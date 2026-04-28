@@ -1,0 +1,106 @@
+# CLI commands
+
+Every `garyx` subcommand grouped by what you actually do with it. Run any
+command with `--help` for the full flag list and arg descriptions.
+
+## Setup
+
+| Command | Use it for |
+| --- | --- |
+| `garyx onboard` | Guided first-time setup that writes a working `garyx.json`. |
+| `garyx config init` | Write a defaults-only `garyx.json` without prompts. |
+| `garyx config show` | Print the loaded, merged config (pretty JSON). |
+| `garyx config get <path>` | Read a value by dotted path, e.g. `gateway.port`. |
+| `garyx config set <path> <value>` | Update a value by dotted path. |
+| `garyx config unset <path>` | Remove a key by dotted path. |
+| `garyx config validate` | Validate the config file against the schema. |
+| `garyx config path` | Print the absolute config file path. |
+
+## Gateway
+
+| Command | Use it for |
+| --- | --- |
+| `garyx gateway run` | Run the gateway in the foreground (blocks). |
+| `garyx gateway install` | Register the managed service (launchd/systemd) and start it. Safe to re-run. |
+| `garyx gateway start` / `stop` / `restart` | Control the managed service. |
+| `garyx gateway uninstall` | Remove the managed unit / plist file. |
+| `garyx gateway reload-config` | Reload config without restart. |
+| `garyx gateway token` | Ensure a gateway auth token exists; print it. |
+
+See [Service manager](/reference/service-manager) for what `install` actually
+writes to disk.
+
+## Channels {#channels}
+
+| Command | Use it for |
+| --- | --- |
+| `garyx channels list` | List configured channel accounts. |
+| `garyx channels add <channel> <account_id>` | Add a new account (Telegram, Feishu, WeChat, plugin id). |
+| `garyx channels enable <channel> <account_id>` | Enable / disable an existing account. |
+| `garyx channels remove <channel> <account_id>` | Delete an account from config. |
+| `garyx channels login <channel>` | Channel-specific login flow (device-flow Feishu, QR-code WeChat, etc.). |
+
+Common flags on `channels add`:
+
+- `--token "<bot token>"` — Telegram
+- `--app-id <id> --app-secret <secret> --domain feishu|lark` — Feishu / Lark
+- `--uin <uin> --base-url <url>` — WeChat
+- `--agent-id <id>` — bind the channel to a specific agent
+
+## Plugins
+
+| Command | Use it for |
+| --- | --- |
+| `garyx plugins install <path>` | Install a subprocess channel plugin from a binary. |
+| `garyx plugins list` | List installed plugins. |
+| `garyx plugins uninstall <id>` | Remove a plugin. |
+
+## Threads
+
+| Command | Use it for |
+| --- | --- |
+| `garyx thread list` | List threads (paginated). |
+| `garyx thread get <thread_id>` | Fetch one thread record. |
+| `garyx thread create [--workspace-dir <path>] [--agent-id <id>] [--json]` | Create a new thread. |
+| `garyx thread send <thread_id> [message]` | Send a message and stream the response. Reads stdin when `message` is omitted. |
+
+## Agents and teams
+
+| Command | Use it for |
+| --- | --- |
+| `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. |
+| `garyx team list / get / create / update / delete` | CRUD on agent teams. |
+| `garyx shortcuts list / get / set / delete` | Manage prompt shortcuts (a.k.a. commands). |
+
+## Diagnostics
+
+| Command | Use it for |
+| --- | --- |
+| `garyx status` | Show running gateway + channel summary. |
+| `garyx doctor` | Run health checks (CLIs found, ports open, config valid). |
+| `garyx audit` | Local environment / config audit. |
+| `garyx logs path` | Print the log file path. |
+| `garyx logs tail [--lines N]` | Tail the gateway log. |
+| `garyx logs clear` | Truncate the log file. |
+| `garyx debug thread <thread_id>` | Per-thread runtime diagnostics. |
+| `garyx debug bot <bot_selector>` | Recent diagnostics + problem threads for a bot. |
+
+## Updates
+
+| Command | Use it for |
+| --- | --- |
+| `garyx update` | Download the latest release binary from GitHub and replace the running one. |
+
+## Misc
+
+| Command | Use it for |
+| --- | --- |
+| `garyx message --bot <selector> [text]` | Send a message via a bot (e.g. `--bot telegram:main`). |
+| `garyx auto-research create / list / get / stop / patch / feedback / reverify` | Drive the auto-research loop. |
+| `garyx wiki init / list / get / status / delete` | Manage wiki knowledge bases. |
+| `garyx migrate thread-transcripts` {#migrate} | Move inline thread messages into transcript files. |
+
+## Where to go next
+
+- [Configuration](/configuration) — every dotted path you can pass to `config get/set`
+- [Service manager](/reference/service-manager) — under-the-hood for `gateway install`
