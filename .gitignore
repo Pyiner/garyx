@@ -84,3 +84,8 @@ desktop/garyx-desktop/.gary/
 
 # Private/internal skills that must never be committed
 devbox-install-*.SKILL.md
+
+# VitePress docs site
+docs/node_modules
+docs/.vitepress/dist
+docs/.vitepress/cache

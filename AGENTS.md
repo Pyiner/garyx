@@ -25,7 +25,7 @@ This file is the short repo-level guide for coding agents.
 2. Keep the change scoped to the smallest correct surface.
 3. Prefer existing crate and UI patterns over new abstractions.
 4. Run focused deterministic tests for the touched area.
-5. Update [docs/CONFIGURATION.md](docs/CONFIGURATION.md) when user-facing configuration or behavior changes.
+5. Update [docs/configuration.md](docs/configuration.md) when user-facing configuration or behavior changes.
 
 ## Validation
 
