@@ -1,8 +1,8 @@
 import { defineConfig } from "vitepress";
 
 // Project pages live under https://pyiner.github.io/garyx/. If we ever
-// move to garyx.github.io or a custom domain, set `base` to "/" and
-// update the editLink + socialLinks.
+// move to a custom domain (e.g. garyx.dev), set `base` to "/" and add a
+// docs/public/CNAME file.
 export default defineConfig({
   base: "/garyx/",
   lang: "en-US",
@@ -29,18 +29,9 @@ export default defineConfig({
     logo: "/logo.svg",
 
     nav: [
+      { text: "Docs", link: "/", activeMatch: "^/(?!architecture)" },
       {
-        text: "Docs",
-        link: "/getting-started",
-        activeMatch: "^/(getting-started|configuration)",
-      },
-      {
-        text: "Architecture",
-        link: "/architecture/command-list-design",
-        activeMatch: "^/architecture/",
-      },
-      {
-        text: "v0.1",
+        text: "v0.1.10",
         items: [
           { text: "Releases", link: "https://github.com/Pyiner/garyx/releases" },
           { text: "Changelog", link: "https://github.com/Pyiner/garyx/commits/main" },
@@ -50,22 +41,31 @@ export default defineConfig({
 
     sidebar: {
       "/": [
+        { text: "Introduction", link: "/" },
         {
-          text: "Introduction",
+          text: "Get started",
           items: [
-            { text: "What is Garyx", link: "/" },
-            { text: "Getting Started", link: "/getting-started" },
+            { text: "Installation", link: "/installation" },
+            { text: "Your first bot", link: "/first-bot" },
+          ],
+        },
+        {
+          text: "Concepts",
+          items: [
+            { text: "Threads & workspaces", link: "/concepts/threads-and-workspaces" },
+            { text: "Channels", link: "/concepts/channels" },
+            { text: "Providers", link: "/concepts/providers" },
+            { text: "MCP integration", link: "/concepts/mcp" },
           ],
         },
         {
           text: "Reference",
-          items: [{ text: "Configuration", link: "/configuration" }],
-        },
-        {
-          text: "Architecture",
           items: [
+            { text: "Configuration", link: "/configuration" },
+            { text: "CLI commands", link: "/reference/cli" },
+            { text: "Service manager", link: "/reference/service-manager" },
             {
-              text: "Command List Design",
+              text: "Architecture: command list",
               link: "/architecture/command-list-design",
             },
           ],
@@ -87,8 +87,6 @@ export default defineConfig({
       copyright: "© Pyiner",
     },
 
-    search: {
-      provider: "local",
-    },
+    search: { provider: "local" },
   },
 });
