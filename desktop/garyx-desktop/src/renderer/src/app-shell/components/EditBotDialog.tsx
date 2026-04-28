@@ -12,6 +12,13 @@
  *   - `agent_id` binding
  *   - `workspace_dir` override
  *
+ * Reauthorization path: channels/plugins that advertise an
+ * `auto_login` config method can refresh credentials from this edit
+ * dialog. The flow is still channel-blind: `AuthFlowDriver` returns a
+ * values patch, this dialog merges it into plugin config, and if the
+ * provider also returns `account_id` the save path moves the account
+ * to that id while preserving metadata.
+ *
  * Save path: combines metadata fields + plugin-config values and
  * emits an `EditBotPatch` the existing gateway expects. The patch
  * shape still names channel-specific fields (token / appId /
@@ -21,9 +28,11 @@
  * `config: Record<string, unknown>`, the translator disappears.
  */
 import { useEffect, useMemo, useState } from "react";
+import { RefreshCw } from "lucide-react";
 
 import type {
   ChannelPluginCatalogEntry,
+  ChannelPluginConfigMethod,
 } from "@shared/contracts";
 
 import { Button } from "@/components/ui/button";
@@ -46,6 +55,7 @@ import {
 } from "@/components/ui/select";
 
 import { DirectoryInput } from "../../components/DirectoryInput";
+import { AuthFlowDriver } from "../../channel-plugins/AuthFlowDriver";
 import { PluginConfigSections } from "../../channel-plugins/PluginConfigPanel";
 import { useChannelPluginCatalog } from "../../channel-plugins/useChannelPluginCatalog";
 
@@ -59,6 +69,7 @@ export type EditBotDialogContext = {
 };
 
 export type EditBotPatch = {
+  nextAccountId?: string | null;
   name?: string | null;
   agentId?: string;
   workspaceDir?: string | null;
@@ -112,6 +123,52 @@ function accountToConfig(account: Record<string, unknown>): Record<string, unkno
   return out;
 }
 
+function methodKind(method: ChannelPluginConfigMethod): string {
+  return typeof method?.kind === "string" ? method.kind : "";
+}
+
+function entrySupportsAutoLogin(entry: ChannelPluginCatalogEntry | null): boolean {
+  if (!entry) return false;
+  const methods = entry.config_methods ?? [{ kind: "form" }];
+  return methods.some((method) => methodKind(method) === "auto_login");
+}
+
+function accountIdFromAuthValues(values: Record<string, unknown>): string | null {
+  const value = values.account_id;
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function schemaDeclaresField(
+  schema: unknown,
+  field: "account_id" | "agent_id",
+): boolean {
+  const properties =
+    schema &&
+    typeof schema === "object" &&
+    !Array.isArray(schema) &&
+    (schema as Record<string, unknown>).properties;
+  return Boolean(
+    properties &&
+      typeof properties === "object" &&
+      !Array.isArray(properties) &&
+      field in (properties as Record<string, unknown>),
+  );
+}
+
+function stripAuthIdentityHints(
+  values: Record<string, unknown>,
+  schema: unknown,
+): Record<string, unknown> {
+  const next = { ...values };
+  if (!schemaDeclaresField(schema, "account_id")) {
+    delete next.account_id;
+  }
+  if (!schemaDeclaresField(schema, "agent_id")) {
+    delete next.agent_id;
+  }
+  return next;
+}
+
 export function EditBotDialog(props: EditBotDialogProps) {
   const { open, context, agentTargets, saving, onClose, onSave, onRemove } =
     props;
@@ -121,6 +178,8 @@ export function EditBotDialog(props: EditBotDialogProps) {
   const [agentId, setAgentId] = useState("");
   const [workspaceDir, setWorkspaceDir] = useState("");
   const [pluginConfig, setPluginConfig] = useState<Record<string, unknown>>({});
+  const [showReauthorize, setShowReauthorize] = useState(false);
+  const [reauthorizedAccountId, setReauthorizedAccountId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
 
@@ -139,6 +198,8 @@ export function EditBotDialog(props: EditBotDialogProps) {
     setAgentId(context.resolvedAgentId || "");
     setWorkspaceDir(String(account.workspace_dir || ""));
     setPluginConfig(accountToConfig(account));
+    setShowReauthorize(false);
+    setReauthorizedAccountId(null);
     setError(null);
     setRemoving(false);
   }, [open, context]);
@@ -168,15 +229,32 @@ export function EditBotDialog(props: EditBotDialogProps) {
   }
 
   const { kind, accountId } = context;
+  const canReauthorize = entrySupportsAutoLogin(selectedEntry);
+  const nextAccountId =
+    reauthorizedAccountId && reauthorizedAccountId !== accountId
+      ? reauthorizedAccountId
+      : null;
   const selectedAgentMissing = Boolean(
     agentId && !agentTargets.find((t) => t.value === agentId),
   );
+
+  function handleReauthorizeConfirmed(values: Record<string, unknown>) {
+    setPluginConfig((current) => ({
+      ...current,
+      ...stripAuthIdentityHints(values, selectedEntry?.schema),
+    }));
+    const returnedAccountId = accountIdFromAuthValues(values);
+    if (returnedAccountId) {
+      setReauthorizedAccountId(returnedAccountId);
+    }
+  }
 
   async function handleSave() {
     if (!context) return;
     setError(null);
     try {
       const patch: EditBotPatch = {
+        nextAccountId,
         name: name.trim() || null,
         workspaceDir: workspaceDir.trim() || null,
         config: pluginConfig,
@@ -261,13 +339,52 @@ export function EditBotDialog(props: EditBotDialogProps) {
           </div>
 
           {selectedEntry ? (
-            <PluginConfigSections
-              entry={selectedEntry}
-              value={pluginConfig}
-              onChange={setPluginConfig}
-              secretInputType="text"
-              showAutoLoginMethod={false}
-            />
+            <>
+              {canReauthorize ? (
+                <section className="flex flex-col gap-3 rounded-md border border-[#e7eee6] bg-[#f8fbf7] p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-medium text-neutral-900">
+                        重新授权
+                      </h4>
+                      {nextAccountId ? (
+                        <p className="mt-0.5 truncate text-xs text-neutral-500">
+                          保存后账号 ID 将更新为 <code>{nextAccountId}</code>
+                        </p>
+                      ) : null}
+                    </div>
+                    {!showReauthorize ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        type="button"
+                        onClick={() => setShowReauthorize(true)}
+                        disabled={saving || removing}
+                      >
+                        <RefreshCw aria-hidden size={13} strokeWidth={2} />
+                        重新授权
+                      </Button>
+                    ) : null}
+                  </div>
+                  {showReauthorize ? (
+                    <AuthFlowDriver
+                      pluginId={selectedEntry.id}
+                      formState={pluginConfig}
+                      iconDataUrl={selectedEntry.icon_data_url}
+                      onConfirmed={handleReauthorizeConfirmed}
+                      onCancel={() => setShowReauthorize(false)}
+                    />
+                  ) : null}
+                </section>
+              ) : null}
+              <PluginConfigSections
+                entry={selectedEntry}
+                value={pluginConfig}
+                onChange={setPluginConfig}
+                secretInputType="text"
+                showAutoLoginMethod={false}
+              />
+            </>
           ) : (
             <div className="rounded-md border border-[#eeeeee] bg-[#fafaf9] p-3 text-sm text-neutral-500">
               加载渠道目录…

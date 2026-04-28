@@ -3569,13 +3569,21 @@ async fn run_plugin_auth_flow(
     manifest: &PluginManifest,
     form_state: Value,
 ) -> Result<std::collections::BTreeMap<String, Value>, Box<dyn std::error::Error>> {
+    run_plugin_auth_flow_with_options(manifest, form_state, false).await
+}
+
+async fn run_plugin_auth_flow_with_options(
+    manifest: &PluginManifest,
+    form_state: Value,
+    json_events: bool,
+) -> Result<std::collections::BTreeMap<String, Value>, Box<dyn std::error::Error>> {
     let plugin = SubprocessPlugin::spawn(
         manifest,
         SpawnOptions::default(),
         Arc::new(CliPluginAuthFlowHandler),
     )?;
     let executor = SubprocessAuthFlowExecutor::new(manifest.plugin.id.clone(), plugin.client());
-    let result = run_auth_flow(&executor, form_state).await;
+    let result = run_auth_flow_with_options(&executor, form_state, json_events).await;
     let _ = plugin.shutdown_gracefully().await;
     result
 }
@@ -4496,10 +4504,21 @@ fn render_terminal_qr(payload: &str) -> Option<String> {
 /// with a plain-text fallback so a scanner-hostile terminal never hides
 /// the underlying payload from the user. Unknown items (forward-compat)
 /// are silently skipped.
-fn render_display(items: &[AuthDisplayItem]) {
+fn render_display_with_options(items: &[AuthDisplayItem], json_events: bool) {
     for item in items {
         match item {
             AuthDisplayItem::Text { value } => {
+                if json_events {
+                    println!(
+                        "{}",
+                        json!({
+                            "event": "auth_display",
+                            "kind": "text",
+                            "value": value,
+                        })
+                    );
+                    continue;
+                }
                 println!("{value}");
                 // Convenience: if a Text item is a standalone URL on
                 // its own line, try to open it in the user's default
@@ -4514,13 +4533,26 @@ fn render_display(items: &[AuthDisplayItem]) {
                     let _ = open_url_in_browser(value);
                 }
             }
-            AuthDisplayItem::Qr { value } => match render_terminal_qr(value) {
-                Some(art) => println!("{art}"),
-                None => {
-                    eprintln!("[warn] 无法在终端渲染二维码，请使用下列原始内容：");
-                    println!("{value}");
+            AuthDisplayItem::Qr { value } => {
+                if json_events {
+                    println!(
+                        "{}",
+                        json!({
+                            "event": "auth_display",
+                            "kind": "qr",
+                            "value": value,
+                        })
+                    );
+                    continue;
                 }
-            },
+                match render_terminal_qr(value) {
+                    Some(art) => println!("{art}"),
+                    None => {
+                        eprintln!("[warn] 无法在终端渲染二维码，请使用下列原始内容：");
+                        println!("{value}");
+                    }
+                }
+            }
             AuthDisplayItem::Unknown => {}
         }
     }
@@ -4575,11 +4607,19 @@ async fn run_auth_flow<E: AuthFlowExecutor + ?Sized>(
     executor: &E,
     form_state: Value,
 ) -> Result<std::collections::BTreeMap<String, Value>, Box<dyn std::error::Error>> {
+    run_auth_flow_with_options(executor, form_state, false).await
+}
+
+async fn run_auth_flow_with_options<E: AuthFlowExecutor + ?Sized>(
+    executor: &E,
+    form_state: Value,
+    json_events: bool,
+) -> Result<std::collections::BTreeMap<String, Value>, Box<dyn std::error::Error>> {
     let session = executor
         .start(form_state)
         .await
         .map_err(|e| format!("auth flow start failed: {e}"))?;
-    render_display(&session.display);
+    render_display_with_options(&session.display, json_events);
 
     let mut interval = session.poll_interval_secs.max(1);
     // Honour the executor's exact TTL — callers MUST NOT poll past
@@ -4609,7 +4649,7 @@ async fn run_auth_flow<E: AuthFlowExecutor + ?Sized>(
                 next_interval_secs,
             } => {
                 if let Some(d) = display {
-                    render_display(&d);
+                    render_display_with_options(&d, json_events);
                 }
                 if let Some(i) = next_interval_secs {
                     interval = i.max(1);
@@ -4639,21 +4679,132 @@ fn take_string(
     }
 }
 
+fn reauthorize_account_entry(
+    cfg: &GaryxConfig,
+    channel: &str,
+    reauthorize: Option<&str>,
+) -> Result<Option<PluginAccountEntry>, Box<dyn std::error::Error>> {
+    let Some(account_id) = reauthorize else {
+        return Ok(None);
+    };
+    let entry = cfg
+        .channels
+        .plugin_channel(channel)
+        .and_then(|plugin| plugin.accounts.get(account_id))
+        .cloned()
+        .ok_or_else(|| format!("--reauthorize `{account_id}` was not found in {channel}"))?;
+    Ok(Some(entry))
+}
+
+fn config_string(entry: &PluginAccountEntry, key: &str) -> Option<String> {
+    entry
+        .config
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn finish_reauthorization(
+    cfg: &mut GaryxConfig,
+    channel: &str,
+    reauthorize: Option<&str>,
+    target_account: &str,
+    forget_previous: bool,
+) -> Result<Option<&'static str>, Box<dyn std::error::Error>> {
+    let Some(old_account) = reauthorize else {
+        return Ok(None);
+    };
+    if old_account == target_account {
+        return Ok(None);
+    }
+    let accounts = &mut cfg.channels.plugin_channel_mut(channel).accounts;
+    if forget_previous {
+        accounts.remove(old_account);
+        return Ok(Some("deleted"));
+    }
+    let entry = accounts
+        .get_mut(old_account)
+        .ok_or_else(|| format!("--reauthorize `{old_account}` disappeared from {channel}"))?;
+    entry.enabled = false;
+    Ok(Some("disabled"))
+}
+
+fn print_login_json_summary(
+    channel: &str,
+    account_id: &str,
+    action: &str,
+    reauthorize: Option<&str>,
+    previous_account_action: Option<&str>,
+    config_path: &Path,
+) {
+    println!(
+        "{}",
+        json!({
+            "ok": true,
+            "event": "channel_login_saved",
+            "channel": channel,
+            "account_id": account_id,
+            "action": action,
+            "reauthorize": reauthorize,
+            "previous_account_action": previous_account_action,
+            "config_path": config_path.to_string_lossy().to_string(),
+        })
+    );
+}
+
+fn previous_account_action_label(action: &str) -> &str {
+    match action {
+        "deleted" => "删除",
+        "disabled" => "禁用",
+        _ => action,
+    }
+}
+
 pub(crate) async fn cmd_channels_login(
     config_path: &str,
     channel: &str,
     account: Option<String>,
+    reauthorize: Option<String>,
+    forget_previous: bool,
+    name: Option<String>,
+    workspace_dir: Option<String>,
     agent_id: Option<String>,
+    uin: Option<String>,
     base_url: Option<String>,
     domain: Option<String>,
     timeout_seconds: u64,
+    json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let channel = canonical_channel_id(channel);
+    if forget_previous && trim_opt(reauthorize.clone()).is_none() {
+        return Err("--forget-previous requires --reauthorize".into());
+    }
     let loaded = load_config_or_default(config_path, ConfigRuntimeOverrides::default())?;
     let config_path = loaded.path;
     let mut cfg = loaded.config;
-    let mut selected_agent_id = trim_opt(agent_id);
-    if selected_agent_id.is_none() && can_prompt_interactively() {
+    let reauthorize = trim_opt(reauthorize);
+    let reauthorize_entry = reauthorize_account_entry(&cfg, &channel, reauthorize.as_deref())?;
+    let inherited_auth_form_state = reauthorize_entry
+        .as_ref()
+        .and_then(|entry| entry.config.as_object().cloned())
+        .unwrap_or_default();
+    let selected_name =
+        trim_opt(name).or_else(|| reauthorize_entry.as_ref().and_then(|e| e.name.clone()));
+    let selected_workspace_dir = trim_opt(workspace_dir).or_else(|| {
+        reauthorize_entry
+            .as_ref()
+            .and_then(|e| e.workspace_dir.clone())
+    });
+    let selected_uin = trim_opt(uin).or_else(|| {
+        reauthorize_entry
+            .as_ref()
+            .and_then(|entry| config_string(entry, "uin"))
+    });
+    let mut selected_agent_id =
+        trim_opt(agent_id).or_else(|| reauthorize_entry.as_ref().and_then(|e| e.agent_id.clone()));
+    if selected_agent_id.is_none() && can_prompt_interactively() && !json_output {
         selected_agent_id = Some(prompt_agent_reference_choice(Some(
             DEFAULT_CHANNEL_AGENT_ID,
         ))?);
@@ -4662,12 +4813,18 @@ pub(crate) async fn cmd_channels_login(
     match channel.as_str() {
         BUILTIN_CHANNEL_PLUGIN_WEIXIN => {
             let executor = WeixinAuthExecutor::new(reqwest::Client::new());
-            let mut values = run_auth_flow(
+            let login_base_url = trim_opt(base_url.clone()).or_else(|| {
+                reauthorize_entry
+                    .as_ref()
+                    .and_then(|entry| config_string(entry, "base_url"))
+            });
+            let mut values = run_auth_flow_with_options(
                 &executor,
                 json!({
-                    "base_url": normalize_weixin_base_url(base_url),
+                    "base_url": normalize_weixin_base_url(login_base_url),
                     "timeout_secs": timeout_seconds,
                 }),
+                json_output,
             )
             .await?;
             let token = take_string(&mut values, "token")?;
@@ -4679,29 +4836,65 @@ pub(crate) async fn cmd_channels_login(
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned)
                 .unwrap_or_else(|| scanned_account_id.clone());
+            let existed = cfg
+                .channels
+                .plugin_channel(BUILTIN_CHANNEL_PLUGIN_WEIXIN)
+                .and_then(|plugin| plugin.accounts.get(&target_account_id))
+                .is_some();
 
             upsert_channel_account(
                 &mut cfg,
                 BUILTIN_CHANNEL_PLUGIN_WEIXIN,
                 &target_account_id,
-                None,
-                None,
+                selected_name.clone(),
+                selected_workspace_dir.clone(),
                 selected_agent_id.clone(),
                 Some(token),
-                Some(String::new()),
+                selected_uin.clone(),
                 Some(login_base_url),
                 None,
                 None,
                 None,
                 Map::new(),
             )?;
+            let previous_account_action = finish_reauthorization(
+                &mut cfg,
+                BUILTIN_CHANNEL_PLUGIN_WEIXIN,
+                reauthorize.as_deref(),
+                &target_account_id,
+                forget_previous,
+            )?;
             save_config_struct(&config_path, &cfg)?;
-            println!("已添加 weixin 账号: {target_account_id}");
-            notify_gateway_reload(&config_path).await;
+            if json_output {
+                notify_gateway_reload_quiet(&config_path).await;
+                print_login_json_summary(
+                    BUILTIN_CHANNEL_PLUGIN_WEIXIN,
+                    &target_account_id,
+                    if existed { "updated" } else { "added" },
+                    reauthorize.as_deref(),
+                    previous_account_action,
+                    &config_path,
+                );
+            } else {
+                println!("已添加 weixin 账号: {target_account_id}");
+                if let Some(action) = previous_account_action {
+                    println!(
+                        "已{}旧 weixin 账号: {}",
+                        previous_account_action_label(action),
+                        reauthorize.as_deref().unwrap()
+                    );
+                }
+                notify_gateway_reload(&config_path).await;
+            }
             Ok(())
         }
         BUILTIN_CHANNEL_PLUGIN_FEISHU => {
-            let resolved_domain = domain
+            let login_domain = trim_opt(domain.clone()).or_else(|| {
+                reauthorize_entry
+                    .as_ref()
+                    .and_then(|entry| config_string(entry, "domain"))
+            });
+            let resolved_domain = login_domain
                 .as_deref()
                 .and_then(parse_feishu_domain)
                 .unwrap_or_default();
@@ -4710,7 +4903,9 @@ pub(crate) async fn cmd_channels_login(
                 FeishuDomain::Lark => "lark",
             };
             let executor = FeishuAuthExecutor::new(reqwest::Client::new());
-            let mut values = run_auth_flow(&executor, json!({ "domain": domain_str })).await?;
+            let mut values =
+                run_auth_flow_with_options(&executor, json!({ "domain": domain_str }), json_output)
+                    .await?;
             let app_id = take_string(&mut values, "app_id")?;
             let app_secret = take_string(&mut values, "app_secret")?;
             let confirmed_domain = take_string(&mut values, "domain")?;
@@ -4720,13 +4915,18 @@ pub(crate) async fn cmd_channels_login(
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned)
                 .unwrap_or_else(|| app_id.clone());
+            let existed = cfg
+                .channels
+                .plugin_channel(BUILTIN_CHANNEL_PLUGIN_FEISHU)
+                .and_then(|plugin| plugin.accounts.get(&target_account_id))
+                .is_some();
 
             upsert_channel_account(
                 &mut cfg,
                 BUILTIN_CHANNEL_PLUGIN_FEISHU,
                 &target_account_id,
-                None,
-                None,
+                selected_name.clone(),
+                selected_workspace_dir.clone(),
                 selected_agent_id.clone(),
                 None,
                 None,
@@ -4736,9 +4936,35 @@ pub(crate) async fn cmd_channels_login(
                 Some(confirmed_domain),
                 Map::new(),
             )?;
+            let previous_account_action = finish_reauthorization(
+                &mut cfg,
+                BUILTIN_CHANNEL_PLUGIN_FEISHU,
+                reauthorize.as_deref(),
+                &target_account_id,
+                forget_previous,
+            )?;
             save_config_struct(&config_path, &cfg)?;
-            println!("已添加 feishu 账号: {target_account_id}");
-            notify_gateway_reload(&config_path).await;
+            if json_output {
+                notify_gateway_reload_quiet(&config_path).await;
+                print_login_json_summary(
+                    BUILTIN_CHANNEL_PLUGIN_FEISHU,
+                    &target_account_id,
+                    if existed { "updated" } else { "added" },
+                    reauthorize.as_deref(),
+                    previous_account_action,
+                    &config_path,
+                );
+            } else {
+                println!("已添加 feishu 账号: {target_account_id}");
+                if let Some(action) = previous_account_action {
+                    println!(
+                        "已{}旧 feishu 账号: {}",
+                        previous_account_action_label(action),
+                        reauthorize.as_deref().unwrap()
+                    );
+                }
+                notify_gateway_reload(&config_path).await;
+            }
             Ok(())
         }
         _ => {
@@ -4751,14 +4977,19 @@ pub(crate) async fn cmd_channels_login(
             if manifest.auth_flows.is_empty() {
                 return Err(format!("channel `{channel}` does not advertise any auth flow").into());
             }
-            let mut values = run_plugin_auth_flow(
+            let mut values = run_plugin_auth_flow_with_options(
                 &manifest,
-                Value::Object(plugin_form_state_from_overrides(&ChannelOverrides {
-                    base_url,
-                    domain: trim_opt(domain),
-                    plugin_extras: Map::new(),
-                    ..ChannelOverrides::default()
-                })),
+                Value::Object({
+                    let mut form_state = inherited_auth_form_state.clone();
+                    if let Some(value) = trim_opt(base_url) {
+                        form_state.insert("base_url".to_owned(), Value::String(value));
+                    }
+                    if let Some(value) = trim_opt(domain) {
+                        form_state.insert("domain".to_owned(), Value::String(value));
+                    }
+                    form_state
+                }),
+                json_output,
             )
             .await?;
             let target_account_id = account
@@ -4770,9 +5001,16 @@ pub(crate) async fn cmd_channels_login(
                 .ok_or_else(|| {
                     format!("plugin `{channel}` auth flow did not return an account id hint")
                 })?;
+            let existed = cfg
+                .channels
+                .plugin_channel(&channel)
+                .and_then(|plugin| plugin.accounts.get(&target_account_id))
+                .is_some();
             strip_plugin_identity_hints(&mut values, &manifest.schema);
             let mut overrides = ChannelOverrides {
                 account: Some(target_account_id.clone()),
+                name: selected_name.clone(),
+                workspace_dir: selected_workspace_dir.clone(),
                 agent_id: selected_agent_id.clone(),
                 plugin_extras: Map::new(),
                 ..ChannelOverrides::default()
@@ -4784,8 +5022,8 @@ pub(crate) async fn cmd_channels_login(
                 &mut cfg,
                 &channel,
                 &target_account_id,
-                None,
-                None,
+                overrides.name,
+                overrides.workspace_dir,
                 overrides.agent_id,
                 overrides.token,
                 overrides.uin,
@@ -4795,9 +5033,35 @@ pub(crate) async fn cmd_channels_login(
                 overrides.domain,
                 overrides.plugin_extras,
             )?;
+            let previous_account_action = finish_reauthorization(
+                &mut cfg,
+                &channel,
+                reauthorize.as_deref(),
+                &target_account_id,
+                forget_previous,
+            )?;
             save_config_struct(&config_path, &cfg)?;
-            println!("已添加 {channel} 账号: {target_account_id}");
-            notify_gateway_reload(&config_path).await;
+            if json_output {
+                notify_gateway_reload_quiet(&config_path).await;
+                print_login_json_summary(
+                    &channel,
+                    &target_account_id,
+                    if existed { "updated" } else { "added" },
+                    reauthorize.as_deref(),
+                    previous_account_action,
+                    &config_path,
+                );
+            } else {
+                println!("已添加 {channel} 账号: {target_account_id}");
+                if let Some(action) = previous_account_action {
+                    println!(
+                        "已{}旧 {channel} 账号: {}",
+                        previous_account_action_label(action),
+                        reauthorize.as_deref().unwrap()
+                    );
+                }
+                notify_gateway_reload(&config_path).await;
+            }
             Ok(())
         }
     }

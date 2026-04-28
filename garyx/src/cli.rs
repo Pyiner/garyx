@@ -397,9 +397,32 @@ pub(crate) enum ChannelsAction {
         /// Account id to write into config (defaults to scanned bot id or app_id)
         #[arg(long)]
         account: Option<String>,
+        /// Existing account id to re-authorize.
+        ///
+        /// Metadata such as name, workspace, agent binding, and channel
+        /// specific fields are inherited unless explicitly overridden. If
+        /// the provider returns a different account id, the previous id
+        /// is disabled by default.
+        #[arg(long)]
+        reauthorize: Option<String>,
+        /// Forget the previous account after the new login is saved.
+        ///
+        /// Without this flag, the previous account is left in config but
+        /// disabled so rollback is possible.
+        #[arg(long, default_value_t = false)]
+        forget_previous: bool,
+        /// Friendly display name
+        #[arg(long)]
+        name: Option<String>,
+        /// Workspace directory
+        #[arg(long)]
+        workspace_dir: Option<String>,
         /// Agent or team id to bind this channel account to
         #[arg(long)]
         agent_id: Option<String>,
+        /// Weixin UIN (optional; inherited from --reauthorize when omitted)
+        #[arg(long)]
+        uin: Option<String>,
         /// Weixin API base URL
         #[arg(long)]
         base_url: Option<String>,
@@ -409,6 +432,12 @@ pub(crate) enum ChannelsAction {
         /// Login timeout in seconds
         #[arg(long, default_value_t = 480)]
         timeout_seconds: u64,
+        /// Emit machine-readable JSON events and final summary.
+        ///
+        /// QR display payloads are printed as JSON instead of terminal block
+        /// art, which lets an agent forward or render them without scraping.
+        #[arg(long)]
+        json: bool,
     },
 }
 

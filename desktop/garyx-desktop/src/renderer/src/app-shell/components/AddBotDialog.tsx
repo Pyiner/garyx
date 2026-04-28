@@ -123,6 +123,37 @@ function configAccountIdOverride(
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
+function schemaDeclaresField(
+  schema: unknown,
+  field: "account_id" | "agent_id",
+): boolean {
+  const properties =
+    schema &&
+    typeof schema === "object" &&
+    !Array.isArray(schema) &&
+    (schema as Record<string, unknown>).properties;
+  return Boolean(
+    properties &&
+      typeof properties === "object" &&
+      !Array.isArray(properties) &&
+      field in (properties as Record<string, unknown>),
+  );
+}
+
+function stripAuthIdentityHints(
+  values: Record<string, unknown>,
+  schema: unknown,
+): Record<string, unknown> {
+  const next = { ...values };
+  if (!schemaDeclaresField(schema, "account_id")) {
+    delete next.account_id;
+  }
+  if (!schemaDeclaresField(schema, "agent_id")) {
+    delete next.agent_id;
+  }
+  return next;
+}
+
 function randomAccountSuffix(): string {
   const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   const digits = "0123456789";
@@ -301,7 +332,10 @@ export function AddBotDialog(props: AddBotDialogProps) {
   );
 
   const handleAuthConfirmed = useCallback((values: Record<string, unknown>) => {
-    setPluginConfig((current) => ({ ...current, ...values }));
+    setPluginConfig((current) => ({
+      ...current,
+      ...stripAuthIdentityHints(values, selectedEntry?.schema),
+    }));
     const resolvedFromAuth = configAccountIdOverride(values);
     if (resolvedFromAuth) {
       setAccountId((current) => {
@@ -312,7 +346,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
         return current;
       });
     }
-  }, [generatedAccountId]);
+  }, [generatedAccountId, selectedEntry?.schema]);
 
   const goToAuthStep = useCallback(() => {
     if (!selectedEntry) {

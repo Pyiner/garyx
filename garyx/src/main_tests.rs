@@ -1354,10 +1354,18 @@ fn cli_channels_login_parses_feishu_domain_flag() {
         "feishu",
         "--account",
         "mybot",
+        "--reauthorize",
+        "oldbot",
+        "--forget-previous",
+        "--name",
+        "My Bot",
+        "--workspace-dir",
+        "/tmp/garyx-login",
         "--agent-id",
         "product-ship",
         "--domain",
         "lark",
+        "--json",
     ]);
     match cli.command {
         Some(Commands::Channels {
@@ -1365,15 +1373,25 @@ fn cli_channels_login_parses_feishu_domain_flag() {
                 ChannelsAction::Login {
                     channel,
                     account,
+                    reauthorize,
+                    forget_previous,
+                    name,
+                    workspace_dir,
                     agent_id,
                     domain,
+                    json,
                     ..
                 },
         }) => {
             assert_eq!(channel, "feishu");
             assert_eq!(account.as_deref(), Some("mybot"));
+            assert_eq!(reauthorize.as_deref(), Some("oldbot"));
+            assert!(forget_previous);
+            assert_eq!(name.as_deref(), Some("My Bot"));
+            assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx-login"));
             assert_eq!(agent_id.as_deref(), Some("product-ship"));
             assert_eq!(domain.as_deref(), Some("lark"));
+            assert!(json);
         }
         _ => panic!("unexpected parse result: expected Channels::Login"),
     }
@@ -1389,9 +1407,15 @@ async fn channels_login_rejects_unsupported_channel() {
         "telegram",
         Some("alice".to_owned()),
         None,
+        false,
+        None,
+        None,
+        None,
+        None,
         None,
         None,
         30,
+        false,
     )
     .await
     .expect_err("telegram login should not be supported");

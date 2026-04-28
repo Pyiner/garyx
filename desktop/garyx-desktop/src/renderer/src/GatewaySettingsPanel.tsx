@@ -1690,10 +1690,15 @@ export function GatewaySettingsPanel({
             next.channels[kind].accounts = next.channels[kind].accounts || {};
             const account = next.channels[kind].accounts[accountId];
             if (!account) return;
+            const targetAccountId = patch.nextAccountId?.trim() || accountId;
             if (patch.name !== undefined) account.name = patch.name;
             if (patch.workspaceDir !== undefined) account.workspace_dir = patch.workspaceDir;
             if (patch.agentId !== undefined) account.agent_id = patch.agentId;
             if (patch.config !== undefined) account.config = patch.config;
+            if (targetAccountId !== accountId) {
+              next.channels[kind].accounts[targetAccountId] = account;
+              delete next.channels[kind].accounts[accountId];
+            }
           });
           await onSaveGatewaySettings();
         }}

@@ -546,6 +546,78 @@ fn render_terminal_qr_returns_none_for_unencodable_input() {
 }
 
 #[test]
+fn reauthorize_weixin_can_inherit_metadata_and_disable_previous_account() {
+    let mut cfg = GaryxConfig::default();
+    upsert_channel_account(
+        &mut cfg,
+        BUILTIN_CHANNEL_PLUGIN_WEIXIN,
+        "old-wx",
+        Some("Wiki".to_owned()),
+        Some("/Users/pyiner".to_owned()),
+        Some("wiki-curator".to_owned()),
+        Some("old-token".to_owned()),
+        Some("old-uin".to_owned()),
+        Some("https://ilinkai.weixin.qq.com".to_owned()),
+        None,
+        None,
+        None,
+        Map::new(),
+    )
+    .unwrap();
+
+    let inherited = reauthorize_account_entry(&cfg, BUILTIN_CHANNEL_PLUGIN_WEIXIN, Some("old-wx"))
+        .unwrap()
+        .expect("previous account should exist");
+    assert_eq!(inherited.name.as_deref(), Some("Wiki"));
+    assert_eq!(inherited.workspace_dir.as_deref(), Some("/Users/pyiner"));
+    assert_eq!(inherited.agent_id.as_deref(), Some("wiki-curator"));
+    assert_eq!(config_string(&inherited, "uin").as_deref(), Some("old-uin"));
+
+    upsert_channel_account(
+        &mut cfg,
+        BUILTIN_CHANNEL_PLUGIN_WEIXIN,
+        "new-wx",
+        inherited.name.clone(),
+        inherited.workspace_dir.clone(),
+        inherited.agent_id.clone(),
+        Some("new-token".to_owned()),
+        config_string(&inherited, "uin"),
+        Some("https://ilinkai.weixin.qq.com".to_owned()),
+        None,
+        None,
+        None,
+        Map::new(),
+    )
+    .unwrap();
+
+    let action = finish_reauthorization(
+        &mut cfg,
+        BUILTIN_CHANNEL_PLUGIN_WEIXIN,
+        Some("old-wx"),
+        "new-wx",
+        false,
+    )
+    .unwrap();
+    assert_eq!(action, Some("disabled"));
+
+    let accounts = &cfg
+        .channels
+        .plugin_channel(BUILTIN_CHANNEL_PLUGIN_WEIXIN)
+        .unwrap()
+        .accounts;
+    assert!(!accounts["old-wx"].enabled);
+    assert!(accounts["new-wx"].enabled);
+    assert_eq!(accounts["new-wx"].name.as_deref(), Some("Wiki"));
+    assert_eq!(
+        accounts["new-wx"].workspace_dir.as_deref(),
+        Some("/Users/pyiner")
+    );
+    assert_eq!(accounts["new-wx"].agent_id.as_deref(), Some("wiki-curator"));
+    assert_eq!(accounts["new-wx"].config["uin"], "old-uin");
+    assert_eq!(accounts["new-wx"].config["token"], "new-token");
+}
+
+#[test]
 fn next_onboard_steps_suggests_channel_bind_when_empty() {
     let cfg = GaryxConfig::default();
     let steps = next_onboard_steps(&cfg);

@@ -199,19 +199,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ChannelsAction::Login {
                 channel,
                 account,
+                reauthorize,
+                forget_previous,
+                name,
+                workspace_dir,
                 agent_id,
+                uin,
                 base_url,
                 domain,
                 timeout_seconds,
+                json,
             } => {
                 cmd_channels_login(
                     config_path,
                     &channel,
                     account,
+                    reauthorize,
+                    forget_previous,
+                    name,
+                    workspace_dir,
                     agent_id,
+                    uin,
                     base_url,
                     domain,
                     timeout_seconds,
+                    json,
                 )
                 .await
             }

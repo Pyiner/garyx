@@ -155,6 +155,14 @@ You can also use the interactive login flow:
 garyx channels login feishu --account main
 ```
 
+To refresh an existing account's credentials while preserving its display
+name, workspace, agent binding, and plugin-specific config, pass that account
+id to `--reauthorize`:
+
+```bash
+garyx channels login feishu --reauthorize main
+```
+
 ### Weixin
 
 ```json
@@ -180,6 +188,15 @@ You can also use the interactive QR login flow:
 
 ```bash
 garyx channels login weixin --account main
+```
+
+For QR reauthorization, omit `--account` so Garyx can use the bot id returned
+by Weixin. If that id differs from the previous one, the previous account is
+disabled by default; add `--forget-previous` to remove it after the new account
+is saved:
+
+```bash
+garyx channels login weixin --reauthorize main --forget-previous
 ```
 
 ### External Plugins
@@ -221,6 +238,12 @@ If the plugin declares an auth flow, use:
 
 ```bash
 garyx channels login acmechat --account main
+```
+
+The same reauthorization convention works for plugins with auth flows:
+
+```bash
+garyx channels login acmechat --reauthorize main
 ```
 
 ## Commands
