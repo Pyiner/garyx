@@ -205,7 +205,7 @@ npm run dist:dir
 
 The main configuration file is `~/.garyx/garyx.json`.
 
-Read [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full configuration
+Read [docs/configuration.md](docs/configuration.md) for the full configuration
 reference: channels, plugins, providers, managed MCP servers, automations,
 and desktop behavior.
 
