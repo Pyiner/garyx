@@ -1,0 +1,110 @@
+{
+  "name": "garyx-desktop",
+  "private": true,
+  "version": "0.1.9",
+  "description": "Garyx macOS app powered by the Garyx API channel",
+  "author": "Garyx",
+  "license": "MIT",
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "dev:web": "vite --config vite.web.config.ts",
+    "build": "npm run build:ui",
+    "build:ui": "tsc --noEmit && electron-vite build",
+    "build:web": "tsc --noEmit && vite build --config vite.web.config.ts",
+    "build:rust": "cargo build --release -p garyx --manifest-path ../../Cargo.toml",
+    "build:packaged": "npm run build:ui",
+    "preview": "electron-vite preview",
+    "install:app": "node ./scripts/install-mac-app.mjs",
+    "dist:mac": "npm run build:packaged && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.identity=null --publish never && npm run install:app",
+    "dist:dir": "npm run build:packaged && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir --config.mac.identity=null --publish never && npm run install:app",
+    "dist:mac:release": "npm run build:packaged && node ./scripts/build-mac-release.mjs",
+    "test:smoke": "npm run dist:dir && node ./scripts/electron-smoke.mjs",
+    "verify:mac:release": "node ./scripts/verify-mac-release.mjs"
+  },
+  "dependencies": {
+    "@tabler/icons-react": "^3.40.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "electron-updater": "^6.8.3",
+    "lucide-react": "^0.577.0",
+    "mermaid": "^11.13.0",
+    "prismjs": "^1.30.0",
+    "qrcode": "^1.5.4",
+    "radix-ui": "^1.4.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@electron/notarize": "^2.5.0",
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/node": "^22.13.10",
+    "@types/prismjs": "^1.26.6",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.0.12",
+    "@types/react-dom": "^19.0.5",
+    "@vitejs/plugin-react": "^5.1.4",
+    "electron": "^40.8.0",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
+    "playwright": "^1.58.2",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^5.8.2",
+    "vite": "^7.3.1",
+    "ws": "^8.19.0"
+  },
+  "build": {
+    "appId": "com.garyx.desktop",
+    "productName": "Garyx",
+    "artifactName": "Garyx-${version}-${arch}.${ext}",
+    "afterSign": "scripts/notarize.mjs",
+    "icon": "resources/garyx.icns",
+    "directories": {
+      "output": "dist-release"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/trayTemplate.png",
+        "to": "trayTemplate.png"
+      },
+      {
+        "from": "resources/trayTemplate@2x.png",
+        "to": "trayTemplate@2x.png"
+      }
+    ],
+    "mac": {
+      "icon": "resources/garyx.icns",
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": true,
+      "entitlements": "resources/entitlements.mac.plist",
+      "entitlementsInherit": "resources/entitlements.mac.plist",
+      "protocols": [
+        {
+          "name": "Garyx Deep Link",
+          "schemes": [
+            "garyx"
+          ]
+        }
+      ],
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Pyiner",
+        "repo": "garyx"
+      }
+    ]
+  }
+}

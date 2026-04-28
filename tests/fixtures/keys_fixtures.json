@@ -1,0 +1,681 @@
+{
+  "module": "keys",
+  "generated_at": "2026-02-27T09:08:54.945511+00:00",
+  "test_cases": [
+    {
+      "name": "test_build_simple_dm_key",
+      "function": "build_session_key",
+      "input": {
+        "agent_id": "main",
+        "session_type": "dm",
+        "peer_id": "telegram:123"
+      },
+      "expected": "main::dm::telegram:123"
+    },
+    {
+      "name": "test_build_simple_group_key",
+      "function": "build_session_key",
+      "input": {
+        "agent_id": "main",
+        "session_type": "group",
+        "peer_id": "-987654321"
+      },
+      "expected": "main::group::-987654321"
+    },
+    {
+      "name": "test_build_assistant_key",
+      "function": "build_session_key",
+      "input": {
+        "agent_id": "assistant1",
+        "session_type": "main",
+        "peer_id": "+1234567890"
+      },
+      "expected": "assistant1::main::+1234567890"
+    },
+    {
+      "name": "test_build_channel_key",
+      "function": "build_session_key",
+      "input": {
+        "agent_id": "bot2",
+        "session_type": "channel",
+        "peer_id": "C12345"
+      },
+      "expected": "bot2::channel::C12345"
+    },
+    {
+      "name": "test_build_empty_peer",
+      "function": "build_session_key",
+      "input": {
+        "agent_id": "main",
+        "session_type": "dm",
+        "peer_id": ""
+      },
+      "expected": "main::dm::"
+    },
+    {
+      "name": "test_build_hier_dm",
+      "function": "build_agent_session_key",
+      "input": {
+        "agent_id": "main",
+        "channel": "telegram",
+        "surface": "dm",
+        "peer_id": "user123",
+        "thread_id": null
+      },
+      "expected": "agent:main:telegram:dm:user123"
+    },
+    {
+      "name": "test_build_hier_group",
+      "function": "build_agent_session_key",
+      "input": {
+        "agent_id": "main",
+        "channel": "telegram",
+        "surface": "group",
+        "peer_id": "chat456",
+        "thread_id": null
+      },
+      "expected": "agent:main:telegram:group:chat456"
+    },
+    {
+      "name": "test_build_hier_thread",
+      "function": "build_agent_session_key",
+      "input": {
+        "agent_id": "main",
+        "channel": "slack",
+        "surface": "channel",
+        "peer_id": "C123",
+        "thread_id": "t456"
+      },
+      "expected": "agent:main:slack:channel:C123:thread:t456"
+    },
+    {
+      "name": "test_build_hier_no_thread",
+      "function": "build_agent_session_key",
+      "input": {
+        "agent_id": "bot2",
+        "channel": "discord",
+        "surface": "dm",
+        "peer_id": "user789",
+        "thread_id": null
+      },
+      "expected": "agent:bot2:discord:dm:user789"
+    },
+    {
+      "name": "test_build_subagent_gpt4",
+      "function": "build_subagent_session_key",
+      "input": {
+        "agent_id": "main",
+        "subagent_name": "openai-gpt4"
+      },
+      "expected": "agent:main:subagent:openai-gpt4"
+    },
+    {
+      "name": "test_build_subagent_claude",
+      "function": "build_subagent_session_key",
+      "input": {
+        "agent_id": "assistant1",
+        "subagent_name": "claude-3"
+      },
+      "expected": "agent:assistant1:subagent:claude-3"
+    },
+    {
+      "name": "test_parse_simple_key",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "main::dm::telegram:123"
+      },
+      "expected": [
+        "main",
+        "dm",
+        "telegram:123"
+      ]
+    },
+    {
+      "name": "test_parse_group_key",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "main::group::-987654321"
+      },
+      "expected": [
+        "main",
+        "group",
+        "-987654321"
+      ]
+    },
+    {
+      "name": "test_parse_hier_key",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "agent:main:telegram:dm:user123"
+      },
+      "expected": [
+        "main",
+        "dm",
+        "user123"
+      ]
+    },
+    {
+      "name": "test_parse_hier_thread_key",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "agent:main:slack:channel:C123:thread:t456"
+      },
+      "expected": [
+        "main",
+        "channel",
+        "C123"
+      ]
+    },
+    {
+      "name": "test_parse_subagent_key",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "agent:main:subagent:openai-gpt4"
+      },
+      "expected": [
+        "main",
+        "subagent",
+        "openai-gpt4"
+      ]
+    },
+    {
+      "name": "test_parse_empty",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": ""
+      },
+      "expected_error": true,
+      "error_type": "ValueError",
+      "error_message": "Session key cannot be empty"
+    },
+    {
+      "name": "test_parse_no_separator",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "noseparator"
+      },
+      "expected_error": true,
+      "error_type": "ValueError",
+      "error_message": "Invalid session key format: noseparator. Expected format: {agentId}::{sessionType}::{peerId}"
+    },
+    {
+      "name": "test_parse_one_part",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "main::dm"
+      },
+      "expected_error": true,
+      "error_type": "ValueError",
+      "error_message": "Invalid session key format: main::dm. Expected format: {agentId}::{sessionType}::{peerId}"
+    },
+    {
+      "name": "test_parse_whitespace_start",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": " main::dm::user"
+      },
+      "expected_error": true,
+      "error_type": "ValueError",
+      "error_message": "Session key cannot start or end with whitespace"
+    },
+    {
+      "name": "test_parse_whitespace_end",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "main::dm::user "
+      },
+      "expected_error": true,
+      "error_type": "ValueError",
+      "error_message": "Session key cannot start or end with whitespace"
+    },
+    {
+      "name": "test_parse_null_char",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "main::dm::user\u0000"
+      },
+      "expected_error": true,
+      "error_type": "ValueError",
+      "error_message": "Session key contains invalid characters"
+    },
+    {
+      "name": "test_parse_newline_char",
+      "function": "parse_session_key",
+      "input": {
+        "session_key": "main\n::dm::user"
+      },
+      "expected_error": true,
+      "error_type": "ValueError",
+      "error_message": "Session key contains invalid characters"
+    },
+    {
+      "name": "test_hier_parse_dm",
+      "function": "parse_hierarchical_key",
+      "input": {
+        "session_key": "agent:main:telegram:dm:user123"
+      },
+      "expected": {
+        "agent_id": "main",
+        "session_type": "dm",
+        "peer_id": "user123",
+        "channel": "telegram",
+        "surface": "dm",
+        "thread_id": null,
+        "is_subagent": false,
+        "subagent_name": null
+      }
+    },
+    {
+      "name": "test_hier_parse_group",
+      "function": "parse_hierarchical_key",
+      "input": {
+        "session_key": "agent:main:telegram:group:chat456"
+      },
+      "expected": {
+        "agent_id": "main",
+        "session_type": "group",
+        "peer_id": "chat456",
+        "channel": "telegram",
+        "surface": "group",
+        "thread_id": null,
+        "is_subagent": false,
+        "subagent_name": null
+      }
+    },
+    {
+      "name": "test_hier_parse_thread",
+      "function": "parse_hierarchical_key",
+      "input": {
+        "session_key": "agent:main:slack:channel:C123:thread:t456"
+      },
+      "expected": {
+        "agent_id": "main",
+        "session_type": "channel",
+        "peer_id": "C123",
+        "channel": "slack",
+        "surface": "channel",
+        "thread_id": "t456",
+        "is_subagent": false,
+        "subagent_name": null
+      }
+    },
+    {
+      "name": "test_hier_parse_subagent",
+      "function": "parse_hierarchical_key",
+      "input": {
+        "session_key": "agent:main:subagent:openai-gpt4"
+      },
+      "expected": {
+        "agent_id": "main",
+        "session_type": "subagent",
+        "peer_id": "openai-gpt4",
+        "channel": null,
+        "surface": null,
+        "thread_id": null,
+        "is_subagent": true,
+        "subagent_name": "openai-gpt4"
+      }
+    },
+    {
+      "name": "test_hier_parse_not_agent",
+      "function": "parse_hierarchical_key",
+      "input": {
+        "session_key": "notagent:main:telegram:dm:user123"
+      },
+      "expected_error": true,
+      "error_type": "ValueError",
+      "error_message": "Not a hierarchical key: notagent:main:telegram:dm:user123"
+    },
+    {
+      "name": "test_hier_parse_too_short",
+      "function": "parse_hierarchical_key",
+      "input": {
+        "session_key": "agent:main:telegram"
+      },
+      "expected_error": true,
+      "error_type": "ValueError",
+      "error_message": "Invalid hierarchical key format: agent:main:telegram"
+    },
+    {
+      "name": "test_classify_global",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "global"
+      },
+      "expected": "global"
+    },
+    {
+      "name": "test_classify_unknown",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "unknown"
+      },
+      "expected": "unknown"
+    },
+    {
+      "name": "test_classify_subagent",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "agent:main:subagent:gpt4"
+      },
+      "expected": "subagent"
+    },
+    {
+      "name": "test_classify_thread",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "agent:main:telegram:dm:user:thread:t1"
+      },
+      "expected": "thread"
+    },
+    {
+      "name": "test_classify_group_simple",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "main::group::chat123"
+      },
+      "expected": "group"
+    },
+    {
+      "name": "test_classify_channel_simple",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "main::channel::C123"
+      },
+      "expected": "group"
+    },
+    {
+      "name": "test_classify_direct_simple",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "main::dm::user123"
+      },
+      "expected": "direct"
+    },
+    {
+      "name": "test_classify_direct_main",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "main::main::user123"
+      },
+      "expected": "direct"
+    },
+    {
+      "name": "test_classify_hier_group",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "agent:main:telegram:group:chat456"
+      },
+      "expected": "group"
+    },
+    {
+      "name": "test_classify_hier_dm",
+      "function": "classify_session_key",
+      "input": {
+        "session_key": "agent:main:telegram:dm:user456"
+      },
+      "expected": "direct"
+    },
+    {
+      "name": "test_validate_valid_simple",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "main::main::user123"
+      },
+      "expected": null
+    },
+    {
+      "name": "test_validate_valid_hier",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "agent:main:telegram:dm:user123"
+      },
+      "expected": null
+    },
+    {
+      "name": "test_validate_valid_subagent",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "agent:main:subagent:gpt4"
+      },
+      "expected": null
+    },
+    {
+      "name": "test_validate_valid_global",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "global"
+      },
+      "expected": null
+    },
+    {
+      "name": "test_validate_valid_unknown",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "unknown"
+      },
+      "expected": null
+    },
+    {
+      "name": "test_validate_valid_thread",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "agent:main:telegram:dm:user:thread:t1"
+      },
+      "expected": null
+    },
+    {
+      "name": "test_validate_channel_prefixed",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "telegram:dm:user123"
+      },
+      "expected": null
+    },
+    {
+      "name": "test_validate_empty",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": ""
+      },
+      "expected_error": true,
+      "error_type": "SessionKeyValidationError"
+    },
+    {
+      "name": "test_validate_too_long",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected_error": true,
+      "error_type": "SessionKeyValidationError"
+    },
+    {
+      "name": "test_validate_invalid_chars_simple",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "main::dm::user@#$%"
+      },
+      "expected_error": true,
+      "error_type": "SessionKeyValidationError"
+    },
+    {
+      "name": "test_validate_empty_agent",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "::dm::user123"
+      },
+      "expected_error": true,
+      "error_type": "SessionKeyValidationError"
+    },
+    {
+      "name": "test_validate_empty_type",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "main::::user123"
+      },
+      "expected_error": true,
+      "error_type": "SessionKeyValidationError"
+    },
+    {
+      "name": "test_validate_uppercase_type",
+      "function": "validate_session_key",
+      "input": {
+        "session_key": "main::DM::user123"
+      },
+      "expected_error": true,
+      "error_type": "SessionKeyValidationError"
+    },
+    {
+      "name": "test_normalize_already_hier",
+      "function": "normalize_session_key",
+      "input": {
+        "session_key": "agent:main:telegram:dm:user123",
+        "default_agent_id": "main"
+      },
+      "expected": "agent:main:telegram:dm:user123"
+    },
+    {
+      "name": "test_normalize_simple",
+      "function": "normalize_session_key",
+      "input": {
+        "session_key": "main::dm::user123",
+        "default_agent_id": "main"
+      },
+      "expected": "main::dm::user123"
+    },
+    {
+      "name": "test_normalize_channel_prefixed",
+      "function": "normalize_session_key",
+      "input": {
+        "session_key": "telegram:dm:user123",
+        "default_agent_id": "main"
+      },
+      "expected": "agent:main:telegram:dm:user123"
+    },
+    {
+      "name": "test_normalize_channel_prefixed_custom_agent",
+      "function": "normalize_session_key",
+      "input": {
+        "session_key": "telegram:dm:user123",
+        "default_agent_id": "bot2"
+      },
+      "expected": "agent:bot2:telegram:dm:user123"
+    },
+    {
+      "name": "test_normalize_global",
+      "function": "normalize_session_key",
+      "input": {
+        "session_key": "global",
+        "default_agent_id": "main"
+      },
+      "expected": "global"
+    },
+    {
+      "name": "test_normalize_unknown",
+      "function": "normalize_session_key",
+      "input": {
+        "session_key": "unknown",
+        "default_agent_id": "main"
+      },
+      "expected": "unknown"
+    },
+    {
+      "name": "test_normalize_short",
+      "function": "normalize_session_key",
+      "input": {
+        "session_key": "ab",
+        "default_agent_id": "main"
+      },
+      "expected": "ab"
+    },
+    {
+      "name": "test_is_subagent_true",
+      "function": "is_subagent_session_key",
+      "input": {
+        "session_key": "agent:main:subagent:gpt4"
+      },
+      "expected": true
+    },
+    {
+      "name": "test_is_subagent_false",
+      "function": "is_subagent_session_key",
+      "input": {
+        "session_key": "main::dm::user123"
+      },
+      "expected": false
+    },
+    {
+      "name": "test_is_thread_true",
+      "function": "is_thread_session_key",
+      "input": {
+        "session_key": "agent:main:telegram:dm:u:thread:t1"
+      },
+      "expected": true
+    },
+    {
+      "name": "test_is_thread_false",
+      "function": "is_thread_session_key",
+      "input": {
+        "session_key": "main::dm::user123"
+      },
+      "expected": false
+    },
+    {
+      "name": "test_is_global_true",
+      "function": "is_global_key",
+      "input": {
+        "session_key": "global"
+      },
+      "expected": true
+    },
+    {
+      "name": "test_is_global_false",
+      "function": "is_global_key",
+      "input": {
+        "session_key": "main::dm::user123"
+      },
+      "expected": false
+    },
+    {
+      "name": "test_is_global_not_prefix",
+      "function": "is_global_key",
+      "input": {
+        "session_key": "global_extra"
+      },
+      "expected": false
+    },
+    {
+      "name": "test_extract_channel_hier",
+      "function": "extract_channel_from_key",
+      "input": {
+        "session_key": "agent:main:telegram:dm:user123"
+      },
+      "expected": "telegram"
+    },
+    {
+      "name": "test_extract_channel_slack",
+      "function": "extract_channel_from_key",
+      "input": {
+        "session_key": "agent:main:slack:channel:C123:thread:t1"
+      },
+      "expected": "slack"
+    },
+    {
+      "name": "test_extract_channel_simple",
+      "function": "extract_channel_from_key",
+      "input": {
+        "session_key": "main::main::user123"
+      },
+      "expected": null
+    },
+    {
+      "name": "test_extract_channel_subagent",
+      "function": "extract_channel_from_key",
+      "input": {
+        "session_key": "agent:main:subagent:gpt4"
+      },
+      "expected": null
+    }
+  ]
+}

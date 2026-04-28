@@ -1,0 +1,1307 @@
+//! Codex app-server agent provider.
+//!
+//! Rust port of `the original codex_provider.py`.
+//! Implements `AgentLoopProvider` backed by `codex_sdk::CodexClient`,
+//! managing thread/turn lifecycle and streaming notifications.
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use async_trait::async_trait;
+use codex_sdk::types::{coerce_f64, coerce_i64};
+use codex_sdk::{
+    CodexClient, CodexClientConfig, CodexError, InputItem, JsonRpcNotification, ThreadResumeParams,
+    ThreadStartParams,
+};
+use garyx_models::provider::{
+    CodexAppServerConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderMessageRole,
+    ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput, StreamBoundaryKind,
+    StreamEvent, attachments_from_metadata, build_prompt_message_with_attachments,
+};
+use serde_json::{Value, json};
+use tokio::sync::Mutex;
+
+use crate::gary_prompt::{append_runtime_context_section, compose_gary_instructions};
+use crate::native_slash::build_native_skill_prompt;
+use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+
+// ---------------------------------------------------------------------------
+// Helper functions (provider-level domain mapping)
+// ---------------------------------------------------------------------------
+
+/// Check whether a notification's params match our expected thread/turn.
+fn matches_turn(params: &Value, thread_id: &str, turn_id: &str) -> bool {
+    if let Some(event_thread) = params.get("threadId").and_then(|v| v.as_str()) {
+        if !event_thread.is_empty() && event_thread != thread_id {
+            return false;
+        }
+    }
+    if let Some(event_turn) = params.get("turnId").and_then(|v| v.as_str()) {
+        if !event_turn.is_empty() && event_turn != turn_id {
+            return false;
+        }
+    }
+    if let Some(turn_obj_id) = params
+        .get("turn")
+        .and_then(|t| t.get("id"))
+        .and_then(|v| v.as_str())
+    {
+        if !turn_obj_id.is_empty() && turn_obj_id != turn_id {
+            return false;
+        }
+    }
+    true
+}
+
+/// Extract usage (input_tokens, output_tokens, cost) from a completed turn.
+fn extract_usage(turn: &Value) -> (i64, i64, f64) {
+    let usage = match turn.get("usage") {
+        Some(u) if u.is_object() => u,
+        _ => return (0, 0, 0.0),
+    };
+
+    let input_tokens = ["inputTokens", "input_tokens", "input", "prompt_tokens"]
+        .iter()
+        .find_map(|k| usage.get(*k).filter(|v| !v.is_null()))
+        .map(coerce_i64)
+        .unwrap_or(0);
+
+    let output_tokens = [
+        "outputTokens",
+        "output_tokens",
+        "output",
+        "completion_tokens",
+    ]
+    .iter()
+    .find_map(|k| usage.get(*k).filter(|v| !v.is_null()))
+    .map(coerce_i64)
+    .unwrap_or(0);
+
+    let cost = ["totalCostUsd", "total_cost_usd", "costUsd", "cost"]
+        .iter()
+        .find_map(|k| usage.get(*k).filter(|v| !v.is_null()))
+        .map(coerce_f64)
+        .unwrap_or(0.0);
+
+    (input_tokens, output_tokens, cost)
+}
+
+/// Build typed `InputItem` vector from `ProviderRunOptions`.
+fn build_input_items_from_parts(
+    message: &str,
+    images: &[ImagePayload],
+    attachments: &[PromptAttachment],
+) -> Vec<InputItem> {
+    let message = build_prompt_message_with_attachments(message, attachments);
+    if !attachments.is_empty() {
+        return vec![InputItem::Text { text: message }];
+    }
+
+    let mut items = Vec::with_capacity(images.len() + 1);
+    if !message.trim().is_empty() || images.is_empty() {
+        items.push(InputItem::Text { text: message });
+    }
+
+    for image in images {
+        if image.data.trim().is_empty() {
+            continue;
+        }
+        items.push(InputItem::Image {
+            url: format!("data:{};base64,{}", image.media_type, image.data),
+        });
+    }
+
+    items
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct CodexCliConfigFile {
+    model: Option<String>,
+}
+
+fn normalize_non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn default_codex_config_path() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(home).join("config.toml"));
+    }
+
+    std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|home| home.join(".codex").join("config.toml"))
+}
+
+fn read_codex_cli_default_model_from_path(path: &Path) -> Option<String> {
+    let contents = std::fs::read_to_string(path).ok()?;
+    let parsed: CodexCliConfigFile = toml::from_str(&contents).ok()?;
+    normalize_non_empty(parsed.model.as_deref())
+}
+
+fn resolve_codex_actual_model_with_config_path(
+    config: &CodexAppServerConfig,
+    metadata: &HashMap<String, Value>,
+    config_path: Option<&Path>,
+) -> Option<String> {
+    normalize_non_empty(metadata.get("model").and_then(Value::as_str))
+        .or_else(|| normalize_non_empty(Some(config.model.as_str())))
+        .or_else(|| normalize_non_empty(Some(config.default_model.as_str())))
+        .or_else(|| config_path.and_then(read_codex_cli_default_model_from_path))
+}
+
+fn resolve_codex_actual_model(
+    config: &CodexAppServerConfig,
+    metadata: &HashMap<String, Value>,
+) -> Option<String> {
+    let config_path = default_codex_config_path();
+    resolve_codex_actual_model_with_config_path(config, metadata, config_path.as_deref())
+}
+
+fn normalize_codex_mcp_servers(metadata: &HashMap<String, Value>) -> Option<Value> {
+    let servers = metadata.get("remote_mcp_servers")?.as_object()?;
+    let mut normalized = serde_json::Map::new();
+
+    for (name, raw_server) in servers {
+        let Some(server) = raw_server.as_object() else {
+            continue;
+        };
+        let mut entry = serde_json::Map::new();
+
+        if let Some(command) = server
+            .get("command")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            entry.insert("command".to_owned(), Value::String(command.to_owned()));
+            entry.insert(
+                "args".to_owned(),
+                Value::Array(
+                    server
+                        .get("args")
+                        .and_then(Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.as_str().map(|value| value.to_owned()))
+                                .map(Value::String)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default(),
+                ),
+            );
+
+            let env = server
+                .get("env")
+                .and_then(Value::as_object)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter_map(|(env_key, env_value)| {
+                            env_value.as_str().map(|env_value| {
+                                (env_key.clone(), Value::String(env_value.to_owned()))
+                            })
+                        })
+                        .collect::<serde_json::Map<_, _>>()
+                })
+                .unwrap_or_default();
+            if !env.is_empty() {
+                entry.insert("env".to_owned(), Value::Object(env));
+            }
+            if let Some(enabled) = server.get("enabled").and_then(Value::as_bool) {
+                entry.insert("enabled".to_owned(), Value::Bool(enabled));
+            }
+            if let Some(cwd) = server
+                .get("cwd")
+                .or_else(|| server.get("working_dir"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                let canonical = std::fs::canonicalize(cwd)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| cwd.to_owned());
+                entry.insert("cwd".to_owned(), Value::String(canonical));
+            }
+        } else if let Some(url) = server
+            .get("url")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            entry.insert("url".to_owned(), Value::String(url.to_owned()));
+            if let Some(enabled) = server.get("enabled").and_then(Value::as_bool) {
+                entry.insert("enabled".to_owned(), Value::Bool(enabled));
+            }
+            if let Some(headers) = server.get("headers").and_then(Value::as_object) {
+                let http_headers = headers
+                    .iter()
+                    .filter_map(|(header_key, header_value)| {
+                        header_value.as_str().map(|header_value| {
+                            (header_key.clone(), Value::String(header_value.to_owned()))
+                        })
+                    })
+                    .collect::<serde_json::Map<_, _>>();
+                if !http_headers.is_empty() {
+                    entry.insert("http_headers".to_owned(), Value::Object(http_headers));
+                }
+            }
+            if matches!(
+                server.get("type").and_then(Value::as_str),
+                Some(kind) if kind.eq_ignore_ascii_case("sse")
+            ) {
+                entry.insert("transport".to_owned(), Value::String("sse".to_owned()));
+            }
+        }
+
+        if !entry.is_empty() {
+            normalized.insert(name.clone(), Value::Object(entry));
+        }
+    }
+
+    (!normalized.is_empty()).then_some(Value::Object(normalized))
+}
+
+fn metadata_string_map(metadata: &HashMap<String, Value>, key: &str) -> HashMap<String, String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_object)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(env_key, env_value)| {
+                    env_value
+                        .as_str()
+                        .map(|env_value| (env_key.clone(), env_value.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn resolve_runtime_codex_env(
+    config: &CodexAppServerConfig,
+    metadata: &HashMap<String, Value>,
+) -> HashMap<String, String> {
+    let mut env = config.env.clone();
+    env.extend(metadata_string_map(metadata, "desktop_codex_env"));
+    env
+}
+
+fn garyx_mcp_server(
+    config: &CodexAppServerConfig,
+    thread_id: &str,
+    run_id: &str,
+    metadata: &HashMap<String, Value>,
+) -> Option<Value> {
+    let base_url = config.mcp_base_url.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        return None;
+    }
+
+    let mut http_headers = serde_json::Map::from_iter([
+        ("X-Run-Id".to_owned(), Value::String(run_id.to_owned())),
+        (
+            "X-Thread-Id".to_owned(),
+            Value::String(thread_id.to_owned()),
+        ),
+        (
+            "X-Session-Key".to_owned(),
+            Value::String(thread_id.to_owned()),
+        ),
+    ]);
+    for (key, value) in metadata_string_map(metadata, "garyx_mcp_headers") {
+        http_headers.insert(key, Value::String(value));
+    }
+
+    // Encode thread_id and run_id into the URL path so the gateway can
+    // extract context even when the client strips custom headers (matches
+    // the Claude Code workaround in claude_provider.rs).
+    let encoded_thread = urlencoding::encode(thread_id);
+    let encoded_run = urlencoding::encode(run_id);
+    let url = metadata
+        .get("garyx_mcp_auth_token")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|token| {
+            format!(
+                "{base_url}/mcp/auth/{}/{}/{}",
+                urlencoding::encode(token),
+                encoded_thread,
+                encoded_run
+            )
+        })
+        .unwrap_or_else(|| format!("{base_url}/mcp/{encoded_thread}/{encoded_run}"));
+    Some(json!({
+        "url": url,
+        "http_headers": http_headers,
+    }))
+}
+
+fn build_codex_thread_config(
+    provider_config: &CodexAppServerConfig,
+    metadata: &HashMap<String, Value>,
+    thread_id: &str,
+    run_id: &str,
+    workspace_dir: Option<&Path>,
+) -> Option<Value> {
+    let mut thread_config = serde_json::Map::new();
+
+    let runtime_instructions = metadata
+        .get("developer_instructions")
+        .and_then(|v| v.as_str())
+        .or_else(|| metadata.get("system_prompt").and_then(|v| v.as_str()));
+    let automation_id = metadata.get("automation_id").and_then(|v| v.as_str());
+    let instructions =
+        compose_gary_instructions(runtime_instructions, workspace_dir, automation_id);
+    thread_config.insert(
+        "developer_instructions".to_owned(),
+        Value::String(append_runtime_context_section(
+            instructions,
+            thread_id,
+            workspace_dir,
+            metadata,
+        )),
+    );
+
+    let mut mcp_servers = match normalize_codex_mcp_servers(metadata) {
+        Some(Value::Object(obj)) => obj,
+        _ => serde_json::Map::new(),
+    };
+    if let Some(server) = garyx_mcp_server(provider_config, thread_id, run_id, metadata) {
+        // Reserve `garyx` for the built-in local gateway endpoint so runtime
+        // metadata cannot shadow it with a stale or malformed URL.
+        mcp_servers.insert("garyx".to_owned(), server);
+    }
+    if !mcp_servers.is_empty() {
+        thread_config.insert("mcp_servers".to_owned(), Value::Object(mcp_servers));
+    }
+    (!thread_config.is_empty()).then_some(Value::Object(thread_config))
+}
+
+fn build_input_items(options: &ProviderRunOptions) -> Vec<InputItem> {
+    let message = build_native_skill_prompt(&options.message, &options.metadata)
+        .unwrap_or_else(|| options.message.clone());
+    let attachments = attachments_from_metadata(&options.metadata);
+    build_input_items_from_parts(
+        &message,
+        options.images.as_deref().unwrap_or_default(),
+        &attachments,
+    )
+}
+
+fn append_codex_assistant_session_message(
+    session_messages: &mut Vec<ProviderMessage>,
+    item_id: Option<&str>,
+    delta: &str,
+) {
+    if delta.is_empty() {
+        return;
+    }
+
+    let normalized_item_id = item_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    let can_append = session_messages.last().is_some_and(|message| {
+        message.role == ProviderMessageRole::Assistant
+            && message.metadata.get("source").and_then(Value::as_str) == Some("codex_app_server")
+            && message
+                .metadata
+                .get("item_id")
+                .and_then(Value::as_str)
+                .map(|value| value.to_owned())
+                == normalized_item_id
+    });
+
+    if can_append {
+        if let Some(last) = session_messages.last_mut() {
+            let mut text = last.text.clone().unwrap_or_default();
+            text.push_str(delta);
+            last.text = Some(text.clone());
+            last.content = Value::String(text);
+        }
+        return;
+    }
+
+    let mut message = ProviderMessage::assistant_text(delta)
+        .with_timestamp(chrono::Utc::now().to_rfc3339())
+        .with_metadata_value("source", serde_json::json!("codex_app_server"))
+        .with_metadata_value("item_type", serde_json::json!("agentMessage"));
+    if let Some(item_id) = normalized_item_id {
+        message = message.with_metadata_value("item_id", serde_json::json!(item_id));
+    }
+    session_messages.push(message);
+}
+
+/// Build a tool session message from an item notification.
+fn build_tool_session_message(item: &Value, is_completed: bool) -> Option<ProviderMessage> {
+    let item_type = item
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if !["commandExecution", "fileChange", "mcpToolCall"].contains(&item_type) {
+        return None;
+    }
+
+    let tool_use_id = item
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
+
+    let tool_name = if item_type == "mcpToolCall" {
+        let server = item.get("server").and_then(|v| v.as_str()).unwrap_or("");
+        let tool = item.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+        if !tool.is_empty() {
+            format!("mcp:{server}:{tool}")
+        } else {
+            "mcpToolCall".to_owned()
+        }
+    } else {
+        item_type.to_owned()
+    };
+
+    let mut msg = if is_completed {
+        let status = item
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        ProviderMessage::tool_result(
+            item.clone(),
+            (!tool_use_id.is_empty()).then_some(tool_use_id),
+            Some(tool_name),
+            Some(status == "failed" || status == "declined"),
+        )
+    } else {
+        ProviderMessage::tool_use(
+            item.clone(),
+            (!tool_use_id.is_empty()).then_some(tool_use_id),
+            Some(tool_name),
+        )
+    };
+
+    msg = msg
+        .with_timestamp(chrono::Utc::now().to_rfc3339())
+        .with_metadata_value("source", serde_json::json!("codex_app_server"))
+        .with_metadata_value("item_type", serde_json::json!(item_type));
+
+    Some(msg)
+}
+
+fn is_agent_message_item(item: &Value) -> bool {
+    item.get("type")
+        .and_then(|v| v.as_str())
+        .map(|kind| kind.eq_ignore_ascii_case("agentMessage"))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+fn is_tool_activity_item(item: &Value) -> bool {
+    item.get("type")
+        .and_then(|v| v.as_str())
+        .map(|kind| matches!(kind, "commandExecution" | "fileChange" | "mcpToolCall"))
+        .unwrap_or(false)
+}
+
+fn maybe_emit_agent_message_separator(
+    next_item_id: Option<&str>,
+    current_item_id: &mut Option<String>,
+    current_item_has_text: &mut bool,
+    response_parts: &mut Vec<String>,
+    on_chunk: &(dyn Fn(StreamEvent) + Send + Sync),
+) {
+    let Some(next_item_id) = next_item_id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return;
+    };
+
+    let switched_items = current_item_id
+        .as_deref()
+        .map(|current| current != next_item_id)
+        .unwrap_or(false);
+
+    if switched_items && *current_item_has_text {
+        let separator = "\n\n".to_owned();
+        response_parts.push(separator.clone());
+        on_chunk(StreamEvent::Boundary {
+            kind: StreamBoundaryKind::AssistantSegment,
+            pending_input_id: None,
+        });
+    }
+
+    if current_item_id.as_deref() != Some(next_item_id) {
+        *current_item_id = Some(next_item_id.to_owned());
+        *current_item_has_text = false;
+    }
+}
+
+fn emit_tool_stream_event(
+    message: &ProviderMessage,
+    on_chunk: &(dyn Fn(StreamEvent) + Send + Sync),
+) {
+    match message.role_str() {
+        "tool_use" => on_chunk(StreamEvent::ToolUse {
+            message: message.clone(),
+        }),
+        "tool_result" => on_chunk(StreamEvent::ToolResult {
+            message: message.clone(),
+        }),
+        _ => {}
+    }
+}
+
+/// Build `ThreadStartParams` from `CodexAppServerConfig`.
+fn build_thread_start_params(
+    config: &CodexAppServerConfig,
+    workspace_dir_override: Option<&str>,
+    thread_id: &str,
+    run_id: &str,
+    metadata: &HashMap<String, Value>,
+) -> ThreadStartParams {
+    let cwd = workspace_dir_override
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            config
+                .workspace_dir
+                .as_ref()
+                .filter(|d| !d.is_empty())
+                .cloned()
+        });
+    let model = metadata
+        .get("model")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            if !config.model.is_empty() {
+                Some(config.model.clone())
+            } else if !config.default_model.is_empty() {
+                Some(config.default_model.clone())
+            } else {
+                None
+            }
+        });
+    let model_reasoning_effort = config
+        .model_reasoning_effort
+        .trim()
+        .is_empty()
+        .then_some(None)
+        .unwrap_or_else(|| Some(config.model_reasoning_effort.clone()));
+
+    ThreadStartParams {
+        cwd: cwd.clone(),
+        config: build_codex_thread_config(
+            config,
+            metadata,
+            thread_id,
+            run_id,
+            cwd.as_deref().map(Path::new),
+        ),
+        model,
+        model_reasoning_effort,
+        approval_policy: if config.approval_policy.is_empty() {
+            None
+        } else {
+            Some(config.approval_policy.clone())
+        },
+        sandbox: if config.sandbox_mode.is_empty() {
+            None
+        } else {
+            Some(config.sandbox_mode.clone())
+        },
+    }
+}
+
+/// Map a `CodexError` into a `BridgeError`.
+fn map_codex_error(context: &str, e: CodexError) -> BridgeError {
+    BridgeError::RunFailed(format!("{context}: {e}"))
+}
+
+fn resolve_existing_thread_id(
+    session_map: &HashMap<String, String>,
+    thread_id: &str,
+    sdk_session_id: Option<&str>,
+) -> Option<String> {
+    session_map
+        .get(thread_id)
+        .cloned()
+        .or_else(|| sdk_session_id.map(ToOwned::to_owned))
+}
+
+async fn resume_or_start_thread<Resume, ResumeFut, Start, StartFut>(
+    existing_thread_id: Option<String>,
+    thread_params: ThreadStartParams,
+    mut resume: Resume,
+    mut start: Start,
+) -> Result<String, BridgeError>
+where
+    Resume: FnMut(ThreadResumeParams) -> ResumeFut,
+    ResumeFut: Future<Output = Result<String, CodexError>>,
+    Start: FnMut(ThreadStartParams) -> StartFut,
+    StartFut: Future<Output = Result<String, CodexError>>,
+{
+    if let Some(existing_thread_id) = existing_thread_id {
+        let resume_params = ThreadResumeParams {
+            thread_id: existing_thread_id.clone(),
+            cwd: thread_params.cwd.clone(),
+            config: thread_params.config.clone(),
+            model: thread_params.model.clone(),
+            model_reasoning_effort: thread_params.model_reasoning_effort.clone(),
+            approval_policy: thread_params.approval_policy.clone(),
+            sandbox: thread_params.sandbox.clone(),
+        };
+
+        match resume(resume_params).await {
+            Ok(thread_id) => return Ok(thread_id),
+            Err(error) => {
+                tracing::warn!(
+                    thread_id = %existing_thread_id,
+                    error = %error,
+                    "codex resume failed, starting new thread"
+                );
+            }
+        }
+    }
+
+    start(thread_params)
+        .await
+        .map_err(|e| map_codex_error("thread/start failed", e))
+}
+
+// ---------------------------------------------------------------------------
+// CodexAgentProvider
+// ---------------------------------------------------------------------------
+
+/// Agent provider backed by `codex app-server` via `codex_sdk::CodexClient`.
+pub struct CodexAgentProvider {
+    config: CodexAppServerConfig,
+    client: Mutex<Option<CodexClient>>,
+    client_env: Mutex<HashMap<String, String>>,
+    /// Maps Garyx thread IDs to codex thread IDs.
+    session_map: Mutex<HashMap<String, String>>,
+    /// run_id -> (thread_id, turn_id)
+    active_runs: Mutex<HashMap<String, (String, String)>>,
+    /// thread_id -> (codex_thread_id, turn_id, run_id)
+    active_session_turns: Mutex<HashMap<String, (String, String, String)>>,
+    /// thread_id -> (run_id, live callback)
+    active_session_callbacks: Mutex<HashMap<String, ActiveSessionCallback>>,
+    ready: Mutex<bool>,
+}
+
+type ActiveSessionCallback = (String, Arc<dyn Fn(StreamEvent) + Send + Sync>);
+
+impl CodexAgentProvider {
+    /// Create a new Codex provider with the given config.
+    pub fn new(config: CodexAppServerConfig) -> Self {
+        Self {
+            config,
+            client: Mutex::new(None),
+            client_env: Mutex::new(HashMap::new()),
+            session_map: Mutex::new(HashMap::new()),
+            active_runs: Mutex::new(HashMap::new()),
+            active_session_turns: Mutex::new(HashMap::new()),
+            active_session_callbacks: Mutex::new(HashMap::new()),
+            ready: Mutex::new(false),
+        }
+    }
+
+    fn build_client_config(&self, env: HashMap<String, String>) -> CodexClientConfig {
+        let codex_bin = if self.config.codex_bin.is_empty() {
+            "codex".to_owned()
+        } else {
+            self.config.codex_bin.clone()
+        };
+
+        let model = if !self.config.model.is_empty() {
+            Some(self.config.model.clone())
+        } else if !self.config.default_model.is_empty() {
+            Some(self.config.default_model.clone())
+        } else {
+            None
+        };
+
+        CodexClientConfig {
+            codex_bin,
+            workspace_dir: self.config.workspace_dir.clone(),
+            model,
+            approval_policy: self.config.approval_policy.clone(),
+            sandbox_mode: self.config.sandbox_mode.clone(),
+            experimental_api: self.config.experimental_api,
+            request_timeout: Duration::from_secs_f64(self.config.request_timeout_seconds),
+            startup_timeout: Duration::from_secs_f64(self.config.startup_timeout_seconds),
+            env,
+            ..CodexClientConfig::default()
+        }
+    }
+
+    async fn restart_client_with_env(
+        &self,
+        client_guard: &mut Option<CodexClient>,
+        env: HashMap<String, String>,
+    ) -> Result<(), BridgeError> {
+        if let Some(client) = client_guard.as_mut() {
+            client.shutdown().await;
+        }
+
+        let mut client = CodexClient::new(self.build_client_config(env.clone()));
+        client
+            .initialize()
+            .await
+            .map_err(|e| BridgeError::Internal(format!("codex client init failed: {e}")))?;
+
+        *client_guard = Some(client);
+        *self.client_env.lock().await = env;
+        *self.ready.lock().await = true;
+        Ok(())
+    }
+
+    async fn ensure_client_matches_options(
+        &self,
+        options: &ProviderRunOptions,
+    ) -> Result<(), BridgeError> {
+        let desired_env = resolve_runtime_codex_env(&self.config, &options.metadata);
+        let mut client_guard = self.client.lock().await;
+        let current_env = self.client_env.lock().await.clone();
+
+        if client_guard.is_some() && current_env == desired_env {
+            return Ok(());
+        }
+
+        if client_guard.is_some() && current_env != desired_env {
+            let active_run_present = self
+                .active_runs
+                .try_lock()
+                .map(|runs| !runs.is_empty())
+                .unwrap_or(true);
+            if active_run_present {
+                return Err(BridgeError::RunFailed(
+                    "codex auth settings changed while another Codex run is active".to_owned(),
+                ));
+            }
+        }
+
+        self.restart_client_with_env(&mut client_guard, desired_env)
+            .await
+    }
+
+    async fn cleanup_active_run_state(&self, run_id: &str) {
+        self.active_runs.lock().await.remove(run_id);
+
+        let thread_ids: Vec<String> = {
+            let turns = self.active_session_turns.lock().await;
+            turns
+                .iter()
+                .filter(|(_, (_, _, active_run_id))| active_run_id == run_id)
+                .map(|(thread_id, _)| thread_id.clone())
+                .collect()
+        };
+
+        if thread_ids.is_empty() {
+            return;
+        }
+
+        {
+            let mut turns = self.active_session_turns.lock().await;
+            for thread_id in &thread_ids {
+                turns.remove(thread_id);
+            }
+        }
+
+        let mut callbacks = self.active_session_callbacks.lock().await;
+        for thread_id in thread_ids {
+            let should_remove = callbacks
+                .get(&thread_id)
+                .map(|(active_run_id, _)| active_run_id == run_id)
+                .unwrap_or(false);
+            if should_remove {
+                callbacks.remove(&thread_id);
+            }
+        }
+    }
+
+    /// Core streaming run implementation.
+    async fn run_streaming_impl(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        let client_guard = self.client.lock().await;
+        let client = client_guard.as_ref().ok_or(BridgeError::ProviderNotReady)?;
+        let live_callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(on_chunk);
+
+        let run_id = options
+            .metadata
+            .get("bridge_run_id")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                options
+                    .metadata
+                    .get("client_run_id")
+                    .and_then(|v| v.as_str())
+            })
+            .or_else(|| options.metadata.get("run_id").and_then(|v| v.as_str()))
+            .map(|s| s.to_owned())
+            .unwrap_or_else(|| {
+                format!(
+                    "run_{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                )
+            });
+
+        let start = Instant::now();
+        let actual_model = resolve_codex_actual_model(&self.config, &options.metadata);
+        let mut response_parts: Vec<String> = Vec::new();
+        let mut session_messages: Vec<ProviderMessage> = Vec::new();
+        let mut notification_rx = client.subscribe_events();
+
+        // Resolve or create thread
+        let sdk_session_id = options
+            .metadata
+            .get("sdk_session_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
+
+        let existing_thread_id = {
+            let session_map = self.session_map.lock().await;
+            resolve_existing_thread_id(&session_map, &options.thread_id, sdk_session_id.as_deref())
+        };
+        let thread_params = build_thread_start_params(
+            &self.config,
+            options.workspace_dir.as_deref(),
+            &options.thread_id,
+            &run_id,
+            &options.metadata,
+        );
+        let thread_id = resume_or_start_thread(
+            existing_thread_id,
+            thread_params,
+            |params| client.resume_thread(params),
+            |params| client.start_thread(params),
+        )
+        .await?;
+        self.session_map
+            .lock()
+            .await
+            .insert(options.thread_id.clone(), thread_id.clone());
+
+        // Start turn
+        let input_items = build_input_items(options);
+        let turn_id = client
+            .start_turn(&thread_id, input_items)
+            .await
+            .map_err(|e| map_codex_error("turn/start failed", e))?;
+
+        // Track active run
+        {
+            self.active_runs
+                .lock()
+                .await
+                .insert(run_id.clone(), (thread_id.clone(), turn_id.clone()));
+            self.active_session_turns.lock().await.insert(
+                options.thread_id.clone(),
+                (thread_id.clone(), turn_id.clone(), run_id.clone()),
+            );
+            self.active_session_callbacks.lock().await.insert(
+                options.thread_id.clone(),
+                (run_id.clone(), live_callback.clone()),
+            );
+        }
+
+        // Drop the client lock before entering notification loop
+        drop(client_guard);
+
+        // Notification loop
+        let mut completed_turn: Option<Value> = None;
+        let mut streamed_error_message: Option<String> = None;
+        let mut current_agent_message_item_id: Option<String> = None;
+        let mut current_agent_message_has_text = false;
+
+        let timeout = Duration::from_secs_f64(self.config.request_timeout_seconds);
+
+        let loop_result: Result<(), BridgeError> = async {
+            loop {
+                let notification: JsonRpcNotification =
+                    tokio::time::timeout(timeout, notification_rx.recv())
+                        .await
+                        .map_err(|_| BridgeError::Timeout)?
+                        .map_err(|e| {
+                            BridgeError::RunFailed(format!("notification channel error: {e}"))
+                        })?;
+
+                let method = &notification.method;
+                let params = &notification.params;
+
+                // Fatal transport error
+                if method == "transport/fatal" {
+                    let error_msg = params
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("codex transport fatal error")
+                        .to_owned();
+                    return Err(BridgeError::RunFailed(error_msg));
+                }
+
+                if !matches_turn(params, &thread_id, &turn_id) {
+                    continue;
+                }
+
+                match method.as_str() {
+                    "item/agentMessage/delta" => {
+                        maybe_emit_agent_message_separator(
+                            params.get("itemId").and_then(|v| v.as_str()),
+                            &mut current_agent_message_item_id,
+                            &mut current_agent_message_has_text,
+                            &mut response_parts,
+                            live_callback.as_ref(),
+                        );
+
+                        let delta = params.get("delta").and_then(|v| v.as_str()).unwrap_or("");
+                        if !delta.is_empty() {
+                            response_parts.push(delta.to_owned());
+                            append_codex_assistant_session_message(
+                                &mut session_messages,
+                                params.get("itemId").and_then(|v| v.as_str()),
+                                delta,
+                            );
+                            live_callback(StreamEvent::Delta {
+                                text: delta.to_owned(),
+                            });
+                            current_agent_message_has_text = true;
+                        }
+                    }
+                    "item/started" => {
+                        if let Some(item) = params.get("item") {
+                            if is_agent_message_item(item) {
+                                maybe_emit_agent_message_separator(
+                                    item.get("id").and_then(|v| v.as_str()),
+                                    &mut current_agent_message_item_id,
+                                    &mut current_agent_message_has_text,
+                                    &mut response_parts,
+                                    live_callback.as_ref(),
+                                );
+                            }
+                            if let Some(msg) = build_tool_session_message(item, false) {
+                                emit_tool_stream_event(&msg, live_callback.as_ref());
+                                session_messages.push(msg);
+                            }
+                        }
+                    }
+                    "item/completed" => {
+                        if let Some(item) = params.get("item") {
+                            if let Some(msg) = build_tool_session_message(item, true) {
+                                emit_tool_stream_event(&msg, live_callback.as_ref());
+                                session_messages.push(msg);
+                            }
+                        }
+                    }
+                    "error" => {
+                        if let Some(err_obj) = params.get("error") {
+                            streamed_error_message = Some(
+                                err_obj
+                                    .get("message")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("codex turn error")
+                                    .to_owned(),
+                            );
+                        }
+                    }
+                    "turn/completed" => {
+                        let turn = params
+                            .get("turn")
+                            .cloned()
+                            .unwrap_or(Value::Object(serde_json::Map::new()));
+                        completed_turn = Some(turn);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        // Cleanup tracking
+        self.cleanup_active_run_state(&run_id).await;
+
+        let duration_ms = start.elapsed().as_millis() as i64;
+        let response = response_parts.join("");
+
+        // If the loop errored, return a failure result
+        if let Err(e) = loop_result {
+            tracing::error!(error = %e, "codex provider run_streaming error");
+            return Ok(ProviderRunResult {
+                run_id,
+                thread_id: options.thread_id.clone(),
+                response,
+                session_messages,
+                sdk_session_id: Some(thread_id),
+                actual_model,
+                success: false,
+                error: Some(e.to_string()),
+                input_tokens: 0,
+                output_tokens: 0,
+                cost: 0.0,
+                duration_ms,
+            });
+        }
+
+        // Build result from completed turn
+        let completed = completed_turn.unwrap_or(Value::Object(serde_json::Map::new()));
+        let status = completed
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed")
+            .to_lowercase();
+        let success = status != "failed";
+
+        let error = if status == "failed" {
+            let from_turn = completed
+                .get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_owned());
+            Some(
+                from_turn
+                    .or(streamed_error_message)
+                    .unwrap_or_else(|| "codex turn failed".to_owned()),
+            )
+        } else {
+            None
+        };
+
+        let (input_tokens, output_tokens, cost) = extract_usage(&completed);
+
+        live_callback(StreamEvent::Done);
+
+        Ok(ProviderRunResult {
+            run_id,
+            thread_id: options.thread_id.clone(),
+            response,
+            session_messages,
+            sdk_session_id: Some(thread_id),
+            actual_model,
+            success,
+            error,
+            input_tokens,
+            output_tokens,
+            cost,
+            duration_ms,
+        })
+    }
+}
+
+#[async_trait]
+impl AgentLoopProvider for CodexAgentProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::CodexAppServer
+    }
+
+    fn is_ready(&self) -> bool {
+        // Use try_lock to avoid blocking; if lock is held, provider is busy but ready
+        self.ready.try_lock().map(|g| *g).unwrap_or(false)
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        if *self.ready.lock().await {
+            return Ok(());
+        }
+
+        let initial_env = self.config.env.clone();
+        let mut client = CodexClient::new(self.build_client_config(initial_env.clone()));
+        client
+            .initialize()
+            .await
+            .map_err(|e| BridgeError::Internal(format!("codex client init failed: {e}")))?;
+
+        *self.client.lock().await = Some(client);
+        *self.client_env.lock().await = initial_env;
+        *self.ready.lock().await = true;
+        tracing::info!("codex provider initialized");
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        tracing::info!("shutting down codex provider");
+
+        let mut client_opt = self.client.lock().await;
+        if let Some(ref mut client) = *client_opt {
+            client.shutdown().await;
+        }
+        *client_opt = None;
+        drop(client_opt);
+        *self.client_env.lock().await = HashMap::new();
+
+        self.active_runs.lock().await.clear();
+        self.active_session_turns.lock().await.clear();
+        self.active_session_callbacks.lock().await.clear();
+
+        *self.ready.lock().await = false;
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        if !*self.ready.lock().await {
+            return Err(BridgeError::ProviderNotReady);
+        }
+        self.ensure_client_matches_options(options).await?;
+        self.run_streaming_impl(options, on_chunk).await
+    }
+
+    async fn abort(&self, run_id: &str) -> bool {
+        let active = self.active_runs.lock().await.get(run_id).cloned();
+        let Some((thread_id, turn_id)) = active else {
+            self.cleanup_active_run_state(run_id).await;
+            return false;
+        };
+
+        let client_guard = self.client.lock().await;
+        let Some(client) = client_guard.as_ref() else {
+            drop(client_guard);
+            self.cleanup_active_run_state(run_id).await;
+            return false;
+        };
+
+        // Try interrupt with timeout; force-cleanup on failure
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            client.interrupt_turn(&thread_id, &turn_id),
+        )
+        .await;
+
+        match result {
+            Ok(Ok(())) => {
+                self.cleanup_active_run_state(run_id).await;
+                true
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(run_id, error = %e, "codex abort failed");
+                self.cleanup_active_run_state(run_id).await;
+                false
+            }
+            Err(_) => {
+                tracing::warn!(run_id, "codex abort timed out, force-cleaning up");
+                self.cleanup_active_run_state(run_id).await;
+                false
+            }
+        }
+    }
+
+    fn supports_streaming_input(&self) -> bool {
+        true
+    }
+
+    async fn add_streaming_input(&self, thread_id: &str, input: QueuedUserInput) -> bool {
+        let active = {
+            self.active_session_turns
+                .lock()
+                .await
+                .get(thread_id)
+                .cloned()
+        };
+
+        let Some((thread_id, turn_id, _run_id)) = active else {
+            return false;
+        };
+
+        let client_guard = self.client.lock().await;
+        let Some(client) = client_guard.as_ref() else {
+            return false;
+        };
+
+        let pending_input_id = input.pending_input_id.clone();
+        let input = build_input_items_from_parts(&input.message, &input.images, &input.attachments);
+
+        match client.steer_turn(&thread_id, &turn_id, input).await {
+            Ok(()) => {
+                let callback = {
+                    self.active_session_callbacks
+                        .lock()
+                        .await
+                        .get(&thread_id)
+                        .map(|(_, callback)| callback.clone())
+                };
+                if let Some(callback) = callback {
+                    callback(StreamEvent::Boundary {
+                        kind: StreamBoundaryKind::UserAck,
+                        pending_input_id,
+                    });
+                }
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    "steered codex turn with additional input"
+                );
+                true
+            }
+            Err(e) => {
+                tracing::warn!(
+                    thread_id = %thread_id,
+                    error = %e,
+                    "failed to steer codex turn"
+                );
+                false
+            }
+        }
+    }
+
+    async fn interrupt_streaming_session(&self, thread_id: &str) -> bool {
+        let active = {
+            self.active_session_turns
+                .lock()
+                .await
+                .get(thread_id)
+                .cloned()
+        };
+
+        let Some((_thread_id, _turn_id, run_id)) = active else {
+            return false;
+        };
+
+        self.abort(&run_id).await
+    }
+
+    async fn get_or_create_session(&self, thread_id: &str) -> Result<String, BridgeError> {
+        let map = self.session_map.lock().await;
+        if let Some(existing_thread_id) = map.get(thread_id) {
+            return Ok(existing_thread_id.clone());
+        }
+        // No existing thread - return a placeholder; actual thread creation
+        // happens in run() via thread/start.
+        Ok(String::new())
+    }
+
+    async fn clear_session(&self, thread_id: &str) -> bool {
+        self.session_map.lock().await.remove(thread_id);
+        self.active_session_turns.lock().await.remove(thread_id);
+        self.active_session_callbacks.lock().await.remove(thread_id);
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests;

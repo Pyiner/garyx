@@ -1,0 +1,30 @@
+[package]
+name = "garyx-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Provider adapters (Claude Code, Codex, Gemini) for the garyx AI chat gateway"
+
+[dependencies]
+garyx-models = { workspace = true }
+garyx-core = { workspace = true }
+garyx-router = { workspace = true }
+claude-agent-sdk = { workspace = true }
+codex-sdk = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+shellexpand = "3"
+urlencoding = "2"
+chrono = { workspace = true }
+toml = "0.8"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }

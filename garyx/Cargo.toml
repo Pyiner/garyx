@@ -1,0 +1,47 @@
+[package]
+name = "garyx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "AI chat gateway connecting Telegram / Feishu / WeChat to Claude and Codex"
+keywords = ["ai", "chatbot", "claude", "telegram", "feishu"]
+categories = ["command-line-utilities"]
+readme = "../README.md"
+
+[[bin]]
+name = "garyx"
+path = "src/main.rs"
+
+[dependencies]
+garyx-models = { workspace = true }
+garyx-core = { workspace = true }
+garyx-router = { workspace = true }
+garyx-bridge = { workspace = true }
+garyx-channels = { workspace = true }
+garyx-gateway = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+rpassword = { workspace = true }
+tokio-tungstenite = { workspace = true }
+uuid = { workspace = true }
+futures-util = "0.3"
+urlencoding = "2"
+qrcode = { workspace = true }
+dialoguer = { version = "0.11", default-features = false }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+flate2 = "1"
+tar = "0.4"
+sha2 = "0.10"
+
+[dev-dependencies]
+axum = { workspace = true }

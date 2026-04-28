@@ -1,0 +1,268 @@
+{
+  "module": "label",
+  "generated_at": "2026-02-27T09:08:54.945511+00:00",
+  "test_cases": [
+    {
+      "name": "test_validate_normal",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "My Session"
+      },
+      "expected": {
+        "ok": true,
+        "label": "My Session",
+        "error": null
+      }
+    },
+    {
+      "name": "test_validate_single_char",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "A"
+      },
+      "expected": {
+        "ok": true,
+        "label": "A",
+        "error": null
+      }
+    },
+    {
+      "name": "test_validate_numbers",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "session123"
+      },
+      "expected": {
+        "ok": true,
+        "label": "session123",
+        "error": null
+      }
+    },
+    {
+      "name": "test_validate_hyphens_underscores",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "my-session_1"
+      },
+      "expected": {
+        "ok": true,
+        "label": "my-session_1",
+        "error": null
+      }
+    },
+    {
+      "name": "test_validate_with_spaces",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "My Cool Session"
+      },
+      "expected": {
+        "ok": true,
+        "label": "My Cool Session",
+        "error": null
+      }
+    },
+    {
+      "name": "test_validate_empty",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": ""
+      },
+      "expected": {
+        "ok": false,
+        "label": null,
+        "error": "Label cannot be empty"
+      }
+    },
+    {
+      "name": "test_validate_whitespace_only",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "   "
+      },
+      "expected": {
+        "ok": false,
+        "label": null,
+        "error": "Label cannot be empty"
+      }
+    },
+    {
+      "name": "test_validate_too_long",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "ok": false,
+        "label": null,
+        "error": "Label cannot exceed 64 characters"
+      }
+    },
+    {
+      "name": "test_validate_max_length",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "ok": true,
+        "label": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "error": null
+      }
+    },
+    {
+      "name": "test_validate_special_chars",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "session!@#"
+      },
+      "expected": {
+        "ok": false,
+        "label": null,
+        "error": "Label must contain only letters, numbers, hyphens, underscores, and spaces"
+      }
+    },
+    {
+      "name": "test_validate_leading_space_trimmed",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "  hello  "
+      },
+      "expected": {
+        "ok": true,
+        "label": "hello",
+        "error": null
+      }
+    },
+    {
+      "name": "test_validate_starts_with_special",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "-invalid"
+      },
+      "expected": {
+        "ok": false,
+        "label": null,
+        "error": "Label must contain only letters, numbers, hyphens, underscores, and spaces"
+      }
+    },
+    {
+      "name": "test_validate_ends_with_special",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "invalid-"
+      },
+      "expected": {
+        "ok": false,
+        "label": null,
+        "error": "Label must contain only letters, numbers, hyphens, underscores, and spaces"
+      }
+    },
+    {
+      "name": "test_validate_starts_with_space_after_trim",
+      "function": "validate_session_label",
+      "input": {
+        "raw_label": "ok"
+      },
+      "expected": {
+        "ok": true,
+        "label": "ok",
+        "error": null
+      }
+    },
+    {
+      "name": "test_normalize_mixed_case",
+      "function": "normalize_label_for_search",
+      "input": {
+        "label": "Hello World"
+      },
+      "expected": "hello world"
+    },
+    {
+      "name": "test_normalize_all_upper",
+      "function": "normalize_label_for_search",
+      "input": {
+        "label": "HELLO"
+      },
+      "expected": "hello"
+    },
+    {
+      "name": "test_normalize_all_lower",
+      "function": "normalize_label_for_search",
+      "input": {
+        "label": "hello"
+      },
+      "expected": "hello"
+    },
+    {
+      "name": "test_normalize_with_spaces",
+      "function": "normalize_label_for_search",
+      "input": {
+        "label": "  Hello  "
+      },
+      "expected": "hello"
+    },
+    {
+      "name": "test_normalize_empty",
+      "function": "normalize_label_for_search",
+      "input": {
+        "label": ""
+      },
+      "expected": ""
+    },
+    {
+      "name": "test_match_same_case",
+      "function": "labels_match",
+      "input": {
+        "label1": "Hello",
+        "label2": "Hello"
+      },
+      "expected": true
+    },
+    {
+      "name": "test_match_diff_case",
+      "function": "labels_match",
+      "input": {
+        "label1": "Hello",
+        "label2": "hello"
+      },
+      "expected": true
+    },
+    {
+      "name": "test_match_with_spaces",
+      "function": "labels_match",
+      "input": {
+        "label1": "  Hello  ",
+        "label2": "hello"
+      },
+      "expected": true
+    },
+    {
+      "name": "test_match_different",
+      "function": "labels_match",
+      "input": {
+        "label1": "Hello",
+        "label2": "World"
+      },
+      "expected": false
+    },
+    {
+      "name": "test_match_empty",
+      "function": "labels_match",
+      "input": {
+        "label1": "",
+        "label2": ""
+      },
+      "expected": true
+    },
+    {
+      "name": "test_match_one_empty",
+      "function": "labels_match",
+      "input": {
+        "label1": "Hello",
+        "label2": ""
+      },
+      "expected": false
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+[package]
+name = "garyx-channels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Channel implementations (Telegram, Feishu, WeChat, API) for the garyx AI chat gateway"
+
+[dependencies]
+garyx-models = { workspace = true }
+garyx-core = { workspace = true }
+garyx-router = { workspace = true }
+garyx-bridge = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+uuid = { workspace = true }
+base64 = "0.22"
+tokio-tungstenite = { workspace = true }
+futures-util = "0.3"
+urlencoding = "2"
+toml = "0.8"
+arc-swap = "1"
+libc = "0.2"
+chrono = { workspace = true }
+prost = "0.13"
+regex = { workspace = true }
+aes = "0.8"
+ecb = "0.1"
+md5 = "0.7"
+# qrcode's `image` feature pulls an older `image` crate pin, which
+# conflicts with our own. Use default features (which include the
+# compatible pixel renderer) and keep a separate `image` dep for
+# PNG encoding.
+qrcode = { version = "0.14" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+wiremock = "0.6"

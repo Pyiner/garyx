@@ -1,0 +1,55 @@
+[package]
+name = "garyx-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "HTTP and WebSocket gateway server for the garyx AI chat gateway"
+
+[features]
+default = []
+real-provider-tests = []
+
+[dependencies]
+garyx-models = { workspace = true }
+garyx-core = { workspace = true }
+garyx-router = { workspace = true }
+garyx-bridge = { workspace = true }
+garyx-channels = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = "0.10"
+uuid = { workspace = true }
+reqwest = { workspace = true }
+cron = "0.12"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+regex = { workspace = true }
+base64 = "0.22"
+rmcp = { version = "0.17", features = [
+    "server",
+    "macros",
+    "transport-streamable-http-server",
+    "schemars",
+] }
+schemars = "1"
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = { workspace = true }
+serde_yaml = "0.9"
+toml = "0.8"
+futures-util = "0.3"
+urlencoding = "2"
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile.workspace = true
+wiremock = "0.6"
+tokio-tungstenite = { workspace = true }
+futures-util = "0.3"

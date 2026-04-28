@@ -1,0 +1,361 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use axum::Json;
+use axum::http::StatusCode;
+use garyx_models::provider::{
+    ATTACHMENTS_METADATA_KEY, ImagePayload, ProviderType, attachments_to_metadata_value,
+    stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
+};
+use garyx_models::thread_logs::ThreadLogEvent;
+use garyx_router::{
+    NATIVE_COMMAND_TEXT_METADATA_KEY, is_thread_key, update_thread_record, workspace_dir_from_value,
+};
+use serde_json::{Value, json};
+
+use crate::application::chat::contracts::ChatRequest;
+use crate::chat_shared::record_api_thread_log;
+use crate::custom_agents::CustomAgentStore;
+use crate::managed_mcp_metadata::inject_managed_mcp_servers;
+use crate::server::AppState;
+
+const LEGACY_DEFAULT_THREAD_LABEL: &str = "Fresh Thread";
+
+#[derive(Debug)]
+pub(crate) enum ChatPreparationError {
+    InvalidRequest(StatusCode, Json<Value>),
+    ThreadUpdateConflict { thread_id: String, error: String },
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedChatRequest {
+    pub(crate) thread_id: String,
+    pub(crate) effective_message: String,
+    pub(crate) account_id: String,
+    pub(crate) from_id: String,
+    pub(crate) workspace_path: Option<String>,
+    pub(crate) provider_type: Option<ProviderType>,
+    pub(crate) images: Vec<ImagePayload>,
+    pub(crate) metadata: HashMap<String, Value>,
+    pub(crate) provider_metadata: HashMap<String, Value>,
+}
+
+fn thread_bound_agent_id(thread_data: &Value) -> Option<&str> {
+    thread_data
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn thread_bound_provider_type(thread_data: &Value) -> Option<ProviderType> {
+    let raw = thread_data.get("provider_type")?.clone();
+    serde_json::from_value(raw.clone())
+        .map_err(|e| tracing::debug!(raw = %raw, error = %e, "failed to parse thread-bound provider_type"))
+        .ok()
+}
+
+async fn resolve_thread_agent_profile(
+    agent_store: &CustomAgentStore,
+    thread_store: &dyn garyx_router::ThreadStore,
+    thread_id: &str,
+) -> Option<garyx_models::CustomAgentProfile> {
+    let thread_data = thread_store.get(thread_id).await?;
+    let agent_id = thread_bound_agent_id(&thread_data)?;
+    agent_store.get_agent(agent_id).await
+}
+
+async fn persist_thread_provider_type_if_missing(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    provider_type: &ProviderType,
+) {
+    let Some(mut thread_data) = state.threads.thread_store.get(thread_id).await else {
+        return;
+    };
+    if thread_bound_provider_type(&thread_data).is_some() {
+        return;
+    }
+    let Some(obj) = thread_data.as_object_mut() else {
+        return;
+    };
+    obj.insert(
+        "provider_type".to_owned(),
+        serde_json::to_value(provider_type).unwrap_or(Value::Null),
+    );
+    obj.insert(
+        "updated_at".to_owned(),
+        Value::String(chrono::Utc::now().to_rfc3339()),
+    );
+    state.threads.thread_store.set(thread_id, thread_data).await;
+}
+
+pub(crate) async fn prepare_chat_request(
+    state: &Arc<AppState>,
+    mut req: ChatRequest,
+) -> Result<PreparedChatRequest, ChatPreparationError> {
+    let config = state.config_snapshot();
+    let resolved_message = resolve_chat_message(&config, &mut req);
+    let thread_id = resolve_chat_thread_id(state, &req).await?;
+    let thread_data = state.threads.thread_store.get(&thread_id).await;
+    let agent_profile = resolve_thread_agent_profile(
+        state.ops.custom_agents.as_ref(),
+        state.threads.thread_store.as_ref(),
+        &thread_id,
+    )
+    .await;
+    let thread_provider_type = thread_data.as_ref().and_then(thread_bound_provider_type);
+    if let Some(profile) = agent_profile.as_ref() {
+        if !profile.system_prompt.trim().is_empty() {
+            req.provider_metadata.insert(
+                "system_prompt".to_owned(),
+                Value::String(profile.system_prompt.clone()),
+            );
+        }
+        req.metadata.insert(
+            "agent_id".to_owned(),
+            Value::String(profile.agent_id.clone()),
+        );
+        req.metadata.insert(
+            "agent_display_name".to_owned(),
+            Value::String(profile.display_name.clone()),
+        );
+        if !profile.model.trim().is_empty() {
+            req.metadata
+                .insert("model".to_owned(), Value::String(profile.model.clone()));
+        }
+    }
+    req.provider_type = thread_provider_type.or_else(|| {
+        agent_profile
+            .as_ref()
+            .map(|profile| profile.provider_type.clone())
+    });
+    if let Some(provider_type) = req.provider_type.as_ref() {
+        persist_thread_provider_type_if_missing(state, &thread_id, provider_type).await;
+    }
+
+    let mut staged_attachments = req.attachments.clone();
+    staged_attachments.extend(stage_image_payloads_for_prompt(
+        "garyx-gateway",
+        &req.images,
+    ));
+    staged_attachments.extend(stage_file_payloads_for_prompt("garyx-gateway", &req.files));
+    if !staged_attachments.is_empty() {
+        req.metadata.insert(
+            ATTACHMENTS_METADATA_KEY.to_owned(),
+            attachments_to_metadata_value(&staged_attachments),
+        );
+    }
+
+    persist_thread_label_if_missing(state, &thread_id, &resolved_message).await?;
+
+    record_api_thread_log(
+        state,
+        ThreadLogEvent::info(&thread_id, "api", "chat request prepared")
+            .with_field("workspace_path", json!(req.workspace_path.clone()))
+            .with_field("wait_for_response", json!(req.wait_for_response)),
+    )
+    .await;
+
+    persist_thread_workspace_if_missing(state, &thread_id, req.workspace_path.as_deref()).await?;
+
+    Ok(PreparedChatRequest {
+        thread_id,
+        effective_message: resolved_message,
+        account_id: req.account_id,
+        from_id: req.from_id,
+        workspace_path: req.workspace_path,
+        provider_type: req.provider_type,
+        images: req.images,
+        metadata: req.metadata,
+        provider_metadata: req.provider_metadata,
+    })
+}
+
+pub(crate) fn build_provider_run_metadata(
+    config: &garyx_models::config::GaryxConfig,
+    metadata: HashMap<String, Value>,
+    provider_metadata: HashMap<String, Value>,
+    account_id: &str,
+    from_id: &str,
+    run_id: &str,
+) -> HashMap<String, Value> {
+    let mut run_metadata = build_chat_metadata(metadata, account_id, from_id, run_id);
+    run_metadata.extend(provider_metadata);
+    let gateway_auth_token = config.gateway.auth_token.trim();
+    if !gateway_auth_token.is_empty() {
+        run_metadata.insert(
+            "garyx_mcp_auth_token".to_owned(),
+            Value::String(gateway_auth_token.to_owned()),
+        );
+    }
+    inject_managed_mcp_servers(&config.mcp_servers, &mut run_metadata);
+    run_metadata
+}
+
+fn resolve_chat_message(
+    config: &garyx_models::config::GaryxConfig,
+    req: &mut ChatRequest,
+) -> String {
+    let command_text = req
+        .metadata
+        .get(NATIVE_COMMAND_TEXT_METADATA_KEY)
+        .and_then(Value::as_str)
+        .unwrap_or(&req.message)
+        .to_owned();
+    garyx_core::apply_custom_slash_command(config, &command_text, &req.message, &mut req.metadata)
+        .unwrap_or_else(|| req.message.clone())
+}
+
+fn summarize_thread_label(value: &str, limit: usize) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= limit {
+        return normalized;
+    }
+    let mut truncated = String::new();
+    for ch in normalized.chars().take(limit - 1) {
+        truncated.push(ch);
+    }
+    format!("{}…", truncated.trim_end())
+}
+
+fn prompt_derived_thread_label(message: &str) -> Option<String> {
+    let summary = summarize_thread_label(message, 40);
+    (!summary.is_empty()).then_some(summary)
+}
+
+fn should_autoname_thread(existing: &Value) -> bool {
+    let Some(label) = existing.get("label").and_then(Value::as_str) else {
+        return true;
+    };
+    let trimmed = label.trim();
+    trimmed.is_empty()
+        || trimmed == LEGACY_DEFAULT_THREAD_LABEL
+        || api_route_placeholder_label(existing).as_deref() == Some(trimmed)
+}
+
+fn api_route_placeholder_label(existing: &Value) -> Option<String> {
+    let channel = existing.get("channel").and_then(Value::as_str)?.trim();
+    let account_id = existing.get("account_id").and_then(Value::as_str)?.trim();
+    let from_id = existing.get("from_id").and_then(Value::as_str)?.trim();
+    if channel != "api" || account_id.is_empty() || from_id.is_empty() {
+        return None;
+    }
+    Some(format!("{channel}/{account_id}/{from_id}"))
+}
+
+async fn persist_thread_label_if_missing(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    effective_message: &str,
+) -> Result<(), ChatPreparationError> {
+    let Some(next_label) = prompt_derived_thread_label(effective_message) else {
+        return Ok(());
+    };
+    let Some(existing) = state.threads.thread_store.get(thread_id).await else {
+        return Ok(());
+    };
+    if !should_autoname_thread(&existing) {
+        return Ok(());
+    }
+
+    update_thread_record(
+        &state.threads.thread_store,
+        thread_id,
+        Some(next_label),
+        None,
+    )
+    .await
+    .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
+        thread_id: thread_id.to_owned(),
+        error,
+    })?;
+    Ok(())
+}
+
+async fn persist_thread_workspace_if_missing(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    workspace_path: Option<&str>,
+) -> Result<(), ChatPreparationError> {
+    let Some(workspace_path) = workspace_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    if !is_thread_key(thread_id) {
+        return Ok(());
+    }
+
+    let Some(existing) = state.threads.thread_store.get(thread_id).await else {
+        return Ok(());
+    };
+    if workspace_dir_from_value(&existing).is_some() {
+        return Ok(());
+    }
+
+    let updated = update_thread_record(
+        &state.threads.thread_store,
+        thread_id,
+        None,
+        Some(workspace_path.to_owned()),
+    )
+    .await
+    .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
+        thread_id: thread_id.to_owned(),
+        error,
+    })?;
+    state
+        .integration
+        .bridge
+        .set_thread_workspace_binding(thread_id, workspace_dir_from_value(&updated))
+        .await;
+    Ok(())
+}
+
+async fn resolve_chat_thread_id(
+    state: &Arc<AppState>,
+    req: &ChatRequest,
+) -> Result<String, ChatPreparationError> {
+    if let Some(key) = req.thread_id.as_deref() {
+        let trimmed = key.trim();
+        if trimmed.is_empty() || !is_thread_key(trimmed) {
+            return Err(ChatPreparationError::InvalidRequest(
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "runId": "",
+                    "threadId": trimmed,
+                    "response": Value::Null,
+                    "error": "threadId must be a canonical thread id",
+                })),
+            ));
+        }
+        return Ok(trimmed.to_owned());
+    }
+
+    let mut router = state.threads.router.lock().await;
+    Ok(router
+        .resolve_or_create_inbound_thread("api", &req.account_id, &req.from_id, &req.metadata)
+        .await)
+}
+
+fn build_chat_metadata(
+    mut metadata: HashMap<String, Value>,
+    account_id: &str,
+    from_id: &str,
+    run_id: &str,
+) -> HashMap<String, Value> {
+    metadata.insert("channel".to_owned(), Value::String("api".to_owned()));
+    metadata.insert(
+        "account_id".to_owned(),
+        Value::String(account_id.to_owned()),
+    );
+    metadata.insert("from_id".to_owned(), Value::String(from_id.to_owned()));
+    metadata.insert("is_group".to_owned(), Value::Bool(false));
+    metadata.insert("client_run_id".to_owned(), Value::String(run_id.to_owned()));
+    metadata
+}
+
+#[cfg(test)]
+mod tests;

@@ -1,0 +1,896 @@
+{
+  "module": "stateful_routing",
+  "description": "Sequences of messages through the MessageRouter that verify thread state after each step. These test the stateful routing logic: thread id resolution, user_thread_map updates, thread history tracking, and navigation.",
+  "notes": {
+    "session_key_formula": "build_session_key(account_id, surface, peer_id) where surface='main' for DM, 'group' for group; peer_id=from_id for DM, thread_id for group",
+    "user_key_formula": "'{channel}:{from_id}' for DM, '{channel}:{from_id}:g:{group_id}' for group",
+    "switched_thread": "If user_thread_map[user_key] exists, use that thread_id instead of default",
+    "history_behavior": "_switch_to_thread appends to history if different from last, limits to 20, truncates forward on mid-history switch"
+  },
+  "sequences": [
+    {
+      "name": "basic_dm_flow",
+      "description": "User sends multiple DM messages. All go to the same default thread. No thread switching occurs.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user123",
+            "text": "hello",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::user123",
+            "user_key": "telegram:user123",
+            "user_thread_map": {},
+            "comment": "No entry in user_thread_map because user has not switched threads; default key is computed"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user123",
+            "text": "how are you?",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::user123",
+            "user_key": "telegram:user123",
+            "user_thread_map": {},
+            "comment": "Same thread as before, still no switch"
+          }
+        }
+      ]
+    },
+    {
+      "name": "two_users_dm_isolation",
+      "description": "Two different users sending DMs. Each gets their own thread. Verify no cross-contamination.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "alice",
+            "text": "hi from alice",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::alice",
+            "user_key": "telegram:alice"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "bob",
+            "text": "hi from bob",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::bob",
+            "user_key": "telegram:bob"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "alice",
+            "text": "alice again",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::alice",
+            "user_key": "telegram:alice",
+            "comment": "Alice's thread is unaffected by Bob's messages"
+          }
+        }
+      ]
+    },
+    {
+      "name": "group_message_routing",
+      "description": "Messages in groups use surface='group' and peer_id=thread_id (group chat ID). User key is scoped per group.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user123",
+            "text": "hello group A",
+            "is_group": true,
+            "thread_id": "groupA"
+          },
+          "expected": {
+            "thread_id": "bot1::group::groupA",
+            "user_key": "telegram:user123:g:groupA",
+            "comment": "Group message: surface=group, peer_id=thread_id"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user123",
+            "text": "hello group B",
+            "is_group": true,
+            "thread_id": "groupB"
+          },
+          "expected": {
+            "thread_id": "bot1::group::groupB",
+            "user_key": "telegram:user123:g:groupB",
+            "comment": "Different group = different thread and different user_key"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user123",
+            "text": "back to DM",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::user123",
+            "user_key": "telegram:user123",
+            "comment": "DM uses different user_key, independent from group threads"
+          }
+        }
+      ]
+    },
+    {
+      "name": "group_no_thread_id",
+      "description": "Group message without thread_id falls back to from_id as peer_id.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user123",
+            "text": "group without thread",
+            "is_group": true,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::group::user123",
+            "user_key": "telegram:user123",
+            "comment": "is_group=true but no thread_id: peer_id falls back to from_id; user_key has no :g: suffix because group_id=None"
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread_switch_and_sticky",
+      "description": "User switches to a named thread. Subsequent messages go to the switched thread until reset.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user123",
+            "text": "msg1",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::user123",
+            "user_key": "telegram:user123",
+            "user_thread_map": {},
+            "comment": "Default thread, no switch yet"
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:user123",
+            "thread_id": "bot1::main::custom-session-1"
+          },
+          "expected": {
+            "user_thread_map": {
+              "telegram:user123": "bot1::main::custom-session-1"
+            },
+            "thread_history": ["bot1::main::custom-session-1"],
+            "thread_history_index": 0,
+            "comment": "_switch_to_thread initializes history and sets current thread"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user123",
+            "text": "msg2 after switch",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::custom-session-1",
+            "user_key": "telegram:user123",
+            "comment": "Message routed to switched thread because user_thread_map has entry"
+          }
+        },
+        {
+          "action": "reset_thread",
+          "params": {
+            "channel": "telegram",
+            "from_id": "user123",
+            "is_group": false,
+            "group_id": null
+          },
+          "expected": {
+            "user_thread_map": {},
+            "result": true,
+            "comment": "reset_user_thread removes the mapping, returns True"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user123",
+            "text": "msg3 after reset",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::user123",
+            "user_key": "telegram:user123",
+            "comment": "Back to default thread after reset"
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread_history_tracking",
+      "description": "Switching threads accumulates history. Duplicate consecutive switches are deduplicated.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:user1",
+            "thread_id": "session-A"
+          },
+          "expected": {
+            "thread_history": ["session-A"],
+            "thread_history_index": 0,
+            "user_thread_map": {
+              "telegram:user1": "session-A"
+            }
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:user1",
+            "thread_id": "session-B"
+          },
+          "expected": {
+            "thread_history": ["session-A", "session-B"],
+            "thread_history_index": 1,
+            "user_thread_map": {
+              "telegram:user1": "session-B"
+            }
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:user1",
+            "thread_id": "session-B"
+          },
+          "expected": {
+            "thread_history": ["session-A", "session-B"],
+            "thread_history_index": 1,
+            "comment": "Duplicate switch to same thread is deduplicated (history[-1] == thread_id)"
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:user1",
+            "thread_id": "session-C"
+          },
+          "expected": {
+            "thread_history": ["session-A", "session-B", "session-C"],
+            "thread_history_index": 2
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:user1",
+            "thread_id": "session-A"
+          },
+          "expected": {
+            "thread_history": ["session-A", "session-B", "session-C", "session-A"],
+            "thread_history_index": 3,
+            "comment": "Going back to thread-A adds a new entry (not a dedup, since last was C)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "thread_navigation_prev_next",
+      "description": "Navigate through thread history with prev/next. Index moves but history is stable.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:nav_user",
+            "thread_id": "sess-1"
+          },
+          "expected": {
+            "thread_history": ["sess-1"],
+            "thread_history_index": 0
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:nav_user",
+            "thread_id": "sess-2"
+          },
+          "expected": {
+            "thread_history": ["sess-1", "sess-2"],
+            "thread_history_index": 1
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:nav_user",
+            "thread_id": "sess-3"
+          },
+          "expected": {
+            "thread_history": ["sess-1", "sess-2", "sess-3"],
+            "thread_history_index": 2
+          }
+        },
+        {
+          "action": "navigate",
+          "params": {
+            "user_key": "telegram:nav_user",
+            "direction": "prev"
+          },
+          "expected": {
+            "thread_history": ["sess-1", "sess-2", "sess-3"],
+            "thread_history_index": 1,
+            "current_thread": "sess-2",
+            "comment": "prev moves index from 2 to 1"
+          }
+        },
+        {
+          "action": "navigate",
+          "params": {
+            "user_key": "telegram:nav_user",
+            "direction": "prev"
+          },
+          "expected": {
+            "thread_history": ["sess-1", "sess-2", "sess-3"],
+            "thread_history_index": 0,
+            "current_thread": "sess-1",
+            "comment": "prev moves index from 1 to 0"
+          }
+        },
+        {
+          "action": "navigate",
+          "params": {
+            "user_key": "telegram:nav_user",
+            "direction": "prev"
+          },
+          "expected": {
+            "thread_history_index": 0,
+            "error": "already_at_oldest",
+            "comment": "Cannot go back further, already at index 0"
+          }
+        },
+        {
+          "action": "navigate",
+          "params": {
+            "user_key": "telegram:nav_user",
+            "direction": "next"
+          },
+          "expected": {
+            "thread_history": ["sess-1", "sess-2", "sess-3"],
+            "thread_history_index": 1,
+            "current_thread": "sess-2",
+            "comment": "next moves index from 0 to 1"
+          }
+        },
+        {
+          "action": "navigate",
+          "params": {
+            "user_key": "telegram:nav_user",
+            "direction": "next"
+          },
+          "expected": {
+            "thread_history_index": 2,
+            "current_thread": "sess-3"
+          }
+        },
+        {
+          "action": "navigate",
+          "params": {
+            "user_key": "telegram:nav_user",
+            "direction": "next"
+          },
+          "expected": {
+            "thread_history_index": 2,
+            "error": "already_at_newest",
+            "comment": "Cannot go forward further, already at end"
+          }
+        }
+      ]
+    },
+    {
+      "name": "mid_history_switch_truncates_forward",
+      "description": "When navigated back to middle of history and then switching to a new thread, forward history is truncated.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:trunc_user",
+            "thread_id": "s1"
+          },
+          "expected": {
+            "thread_history": ["s1"],
+            "thread_history_index": 0
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:trunc_user",
+            "thread_id": "s2"
+          },
+          "expected": {
+            "thread_history": ["s1", "s2"],
+            "thread_history_index": 1
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:trunc_user",
+            "thread_id": "s3"
+          },
+          "expected": {
+            "thread_history": ["s1", "s2", "s3"],
+            "thread_history_index": 2
+          }
+        },
+        {
+          "action": "navigate",
+          "params": {
+            "user_key": "telegram:trunc_user",
+            "direction": "prev"
+          },
+          "expected": {
+            "thread_history": ["s1", "s2", "s3"],
+            "thread_history_index": 1,
+            "current_thread": "s2"
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:trunc_user",
+            "thread_id": "s4"
+          },
+          "expected": {
+            "thread_history": ["s1", "s2", "s4"],
+            "thread_history_index": 2,
+            "comment": "Forward history (s3) was truncated. s4 appended after current index (1). History is now [s1, s2, s4]."
+          }
+        }
+      ]
+    },
+    {
+      "name": "cross_channel_thread_isolation",
+      "description": "Same user on different channels gets independent threads and user keys.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "tg_bot",
+            "from_id": "user123",
+            "text": "hello from telegram",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "tg_bot::main::user123",
+            "user_key": "telegram:user123"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "slack",
+            "account_id": "slack_bot",
+            "from_id": "user123",
+            "text": "hello from slack",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "slack_bot::main::user123",
+            "user_key": "slack:user123",
+            "comment": "Different channel + different account_id = different thread key and user key"
+          }
+        }
+      ]
+    },
+    {
+      "name": "account_id_determines_thread_id",
+      "description": "Session key uses account_id (not agent_id from route resolver). Different bot accounts get different threads even on same channel.",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {"agentId": "assistant1", "match": {"channel": "telegram"}}
+          ]
+        }
+      },
+      "steps": [
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot_primary",
+            "from_id": "user123",
+            "text": "msg to primary bot",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "resolved_agent_id": "assistant1",
+            "thread_id": "bot_primary::main::user123",
+            "comment": "Route resolver maps telegram -> assistant1, but thread key uses account_id=bot_primary"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot_secondary",
+            "from_id": "user123",
+            "text": "msg to secondary bot",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "resolved_agent_id": "assistant1",
+            "thread_id": "bot_secondary::main::user123",
+            "comment": "Same agent (assistant1) but different account_id = different thread"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dm_and_group_thread_independence",
+      "description": "Session switches in a group do not affect DM routing and vice versa, because user_key is scoped differently.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:user1:g:group1",
+            "thread_id": "custom-group-session"
+          },
+          "expected": {
+            "user_thread_map": {
+              "telegram:user1:g:group1": "custom-group-session"
+            },
+            "thread_history": ["custom-group-session"],
+            "thread_history_index": 0,
+            "comment": "Switch thread in group context"
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user1",
+            "text": "DM message",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::user1",
+            "user_key": "telegram:user1",
+            "comment": "DM user_key (telegram:user1) has no thread_map entry, so default thread is used. Group switch does not bleed into DM."
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user1",
+            "text": "group message",
+            "is_group": true,
+            "thread_id": "group1"
+          },
+          "expected": {
+            "thread_id": "custom-group-session",
+            "user_key": "telegram:user1:g:group1",
+            "comment": "Group user_key (telegram:user1:g:group1) HAS thread_map entry, so switched thread is used"
+          }
+        }
+      ]
+    },
+    {
+      "name": "reply_routing_switch",
+      "description": "Replying to a bot message from a scheduled thread switches the user to that thread. This tests the route_reply_message logic for scheduled threads.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user1",
+            "text": "initial message",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "bot1::main::user1",
+            "user_key": "telegram:user1"
+          }
+        },
+        {
+          "action": "reply_route",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user1",
+            "reply_to_message_id": "msg_42",
+            "text": "replying to heartbeat",
+            "is_group": false,
+            "thread_id": null,
+            "resolved_thread_id": "cron::heartbeat::daily",
+            "is_scheduled_thread": true
+          },
+          "expected": {
+            "thread_id": "cron::heartbeat::daily",
+            "user_key": "telegram:user1",
+            "user_thread_map": {
+              "telegram:user1": "cron::heartbeat::daily"
+            },
+            "comment": "Reply routed to scheduled thread. Since it is a scheduled thread (cron:: prefix), user is switched to it."
+          }
+        },
+        {
+          "action": "inbound",
+          "params": {
+            "channel": "telegram",
+            "account_id": "bot1",
+            "from_id": "user1",
+            "text": "follow-up after reply",
+            "is_group": false,
+            "thread_id": null
+          },
+          "expected": {
+            "thread_id": "cron::heartbeat::daily",
+            "user_key": "telegram:user1",
+            "comment": "Subsequent messages continue to go to the switched (scheduled) thread"
+          }
+        }
+      ]
+    },
+    {
+      "name": "scheduled_thread_detection",
+      "description": "Verify which thread keys are considered 'scheduled' (heartbeat or cron prefix).",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "check_scheduled",
+          "params": {
+            "thread_id": "bot1::heartbeat::daily"
+          },
+          "expected": {
+            "is_scheduled": true,
+            "comment": "Contains ::heartbeat::"
+          }
+        },
+        {
+          "action": "check_scheduled",
+          "params": {
+            "thread_id": "cron::reminder::morning"
+          },
+          "expected": {
+            "is_scheduled": true,
+            "comment": "Starts with cron::"
+          }
+        },
+        {
+          "action": "check_scheduled",
+          "params": {
+            "thread_id": "bot1::main::user123"
+          },
+          "expected": {
+            "is_scheduled": false,
+            "comment": "Normal DM thread"
+          }
+        },
+        {
+          "action": "check_scheduled",
+          "params": {
+            "thread_id": "bot1::group::chat456"
+          },
+          "expected": {
+            "is_scheduled": false,
+            "comment": "Normal group thread"
+          }
+        }
+      ]
+    },
+    {
+      "name": "history_max_size_20",
+      "description": "Session history is capped at 20 entries. Oldest entries are dropped when limit is exceeded.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "switch_thread_batch",
+          "params": {
+            "user_key": "telegram:overflow_user",
+            "thread_ids": [
+              "s01", "s02", "s03", "s04", "s05",
+              "s06", "s07", "s08", "s09", "s10",
+              "s11", "s12", "s13", "s14", "s15",
+              "s16", "s17", "s18", "s19", "s20"
+            ]
+          },
+          "expected": {
+            "thread_history_len": 20,
+            "thread_history_index": 19,
+            "thread_history_first": "s01",
+            "thread_history_last": "s20"
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:overflow_user",
+            "thread_id": "s21"
+          },
+          "expected": {
+            "thread_history_len": 20,
+            "thread_history_index": 19,
+            "thread_history_first": "s02",
+            "thread_history_last": "s21",
+            "comment": "21st entry pushes out s01. History stays at max 20."
+          }
+        }
+      ]
+    },
+    {
+      "name": "reset_returns_false_when_no_mapping",
+      "description": "Resetting a user who has no thread mapping returns False.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "reset_thread",
+          "params": {
+            "channel": "telegram",
+            "from_id": "nobody",
+            "is_group": false,
+            "group_id": null
+          },
+          "expected": {
+            "result": false,
+            "comment": "No mapping existed, so reset returns False"
+          }
+        }
+      ]
+    },
+    {
+      "name": "get_current_thread_id",
+      "description": "get_current_thread_id returns None when no switch, or the switched key.",
+      "config": {
+        "agents": null
+      },
+      "steps": [
+        {
+          "action": "get_current_thread",
+          "params": {
+            "channel": "telegram",
+            "from_id": "user1",
+            "is_group": false,
+            "group_id": null
+          },
+          "expected": {
+            "current_thread_id": null,
+            "comment": "No thread mapping, returns None"
+          }
+        },
+        {
+          "action": "switch_thread",
+          "params": {
+            "user_key": "telegram:user1",
+            "thread_id": "my-session"
+          },
+          "expected": {
+            "user_thread_map": {
+              "telegram:user1": "my-session"
+            }
+          }
+        },
+        {
+          "action": "get_current_thread",
+          "params": {
+            "channel": "telegram",
+            "from_id": "user1",
+            "is_group": false,
+            "group_id": null
+          },
+          "expected": {
+            "current_thread_id": "my-session",
+            "comment": "After switch, returns the switched thread key"
+          }
+        }
+      ]
+    }
+  ]
+}

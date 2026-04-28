@@ -1,0 +1,28 @@
+[package]
+name = "garyx-router"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Message routing and thread-dispatch layer for the garyx AI chat gateway"
+
+[dependencies]
+garyx-models = { workspace = true }
+garyx-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+filetime = { workspace = true }
+wiremock = "0.6"

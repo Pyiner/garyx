@@ -1,0 +1,70 @@
+[workspace]
+members = [
+    "garyx-models",
+    "garyx-core",
+    "garyx-router",
+    "garyx-bridge",
+    "garyx-channels",
+    "garyx-gateway",
+    "garyx",
+    "codex-sdk",
+    "claude-agent-sdk",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.9"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Pyiner/garyx"
+homepage = "https://github.com/Pyiner/garyx"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = "0.8"
+regex = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+once_cell = "1"
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+qrcode = { version = "0.14", default-features = false }
+
+# Channels
+teloxide = "0.13"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+
+# Internal crates
+claude-agent-sdk = { path = "claude-agent-sdk" }
+codex-sdk = { path = "codex-sdk" }
+garyx-models = { path = "garyx-models" }
+garyx-core = { path = "garyx-core" }
+garyx-router = { path = "garyx-router" }
+garyx-bridge = { path = "garyx-bridge" }
+garyx-channels = { path = "garyx-channels" }
+garyx-gateway = { path = "garyx-gateway" }
+
+# Dev
+proptest = "1"
+tempfile = "3"
+filetime = "0.2"
+
+# ---------------------------------------------------------------------------
+# Release profile tuning. Defaults (opt-level=3, lto=off, codegen-units=16)
+# are fine for build speed; we only opt into `strip = "symbols"` to drop
+# the symbol tables that ship in dev-builds. Measured on a 2026-04-21
+# x86_64-unknown-linux-gnu release build: 41MB → 33MB (~20% smaller).
+# No runtime / compile-time impact; Rust panics still produce backtraces,
+# we just lose addr2line resolution — release binaries direct users to
+# `garyx logs` for diagnostics anyway.
+# ---------------------------------------------------------------------------
+[profile.release]
+strip = "symbols"

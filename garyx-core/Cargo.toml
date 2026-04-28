@@ -1,0 +1,20 @@
+[package]
+name = "garyx-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Shared business logic and domain primitives for the garyx AI chat gateway"
+
+[dependencies]
+garyx-models = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

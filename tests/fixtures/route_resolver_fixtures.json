@@ -1,0 +1,401 @@
+{
+  "module": "route_resolver",
+  "generated_at": "2026-02-27T09:08:54.945511+00:00",
+  "test_cases": [
+    {
+      "name": "test_no_bindings_default",
+      "config": {
+        "agents": null
+      },
+      "input": {
+        "channel": "telegram"
+      },
+      "expected": {
+        "agent_id": "main",
+        "is_default": true
+      }
+    },
+    {
+      "name": "test_channel_binding_telegram",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "telegram-bot",
+              "match": {
+                "channel": "telegram"
+              }
+            },
+            {
+              "agentId": "slack-bot",
+              "match": {
+                "channel": "slack"
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram"
+      },
+      "expected": {
+        "agent_id": "telegram-bot",
+        "is_default": false
+      }
+    },
+    {
+      "name": "test_channel_binding_slack",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "telegram-bot",
+              "match": {
+                "channel": "telegram"
+              }
+            },
+            {
+              "agentId": "slack-bot",
+              "match": {
+                "channel": "slack"
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "slack"
+      },
+      "expected": {
+        "agent_id": "slack-bot",
+        "is_default": false
+      }
+    },
+    {
+      "name": "test_channel_binding_discord",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "telegram-bot",
+              "match": {
+                "channel": "telegram"
+              }
+            },
+            {
+              "agentId": "slack-bot",
+              "match": {
+                "channel": "slack"
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "discord"
+      },
+      "expected": {
+        "agent_id": "main",
+        "is_default": true
+      }
+    },
+    {
+      "name": "test_peer_kind_group",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "group-handler",
+              "match": {
+                "channel": "telegram",
+                "peer": {
+                  "kind": "group"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "peer_kind": "group"
+      },
+      "expected": {
+        "agent_id": "group-handler",
+        "is_default": false
+      }
+    },
+    {
+      "name": "test_peer_kind_dm",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "group-handler",
+              "match": {
+                "channel": "telegram",
+                "peer": {
+                  "kind": "group"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "peer_kind": "dm"
+      },
+      "expected": {
+        "agent_id": "main",
+        "is_default": true
+      }
+    },
+    {
+      "name": "test_peer_id_user_vip",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "vip-handler",
+              "match": {
+                "channel": "telegram",
+                "peer": {
+                  "id": "user_vip"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "peer_id": "user_vip"
+      },
+      "expected": {
+        "agent_id": "vip-handler",
+        "is_default": false
+      }
+    },
+    {
+      "name": "test_peer_id_user_regular",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "vip-handler",
+              "match": {
+                "channel": "telegram",
+                "peer": {
+                  "id": "user_vip"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "peer_id": "user_regular"
+      },
+      "expected": {
+        "agent_id": "main",
+        "is_default": true
+      }
+    },
+    {
+      "name": "test_peer_pattern_admin_alice",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "admin-handler",
+              "match": {
+                "channel": "telegram",
+                "peer": {
+                  "pattern": "admin_.*"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "peer_id": "admin_alice"
+      },
+      "expected": {
+        "agent_id": "admin-handler",
+        "is_default": false
+      }
+    },
+    {
+      "name": "test_peer_pattern_admin_bob",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "admin-handler",
+              "match": {
+                "channel": "telegram",
+                "peer": {
+                  "pattern": "admin_.*"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "peer_id": "admin_bob"
+      },
+      "expected": {
+        "agent_id": "admin-handler",
+        "is_default": false
+      }
+    },
+    {
+      "name": "test_peer_pattern_user_charlie",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "admin-handler",
+              "match": {
+                "channel": "telegram",
+                "peer": {
+                  "pattern": "admin_.*"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "peer_id": "user_charlie"
+      },
+      "expected": {
+        "agent_id": "main",
+        "is_default": true
+      }
+    },
+    {
+      "name": "test_priority_ordering",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "low-prio",
+              "match": {
+                "channel": "telegram"
+              },
+              "priority": 10
+            },
+            {
+              "agentId": "high-prio",
+              "match": {
+                "channel": "telegram"
+              },
+              "priority": 100
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram"
+      },
+      "expected": {
+        "agent_id": "high-prio",
+        "is_default": false
+      }
+    },
+    {
+      "name": "test_account_id_bot_123",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "account-bot",
+              "match": {
+                "channel": "telegram",
+                "accountId": "bot_123"
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "account_id": "bot_123"
+      },
+      "expected": {
+        "agent_id": "account-bot",
+        "is_default": false
+      }
+    },
+    {
+      "name": "test_account_id_bot_456",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "account-bot",
+              "match": {
+                "channel": "telegram",
+                "accountId": "bot_123"
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "account_id": "bot_456"
+      },
+      "expected": {
+        "agent_id": "main",
+        "is_default": true
+      }
+    },
+    {
+      "name": "test_wildcard_account",
+      "config": {
+        "agents": {
+          "default": "main",
+          "bindings": [
+            {
+              "agentId": "any-account-bot",
+              "match": {
+                "channel": "telegram",
+                "accountId": "*"
+              }
+            }
+          ]
+        }
+      },
+      "input": {
+        "channel": "telegram",
+        "account_id": "any_account"
+      },
+      "expected": {
+        "agent_id": "any-account-bot",
+        "is_default": false
+      }
+    }
+  ]
+}

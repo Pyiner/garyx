@@ -1,0 +1,86 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Logs
+*.log
+
+# Configuration
+config.local.yaml
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend
+node_modules/
+frontend/**/node_modules/
+frontend/**/.next/
+frontend/**/out/
+desktop/**/node_modules/
+desktop/**/out/
+desktop/**/dist-release/
+desktop/**/test-artifacts/
+desktop/**/.playwright-cli/
+!desktop/garyx-desktop/src/renderer/src/lib/
+!desktop/garyx-desktop/src/renderer/src/lib/utils.ts
+
+# Rust build artifacts
+target/
+
+# Gary runtime state
+.claude/
+.gary/
+.local-research/
+data/.restart_marker
+data/graph_executions.jsonl
+data/graph_executions.lock
+desktop/garyx-desktop/.gary/
+
+# Private/internal skills that must never be committed
+devbox-install-*.SKILL.md

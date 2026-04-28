@@ -1,0 +1,1 @@
+export { AutoResearchPanel } from './AutoResearchPanel';

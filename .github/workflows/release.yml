@@ -1,0 +1,216 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-14
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate tag format
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "ERROR: Tag '${GITHUB_REF_NAME}' does not match expected semver format (vX.Y.Z)"
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Linux targets go through `cargo-zigbuild` so we can pin a low glibc
+      # floor (2.17, covers RHEL 7 / Debian 8+ and older enterprise hosts
+      # that shipped with glibc 2.31 or 2.34). The ubuntu-22.04
+      # runner itself has glibc 2.35, so a vanilla `cargo build` would
+      # emit binaries that refuse to load on any of those older hosts
+      # with `GLIBC_2.35 not found`. zig's bundled libc rewrites the
+      # stubbed versions down to the requested floor.
+      #
+      # zig is pinned to 0.13.0 because 0.16.0's bundled llvm-ar regressed
+      # on create-archive operations (breaks libsqlite3-sys, ring, etc.).
+      - name: Install Zig (Linux targets)
+        if: contains(matrix.target, 'linux')
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild (Linux targets)
+        if: contains(matrix.target, 'linux')
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build (macOS — native)
+        if: contains(matrix.target, 'apple-darwin')
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (Linux — glibc 2.17 floor via cargo-zigbuild)
+        if: contains(matrix.target, 'linux')
+        run: cargo zigbuild --release --target ${{ matrix.target }}.2.17
+
+      - name: Package
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCHIVE="garyx-${VERSION}-${{ matrix.target }}"
+          mkdir -p "$ARCHIVE"
+          cp target/${{ matrix.target }}/release/garyx "$ARCHIVE/"
+          cp README.md LICENSE "$ARCHIVE/"
+          tar czf "${ARCHIVE}.tar.gz" "$ARCHIVE"
+          shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
+          echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
+
+      - name: Smoke test binary
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
+        run: |
+          ./target/${{ matrix.target }}/release/garyx --version
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: |
+            ${{ env.ARCHIVE }}.tar.gz
+            ${{ env.ARCHIVE }}.tar.gz.sha256
+
+  build-desktop-macos:
+    name: Build Garyx (macOS universal)
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: desktop/garyx-desktop
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Derive desktop version from tag
+        id: desktop_version
+        shell: bash
+        run: |
+          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check desktop signing secrets
+        id: desktop_secrets
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_KEYCHAIN_PROFILE: ${{ secrets.APPLE_KEYCHAIN_PROFILE }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [[ -n "$CSC_LINK" && -n "$CSC_KEY_PASSWORD" ]] && \
+             ([[ -n "$APPLE_KEYCHAIN_PROFILE" ]] || \
+              ([[ -n "$APPLE_API_KEY" && -n "$APPLE_API_KEY_ID" && -n "$APPLE_API_ISSUER" ]]) || \
+              ([[ -n "$APPLE_ID" && -n "$APPLE_APP_SPECIFIC_PASSWORD" && -n "$APPLE_TEAM_ID" ]])); then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping Garyx macOS release build because macOS signing/notarization secrets are not fully configured."
+          fi
+
+      - name: Install Node.js
+        if: steps.desktop_secrets.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/garyx-desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        if: steps.desktop_secrets.outputs.ready == 'true'
+        run: npm ci
+
+      - name: Build signed and notarized Garyx
+        if: steps.desktop_secrets.outputs.ready == 'true'
+        env:
+          GARYX_DESKTOP_VERSION: ${{ steps.desktop_version.outputs.value }}
+          REQUIRE_MACOS_NOTARIZATION: "1"
+          CSC_NAME: Developer ID Application
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_KEYCHAIN_PROFILE: ${{ secrets.APPLE_KEYCHAIN_PROFILE }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run dist:mac:release
+
+      - name: Verify signed macOS app
+        if: steps.desktop_secrets.outputs.ready == 'true'
+        run: npm run verify:mac:release
+
+      - name: Generate desktop checksums
+        if: steps.desktop_secrets.outputs.ready == 'true'
+        shell: bash
+        run: |
+          shasum -a 256 dist-release/*.dmg dist-release/*.zip > "dist-release/garyx-mac-${{ steps.desktop_version.outputs.value }}.sha256"
+
+      - name: Upload desktop artifacts
+        if: steps.desktop_secrets.outputs.ready == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: garyx-macos-${{ steps.desktop_version.outputs.value }}
+          path: |
+            desktop/garyx-desktop/dist-release/*.dmg
+            desktop/garyx-desktop/dist-release/*.zip
+            desktop/garyx-desktop/dist-release/*.blockmap
+            desktop/garyx-desktop/dist-release/*.sha256
+            desktop/garyx-desktop/dist-release/latest-mac.yml
+
+  release:
+    name: Publish Release
+    needs:
+      - build
+      - build-desktop-macos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # Publishes to the Pyiner/garyx repo via the built-in GITHUB_TOKEN.
+      # electron-updater reads latest-mac.yml from the release assets; if
+      # the repo is ever made private the app has to be configured with a
+      # PAT (see updater.ts). The `*.yml` glob is required so latest-mac.yml
+      # is uploaded alongside the .dmg / .zip / .blockmap artifacts.
+      - name: Publish release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.sha256
+            artifacts/*.dmg
+            artifacts/*.zip
+            artifacts/*.blockmap
+            artifacts/*.yml

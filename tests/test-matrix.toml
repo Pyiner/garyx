@@ -1,0 +1,41 @@
+version = 1
+
+[tier1]
+name = "fast"
+description = "Local/agent-loop fast deterministic validation"
+commands = [
+  "cargo test -p garyx-models --all-targets",
+  "cargo test -p garyx-core --all-targets",
+  "cargo test -p garyx-router --all-targets",
+  "cargo test -p garyx-bridge --all-targets",
+  "cargo test -p garyx-channels --lib",
+  "cargo test -p garyx-gateway --lib",
+]
+
+[tier2]
+name = "pr"
+description = "PR gate: workspace deterministic tests + known-failure tolerant checks"
+blocking_commands = [
+  "cargo test --workspace --all-targets --exclude garyx-gateway --exclude garyx",
+]
+non_blocking_commands = [
+  "cargo test -p garyx-gateway",
+  "cargo test -p garyx",
+]
+
+[tier3]
+name = "extended"
+description = "Nightly/manual external dependency tests and coverage report"
+commands = [
+  "cargo test -p claude-agent-sdk --test integration -- --ignored",
+  "cargo test -p codex-sdk --test integration -- --ignored",
+  "cargo test -p garyx-bridge --test integration -- --ignored",
+  "cargo test -p garyx-gateway --lib --features real-provider-tests downstream_real_tests -- --nocapture",
+  "cargo test -p garyx-gateway --lib --features real-provider-tests managed_mcp_real_tests -- --nocapture",
+]
+coverage_command = "cargo llvm-cov --workspace --all-targets --exclude garyx-gateway --exclude garyx --lcov --output-path target/coverage/lcov.info"
+
+[env]
+run_external_ai_tests = "RUN_EXTERNAL_AI_TESTS=1"
+allow_known_failures = "ALLOW_KNOWN_FAILURES=1"
+rust_test_fail_fast = "RUST_TEST_FAIL_FAST=1"
