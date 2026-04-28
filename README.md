@@ -6,17 +6,17 @@ a macOS desktop app to shared thread history.
 
 ## Install
 
+### Homebrew (recommended on macOS / Linux)
+
+```bash
+brew tap pyiner/garyx
+brew install pyiner/garyx/garyx
+```
+
 ### Shell Script
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
-```
-
-### Homebrew
-
-```bash
-brew tap pyiner/garyx https://github.com/Pyiner/garyx
-brew install garyx
 ```
 
 ### From Source
@@ -29,9 +29,18 @@ cargo build --release
 
 The built binary is `target/release/garyx`.
 
-## Quick Start
+## Getting Started
 
-Create or edit `~/.garyx/garyx.json`:
+### 1. Initialize the config
+
+`garyx.json` lives at `~/.garyx/garyx.json`. Generate a minimal one with:
+
+```bash
+garyx onboard
+```
+
+That seeds an `api` channel account, default agents, and the gateway block.
+You can also hand-write `~/.garyx/garyx.json`:
 
 ```json
 {
@@ -40,15 +49,115 @@ Create or edit `~/.garyx/garyx.json`:
     "port": 31337
   },
   "channels": {
-    "plugins": {
-      "telegram": {
-        "accounts": {
-          "main": {
-            "enabled": true,
-            "agent_id": "claude",
-            "config": {
-              "token": "${TELEGRAM_BOT_TOKEN}"
-            }
+    "api": { "accounts": { "main": { "enabled": true } } }
+  }
+}
+```
+
+> Strings support `${VAR}` and `${VAR:-default}` env-var expansion at load
+> time, so secrets can stay out of the file.
+
+### 2. Start the gateway
+
+For day-to-day use, install it as a managed background service:
+
+```bash
+garyx gateway install   # writes ~/Library/LaunchAgents/com.garyx.agent.plist (macOS)
+                        #     or ~/.config/systemd/user/garyx.service (Linux)
+                        # and starts it; safe to re-run after config changes
+garyx gateway restart   # pick up new config
+garyx gateway stop      # stop the managed service
+```
+
+For one-off testing, run it in the foreground:
+
+```bash
+garyx gateway run
+```
+
+Logs land in `~/.garyx/logs/{stdout,stderr}.log`.
+
+### 3. Verify
+
+```bash
+curl -s http://127.0.0.1:31337/health
+garyx status
+garyx doctor
+```
+
+Send a message into a fresh thread end-to-end:
+
+```bash
+TID=$(garyx thread create --workspace-dir "$PWD" --json | jq -r .thread_id)
+garyx thread send "$TID" "What does this workspace do?"
+```
+
+### 4. Add your first channel bot
+
+Pick the platform you want Garyx to talk to:
+
+#### Telegram
+
+1. Talk to [@BotFather](https://t.me/BotFather), `/newbot`, copy the token.
+2. Register the account with Garyx:
+
+   ```bash
+   garyx channels add telegram main \
+     --token "123456:ABC-DEF…" \
+     --agent-id claude
+   garyx gateway restart
+   ```
+
+3. DM your bot. The gateway picks up updates via long-polling and routes them
+   through the agent you bound.
+
+#### Feishu / Lark
+
+1. Run the device-flow login (auto-fetches App ID / Secret):
+
+   ```bash
+   garyx channels login feishu --domain feishu   # use --domain lark for海外
+   garyx gateway restart
+   ```
+
+   Or, if you already have credentials:
+
+   ```bash
+   garyx channels add feishu gary \
+     --app-id cli_xxxxxxxx \
+     --app-secret xxxxxxxxxxxx \
+     --domain feishu \
+     --agent-id claude
+   ```
+
+2. The gateway opens a Feishu WebSocket and you can @-mention the bot in any
+   chat it has been added to.
+
+#### WeChat (企业微信 / 个人号 via ilinkai)
+
+```bash
+garyx channels login weixin
+garyx gateway restart
+```
+
+The login flow scans a QR code in your terminal and writes the resulting
+`token` and `uin` back into `~/.garyx/garyx.json`.
+
+#### What the resulting config looks like
+
+After adding the Telegram example above, the relevant slice of `garyx.json`
+will look like this:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "accounts": {
+        "main": {
+          "enabled": true,
+          "agent_id": "claude",
+          "config": {
+            "token": "${TELEGRAM_BOT_TOKEN}"
           }
         }
       }
@@ -57,44 +166,31 @@ Create or edit `~/.garyx/garyx.json`:
 }
 ```
 
-Start the gateway:
-
-```bash
-garyx gateway run
-```
-
-Check that it is healthy:
-
-```bash
-curl http://127.0.0.1:31337/health
-```
-
-Create a thread and send a message:
-
-```bash
-garyx thread create --workspace-dir "$PWD" --json
-garyx thread send thread::your-thread-id "What does this workspace do?"
-```
+Built-in channels (`telegram`, `feishu`, `weixin`, `api`) sit directly under
+`channels.<channel_id>`. Each account has an envelope (`enabled`, `name`,
+`agent_id`, `workspace_dir`) plus a channel-specific `config` blob.
 
 ## Common Commands
 
 ```bash
-garyx gateway run
-garyx gateway install
-garyx gateway restart
-garyx config show
-garyx doctor
-garyx status
-garyx channels list
-garyx channels add telegram main --token "$TELEGRAM_BOT_TOKEN"
-garyx channels login weixin --account main
+garyx gateway install           # install + start the managed service
+garyx gateway restart           # restart after editing the config
+garyx gateway run               # run in foreground (testing)
+garyx config show               # dump effective config
+garyx doctor                    # local environment health check
+garyx status                    # show running gateway summary
+garyx channels list             # list configured channel accounts
+garyx channels add telegram main --token "$TELEGRAM_BOT_TOKEN" --agent-id claude
+garyx channels login feishu     # device-flow login, writes credentials
 garyx plugins install ./path/to/garyx-plugin-acmechat
-garyx logs tail
+garyx logs tail                 # tail gateway logs
+garyx update                    # download latest release binary
 ```
 
 ## Desktop App
 
-The macOS desktop app lives in `desktop/garyx-desktop`.
+The macOS desktop app lives in `desktop/garyx-desktop`. Pre-built `.dmg` and
+`.zip` bundles are attached to every GitHub release; for local hacking:
 
 ```bash
 cd desktop/garyx-desktop
@@ -109,9 +205,9 @@ npm run dist:dir
 
 The main configuration file is `~/.garyx/garyx.json`.
 
-Read [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the user-facing
-configuration guide, including channels, plugins, providers, managed MCP
-servers, automations, and desktop behavior.
+Read [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full configuration
+reference: channels, plugins, providers, managed MCP servers, automations,
+and desktop behavior.
 
 ## Development
 
