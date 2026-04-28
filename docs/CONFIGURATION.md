@@ -307,6 +307,10 @@ Saving the gateway URL/token pair first verifies connectivity. Only verified
 saves are written to local desktop state and added to the Gateway URL history;
 the field can still be edited manually.
 
+The desktop language preference is stored in local desktop state. The default
+is `system`, which follows macOS and falls back to English; users can also
+choose English or Chinese explicitly from Settings.
+
 ## CLI Update
 
 The CLI does not auto-update. Use:

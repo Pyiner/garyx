@@ -48,6 +48,7 @@ import {
 import { DirectoryInput } from "../../components/DirectoryInput";
 import { PluginConfigSections } from "../../channel-plugins/PluginConfigPanel";
 import { useChannelPluginCatalog } from "../../channel-plugins/useChannelPluginCatalog";
+import { useI18n } from "../../i18n";
 
 type AgentTargetOption = { value: string; label: string };
 
@@ -113,6 +114,7 @@ function accountToConfig(account: Record<string, unknown>): Record<string, unkno
 }
 
 export function EditBotDialog(props: EditBotDialogProps) {
+  const { t } = useI18n();
   const { open, context, agentTargets, saving, onClose, onSave, onRemove } =
     props;
   const { entries } = useChannelPluginCatalog();
@@ -185,20 +187,20 @@ export function EditBotDialog(props: EditBotDialogProps) {
       await onSave({ kind, accountId, patch });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
+      setError(err instanceof Error ? err.message : t("Save failed."));
     }
   }
 
   async function handleRemove() {
     if (!context) return;
-    if (!window.confirm(`确认删除 ${kind} 账号 "${name || accountId}"？`)) return;
+    if (!window.confirm(t('Delete {kind} account "{name}"?', { kind, name: name || accountId }))) return;
     setRemoving(true);
     setError(null);
     try {
       await onRemove({ kind, accountId });
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除失败");
+      setError(err instanceof Error ? err.message : t("Delete failed."));
     } finally {
       setRemoving(false);
     }
@@ -213,7 +215,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
     >
       <DialogContent className="sm:max-w-[640px]">
         <DialogHeader>
-          <DialogTitle>编辑账号</DialogTitle>
+          <DialogTitle>{t("Edit account")}</DialogTitle>
           <DialogDescription>
             {`${selectedEntry?.display_name || kind} · ${accountId}`}
           </DialogDescription>
@@ -222,7 +224,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="edit-bot-name">显示名</Label>
+              <Label htmlFor="edit-bot-name">{t("Display name")}</Label>
               <Input
                 id="edit-bot-name"
                 value={name}
@@ -230,10 +232,10 @@ export function EditBotDialog(props: EditBotDialogProps) {
               />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="edit-bot-agent">Agent</Label>
+              <Label htmlFor="edit-bot-agent">{t("Agent")}</Label>
               <Select value={agentId} onValueChange={setAgentId}>
                 <SelectTrigger id="edit-bot-agent">
-                  <SelectValue placeholder="选择 agent" />
+                  <SelectValue placeholder={t("Choose agent")} />
                 </SelectTrigger>
                 <SelectContent>
                   {agentTargets.map((target) => (
@@ -245,17 +247,17 @@ export function EditBotDialog(props: EditBotDialogProps) {
               </Select>
               {selectedAgentMissing && (
                 <span className="text-xs text-amber-700">
-                  当前 agent `{agentId}` 已不存在，请重新选择
+                  {t('Agent "{id}" no longer exists. Choose again.', { id: agentId })}
                 </span>
               )}
             </div>
             <div className="col-span-2 flex flex-col gap-1.5">
-              <Label htmlFor="edit-bot-workspace">工作目录（可选）</Label>
+              <Label htmlFor="edit-bot-workspace">{t("Working directory")} ({t("Optional")})</Label>
               <DirectoryInput
                 id="edit-bot-workspace"
                 value={workspaceDir}
                 onChange={setWorkspaceDir}
-                placeholder="默认沿用主工作区"
+                placeholder={t("Use the main workspace by default")}
               />
             </div>
           </div>
@@ -270,7 +272,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
             />
           ) : (
             <div className="rounded-md border border-[#eeeeee] bg-[#fafaf9] p-3 text-sm text-neutral-500">
-              加载渠道目录…
+              {t("Loading channel catalog…")}
             </div>
           )}
         </div>
@@ -284,13 +286,13 @@ export function EditBotDialog(props: EditBotDialogProps) {
             onClick={() => void handleRemove()}
             disabled={removing || saving}
           >
-            {removing ? "删除中…" : "删除账号"}
+            {removing ? t("Deleting…") : t("Delete account")}
           </Button>
           <Button variant="outline" onClick={onClose} disabled={saving || removing}>
-            取消
+            {t("Cancel")}
           </Button>
           <Button onClick={() => void handleSave()} disabled={saving || removing}>
-            {saving ? "保存中…" : "保存"}
+            {saving ? t("Saving…") : t("Save")}
           </Button>
         </DialogFooter>
       </DialogContent>

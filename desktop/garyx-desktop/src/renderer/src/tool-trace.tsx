@@ -22,6 +22,7 @@ import {
   type MergedToolTrace,
   type ToolTraceMessage,
 } from './tool-trace-registry';
+import { useI18n } from './i18n';
 
 export { canMergeToolTraceMessages, type ToolTraceMessage } from './tool-trace-registry';
 
@@ -255,6 +256,7 @@ export function ToolTraceLine({
   nestedChildren?: ReactNode;
   onThreadNavigate?: (threadId: string) => void;
 }) {
+  const { t } = useI18n();
   const merged = resolveMergedToolTrace(toolUse, toolResult);
   const [expanded, setExpanded] = useState(defaultExpanded);
   const targetThreadId = extractTargetThreadId(toolResult);
@@ -299,7 +301,7 @@ export function ToolTraceLine({
           {merged.inputDetail ? (
             <div className="tool-trace-section">
               <span className="tool-trace-section-label">
-                {merged.inputLabel || 'Call'}
+                {merged.inputLabel || t('Call')}
               </span>
               <ToolTraceBody content={merged.inputDetail} label={merged.inputLabel} />
             </div>
@@ -307,14 +309,14 @@ export function ToolTraceLine({
           {merged.resultDetail ? (
             <div className="tool-trace-section">
               <span className="tool-trace-section-label">
-                {merged.resultLabel || 'Result'}
+                {merged.resultLabel || t('Result')}
               </span>
               <ToolTraceBody content={merged.resultDetail} label={merged.resultLabel} />
             </div>
           ) : null}
           {nestedChildren ? (
             <div className="tool-trace-section">
-              <span className="tool-trace-section-label">Activity</span>
+              <span className="tool-trace-section-label">{t('Activity')}</span>
               <div className="tool-trace-children">
                 <div className="tool-trace-children-scroll">
                   {nestedChildren}

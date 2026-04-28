@@ -6,6 +6,7 @@ import {
 } from './ConversationTeamMembers';
 import { ThreadInfoPopover } from './ThreadInfoPopover';
 import type { ThreadRuntimeInfo } from '@shared/contracts';
+import { useI18n } from './i18n';
 
 type ConversationHeaderActionsProps = {
   gatewayStatusLabel: string | null;
@@ -56,6 +57,7 @@ export function ConversationHeaderActions({
   onToggleInspector,
   onToggleThreadLogs,
 }: ConversationHeaderActionsProps) {
+  const { t } = useI18n();
   return (
     <div className="conversation-header-actions">
       {isAutomationView ? (
@@ -64,7 +66,7 @@ export function ConversationHeaderActions({
           onClick={onCreateAutomation}
           type="button"
         >
-          <span>New Automation</span>
+          <span>{t('New Automation')}</span>
         </button>
       ) : isBotsView ? (
         <button
@@ -72,7 +74,7 @@ export function ConversationHeaderActions({
           onClick={onOpenThreads}
           type="button"
         >
-          <span>Threads</span>
+          <span>{t('Threads')}</span>
         </button>
       ) : isSkillsView ? null : (
         <>
@@ -106,12 +108,12 @@ export function ConversationHeaderActions({
             type="button"
           >
             <QueueIcon />
-            <span>{threadLogsOpen ? 'Close Logs' : 'Logs'}</span>
+            <span>{threadLogsOpen ? t('Close Logs') : t('Logs')}</span>
           </button>
           {selectedThreadId ? (
             <button
               aria-expanded={inspectorOpen}
-              aria-label={inspectorOpen ? 'Hide file directory' : 'Show file directory'}
+              aria-label={inspectorOpen ? t('Hide file directory') : t('Show file directory')}
               className={`conversation-header-action-button conversation-header-action-icon ${inspectorOpen ? 'is-open' : ''}`}
               disabled={!hasWorkspaceDirectory}
               onClick={onToggleInspector}

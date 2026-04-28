@@ -48,6 +48,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
+import { useI18n } from '../../i18n';
 
 type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli';
 type HubTab = 'agents' | 'teams';
@@ -183,6 +184,7 @@ export function AgentsHubPanel({
   onStartThread,
   onToast,
 }: AgentsHubPanelProps) {
+  const { t } = useI18n();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [agents, setAgents] = useState<DesktopCustomAgent[]>([]);
@@ -458,20 +460,20 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
 
       if (agentDialogMode === 'create') {
         await window.garyxDesktop.createCustomAgent(payload);
-        onToast?.('Custom agent created', 'success');
+        onToast?.(t('Custom agent created'), 'success');
       } else {
         const updatePayload: UpdateCustomAgentInput = {
           ...payload,
           currentAgentId: selectedAgent?.agentId || payload.agentId,
         };
         await window.garyxDesktop.updateCustomAgent(updatePayload);
-        onToast?.('Custom agent updated', 'success');
+        onToast?.(t('Custom agent updated'), 'success');
       }
 
       closeAgentDialog();
       await loadData();
     } catch (error) {
-      onToast?.(error instanceof Error ? error.message : 'Failed to save custom agent', 'error');
+      onToast?.(error instanceof Error ? error.message : t('Failed to save custom agent'), 'error');
     } finally {
       setSaving(false);
     }
@@ -484,11 +486,11 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
     setSaving(true);
     try {
       await window.garyxDesktop.deleteCustomAgent({ agentId: agent.agentId });
-      onToast?.('Custom agent deleted', 'success');
+      onToast?.(t('Custom agent deleted'), 'success');
       closeAgentDialog();
       await loadData();
     } catch (error) {
-      onToast?.(error instanceof Error ? error.message : 'Failed to delete custom agent', 'error');
+      onToast?.(error instanceof Error ? error.message : t('Failed to delete custom agent'), 'error');
     } finally {
       setSaving(false);
     }
@@ -510,20 +512,20 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
 
       if (teamDialogMode === 'create') {
         await window.garyxDesktop.createTeam(payload);
-        onToast?.('Agent team created', 'success');
+        onToast?.(t('Agent team created'), 'success');
       } else {
         const updatePayload: UpdateTeamInput = {
           ...payload,
           currentTeamId: selectedTeam?.teamId || payload.teamId,
         };
         await window.garyxDesktop.updateTeam(updatePayload);
-        onToast?.('Agent team updated', 'success');
+        onToast?.(t('Agent team updated'), 'success');
       }
 
       closeTeamDialog();
       await loadData();
     } catch (error) {
-      onToast?.(error instanceof Error ? error.message : 'Failed to save team', 'error');
+      onToast?.(error instanceof Error ? error.message : t('Failed to save team'), 'error');
     } finally {
       setSaving(false);
     }
@@ -533,11 +535,11 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
     setSaving(true);
     try {
       await window.garyxDesktop.deleteTeam({ teamId: team.teamId });
-      onToast?.('Agent team deleted', 'success');
+      onToast?.(t('Agent team deleted'), 'success');
       closeTeamDialog();
       await loadData();
     } catch (error) {
-      onToast?.(error instanceof Error ? error.message : 'Failed to delete team', 'error');
+      onToast?.(error instanceof Error ? error.message : t('Failed to delete team'), 'error');
     } finally {
       setSaving(false);
     }
@@ -545,24 +547,24 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
 
   const agentValidationError =
     !agentDraft.displayName.trim()
-      ? 'Name is required.'
+      ? t('Name is required.')
       : !agentDraft.agentId.trim()
-        ? 'Agent ID is required.'
+        ? t('Agent ID is required.')
         : !agentDraft.systemPrompt.trim()
-          ? 'System prompt is required.'
+          ? t('System prompt is required.')
           : null;
 
   const teamValidationError =
     !teamDraft.displayName.trim()
-      ? 'Team name is required.'
+      ? t('Team name is required.')
       : !teamDraft.teamId.trim()
-        ? 'Team ID is required.'
+        ? t('Team ID is required.')
         : teamDraft.memberAgentIds.length === 0
-          ? 'Select at least one member.'
+          ? t('Select at least one member.')
           : !teamDraft.leaderAgentId.trim()
-            ? 'Select a leader.'
+            ? t('Select a leader.')
             : !teamDraft.memberAgentIds.includes(teamDraft.leaderAgentId)
-              ? 'Leader must be part of the team.'
+              ? t('Leader must be part of the team.')
               : null;
 
   const showingAgents = activeTab === 'agents';
@@ -572,7 +574,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
   return (
     <div className="agents-hub">
       <div className="agents-hub-hero">
-        <div className="agents-hub-tabs" role="tablist" aria-label="Agent registry sections">
+        <div className="agents-hub-tabs" role="tablist" aria-label={t("Agent registry sections")}>
           <button
             className={`agents-hub-tab ${showingAgents ? 'active' : ''}`}
             onClick={() => {
@@ -581,7 +583,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
             role="tab"
             type="button"
           >
-            <span>My Agents</span>
+            <span>{t("My Agents")}</span>
             <Badge className="agents-hub-tab-badge" variant="outline">{agents.length}</Badge>
           </button>
           <button
@@ -592,7 +594,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
             role="tab"
             type="button"
           >
-            <span>Teams</span>
+            <span>{t("Teams")}</span>
             <Badge className="agents-hub-tab-badge" variant="outline">{teams.length}</Badge>
           </button>
         </div>
@@ -605,7 +607,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
               onChange={(event) => {
                 setSearch(event.target.value);
               }}
-              placeholder="Search..."
+              placeholder={t("Search...")}
               value={search}
             />
           </div>
@@ -615,7 +617,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
             size="sm"
           >
             <IconPlus aria-hidden size={15} stroke={2} />
-            {showingAgents ? 'New Agent' : 'New Team'}
+            {showingAgents ? t('New Agent') : t('New Team')}
           </Button>
         </div>
       </div>
@@ -625,15 +627,15 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
       ) : null}
 
       {loading ? (
-        <div className="agents-hub-empty-state">Loading...</div>
+        <div className="agents-hub-empty-state">{t('Loading...')}</div>
       ) : (
         <Table className="agents-hub-table">
           <TableHeader>
             <TableRow>
-              <TableHead style={{ width: '40%' }}>Name</TableHead>
-              <TableHead style={{ width: '20%' }}>{showingAgents ? 'Provider' : 'Leader'}</TableHead>
-              <TableHead style={{ width: '20%' }}>{showingAgents ? 'Type' : 'Members'}</TableHead>
-              <TableHead style={{ width: '20%' }} className="text-right">Actions</TableHead>
+              <TableHead style={{ width: '40%' }}>{t('Name')}</TableHead>
+              <TableHead style={{ width: '20%' }}>{showingAgents ? t('Provider') : t('Leader')}</TableHead>
+              <TableHead style={{ width: '20%' }}>{showingAgents ? t('Type') : t('Members')}</TableHead>
+              <TableHead style={{ width: '20%' }} className="text-right">{t('Actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -658,7 +660,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     </TableCell>
                     <TableCell>{providerLabel(agent.providerType)}</TableCell>
                     <TableCell>
-                      <Badge variant="outline">{agent.builtIn ? 'Built-in' : 'Custom'}</Badge>
+                      <Badge variant="outline">{agent.builtIn ? t('Built-in') : t('Custom')}</Badge>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="agents-hub-row-actions">
@@ -667,14 +669,14 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                           size="sm"
                           variant="outline"
                         >
-                          Chat
+                          {t('Chat')}
                         </Button>
                         <Button
                           onClick={(e) => { stopEvent(e); openCreateTeamDialog(agent.agentId); }}
                           size="sm"
                           variant="ghost"
                         >
-                          Team
+                          {t('Team')}
                         </Button>
                         {!agent.builtIn ? (
                           <Button
@@ -684,7 +686,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                             variant="ghost"
                             className="text-destructive"
                           >
-                            Delete
+                            {t('Delete')}
                           </Button>
                         ) : null}
                       </div>
@@ -694,7 +696,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
               ) : search.trim() ? (
                 <TableRow>
                   <TableCell className="text-center text-muted-foreground" colSpan={4}>
-                    No agents matching &ldquo;{search.trim()}&rdquo;
+                    {t('No agents matching "{query}"', { query: search.trim() })}
                   </TableCell>
                 </TableRow>
               ) : null
@@ -734,14 +736,14 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                             size="sm"
                             variant="outline"
                           >
-                            Chat
+                            {t('Chat')}
                           </Button>
                           <Button
                             onClick={(e) => { stopEvent(e); openEditTeamDialog(team); }}
                             size="sm"
                             variant="ghost"
                           >
-                            Edit
+                            {t('Edit')}
                           </Button>
                           <Button
                             disabled={saving}
@@ -750,7 +752,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                             variant="ghost"
                             className="text-destructive"
                           >
-                            Delete
+                            {t('Delete')}
                           </Button>
                         </div>
                       </TableCell>
@@ -760,7 +762,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
               ) : search.trim() ? (
                 <TableRow>
                   <TableCell className="text-center text-muted-foreground" colSpan={4}>
-                    No teams matching &ldquo;{search.trim()}&rdquo;
+                    {t('No teams matching "{query}"', { query: search.trim() })}
                   </TableCell>
                 </TableRow>
               ) : null
@@ -780,19 +782,19 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
         <DialogContent className="sm:max-w-[720px]">
           <DialogHeader>
             <DialogDescription className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              Agent
+              {t('Agent')}
             </DialogDescription>
             <DialogTitle>
               {agentDialogMode === 'create'
-                ? 'Create agent'
+                ? t('Create agent')
                 : agentDialogMode === 'edit'
-                  ? 'Edit agent'
-                  : selectedAgent?.displayName || 'Agent'}
+                  ? t('Edit agent')
+                  : selectedAgent?.displayName || t('Agent')}
             </DialogTitle>
             <DialogDescription>
               {agentDialogMode === 'create'
-                ? 'Create a reusable agent identity with its own provider and system prompt.'
-                : 'Inspect or adjust how this agent shows up in the desktop app.'}
+                ? t('Create a reusable agent identity with its own provider and system prompt.')
+                : t('Inspect or adjust how this agent shows up in the desktop app.')}
             </DialogDescription>
           </DialogHeader>
 
@@ -800,7 +802,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
             <form className="agents-hub-dialog-form" onSubmit={handleAgentSubmit}>
               <div className="agents-hub-form-grid">
                 <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="agent-dialog-name">Name</Label>
+                  <Label className="codex-form-label" htmlFor="agent-dialog-name">{t('Name')}</Label>
                   <Input
                     id="agent-dialog-name"
                     onChange={(event) => {
@@ -810,7 +812,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                   />
                 </div>
                 <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="agent-dialog-id">Agent ID</Label>
+                  <Label className="codex-form-label" htmlFor="agent-dialog-id">{t('Agent ID')}</Label>
                   <Input
                     disabled={agentDialogMode === 'edit'}
                     id="agent-dialog-id"
@@ -824,7 +826,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
               </div>
 
               <div className="codex-form-field">
-                <Label className="codex-form-label">Provider</Label>
+                <Label className="codex-form-label">{t('Provider')}</Label>
                 <Select
                   onValueChange={(value: ProviderType) => {
                     setAgentDraft((current) => ({
@@ -839,7 +841,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                   value={agentDraft.providerType}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select provider" />
+                    <SelectValue placeholder={t('Select provider')} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="claude_code">Claude</SelectItem>
@@ -850,19 +852,19 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
               </div>
 
               <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="agent-dialog-model">Model</Label>
+                <Label className="codex-form-label" htmlFor="agent-dialog-model">{t('Model')}</Label>
                 <Input
                   id="agent-dialog-model"
                   onChange={(event) => {
                     setAgentDraft((current) => ({ ...current, model: event.target.value }));
                   }}
-                  placeholder={agentDraft.providerType === 'gemini_cli' ? DEFAULT_GEMINI_MODEL : 'provider default'}
+                  placeholder={agentDraft.providerType === 'gemini_cli' ? DEFAULT_GEMINI_MODEL : t('provider default')}
                   value={agentDraft.model}
                 />
               </div>
 
               <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="agent-dialog-prompt">System Prompt</Label>
+                <Label className="codex-form-label" htmlFor="agent-dialog-prompt">{t('System Prompt')}</Label>
                 <Textarea
                   className="min-h-[260px]"
                   id="agent-dialog-prompt"
@@ -882,10 +884,10 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     type="button"
                     variant="outline"
                   >
-                    Cancel
+                    {t('Cancel')}
                   </Button>
                   <Button disabled={Boolean(agentValidationError) || saving} type="submit">
-                    {saving ? 'Saving...' : agentDialogMode === 'create' ? 'Create Agent' : 'Save Agent'}
+                    {saving ? t('Saving...') : agentDialogMode === 'create' ? t('Create Agent') : t('Save Agent')}
                   </Button>
                 </div>
               </DialogFooter>
@@ -898,19 +900,19 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                 </span>
                 <div className="agents-hub-detail-copy">
                 <div className="agents-hub-card-badges">
-                  <Badge variant="outline">{selectedAgent?.builtIn ? 'Built-in' : 'Custom'}</Badge>
+                  <Badge variant="outline">{selectedAgent?.builtIn ? t('Built-in') : t('Custom')}</Badge>
                   {selectedAgent ? <Badge variant="outline">{providerLabel(selectedAgent.providerType)}</Badge> : null}
                 </div>
-                <h3>{selectedAgent?.displayName || 'Agent'}</h3>
+                <h3>{selectedAgent?.displayName || t('Agent')}</h3>
                 <p>{selectedAgent?.agentId || ''}</p>
-                {selectedAgent ? <p>{selectedAgent.model || '(provider default)'}</p> : null}
+                {selectedAgent ? <p>{selectedAgent.model || t('(provider default)')}</p> : null}
               </div>
               </div>
 
               <div className="agents-hub-detail-block">
-                <div className="agents-hub-detail-label">System Prompt</div>
+                <div className="agents-hub-detail-label">{t('System Prompt')}</div>
                 <div className="agents-hub-detail-body mono">
-                  {selectedAgent?.systemPrompt || '(empty)'}
+                  {selectedAgent?.systemPrompt || t('(empty)')}
                 </div>
               </div>
 
@@ -924,7 +926,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     type="button"
                     variant="outline"
                   >
-                    Chat
+                    {t('Chat')}
                   </Button>
                 ) : null}
                 {selectedAgent ? (
@@ -936,7 +938,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     type="button"
                     variant="outline"
                   >
-                    Create Team
+                    {t('Create Team')}
                   </Button>
                 ) : null}
                 {selectedAgent && !selectedAgent.builtIn ? (
@@ -946,7 +948,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     }}
                     type="button"
                   >
-                    Edit Agent
+                    {t('Edit Agent')}
                   </Button>
                 ) : null}
               </DialogFooter>
@@ -967,13 +969,13 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
           <DialogHeader>
             <DialogTitle>
               {teamDialogMode === 'create'
-                ? 'Create team'
+                ? t('Create team')
                 : teamDialogMode === 'edit'
-                  ? 'Edit team'
-                  : selectedTeam?.displayName || 'Team'}
+                  ? t('Edit team')
+                  : selectedTeam?.displayName || t('Team')}
             </DialogTitle>
             <DialogDescription>
-              Set team name and add at least one agent. You can set one as TL (Team Lead).
+              {t('Set team name and add at least one agent. You can set one as TL (Team Lead).')}
             </DialogDescription>
           </DialogHeader>
 
@@ -981,24 +983,24 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
             <form className="agents-hub-dialog-form" onSubmit={handleTeamSubmit}>
               <div className="team-builder-form-grid">
                 <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="team-dialog-name">Team name</Label>
+                  <Label className="codex-form-label" htmlFor="team-dialog-name">{t('Team name')}</Label>
                   <Input
                     id="team-dialog-name"
                     onChange={(event) => {
                       setTeamDraft((current) => ({ ...current, displayName: event.target.value }));
                     }}
-                    placeholder="e.g. dev-team"
+                    placeholder={t('e.g. dev-team')}
                     value={teamDraft.displayName}
                   />
                 </div>
                 <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="team-dialog-workflow">Workflow</Label>
+                  <Label className="codex-form-label" htmlFor="team-dialog-workflow">{t('Workflow')}</Label>
                   <Textarea
                     id="team-dialog-workflow"
                     onChange={(event) => {
                       setTeamDraft((current) => ({ ...current, workflowText: event.target.value }));
                     }}
-                    placeholder="How should the team coordinate? (optional)"
+                    placeholder={t('How should the team coordinate? (optional)')}
                     rows={2}
                     value={teamDraft.workflowText}
                   />
@@ -1007,7 +1009,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
 
               <div className="team-builder-body">
                 <div className="team-builder-left">
-                  <div className="team-builder-agent-count">ALL AGENTS ({agents.length})</div>
+                  <div className="team-builder-agent-count">{t('ALL AGENTS')} ({agents.length})</div>
                   <div className="team-builder-agent-list">
                     {agents.map((agent) => {
                       const selected = teamDraft.memberAgentIds.includes(agent.agentId);
@@ -1026,7 +1028,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                           <div className="team-builder-agent-info">
                             <span className="team-builder-agent-name">{agent.displayName}</span>
                             <span className="team-builder-agent-desc">
-                              {previewText(agent.systemPrompt, agent.builtIn ? 'Built-in agent' : 'Custom agent')}
+                              {previewText(agent.systemPrompt, agent.builtIn ? t('Built-in agent') : t('Custom agent'))}
                             </span>
                           </div>
                           <span className={`team-builder-toggle-btn ${selected ? 'checked' : ''}`}>
@@ -1038,13 +1040,13 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                       );
                     })}
                     {!agents.length ? (
-                      <div className="codex-empty-state">No agents available yet.</div>
+                      <div className="codex-empty-state">{t('No agents available yet.')}</div>
                     ) : null}
                   </div>
                 </div>
 
                 <div className="team-builder-right">
-                  <div className="team-builder-agent-count">SELECTED MEMBERS ({teamDraft.memberAgentIds.length} / {agents.length})</div>
+                  <div className="team-builder-agent-count">{t('SELECTED MEMBERS')} ({teamDraft.memberAgentIds.length} / {agents.length})</div>
                   <div className="team-builder-selected-list">
                     {teamDraft.memberAgentIds.map((agentId) => {
                       const agent = agentMap.get(agentId);
@@ -1057,7 +1059,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                           <div className="team-builder-agent-info">
                             <span className="team-builder-agent-name">{agent?.displayName || agentId}</span>
                             <span className="team-builder-agent-desc">
-                              {previewText(agent?.systemPrompt || '', 'Agent')}
+                              {previewText(agent?.systemPrompt || '', t('Agent'))}
                             </span>
                           </div>
                           <div className="team-builder-selected-actions">
@@ -1069,7 +1071,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                                 onClick={() => {
                                   selectTeamLeader(agentId);
                                 }}
-                                title="Set as Team Lead"
+                                title={t('Set as Team Lead')}
                                 type="button"
                               >
                                 TL
@@ -1080,7 +1082,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                               onClick={() => {
                                 toggleTeamMember(agentId);
                               }}
-                              title="Remove"
+                              title={t('Remove')}
                               type="button"
                             >
                               <IconX aria-hidden size={14} stroke={2} />
@@ -1091,7 +1093,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     })}
                     {!teamDraft.memberAgentIds.length ? (
                       <div style={{ padding: '32px 16px', color: 'var(--color-token-description-foreground)', fontSize: 'var(--text-sm)', textAlign: 'center' }}>
-                        Select agents from the left to add them.
+                        {t('Select agents from the left to add them.')}
                       </div>
                     ) : null}
                   </div>
@@ -1108,10 +1110,10 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                   type="button"
                   variant="outline"
                 >
-                  Cancel
+                  {t('Cancel')}
                 </Button>
                 <Button className="team-builder-create-team-btn" disabled={Boolean(teamValidationError) || saving} type="submit">
-                  {saving ? 'Saving...' : teamDialogMode === 'create' ? 'Create team' : 'Save team'}
+                  {saving ? t('Saving...') : teamDialogMode === 'create' ? t('Create team') : t('Save team')}
                 </Button>
               </DialogFooter>
             </form>
@@ -1124,17 +1126,17 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                 <div className="agents-hub-detail-copy">
                   <div className="agents-hub-card-badges">
                     <Badge variant="outline">
-                      Lead: {agentMap.get(selectedTeam?.leaderAgentId || '')?.displayName || selectedTeam?.leaderAgentId}
+                      {t('Lead')}: {agentMap.get(selectedTeam?.leaderAgentId || '')?.displayName || selectedTeam?.leaderAgentId}
                     </Badge>
-                    <Badge variant="outline">{selectedTeam?.memberAgentIds.length || 0} members</Badge>
+                    <Badge variant="outline">{t('{count} members', { count: selectedTeam?.memberAgentIds.length || 0 })}</Badge>
                   </div>
-                  <h3>{selectedTeam?.displayName || 'Team'}</h3>
+                  <h3>{selectedTeam?.displayName || t('Team')}</h3>
                   <p>{selectedTeam?.teamId || ''}</p>
                 </div>
               </div>
 
               <div className="agents-hub-detail-block">
-                <div className="agents-hub-detail-label">Members</div>
+                <div className="agents-hub-detail-label">{t('Members')}</div>
                 <div className="agents-hub-chip-list">
                   {(selectedTeam?.memberAgentIds || []).map((agentId) => (
                     <Badge key={agentId} variant="outline">
@@ -1145,8 +1147,8 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
               </div>
 
               <div className="agents-hub-detail-block">
-                <div className="agents-hub-detail-label">Workflow</div>
-                <div className="agents-hub-detail-body">{selectedTeam?.workflowText || '(empty)'}</div>
+                <div className="agents-hub-detail-label">{t('Workflow')}</div>
+                <div className="agents-hub-detail-body">{selectedTeam?.workflowText || t('(empty)')}</div>
               </div>
 
               <DialogFooter className="agents-hub-dialog-actions">
@@ -1158,7 +1160,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     type="button"
                     variant="outline"
                   >
-                    Chat
+                    {t('Chat')}
                   </Button>
                 ) : null}
                 {selectedTeam ? (
@@ -1168,7 +1170,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     }}
                     type="button"
                   >
-                    Edit Team
+                    {t('Edit Team')}
                   </Button>
                 ) : null}
               </DialogFooter>

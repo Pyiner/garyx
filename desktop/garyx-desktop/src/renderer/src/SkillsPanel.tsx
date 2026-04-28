@@ -13,6 +13,7 @@ import type {
   DesktopSkillInfo,
 } from '@shared/contracts';
 import type { ToastTone } from './toast';
+import { useI18n } from './i18n';
 
 const SKILL_ID_PATTERN = /^[a-z0-9-]+$/;
 const TRANSIENT_STATUS_MS = 3200;
@@ -171,6 +172,7 @@ const TrashIcon = (
 );
 
 export function SkillsPanel({ onToast }: SkillsPanelProps) {
+  const { t } = useI18n();
   const [skills, setSkills] = useState<DesktopSkillInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -272,17 +274,17 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
   const duplicateSkill = skills.find((skill) => skill.id === trimmedId);
   const validationError =
     !trimmedName
-      ? 'Skill name is required.'
+      ? t('Skill name is required.')
       : !trimmedDescription
-        ? 'Skill description is required.'
+        ? t('Skill description is required.')
         : !trimmedBody
-          ? 'Skill content is required.'
+          ? t('Skill content is required.')
           : !trimmedId
-            ? 'Skill ID is required. Open Advanced to set a slug.'
+            ? t('Skill ID is required. Open Advanced to set a slug.')
             : !SKILL_ID_PATTERN.test(trimmedId)
-              ? 'Skill ID must match [a-z0-9-].'
+              ? t('Skill ID must match [a-z0-9-].')
               : duplicateSkill
-                ? `Skill ID "${trimmedId}" already exists.`
+                ? t('Skill ID "{id}" already exists.', { id: trimmedId })
                 : null;
   const hasSkillIdValidationError = validationError?.toLowerCase().includes('skill id') ?? false;
   const editorDirty = Boolean(
@@ -687,8 +689,8 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
         <div className="codex-section">
           <div className="codex-section-header skills-panel-header">
             <div className="skills-panel-header-copy">
-              <span className="codex-section-title">Skills</span>
-              <span className="codex-section-note">{skills.length} total</span>
+              <span className="codex-section-title">{t('Skills')}</span>
+              <span className="codex-section-note">{t('{count} total', { count: skills.length })}</span>
             </div>
             <div className="skills-panel-header-actions">
               <button
@@ -699,7 +701,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 }}
                 type="button"
               >
-                {loading ? 'Refreshing...' : 'Refresh'}
+                {loading ? t('Refreshing...') : t('Refresh')}
               </button>
               <button
                 className="codex-section-action"
@@ -707,16 +709,16 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 onClick={openCreateDialog}
                 type="button"
               >
-                {PlusIcon} New Skill
+                {PlusIcon} {t('New Skill')}
               </button>
             </div>
           </div>
         </div>
 
         {loading ? (
-          <div className="codex-empty-state skills-panel-empty">Loading skills...</div>
+          <div className="codex-empty-state skills-panel-empty">{t('Loading skills...')}</div>
         ) : !skills.length ? (
-          <div className="codex-empty-state skills-panel-empty">No skills installed. Create your first skill.</div>
+          <div className="codex-empty-state skills-panel-empty">{t('No skills installed. Create your first skill.')}</div>
         ) : (
           <div className="codex-list-card skills-panel-list">
             {skills.map((skill) => {
@@ -731,11 +733,11 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
                     <div className="skills-panel-row-title">
                       <span className="codex-list-row-name">{skill.name}</span>
-                      <span className="codex-sync-pill ok">{sourceLabel(skill)}</span>
+                      <span className="codex-sync-pill ok">{t(sourceLabel(skill))}</span>
                     </div>
                     {showId ? <span className="codex-command-row-desc">{skill.id}</span> : null}
                     <span className="codex-command-row-desc skills-panel-description">
-                      {skill.description || 'No description provided.'}
+                      {skill.description || t('No description provided.')}
                     </span>
                   </div>
                   <div className="codex-list-row-actions">
@@ -745,7 +747,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                       onClick={() => {
                         void openSkillEditor(skill);
                       }}
-                      title="Edit"
+                      title={t('Edit')}
                       type="button"
                     >
                       {GearIcon}
@@ -756,13 +758,13 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                       onClick={() => {
                         void handleDeleteSkill(skill);
                       }}
-                      title="Delete"
+                      title={t('Delete')}
                       type="button"
                     >
                       {TrashIcon}
                     </button>
                     <button
-                      aria-label={skill.enabled ? 'Disable skill' : 'Enable skill'}
+                      aria-label={skill.enabled ? t('Disable skill') : t('Enable skill')}
                       aria-pressed={skill.enabled}
                       className={`settings-switch ${skill.enabled ? 'checked' : ''}`}
                       disabled={busy || creating || Boolean(editorBusy)}
@@ -800,11 +802,11 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
           >
             <div className="panel-header skills-create-modal-header">
               <div className="bot-card-copy">
-                <span className="eyebrow">Create Skill</span>
-                <h3 className="panel-title" id="skills-create-dialog-title">New Skill</h3>
+                <span className="eyebrow">{t('Create Skill')}</span>
+                <h3 className="panel-title" id="skills-create-dialog-title">{t('New Skill')}</h3>
               </div>
               <button
-                aria-label="Close skill dialog"
+                aria-label={t('Close skill dialog')}
                 className="sidebar-tool-button"
                 disabled={creating}
                 onClick={closeCreateDialog}
@@ -821,7 +823,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
               }}
             >
               <label>
-                <span>Name</span>
+                <span>{t('Name')}</span>
                 <input
                   autoFocus
                   onChange={(event) => {
@@ -830,13 +832,13 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                       name: event.target.value,
                     }));
                   }}
-                  placeholder="Example Skill"
+                  placeholder={t('Example Skill')}
                   value={draft.name}
                 />
               </label>
 
               <label>
-                <span>Description</span>
+                <span>{t('Description')}</span>
                 <textarea
                   onChange={(event) => {
                     setDraft((current) => ({
@@ -844,13 +846,13 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                       description: event.target.value,
                     }));
                   }}
-                  placeholder="What this skill should help Garyx do."
+                  placeholder={t('What this skill should help Garyx do.')}
                   value={draft.description}
                 />
               </label>
 
               <label>
-                <span>Skill Content</span>
+                <span>{t('Skill Content')}</span>
                 <textarea
                   className="skills-create-content-input"
                   onChange={(event) => {
@@ -866,7 +868,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
               </label>
 
               <p className="small-note skills-form-note">
-                Frontmatter is generated automatically from Name and Description. Write only the markdown body for <code>SKILL.md</code> here.
+                {t('Frontmatter is generated automatically from Name and Description. Write only the markdown body for SKILL.md here.')}
               </p>
 
               <div className="skills-create-advanced">
@@ -878,17 +880,17 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   }}
                   type="button"
                 >
-                  {createAdvancedOpen ? 'Hide Advanced' : 'Advanced'}
+                  {createAdvancedOpen ? t('Hide Advanced') : t('Advanced')}
                 </button>
                 <span className="small-note">
-                  Skill ID: <code>{trimmedId || 'set manually'}</code>
+                  {t('Skill ID')}: <code>{trimmedId || t('set manually')}</code>
                 </span>
               </div>
 
               {createAdvancedOpen ? (
                 <div className="skills-advanced-panel">
                   <label>
-                    <span>Skill ID</span>
+                    <span>{t('Skill ID')}</span>
                     <input
                       onChange={(event) => {
                         setDraftIdManuallyEdited(true);
@@ -903,13 +905,13 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                     />
                   </label>
                   <p className="small-note skills-form-note">
-                    Stable slug used as the skill directory name and API key under <code>~/.garyx/skills/&lt;id&gt;</code>.
+                    {t('Stable slug used as the skill directory name and API key under ~/.garyx/skills/<id>.')}
                   </p>
                 </div>
               ) : null}
 
               <p className={`small-note skills-form-note ${validationError ? 'error' : ''}`}>
-                {validationError || 'The skill is created immediately with a real SKILL.md body, then opened in the full directory editor.'}
+                {validationError || t('The skill is created immediately with a real SKILL.md body, then opened in the full directory editor.')}
               </p>
 
               <div className="skills-form-footer">
@@ -919,14 +921,14 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   onClick={closeCreateDialog}
                   type="button"
                 >
-                  Cancel
+                  {t('Cancel')}
                 </button>
                 <button
                   className="primary-button"
                   disabled={creating || Boolean(validationError)}
                   type="submit"
                 >
-                  {creating ? 'Creating...' : 'Create Skill'}
+                  {creating ? t('Creating...') : t('Create Skill')}
                 </button>
               </div>
             </form>
@@ -953,7 +955,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
           >
             <div className="skills-editor-header">
               <div className="skills-editor-header-copy">
-                <span className="eyebrow">Skill Editor</span>
+                <span className="eyebrow">{t('Skill Editor')}</span>
                 <h3 className="panel-title" id="skills-editor-title">{editor.skill.name}</h3>
                 <p className="small-note">{editor.skill.sourcePath}</p>
               </div>
@@ -967,7 +969,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   type="button"
                 >
                   <IconFilePlus size={16} stroke={1.8} />
-                  New File
+                  {t('New File')}
                 </button>
                 <button
                   className="codex-section-action"
@@ -978,7 +980,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   type="button"
                 >
                   <IconFolderPlus size={16} stroke={1.8} />
-                  New Folder
+                  {t('New Folder')}
                 </button>
                 <button
                   className="codex-icon-button codex-icon-button-danger"
@@ -986,7 +988,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   onClick={() => {
                     void handleDeleteEditorEntry();
                   }}
-                  title="Delete file"
+                  title={t('Delete file')}
                   type="button"
                 >
                   {TrashIcon}
@@ -1005,10 +1007,10 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   type="button"
                 >
                   <IconDeviceFloppy size={16} stroke={1.8} />
-                  {editorBusy?.startsWith('save:') ? 'Saving...' : 'Save'}
+                  {editorBusy?.startsWith('save:') ? t('Saving...') : t('Save')}
                 </button>
                 <button
-                  aria-label="Close skill editor"
+                  aria-label={t('Close skill editor')}
                   className="codex-icon-button"
                   disabled={Boolean(editorBusy)}
                   onClick={closeEditor}
@@ -1028,16 +1030,16 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
 
               <section className="skills-editor-main">
                 <div className="skills-editor-filebar">
-                  <strong>{editor.selectedPath || 'No file selected'}</strong>
+                  <strong>{editor.selectedPath || t('No file selected')}</strong>
                   <div className="skills-editor-filebar-status">
                     {skillPreviewBadgeLabel(editor.selectedDocument) ? (
                       <span className="codex-sync-pill ok">
-                        {skillPreviewBadgeLabel(editor.selectedDocument)}
+                        {t(skillPreviewBadgeLabel(editor.selectedDocument)!)}
                       </span>
                     ) : null}
-                    {editorDirty ? <span className="codex-sync-pill fail">Unsaved</span> : null}
+                    {editorDirty ? <span className="codex-sync-pill fail">{t('Unsaved')}</span> : null}
                     {editor.selectedDocument && !editor.selectedDocument.editable ? (
-                      <span className="codex-sync-pill ok">Read-only</span>
+                      <span className="codex-sync-pill ok">{t('Read-only')}</span>
                     ) : null}
                   </div>
                 </div>
@@ -1046,8 +1048,8 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   editor.selectedDocument?.previewKind === 'image' && editor.selectedDocument.dataBase64 ? (
                     <div className="skills-editor-preview-shell">
                       <div className="skills-editor-preview-copy">
-                        <span className="eyebrow">Image Preview</span>
-                        <p>{skillPreviewMessage(editor.selectedDocument)}</p>
+                        <span className="eyebrow">{t('Image Preview')}</span>
+                        <p>{t(skillPreviewMessage(editor.selectedDocument))}</p>
                       </div>
                       <div className="skills-editor-image-frame">
                         <img
@@ -1072,9 +1074,9 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   ) : (
                     <div className="workspace-empty-block skills-editor-empty skills-editor-preview-shell">
                       <span className="eyebrow">
-                        {editor.selectedDocument?.previewKind === 'image' ? 'Image Preview' : 'Preview Unavailable'}
+                        {editor.selectedDocument?.previewKind === 'image' ? t('Image Preview') : t('Preview Unavailable')}
                       </span>
-                      <p>{skillPreviewMessage(editor.selectedDocument)}</p>
+                      <p>{t(skillPreviewMessage(editor.selectedDocument))}</p>
                       {editor.selectedDocument?.mediaType ? (
                         <code>{editor.selectedDocument.mediaType}</code>
                       ) : null}
@@ -1082,8 +1084,8 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   )
                 ) : (
                   <div className="workspace-empty-block skills-editor-empty">
-                    <span className="eyebrow">No Files</span>
-                    <p>Create a file to start editing this skill directory.</p>
+                    <span className="eyebrow">{t('No Files')}</span>
+                    <p>{t('Create a file to start editing this skill directory.')}</p>
                   </div>
                 )}
               </section>

@@ -13,6 +13,7 @@ import {
   type DesktopBotConsoleSummary,
   type ConfiguredBot,
   type DesktopGatewayProfile,
+  type DesktopLanguagePreference,
   type DesktopRemoteStateError,
   type DesktopThreadSummary,
   type DesktopSettings,
@@ -223,6 +224,11 @@ function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
     }
     return Math.max(280, Math.min(760, Math.round(numeric)));
   };
+  const normalizeLanguagePreference = (input: unknown): DesktopLanguagePreference => {
+    return input === 'en' || input === 'zh-CN' || input === 'system'
+      ? input
+      : DEFAULT_DESKTOP_SETTINGS.languagePreference;
+  };
 
   return {
     gatewayUrl:
@@ -245,6 +251,7 @@ function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
         ? value.providerCodexApiKey.trim()
         : DEFAULT_DESKTOP_SETTINGS.providerCodexApiKey,
     threadLogsPanelWidth: normalizeThreadLogsPanelWidth(value?.threadLogsPanelWidth),
+    languagePreference: normalizeLanguagePreference(value?.languagePreference),
   };
 }
 

@@ -15,9 +15,11 @@ import { useMemo, type ReactElement } from "react";
 
 import type { ChannelPluginCatalogEntry } from "@shared/contracts";
 
+import { useI18n } from "@/i18n";
 import { useChannelPluginCatalog } from "./useChannelPluginCatalog";
 
 export function ChannelPluginCatalogPanel(): ReactElement {
+  const { t } = useI18n();
   const { entries, error, loading, refresh } = useChannelPluginCatalog();
 
   const rows = useMemo(() => entries ?? [], [entries]);
@@ -25,26 +27,26 @@ export function ChannelPluginCatalogPanel(): ReactElement {
   return (
     <div className="channel-plugin-catalog">
       <div className="channel-plugin-catalog-header">
-        <h3 className="channel-plugin-catalog-title">Channel plugins</h3>
+        <h3 className="channel-plugin-catalog-title">{t("Channel plugins")}</h3>
         <button
           type="button"
           className="channel-plugin-catalog-refresh"
           disabled={loading}
           onClick={() => void refresh()}
         >
-          {loading ? "Refreshing…" : "Refresh"}
+          {loading ? t("Refreshing…") : t("Refresh")}
         </button>
       </div>
       {error ? (
         <div className="channel-plugin-catalog-error">
-          Couldn't fetch the plugin list: {error}
+          {t("Couldn't fetch the plugin list: {error}", { error })}
         </div>
       ) : null}
       {entries === null && !error ? (
-        <div className="channel-plugin-catalog-empty">Loading…</div>
+        <div className="channel-plugin-catalog-empty">{t("Loading…")}</div>
       ) : rows.length === 0 ? (
         <div className="channel-plugin-catalog-empty">
-          No channels detected. Install one with{" "}
+          {t("No channels detected. Install one with")}{" "}
           <code>garyx plugins install &lt;path&gt;</code>.
         </div>
       ) : (
@@ -63,6 +65,7 @@ interface ChannelPluginRowProps {
 }
 
 function ChannelPluginRow({ entry }: ChannelPluginRowProps): ReactElement {
+  const { t } = useI18n();
   return (
     <li className="channel-plugin-catalog-row" data-state={entry.state}>
       <div className="channel-plugin-catalog-row-logo">
@@ -92,12 +95,12 @@ function ChannelPluginRow({ entry }: ChannelPluginRowProps): ReactElement {
           <span>·</span>
           <span>
             {entry.accounts.length}{" "}
-            {entry.accounts.length === 1 ? "account" : "accounts"}
+            {entry.accounts.length === 1 ? t("account") : t("accounts")}
           </span>
         </div>
         {entry.last_error ? (
           <div className="channel-plugin-catalog-row-error">
-            Last error: {entry.last_error}
+            {t("Last error")}: {entry.last_error}
           </div>
         ) : null}
       </div>

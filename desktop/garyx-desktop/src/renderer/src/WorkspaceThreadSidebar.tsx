@@ -11,6 +11,7 @@ import {
   buildWorkspaceThreadRows,
   type WorkspaceThreadGroup,
 } from './thread-model';
+import { useI18n } from './i18n';
 
 type WorkspaceMutation = 'assign' | 'add' | 'relink' | 'remove' | null;
 
@@ -63,6 +64,7 @@ export function WorkspaceThreadSidebar({
   onRequestRemoveWorkspace,
   onDeleteThread,
 }: WorkspaceThreadSidebarProps) {
+  const { t } = useI18n();
   const [sectionCollapsed, setSectionCollapsed] = useState(false);
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -186,23 +188,23 @@ export function WorkspaceThreadSidebar({
       <div className="panel-header sidebar-section-header sidebar-section-header-interactive">
         <button
           aria-expanded={!sectionCollapsed}
-          aria-label={sectionCollapsed ? 'Expand threads' : 'Collapse threads'}
+          aria-label={sectionCollapsed ? t('Expand threads') : t('Collapse threads')}
           className="sidebar-section-toggle"
           onClick={() => setSectionCollapsed((c) => !c)}
           type="button"
         >
-          <span className="sidebar-section-title">Threads</span>
+          <span className="sidebar-section-title">{t('Threads')}</span>
           <ChevronDownIcon
             size={16}
             className={`icon sidebar-section-chevron ${sectionCollapsed ? 'collapsed' : ''}`}
           />
         </button>
         <button
-          aria-label={workspaceMutation === 'add' ? 'Opening folder' : 'New folder'}
+          aria-label={workspaceMutation === 'add' ? t('Opening folder') : t('New folder')}
           className="sidebar-section-action"
           disabled={workspaceMutation === 'add'}
           onClick={onOpenFolder}
-          title={workspaceMutation === 'add' ? 'Opening folder…' : 'New folder'}
+          title={workspaceMutation === 'add' ? t('Opening folder…') : t('New folder')}
           type="button"
         >
           <NewFolderIcon />
@@ -263,7 +265,7 @@ export function WorkspaceThreadSidebar({
                     </span>
                     {isRenaming ? (
                       <input
-                        aria-label={`Rename ${workspace.name}`}
+                        aria-label={t('Rename {name}', { name: workspace.name })}
                         className="workspace-rename-input"
                         onChange={(event) => {
                           setWorkspaceNameDraft(event.target.value);
@@ -287,7 +289,7 @@ export function WorkspaceThreadSidebar({
                     <span
                       className={`workspace-status ${group.status === 'Unavailable' ? 'warning' : ''}`}
                     >
-                      {group.status}
+                      {t(group.status)}
                     </span>
                   ) : null}
                 </button>
@@ -304,7 +306,7 @@ export function WorkspaceThreadSidebar({
                         tabIndex={-1}
                         type="button"
                       >
-                        Save
+                        {t('Save')}
                       </button>
                       <button
                         className="workspace-action-button"
@@ -315,13 +317,13 @@ export function WorkspaceThreadSidebar({
                         tabIndex={-1}
                         type="button"
                       >
-                        Cancel
+                        {t('Cancel')}
                       </button>
                     </>
                   ) : (
                     <>
                       <button
-                        aria-label={`Create thread in ${workspace.name}`}
+                        aria-label={t('Create thread in {name}', { name: workspace.name })}
                         className="workspace-action-icon-button"
                         disabled={!workspace.available || workspaceMutation === 'assign'}
                         onClick={(event) => {
@@ -331,8 +333,8 @@ export function WorkspaceThreadSidebar({
                         tabIndex={-1}
                         title={
                           workspaceMutation === 'assign'
-                            ? 'Creating thread…'
-                            : `Create thread in ${workspace.name}`
+                            ? t('Creating thread…')
+                            : t('Create thread in {name}', { name: workspace.name })
                         }
                         type="button"
                       >
@@ -343,7 +345,7 @@ export function WorkspaceThreadSidebar({
                           <button
                             aria-expanded={isMenuOpen}
                             aria-haspopup="menu"
-                            aria-label={`More actions for ${workspace.name}`}
+                            aria-label={t('More actions for {name}', { name: workspace.name })}
                             className="workspace-action-icon-button"
                             ref={(node) => {
                               menuButtonRefs.current[workspace.id] = node;
@@ -355,7 +357,7 @@ export function WorkspaceThreadSidebar({
                               });
                             }}
                             tabIndex={-1}
-                            title={`More actions for ${workspace.name}`}
+                            title={t('More actions for {name}', { name: workspace.name })}
                             type="button"
                           >
                             <MoreDotsIcon size={16} />
@@ -394,14 +396,14 @@ export function WorkspaceThreadSidebar({
                                     type="button"
                                   >
                                     <RenameIcon />
-                                    Rename Workspace
+                                    {t('Rename Workspace')}
                                   </button>
                                   {isRemoveConfirming ? (
-                                    <div className="workspace-menu-confirm" role="group" aria-label={`Confirm removal of ${workspace.name}`}>
+                                    <div className="workspace-menu-confirm" role="group" aria-label={t('Confirm removal of {name}', { name: workspace.name })}>
                                       <div className="workspace-menu-confirm-copy">
-                                        <span className="workspace-menu-confirm-title">Remove from Desktop?</span>
+                                        <span className="workspace-menu-confirm-title">{t('Remove from Desktop?')}</span>
                                         <p>
-                                          This only hides the workspace from Garyx. Threads stay intact.
+                                          {t('This only hides the workspace from Garyx. Threads stay intact.')}
                                         </p>
                                       </div>
                                       <div className="workspace-menu-confirm-actions">
@@ -413,7 +415,7 @@ export function WorkspaceThreadSidebar({
                                           }}
                                           type="button"
                                         >
-                                          Cancel
+                                          {t('Cancel')}
                                         </button>
                                         <button
                                           className="workspace-menu-confirm-button danger"
@@ -424,7 +426,7 @@ export function WorkspaceThreadSidebar({
                                           }}
                                           type="button"
                                         >
-                                          Remove
+                                          {t('Remove')}
                                         </button>
                                       </div>
                                     </div>
@@ -436,11 +438,11 @@ export function WorkspaceThreadSidebar({
                                         setConfirmRemoveWorkspaceId(workspace.id);
                                       }}
                                       role="menuitem"
-                                      title="Remove this workspace from Garyx"
+                                      title={t('Remove this workspace from Garyx')}
                                       type="button"
                                     >
                                       <DeleteIcon />
-                                      Remove from Desktop…
+                                      {t('Remove from Desktop…')}
                                     </button>
                                   )}
                                 </div>
@@ -490,7 +492,7 @@ export function WorkspaceThreadSidebar({
                         </button>
                         {row.deleteDisabled ? null : confirmDeleteId === thread.id ? (
                           <button
-                            aria-label={`Confirm delete ${thread.title}`}
+                            aria-label={t('Confirm delete {name}', { name: thread.title })}
                             className="thread-delete-button confirm"
                             style={{ opacity: 1, pointerEvents: 'auto' }}
                             onClick={(event) => {
@@ -501,11 +503,11 @@ export function WorkspaceThreadSidebar({
                             tabIndex={-1}
                             type="button"
                           >
-                            Confirm
+                            {t('Confirm')}
                           </button>
                         ) : (
                           <button
-                            aria-label={`Delete ${thread.title}`}
+                            aria-label={t('Delete {name}', { name: thread.title })}
                             className="thread-delete-button"
                             onClick={(event) => {
                               event.stopPropagation();
@@ -524,7 +526,7 @@ export function WorkspaceThreadSidebar({
                     );
                   })
                 ) : collapsedIds.has(workspace.id) ? null : (
-                  <p className="workspace-empty-note">No threads yet</p>
+                  <p className="workspace-empty-note">{t('No threads yet')}</p>
                 )}
                 {!collapsedIds.has(workspace.id) && hasPreviewOverflow ? (
                   <div className="workspace-thread-preview-row">
@@ -544,7 +546,7 @@ export function WorkspaceThreadSidebar({
                       }}
                       type="button"
                     >
-                      {isPreviewExpanded ? 'Show less' : `See ${hiddenThreadCount} more`}
+                      {isPreviewExpanded ? t('Show less') : t('See {count} more', { count: hiddenThreadCount })}
                     </button>
                   </div>
                 ) : null}
@@ -555,8 +557,8 @@ export function WorkspaceThreadSidebar({
 
         {!workspaceThreadGroups.length ? (
           <div className="workspace-empty-block">
-            <span className="eyebrow">No Workspaces</span>
-            <p>Add a folder to start grouping Garyx threads by workspace.</p>
+            <span className="eyebrow">{t('No Workspaces')}</span>
+            <p>{t('Add a folder to start grouping Garyx threads by workspace.')}</p>
           </div>
         ) : null}
       </div> : null}

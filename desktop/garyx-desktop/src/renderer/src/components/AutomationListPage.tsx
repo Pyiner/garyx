@@ -7,6 +7,7 @@ import type {
   DesktopState,
 } from '@shared/contracts';
 
+import { useI18n, type Translate } from '@/i18n';
 import { selectedWorkspace } from '@/thread-model';
 
 // ---------------------------------------------------------------------------
@@ -35,11 +36,12 @@ function compactPathLabel(path?: string | null): string {
 function getWorkspaceLabel(
   state: DesktopState | null,
   automation: DesktopAutomationSummary,
+  t: Translate,
 ): string {
   return (
     selectedWorkspace(state, automation.workspaceId)?.name
     || compactPathLabel(automation.workspacePath)
-    || 'Workspace unavailable'
+    || t('Workspace unavailable')
   );
 }
 
@@ -64,16 +66,16 @@ function formatOneTimeSchedule(value: string): string {
   }).format(date);
 }
 
-function formatSchedule(schedule: DesktopAutomationSchedule): string {
+function formatSchedule(schedule: DesktopAutomationSchedule, t: Translate): string {
   if (schedule.kind === 'interval') {
-    return `Every ${schedule.hours}h`;
+    return t('Every {hours}h', { hours: schedule.hours });
   }
   if (schedule.kind === 'once') {
-    return `One-time · ${formatOneTimeSchedule(schedule.at) || schedule.at}`;
+    return t('One-time · {time}', { time: formatOneTimeSchedule(schedule.at) || schedule.at });
   }
   const weekdays = schedule.weekdays.length
     ? schedule.weekdays.map((d) => d.slice(0, 2).toUpperCase()).join(' ')
-    : 'Daily';
+    : t('Daily');
   return `${schedule.time} · ${weekdays} · ${schedule.timezone}`;
 }
 
@@ -163,24 +165,26 @@ export function AutomationListPage({
   onDelete,
   onCreateAutomation,
 }: AutomationListPageProps) {
+  const { t } = useI18n();
+
   return (
     <div className="codex-section" style={{ padding: '20px 20px 0', height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
       <div className="codex-section-header">
-        <span className="codex-section-title">Automations</span>
+        <span className="codex-section-title">{t('Automations')}</span>
         <button className="codex-section-action" onClick={onCreateAutomation} type="button">
-          {PlusIcon} New
+          {PlusIcon} {t('New')}
         </button>
       </div>
 
       {!automations.length ? (
-        <div className="codex-empty-state">No automations yet. Create your first scheduled prompt.</div>
+        <div className="codex-empty-state">{t('No automations yet. Create your first scheduled prompt.')}</div>
       ) : (
         <div className="codex-list-card" style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}>
           {automations.map((automation) => {
-            const wsLabel = getWorkspaceLabel(desktopState, automation);
+            const wsLabel = getWorkspaceLabel(desktopState, automation, t);
             const agentLabel = getAgentLabel(agents, automation);
             const workspace = selectedWorkspace(desktopState, automation.workspaceId);
-            const nextTitle = automation.schedule.kind === 'once' ? 'Run At' : 'Next';
+            const nextTitle = automation.schedule.kind === 'once' ? t('Run At') : t('Next');
             const nextRunLabel = automation.schedule.kind === 'once'
               ? formatOneTimeSchedule(automation.schedule.at) || formatTimestamp(automation.nextRun) || automation.nextRun
               : formatTimestamp(automation.nextRun) || automation.nextRun;
@@ -204,15 +208,15 @@ export function AutomationListPage({
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <span className={`codex-sync-pill ${status.pillClass}`}>{status.label}</span>
+                    <span className={`codex-sync-pill ${status.pillClass}`}>{t(status.label)}</span>
                     <span className="codex-sync-pill">{agentLabel}</span>
-                    <span className="codex-sync-pill ok">{formatSchedule(automation.schedule)}</span>
+                    <span className="codex-sync-pill ok">{formatSchedule(automation.schedule, t)}</span>
                     {!workspace?.available && (
-                      <span className="codex-sync-pill fail">Workspace unavailable</span>
+                      <span className="codex-sync-pill fail">{t('Workspace unavailable')}</span>
                     )}
                     <span className="codex-command-row-desc">
                       {wsLabel}
-                      {automation.lastRunAt ? ` · Last: ${formatTimestamp(automation.lastRunAt)}` : ''}
+                      {automation.lastRunAt ? ` · ${t('Last')}: ${formatTimestamp(automation.lastRunAt)}` : ''}
                       {nextRunLabel ? ` · ${nextTitle}: ${nextRunLabel}` : ''}
                     </span>
                   </div>
@@ -224,7 +228,7 @@ export function AutomationListPage({
                     onClick={() => onRunNow(automation)}
                     type="button"
                   >
-                    {isRunning ? 'Running...' : 'Run'}
+                    {isRunning ? t('Running...') : t('Run')}
                   </button>
                   <button
                     className="codex-section-action"
@@ -232,19 +236,19 @@ export function AutomationListPage({
                     onClick={() => onToggleEnabled(automation, !automation.enabled)}
                     type="button"
                   >
-                    {automation.enabled ? 'Pause' : 'Resume'}
+                    {automation.enabled ? t('Pause') : t('Resume')}
                   </button>
                   <button
                     className="codex-section-action"
                     onClick={() => onOpenMemory(automation)}
                     type="button"
                   >
-                    Memory
+                    {t('Memory')}
                   </button>
                   <button
                     className="codex-icon-button"
                     onClick={() => onEdit(automation)}
-                    title="Edit"
+                    title={t('Edit')}
                     type="button"
                   >
                     {GearIcon}
@@ -255,13 +259,13 @@ export function AutomationListPage({
                     onClick={() => onOpenThread(automation)}
                     type="button"
                   >
-                    Thread
+                    {t('Thread')}
                   </button>
                   <button
                     className="codex-icon-button codex-icon-button-danger"
                     disabled={isDeleting}
                     onClick={() => onDelete(automation)}
-                    title="Delete"
+                    title={t('Delete')}
                     type="button"
                   >
                     {TrashIcon}

@@ -1,4 +1,5 @@
 import { IconAlertCircle, IconCheck, IconInfoCircle, IconX } from '@tabler/icons-react';
+import { useI18n } from './i18n';
 
 export type ToastTone = 'success' | 'error' | 'info';
 
@@ -25,6 +26,7 @@ function ToastIcon({ tone }: { tone: ToastTone }) {
 }
 
 export function ToastViewport({ onDismiss, toasts }: ToastViewportProps) {
+  const { t } = useI18n();
   if (!toasts.length) {
     return null;
   }
@@ -44,7 +46,7 @@ export function ToastViewport({ onDismiss, toasts }: ToastViewportProps) {
             <p>{toast.message}</p>
           </div>
           <button
-            aria-label="Dismiss notification"
+            aria-label={t('Dismiss notification')}
             className="toast-dismiss"
             onClick={() => {
               onDismiss(toast.id);

@@ -34,6 +34,7 @@ import {
 import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ThreadLogPanel } from "./ThreadLogPanel";
+import { useI18n } from "../../i18n";
 import type {
   ClientLogEntry,
   PendingAutomationRun,
@@ -374,6 +375,7 @@ export function ThreadPage({
   workspaceDirectoryPanel,
   workspaceMutation,
 }: ThreadPageProps) {
+  const { t } = useI18n();
   const composerShellWrapRef = useRef<HTMLDivElement | null>(null);
   const teamView = deriveThreadTeamView(activeThreadSummary);
   const teamSpeakerOptions = {
@@ -395,11 +397,10 @@ export function ThreadPage({
           !showAutomationRunInitialPlaceholder ? (
             selectedThreadId ? (
               <div className="empty-state">
-                <span className="eyebrow">Ready</span>
-                <h3>Continue the current thread</h3>
+                <span className="eyebrow">{t("Ready")}</span>
+                <h3>{t("Continue the current thread")}</h3>
                 <p>
-                  Every thread is replayable from gateway history and can
-                  continue on this Mac.
+                  {t("Every thread is replayable from gateway history and can continue on this Mac.")}
                 </p>
               </div>
             ) : (
@@ -417,10 +418,10 @@ export function ThreadPage({
           {showHistoryLoadingPlaceholder ? (
             <article className="message-bubble assistant pending">
               <div
-                aria-label="Loading thread history"
+                aria-label={t("Loading thread history")}
                 className="message-loading"
               >
-                <p className="message-loading-label">Loading thread history…</p>
+                <p className="message-loading-label">{t("Loading thread history…")}</p>
                 <span aria-hidden="true" className="message-loading-dots">
                   <span />
                   <span />
@@ -445,9 +446,9 @@ export function ThreadPage({
                 />
               </article>
               <article className="message-bubble assistant pending">
-                <div aria-label="Garyx is working" className="message-loading">
+                <div aria-label={t("Garyx is working")} className="message-loading">
                   <p className="message-loading-label">
-                    Garyx is working through the run…
+                    {t("Garyx is working through the run…")}
                   </p>
                   <span aria-hidden="true" className="message-loading-dots">
                     <span />
@@ -507,7 +508,7 @@ export function ThreadPage({
                     {entry.message.role === "assistant" &&
                     entry.message.pending ? (
                       <div
-                        aria-label="Garyx is working"
+                        aria-label={t("Garyx is working")}
                         className="message-loading"
                       >
                         <p className="message-loading-label">
@@ -549,7 +550,7 @@ export function ThreadPage({
                   className="team-agent-speaker"
                   key={`${block.key}:speaker`}
                   onClick={() => onOpenThreadById(speaker.threadId!)}
-                  title={`Open ${speaker.displayName} thread`}
+                  title={t("Open {name} thread", { name: speaker.displayName })}
                   type="button"
                 >
                   <AgentAvatar
@@ -616,11 +617,11 @@ export function ThreadPage({
           {showPendingAckLoading ? (
             <article className="message-bubble assistant pending">
               <div
-                aria-label="Waiting for Garyx to accept queued follow-up"
+                aria-label={t("Waiting for Garyx to accept queued follow-up")}
                 className="message-loading"
               >
                 <p className="message-loading-label">
-                  Waiting for Garyx to accept the queued follow-up…
+                  {t("Waiting for Garyx to accept the queued follow-up…")}
                 </p>
                 <span aria-hidden="true" className="message-loading-dots">
                   <span />
@@ -633,9 +634,9 @@ export function ThreadPage({
 
           {showAutomationRunTailLoading ? (
             <article className="message-bubble assistant pending">
-              <div aria-label="Garyx is working" className="message-loading">
+              <div aria-label={t("Garyx is working")} className="message-loading">
                 <p className="message-loading-label">
-                  Garyx is working through the run…
+                  {t("Garyx is working through the run…")}
                 </p>
                 <span aria-hidden="true" className="message-loading-dots">
                   <span />
@@ -735,7 +736,7 @@ export function ThreadPage({
       {threadLogsOpen ? (
         <>
           <div
-            aria-label="Resize logs panel"
+            aria-label={t("Resize logs panel")}
             aria-orientation="vertical"
             aria-valuemax={threadLogsMaxWidth}
             aria-valuemin={280}

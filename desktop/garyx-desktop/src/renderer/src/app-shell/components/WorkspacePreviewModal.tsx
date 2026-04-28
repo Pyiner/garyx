@@ -3,6 +3,7 @@ import { CopyIcon, FolderOpenIcon } from 'lucide-react';
 
 import { WorkspaceFilePreview } from '../../workspace-file-preview';
 import { workspaceFileAbsolutePath } from '../workspace-helpers';
+import { useI18n } from '../../i18n';
 
 type WorkspacePreviewModalProps = {
   open: boolean;
@@ -84,6 +85,7 @@ export function WorkspacePreviewModal({
   onClose,
   onLocalFileLinkClick,
 }: WorkspacePreviewModalProps) {
+  const { t } = useI18n();
   const absolutePath = preview?.workspacePath && preview.path
     ? workspaceFileAbsolutePath(preview.workspacePath, preview.path)
     : title;
@@ -155,30 +157,30 @@ export function WorkspacePreviewModal({
               </div>
               <div className="workspace-preview-modal-actions">
                 {preview?.truncated ? (
-                  <span className="workspace-preview-modal-status">Truncated</span>
+                  <span className="workspace-preview-modal-status">{t('Truncated')}</span>
                 ) : null}
                 <button
-                  aria-label="Copy file path"
+                  aria-label={t('Copy file path')}
                   className="workspace-preview-icon-button"
-                  data-tip="Copy path"
+                  data-tip={t('Copy path')}
                   disabled={!canCopyPath}
                   onClick={() => {
                     void handleCopyPath();
                   }}
-                  title="Copy path"
+                  title={t('Copy path')}
                   type="button"
                 >
                   <CopyIcon aria-hidden size={13} strokeWidth={1.8} />
                 </button>
                 <button
-                  aria-label="Show in Finder"
+                  aria-label={t('Show in Finder')}
                   className="workspace-preview-icon-button"
-                  data-tip="Show in Finder"
+                  data-tip={t('Show in Finder')}
                   disabled={!canRevealInFinder}
                   onClick={() => {
                     void handleRevealInFinder();
                   }}
-                  title="Show in Finder"
+                  title={t('Show in Finder')}
                   type="button"
                 >
                   <FolderOpenIcon aria-hidden size={13} strokeWidth={1.8} />
@@ -189,7 +191,7 @@ export function WorkspacePreviewModal({
                   onClick={onClose}
                   type="button"
                 >
-                  Close
+                  {t('Close')}
                 </button>
               </div>
             </div>
@@ -200,7 +202,7 @@ export function WorkspacePreviewModal({
             ) : null}
             <div className="workspace-preview-modal-body">
               {loading ? (
-                <div className="workspace-file-empty">Loading preview…</div>
+                <div className="workspace-file-empty">{t('Loading preview…')}</div>
               ) : (
                 <WorkspaceFilePreview
                   onLocalFileLinkClick={onLocalFileLinkClick}

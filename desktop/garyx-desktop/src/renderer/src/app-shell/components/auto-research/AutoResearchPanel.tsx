@@ -40,6 +40,7 @@ import {
   statusIcon,
 } from './helpers';
 import { Section } from './ProgressBar';
+import { useI18n } from '../../../i18n';
 
 type AutoResearchPanelProps = {
   loading: boolean;
@@ -124,8 +125,10 @@ function VerdictDetails({
 }: {
   verdict?: CandidateVerdict | null;
 }) {
+  const { t } = useI18n();
+
   if (!verdict) {
-    return <p className="codex-command-row-desc">No verifier feedback has landed yet.</p>;
+    return <p className="codex-command-row-desc">{t('No verifier feedback has landed yet.')}</p>;
   }
 
   const score = verdictScore(verdict);
@@ -167,6 +170,7 @@ export function AutoResearchPanel({
   onDelete,
   onSelectCandidate,
 }: AutoResearchPanelProps) {
+  const { t } = useI18n();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [selectedIterationIndex, setSelectedIterationIndex] = useState<number | null>(null);
@@ -218,11 +222,11 @@ export function AutoResearchPanel({
         <div className="agents-hub-hero">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Button onClick={() => setDetailOpen(false)} size="sm" variant="ghost">
-              &larr; Back
+              &larr; {t('Back')}
             </Button>
             {selectedIteration ? (
               <Button onClick={() => setSelectedIterationIndex(null)} size="sm" variant="ghost">
-                &larr; All Iterations
+                &larr; {t('All Iterations')}
               </Button>
             ) : null}
             <span className={`${runStatePillClass(runDetail.run.state)}${!isTerminalRunState(runDetail.run.state) ? ' ar-pulse' : ''}`}>
@@ -232,7 +236,7 @@ export function AutoResearchPanel({
             {runDetail.activeThreadId ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--color-token-description-foreground)' }}>
                 <span className="ar-pulse" style={{ height: 6, width: 6, borderRadius: 9999, background: 'var(--color-token-text-primary)', display: 'inline-block' }} />
-                Active
+                {t('Active')}
               </span>
             ) : null}
           </div>
@@ -243,7 +247,7 @@ export function AutoResearchPanel({
               size="sm"
               variant="outline"
             >
-              {loading ? 'Refreshing…' : 'Refresh'}
+              {loading ? t('Refreshing…') : t('Refresh')}
             </Button>
             {!isTerminalRunState(runDetail.run.state) ? (
               <Button
@@ -252,7 +256,7 @@ export function AutoResearchPanel({
                 size="sm"
                 variant="destructive"
               >
-                Stop
+                {t('Stop')}
               </Button>
             ) : null}
           </div>
@@ -263,13 +267,16 @@ export function AutoResearchPanel({
           <span className="ar-detail-task">{runDetail.run.goal}</span>
           <span className="ar-detail-meta">
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', opacity: 0.5 }}>{runDetail.run.runId}</span>
-            {' · '}Updated {formatTimestamp(runDetail.run.updatedAt)}
+            {' · '}{t('Updated {time}', { time: formatTimestamp(runDetail.run.updatedAt) })}
           </span>
         </div>
 
         {selectedIteration ? (
           <>
-            <Section description={`Iteration ${selectedIteration.iterationIndex} detail.`} title={`Iteration ${selectedIteration.iterationIndex}`}>
+            <Section
+              description={t('Iteration {index} detail.', { index: selectedIteration.iterationIndex })}
+              title={t('Iteration {index}', { index: selectedIteration.iterationIndex })}
+            >
               <div style={{ display: 'grid', gap: 16 }}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
                   <span className={`${runStatePillClass(selectedIteration.state)}${selectedIteration.state !== 'completed' ? ' ar-pulse' : ''}`} style={{ fontSize: 10 }}>
@@ -283,21 +290,21 @@ export function AutoResearchPanel({
                     {formatTimestamp(selectedIteration.startedAt)}{selectedIteration.completedAt ? ` — ${formatTimestamp(selectedIteration.completedAt)}` : ''}
                   </span>
                   {selectedIteration.workThreadId ? (
-                    <button className="codex-section-action" onClick={() => onOpenThread(selectedIteration.workThreadId!)} type="button">Open Work Thread</button>
+                    <button className="codex-section-action" onClick={() => onOpenThread(selectedIteration.workThreadId!)} type="button">{t('Open Work Thread')}</button>
                   ) : null}
                   {selectedIteration.verifyThreadId ? (
-                    <button className="codex-section-action" onClick={() => onOpenThread(selectedIteration.verifyThreadId!)} type="button">Open Verify Thread</button>
+                    <button className="codex-section-action" onClick={() => onOpenThread(selectedIteration.verifyThreadId!)} type="button">{t('Open Verify Thread')}</button>
                   ) : null}
                 </div>
 
-                <Section description="What the worker actually produced in this round." title="Candidate Output">
+                <Section description={t('What the worker actually produced in this round.')} title={t('Candidate Output')}>
                   <CandidateArtifact
-                    emptyText="The worker has not emitted a candidate artifact yet."
+                    emptyText={t('The worker has not emitted a candidate artifact yet.')}
                     text={selectedIterationCandidate?.output}
                   />
                 </Section>
 
-                <Section description="What the verifier said about this round." title="Verifier Feedback">
+                <Section description={t('What the verifier said about this round.')} title={t('Verifier Feedback')}>
                   <VerdictDetails verdict={selectedIterationCandidate?.verdict} />
                 </Section>
               </div>
@@ -320,26 +327,29 @@ export function AutoResearchPanel({
           }}
         >
           <span className="codex-sync-pill ok">
-            {runDetail.run.iterationsUsed}/{runDetail.run.maxIterations} iterations
+            {t('{used}/{max} iterations', {
+              used: runDetail.run.iterationsUsed,
+              max: runDetail.run.maxIterations,
+            })}
           </span>
           {runDetail.run.selectedCandidate ? (
-            <span className="codex-sync-pill">Selected: {runDetail.run.selectedCandidate}</span>
+            <span className="codex-sync-pill">{t('Selected: {candidate}', { candidate: runDetail.run.selectedCandidate })}</span>
           ) : null}
-          <span className="codex-command-row-desc">Updated {formatTimestamp(runDetail.run.updatedAt)}</span>
+          <span className="codex-command-row-desc">{t('Updated {time}', { time: formatTimestamp(runDetail.run.updatedAt) })}</span>
         </div>
 
-        <Section description="One row per round. Click a row or the detail action to inspect that iteration." title="Iterations">
+        <Section description={t('One row per round. Click a row or the detail action to inspect that iteration.')} title={t('Iterations')}>
           {timelineIterations.length ? (
             <Table className="agents-hub-table">
               <TableHeader>
                 <TableRow>
-                  <TableHead style={{ width: '10%' }}>Iteration</TableHead>
-                  <TableHead style={{ width: '12%' }}>State</TableHead>
-                  <TableHead style={{ width: '11%' }}>Score</TableHead>
-                  <TableHead style={{ width: '25%' }}>Output</TableHead>
-                  <TableHead style={{ width: '26%' }}>Verify</TableHead>
-                  <TableHead style={{ width: '10%' }}>Started</TableHead>
-                  <TableHead style={{ width: '6%' }} className="text-right">Detail</TableHead>
+                  <TableHead style={{ width: '10%' }}>{t('Iteration')}</TableHead>
+                  <TableHead style={{ width: '12%' }}>{t('State')}</TableHead>
+                  <TableHead style={{ width: '11%' }}>{t('Score')}</TableHead>
+                  <TableHead style={{ width: '25%' }}>{t('Output')}</TableHead>
+                  <TableHead style={{ width: '26%' }}>{t('Verify')}</TableHead>
+                  <TableHead style={{ width: '10%' }}>{t('Started')}</TableHead>
+                  <TableHead style={{ width: '6%' }} className="text-right">{t('Detail')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -353,9 +363,9 @@ export function AutoResearchPanel({
                       onClick={() => setSelectedIterationIndex(iteration.iterationIndex)}
                     >
                       <TableCell>
-                        <div className="agents-hub-cell-name">Iteration {iteration.iterationIndex}</div>
+                        <div className="agents-hub-cell-name">{t('Iteration {index}', { index: iteration.iterationIndex })}</div>
                         <div className="agents-hub-cell-id">
-                          {iteration.completedAt ? 'Completed' : 'In progress'}
+                          {iteration.completedAt ? t('Completed') : t('In progress')}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -367,19 +377,19 @@ export function AutoResearchPanel({
                       <TableCell>
                         {verdictScore(iterationVerdict) != null
                           ? verdictHeadline(iterationVerdict)
-                          : 'Pending'}
+                          : t('Pending')}
                       </TableCell>
                       <TableCell>
                         <div className="agents-hub-cell-name" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                          {firstNonEmptyLine(iterationCandidate?.output || '') || 'No candidate output yet'}
+                          {firstNonEmptyLine(iterationCandidate?.output || '') || t('No candidate output yet')}
                         </div>
                       </TableCell>
                       <TableCell>
                         <div className="agents-hub-cell-name" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                          {verdictSummary(iterationVerdict) || 'No verifier result yet'}
+                          {verdictSummary(iterationVerdict) || t('No verifier result yet')}
                         </div>
                         <div className="agents-hub-cell-id" style={{ display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                          {verdictScore(iterationVerdict) != null ? verdictHeadline(iterationVerdict) : 'Pending'}
+                          {verdictScore(iterationVerdict) != null ? verdictHeadline(iterationVerdict) : t('Pending')}
                         </div>
                       </TableCell>
                       <TableCell>
@@ -394,7 +404,7 @@ export function AutoResearchPanel({
                             }}
                             size="sm"
                             variant="outline"
-                            title="Select this candidate as the winner"
+                            title={t('Select this candidate as the winner')}
                           >
                             ✓
                           </Button>
@@ -407,7 +417,7 @@ export function AutoResearchPanel({
                           size="sm"
                           variant="ghost"
                         >
-                          View
+                          {t('View')}
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -416,7 +426,7 @@ export function AutoResearchPanel({
               </TableBody>
             </Table>
           ) : (
-            <p className="codex-command-row-desc">The run has not produced iteration records yet.</p>
+            <p className="codex-command-row-desc">{t('The run has not produced iteration records yet.')}</p>
           )}
         </Section>
 
@@ -433,25 +443,25 @@ export function AutoResearchPanel({
   return (
     <div className="agents-hub">
       <div className="agents-hub-hero">
-        <span className="ar-page-title">Auto Research</span>
+        <span className="ar-page-title">{t('Auto Research')}</span>
         <div className="agents-hub-controls">
           <Button onClick={() => setCreateDialogOpen(true)} size="sm">
-            + New Run
+            {t('+ New Run')}
           </Button>
         </div>
       </div>
 
       {loading && !runs.length ? (
-        <div className="agents-hub-empty-state">Loading runs...</div>
+        <div className="agents-hub-empty-state">{t('Loading runs...')}</div>
       ) : runs.length ? (
         <Table className="agents-hub-table">
           <TableHeader>
             <TableRow>
-              <TableHead style={{ width: '40%' }}>Goal</TableHead>
-              <TableHead style={{ width: '15%' }}>State</TableHead>
-              <TableHead style={{ width: '15%' }}>Iterations</TableHead>
-              <TableHead style={{ width: '15%' }}>Updated</TableHead>
-              <TableHead style={{ width: '15%' }} className="text-right">Actions</TableHead>
+              <TableHead style={{ width: '40%' }}>{t('Goal')}</TableHead>
+              <TableHead style={{ width: '15%' }}>{t('State')}</TableHead>
+              <TableHead style={{ width: '15%' }}>{t('Iterations')}</TableHead>
+              <TableHead style={{ width: '15%' }}>{t('Updated')}</TableHead>
+              <TableHead style={{ width: '15%' }} className="text-right">{t('Actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -484,7 +494,7 @@ export function AutoResearchPanel({
                         size="sm"
                         variant="destructive"
                       >
-                        Stop
+                        {t('Stop')}
                       </Button>
                     ) : null}
                     <Button
@@ -494,7 +504,7 @@ export function AutoResearchPanel({
                       variant="ghost"
                       className="text-destructive"
                     >
-                      Delete
+                      {t('Delete')}
                     </Button>
                   </div>
                 </TableCell>
@@ -504,7 +514,7 @@ export function AutoResearchPanel({
         </Table>
       ) : (
         <div className="agents-hub-empty-state" style={{ padding: '48px 0' }}>
-          No runs yet. Click <strong>+ New Run</strong> to start a bounded research loop.
+          {t('No runs yet. Click + New Run to start a bounded research loop.')}
         </div>
       )}
 

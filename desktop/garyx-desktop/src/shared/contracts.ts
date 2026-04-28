@@ -1,3 +1,5 @@
+export type DesktopLanguagePreference = "system" | "en" | "zh-CN";
+
 export interface DesktopSettings {
   gatewayUrl: string;
   gatewayAuthToken: string;
@@ -8,6 +10,7 @@ export interface DesktopSettings {
   providerCodexAuthMode: "cli" | "api_key";
   providerCodexApiKey: string;
   threadLogsPanelWidth: number;
+  languagePreference: DesktopLanguagePreference;
 }
 
 export interface DesktopGatewayProfile {
@@ -699,7 +702,7 @@ export interface StartFeishuChannelAuthInput {
   accountId?: string | null;
   name?: string | null;
   workspaceDir?: string | null;
-  /** `feishu` (国内 default) or `lark` (海外). */
+  /** `feishu` for the China tenant or `lark` for the international tenant. */
   domain?: "feishu" | "lark" | null;
 }
 
@@ -1492,4 +1495,5 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   providerCodexAuthMode: "cli",
   providerCodexApiKey: "",
   threadLogsPanelWidth: 360,
+  languagePreference: "system",
 };

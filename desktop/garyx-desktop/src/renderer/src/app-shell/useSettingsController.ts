@@ -36,7 +36,8 @@ function desktopSettingsEqual(
     left.providerClaudeEnv === right.providerClaudeEnv &&
     left.providerCodexAuthMode === right.providerCodexAuthMode &&
     left.providerCodexApiKey === right.providerCodexApiKey &&
-    left.threadLogsPanelWidth === right.threadLogsPanelWidth
+    left.threadLogsPanelWidth === right.threadLogsPanelWidth &&
+    left.languagePreference === right.languagePreference
   );
 }
 
@@ -431,7 +432,7 @@ export function useSettingsController({
       setGatewaySettingsJsonError(
         gatewayError instanceof Error ? gatewayError.message : 'Invalid JSON',
       );
-      setGatewaySettingsStatus('JSON 无法解析，暂时无法切回表单模式。');
+      setGatewaySettingsStatus('JSON cannot be parsed, so Garyx cannot switch back to form mode yet.');
       return false;
     }
   }

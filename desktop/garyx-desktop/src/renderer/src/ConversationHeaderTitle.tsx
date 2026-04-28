@@ -5,6 +5,7 @@ import type { KeyboardEvent, RefObject } from 'react';
 import type { DesktopBotConsoleSummary } from '@shared/contracts';
 
 import { ChannelLogo } from './channel-logo';
+import { useI18n } from './i18n';
 
 type ConversationHeaderTitleProps = {
   activeThread: { id: string } | null;
@@ -53,22 +54,23 @@ export function ConversationHeaderTitle({
   titleDraft,
   titleInputRef,
 }: ConversationHeaderTitleProps) {
-  const fallbackTitle = activeThreadTitle || activeWorkspaceName || 'Select a thread';
+  const { t } = useI18n();
+  const fallbackTitle = activeThreadTitle || activeWorkspaceName || t('Select a thread');
   const staticTitle = isAutomationView
-    ? 'Automation'
+    ? t('Automation')
     : isSkillsView
-      ? 'Skills'
+      ? t('Skills')
       : isBotsView
-        ? 'Bots'
+        ? t('Bots')
         : fallbackTitle;
 
   const staticTitleHint = isAutomationView
-    ? 'Automation'
+    ? t('Automation')
     : isSkillsView
-      ? 'Skills'
+      ? t('Skills')
       : isBotsView
-        ? 'Bots'
-        : activeThreadTitle || 'Select a thread';
+        ? t('Bots')
+        : activeThreadTitle || t('Select a thread');
 
   const handleTitleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') {
@@ -88,7 +90,7 @@ export function ConversationHeaderTitle({
           {canEditThreadTitle && editingThreadTitle ? (
             <input
               ref={titleInputRef}
-              aria-label="Thread title"
+              aria-label={t('Thread title')}
               className="conversation-title-input"
               onBlur={onSaveTitle}
               onChange={(event) => {
@@ -102,7 +104,7 @@ export function ConversationHeaderTitle({
             <button
               className="conversation-title-button"
               onClick={onBeginEdit}
-              title="Click to rename thread"
+              title={t('Click to rename thread')}
               type="button"
             >
               <span className="conversation-title-text">
@@ -115,7 +117,7 @@ export function ConversationHeaderTitle({
           {!isAutomationView && !isSkillsView && !isBotsView && (activeThread || activeThreadBotId) ? (
             <label
               className={`thread-bot-inline-trigger ${activeThreadBot ? '' : 'empty'}`}
-              title={activeThreadBot ? `Bound to ${activeThreadBot.title}` : 'Bind bot'}
+              title={activeThreadBot ? t('Bound to {name}', { name: activeThreadBot.title }) : t('Bind bot')}
             >
               {activeThreadBot ? (
                 <ChannelLogo
@@ -126,7 +128,7 @@ export function ConversationHeaderTitle({
                 <IconPlugConnected aria-hidden className="icon" size={14} stroke={1.7} />
               )}
               <select
-                aria-label="Thread bot binding"
+                aria-label={t('Thread bot binding')}
                 className="thread-bot-inline-select"
                 disabled={bindingMutation === 'bot-binding'}
                 onChange={(event) => {
@@ -139,7 +141,7 @@ export function ConversationHeaderTitle({
                 }}
                 value={activeThreadBotId || ''}
               >
-                <option value="">No bot</option>
+                <option value="">{t('No bot')}</option>
                 {botGroups.map((group) => (
                   <option key={group.id} value={group.id}>
                     {group.title}

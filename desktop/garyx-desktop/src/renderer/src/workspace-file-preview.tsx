@@ -30,6 +30,7 @@ import {
   localFilePathFromMessageLinkHref,
   type LocalFileLinkHandler,
 } from './message-rich-text';
+import { useI18n } from './i18n';
 
 const MAX_HIGHLIGHT_CHAR_COUNT = 200_000;
 
@@ -201,6 +202,7 @@ function usePreviewBlobUrl(preview: DesktopWorkspaceFilePreview | null): string 
 }
 
 function MermaidDiagram({ code }: { code: string }) {
+  const { t } = useI18n();
   const id = useId().replace(/:/g, '-');
   const [svg, setSvg] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -229,7 +231,7 @@ function MermaidDiagram({ code }: { code: string }) {
           setError(
             renderError instanceof Error
               ? renderError.message
-              : 'Failed to render Mermaid diagram.',
+              : t('Failed to render Mermaid diagram.'),
           );
         }
       }
@@ -245,7 +247,7 @@ function MermaidDiagram({ code }: { code: string }) {
   }
 
   if (!svg) {
-    return <div className="workspace-file-mermaid-loading">Rendering diagram…</div>;
+    return <div className="workspace-file-mermaid-loading">{t('Rendering diagram…')}</div>;
   }
 
   return (

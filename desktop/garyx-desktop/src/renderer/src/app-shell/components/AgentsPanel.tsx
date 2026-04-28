@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
+import { useI18n } from '../../i18n';
 
 type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli';
 type EditorMode = 'inspect' | 'create' | 'edit';
@@ -70,6 +71,7 @@ const plusIcon = (
 );
 
 export function AgentsPanel({ onToast }: AgentsPanelProps) {
+  const { t } = useI18n();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [agents, setAgents] = useState<DesktopCustomAgent[]>([]);
@@ -93,7 +95,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
       setAgents(visibleAgents);
       setSelectedAgentId(preferredAgentId || selectedAgentId || visibleAgents[0]?.agentId || null);
     } catch (error) {
-      onToast?.(error instanceof Error ? error.message : 'Failed to load agents', 'error');
+      onToast?.(error instanceof Error ? error.message : t('Failed to load agents'), 'error');
     } finally {
       setLoading(false);
     }
@@ -144,11 +146,11 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     setSaving(true);
     try {
       await window.garyxDesktop.deleteCustomAgent({ agentId: agent.agentId });
-      onToast?.('Custom agent deleted', 'success');
+      onToast?.(t('Custom agent deleted'), 'success');
       setEditorMode('inspect');
       await loadAgents(agents.find((item) => item.agentId !== agent.agentId)?.agentId || null);
     } catch (error) {
-      onToast?.(error instanceof Error ? error.message : 'Failed to delete custom agent', 'error');
+      onToast?.(error instanceof Error ? error.message : t('Failed to delete custom agent'), 'error');
     } finally {
       setSaving(false);
     }
@@ -168,21 +170,21 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
       let saved: DesktopCustomAgent;
       if (editorMode === 'create') {
         saved = await window.garyxDesktop.createCustomAgent(payload);
-        onToast?.('Custom agent created', 'success');
+        onToast?.(t('Custom agent created'), 'success');
       } else {
         const updatePayload: UpdateCustomAgentInput = {
           ...payload,
           currentAgentId: selectedAgent?.agentId || payload.agentId,
         };
         saved = await window.garyxDesktop.updateCustomAgent(updatePayload);
-        onToast?.('Custom agent updated', 'success');
+        onToast?.(t('Custom agent updated'), 'success');
       }
       setEditorMode('inspect');
       setDraft(emptyDraft());
       setDraftIdTouched(false);
       await loadAgents(saved.agentId);
     } catch (error) {
-      onToast?.(error instanceof Error ? error.message : 'Failed to save custom agent', 'error');
+      onToast?.(error instanceof Error ? error.message : t('Failed to save custom agent'), 'error');
     } finally {
       setSaving(false);
     }
@@ -190,11 +192,11 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
 
   const validationError =
     !draft.displayName.trim()
-      ? 'Name is required.'
+      ? t('Name is required.')
       : !draft.agentId.trim()
-        ? 'Agent ID is required.'
+        ? t('Agent ID is required.')
         : !draft.systemPrompt.trim()
-          ? 'System prompt is required.'
+          ? t('System prompt is required.')
           : null;
 
   const showingEditor = editorMode === 'create' || (editorMode === 'edit' && selectedAgent && !selectedAgent.builtIn);
@@ -205,14 +207,14 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
       <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
         <div className="codex-section">
           <div className="codex-section-header">
-            <span className="codex-section-title">Agents</span>
+            <span className="codex-section-title">{t('Agents')}</span>
             <button className="codex-section-action" onClick={openCreateEditor} type="button">
-              {plusIcon} 新建
+              {plusIcon} {t('New')}
             </button>
           </div>
         </div>
         {loading ? (
-          <div className="codex-empty-state">Loading agents...</div>
+          <div className="codex-empty-state">{t('Loading agents...')}</div>
         ) : agents.length ? (
           <div className="codex-list-card" style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}>
             {agents.map((agent) => {
@@ -233,7 +235,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                   </div>
                   <div className="codex-list-row-actions">
                     <span className="codex-sync-pill ok">
-                      {agent.builtIn ? 'built-in' : providerLabel(agent.providerType)}
+                      {agent.builtIn ? t('built-in') : providerLabel(agent.providerType)}
                     </span>
                   </div>
                 </button>
@@ -241,7 +243,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
             })}
           </div>
         ) : (
-          <div className="codex-empty-state">No agents found.</div>
+          <div className="codex-empty-state">{t('No agents found.')}</div>
         )}
       </div>
 
@@ -251,14 +253,14 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
           <div className="codex-section">
             <div className="codex-section-header">
               <span className="codex-section-title">
-                {editorMode === 'create' ? 'New Agent' : 'Edit Agent'}
+                {editorMode === 'create' ? t('New Agent') : t('Edit Agent')}
               </span>
             </div>
           </div>
           <div className="codex-list-card" style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}>
             <form onSubmit={handleSubmit}>
               <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="agent-display-name">Name</Label>
+                <Label className="codex-form-label" htmlFor="agent-display-name">{t('Name')}</Label>
                 <Input
                   id="agent-display-name"
                   onChange={(event) => {
@@ -268,7 +270,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 />
               </div>
               <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="agent-id">Agent ID</Label>
+                <Label className="codex-form-label" htmlFor="agent-id">{t('Agent ID')}</Label>
                 <Input
                   disabled={editorMode === 'edit'}
                   id="agent-id"
@@ -280,7 +282,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 />
               </div>
               <div className="codex-form-field">
-                <Label className="codex-form-label">Provider</Label>
+                <Label className="codex-form-label">{t('Provider')}</Label>
                 <Select
                   onValueChange={(value: ProviderType) => {
                     setDraft((current) => ({
@@ -295,7 +297,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                   value={draft.providerType}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select provider" />
+                    <SelectValue placeholder={t('Select provider')} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="claude_code">Claude</SelectItem>
@@ -305,18 +307,18 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 </Select>
               </div>
               <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="agent-model">Model</Label>
+                <Label className="codex-form-label" htmlFor="agent-model">{t('Model')}</Label>
                 <Input
                   id="agent-model"
                   onChange={(event) => {
                     setDraft((current) => ({ ...current, model: event.target.value }));
                   }}
-                  placeholder={draft.providerType === 'gemini_cli' ? DEFAULT_GEMINI_MODEL : 'provider default'}
+                  placeholder={draft.providerType === 'gemini_cli' ? DEFAULT_GEMINI_MODEL : t('provider default')}
                   value={draft.model}
                 />
               </div>
               <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="agent-system-prompt">System Prompt</Label>
+                <Label className="codex-form-label" htmlFor="agent-system-prompt">{t('System Prompt')}</Label>
                 <Textarea
                   className="min-h-[260px]"
                   id="agent-system-prompt"
@@ -338,7 +340,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                     }}
                     type="button"
                   >
-                    Cancel
+                    {t('Cancel')}
                   </button>
                   <button
                     className="codex-section-action"
@@ -346,7 +348,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                     style={{ color: 'var(--color-token-text-primary)', fontWeight: 500 }}
                     type="submit"
                   >
-                    {saving ? 'Saving...' : editorMode === 'create' ? 'Create Agent' : 'Save Agent'}
+                    {saving ? t('Saving...') : editorMode === 'create' ? t('Create Agent') : t('Save Agent')}
                   </button>
                 </div>
               </div>
@@ -357,11 +359,11 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
         <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
           <div className="codex-section">
             <div className="codex-section-header">
-              <span className="codex-section-title">{selectedAgent?.displayName || 'Agent'}</span>
+              <span className="codex-section-title">{selectedAgent?.displayName || t('Agent')}</span>
               {selectedAgent && !selectedAgent.builtIn ? (
                 <div className="codex-list-row-actions">
                   <button className="codex-section-action" onClick={() => openEditEditor(selectedAgent)} type="button">
-                    编辑
+                    {t('Edit')}
                   </button>
                   <button
                     className="codex-section-action"
@@ -369,7 +371,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                     style={{ color: '#ef4444' }}
                     type="button"
                   >
-                    删除
+                    {t('Delete')}
                   </button>
                 </div>
               ) : null}
@@ -378,27 +380,27 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
           {selectedAgent ? (
             <div className="codex-list-card" style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}>
               <div className="codex-list-row">
-                <span className="codex-list-row-name">Agent ID</span>
+                <span className="codex-list-row-name">{t('Agent ID')}</span>
                 <span className="codex-command-row-desc">{selectedAgent.agentId}</span>
               </div>
               <div className="codex-list-row">
-                <span className="codex-list-row-name">Provider</span>
+                <span className="codex-list-row-name">{t('Provider')}</span>
                 <span className="codex-command-row-desc">{providerLabel(selectedAgent.providerType)}</span>
               </div>
               <div className="codex-list-row">
-                <span className="codex-list-row-name">Model</span>
-                <span className="codex-command-row-desc">{selectedAgent.model || '(provider default)'}</span>
+                <span className="codex-list-row-name">{t('Model')}</span>
+                <span className="codex-command-row-desc">{selectedAgent.model || t('(provider default)')}</span>
               </div>
               <div style={{ padding: '12px 16px' }}>
-                <div className="codex-list-row-name" style={{ marginBottom: 8 }}>System Prompt</div>
+                <div className="codex-list-row-name" style={{ marginBottom: 8 }}>{t('System Prompt')}</div>
                 <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6, color: 'var(--color-token-text-secondary)', fontFamily: 'var(--font-mono)' }}>
-                  {selectedAgent.systemPrompt || '(empty)'}
+                  {selectedAgent.systemPrompt || t('(empty)')}
                 </div>
               </div>
             </div>
           ) : (
             <div className="codex-empty-state">
-              Select an agent from the list to inspect its provider and prompt.
+              {t('Select an agent from the list to inspect its provider and prompt.')}
             </div>
           )}
         </div>

@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
+import { useI18n } from '../../i18n';
 
 type TeamsPanelProps = {
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
@@ -59,6 +60,7 @@ const plusIcon = (
 );
 
 export function TeamsPanel({ onToast }: TeamsPanelProps) {
+  const { t } = useI18n();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [teams, setTeams] = useState<DesktopTeam[]>([]);
@@ -95,7 +97,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
         const message =
           teamsResult.reason instanceof Error
             ? teamsResult.reason.message
-            : 'Failed to load teams';
+            : t('Failed to load teams');
         setTeams([]);
         setSelectedTeamId(null);
         setTeamsLoadError(message);
@@ -110,7 +112,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
         const message =
           agentsResult.reason instanceof Error
             ? agentsResult.reason.message
-            : 'Failed to load custom agents';
+            : t('Failed to load custom agents');
         setAgents([]);
         setAgentsLoadError(message);
         onToast?.(message, 'error');
@@ -213,11 +215,11 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
     setSaving(true);
     try {
       await window.garyxDesktop.deleteTeam({ teamId: team.teamId });
-      onToast?.('Agent team deleted', 'success');
+      onToast?.(t('Agent team deleted'), 'success');
       setEditorMode('inspect');
       await loadData(teams.find((item) => item.teamId !== team.teamId)?.teamId || null);
     } catch (error) {
-      onToast?.(error instanceof Error ? error.message : 'Failed to delete team', 'error');
+      onToast?.(error instanceof Error ? error.message : t('Failed to delete team'), 'error');
     } finally {
       setSaving(false);
     }
@@ -237,21 +239,21 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
       let saved: DesktopTeam;
       if (editorMode === 'create') {
         saved = await window.garyxDesktop.createTeam(payload);
-        onToast?.('Agent team created', 'success');
+        onToast?.(t('Agent team created'), 'success');
       } else {
         const updatePayload: UpdateTeamInput = {
           ...payload,
           currentTeamId: selectedTeam?.teamId || payload.teamId,
         };
         saved = await window.garyxDesktop.updateTeam(updatePayload);
-        onToast?.('Agent team updated', 'success');
+        onToast?.(t('Agent team updated'), 'success');
       }
       setEditorMode('inspect');
       setDraft(emptyDraft());
       setDraftIdTouched(false);
       await loadData(saved.teamId);
     } catch (error) {
-      onToast?.(error instanceof Error ? error.message : 'Failed to save team', 'error');
+      onToast?.(error instanceof Error ? error.message : t('Failed to save team'), 'error');
     } finally {
       setSaving(false);
     }
@@ -259,17 +261,17 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
 
   const validationError =
     !draft.displayName.trim()
-      ? 'Team name is required.'
+      ? t('Team name is required.')
       : !draft.teamId.trim()
-        ? 'Team ID is required.'
+        ? t('Team ID is required.')
         : draft.memberAgentIds.length === 0
-          ? 'Select at least one member.'
+          ? t('Select at least one member.')
           : !draft.leaderAgentId.trim()
-            ? 'Select a leader.'
+            ? t('Select a leader.')
             : !draft.memberAgentIds.includes(draft.leaderAgentId)
-              ? 'Leader must be included in the member list.'
+              ? t('Leader must be included in the member list.')
               : !draft.workflowText.trim()
-                ? 'Workflow is required.'
+                ? t('Workflow is required.')
                 : null;
 
   const showingEditor = editorMode === 'create' || editorMode === 'edit';
@@ -280,9 +282,9 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
       <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
         <div className="codex-section">
           <div className="codex-section-header">
-            <span className="codex-section-title">Teams</span>
+            <span className="codex-section-title">{t('Teams')}</span>
             <button className="codex-section-action" onClick={openCreateEditor} type="button">
-              {plusIcon} 新建
+              {plusIcon} {t('New')}
             </button>
           </div>
         </div>
@@ -290,7 +292,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
           <div className="codex-inline-hint" style={{ color: '#9b4b4b' }}>{teamsLoadError}</div>
         ) : null}
         {loading ? (
-          <div className="codex-empty-state">Loading teams...</div>
+          <div className="codex-empty-state">{t('Loading teams...')}</div>
         ) : teams.length ? (
           <div className="codex-list-card" style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}>
             {teams.map((team) => {
@@ -311,7 +313,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                   </div>
                   <div className="codex-list-row-actions">
                     <span className="codex-sync-pill ok">
-                      {team.memberAgentIds.length} members
+                      {t('{count} members', { count: team.memberAgentIds.length })}
                     </span>
                   </div>
                 </button>
@@ -319,7 +321,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
             })}
           </div>
         ) : (
-          <div className="codex-empty-state">No teams yet.</div>
+          <div className="codex-empty-state">{t('No teams yet.')}</div>
         )}
       </div>
 
@@ -329,14 +331,14 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
           <div className="codex-section">
             <div className="codex-section-header">
               <span className="codex-section-title">
-                {editorMode === 'create' ? 'New Team' : 'Edit Team'}
+                {editorMode === 'create' ? t('New Team') : t('Edit Team')}
               </span>
             </div>
           </div>
           <div className="codex-list-card" style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}>
             <form onSubmit={handleSubmit}>
               <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="team-display-name">Name</Label>
+                <Label className="codex-form-label" htmlFor="team-display-name">{t('Name')}</Label>
                 <Input
                   id="team-display-name"
                   onChange={(event) => {
@@ -346,7 +348,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                 />
               </div>
               <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="team-id">Team ID</Label>
+                <Label className="codex-form-label" htmlFor="team-id">{t('Team ID')}</Label>
                 <Input
                   disabled={editorMode === 'edit'}
                   id="team-id"
@@ -358,13 +360,13 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                 />
               </div>
               <div className="codex-form-field">
-                <Label className="codex-form-label">Leader Agent</Label>
+                <Label className="codex-form-label">{t('Leader Agent')}</Label>
                 <Select
                   onValueChange={selectLeader}
                   value={draft.leaderAgentId}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Choose the leader agent" />
+                    <SelectValue placeholder={t('Choose the leader agent')} />
                   </SelectTrigger>
                   <SelectContent>
                     {agents.length ? (
@@ -375,20 +377,20 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                       ))
                     ) : (
                       <SelectItem disabled value="no-agents">
-                        No agents available
+                        {t('No agents available')}
                       </SelectItem>
                     )}
                   </SelectContent>
                 </Select>
                 <span className="codex-form-hint">
-                  The leader receives the brief first and is automatically included in the member set.
+                  {t('The leader receives the brief first and is automatically included in the member set.')}
                 </span>
               </div>
               <div className="codex-form-field">
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                  <Label className="codex-form-label">Members</Label>
+                  <Label className="codex-form-label">{t('Members')}</Label>
                   <span className="codex-form-hint">
-                    {draft.memberAgentIds.length} selected
+                    {t('{count} selected', { count: draft.memberAgentIds.length })}
                   </span>
                 </div>
                 {agentsLoadError ? (
@@ -400,13 +402,13 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                       <div className="codex-list-row" style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--color-token-bg-primary, #fcfcfa)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <Checkbox
-                            aria-label="Select all agents"
+                            aria-label={t('Select all agents')}
                             checked={memberSelectionState}
                             onCheckedChange={(checked) => {
                               setAllMembers(checked === true);
                             }}
                           />
-                          <span className="codex-list-row-name" style={{ fontSize: 12 }}>Select All</span>
+                          <span className="codex-list-row-name" style={{ fontSize: 12 }}>{t('Select All')}</span>
                         </div>
                       </div>
                       {agents.map((agent) => {
@@ -420,7 +422,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                               <Checkbox
-                                aria-label={`Select ${agent.displayName}`}
+                                aria-label={t('Select {name}', { name: agent.displayName })}
                                 checked={selected}
                                 disabled={leader}
                                 onCheckedChange={(checked) => {
@@ -434,10 +436,10 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                             </div>
                             <div className="codex-list-row-actions">
                               {leader ? (
-                                <span className="codex-sync-pill ok">Leader</span>
+                                <span className="codex-sync-pill ok">{t('Leader')}</span>
                               ) : null}
                               {agent.builtIn ? (
-                                <span className="codex-sync-pill ok">Built-in</span>
+                                <span className="codex-sync-pill ok">{t('Built-in')}</span>
                               ) : null}
                             </div>
                           </div>
@@ -445,12 +447,12 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                       })}
                     </>
                   ) : (
-                    <div className="codex-empty-state">No custom agents available yet.</div>
+                    <div className="codex-empty-state">{t('No custom agents available yet.')}</div>
                   )}
                 </div>
               </div>
               <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="team-workflow">Workflow</Label>
+                <Label className="codex-form-label" htmlFor="team-workflow">{t('Workflow')}</Label>
                 <Textarea
                   className="min-h-[220px]"
                   id="team-workflow"
@@ -472,7 +474,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                     }}
                     type="button"
                   >
-                    Cancel
+                    {t('Cancel')}
                   </button>
                   <button
                     className="codex-section-action"
@@ -480,7 +482,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                     style={{ color: 'var(--color-token-text-primary)', fontWeight: 500 }}
                     type="submit"
                   >
-                    {saving ? 'Saving...' : editorMode === 'create' ? 'Create Team' : 'Save Team'}
+                    {saving ? t('Saving...') : editorMode === 'create' ? t('Create Team') : t('Save Team')}
                   </button>
                 </div>
               </div>
@@ -491,11 +493,11 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
         <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
           <div className="codex-section">
             <div className="codex-section-header">
-              <span className="codex-section-title">{selectedTeam?.displayName || 'Team'}</span>
+              <span className="codex-section-title">{selectedTeam?.displayName || t('Team')}</span>
               {selectedTeam ? (
                 <div className="codex-list-row-actions">
                   <button className="codex-section-action" onClick={() => openEditEditor(selectedTeam)} type="button">
-                    编辑
+                    {t('Edit')}
                   </button>
                   <button
                     className="codex-section-action"
@@ -503,7 +505,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                     style={{ color: '#ef4444' }}
                     type="button"
                   >
-                    删除
+                    {t('Delete')}
                   </button>
                 </div>
               ) : null}
@@ -512,17 +514,17 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
           {selectedTeam ? (
             <div className="codex-list-card" style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}>
               <div className="codex-list-row">
-                <span className="codex-list-row-name">Team ID</span>
+                <span className="codex-list-row-name">{t('Team ID')}</span>
                 <span className="codex-command-row-desc">{selectedTeam.teamId}</span>
               </div>
               <div className="codex-list-row">
-                <span className="codex-list-row-name">Leader</span>
+                <span className="codex-list-row-name">{t('Leader')}</span>
                 <span className="codex-command-row-desc">
                   {agentMap.get(selectedTeam.leaderAgentId)?.displayName || selectedTeam.leaderAgentId}
                 </span>
               </div>
               <div style={{ padding: '12px 16px' }}>
-                <div className="codex-list-row-name" style={{ marginBottom: 8 }}>Members</div>
+                <div className="codex-list-row-name" style={{ marginBottom: 8 }}>{t('Members')}</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {selectedTeam.memberAgentIds.map((agentId: string) => (
                     <span
@@ -536,7 +538,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                 </div>
               </div>
               <div style={{ padding: '12px 16px' }}>
-                <div className="codex-list-row-name" style={{ marginBottom: 8 }}>Workflow</div>
+                <div className="codex-list-row-name" style={{ marginBottom: 8 }}>{t('Workflow')}</div>
                 <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6, color: 'var(--color-token-text-secondary)' }}>
                   {selectedTeam.workflowText}
                 </div>
@@ -544,7 +546,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
             </div>
           ) : (
             <div className="codex-empty-state">
-              Select a team to inspect its leader, members, and workflow.
+              {t('Select a team to inspect its leader, members, and workflow.')}
             </div>
           )}
         </div>

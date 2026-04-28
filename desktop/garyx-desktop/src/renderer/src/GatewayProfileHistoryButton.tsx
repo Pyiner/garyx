@@ -10,6 +10,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { useI18n } from './i18n';
 
 type GatewayProfileHistoryButtonProps = {
   profiles: DesktopGatewayProfile[];
@@ -22,6 +23,7 @@ export function GatewayProfileHistoryButton({
   className,
   onSelect,
 }: GatewayProfileHistoryButtonProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const normalizedProfiles = useMemo(() => {
     return profiles.filter((profile) => profile.gatewayUrl.trim().length > 0);
@@ -35,9 +37,9 @@ export function GatewayProfileHistoryButton({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <button
-          aria-label="Choose gateway"
+          aria-label={t('Choose gateway')}
           className={cn('gateway-profile-history-trigger', className)}
-          title="Choose gateway"
+          title={t('Choose gateway')}
           type="button"
         >
           <HistoryIcon aria-hidden size={17} strokeWidth={1.9} />
@@ -50,7 +52,7 @@ export function GatewayProfileHistoryButton({
               <HistoryIcon size={15} strokeWidth={1.9} />
             </span>
             <DialogTitle className="gateway-profile-dialog-title">
-              Choose gateway
+              {t('Choose gateway')}
             </DialogTitle>
           </div>
         </DialogHeader>

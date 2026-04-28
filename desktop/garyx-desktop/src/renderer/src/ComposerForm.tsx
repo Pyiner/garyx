@@ -59,6 +59,7 @@ import {
 export type { ComposerAgentOption };
 
 import { buildMessageImageDataUrl } from './message-rich-content';
+import { useI18n, type Translate } from './i18n';
 
 type ComposerFormProps = {
   activeQueueLength: number;
@@ -146,22 +147,22 @@ function slashCommandPreview(command: SlashCommand): string {
   return preview.length > 120 ? `${preview.slice(0, 117)}…` : preview;
 }
 
-function slashCommandLabel(command: SlashCommand): string {
+function slashCommandLabel(command: SlashCommand, t: Translate): string {
   const key = command.name.toLowerCase();
   const labels: Record<string, string> = {
-    branch: '派生',
-    cloud: '云端',
-    compact: '压缩',
-    compress: '压缩',
-    feedback: '反馈',
-    fast: '快速',
+    branch: t('Branch'),
+    cloud: t('Cloud'),
+    compact: t('Compact'),
+    compress: t('Compress'),
+    feedback: t('Feedback'),
+    fast: t('Fast'),
     mcp: 'MCP',
-    model: '模型',
-    persona: '个性',
-    profile: '个性',
-    reasoning: '推理模式',
-    review: '代码审查',
-    status: '状态',
+    model: t('Model'),
+    persona: t('Persona'),
+    profile: t('Profile'),
+    reasoning: t('Reasoning'),
+    review: t('Review'),
+    status: t('Status'),
   };
   return labels[key] || command.name;
 }
@@ -251,12 +252,14 @@ function renderComposerProviderControl({
   agentOptions,
   selectedAgentId,
   onSelectAgent,
+  t,
 }: {
   composerProviderType: DesktopApiProviderType;
   agentLabel?: string | null;
   agentOptions?: ComposerAgentOption[];
   selectedAgentId?: string;
   onSelectAgent?: (agentId: string) => void;
+  t: Translate;
 }) {
   const providerIcon =
     composerProviderType === 'codex_app_server' ? (
@@ -273,7 +276,7 @@ function renderComposerProviderControl({
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
-          aria-label="Change agent for this thread"
+          aria-label={t("Change agent for this thread")}
           className="composer-provider-trigger"
         >
           {providerIcon}
@@ -293,7 +296,7 @@ function renderComposerProviderControl({
           {hasAgents || hasTeams ? <DropdownMenuSeparator /> : null}
           {hasAgents ? (
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Agents</DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger>{t("Agents")}</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {grouped.agent.map((option) => (
                   <DropdownMenuItem
@@ -313,7 +316,7 @@ function renderComposerProviderControl({
           ) : null}
           {hasTeams ? (
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>Agent Teams</DropdownMenuSubTrigger>
+              <DropdownMenuSubTrigger>{t("Agent Teams")}</DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
                 {grouped.team.map((option) => (
                   <DropdownMenuItem
@@ -374,6 +377,7 @@ export function ComposerForm({
   slashCommandsLoaded,
   slashCommandsLoading,
 }: ComposerFormProps) {
+  const { t } = useI18n();
   const [composerCursor, setComposerCursor] = useState(composer.length);
   const [highlightedSlashCommandIndex, setHighlightedSlashCommandIndex] = useState(0);
   const [dismissedSlashQuery, setDismissedSlashQuery] = useState<string | null>(null);
@@ -536,21 +540,21 @@ export function ComposerForm({
   const slashPanel = slashPanelOpen ? (
     <div className="composer-command-panel" data-testid="slash-command-panel">
       <div
-        aria-label="Slash command shortcuts"
+        aria-label={t("Slash command shortcuts")}
         className="composer-command-list"
         role="listbox"
       >
         {slashCommandsLoading ? (
           <div className="composer-command-empty">
-            <strong>Loading shortcuts…</strong>
-            <span>Reading the current command list.</span>
+            <strong>{t("Loading shortcuts…")}</strong>
+            <span>{t("Reading the current command list.")}</span>
           </div>
         ) : filteredSlashCommands.length ? (
           filteredSlashCommands.map((command, index) => {
             const isHighlighted = index === highlightedSlashCommandIndex;
             const preview = slashCommandPreview(command);
             const CommandIcon = slashCommandIcon(command);
-            const label = slashCommandLabel(command);
+            const label = slashCommandLabel(command, t);
             return (
               <button
                 aria-selected={isHighlighted}
@@ -589,12 +593,12 @@ export function ComposerForm({
         ) : (
           <div className="composer-command-empty">
             <strong>
-              {slashCommands.length ? 'No matching shortcut' : 'No shortcuts yet'}
+              {slashCommands.length ? t('No matching shortcut') : t('No shortcuts yet')}
             </strong>
             <span>
               {slashCommands.length
-                ? 'Try a different command name.'
-                : 'Create one in Settings → Commands.'}
+                ? t('Try a different command name.')
+                : t('Create one in Settings → Commands.')}
             </span>
           </div>
         )}
@@ -647,7 +651,7 @@ export function ComposerForm({
                 type="button"
               >
                 <IconX aria-hidden size={10} stroke={2.2} />
-                <span className="sr-only">Remove image attachment</span>
+                <span className="sr-only">{t("Remove image attachment")}</span>
               </button>
             </div>
           ))}
@@ -669,7 +673,7 @@ export function ComposerForm({
                 type="button"
               >
                 <IconX aria-hidden size={10} stroke={2.2} />
-                <span className="sr-only">Remove file attachment</span>
+                <span className="sr-only">{t("Remove file attachment")}</span>
               </button>
             </div>
           ))}
@@ -703,10 +707,11 @@ export function ComposerForm({
           agentOptions,
           selectedAgentId,
           onSelectAgent,
+          t,
         })}
         <div className="composer-buttons">
           <button
-            aria-label="Attach files"
+            aria-label={t("Attach files")}
             className="ghost-button composer-attach-button"
             disabled={composerLocked}
             onClick={() => {
@@ -715,21 +720,21 @@ export function ComposerForm({
             type="button"
           >
             <IconPaperclip aria-hidden size={14} stroke={1.8} />
-            <span className="sr-only">Attach files</span>
+            <span className="sr-only">{t("Attach files")}</span>
           </button>
           {isActiveSendingThread ? (
             <button
-              aria-label="Interrupt"
+              aria-label={t("Interrupt")}
               className="primary-button primary-send-button primary-stop-button"
               onClick={onInterrupt}
               type="button"
             >
               <IconPlayerStopFilled aria-hidden size={14} />
-              <span className="sr-only">Interrupt</span>
+              <span className="sr-only">{t("Interrupt")}</span>
             </button>
           ) : (
             <button
-              aria-label="Send"
+              aria-label={t("Send")}
               className="primary-button primary-send-button"
               disabled={
                 composerLocked ||
@@ -740,7 +745,7 @@ export function ComposerForm({
               <svg aria-hidden width="16" height="16" viewBox="0 0 20 20" fill="none">
                 <path d="M9.33467 16.6663V4.93978L4.6374 9.63704L3.4585 8.45814L9.99967 1.91697L16.5408 8.45814L15.3619 9.63704L10.6647 4.93978V16.6663H9.33467Z" fill="currentColor"/>
               </svg>
-              <span className="sr-only">Send</span>
+              <span className="sr-only">{t("Send")}</span>
             </button>
           )}
         </div>

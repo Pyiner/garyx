@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,6 +32,60 @@ const STARTUP_FAILURE_BUDGET = new Map([
   ['/api/configured-bots', 2],
   ['/api/automations', 1],
 ]);
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function unescapeJsString(value) {
+  return value
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\'/g, "'")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
+function loadZhTranslation(key) {
+  const i18nSource = readFileSync(
+    path.join(projectDir, 'src/renderer/src/i18n/index.tsx'),
+    'utf8',
+  );
+  const escapedKey = escapeRegExp(key).replace(/'/g, "\\'");
+  const match = i18nSource.match(
+    new RegExp(`['"]${escapedKey}['"]\\s*:\\s*(['"])((?:\\\\.|(?!\\1).)*)\\1`),
+  );
+  return match ? unescapeJsString(match[2]) : key;
+}
+
+function smokeLabel(key) {
+  return [key, loadZhTranslation(key)];
+}
+
+const SMOKE_TEXT = {
+  newThread: smokeLabel('New Thread'),
+  startNewThread: smokeLabel('Start a new thread'),
+  resumeExistingSession: smokeLabel('Resume existing session'),
+  send: smokeLabel('Send'),
+  settings: smokeLabel('Settings'),
+  language: smokeLabel('Language'),
+  followUpsReady: smokeLabel('2 follow-ups ready'),
+  tabs: {
+    Gateway: smokeLabel('Gateway'),
+    Provider: smokeLabel('Provider'),
+    Channels: smokeLabel('Channels'),
+    Advanced: smokeLabel('Advanced'),
+  },
+};
+
+function oneOfExact(values) {
+  return new RegExp(`^(?:${values.map(escapeRegExp).join('|')})$`);
+}
+
+function createThreadInLabel(name) {
+  return oneOfExact(smokeLabel('Create thread in {name}').map((label) => label.replace('{name}', name)));
+}
 
 function sleep(ms) {
   return new Promise((resolve) => {
@@ -714,7 +769,7 @@ async function main() {
     await window.setViewportSize({ width: 1480, height: 940 });
     try {
       stage = 'wait-thread-list';
-      await window.getByRole('button', { name: 'New Thread', exact: true }).waitFor({
+      await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.newThread) }).waitFor({
         timeout: 15000,
       });
       try {
@@ -729,11 +784,11 @@ async function main() {
       stage = 'workspace-plus-shared-new-thread';
       const localBookmarkRow = window.locator('.workspace-row-shell').filter({ hasText: localBookmarkName }).first();
       await localBookmarkRow.hover();
-      await window.getByRole('button', { name: `Create thread in ${localBookmarkName}` }).click();
-      await window.getByText('Start a new thread', { exact: true }).waitFor({
+      await localBookmarkRow.getByRole('button', { name: createThreadInLabel(localBookmarkName) }).click();
+      await window.getByText(oneOfExact(SMOKE_TEXT.startNewThread)).waitFor({
         timeout: 10000,
       });
-      await window.getByText('Resume existing session', { exact: true }).waitFor({
+      await window.getByText(oneOfExact(SMOKE_TEXT.resumeExistingSession)).waitFor({
         timeout: 10000,
       });
       await window.getByText(localBookmarkName, { exact: true }).first().waitFor({
@@ -741,11 +796,11 @@ async function main() {
       });
 
       stage = 'managed-workspace-new-thread';
-      await window.getByRole('button', { name: 'New Thread', exact: true }).click();
-      await window.getByText('Start a new thread', { exact: true }).waitFor({
+      await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.newThread) }).click();
+      await window.getByText(oneOfExact(SMOKE_TEXT.startNewThread)).waitFor({
         timeout: 10000,
       });
-      await window.getByText('Resume existing session', { exact: true }).waitFor({
+      await window.getByText(oneOfExact(SMOKE_TEXT.resumeExistingSession)).waitFor({
         timeout: 10000,
       });
       await window.getByText(localBookmarkName, { exact: true }).first().waitFor({
@@ -774,14 +829,14 @@ async function main() {
 
       stage = 'warmup-send';
       await composer.fill(`Return exactly the token ${WARMUP_TOKEN} and nothing else.`);
-      await window.getByRole('button', { name: 'Send' }).click();
+      await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) }).click();
       await window.locator('.tool-trace').first().waitFor({ timeout: 20000 });
       stage = 'queue-followups';
       await composer.fill(`Return exactly the token ${TOKENS[0]} and nothing else.`);
       await composer.press('Enter');
       await composer.fill(`Return exactly the token ${TOKENS[1]} and nothing else.`);
       await composer.press('Enter');
-      await window.getByText('2 follow-ups ready').waitFor({ timeout: 3000 }).catch(() => {});
+      await window.getByText(oneOfExact(SMOKE_TEXT.followUpsReady)).waitFor({ timeout: 3000 }).catch(() => {});
       await window
         .locator('.message-bubble.assistant p')
         .filter({ hasText: TOKENS[0] })
@@ -821,16 +876,19 @@ async function main() {
         `expected Codex-style MCP tool trace, got: ${toolTraceTexts.join(' | ') || '<empty>'}`,
       );
 
-      await window.getByRole('button', { name: 'Send' }).waitFor({ timeout: 15000 });
+      await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) }).waitFor({ timeout: 15000 });
       await window.waitForTimeout(300);
 
       stage = 'settings-navigation';
-      await window.getByRole('button', { name: 'Settings', exact: true }).click();
-      for (const tab of ['Gateway', 'Provider', 'Channels', 'Advanced']) {
-        await window.getByRole('button', { name: tab, exact: true }).click();
+      await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.settings) }).click();
+      await window.getByText(oneOfExact(SMOKE_TEXT.language)).first().waitFor({
+        timeout: 10000,
+      });
+      for (const [tab, labels] of Object.entries(SMOKE_TEXT.tabs)) {
+        await window.getByRole('button', { name: oneOfExact(labels) }).click();
         await window
           .locator('.settings-page-header .settings-tab-title')
-          .filter({ hasText: tab })
+          .filter({ hasText: oneOfExact(labels) })
           .waitFor({ timeout: 10000 });
       }
 

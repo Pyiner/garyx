@@ -21,6 +21,7 @@ import {
   SettingsTabIcon,
   SkillsIcon,
 } from '../icons';
+import { useI18n } from '../../i18n';
 
 type AppLeftRailProps = {
   isSettingsView: boolean;
@@ -123,13 +124,14 @@ export function AppLeftRail({
   onSidebarResizeStart,
   sidebarResizing,
 }: AppLeftRailProps) {
+  const { t } = useI18n();
   const isThreadView = !isSettingsView && !isAutomationView && !isAutoResearchView && !isAgentsView && !isTeamsView && !isSkillsView && !isBrowserView;
   const visibleSelectedThreadId = isThreadView ? selectedThreadId : null;
   return (
     <aside className={`left-rail ${isSettingsView ? 'settings-rail-shell' : ''}`}>
       {isSettingsView ? (
         <nav
-          aria-label="Settings navigation"
+          aria-label={t('Settings navigation')}
           className="sidebar-nav settings-sidebar-nav"
         >
           <button
@@ -138,7 +140,7 @@ export function AppLeftRail({
             type="button"
           >
             <BackIcon />
-            <span>Back to App</span>
+            <span>{t('Back to App')}</span>
           </button>
 
           <div className="settings-rail-list">
@@ -154,7 +156,7 @@ export function AppLeftRail({
                 <span className="settings-rail-item-icon">
                   <SettingsTabIcon tabId={tab.id} />
                 </span>
-                <span className="settings-rail-item-label">{tab.label}</span>
+                <span className="settings-rail-item-label">{t(tab.label)}</span>
               </button>
             ))}
           </div>
@@ -165,7 +167,7 @@ export function AppLeftRail({
             <UpdatePill />
           </div>
           <nav
-            aria-label="Primary actions"
+            aria-label={t('Primary actions')}
             className="sidebar-nav"
           >
             <button
@@ -174,7 +176,7 @@ export function AppLeftRail({
               type="button"
             >
               <NewThreadIcon />
-              <span>New Thread</span>
+              <span>{t('New Thread')}</span>
             </button>
             <button
               className={`sidebar-action ${isAutomationView ? 'active' : ''}`}
@@ -184,7 +186,7 @@ export function AppLeftRail({
               type="button"
             >
               <AutomationIcon />
-              <span>Automation</span>
+              <span>{t('Automation')}</span>
             </button>
             <button
               className={`sidebar-action ${isBrowserView ? 'active' : ''}`}
@@ -192,7 +194,7 @@ export function AppLeftRail({
               type="button"
             >
               <BrowserIcon />
-              <span>Browser</span>
+              <span>{t('Browser')}</span>
             </button>
             {showAutoResearch ? (
               <button
@@ -201,7 +203,7 @@ export function AppLeftRail({
                 type="button"
               >
                 <AutoResearchIcon />
-                <span>Auto Research</span>
+                <span>{t('Auto Research')}</span>
               </button>
             ) : null}
             <button
@@ -210,7 +212,7 @@ export function AppLeftRail({
               type="button"
             >
               <AgentsIcon />
-              <span>Agents</span>
+              <span>{t('Agents')}</span>
             </button>
             <button
               className={`sidebar-action ${isSkillsView ? 'active' : ''}`}
@@ -218,7 +220,7 @@ export function AppLeftRail({
               type="button"
             >
               <SkillsIcon />
-              <span>Skills</span>
+              <span>{t('Skills')}</span>
             </button>
             <button
               className="sidebar-action"
@@ -226,7 +228,7 @@ export function AppLeftRail({
               type="button"
             >
               <MemoryIcon />
-              <span>Memory</span>
+              <span>{t('Memory')}</span>
             </button>
           </nav>
 
@@ -271,7 +273,7 @@ export function AppLeftRail({
               type="button"
             >
               <SettingsIcon />
-              <span>Settings</span>
+              <span>{t('Settings')}</span>
             </button>
           </div>
         </>

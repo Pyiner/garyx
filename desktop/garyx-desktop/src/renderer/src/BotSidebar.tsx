@@ -5,6 +5,7 @@ import type { DesktopBotConsoleSummary, DesktopChannelEndpoint } from '@shared/c
 import { ChevronDownIcon, MoreDotsIcon } from './app-shell/icons';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { ChannelLogo } from './channel-logo';
+import { useI18n } from './i18n';
 
 type BotSidebarProps = {
   groups: DesktopBotConsoleSummary[];
@@ -23,6 +24,7 @@ export function BotSidebar({
   onOpenEndpoint,
   onAddBot,
 }: BotSidebarProps) {
+  const { t } = useI18n();
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
   const { entries: pluginCatalog } = useChannelPluginCatalog();
 
@@ -50,15 +52,15 @@ export function BotSidebar({
     <div className="sidebar-thread-block sidebar-bot-block">
       <div className="panel-header sidebar-section-header">
         <div className="sidebar-section-copy">
-          <span className="sidebar-section-title">Bots</span>
+          <span className="sidebar-section-title">{t('Bots')}</span>
         </div>
         {!groups.length ? (
           <div className="sidebar-section-tools">
             <button
-              aria-label="Add bot"
+              aria-label={t('Add bot')}
               className="sidebar-section-action sidebar-section-action-always"
               onClick={onAddBot}
-              title="Add bot"
+              title={t('Add bot')}
               type="button"
             >
               <svg aria-hidden width="14" height="14" viewBox="0 0 15 15" fill="none" style={{ strokeWidth: 1.21 }}>

@@ -1,6 +1,7 @@
 import type { DesktopBotConsoleSummary } from '@shared/contracts';
 
 import { channelDisplayName, primaryBotEndpoint } from './bot-console-model';
+import { useI18n, type Translate } from './i18n';
 import {
   UIButton,
   UIBadge,
@@ -27,9 +28,9 @@ type BotConsoleViewProps = {
   status?: string | null;
 };
 
-function formatTimestamp(value: string | null): string {
+function formatTimestamp(value: string | null, t: Translate): string {
   if (!value) {
-    return 'No recent activity';
+    return t('No recent activity');
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -57,18 +58,20 @@ export function BotConsoleView({
   toolbarNote,
   status,
 }: BotConsoleViewProps) {
+  const { t } = useI18n();
+
   return (
     <div className="shadcn-shell bot-console-view">
       <section className="shadcn-hero">
         <div className="shadcn-hero-copy">
-          <p className="shadcn-kicker">Bot Console</p>
-          <h1>Per-bot controls</h1>
+          <p className="shadcn-kicker">{t('Bot Console')}</p>
+          <h1>{t('Per-bot controls')}</h1>
           <p className="shadcn-subcopy">
-            Mobile-friendly bot status, endpoint binding state, and quick thread actions.
+            {t('Mobile-friendly bot status, endpoint binding state, and quick thread actions.')}
           </p>
           {toolbarNote ? (
             <div className="shadcn-inline-note">
-              <UIBadge>Deep Link</UIBadge>
+              <UIBadge>{t('Deep Link')}</UIBadge>
               <code>{toolbarNote}</code>
             </div>
           ) : null}
@@ -76,12 +79,12 @@ export function BotConsoleView({
         <div className="shadcn-hero-actions">
           {onRefresh ? (
             <UIButton onClick={onRefresh} variant="outline">
-              Refresh
+              {t('Refresh')}
             </UIButton>
           ) : null}
           {onOpenSettings ? (
             <UIButton onClick={onOpenSettings} variant="secondary">
-              Settings
+              {t('Settings')}
             </UIButton>
           ) : null}
         </div>
@@ -90,7 +93,7 @@ export function BotConsoleView({
       {status ? (
         <UICard className="bot-console-status-card">
           <UICardContent className="bot-console-status-copy">
-            <UIBadge className="is-connected">Success</UIBadge>
+            <UIBadge className="is-connected">{t('Success')}</UIBadge>
             <p>{status}</p>
           </UICardContent>
         </UICard>
@@ -113,27 +116,31 @@ export function BotConsoleView({
                     <div className="bot-console-card-heading-top">
                       <UIBadge>{group.subtitle}</UIBadge>
                       <UIBadge className={statusTone(group.status)}>
-                        {group.status === 'connected' ? 'Connected' : 'Idle'}
+                        {group.status === 'connected' ? t('Connected') : t('Idle')}
                       </UIBadge>
                     </div>
                     <UICardTitle>{group.title}</UICardTitle>
                     <UICardDescription>
-                      Workspace <code>{group.workspaceDir || 'Not configured'}</code>
+                      {t('Workspace')} <code>{group.workspaceDir || t('Not configured')}</code>
                     </UICardDescription>
                     <UICardDescription>
-                      Main endpoint {group.mainEndpointStatus} · {group.boundEndpointCount}/{group.endpointCount} endpoints bound · latest activity{' '}
-                      {formatTimestamp(group.latestActivity)}
+                      {t('Main endpoint {status} · {bound}/{total} endpoints bound · latest activity {time}', {
+                        status: group.mainEndpointStatus,
+                        bound: group.boundEndpointCount,
+                        total: group.endpointCount,
+                        time: formatTimestamp(group.latestActivity, t),
+                      })}
                     </UICardDescription>
                   </div>
                   <div className="bot-console-card-actions">
                     {!isFocusedBot && onOpenBot ? (
                       <UIButton onClick={() => onOpenBot(group.id)} size="sm" variant="outline">
-                        Open Bot
+                        {t('Open Bot')}
                       </UIButton>
                     ) : null}
                     {openThreadId && onOpenThread ? (
                       <UIButton onClick={() => onOpenThread(openThreadId)} size="sm">
-                        Open Main Chat
+                        {t('Open Main Chat')}
                       </UIButton>
                     ) : null}
                     {onCreateThread ? (
@@ -143,7 +150,7 @@ export function BotConsoleView({
                         size="sm"
                         variant="outline"
                       >
-                        {createBusy ? 'Opening…' : 'Open Main Chat'}
+                        {createBusy ? t('Opening…') : t('Open Main Chat')}
                       </UIButton>
                     ) : null}
                   </div>
@@ -166,6 +173,7 @@ export function BotConsoleView({
                                     || endpoint.lastDeliveryAt
                                     || endpoint.threadUpdatedAt
                                     || null,
+                                  t,
                                 )}
                               </span>
                             </div>
@@ -174,17 +182,17 @@ export function BotConsoleView({
                                 {channelDisplayName(endpoint.channel)} · {endpoint.accountId}
                               </UIBadge>
                               <UIBadge className={endpoint.threadId ? 'is-connected' : 'is-idle'}>
-                                {endpoint.threadId ? 'Bound' : 'Unbound'}
+                                {endpoint.threadId ? t('Bound') : t('Unbound')}
                               </UIBadge>
                             </div>
                             <p className="bot-console-mono-line">
-                              Delivery <code>{endpoint.deliveryTargetType}:{endpoint.deliveryTargetId || endpoint.chatId}</code>
+                              {t('Delivery')} <code>{endpoint.deliveryTargetType}:{endpoint.deliveryTargetId || endpoint.chatId}</code>
                             </p>
                             <p className="bot-console-mono-line">
-                              Thread <code>{endpoint.threadId || 'Not bound'}</code>
+                              {t('Thread')} <code>{endpoint.threadId || t('Not bound')}</code>
                             </p>
                             <p className="bot-console-mono-line">
-                              Endpoint <code>{endpoint.endpointKey}</code>
+                              {t('Endpoint')} <code>{endpoint.endpointKey}</code>
                             </p>
                           </div>
                           {endpoint.threadId && onOpenThread ? (
@@ -193,7 +201,7 @@ export function BotConsoleView({
                               size="sm"
                               variant="secondary"
                             >
-                              Open
+                              {t('Open')}
                             </UIButton>
                           ) : null}
                         </UICardContent>
@@ -204,7 +212,9 @@ export function BotConsoleView({
                       <UICardContent className="bot-console-empty-endpoint">
                         <p>
                           {emptyCopy
-                            || `No conversations yet. Send a message to this bot on ${channelDisplayName(group.channel)} to start a thread.`}
+                            || t('No conversations yet. Send a message to this bot on {channel} to start a thread.', {
+                              channel: channelDisplayName(group.channel),
+                            })}
                         </p>
                         {onCreateThread ? (
                           <UIButton
@@ -212,7 +222,7 @@ export function BotConsoleView({
                             onClick={() => onCreateThread(group)}
                             size="sm"
                           >
-                            {createBusy ? 'Opening…' : 'Open Main Chat'}
+                            {createBusy ? t('Opening…') : t('Open Main Chat')}
                           </UIButton>
                         ) : null}
                       </UICardContent>
@@ -226,17 +236,17 @@ export function BotConsoleView({
       ) : (
         <UICard className="bot-console-empty-card">
           <UICardHeader>
-            <UIBadge>Bots</UIBadge>
-            <UICardTitle>No bots configured</UICardTitle>
+            <UIBadge>{t('Bots')}</UIBadge>
+            <UICardTitle>{t('No bots configured')}</UICardTitle>
             <UICardDescription>
-              {emptyCopy || 'Add Telegram or Feishu bot accounts first, then the bot console will appear here.'}
+              {emptyCopy || t('Add Telegram or Feishu bot accounts first, then the bot console will appear here.')}
             </UICardDescription>
-            <UICardDescription>{totalEndpoints} known endpoints</UICardDescription>
+            <UICardDescription>{t('{count} known endpoints', { count: totalEndpoints })}</UICardDescription>
           </UICardHeader>
           {onOpenSettings ? (
             <UICardContent>
               <UIButton onClick={onOpenSettings} variant="outline">
-                Open Settings
+                {t('Open Settings')}
               </UIButton>
             </UICardContent>
           ) : null}
