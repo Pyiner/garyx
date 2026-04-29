@@ -1792,7 +1792,7 @@ code {
   width: 16px;
   height: 16px;
   color: currentColor;
-  stroke-width: 1.45;
+  stroke-width: 1.65;
 }
 
 .settings-rail-item:hover .settings-rail-item-icon,
@@ -8112,9 +8112,22 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
   flex-wrap: wrap;
 }
 
-.settings-update-status {
+.settings-update-summary {
   flex: 1 1 220px;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-update-version {
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.settings-update-status {
   color: var(--color-token-text-secondary);
   font-size: 13px;
   line-height: 1.45;

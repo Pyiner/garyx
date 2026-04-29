@@ -63,6 +63,9 @@ import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalo
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { EditBotDialog, type EditBotDialogContext, type EditBotPatch } from './app-shell/components/EditBotDialog';
 import { languagePreferenceLabel, type Translate, useI18n } from './i18n';
+import desktopPackage from '../../../package.json';
+
+const DESKTOP_APP_VERSION = desktopPackage.version.trim() || '0.0.0';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
 type GatewaySettingsPanelProps = {
@@ -169,7 +172,7 @@ type UpdateFeedback = {
 
 function updateCheckFailureMessage(reason: string, t: Translate): string {
   if (reason === 'dev-build') {
-    return t('Update checks are available in packaged Mac builds.');
+    return t('Update checks are available in packaged builds.');
   }
   if (reason === 'update-not-downloaded') {
     return t('The update is not ready to install yet.');
@@ -234,6 +237,12 @@ export const SETTINGS_TABS: Array<{
   description: string;
 }> = [
   {
+    id: 'labs',
+    label: 'General',
+    eyebrow: 'General',
+    description: 'Desktop app behavior, updates, and experimental surfaces.',
+  },
+  {
     id: 'gateway',
     label: 'Gateway',
     eyebrow: 'Gateway',
@@ -256,12 +265,6 @@ export const SETTINGS_TABS: Array<{
     label: 'Channels',
     eyebrow: 'Bots',
     description: 'Telegram and Feishu/Lark bot accounts.',
-  },
-  {
-    id: 'labs',
-    label: 'Mac App',
-    eyebrow: 'Desktop',
-    description: 'Mac-only app behavior, maintenance, and experimental surfaces.',
   },
   {
     id: 'commands',
@@ -2615,9 +2618,14 @@ export function GatewaySettingsPanel({
             className="settings-update-row"
             control={
               <div className="settings-update-control">
-                <span className={`settings-update-status tone-${updateDisplay.tone}`}>
-                  {updateDisplay.message}
-                </span>
+                <div className="settings-update-summary">
+                  <span className="settings-update-version">
+                    {t('Current version {version}', { version: `v${DESKTOP_APP_VERSION}` })}
+                  </span>
+                  <span className={`settings-update-status tone-${updateDisplay.tone}`}>
+                    {updateDisplay.message}
+                  </span>
+                </div>
                 <div className="settings-update-actions">
                   {updateStatus.phase === 'downloaded' ? (
                     <Button
@@ -2652,7 +2660,7 @@ export function GatewaySettingsPanel({
                 </div>
               </div>
             }
-            description={t('Automatic checks run in packaged Mac builds. Use this to refresh the update state immediately.')}
+            description={t('Packaged builds check for updates automatically. Use this to refresh the update state immediately.')}
             label={t('Garyx updates')}
             stacked
           />
@@ -2660,8 +2668,8 @@ export function GatewaySettingsPanel({
       </div>
       <div className="codex-section">
         <div className="codex-section-header">
-          <span className="codex-section-title">{t('Mac Labs')}</span>
-          {renderGatewaySaveAction(t('Save Labs'))}
+          <span className="codex-section-title">{t('Labs')}</span>
+          {renderGatewaySaveAction()}
         </div>
         <div className="codex-list-card">
           <SettingsControlRow
@@ -2678,7 +2686,7 @@ export function GatewaySettingsPanel({
                 }}
               />
             }
-            description={t('Show or hide the Auto Research entry in the Mac app. Disabling it only hides the Mac surface.')}
+            description={t('Show or hide the Auto Research entry in the desktop client. Disabling it only hides the desktop surface.')}
             label={t('Auto Research')}
           />
         </div>

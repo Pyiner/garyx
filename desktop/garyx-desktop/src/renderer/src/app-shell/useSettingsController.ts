@@ -71,7 +71,7 @@ export function useSettingsController({
   const [mcpServersLoading, setMcpServersLoading] = useState(false);
   const [mcpServersSaving, setMcpServersSaving] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTabId>('gateway');
+  const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTabId>('labs');
 
   const gatewaySettingsDraftRef = useRef<any>(ensureGatewayConfig({}));
   const gatewaySettingsSavingRef = useRef(false);

@@ -1,35 +1,30 @@
-import type { ComponentType } from 'react';
-
-import { IconCpu, IconHeartbeat } from '@tabler/icons-react';
+import {
+  Bot,
+  Command,
+  Cpu,
+  HeartPulse,
+  Puzzle,
+  Router,
+  Settings2,
+  SlidersHorizontal,
+  type LucideIcon,
+} from 'lucide-react';
 
 import type { DesktopWorkspaceFileEntry } from '@shared/contracts';
 
 import type { SettingsTabId } from '../GatewaySettingsPanel';
 
-type TablerGlyph = ComponentType<{
-  className?: string;
-  size?: string | number;
-  stroke?: string | number;
-  'aria-hidden'?: boolean;
-}>;
-
-function AppIcon({
+function SettingsRailIcon({
   glyph: Glyph,
-  className = 'icon',
-  size = 16,
-  stroke = 1.7,
 }: {
-  glyph: TablerGlyph;
-  className?: string;
-  size?: number;
-  stroke?: number;
+  glyph: LucideIcon;
 }) {
   return (
     <Glyph
       aria-hidden
-      className={className}
-      size={size}
-      stroke={stroke}
+      className="icon"
+      size={16}
+      strokeWidth={1.7}
     />
   );
 }
@@ -92,14 +87,6 @@ export function GatewayIcon() {
       </g>
     </svg>
   );
-}
-
-export function ProviderIcon() {
-  return <AppIcon glyph={IconCpu} />;
-}
-
-export function HeartbeatIcon() {
-  return <AppIcon glyph={IconHeartbeat} />;
 }
 
 export function ChannelsIcon() {
@@ -219,18 +206,22 @@ export function ExternalLinkIcon() {
 
 export function SettingsTabIcon({ tabId }: { tabId: SettingsTabId }) {
   switch (tabId) {
-    case 'gateway':
-      return <GatewayIcon />;
-    case 'heartbeat':
-      return <HeartbeatIcon />;
-    case 'provider':
-      return <ProviderIcon />;
-    case 'channels':
-      return <ChannelsIcon />;
     case 'labs':
-      return <SettingsIcon />;
+      return <SettingsRailIcon glyph={SlidersHorizontal} />;
+    case 'gateway':
+      return <SettingsRailIcon glyph={Router} />;
+    case 'heartbeat':
+      return <SettingsRailIcon glyph={HeartPulse} />;
+    case 'provider':
+      return <SettingsRailIcon glyph={Cpu} />;
+    case 'channels':
+      return <SettingsRailIcon glyph={Bot} />;
+    case 'commands':
+      return <SettingsRailIcon glyph={Command} />;
+    case 'mcp':
+      return <SettingsRailIcon glyph={Puzzle} />;
     default:
-      return <SettingsIcon />;
+      return <SettingsRailIcon glyph={Settings2} />;
   }
 }
 
