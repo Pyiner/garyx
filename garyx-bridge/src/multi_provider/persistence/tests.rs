@@ -1,5 +1,4 @@
 use super::*;
-use garyx_models::ThreadHistoryBackend;
 use garyx_router::{InMemoryThreadStore, ThreadHistoryRepository, ThreadTranscriptStore};
 use serde_json::json;
 
@@ -7,7 +6,6 @@ fn make_history(store: Arc<dyn ThreadStore>) -> Arc<ThreadHistoryRepository> {
     Arc::new(ThreadHistoryRepository::new(
         store,
         Arc::new(ThreadTranscriptStore::memory()),
-        ThreadHistoryBackend::TranscriptV1,
     ))
 }
 

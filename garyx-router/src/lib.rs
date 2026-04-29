@@ -40,7 +40,7 @@ pub mod storage {
         DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT, ThreadHistoryError,
         ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord,
         ThreadTranscriptStore, active_run_snapshot_messages, active_run_snapshot_run_id,
-        extract_run_id, history_message_count, inline_messages, message_text,
+        extract_run_id, history_message_count, message_text,
     };
 }
 
@@ -76,7 +76,7 @@ pub use thread_history::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT, ThreadHistoryError,
     ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,
     active_run_snapshot_messages, active_run_snapshot_run_id, extract_run_id,
-    history_message_count, inline_messages, message_text,
+    history_message_count, message_text,
 };
 pub use threads::{
     ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, ThreadIndexStats,

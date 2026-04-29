@@ -13,7 +13,6 @@ import {
   type DesktopSkillInfo,
   type DesktopUpdateStatus,
   type GatewaySettingsSource,
-  type GatewayThreadHistoryBackend,
   type McpTransportType,
   type SlashCommand,
   type UpdateMcpServerInput,
@@ -1339,33 +1338,6 @@ export function GatewaySettingsPanel({
             description={t('Directory used by the gateway to persist thread history.')}
             label="sessions.data_dir"
             stacked
-          />
-          <SettingsControlRow
-            control={
-              <Select
-                onValueChange={(value) => {
-                  onMutateGatewayDraft((next) => {
-                    next.sessions ||= {};
-                    next.sessions.thread_history_backend = value as GatewayThreadHistoryBackend;
-                  });
-                }}
-                value={
-                  gatewayDraft?.sessions?.thread_history_backend === 'inline_messages'
-                    ? 'inline_messages'
-                    : 'transcript_v1'
-                }
-              >
-                <SelectTrigger className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none">
-                  <SelectValue placeholder={t('Select backend')} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="transcript_v1">transcript_v1</SelectItem>
-                  <SelectItem value="inline_messages">inline_messages</SelectItem>
-                </SelectContent>
-              </Select>
-            }
-            description={t('Persist thread history as append-only transcripts or legacy inline message snapshots.')}
-            label="sessions.thread_history_backend"
           />
         </div>
       </div>

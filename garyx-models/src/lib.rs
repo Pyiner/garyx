@@ -35,7 +35,6 @@ pub use command_catalog::{
     CommandSource, CommandSurface, CommandVisibility, CommandWarning,
 };
 pub use config::GaryxConfig;
-pub use config::ThreadHistoryBackend;
 pub use config_loader::{
     ConfigDiagnostic, ConfigDiagnostics, ConfigHotReloadOptions, ConfigHotReloader,
     ConfigLoadFailure, ConfigLoadOptions, ConfigReloadMetricsSnapshot, ConfigRuntimeOverrides,
@@ -66,8 +65,9 @@ pub use thread_logs::{
     ThreadLogSink, is_canonical_thread_id, resolve_thread_log_thread_id,
 };
 pub use thread_record::{
-    ActiveRunSnapshot, ProviderRuntimeState, ThreadHistorySource, ThreadHistoryState,
-    ThreadQueueState, ThreadRecord, ThreadRecordView, ThreadRoutingState, ThreadUsageState,
+    ActiveRunSnapshot, ProviderRuntimeState, THREAD_HISTORY_SOURCE_TRANSCRIPT_V1,
+    ThreadHistoryState, ThreadQueueState, ThreadRecord, ThreadRecordView, ThreadRoutingState,
+    ThreadUsageState,
 };
 pub use threading::{
     GroupActivation, QueueDrop, QueueMode, SendPolicy, ThreadOrigin, ThreadTokenUsage,

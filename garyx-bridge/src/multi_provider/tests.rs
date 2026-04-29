@@ -7,9 +7,7 @@ use garyx_models::provider::{
     AgentRunRequest, ImagePayload, ProviderMessage, ProviderRunOptions, ProviderRunResult,
     ProviderType, QueuedUserInput, StreamBoundaryKind, StreamEvent,
 };
-use garyx_models::{
-    AgentTeamProfile, CustomAgentProfile, ThreadHistoryBackend, builtin_provider_agent_profiles,
-};
+use garyx_models::{AgentTeamProfile, CustomAgentProfile, builtin_provider_agent_profiles};
 use garyx_router::{
     InMemoryThreadStore, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
 };
@@ -40,7 +38,6 @@ fn make_history(store: Arc<dyn ThreadStore>) -> Arc<ThreadHistoryRepository> {
     Arc::new(ThreadHistoryRepository::new(
         store,
         Arc::new(ThreadTranscriptStore::memory()),
-        ThreadHistoryBackend::TranscriptV1,
     ))
 }
 

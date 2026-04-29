@@ -764,8 +764,6 @@ export interface GatewayProbeResult {
   error?: string;
 }
 
-export type GatewayThreadHistoryBackend = "transcript_v1" | "inline_messages";
-
 export type GatewayConfigDocument = Record<string, unknown>;
 
 export type GatewaySettingsSource = "local_file" | "gateway_api";

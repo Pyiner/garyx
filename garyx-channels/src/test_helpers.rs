@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use garyx_bridge::provider_trait::StreamCallback;
 use garyx_bridge::{AgentLoopProvider, BridgeError, MultiProviderBridge};
-use garyx_models::ThreadHistoryBackend;
 use garyx_models::config::GaryxConfig;
 use garyx_models::provider::{
     PromptAttachment, PromptAttachmentKind, ProviderRunOptions, ProviderRunResult, ProviderType,
@@ -194,7 +193,6 @@ pub async fn make_bridge_with_store(
     bridge.set_thread_history(Arc::new(ThreadHistoryRepository::new(
         store,
         Arc::new(ThreadTranscriptStore::memory()),
-        ThreadHistoryBackend::TranscriptV1,
     )));
     bridge
 }

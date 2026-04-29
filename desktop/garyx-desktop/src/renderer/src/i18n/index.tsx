@@ -563,7 +563,6 @@ const zhCN: Record<string, string> = {
   'Pending': '等待中',
   'Per-bot controls': '单 Bot 控制',
   'Persona': '个性',
-  'Persist thread history as append-only transcripts or legacy inline message snapshots.': '将线程历史持久化为追加式 transcript 或旧版 inline message 快照。',
   'Port used by the desktop client and other runtime callers.': '客户端和其他运行时调用方使用的端口。',
   'Preview attached file {name}': '预览附件 {name}',
   'Preview Unavailable': '无法预览',

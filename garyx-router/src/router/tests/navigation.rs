@@ -1,5 +1,6 @@
 use super::*;
 use crate::memory_store::InMemoryThreadStore;
+use crate::thread_history::{ThreadHistoryRepository, ThreadTranscriptStore};
 use crate::threads::{ChannelBinding, detach_endpoint_from_thread};
 use serde_json::json;
 use std::sync::Arc;
@@ -166,22 +167,37 @@ async fn test_navigate_thread_with_rebuild_after_restart() {
 }
 
 #[tokio::test]
-async fn test_latest_message_text_for_thread_from_inline_messages() {
+async fn test_latest_message_text_for_thread_from_transcript() {
     let store = Arc::new(InMemoryThreadStore::new());
+    let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+    transcript_store
+        .append_committed_messages(
+            "thread::wx-final",
+            None,
+            &[
+                json!({"role": "assistant", "content": "first"}),
+                json!({"role": "assistant", "content": "  "}),
+                json!({"role": "assistant", "content": "final answer"}),
+            ],
+        )
+        .await
+        .unwrap();
     store
         .set(
             "thread::wx-final",
             json!({
-                "messages": [
-                    {"role": "assistant", "content": "first"},
-                    {"role": "assistant", "content": "  "},
-                    {"role": "assistant", "content": "final answer"}
-                ]
+                "history": {
+                    "message_count": 3
+                }
             }),
         )
         .await;
 
-    let router = MessageRouter::new(store, GaryxConfig::default());
+    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    router.set_thread_history_repository(Arc::new(ThreadHistoryRepository::new(
+        store,
+        transcript_store,
+    )));
     let latest = router
         .latest_message_text_for_thread("thread::wx-final")
         .await;
@@ -191,20 +207,35 @@ async fn test_latest_message_text_for_thread_from_inline_messages() {
 #[tokio::test]
 async fn test_latest_assistant_message_text_for_thread_ignores_user_messages() {
     let store = Arc::new(InMemoryThreadStore::new());
+    let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+    transcript_store
+        .append_committed_messages(
+            "thread::wx-assistant-final",
+            None,
+            &[
+                json!({"role": "assistant", "content": "assistant-first"}),
+                json!({"role": "user", "content": "user-latest"}),
+                json!({"role": "assistant", "content": "assistant-final"}),
+            ],
+        )
+        .await
+        .unwrap();
     store
         .set(
             "thread::wx-assistant-final",
             json!({
-                "messages": [
-                    {"role": "assistant", "content": "assistant-first"},
-                    {"role": "user", "content": "user-latest"},
-                    {"role": "assistant", "content": "assistant-final"}
-                ]
+                "history": {
+                    "message_count": 3
+                }
             }),
         )
         .await;
 
-    let router = MessageRouter::new(store, GaryxConfig::default());
+    let mut router = MessageRouter::new(store.clone(), GaryxConfig::default());
+    router.set_thread_history_repository(Arc::new(ThreadHistoryRepository::new(
+        store,
+        transcript_store,
+    )));
     let latest = router
         .latest_assistant_message_text_for_thread("thread::wx-assistant-final")
         .await;

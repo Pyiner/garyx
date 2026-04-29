@@ -1,7 +1,6 @@
 const DEFAULT_GATEWAY_HOST = '0.0.0.0';
 const DEFAULT_GATEWAY_PORT = 31337;
 const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
-const DEFAULT_THREAD_HISTORY_BACKEND = 'transcript_v1';
 const DEFAULT_CHANNEL_AGENT_ID = 'claude';
 
 export type GatewaySettingsMode = 'form' | 'json';
@@ -40,17 +39,12 @@ export function stringifyJsonBlock(value: unknown): string {
   const sessions = ensureRecord(config.sessions);
   delete sessions.redis;
   delete sessions.store_type;
+  delete sessions.thread_history_backend;
   const dataDir = coerceOptionalString(sessions.data_dir);
   if (dataDir) {
     sessions.data_dir = dataDir;
   } else {
     delete sessions.data_dir;
-  }
-  const threadHistoryBackend = coerceThreadHistoryBackend(sessions.thread_history_backend);
-  if (threadHistoryBackend) {
-    sessions.thread_history_backend = threadHistoryBackend;
-  } else {
-    delete sessions.thread_history_backend;
   }
   if (Object.keys(sessions).length === 0) {
     delete config.sessions;
@@ -97,14 +91,6 @@ function coerceNumber(value: unknown, fallback: number): number {
 function coerceOptionalString(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
   return text ? text : null;
-}
-
-function coerceThreadHistoryBackend(value: unknown): string | null {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  if (normalized === 'inline_messages' || normalized === 'transcript_v1') {
-    return normalized;
-  }
-  return null;
 }
 
 function defaultTelegramPluginConfig() {
@@ -344,10 +330,8 @@ export function ensureGatewayConfig(raw: unknown): any {
   config.sessions = ensureRecord(config.sessions);
   delete config.sessions.redis;
   delete config.sessions.store_type;
+  delete config.sessions.thread_history_backend;
   config.sessions.data_dir = coerceOptionalString(config.sessions.data_dir);
-  config.sessions.thread_history_backend =
-    coerceThreadHistoryBackend(config.sessions.thread_history_backend)
-    || DEFAULT_THREAD_HISTORY_BACKEND;
 
   config.desktop = ensureRecord(config.desktop);
   config.desktop.labs = ensureRecord(config.desktop.labs);

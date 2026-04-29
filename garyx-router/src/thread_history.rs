@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use garyx_models::ThreadHistoryBackend;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
@@ -549,7 +548,6 @@ impl From<ThreadTranscriptRecord> for TranscriptLine {
 pub struct ThreadHistoryRepository {
     thread_store: Arc<dyn ThreadStore>,
     transcript_store: Arc<ThreadTranscriptStore>,
-    backend: ThreadHistoryBackend,
     conversation_index: Option<Arc<ConversationIndexManager>>,
 }
 
@@ -557,12 +555,10 @@ impl ThreadHistoryRepository {
     pub fn new(
         thread_store: Arc<dyn ThreadStore>,
         transcript_store: Arc<ThreadTranscriptStore>,
-        backend: ThreadHistoryBackend,
     ) -> Self {
         Self {
             thread_store,
             transcript_store,
-            backend,
             conversation_index: None,
         }
     }
@@ -577,10 +573,6 @@ impl ThreadHistoryRepository {
 
     pub fn transcript_store(&self) -> Arc<ThreadTranscriptStore> {
         self.transcript_store.clone()
-    }
-
-    pub fn backend(&self) -> ThreadHistoryBackend {
-        self.backend.clone()
     }
 
     pub fn conversation_index(&self) -> Option<Arc<ConversationIndexManager>> {
@@ -650,8 +642,7 @@ impl ThreadHistoryRepository {
         if trimmed_run_id.is_empty() {
             return Ok(Vec::new());
         }
-        let thread_data = self
-            .thread_store
+        self.thread_store
             .get(thread_id)
             .await
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
@@ -663,23 +654,7 @@ impl ThreadHistoryRepository {
                 .await;
         }
 
-        if matches!(self.backend, ThreadHistoryBackend::TranscriptV1) {
-            return Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()));
-        }
-
-        let messages = inline_messages(&thread_data);
-        let mut matches = Vec::new();
-        let mut collecting = false;
-        for message in messages.iter().rev() {
-            if extract_run_id(message).as_deref() == Some(trimmed_run_id) {
-                collecting = true;
-                matches.push(message.clone());
-            } else if collecting {
-                break;
-            }
-        }
-        matches.reverse();
-        Ok(matches)
+        Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()))
     }
 
     pub async fn latest_message_text(
@@ -727,21 +702,8 @@ impl ThreadHistoryRepository {
                 .await;
         }
 
-        let inline = inline_messages(&thread_data);
-        let inline_total = history_message_count(&thread_data).max(inline.len());
-        if matches!(self.backend, ThreadHistoryBackend::TranscriptV1) && inline_total > 0 {
+        if history_message_count(&thread_data) > 0 {
             return Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()));
-        }
-
-        for message in inline.iter().rev() {
-            if message_role(message) == Some(trimmed_role) {
-                if let Some(text) = message_text(message)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    return Ok(Some(text.to_owned()));
-                }
-            }
         }
 
         Ok(None)
@@ -758,12 +720,8 @@ impl ThreadHistoryRepository {
         limit: usize,
     ) -> Result<(Vec<Value>, usize), ThreadHistoryError> {
         let has_transcript = self.transcript_store.exists(thread_id).await;
-        let inline = inline_messages(thread_data);
-        let inline_total = history_message_count(thread_data).max(inline.len());
-        if matches!(self.backend, ThreadHistoryBackend::TranscriptV1)
-            && !has_transcript
-            && inline_total > 0
-        {
+        let message_count = history_message_count(thread_data);
+        if !has_transcript && message_count > 0 {
             return Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()));
         }
 
@@ -775,22 +733,8 @@ impl ThreadHistoryRepository {
             return Ok((self.transcript_store.tail(thread_id, limit).await?, total));
         }
 
-        let messages = inline;
-        let total = inline_total;
-        if limit == 0 {
-            return Ok((Vec::new(), total));
-        }
-        let start = messages.len().saturating_sub(limit);
-        Ok((messages[start..].to_vec(), total))
+        Ok((Vec::new(), 0))
     }
-}
-
-pub fn inline_messages(thread_data: &Value) -> Vec<Value> {
-    thread_data
-        .get("messages")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
 }
 
 pub fn history_message_count(thread_data: &Value) -> usize {
@@ -805,7 +749,7 @@ pub fn history_message_count(thread_data: &Value) -> usize {
                 .and_then(Value::as_u64)
                 .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
         })
-        .unwrap_or_else(|| inline_messages(thread_data).len())
+        .unwrap_or(0)
 }
 
 pub fn active_run_snapshot_messages(thread_data: &Value) -> Vec<Value> {

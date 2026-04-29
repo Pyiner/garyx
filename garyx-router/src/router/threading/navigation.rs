@@ -73,24 +73,6 @@ impl MessageRouter {
                 }
             }
         }
-
-        let thread_data = self.threads.get(thread_id).await?;
-        let messages = thread_data
-            .get("messages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for message in messages.iter().rev() {
-            let content = message
-                .get("content")
-                .or_else(|| message.get("text"))
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .trim();
-            if !content.is_empty() {
-                return Some(content.to_owned());
-            }
-        }
         None
     }
 
@@ -98,29 +80,15 @@ impl MessageRouter {
         &self,
         thread_id: &str,
     ) -> Option<String> {
-        let thread_data = self.threads.get(thread_id).await?;
-        let messages = thread_data
-            .get("messages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for message in messages.iter().rev() {
-            let role = message
-                .get("role")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .trim();
-            if role != "assistant" {
-                continue;
-            }
-            let content = message
-                .get("content")
-                .or_else(|| message.get("text"))
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .trim();
-            if !content.is_empty() {
-                return Some(content.to_owned());
+        if let Some(history) = &self.thread_history {
+            if let Ok(Some(text)) = history
+                .latest_message_text_for_role(thread_id, "assistant")
+                .await
+            {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_owned());
+                }
             }
         }
         None

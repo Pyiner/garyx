@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use clap::{CommandFactory, Parser};
-use garyx_models::ThreadHistoryBackend;
 
 use crate::cli::{
     AgentAction, AutoResearchAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction,
@@ -1432,12 +1431,10 @@ fn default_config_path_points_to_hidden_garyx_dir() {
 }
 
 #[test]
-fn default_config_uses_transcript_thread_history_backend() {
+fn default_config_omits_legacy_thread_history_backend() {
     let config = garyx_models::config::GaryxConfig::default();
-    assert_eq!(
-        config.sessions.thread_history_backend,
-        ThreadHistoryBackend::TranscriptV1
-    );
+    let value = serde_json::to_value(config).expect("default config should serialize");
+    assert!(value.pointer("/sessions/thread_history_backend").is_none());
 }
 
 #[test]

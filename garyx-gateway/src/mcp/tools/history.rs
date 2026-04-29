@@ -2,8 +2,7 @@ use super::super::*;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use garyx_models::provider::ProviderMessage;
 use garyx_router::{
-    active_run_snapshot_messages, inline_messages, is_thread_key, normalize_workspace_dir,
-    workspace_dir_from_value,
+    active_run_snapshot_messages, is_thread_key, normalize_workspace_dir, workspace_dir_from_value,
 };
 use serde_json::{Map, Value, json};
 
@@ -155,20 +154,6 @@ pub(super) async fn collect_history_entries(
                     &record.message,
                     Some(record.seq),
                     Some(record.timestamp.as_str()),
-                    from.as_ref(),
-                    to.as_ref(),
-                ) {
-                    thread_entries.push(entry);
-                }
-            }
-        } else {
-            for (idx, message) in inline_messages(&thread_data).iter().enumerate() {
-                if let Some(entry) = build_history_entry(
-                    &thread_id,
-                    workspace_dir.as_deref(),
-                    message,
-                    Some(idx as u64 + 1),
-                    None,
                     from.as_ref(),
                     to.as_ref(),
                 ) {

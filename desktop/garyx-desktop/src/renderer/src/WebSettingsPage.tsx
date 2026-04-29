@@ -13,7 +13,6 @@ import {
 import type {
   DesktopBotConsoleSummary,
   GatewaySettingsPayload,
-  GatewayThreadHistoryBackend,
 } from '@shared/contracts';
 
 type WebSettingsPageProps = {
@@ -42,7 +41,6 @@ type WebSettingsPageProps = {
   }) => void;
   onPatchSessions: (patch: {
     dataDir?: string;
-    backend?: GatewayThreadHistoryBackend;
   }) => void;
   onAddTelegramAccount: (accountId: string) => void;
   onRemoveTelegramAccount: (accountId: string) => void;
@@ -129,8 +127,6 @@ export function WebSettingsPage({
   const gateway = asRecord(config.gateway);
   const heartbeat = asRecord(asRecord(config.agent_defaults).heartbeat);
   const sessions = asRecord(config.sessions);
-  const threadHistoryBackend =
-    sessions.thread_history_backend === 'inline_messages' ? 'inline_messages' : 'transcript_v1';
   const channels = flatChannelMap(asRecord(config.channels));
   const publicUrl = String(gateway.public_url || '').trim();
   const channelConfigs = Object.fromEntries(Object.entries(channels).filter(([channelId]) => channelId !== 'api'));
@@ -246,7 +242,7 @@ export function WebSettingsPage({
                   <UICard className="web-settings-summary-card">
                     <UICardHeader>
                       <UIBadge>Threads</UIBadge>
-                      <UICardTitle>{threadHistoryBackend}</UICardTitle>
+                      <UICardTitle>transcript_v1</UICardTitle>
                       <UICardDescription>
                         {String(sessions.data_dir || 'No data_dir configured')}
                       </UICardDescription>
@@ -381,20 +377,6 @@ export function WebSettingsPage({
                   type="text"
                   value={String(sessions.data_dir || '')}
                 />
-              </label>
-              <label className="web-settings-field">
-                <span className="eyebrow">sessions.thread_history_backend</span>
-                <select
-                  onChange={(event) => {
-                    onPatchSessions({
-                      backend: event.target.value as GatewayThreadHistoryBackend,
-                    });
-                  }}
-                  value={threadHistoryBackend}
-                >
-                  <option value="transcript_v1">transcript_v1</option>
-                  <option value="inline_messages">inline_messages</option>
-                </select>
               </label>
                 </div>
               </>

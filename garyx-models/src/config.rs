@@ -960,23 +960,12 @@ pub struct CronConfig {
     pub jobs: Vec<CronJobConfig>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ThreadHistoryBackend {
-    #[default]
-    TranscriptV1,
-    InlineMessages,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SessionConfig {
     /// Base directory for file-based session storage.
     /// Defaults to `~/.gary/data` if not set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<String>,
-    /// Which persisted history backend should be used for thread history reads.
-    #[serde(default)]
-    pub thread_history_backend: ThreadHistoryBackend,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -60,8 +60,11 @@ pub struct ThreadUsageState {
     pub last_heartbeat_sent_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Re-exported alias — use [`crate::config::ThreadHistoryBackend`] directly.
-pub type ThreadHistorySource = crate::config::ThreadHistoryBackend;
+pub const THREAD_HISTORY_SOURCE_TRANSCRIPT_V1: &str = "transcript_v1";
+
+fn default_thread_history_source() -> String {
+    THREAD_HISTORY_SOURCE_TRANSCRIPT_V1.to_owned()
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ActiveRunSnapshot {
@@ -73,9 +76,10 @@ pub struct ActiveRunSnapshot {
     pub updated_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ThreadHistoryState {
-    pub source: ThreadHistorySource,
+    pub source: String,
     pub transcript_file: Option<String>,
     pub message_count: usize,
     pub snapshot_limit: usize,
@@ -83,6 +87,21 @@ pub struct ThreadHistoryState {
     pub last_message_at: Option<DateTime<Utc>>,
     pub recent_committed_run_ids: Vec<String>,
     pub active_run_snapshot: Option<ActiveRunSnapshot>,
+}
+
+impl Default for ThreadHistoryState {
+    fn default() -> Self {
+        Self {
+            source: default_thread_history_source(),
+            transcript_file: None,
+            message_count: 0,
+            snapshot_limit: 0,
+            snapshot_truncated: false,
+            last_message_at: None,
+            recent_committed_run_ids: Vec::new(),
+            active_run_snapshot: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

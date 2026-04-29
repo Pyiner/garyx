@@ -26,12 +26,21 @@ async fn transcript_store_appends_and_reads_tail() {
 #[tokio::test]
 async fn repository_overlays_active_run_snapshot() {
     let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let transcript_store = Arc::new(ThreadTranscriptStore::memory());
+    transcript_store
+        .append_committed_messages(
+            "thread::overlay",
+            Some("run-past"),
+            &[json!({"role": "user", "content": "past"})],
+        )
+        .await
+        .unwrap();
     thread_store
         .set(
             "thread::overlay",
             json!({
-                "messages": [{"role": "user", "content": "past"}],
                 "history": {
+                    "message_count": 1,
                     "active_run_snapshot": {
                         "run_id": "run-live",
                         "messages": [{"role": "assistant", "content": "live"}]
@@ -40,11 +49,7 @@ async fn repository_overlays_active_run_snapshot() {
             }),
         )
         .await;
-    let repo = ThreadHistoryRepository::new(
-        thread_store,
-        Arc::new(ThreadTranscriptStore::memory()),
-        ThreadHistoryBackend::InlineMessages,
-    );
+    let repo = ThreadHistoryRepository::new(thread_store, transcript_store);
 
     let snapshot = repo.thread_snapshot("thread::overlay", 10).await.unwrap();
     let combined = snapshot.combined_messages();
@@ -71,11 +76,8 @@ async fn transcript_backend_allows_empty_thread_with_live_overlay() {
             }),
         )
         .await;
-    let repo = ThreadHistoryRepository::new(
-        thread_store,
-        Arc::new(ThreadTranscriptStore::memory()),
-        ThreadHistoryBackend::TranscriptV1,
-    );
+    let repo =
+        ThreadHistoryRepository::new(thread_store, Arc::new(ThreadTranscriptStore::memory()));
 
     let snapshot = repo.thread_snapshot("thread::live-only", 10).await.unwrap();
     assert_eq!(snapshot.total_committed_messages, 0);
@@ -85,7 +87,7 @@ async fn transcript_backend_allows_empty_thread_with_live_overlay() {
 }
 
 #[tokio::test]
-async fn transcript_backend_rejects_legacy_inline_history_without_transcript() {
+async fn repository_rejects_stale_history_count_without_transcript() {
     let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     thread_store
         .set(
@@ -98,16 +100,13 @@ async fn transcript_backend_rejects_legacy_inline_history_without_transcript() {
             }),
         )
         .await;
-    let repo = ThreadHistoryRepository::new(
-        thread_store,
-        Arc::new(ThreadTranscriptStore::memory()),
-        ThreadHistoryBackend::TranscriptV1,
-    );
+    let repo =
+        ThreadHistoryRepository::new(thread_store, Arc::new(ThreadTranscriptStore::memory()));
 
     let error = repo
         .thread_snapshot("thread::legacy-inline", 10)
         .await
-        .expect_err("missing transcript should fail for legacy inline history");
+        .expect_err("missing transcript should fail when history count is non-zero");
     assert!(matches!(
         error,
         ThreadHistoryError::MissingTranscript(thread_id) if thread_id == "thread::legacy-inline"

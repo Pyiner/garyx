@@ -332,6 +332,8 @@ the field can still be edited manually.
 
 Gateway runtime settings, including `agent_defaults.heartbeat` defaults, are
 edited from the Gateway tab in the desktop Settings view.
+Thread history is persisted through transcript records; backend selection is no
+longer exposed as a gateway setting.
 
 Packaged macOS builds check for app updates automatically. You can also open
 Settings > Mac App and use Check Now to manually refresh the update state.

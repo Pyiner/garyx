@@ -117,7 +117,6 @@ impl AppStateBuilder {
         let thread_history = Arc::new(ThreadHistoryRepository::new(
             thread_store.clone(),
             Arc::new(ThreadTranscriptStore::memory()),
-            config.sessions.thread_history_backend.clone(),
         ));
         let skills = Arc::new(SkillsService::new(
             SkillsService::default_user_dir(),
@@ -177,7 +176,6 @@ impl AppStateBuilder {
         self.thread_history = Arc::new(ThreadHistoryRepository::new(
             self.thread_store.clone(),
             self.thread_history.transcript_store(),
-            self.config.sessions.thread_history_backend.clone(),
         ));
         self
     }

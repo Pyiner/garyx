@@ -88,11 +88,8 @@ impl RuntimeAssembler {
                 None
             }
         };
-        let mut thread_history = ThreadHistoryRepository::new(
-            thread_store.clone(),
-            transcript_store,
-            self.config.sessions.thread_history_backend.clone(),
-        );
+        let mut thread_history =
+            ThreadHistoryRepository::new(thread_store.clone(), transcript_store);
         if let Some(conversation_index) = conversation_index {
             thread_history = thread_history.with_conversation_index(conversation_index);
         }

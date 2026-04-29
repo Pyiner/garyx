@@ -1397,7 +1397,7 @@ async fn test_conversation_search_uses_vector_index_backend_and_returns_metadata
     .unwrap();
 
     let thread_history = Arc::new(
-        ThreadHistoryRepository::new(thread_store.clone(), transcript_store, Default::default())
+        ThreadHistoryRepository::new(thread_store.clone(), transcript_store)
             .with_conversation_index(conversation_index.clone()),
     );
     conversation_index.enqueue_thread("thread::vector-search");

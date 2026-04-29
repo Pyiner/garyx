@@ -3,7 +3,6 @@ import { useCallback, useEffect, useState } from 'react';
 import type {
   DesktopBotConsoleSummary,
   GatewaySettingsPayload,
-  GatewayThreadHistoryBackend,
 } from '@shared/contracts';
 
 import { cloneJson, stringifyJsonBlock } from '@renderer/gateway-settings';
@@ -187,7 +186,6 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
 
   const patchSessions = useCallback((patch: {
     dataDir?: string;
-    backend?: GatewayThreadHistoryBackend;
   }) => {
     try {
       const current = cloneJson(JSON.parse(jsonDraft));
@@ -196,9 +194,6 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
       if (typeof patch.dataDir === 'string') {
         const normalized = patch.dataDir.trim();
         sessions.data_dir = normalized || null;
-      }
-      if (typeof patch.backend === 'string') {
-        sessions.thread_history_backend = patch.backend;
       }
       next.sessions = sessions;
       setJsonDraft(stringifyJsonBlock(next));
