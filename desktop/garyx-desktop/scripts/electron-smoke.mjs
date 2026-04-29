@@ -826,7 +826,7 @@ async function main() {
 
       stage = 'settings-navigation';
       await window.getByRole('button', { name: 'Settings', exact: true }).click();
-      for (const tab of ['Gateway', 'Provider', 'Channels', 'Advanced']) {
+      for (const tab of ['Gateway', 'Heartbeat', 'Provider', 'Channels']) {
         await window.getByRole('button', { name: tab, exact: true }).click();
         await window
           .locator('.settings-page-header .settings-tab-title')

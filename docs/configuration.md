@@ -330,6 +330,14 @@ Saving the gateway URL/token pair first verifies connectivity. Only verified
 saves are written to local desktop state and added to the Gateway URL history;
 the field can still be edited manually.
 
+Gateway runtime settings and `agent_defaults.heartbeat` defaults are edited from
+separate Gateway and Heartbeat tabs in the desktop Settings view.
+
+Packaged macOS builds check for app updates automatically. You can also open
+Settings > Mac App and use Check Now to manually refresh the update state.
+Development builds report update checks as unavailable because there is no
+signed app bundle to replace.
+
 ## CLI Update
 
 The CLI does not auto-update. Use:

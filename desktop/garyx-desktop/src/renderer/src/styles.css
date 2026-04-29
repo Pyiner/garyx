@@ -8078,6 +8078,51 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
   flex-wrap: wrap;
 }
 
+.settings-update-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.settings-update-status {
+  flex: 1 1 220px;
+  min-width: 0;
+  color: var(--color-token-text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.settings-update-status.tone-success {
+  color: var(--color-token-success-foreground);
+}
+
+.settings-update-status.tone-danger {
+  color: var(--color-token-danger-foreground);
+}
+
+.settings-update-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@keyframes settings-update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.settings-update-spin {
+  animation: settings-update-spin 0.9s linear infinite;
+}
+
 .settings-control-actions-wide {
   width: 100%;
   justify-content: flex-start;

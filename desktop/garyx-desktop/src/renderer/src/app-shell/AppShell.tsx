@@ -65,7 +65,6 @@ import {
 } from "../message-machine";
 import {
   GatewaySettingsPanel,
-  SETTINGS_TABS,
   type SettingsTabId,
 } from "../GatewaySettingsPanel";
 import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
@@ -84,12 +83,6 @@ import { NewThreadEmptyState } from "../NewThreadEmptyState";
 import { BrowserPage } from "../BrowserPage";
 import { WorkspaceThreadSidebar } from "../WorkspaceThreadSidebar";
 import { ToastViewport, type ToastItem, type ToastTone } from "../toast";
-import {
-  cloneJson,
-  ensureGatewayConfig,
-  type GatewaySettingsMode,
-  stringifyJsonBlock,
-} from "../gateway-settings";
 import { ToolTraceGroup } from "../tool-trace";
 import {
   RichMessageContent,
@@ -151,11 +144,9 @@ import {
   BackIcon,
   NewThreadIcon,
   SettingsIcon,
-  SettingsTabIcon,
   SkillsIcon,
   MemoryIcon,
   WorkspaceFileIcon,
-  isGatewayConfigSettingsTab,
   isLocalSettingsTab,
 } from "./icons";
 import type {
@@ -1490,10 +1481,7 @@ export function AppShell() {
     commandsSaving,
     gatewaySettingsDirty,
     gatewaySettingsDraft,
-    gatewaySettingsJsonDraft,
-    gatewaySettingsJsonError,
     gatewaySettingsLoading,
-    gatewaySettingsMode,
     gatewaySettingsSaving,
     gatewaySettingsSource,
     gatewaySettingsStatus,
@@ -1501,13 +1489,11 @@ export function AppShell() {
     handleCreateSlashCommand,
     handleDeleteMcpServer,
     handleDeleteSlashCommand,
-    handleGatewaySettingsJsonChange,
     handleRetrySettingsView,
     handleSaveGatewaySettings,
     handleSaveLocalSettingsNow,
     handleSaveSettings,
     handleSelectSettingsTab,
-    handleSwitchGatewaySettingsMode,
     handleToggleMcpServer,
     handleUpdateMcpServer,
     handleUpdateSlashCommand,
@@ -6176,10 +6162,7 @@ export function AppShell() {
                     gatewayDirty={gatewaySettingsDirty}
                     gatewayDraft={gatewaySettingsDraft}
                     gatewayProfiles={desktopState?.gatewayProfiles ?? []}
-                    gatewayJsonDraft={gatewaySettingsJsonDraft}
-                    gatewayJsonError={gatewaySettingsJsonError}
                     gatewayLoading={gatewaySettingsLoading}
-                    gatewayMode={gatewaySettingsMode}
                     gatewaySettingsSource={gatewaySettingsSource}
                     gatewaySaving={gatewaySettingsSaving}
                     gatewayStatusMessage={gatewaySettingsStatus}
@@ -6205,13 +6188,8 @@ export function AppShell() {
                     onDeleteSlashCommand={(name) => {
                       return handleDeleteSlashCommand(name);
                     }}
-                    onGatewayJsonChange={handleGatewaySettingsJsonChange}
                     onLocalSettingsChange={setSettingsDraft}
                     onMutateGatewayDraft={mutateGatewaySettingsDraft}
-                    onOpenAdvancedJson={() => {
-                      handleSwitchGatewaySettingsMode("json");
-                      void handleSelectSettingsTab("advanced");
-                    }}
                     onSaveLocalSettings={(event) => {
                       void handleSaveSettings(event);
                     }}

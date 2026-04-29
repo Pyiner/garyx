@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
+import { RefreshCw } from 'lucide-react';
 
 import {
   DEFAULT_DESKTOP_SETTINGS,
@@ -11,6 +12,7 @@ import {
   type DesktopSettings,
   type DesktopMcpServer,
   type DesktopSkillInfo,
+  type DesktopUpdateStatus,
   type GatewaySettingsSource,
   type GatewayThreadHistoryBackend,
   type McpTransportType,
@@ -28,7 +30,6 @@ import {
 
 import {
   defaultChannelAgentId,
-  GatewaySettingsMode,
 } from '@renderer/gateway-settings';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -83,11 +84,8 @@ type GatewaySettingsPanelProps = {
   gatewayDirty?: boolean;
   gatewayLoading?: boolean;
   gatewaySaving?: boolean;
-  gatewayMode?: GatewaySettingsMode;
   gatewaySettingsSource?: GatewaySettingsSource;
   gatewayStatusMessage?: string | null;
-  gatewayJsonDraft?: string;
-  gatewayJsonError?: string | null;
   savingLocalSettings?: boolean;
   agents?: DesktopCustomAgent[];
   teams?: DesktopTeam[];
@@ -105,10 +103,8 @@ type GatewaySettingsPanelProps = {
     requireGatewayConnection?: boolean;
     reloadGatewaySettings?: boolean;
   }) => Promise<boolean>;
-  onGatewayJsonChange?: (value: string) => void;
   onSaveGatewaySettings?: () => Promise<boolean>;
   onMutateGatewayDraft?: DraftMutator;
-  onOpenAdvancedJson?: () => void;
   onRefreshAgentTargets?: () => Promise<void>;
   onAddChannelAccount?: (input: {
     channel: string;
@@ -140,7 +136,6 @@ type GatewaySettingsPanelProps = {
 
 type AgentProviderFieldsProps = {
   provider: any;
-  onOpenAdvancedJson: () => void;
   onMutate: (mutator: (provider: any) => void) => void;
 };
 
@@ -169,16 +164,65 @@ const SLASH_COMMAND_NAME_PATTERN = /^[a-z0-9_]{1,32}$/;
 const noop = () => {};
 const noopAsync = async () => {};
 const noopAsyncBoolean = async () => false;
+const IDLE_UPDATE_STATUS: DesktopUpdateStatus = { phase: 'idle' };
+
+type UpdateFeedback = {
+  message: string;
+  tone: 'info' | 'success' | 'danger';
+};
+
+function updateCheckFailureMessage(reason: string): string {
+  if (reason === 'dev-build') {
+    return 'Update checks are available in packaged Mac builds.';
+  }
+  if (reason === 'update-not-downloaded') {
+    return 'The update is not ready to install yet.';
+  }
+  return reason || 'Failed to check for updates.';
+}
+
+function updateStatusDisplay(
+  status: DesktopUpdateStatus,
+  feedback: UpdateFeedback | null,
+): UpdateFeedback {
+  switch (status.phase) {
+    case 'checking':
+      return { message: 'Checking for updates...', tone: 'info' };
+    case 'available':
+      return {
+        message: `Update v${status.info.version} found. Downloading will start automatically.`,
+        tone: 'info',
+      };
+    case 'downloading':
+      return {
+        message: `Downloading update (${Math.round(status.percent)}%).`,
+        tone: 'info',
+      };
+    case 'downloaded':
+      return {
+        message: `Update v${status.info.version} is ready to install.`,
+        tone: 'success',
+      };
+    case 'error':
+      return { message: status.message || 'Update check failed.', tone: 'danger' };
+    case 'idle':
+    default:
+      return feedback || {
+        message: 'Garyx checks for updates automatically in the background.',
+        tone: 'info',
+      };
+  }
+}
 
 export type SettingsTabId =
   | 'connection'
   | 'gateway'
+  | 'heartbeat'
   | 'provider'
   | 'channels'
   | 'labs'
   | 'commands'
-  | 'mcp'
-  | 'advanced';
+  | 'mcp';
 
 export const SETTINGS_TABS: Array<{
   id: SettingsTabId;
@@ -190,7 +234,13 @@ export const SETTINGS_TABS: Array<{
     id: 'gateway',
     label: 'Gateway',
     eyebrow: 'Gateway',
-    description: 'Gateway URL, runtime, storage, image generation, and heartbeat defaults.',
+    description: 'Gateway URL, runtime, storage, and image generation.',
+  },
+  {
+    id: 'heartbeat',
+    label: 'Heartbeat',
+    eyebrow: 'Heartbeat',
+    description: 'Default heartbeat cadence, target, acknowledgement length, and active hours.',
   },
   {
     id: 'provider',
@@ -206,9 +256,9 @@ export const SETTINGS_TABS: Array<{
   },
   {
     id: 'labs',
-    label: 'Labs',
-    eyebrow: 'Mac Labs',
-    description: 'Mac-only experimental surfaces that can be hidden without affecting your other Garyx workflows.',
+    label: 'Mac App',
+    eyebrow: 'Desktop',
+    description: 'Mac-only app behavior, maintenance, and experimental surfaces.',
   },
   {
     id: 'commands',
@@ -221,12 +271,6 @@ export const SETTINGS_TABS: Array<{
     label: 'MCP Servers',
     eyebrow: 'MCP',
     description: 'Manage external MCP server definitions and local tool config sync.',
-  },
-  {
-    id: 'advanced',
-    label: 'Advanced',
-    eyebrow: 'JSON',
-    description: '',
   },
 ];
 
@@ -815,7 +859,6 @@ function ChannelAccountCard({
 
 function AgentProviderFields({
   provider,
-  onOpenAdvancedJson,
   onMutate,
 }: AgentProviderFieldsProps) {
   const providerType = providerTypeValue(provider);
@@ -891,11 +934,8 @@ export function GatewaySettingsPanel({
   gatewayDirty = false,
   gatewayLoading = false,
   gatewaySaving = false,
-  gatewayMode = 'form',
   gatewaySettingsSource = 'gateway_api',
   gatewayStatusMessage = null,
-  gatewayJsonDraft = '{}',
-  gatewayJsonError = null,
   savingLocalSettings = false,
   agents = [],
   teams = [],
@@ -910,10 +950,8 @@ export function GatewaySettingsPanel({
   onLocalSettingsChange = noop,
   onSaveLocalSettings = noop,
   onSaveLocalSettingsNow = noopAsyncBoolean,
-  onGatewayJsonChange = noop,
   onSaveGatewaySettings = noopAsyncBoolean,
   onMutateGatewayDraft = noop,
-  onOpenAdvancedJson = noop,
   onRefreshAgentTargets = noopAsync,
   onAddChannelAccount = noopAsync,
   onStartWeixinChannelAuth = async () => ({ sessionId: '', qrCodeDataUrl: '' }),
@@ -947,16 +985,19 @@ export function GatewaySettingsPanel({
     });
     return map;
   }, [pluginCatalog]);
-  const [isAdvancedJsonEditing, setIsAdvancedJsonEditing] = useState(false);
   const [editingCommandName, setEditingCommandName] = useState<string | null>(null);
   const [commandDraft, setCommandDraft] = useState<CommandDraft>(() => emptyCommandDraft());
   const [commandDialogOpen, setCommandDialogOpen] = useState(false);
   const [editingMcpServerName, setEditingMcpServerName] = useState<string | null>(null);
   const [mcpServerDraft, setMcpServerDraft] = useState<McpServerDraft>(() => emptyMcpServerDraft());
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
+  const updateStatusRef = useRef<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
+  const [checkingForUpdate, setCheckingForUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [updateFeedback, setUpdateFeedback] = useState<UpdateFeedback | null>(null);
   const statusClass =
-    gatewayJsonError
-      || (gatewayStatusMessage && /(failed|error|invalid)/i.test(gatewayStatusMessage))
+    gatewayStatusMessage && /(failed|error|invalid)/i.test(gatewayStatusMessage)
       ? 'error'
       : 'info';
   const remoteSyncLabel = gatewayLoading
@@ -989,6 +1030,13 @@ export function GatewaySettingsPanel({
     ? 'Editing the gateway runtime config file on the gateway host.'
     : 'Editing live gateway settings over the API.';
   const showGatewayHeaderStatus = normalizedActiveTab === 'gateway';
+  const updateDisplay = updateStatusDisplay(updateStatus, updateFeedback);
+  const updateCheckBusy = checkingForUpdate || updateStatus.phase === 'checking';
+  const updateCheckDisabled =
+    updateCheckBusy
+    || updateStatus.phase === 'available'
+    || updateStatus.phase === 'downloading'
+    || updateStatus.phase === 'downloaded';
   const headerFacts: Array<{
     label: string;
     value: string;
@@ -1019,20 +1067,40 @@ export function GatewaySettingsPanel({
     },
   ];
 
-  function renderGatewaySaveAction(buttonLabel = 'Save JSON') {
-    if (gatewayMode === 'json') {
-      return (
-        <Button
-          className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
-          disabled={!gatewayDirty || gatewayLoading || gatewaySaving}
-          onClick={() => { void onSaveGatewaySettings(); }}
-          size="sm"
-          type="button"
-        >
-          {gatewaySaving ? '保存中…' : buttonLabel}
-        </Button>
-      );
-    }
+  useEffect(() => {
+    const api = window.garyxDesktop;
+    let cancelled = false;
+    const applyStatus = (nextStatus: DesktopUpdateStatus) => {
+      updateStatusRef.current = nextStatus;
+      if (cancelled) {
+        return;
+      }
+      setUpdateStatus(nextStatus);
+      if (nextStatus.phase !== 'idle') {
+        setUpdateFeedback(null);
+      }
+    };
+
+    void api.getUpdateStatus()
+      .then(applyStatus)
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+        setUpdateFeedback({
+          message: error instanceof Error ? error.message : 'Failed to read update status.',
+          tone: 'danger',
+        });
+      });
+    api.subscribeUpdateStatus(applyStatus);
+
+    return () => {
+      cancelled = true;
+      api.unsubscribeUpdateStatus(applyStatus);
+    };
+  }, []);
+
+  function renderGatewaySaveAction() {
     const statusLabel = gatewaySaving
       ? '保存中…'
       : gatewayDirty
@@ -1055,6 +1123,63 @@ export function GatewaySettingsPanel({
         {savingLocalSettings ? 'Saving…' : label}
       </Button>
     );
+  }
+
+  async function handleCheckForUpdatesNow() {
+    if (updateCheckDisabled) {
+      return;
+    }
+
+    setCheckingForUpdate(true);
+    setUpdateFeedback(null);
+    try {
+      const result = await window.garyxDesktop.checkForUpdatesNow();
+      if (!result.ok) {
+        setUpdateFeedback({
+          message: updateCheckFailureMessage(result.reason),
+          tone: 'danger',
+        });
+        return;
+      }
+      if (updateStatusRef.current.phase === 'idle') {
+        setUpdateFeedback({
+          message: 'No update found.',
+          tone: 'success',
+        });
+      }
+    } catch (error) {
+      setUpdateFeedback({
+        message: error instanceof Error ? error.message : 'Failed to check for updates.',
+        tone: 'danger',
+      });
+    } finally {
+      setCheckingForUpdate(false);
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (installingUpdate || updateStatus.phase !== 'downloaded') {
+      return;
+    }
+
+    setInstallingUpdate(true);
+    setUpdateFeedback(null);
+    try {
+      const result = await window.garyxDesktop.installUpdate();
+      if (!result.ok) {
+        setUpdateFeedback({
+          message: updateCheckFailureMessage(result.reason),
+          tone: 'danger',
+        });
+        setInstallingUpdate(false);
+      }
+    } catch (error) {
+      setUpdateFeedback({
+        message: error instanceof Error ? error.message : 'Failed to install update.',
+        tone: 'danger',
+      });
+      setInstallingUpdate(false);
+    }
   }
 
   const connectionPanel = (
@@ -1258,122 +1383,6 @@ export function GatewaySettingsPanel({
           />
         </div>
       </div>
-      <div className="codex-section">
-        <div className="codex-section-header">
-          <span className="codex-section-title">Heartbeat Defaults</span>
-          {renderGatewaySaveAction()}
-        </div>
-        <div className="codex-list-card">
-          <SettingsControlRow
-            control={
-              <SettingsSwitch
-                checked={Boolean(gatewayDraft?.agent_defaults?.heartbeat?.enabled)}
-                label="heartbeat.enabled"
-                onChange={(nextValue) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.enabled = nextValue;
-                  });
-                }}
-              />
-            }
-            description="Turn the shared heartbeat behavior on or off."
-            label="enabled"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.every || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.every = event.target.value;
-                  });
-                }}
-              />
-            }
-            description="Interval expression used by the default heartbeat schedule."
-            label="every"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.target || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.target = event.target.value;
-                  });
-                }}
-              />
-            }
-            description="Default target for heartbeat pings and summaries."
-            label="target"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                min={1}
-                type="number"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.ack_max_chars ?? 500)}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.ack_max_chars = Number(event.target.value) || 500;
-                  });
-                }}
-              />
-            }
-            description="Maximum length of the acknowledgement text."
-            label="ack_max_chars"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.start || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.active_hours.start = event.target.value;
-                  });
-                }}
-              />
-            }
-            description="Start time for the active window."
-            label="active_hours.start"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.end || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.active_hours.end = event.target.value;
-                  });
-                }}
-              />
-            }
-            description="End time for the active window."
-            label="active_hours.end"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.timezone || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.active_hours.timezone = event.target.value;
-                  });
-                }}
-              />
-            }
-            description="Time zone used when evaluating the active heartbeat window."
-            label="active_hours.timezone"
-            stacked
-          />
-        </div>
-      </div>
     </>
   );
 
@@ -1382,6 +1391,125 @@ export function GatewaySettingsPanel({
       {connectionPanel}
       {gatewayRuntimePanel}
     </>
+  );
+
+  const heartbeatPanel = (
+    <div className="codex-section">
+      <div className="codex-section-header">
+        <span className="codex-section-title">Heartbeat Defaults</span>
+        {renderGatewaySaveAction()}
+      </div>
+      <div className="codex-list-card">
+        <SettingsControlRow
+          control={
+            <SettingsSwitch
+              checked={Boolean(gatewayDraft?.agent_defaults?.heartbeat?.enabled)}
+              label="heartbeat.enabled"
+              onChange={(nextValue) => {
+                onMutateGatewayDraft((next) => {
+                  next.agent_defaults.heartbeat.enabled = nextValue;
+                });
+              }}
+            />
+          }
+          description="Turn the shared heartbeat behavior on or off."
+          label="enabled"
+        />
+        <SettingsControlRow
+          control={
+            <Input
+              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+              value={String(gatewayDraft?.agent_defaults?.heartbeat?.every || '')}
+              onChange={(event) => {
+                onMutateGatewayDraft((next) => {
+                  next.agent_defaults.heartbeat.every = event.target.value;
+                });
+              }}
+            />
+          }
+          description="Interval expression used by the default heartbeat schedule."
+          label="every"
+        />
+        <SettingsControlRow
+          control={
+            <Input
+              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+              value={String(gatewayDraft?.agent_defaults?.heartbeat?.target || '')}
+              onChange={(event) => {
+                onMutateGatewayDraft((next) => {
+                  next.agent_defaults.heartbeat.target = event.target.value;
+                });
+              }}
+            />
+          }
+          description="Default target for heartbeat pings and summaries."
+          label="target"
+        />
+        <SettingsControlRow
+          control={
+            <Input
+              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+              min={1}
+              type="number"
+              value={String(gatewayDraft?.agent_defaults?.heartbeat?.ack_max_chars ?? 500)}
+              onChange={(event) => {
+                onMutateGatewayDraft((next) => {
+                  next.agent_defaults.heartbeat.ack_max_chars = Number(event.target.value) || 500;
+                });
+              }}
+            />
+          }
+          description="Maximum length of the acknowledgement text."
+          label="ack_max_chars"
+        />
+        <SettingsControlRow
+          control={
+            <Input
+              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+              value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.start || '')}
+              onChange={(event) => {
+                onMutateGatewayDraft((next) => {
+                  next.agent_defaults.heartbeat.active_hours.start = event.target.value;
+                });
+              }}
+            />
+          }
+          description="Start time for the active window."
+          label="active_hours.start"
+        />
+        <SettingsControlRow
+          control={
+            <Input
+              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+              value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.end || '')}
+              onChange={(event) => {
+                onMutateGatewayDraft((next) => {
+                  next.agent_defaults.heartbeat.active_hours.end = event.target.value;
+                });
+              }}
+            />
+          }
+          description="End time for the active window."
+          label="active_hours.end"
+        />
+        <SettingsControlRow
+          control={
+            <Input
+              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+              value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.timezone || '')}
+              onChange={(event) => {
+                onMutateGatewayDraft((next) => {
+                  next.agent_defaults.heartbeat.active_hours.timezone = event.target.value;
+                });
+              }}
+            />
+          }
+          description="Time zone used when evaluating the active heartbeat window."
+          label="active_hours.timezone"
+          stacked
+        />
+      </div>
+    </div>
   );
 
   const providerPanel = (
@@ -2491,71 +2619,94 @@ export function GatewaySettingsPanel({
   );
 
   const labsPanel = (
-    <div className="codex-section">
-      <div className="codex-section-header">
-        <span className="codex-section-title">Mac Labs</span>
-        {renderGatewaySaveAction('Save Labs')}
+    <>
+      <div className="codex-section">
+        <div className="codex-section-header">
+          <span className="codex-section-title">Updates</span>
+        </div>
+        <div className="codex-list-card">
+          <SettingsControlRow
+            className="settings-update-row"
+            control={
+              <div className="settings-update-control">
+                <span className={`settings-update-status tone-${updateDisplay.tone}`}>
+                  {updateDisplay.message}
+                </span>
+                <div className="settings-update-actions">
+                  {updateStatus.phase === 'downloaded' ? (
+                    <Button
+                      className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
+                      disabled={installingUpdate}
+                      onClick={() => { void handleInstallUpdate(); }}
+                      size="sm"
+                      type="button"
+                    >
+                      {installingUpdate ? 'Restarting...' : 'Restart to Update'}
+                    </Button>
+                  ) : null}
+                  {updateStatus.phase !== 'downloaded' ? (
+                    <Button
+                      className="rounded-xl border-[#e7e7e5] bg-white text-[#111111] shadow-none hover:bg-[#f6f6f5]"
+                      disabled={updateCheckDisabled}
+                      onClick={() => { void handleCheckForUpdatesNow(); }}
+                      size="sm"
+                      title="Check for updates"
+                      type="button"
+                      variant="outline"
+                    >
+                      <RefreshCw
+                        aria-hidden
+                        className={updateCheckBusy ? 'settings-update-spin' : undefined}
+                        size={13}
+                        strokeWidth={2}
+                      />
+                      {updateCheckBusy ? 'Checking...' : 'Check Now'}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            }
+            description="Automatic checks run in packaged Mac builds. Use this to refresh the update state immediately."
+            label="Garyx updates"
+            stacked
+          />
+        </div>
       </div>
-      <div className="codex-list-card">
-        <SettingsControlRow
-          control={
-            <SettingsSwitch
-              checked={Boolean(gatewayDraft?.desktop?.labs?.auto_research)}
-              label="desktop.labs.auto_research"
-              onChange={(nextValue) => {
-                onMutateGatewayDraft((next) => {
-                  next.desktop ||= {};
-                  next.desktop.labs ||= {};
-                  next.desktop.labs.auto_research = nextValue;
-                });
-              }}
-            />
-          }
-          description="Show or hide the Auto Research entry in the Mac app. Disabling it only hides the Mac surface."
-          label="Auto Research"
-        />
-      </div>
-    </div>
-  );
-
-  const advancedPanel = (
-    <div className="codex-section">
-      <div className="codex-section-header">
-        <span className="codex-section-title">Config JSON</span>
-        <div className="codex-list-row-actions">
+      <div className="codex-section">
+        <div className="codex-section-header">
+          <span className="codex-section-title">Mac Labs</span>
           {renderGatewaySaveAction()}
-          <button
-            className="codex-section-action"
-            onClick={() => { setIsAdvancedJsonEditing((current) => !current); }}
-            type="button"
-          >
-            {isAdvancedJsonEditing ? '完成' : '编辑'}
-          </button>
+        </div>
+        <div className="codex-list-card">
+          <SettingsControlRow
+            control={
+              <SettingsSwitch
+                checked={Boolean(gatewayDraft?.desktop?.labs?.auto_research)}
+                label="desktop.labs.auto_research"
+                onChange={(nextValue) => {
+                  onMutateGatewayDraft((next) => {
+                    next.desktop ||= {};
+                    next.desktop.labs ||= {};
+                    next.desktop.labs.auto_research = nextValue;
+                  });
+                }}
+              />
+            }
+            description="Show or hide the Auto Research entry in the Mac app. Disabling it only hides the Mac surface."
+            label="Auto Research"
+          />
         </div>
       </div>
-      <div className="codex-list-card">
-        <div className="settings-editor-block">
-          {isAdvancedJsonEditing ? (
-            <Textarea
-              className="settings-json-editor min-h-[360px] rounded-[16px] border-[#e7e7e5] bg-[#fafaf9] font-mono text-[12px] shadow-none"
-              value={gatewayJsonDraft}
-              onChange={(event) => {
-                onGatewayJsonChange(event.target.value);
-              }}
-            />
-          ) : (
-            <pre className="settings-json-preview">{gatewayJsonDraft}</pre>
-          )}
-          {gatewayJsonError ? <span className="settings-json-error">{gatewayJsonError}</span> : null}
-        </div>
-      </div>
-    </div>
+    </>
   );
 
   let tabContent: ReactNode;
   switch (normalizedActiveTab) {
     case 'gateway':
       tabContent = gatewayPanel;
+      break;
+    case 'heartbeat':
+      tabContent = heartbeatPanel;
       break;
     case 'provider':
       tabContent = providerPanel;
@@ -2571,9 +2722,6 @@ export function GatewaySettingsPanel({
       break;
     case 'mcp':
       tabContent = mcpPanel;
-      break;
-    case 'advanced':
-      tabContent = advancedPanel;
       break;
     default:
       tabContent = gatewayPanel;

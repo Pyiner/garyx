@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react';
 
-import { IconCpu } from '@tabler/icons-react';
+import { IconCpu, IconHeartbeat } from '@tabler/icons-react';
 
 import type { DesktopWorkspaceFileEntry } from '@shared/contracts';
 
@@ -98,21 +98,15 @@ export function ProviderIcon() {
   return <AppIcon glyph={IconCpu} />;
 }
 
+export function HeartbeatIcon() {
+  return <AppIcon glyph={IconHeartbeat} />;
+}
+
 export function ChannelsIcon() {
   return (
     <svg aria-hidden width="16" height="16" viewBox={vb} fill="none" className="icon" style={sw}>
       <g transform="translate(3.5,3) scale(0.929,0.933)">
         <path d="M1.5 4.50006H13.5M10.5 0.500064L8.5 14.5001M0.5 10.5001H12.5M5.5 0.500064L3.5 14.5001" stroke="currentColor" strokeLinecap="round"/>
-      </g>
-    </svg>
-  );
-}
-
-export function AdvancedIcon() {
-  return (
-    <svg aria-hidden width="16" height="16" viewBox={vb} fill="none" className="icon" style={sw}>
-      <g transform="translate(2.28,2) scale(0.939,0.941)">
-        <path d="M7.21938 16.5001L9.21937 0.500053M4.21937 3.50005L0.719131 7.87536C0.426956 8.24058 0.426956 8.75953 0.719131 9.12475L4.21937 13.5001M12.2194 13.5001L15.7192 9.12523C16.0114 8.76001 16.0118 8.24058 15.7196 7.87536L12.2194 3.50005" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
       </g>
     </svg>
   );
@@ -227,14 +221,14 @@ export function SettingsTabIcon({ tabId }: { tabId: SettingsTabId }) {
   switch (tabId) {
     case 'gateway':
       return <GatewayIcon />;
+    case 'heartbeat':
+      return <HeartbeatIcon />;
     case 'provider':
       return <ProviderIcon />;
     case 'channels':
       return <ChannelsIcon />;
     case 'labs':
-      return <AutoResearchIcon />;
-    case 'advanced':
-      return <AdvancedIcon />;
+      return <SettingsIcon />;
     default:
       return <SettingsIcon />;
   }
@@ -245,7 +239,7 @@ export function isLocalSettingsTab(tabId: SettingsTabId): boolean {
 }
 
 export function isGatewayConfigSettingsTab(tabId: SettingsTabId): boolean {
-  return tabId === 'gateway' || tabId === 'channels' || tabId === 'labs' || tabId === 'advanced';
+  return tabId === 'gateway' || tabId === 'heartbeat' || tabId === 'channels' || tabId === 'labs';
 }
 
 export function FolderIcon() {

@@ -18,8 +18,6 @@ import type { SettingsTabId } from '../GatewaySettingsPanel';
 import {
   cloneJson,
   ensureGatewayConfig,
-  type GatewaySettingsMode,
-  stringifyJsonBlock,
 } from '../gateway-settings';
 import { isGatewayConfigSettingsTab, isLocalSettingsTab } from './icons';
 
@@ -57,17 +55,10 @@ export function useSettingsController({
   const [gatewaySettingsDraft, setGatewaySettingsDraft] = useState<any>(() =>
     ensureGatewayConfig({}),
   );
-  const [gatewaySettingsMode, setGatewaySettingsMode] =
-    useState<GatewaySettingsMode>('form');
-  const [gatewaySettingsJsonDraft, setGatewaySettingsJsonDraft] = useState(() =>
-    stringifyJsonBlock(ensureGatewayConfig({})),
-  );
   const [gatewaySettingsDirty, setGatewaySettingsDirty] = useState(false);
   const [gatewaySettingsLoading, setGatewaySettingsLoading] = useState(false);
   const [gatewaySettingsSaving, setGatewaySettingsSaving] = useState(false);
   const [gatewaySettingsStatus, setGatewaySettingsStatus] = useState<string | null>(null);
-  const [gatewaySettingsJsonError, setGatewaySettingsJsonError] =
-    useState<string | null>(null);
   const [gatewaySettingsSource, setGatewaySettingsSource] =
     useState<GatewaySettingsSource>('gateway_api');
   const [commands, setCommands] = useState<SlashCommand[]>([]);
@@ -79,9 +70,7 @@ export function useSettingsController({
   const [mcpServersLoading, setMcpServersLoading] = useState(false);
   const [mcpServersSaving, setMcpServersSaving] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTabId>(() =>
-    gatewaySettingsMode === 'json' ? 'advanced' : 'gateway',
-  );
+  const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTabId>('gateway');
 
   const gatewaySettingsDraftRef = useRef<any>(ensureGatewayConfig({}));
   const gatewaySettingsSavingRef = useRef(false);
@@ -94,9 +83,7 @@ export function useSettingsController({
     const normalized = ensureGatewayConfig(payload.config);
     gatewaySettingsDraftRef.current = normalized;
     setGatewaySettingsDraft(normalized);
-    setGatewaySettingsJsonDraft(stringifyJsonBlock(normalized));
     setGatewaySettingsDirty(false);
-    setGatewaySettingsJsonError(null);
     setGatewaySettingsSource(payload.source);
   }
 
@@ -105,14 +92,12 @@ export function useSettingsController({
     mutator(next);
     gatewaySettingsDraftRef.current = next;
     setGatewaySettingsDraft(next);
-    setGatewaySettingsJsonDraft(stringifyJsonBlock(next));
     setGatewaySettingsDirty(true);
     setGatewaySettingsStatus(null);
     scheduleGatewayAutoSave();
   }
 
   function scheduleGatewayAutoSave() {
-    if (gatewaySettingsMode !== 'form') return;
     if (gatewayAutoSaveTimerRef.current !== null) {
       window.clearTimeout(gatewayAutoSaveTimerRef.current);
     }
@@ -134,7 +119,7 @@ export function useSettingsController({
     while (gatewaySettingsSavingRef.current) {
       await new Promise((resolve) => window.setTimeout(resolve, 40));
     }
-    if (gatewaySettingsMode === 'form' && gatewaySettingsDirty) {
+    if (gatewaySettingsDirty) {
       await handleSaveGatewaySettings({ silent: true });
     }
   }
@@ -406,42 +391,6 @@ export function useSettingsController({
     }
   }
 
-  function handleSwitchGatewaySettingsMode(nextMode: GatewaySettingsMode): boolean {
-    if (nextMode === gatewaySettingsMode) {
-      return true;
-    }
-
-    if (nextMode === 'json') {
-      setGatewaySettingsJsonDraft(stringifyJsonBlock(gatewaySettingsDraftRef.current));
-      setGatewaySettingsJsonError(null);
-      setGatewaySettingsMode('json');
-      return true;
-    }
-
-    try {
-      const normalized = ensureGatewayConfig(JSON.parse(gatewaySettingsJsonDraft));
-      gatewaySettingsDraftRef.current = normalized;
-      setGatewaySettingsDraft(normalized);
-      setGatewaySettingsJsonDraft(stringifyJsonBlock(normalized));
-      setGatewaySettingsJsonError(null);
-      setGatewaySettingsDirty(true);
-      setGatewaySettingsMode('form');
-      return true;
-    } catch (gatewayError) {
-      setGatewaySettingsJsonError(
-        gatewayError instanceof Error ? gatewayError.message : 'Invalid JSON',
-      );
-      setGatewaySettingsStatus('JSON 无法解析，暂时无法切回表单模式。');
-      return false;
-    }
-  }
-
-  function handleGatewaySettingsJsonChange(value: string) {
-    setGatewaySettingsJsonDraft(value);
-    setGatewaySettingsDirty(true);
-    setGatewaySettingsStatus(null);
-  }
-
   async function persistLocalSettings(options?: {
     refreshConnection?: boolean;
     requireGatewayConnection?: boolean;
@@ -518,22 +467,8 @@ export function useSettingsController({
     const silent = options?.silent === true;
     gatewaySettingsSavingRef.current = true;
     setGatewaySettingsSaving(true);
-    setGatewaySettingsJsonError(null);
 
-    let nextConfig = ensureGatewayConfig(gatewaySettingsDraftRef.current);
-    if (gatewaySettingsMode === 'json') {
-      try {
-        nextConfig = ensureGatewayConfig(JSON.parse(gatewaySettingsJsonDraft));
-      } catch (gatewayError) {
-        const message =
-          gatewayError instanceof Error ? gatewayError.message : 'Invalid JSON';
-        setGatewaySettingsJsonError(message);
-        setGatewaySettingsStatus(message);
-        setGatewaySettingsSaving(false);
-        gatewaySettingsSavingRef.current = false;
-        return false;
-      }
-    }
+    const nextConfig = ensureGatewayConfig(gatewaySettingsDraftRef.current);
 
     nextConfig.gateway.public_url = settingsDraft.gatewayUrl || '';
 
@@ -591,11 +526,6 @@ export function useSettingsController({
       await flushGatewayAutoSave();
     }
 
-    const nextMode: GatewaySettingsMode = normalizedNextTab === 'advanced' ? 'json' : 'form';
-    if (!handleSwitchGatewaySettingsMode(nextMode)) {
-      return false;
-    }
-
     setSettingsActiveTab(normalizedNextTab);
     if (!nextTabIsLocal) {
       await refreshSettingsTabResources(normalizedNextTab);
@@ -611,12 +541,6 @@ export function useSettingsController({
     }
   }, [settingsActiveTab]);
 
-  useEffect(() => {
-    if (gatewaySettingsMode === 'json' && settingsActiveTab !== 'advanced') {
-      setSettingsActiveTab('advanced');
-    }
-  }, [gatewaySettingsMode, settingsActiveTab]);
-
   return {
     commands,
     commandsLoaded,
@@ -624,10 +548,7 @@ export function useSettingsController({
     commandsSaving,
     gatewaySettingsDirty,
     gatewaySettingsDraft,
-    gatewaySettingsJsonDraft,
-    gatewaySettingsJsonError,
     gatewaySettingsLoading,
-    gatewaySettingsMode,
     gatewaySettingsSaving,
     gatewaySettingsSource,
     gatewaySettingsStatus,
@@ -635,13 +556,11 @@ export function useSettingsController({
     handleCreateSlashCommand,
     handleDeleteMcpServer,
     handleDeleteSlashCommand,
-    handleGatewaySettingsJsonChange,
     handleRetrySettingsView,
     handleSaveGatewaySettings,
     handleSaveLocalSettingsNow,
     handleSaveSettings,
     handleSelectSettingsTab,
-    handleSwitchGatewaySettingsMode,
     handleToggleMcpServer,
     handleUpdateMcpServer,
     handleUpdateSlashCommand,
