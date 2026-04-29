@@ -170,7 +170,7 @@ const zhCN: Record<string, string> = {
   'Host': '主机',
   'JSON': 'JSON',
   'JSON cannot be parsed, so Garyx cannot switch back to form mode yet.': 'JSON 无法解析，暂时无法切回表单模式。',
-  'Labs': '实验',
+  'Labs': '实验室',
   'Language': '语言',
   'Mac-only experimental surfaces that can be hidden without affecting your other Garyx workflows.': '仅 Mac 客户端的实验功能，隐藏后不会影响其他 Garyx 工作流。',
   'MCP': 'MCP',
