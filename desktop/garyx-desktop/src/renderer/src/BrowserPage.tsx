@@ -157,6 +157,15 @@ export function BrowserPage() {
     };
   }, [connectionMenuOpen]);
 
+  useEffect(() => {
+    void api.setBrowserOverlayPaused(connectionMenuOpen);
+    return () => {
+      if (connectionMenuOpen) {
+        void api.setBrowserOverlayPaused(false);
+      }
+    };
+  }, [api, connectionMenuOpen]);
+
   return (
     <div className="browser-page">
       <div className="browser-toolbar">
