@@ -834,6 +834,36 @@ impl CodexAgentProvider {
         }
     }
 
+    async fn emit_streaming_input_ack(
+        &self,
+        garyx_thread_id: &str,
+        run_id: &str,
+        pending_input_id: Option<String>,
+    ) -> bool {
+        let callback = {
+            self.active_session_callbacks
+                .lock()
+                .await
+                .get(garyx_thread_id)
+                .and_then(|(active_run_id, callback)| {
+                    if active_run_id == run_id {
+                        Some(callback.clone())
+                    } else {
+                        None
+                    }
+                })
+        };
+        if let Some(callback) = callback {
+            callback(StreamEvent::Boundary {
+                kind: StreamBoundaryKind::UserAck,
+                pending_input_id,
+            });
+            true
+        } else {
+            false
+        }
+    }
+
     /// Core streaming run implementation.
     async fn run_streaming_impl(
         &self,
@@ -1213,15 +1243,16 @@ impl AgentLoopProvider for CodexAgentProvider {
     }
 
     async fn add_streaming_input(&self, thread_id: &str, input: QueuedUserInput) -> bool {
+        let garyx_thread_id = thread_id.to_owned();
         let active = {
             self.active_session_turns
                 .lock()
                 .await
-                .get(thread_id)
+                .get(&garyx_thread_id)
                 .cloned()
         };
 
-        let Some((thread_id, turn_id, _run_id)) = active else {
+        let Some((codex_thread_id, turn_id, run_id)) = active else {
             return false;
         };
 
@@ -1233,30 +1264,32 @@ impl AgentLoopProvider for CodexAgentProvider {
         let pending_input_id = input.pending_input_id.clone();
         let input = build_input_items_from_parts(&input.message, &input.images, &input.attachments);
 
-        match client.steer_turn(&thread_id, &turn_id, input).await {
+        match client.steer_turn(&codex_thread_id, &turn_id, input).await {
             Ok(()) => {
-                let callback = {
-                    self.active_session_callbacks
-                        .lock()
-                        .await
-                        .get(&thread_id)
-                        .map(|(_, callback)| callback.clone())
-                };
-                if let Some(callback) = callback {
-                    callback(StreamEvent::Boundary {
-                        kind: StreamBoundaryKind::UserAck,
-                        pending_input_id,
-                    });
+                if !self
+                    .emit_streaming_input_ack(&garyx_thread_id, &run_id, pending_input_id)
+                    .await
+                {
+                    tracing::warn!(
+                        garyx_thread_id = %garyx_thread_id,
+                        codex_thread_id = %codex_thread_id,
+                        run_id = %run_id,
+                        "codex streaming input accepted but no active callback found for ack"
+                    );
                 }
                 tracing::debug!(
-                    thread_id = %thread_id,
+                    garyx_thread_id = %garyx_thread_id,
+                    codex_thread_id = %codex_thread_id,
+                    run_id = %run_id,
                     "steered codex turn with additional input"
                 );
                 true
             }
             Err(e) => {
                 tracing::warn!(
-                    thread_id = %thread_id,
+                    garyx_thread_id = %garyx_thread_id,
+                    codex_thread_id = %codex_thread_id,
+                    run_id = %run_id,
                     error = %e,
                     "failed to steer codex turn"
                 );

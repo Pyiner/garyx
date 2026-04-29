@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 // -- Helper function tests --
@@ -945,6 +946,58 @@ async fn test_clear_session() {
             .await
             .get("sess::1")
             .is_none()
+    );
+}
+
+#[tokio::test]
+async fn test_streaming_input_ack_uses_garyx_thread_id() {
+    let provider = CodexAgentProvider::new(CodexAppServerConfig::default());
+    let events = Arc::new(StdMutex::new(Vec::<StreamEvent>::new()));
+    let captured_events = events.clone();
+    let callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
+        captured_events.lock().unwrap().push(event);
+    });
+
+    provider
+        .active_session_callbacks
+        .lock()
+        .await
+        .insert("thread::garyx".to_owned(), ("run_1".to_owned(), callback));
+
+    assert!(
+        !provider
+            .emit_streaming_input_ack(
+                "codex-thread-1",
+                "run_1",
+                Some("queued_input:wrong".to_owned())
+            )
+            .await,
+        "callbacks are keyed by Garyx thread id, not Codex thread id"
+    );
+    assert!(
+        !provider
+            .emit_streaming_input_ack(
+                "thread::garyx",
+                "run_2",
+                Some("queued_input:wrong-run".to_owned())
+            )
+            .await,
+        "stale callbacks from another run must not receive acks"
+    );
+    assert!(
+        provider
+            .emit_streaming_input_ack("thread::garyx", "run_1", Some("queued_input:1".to_owned()))
+            .await
+    );
+
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        events[0],
+        StreamEvent::Boundary {
+            kind: StreamBoundaryKind::UserAck,
+            pending_input_id: Some("queued_input:1".to_owned()),
+        }
     );
 }
 
