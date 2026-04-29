@@ -4,7 +4,7 @@
 //! Implements `AgentLoopProvider` backed by `codex_sdk::CodexClient`,
 //! managing thread/turn lifecycle and streaming notifications.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -508,6 +508,13 @@ fn is_agent_message_item(item: &Value) -> bool {
         .unwrap_or(false)
 }
 
+fn is_user_message_item(item: &Value) -> bool {
+    item.get("type")
+        .and_then(|v| v.as_str())
+        .map(|kind| kind.eq_ignore_ascii_case("userMessage"))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 fn is_tool_activity_item(item: &Value) -> bool {
     item.get("type")
@@ -700,10 +707,19 @@ pub struct CodexAgentProvider {
     active_session_turns: Mutex<HashMap<String, (String, String, String)>>,
     /// thread_id -> (run_id, live callback)
     active_session_callbacks: Mutex<HashMap<String, ActiveSessionCallback>>,
+    /// thread_id -> (run_id, pending userMessage markers waiting for Codex item events)
+    active_session_pending_acks: Mutex<HashMap<String, PendingCodexAcks>>,
     ready: Mutex<bool>,
 }
 
 type ActiveSessionCallback = (String, Arc<dyn Fn(StreamEvent) + Send + Sync>);
+type PendingCodexAcks = (String, VecDeque<PendingCodexAckMarker>);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PendingCodexAckMarker {
+    RootUserMessage,
+    QueuedInput(String),
+}
 
 impl CodexAgentProvider {
     /// Create a new Codex provider with the given config.
@@ -716,6 +732,7 @@ impl CodexAgentProvider {
             active_runs: Mutex::new(HashMap::new()),
             active_session_turns: Mutex::new(HashMap::new()),
             active_session_callbacks: Mutex::new(HashMap::new()),
+            active_session_pending_acks: Mutex::new(HashMap::new()),
             ready: Mutex::new(false),
         }
     }
@@ -811,6 +828,10 @@ impl CodexAgentProvider {
                 .collect()
         };
 
+        let mut pending_acks = self.active_session_pending_acks.lock().await;
+        pending_acks.retain(|_, (active_run_id, _)| active_run_id != run_id);
+        drop(pending_acks);
+
         if thread_ids.is_empty() {
             return;
         }
@@ -834,7 +855,56 @@ impl CodexAgentProvider {
         }
     }
 
-    async fn emit_streaming_input_ack(
+    async fn enqueue_streaming_input_ack(
+        &self,
+        garyx_thread_id: &str,
+        run_id: &str,
+        pending_input_id: Option<String>,
+    ) -> bool {
+        let Some(pending_input_id) = pending_input_id
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty())
+        else {
+            return false;
+        };
+
+        let mut pending_acks = self.active_session_pending_acks.lock().await;
+        let entry = pending_acks
+            .entry(garyx_thread_id.to_owned())
+            .or_insert_with(|| (run_id.to_owned(), VecDeque::new()));
+        if entry.0 != run_id {
+            *entry = (run_id.to_owned(), VecDeque::new());
+        }
+        entry
+            .1
+            .push_back(PendingCodexAckMarker::QueuedInput(pending_input_id));
+        true
+    }
+
+    async fn rollback_streaming_input_ack(
+        &self,
+        garyx_thread_id: &str,
+        run_id: &str,
+        pending_input_id: Option<&str>,
+    ) {
+        let Some(pending_input_id) = pending_input_id.map(str::trim).filter(|id| !id.is_empty())
+        else {
+            return;
+        };
+
+        let mut pending_acks = self.active_session_pending_acks.lock().await;
+        if let Some((active_run_id, queue)) = pending_acks.get_mut(garyx_thread_id) {
+            if active_run_id == run_id {
+                if let Some(index) = queue.iter().position(|marker| {
+                    matches!(marker, PendingCodexAckMarker::QueuedInput(id) if id == pending_input_id)
+                }) {
+                    queue.remove(index);
+                }
+            }
+        }
+    }
+
+    async fn emit_streaming_input_ack_boundary(
         &self,
         garyx_thread_id: &str,
         run_id: &str,
@@ -861,6 +931,44 @@ impl CodexAgentProvider {
             true
         } else {
             false
+        }
+    }
+
+    async fn acknowledge_next_codex_user_message(
+        &self,
+        garyx_thread_id: &str,
+        run_id: &str,
+    ) -> bool {
+        let marker = {
+            let mut pending_acks = self.active_session_pending_acks.lock().await;
+            let next = pending_acks
+                .get_mut(garyx_thread_id)
+                .and_then(|(active_run_id, queue)| {
+                    if active_run_id == run_id {
+                        queue.pop_front()
+                    } else {
+                        None
+                    }
+                });
+            if pending_acks
+                .get(garyx_thread_id)
+                .is_some_and(|(active_run_id, queue)| active_run_id == run_id && queue.is_empty())
+            {
+                pending_acks.remove(garyx_thread_id);
+            }
+            next
+        };
+
+        match marker {
+            Some(PendingCodexAckMarker::QueuedInput(pending_input_id)) => {
+                self.emit_streaming_input_ack_boundary(
+                    garyx_thread_id,
+                    run_id,
+                    Some(pending_input_id),
+                )
+                .await
+            }
+            Some(PendingCodexAckMarker::RootUserMessage) | None => false,
         }
     }
 
@@ -953,6 +1061,13 @@ impl CodexAgentProvider {
                 options.thread_id.clone(),
                 (run_id.clone(), live_callback.clone()),
             );
+            self.active_session_pending_acks.lock().await.insert(
+                options.thread_id.clone(),
+                (
+                    run_id.clone(),
+                    VecDeque::from([PendingCodexAckMarker::RootUserMessage]),
+                ),
+            );
         }
 
         // Drop the client lock before entering notification loop
@@ -1019,6 +1134,15 @@ impl CodexAgentProvider {
                     }
                     "item/started" => {
                         if let Some(item) = params.get("item") {
+                            if is_user_message_item(item) {
+                                // `turn/steer` only means the input reached the active turn.
+                                // Codex confirms consumption by replaying it as a userMessage item.
+                                self.acknowledge_next_codex_user_message(
+                                    &options.thread_id,
+                                    &run_id,
+                                )
+                                .await;
+                            }
                             if is_agent_message_item(item) {
                                 maybe_emit_agent_message_separator(
                                     item.get("id").and_then(|v| v.as_str()),
@@ -1182,6 +1306,7 @@ impl AgentLoopProvider for CodexAgentProvider {
         self.active_runs.lock().await.clear();
         self.active_session_turns.lock().await.clear();
         self.active_session_callbacks.lock().await.clear();
+        self.active_session_pending_acks.lock().await.clear();
 
         *self.ready.lock().await = false;
         Ok(())
@@ -1262,30 +1387,27 @@ impl AgentLoopProvider for CodexAgentProvider {
         };
 
         let pending_input_id = input.pending_input_id.clone();
+        self.enqueue_streaming_input_ack(&garyx_thread_id, &run_id, pending_input_id.clone())
+            .await;
         let input = build_input_items_from_parts(&input.message, &input.images, &input.attachments);
 
         match client.steer_turn(&codex_thread_id, &turn_id, input).await {
             Ok(()) => {
-                if !self
-                    .emit_streaming_input_ack(&garyx_thread_id, &run_id, pending_input_id)
-                    .await
-                {
-                    tracing::warn!(
-                        garyx_thread_id = %garyx_thread_id,
-                        codex_thread_id = %codex_thread_id,
-                        run_id = %run_id,
-                        "codex streaming input accepted but no active callback found for ack"
-                    );
-                }
                 tracing::debug!(
                     garyx_thread_id = %garyx_thread_id,
                     codex_thread_id = %codex_thread_id,
                     run_id = %run_id,
-                    "steered codex turn with additional input"
+                    "steered codex turn with additional input; waiting for userMessage item ack"
                 );
                 true
             }
             Err(e) => {
+                self.rollback_streaming_input_ack(
+                    &garyx_thread_id,
+                    &run_id,
+                    pending_input_id.as_deref(),
+                )
+                .await;
                 tracing::warn!(
                     garyx_thread_id = %garyx_thread_id,
                     codex_thread_id = %codex_thread_id,
@@ -1328,6 +1450,10 @@ impl AgentLoopProvider for CodexAgentProvider {
         self.session_map.lock().await.remove(thread_id);
         self.active_session_turns.lock().await.remove(thread_id);
         self.active_session_callbacks.lock().await.remove(thread_id);
+        self.active_session_pending_acks
+            .lock()
+            .await
+            .remove(thread_id);
         true
     }
 }

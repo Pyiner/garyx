@@ -262,6 +262,24 @@ fn test_is_agent_message_item_matches_legacy_and_v2_shapes() {
 }
 
 #[test]
+fn test_is_user_message_item_matches_v2_shape() {
+    assert!(is_user_message_item(&json!({
+        "type": "userMessage",
+        "id": "user-1",
+        "content": [{"type": "text", "text": "hello"}]
+    })));
+    assert!(is_user_message_item(&json!({
+        "type": "UserMessage",
+        "id": "user-2",
+        "content": []
+    })));
+    assert!(!is_user_message_item(&json!({
+        "type": "agentMessage",
+        "id": "msg-1"
+    })));
+}
+
+#[test]
 fn test_is_tool_activity_item_matches_supported_types() {
     assert!(is_tool_activity_item(&json!({
         "type": "commandExecution",
@@ -950,7 +968,7 @@ async fn test_clear_session() {
 }
 
 #[tokio::test]
-async fn test_streaming_input_ack_uses_garyx_thread_id() {
+async fn test_streaming_input_ack_waits_for_codex_user_message_item() {
     let provider = CodexAgentProvider::new(CodexAppServerConfig::default());
     let events = Arc::new(StdMutex::new(Vec::<StreamEvent>::new()));
     let captured_events = events.clone();
@@ -963,30 +981,50 @@ async fn test_streaming_input_ack_uses_garyx_thread_id() {
         .lock()
         .await
         .insert("thread::garyx".to_owned(), ("run_1".to_owned(), callback));
+    provider.active_session_pending_acks.lock().await.insert(
+        "thread::garyx".to_owned(),
+        (
+            "run_1".to_owned(),
+            VecDeque::from([PendingCodexAckMarker::RootUserMessage]),
+        ),
+    );
 
     assert!(
-        !provider
-            .emit_streaming_input_ack(
-                "codex-thread-1",
+        provider
+            .enqueue_streaming_input_ack(
+                "thread::garyx",
                 "run_1",
-                Some("queued_input:wrong".to_owned())
+                Some("queued_input:1".to_owned())
             )
+            .await
+    );
+
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "turn/steer acceptance should only enqueue; ACK is emitted by a later userMessage item"
+    );
+    assert!(
+        !provider
+            .acknowledge_next_codex_user_message("codex-thread-1", "run_1")
             .await,
         "callbacks are keyed by Garyx thread id, not Codex thread id"
     );
     assert!(
         !provider
-            .emit_streaming_input_ack(
-                "thread::garyx",
-                "run_2",
-                Some("queued_input:wrong-run".to_owned())
-            )
+            .acknowledge_next_codex_user_message("thread::garyx", "run_2")
             .await,
         "stale callbacks from another run must not receive acks"
     );
     assert!(
+        !provider
+            .acknowledge_next_codex_user_message("thread::garyx", "run_1")
+            .await,
+        "the first Codex userMessage item is the root prompt and must not ACK a queued follow-up"
+    );
+    assert!(events.lock().unwrap().is_empty());
+    assert!(
         provider
-            .emit_streaming_input_ack("thread::garyx", "run_1", Some("queued_input:1".to_owned()))
+            .acknowledge_next_codex_user_message("thread::garyx", "run_1")
             .await
     );
 
