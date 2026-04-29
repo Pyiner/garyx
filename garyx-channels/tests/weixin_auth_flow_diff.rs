@@ -23,6 +23,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const BEGIN_PATH: &str = "/ilink/bot/get_bot_qrcode";
 const POLL_PATH: &str = "/ilink/bot/get_qrcode_status";
 const QRCODE: &str = "wx-nonce-42";
+const QRCODE_IMAGE: &str = "PNG_BASE64_BODY";
 const BOT_ID: &str = "bot-id-42";
 const BOT_TOKEN: &str = "bot-token-42";
 const BASEURL: &str = "https://weixin.example";
@@ -34,7 +35,7 @@ async fn install_script(server: &MockServer) {
         .and(query_param("bot_type", "3"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "qrcode": QRCODE,
-            "qrcode_img_content": "PNG_BASE64_BODY",
+            "qrcode_img_content": QRCODE_IMAGE,
         })))
         .mount(server)
         .await;
@@ -114,14 +115,14 @@ async fn run_new(server: &MockServer) -> (String, String, String, usize) {
         .await
         .expect("start");
 
-    // Weixin's initial display is a hint + a QR carrying the
-    // opaque nonce. Assert the shape holds.
+    // Weixin's initial display is a hint + the server-provided QR payload.
+    // The opaque nonce remains internal and is used only for polling.
     assert!(
         session.display.iter().any(|item| matches!(
             item,
-            AuthDisplayItem::Qr { value } if value == QRCODE,
+            AuthDisplayItem::Qr { value } if value == QRCODE_IMAGE,
         )),
-        "weixin initial display must include a QR with the nonce",
+        "weixin initial display must include the QR payload",
     );
     assert!(
         session
