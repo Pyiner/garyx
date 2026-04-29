@@ -1,5 +1,4 @@
 pub mod agent;
-pub mod agent_node;
 pub mod agent_reference;
 pub mod agent_team;
 pub mod auto_research;
@@ -21,7 +20,6 @@ pub mod wiki;
 
 // Re-export commonly used types at the crate root.
 pub use agent::RunState;
-pub use agent_node::{GatewayToNode, NodeLoadInfo, NodeToGateway, ProviderInfo};
 pub use agent_reference::{
     AgentReference, resolve_agent_reference, validate_agent_team_registry_uniqueness,
 };
