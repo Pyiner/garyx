@@ -1550,7 +1550,7 @@ export function GatewaySettingsPanel({
           <h2 className="provider-section-title">{t('Claude Code')}</h2>
           <a
             className="provider-view-docs"
-            href="https://docs.claude.com/claude-code/settings"
+            href="https://code.claude.com/docs"
             rel="noreferrer"
             target="_blank"
           >
