@@ -435,6 +435,30 @@ code {
   padding-right: 46px !important;
 }
 
+.gateway-summary-control {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.gateway-summary-url {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .gateway-profile-history-trigger {
   position: absolute;
   top: 50%;
@@ -12743,6 +12767,14 @@ button.codex-list-row {
   .settings-section-aside,
   .settings-control-row-control {
     justify-content: flex-start;
+  }
+
+  .gateway-summary-control {
+    justify-content: flex-start;
+  }
+
+  .gateway-summary-url {
+    text-align: left;
   }
 
   .settings-section-header {

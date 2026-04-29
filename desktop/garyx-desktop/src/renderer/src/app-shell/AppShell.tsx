@@ -1239,6 +1239,7 @@ export function AppShell() {
     "Connecting to gateway…",
   );
   const [gatewayFailureCount, setGatewayFailureCount] = useState(0);
+  const [gatewaySetupForced, setGatewaySetupForced] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [newThreadDraftActive, setNewThreadDraftActive] = useState(false);
   const [pendingWorkspaceId, setPendingWorkspaceId] = useState<string | null>(
@@ -1497,7 +1498,6 @@ export function AppShell() {
     handleRetrySettingsView,
     handleSaveGatewaySettings,
     handleSaveLocalSettingsNow,
-    handleSaveSettings,
     handleSelectSettingsTab,
     handleToggleMcpServer,
     handleUpdateMcpServer,
@@ -5855,7 +5855,7 @@ export function AppShell() {
   );
   const gatewaySetupMessage = gatewayAuthSetupMessage;
   const requiresGatewaySetup =
-    !persistedGatewayUrl || Boolean(gatewaySetupMessage);
+    gatewaySetupForced || !persistedGatewayUrl || Boolean(gatewaySetupMessage);
 
   if (requiresGatewaySetup) {
     const setupMessage =
@@ -5944,6 +5944,10 @@ export function AppShell() {
                   void handleSaveLocalSettingsNow({
                     requireGatewayConnection: true,
                     reloadGatewaySettings: true,
+                  }).then((saved) => {
+                    if (saved) {
+                      setGatewaySetupForced(false);
+                    }
                   });
                 }}
                 type="button"
@@ -6177,7 +6181,6 @@ export function AppShell() {
                     connection={connection}
                     gatewayDirty={gatewaySettingsDirty}
                     gatewayDraft={gatewaySettingsDraft}
-                    gatewayProfiles={desktopState?.gatewayProfiles ?? []}
                     gatewayLoading={gatewaySettingsLoading}
                     gatewaySettingsSource={gatewaySettingsSource}
                     gatewaySaving={gatewaySettingsSaving}
@@ -6206,14 +6209,14 @@ export function AppShell() {
                     }}
                     onLocalSettingsChange={setSettingsDraft}
                     onMutateGatewayDraft={mutateGatewaySettingsDraft}
-                    onSaveLocalSettings={(event) => {
-                      void handleSaveSettings(event);
-                    }}
                     onSaveLocalSettingsNow={(options) => {
                       return handleSaveLocalSettingsNow(options);
                     }}
                     onSaveGatewaySettings={() => {
                       return handleSaveGatewaySettings();
+                    }}
+                    onOpenGatewaySetup={() => {
+                      setGatewaySetupForced(true);
                     }}
                     onRefreshAgentTargets={refreshAgentTargets}
                     onToggleMcpServer={handleToggleMcpServer}

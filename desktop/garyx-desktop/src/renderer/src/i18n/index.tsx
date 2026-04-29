@@ -208,6 +208,7 @@ const zhCN: Record<string, string> = {
   'Set the gateway address and token, then save. Saving verifies the gateway before continuing.': '设置网关地址和 token，然后保存。保存时会验证网关连通性。',
   'Settings': '设置',
   'Settings navigation': '设置导航',
+  'Switch Gateway': '切换网关',
   'Skills': '技能',
   'Slash Commands': '斜杠命令',
   'Starting Garyx': '正在启动 Garyx',

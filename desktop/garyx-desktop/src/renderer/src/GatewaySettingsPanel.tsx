@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FormEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { RefreshCw } from 'lucide-react';
 
 import {
@@ -7,7 +7,6 @@ import {
   type ChannelPluginCatalogEntry,
   type ConnectionStatus,
   type DesktopCustomAgent,
-  type DesktopGatewayProfile,
   type DesktopTeam,
   type DesktopSettings,
   type DesktopMcpServer,
@@ -59,7 +58,6 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { GatewayProfileHistoryButton } from './GatewayProfileHistoryButton';
 import { AddBotDialog } from './app-shell/components/AddBotDialog';
 import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
@@ -74,7 +72,6 @@ type GatewaySettingsPanelProps = {
   commandsSaving?: boolean;
   connection?: ConnectionStatus | null;
   localSettings?: DesktopSettings;
-  gatewayProfiles?: DesktopGatewayProfile[];
   localSettingsDirty?: boolean;
   mcpServers?: DesktopMcpServer[];
   mcpServersLoading?: boolean;
@@ -97,12 +94,12 @@ type GatewaySettingsPanelProps = {
   onDeleteMcpServer?: (name: string) => Promise<void>;
   onToggleMcpServer?: (name: string, enabled: boolean) => Promise<void>;
   onLocalSettingsChange?: (mutator: (current: DesktopSettings) => DesktopSettings) => void;
-  onSaveLocalSettings?: (event: FormEvent<HTMLFormElement>) => void;
   onSaveLocalSettingsNow?: (options?: {
     requireGatewayConnection?: boolean;
     reloadGatewaySettings?: boolean;
   }) => Promise<boolean>;
   onSaveGatewaySettings?: () => Promise<boolean>;
+  onOpenGatewaySetup?: () => void;
   onMutateGatewayDraft?: DraftMutator;
   onRefreshAgentTargets?: () => Promise<void>;
   onAddChannelAccount?: (input: {
@@ -933,7 +930,6 @@ export function GatewaySettingsPanel({
   commandsSaving = false,
   connection = null,
   localSettings = DEFAULT_DESKTOP_SETTINGS,
-  gatewayProfiles = [],
   localSettingsDirty = false,
   mcpServers = [],
   mcpServersLoading = false,
@@ -956,9 +952,9 @@ export function GatewaySettingsPanel({
   onDeleteMcpServer = noopAsync,
   onToggleMcpServer = noopAsync,
   onLocalSettingsChange = noop,
-  onSaveLocalSettings = noop,
   onSaveLocalSettingsNow = noopAsyncBoolean,
   onSaveGatewaySettings = noopAsyncBoolean,
+  onOpenGatewaySetup = noop,
   onMutateGatewayDraft = noop,
   onRefreshAgentTargets = noopAsync,
   onAddChannelAccount = noopAsync,
@@ -1192,102 +1188,58 @@ export function GatewaySettingsPanel({
       <div className="codex-section-header">
         <span className="codex-section-title">{t('Desktop Settings')}</span>
       </div>
-      <form className="settings-form" onSubmit={onSaveLocalSettings}>
-        <div className="codex-list-card">
-          <SettingsControlRow
-            control={
-              <Select
-                value={localSettings.languagePreference}
-                onValueChange={(value) => {
-                  onLocalSettingsChange((current) => ({
-                    ...current,
-                    languagePreference: value === 'en' || value === 'zh-CN' ? value : 'system',
-                  }));
-                }}
+      <div className="codex-list-card">
+        <SettingsControlRow
+          control={
+            <Select
+              value={localSettings.languagePreference}
+              onValueChange={(value) => {
+                onLocalSettingsChange((current) => ({
+                  ...current,
+                  languagePreference: value === 'en' || value === 'zh-CN' ? value : 'system',
+                }));
+              }}
+            >
+              <SelectTrigger className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none">
+                <SelectValue
+                  placeholder={languagePreferenceLabel(localSettings.languagePreference, t)}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="system">{t('Follow System')}</SelectItem>
+                <SelectItem value="en">{t('English')}</SelectItem>
+                <SelectItem value="zh-CN">{t('Chinese')}</SelectItem>
+              </SelectContent>
+            </Select>
+          }
+          description={t('Select the language used by this Mac app. System follows macOS language and falls back to English.')}
+          label={t('Language')}
+        />
+        <SettingsControlRow
+          control={
+            <div className="gateway-summary-control">
+              <code className="gateway-summary-url">
+                {localSettings.gatewayUrl.trim() || t('Not configured')}
+              </code>
+              <Button
+                className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
+                onClick={onOpenGatewaySetup}
+                size="sm"
+                type="button"
               >
-                <SelectTrigger className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none">
-                  <SelectValue
-                    placeholder={languagePreferenceLabel(localSettings.languagePreference, t)}
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="system">{t('Follow System')}</SelectItem>
-                  <SelectItem value="en">{t('English')}</SelectItem>
-                  <SelectItem value="zh-CN">{t('Chinese')}</SelectItem>
-                </SelectContent>
-              </Select>
-            }
-            description={t('Select the language used by this Mac app. System follows macOS language and falls back to English.')}
-            label={t('Language')}
-          />
+                {t('Switch Gateway')}
+              </Button>
+            </div>
+          }
+          label={t('Gateway URL')}
+        />
+        {localSettingsDirty ? (
           <SettingsControlRow
-            control={
-              <div className="gateway-url-input-shell">
-                <Input
-                  className="gateway-url-input-with-history rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                  value={localSettings.gatewayUrl}
-                  onChange={(event) => {
-                    onLocalSettingsChange((current) => ({
-                      ...current,
-                      gatewayUrl: event.target.value,
-                    }));
-                  }}
-                />
-                <GatewayProfileHistoryButton
-                  profiles={gatewayProfiles}
-                  onSelect={(profile) => {
-                    onLocalSettingsChange((current) => ({
-                      ...current,
-                      gatewayUrl: profile.gatewayUrl,
-                      gatewayAuthToken: profile.gatewayAuthToken,
-                    }));
-                  }}
-                />
-              </div>
-            }
-            description={t('Desktop-side saved endpoint for the Garyx gateway.')}
-            label={t('Gateway URL')}
-            stacked
+            control={<div className="settings-control-actions">{renderLocalSaveAction()}</div>}
+            label={t('Desktop Settings')}
           />
-          <SettingsControlRow
-            control={
-              <Input
-                autoCapitalize="off"
-                autoComplete="off"
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                placeholder={t('garyx gateway token')}
-                spellCheck={false}
-                type="password"
-                value={localSettings.gatewayAuthToken}
-                onChange={(event) => {
-                  onLocalSettingsChange((current) => ({
-                    ...current,
-                    gatewayAuthToken: event.target.value,
-                  }));
-                }}
-              />
-            }
-            description={t('Required for protected gateway APIs. Run `garyx gateway token` on the gateway host, then paste the token here.')}
-            label={t('Gateway Token')}
-            stacked
-          />
-          <SettingsControlRow
-            control={
-              <div className="settings-control-actions">
-                <Button
-                  className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
-                  disabled={savingLocalSettings}
-                  type="submit"
-                >
-                  {savingLocalSettings ? t('Saving…') : t('Save Gateway')}
-                </Button>
-              </div>
-            }
-            description={t('Verifies the gateway connection before saving.')}
-            label={t('Save')}
-          />
-        </div>
-      </form>
+        ) : null}
+      </div>
     </div>
   );
 
