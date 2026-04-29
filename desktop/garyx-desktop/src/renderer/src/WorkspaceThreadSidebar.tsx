@@ -230,7 +230,6 @@ export function WorkspaceThreadSidebar({
           const visibleRows = rows.filter((row) => !row.isDeleting);
           const hasPreviewOverflow = visibleRows.length > 3;
           const previewRows = isPreviewExpanded ? visibleRows : visibleRows.slice(0, 3);
-          const hiddenThreadCount = Math.max(visibleRows.length - 3, 0);
 
           const handleRenameInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
             if (event.key === 'Enter') {
@@ -546,7 +545,7 @@ export function WorkspaceThreadSidebar({
                       }}
                       type="button"
                     >
-                      {isPreviewExpanded ? t('Show less') : t('See {count} more', { count: hiddenThreadCount })}
+                      {isPreviewExpanded ? t('Show less') : t('Expand')}
                     </button>
                   </div>
                 ) : null}
