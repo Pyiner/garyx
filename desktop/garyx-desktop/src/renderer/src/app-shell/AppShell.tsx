@@ -53,6 +53,7 @@ import {
 
 import {
   buildIntent,
+  findPendingAckIntentIndex,
   initialMessageMachineState,
   isRuntimeBusy,
   messageMachineReducer,
@@ -4053,14 +4054,11 @@ export function AppShell() {
         const acknowledgedPendingInputId = event.pendingInputId?.trim() || "";
         updateLiveStreamState(threadId, (current) => {
           const pendingAckIntentIds = [...(current?.pendingAckIntentIds || [])];
-          const matchedIndex = acknowledgedPendingInputId
-            ? pendingAckIntentIds.findIndex((intentId) => {
-                return (
-                  messageStateRef.current.intentsById[intentId]
-                    ?.pendingInputId === acknowledgedPendingInputId
-                );
-              })
-            : 0;
+          const matchedIndex = findPendingAckIntentIndex(
+            pendingAckIntentIds,
+            acknowledgedPendingInputId,
+            messageStateRef.current.intentsById,
+          );
           if (matchedIndex >= 0) {
             nextIntentId = pendingAckIntentIds[matchedIndex];
             pendingAckIntentIds.splice(matchedIndex, 1);

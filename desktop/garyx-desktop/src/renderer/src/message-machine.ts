@@ -241,6 +241,44 @@ export function selectGlobalActiveThreadId(state: MessageMachineState): string |
   return null;
 }
 
+export function findPendingAckIntentIndex(
+  pendingAckIntentIds: string[],
+  acknowledgedPendingInputId: string,
+  intentsById: Record<string, MessageIntent>,
+): number {
+  if (!pendingAckIntentIds.length) {
+    return -1;
+  }
+  if (!acknowledgedPendingInputId) {
+    return 0;
+  }
+
+  const exactIndex = pendingAckIntentIds.findIndex((intentId) => {
+    return intentsById[intentId]?.pendingInputId === acknowledgedPendingInputId;
+  });
+  if (exactIndex >= 0) {
+    return exactIndex;
+  }
+
+  // Codex can emit user_ack before stream_input returns the pendingInputId.
+  const unresolvedIndexes = pendingAckIntentIds
+    .map((intentId, index) => ({
+      index,
+      pendingInputId: intentsById[intentId]?.pendingInputId?.trim() || '',
+    }))
+    .filter((entry) => !entry.pendingInputId)
+    .map((entry) => entry.index);
+
+  if (unresolvedIndexes.length === 1) {
+    return unresolvedIndexes[0];
+  }
+  if (unresolvedIndexes.length === pendingAckIntentIds.length) {
+    return 0;
+  }
+
+  return -1;
+}
+
 function removeIntentFromQueue(queue: string[] | undefined, intentId: string): string[] {
   return (queue || []).filter((entry) => entry !== intentId);
 }
@@ -377,8 +415,13 @@ export function messageMachineReducer(
       });
 
     case 'intent/remote-accepted': {
+      const existingIntent = state.intentsById[action.intentId];
+      const nextIntentState =
+        existingIntent?.state === 'awaiting_history' || existingIntent?.state === 'completed'
+          ? existingIntent.state
+          : 'remote_accepted';
       const next = patchIntent(state, action.intentId, {
-        state: 'remote_accepted',
+        state: nextIntentState,
         remoteRunId: action.runId,
         remoteThreadKey: action.threadId,
         pendingInputId: action.pendingInputId,
@@ -388,15 +431,18 @@ export function messageMachineReducer(
       if (!action.removeFromQueue) {
         return next;
       }
-      const current = next.intentsById[action.intentId];
-      if (!current) {
+      const acceptedIntent = next.intentsById[action.intentId];
+      if (!acceptedIntent) {
         return next;
       }
       return {
         ...next,
         queueByThread: {
           ...next.queueByThread,
-          [current.threadId]: removeIntentFromQueue(next.queueByThread[current.threadId], action.intentId),
+          [acceptedIntent.threadId]: removeIntentFromQueue(
+            next.queueByThread[acceptedIntent.threadId],
+            action.intentId,
+          ),
         },
       };
     }
