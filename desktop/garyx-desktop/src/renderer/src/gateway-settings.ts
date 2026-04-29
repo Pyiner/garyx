@@ -39,6 +39,7 @@ export function stringifyJsonBlock(value: unknown): string {
   const sessions = ensureRecord(config.sessions);
   delete sessions.redis;
   delete sessions.store_type;
+  delete sessions.thread_history_backend;
   const dataDir = coerceOptionalString(sessions.data_dir);
   if (dataDir) {
     sessions.data_dir = dataDir;
@@ -329,6 +330,7 @@ export function ensureGatewayConfig(raw: unknown): any {
   config.sessions = ensureRecord(config.sessions);
   delete config.sessions.redis;
   delete config.sessions.store_type;
+  delete config.sessions.thread_history_backend;
   config.sessions.data_dir = coerceOptionalString(config.sessions.data_dir);
 
   config.desktop = ensureRecord(config.desktop);

@@ -1431,6 +1431,13 @@ fn default_config_path_points_to_hidden_garyx_dir() {
 }
 
 #[test]
+fn default_config_omits_legacy_thread_history_backend() {
+    let config = garyx_models::config::GaryxConfig::default();
+    let value = serde_json::to_value(config).expect("default config should serialize");
+    assert!(value.pointer("/sessions/thread_history_backend").is_none());
+}
+
+#[test]
 fn plugin_discovery_with_valid_config() {
     use garyx_bridge::MultiProviderBridge;
     use garyx_channels::{BuiltInPluginDiscoverer, ChannelPluginManager};
