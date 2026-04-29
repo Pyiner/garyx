@@ -8828,7 +8828,7 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 .bot-table-head,
 .bot-table-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1.25fr) minmax(128px, 0.9fr) minmax(118px, 1fr) minmax(170px, 1.45fr) 64px;
+  grid-template-columns: minmax(120px, 1.25fr) minmax(128px, 0.9fr) minmax(118px, 1fr) minmax(170px, 1.45fr) 64px 32px;
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
@@ -8851,7 +8851,7 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 .bot-table-row {
   all: unset;
   display: grid;
-  grid-template-columns: minmax(120px, 1.25fr) minmax(128px, 0.9fr) minmax(118px, 1fr) minmax(170px, 1.45fr) 64px;
+  grid-template-columns: minmax(120px, 1.25fr) minmax(128px, 0.9fr) minmax(118px, 1fr) minmax(170px, 1.45fr) 64px 32px;
   align-items: center;
   gap: 12px;
   padding: 11px 14px;
@@ -8977,6 +8977,46 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 .bot-table-col-status {
   justify-self: center;
   overflow: visible;
+}
+
+.bot-table-col-actions {
+  justify-self: end;
+  overflow: visible;
+}
+
+.bot-table-action-button {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #7a7b7d;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.bot-table-action-button:hover,
+.bot-table-action-button[data-state="open"] {
+  background: rgba(26, 28, 31, 0.06);
+  color: #191c1f;
+}
+
+.bot-table-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.bot-table-menu-danger {
+  color: #9b3d3d;
+}
+
+.bot-table-menu-danger[data-highlighted] {
+  background: #fff1f1 !important;
+  color: #8f2e2e !important;
 }
 
 .bot-table .codex-sync-pill {
@@ -10818,14 +10858,100 @@ button.codex-list-row {
   display: none;
 }
 
-.add-bot-manual-details summary span:last-child {
-  color: var(--color-token-description-foreground);
-  font-size: 11.5px;
-  font-weight: var(--font-weight-normal);
-}
-
 .add-bot-manual-form {
   padding: 0 12px 12px;
+}
+
+.add-bot-dialog .json-schema-form {
+  display: grid;
+  gap: 12px;
+}
+
+.add-bot-dialog .json-schema-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.add-bot-dialog .json-schema-label,
+.add-bot-dialog .json-schema-boolean-label,
+.add-bot-dialog .json-schema-fieldset-legend {
+  color: var(--color-token-text-primary);
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.2;
+}
+
+.add-bot-dialog .json-schema-required {
+  margin-left: 4px;
+  color: #c2261c;
+  font-size: 12px;
+}
+
+.add-bot-dialog .json-schema-form [data-slot="input"],
+.add-bot-dialog .json-schema-form [data-slot="select-trigger"] {
+  width: 100%;
+  height: 34px;
+  min-height: 34px;
+  border-color: var(--color-token-border);
+  border-radius: 7px;
+  background: var(--color-token-bg-primary);
+  box-shadow: none;
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+}
+
+.add-bot-dialog .json-schema-form [data-slot="input"]:focus,
+.add-bot-dialog .json-schema-form [data-slot="select-trigger"]:focus,
+.add-bot-dialog .json-schema-form [data-slot="select-trigger"][data-state="open"] {
+  border-color: rgba(26, 28, 31, 0.25);
+  box-shadow: 0 0 0 3px rgba(26, 28, 31, 0.05);
+}
+
+.add-bot-dialog .json-schema-form [data-slot="textarea"] {
+  min-height: 82px;
+  border-color: var(--color-token-border);
+  border-radius: 7px;
+  background: var(--color-token-bg-primary);
+  box-shadow: none;
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.add-bot-dialog .json-schema-boolean-field {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 9px;
+}
+
+.add-bot-dialog .json-schema-checkbox[data-slot="checkbox"] {
+  width: 18px;
+  height: 18px;
+  border-color: rgba(26, 28, 31, 0.18);
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.add-bot-dialog .json-schema-checkbox[data-slot="checkbox"][data-state="checked"],
+.add-bot-dialog .json-schema-checkbox[data-slot="checkbox"][data-state="indeterminate"] {
+  border-color: rgba(26, 28, 31, 0.86);
+  background: rgba(26, 28, 31, 0.86);
+  color: #ffffff;
+}
+
+.add-bot-dialog .json-schema-fieldset {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-token-border-light);
+  border-radius: 8px;
+  background: rgba(26, 28, 31, 0.018);
+}
+
+.add-bot-dialog .json-schema-fieldset-legend {
+  padding: 0 2px;
 }
 
 .add-bot-alert {

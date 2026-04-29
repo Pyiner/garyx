@@ -50,6 +50,7 @@ type JsonValue =
 
 interface JsonSchemaNode {
   type?: string;
+  title?: string;
   description?: string;
   default?: JsonValue;
   enum?: JsonValue[];
@@ -168,8 +169,10 @@ function SchemaField({
   onChange,
 }: SchemaFieldProps): ReactElement {
   const { t } = useI18n();
-  const label = prettifyKey(fieldKey);
-  const description = schema.description;
+  const label =
+    typeof schema.title === "string" && schema.title.trim()
+      ? schema.title.trim()
+      : prettifyKey(fieldKey);
   const isSecret = schema["x-garyx"]?.secret === true;
 
   // Scalar with an enum collapses to a <select> regardless of type.
@@ -181,7 +184,7 @@ function SchemaField({
           ? String(schema.default)
           : "";
     return (
-      <LabelledField label={label} description={description} required={required}>
+      <LabelledField label={label} required={required}>
         <Select
           disabled={disabled}
           value={current || undefined}
@@ -214,19 +217,21 @@ function SchemaField({
             ? schema.default
             : false;
       return (
-        <LabelledField
-          label={label}
-          description={description}
-          required={required}
-          inline
-        >
+        <div className="json-schema-boolean-field">
           <Checkbox
+            className="json-schema-checkbox"
             id={fieldId}
             disabled={disabled}
             checked={current}
             onCheckedChange={(next) => onChange(next === true)}
           />
-        </LabelledField>
+          <Label className="json-schema-boolean-label" htmlFor={fieldId}>
+            {label}
+            {required ? (
+              <span className="json-schema-required">*</span>
+            ) : null}
+          </Label>
+        </div>
       );
     }
     case "integer":
@@ -238,7 +243,7 @@ function SchemaField({
             ? String(schema.default)
             : "";
       return (
-        <LabelledField label={label} description={description} required={required}>
+        <LabelledField label={label} required={required}>
           <Input
             id={fieldId}
             disabled={disabled}
@@ -263,12 +268,12 @@ function SchemaField({
     case "array": {
       const isStringArray = schema.items?.type === "string";
       if (!isStringArray) {
-        return unsupported(label, schema, value, onChange, t);
+        return unsupported(label, value, onChange, t);
       }
       const list = Array.isArray(value) ? (value as string[]) : [];
       const joined = list.join("\n");
       return (
-        <LabelledField label={label} description={description} required={required}>
+        <LabelledField label={label} required={required}>
           <Textarea
             id={fieldId}
             disabled={disabled}
@@ -291,14 +296,9 @@ function SchemaField({
         ? (value as Record<string, JsonValue>)
         : {});
       return (
-        <fieldset className="rounded-2xl border border-[#ecece8] bg-[#fafaf8] p-4">
-          <legend className="px-1 text-sm font-semibold text-neutral-900">
+        <fieldset className="json-schema-fieldset">
+          <legend className="json-schema-fieldset-legend">
             {label}
-            {description ? (
-              <span className="ml-2 text-xs font-normal text-neutral-500">
-                {description}
-              </span>
-            ) : null}
           </legend>
           <JsonSchemaForm
             schema={schema as unknown as Record<string, unknown>}
@@ -323,7 +323,6 @@ function SchemaField({
         return (
           <LabelledField
             label={label}
-            description={description}
             required={required}
           >
             <Input
@@ -342,7 +341,7 @@ function SchemaField({
         );
       }
       return (
-        <LabelledField label={label} description={description} required={required}>
+        <LabelledField label={label} required={required}>
           <Input
             id={fieldId}
             disabled={disabled}
@@ -358,7 +357,6 @@ function SchemaField({
 
 function unsupported(
   label: string,
-  schema: JsonSchemaNode,
   value: JsonValue | undefined,
   onChange: (next: JsonValue) => void,
   t: Translate,
@@ -366,7 +364,7 @@ function unsupported(
   const asText =
     value === undefined ? "" : JSON.stringify(value, null, 2);
   return (
-    <LabelledField label={label} description={schema.description}>
+    <LabelledField label={label}>
       <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
         {t("This field's schema is not rendered natively. Edit the raw JSON below.")}
       </div>
@@ -388,50 +386,22 @@ function unsupported(
 
 interface LabelledFieldProps {
   label: string;
-  description?: string;
   required?: boolean;
-  inline?: boolean;
   children: ReactNode;
 }
 
 function LabelledField({
   label,
-  description,
   required,
-  inline,
   children,
 }: LabelledFieldProps): ReactElement {
-  if (inline) {
-    return (
-      <div className="flex flex-col gap-2 rounded-xl border border-[#ededeb] bg-[#fcfcfb] px-3 py-3">
-        <div className="flex items-start gap-3">
-          {children}
-          <div className="flex min-w-0 flex-col gap-1">
-            <Label className="text-sm font-medium text-neutral-900">
-              {label}
-              {required ? (
-                <span className="text-[13px] text-red-600">*</span>
-              ) : null}
-            </Label>
-            {description ? (
-              <p className="text-sm leading-6 text-neutral-700">{description}</p>
-            ) : null}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex flex-col gap-2">
-      <Label className="text-sm font-medium text-neutral-900">
+    <div className="json-schema-field">
+      <Label className="json-schema-label">
         {label}
-        {required ? <span className="text-[13px] text-red-600">*</span> : null}
+        {required ? <span className="json-schema-required">*</span> : null}
       </Label>
       {children}
-      {description ? (
-        <p className="text-sm leading-6 text-neutral-700">{description}</p>
-      ) : null}
     </div>
   );
 }

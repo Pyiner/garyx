@@ -67,10 +67,6 @@ type EditBotDialogProps = {
     accountId: string;
     patch: EditBotPatch;
   }) => Promise<void> | void;
-  onRemove: (input: {
-    kind: string;
-    accountId: string;
-  }) => Promise<void> | void;
 };
 
 function accountToConfig(account: Record<string, unknown>): Record<string, unknown> {
@@ -172,7 +168,7 @@ function compactAgentLabel(
 
 export function EditBotDialog(props: EditBotDialogProps) {
   const { t } = useI18n();
-  const { open, context, agentTargets, saving, onClose, onSave, onRemove } =
+  const { open, context, agentTargets, saving, onClose, onSave } =
     props;
   const { entries, loading: catalogLoading } = useChannelPluginCatalog();
 
@@ -184,12 +180,10 @@ export function EditBotDialog(props: EditBotDialogProps) {
   const [showReauthorize, setShowReauthorize] = useState(false);
   const [reauthorizedAccountId, setReauthorizedAccountId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [removing, setRemoving] = useState(false);
 
   useEffect(() => {
     if (!open || !context) {
       setError(null);
-      setRemoving(false);
       return;
     }
 
@@ -202,7 +196,6 @@ export function EditBotDialog(props: EditBotDialogProps) {
     setShowReauthorize(false);
     setReauthorizedAccountId(null);
     setError(null);
-    setRemoving(false);
   }, [open, context]);
 
   const selectedEntry: ChannelPluginCatalogEntry | null = useMemo(() => {
@@ -284,23 +277,6 @@ export function EditBotDialog(props: EditBotDialogProps) {
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : t("Save failed."));
-    }
-  }
-
-  async function handleRemove() {
-    if (!context) return;
-    if (!window.confirm(t('Delete {kind} account "{name}"?', { kind, name: name || accountId }))) {
-      return;
-    }
-    setRemoving(true);
-    setError(null);
-    try {
-      await onRemove({ kind, accountId });
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("Delete failed."));
-    } finally {
-      setRemoving(false);
     }
   }
 
@@ -493,25 +469,15 @@ export function EditBotDialog(props: EditBotDialogProps) {
             {error ? (
               <span className="add-bot-save-error">{error}</span>
             ) : (
-              <>
-                <span className="add-bot-step-meta">
-                  <b>{step}</b> / 2
-                </span>
-                <button
-                  className="add-bot-channel-context-edit"
-                  disabled={removing || saving}
-                  onClick={() => void handleRemove()}
-                  type="button"
-                >
-                  {removing ? t("Deleting…") : t("Delete account")}
-                </button>
-              </>
+              <span className="add-bot-step-meta">
+                <b>{step}</b> / 2
+              </span>
             )}
           </div>
           <Button
             className="add-bot-footer-button ghost"
             onClick={onClose}
-            disabled={saving || removing}
+            disabled={saving}
             variant="ghost"
           >
             {t("Cancel")}
@@ -520,7 +486,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
             <Button
               className="add-bot-footer-button secondary"
               onClick={() => setStep(1)}
-              disabled={saving || removing}
+              disabled={saving}
               variant="secondary"
             >
               <ChevronLeft aria-hidden size={13} strokeWidth={2} />
@@ -531,7 +497,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
             <Button
               className="add-bot-footer-button primary"
               onClick={goToAuthStep}
-              disabled={!selectedEntry || removing}
+              disabled={!selectedEntry}
             >
               {t("Next")}
               <ChevronRight aria-hidden size={13} strokeWidth={2} />
@@ -540,7 +506,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
             <Button
               className="add-bot-footer-button primary"
               onClick={() => void handleSave()}
-              disabled={saving || removing || !selectedEntry}
+              disabled={saving || !selectedEntry}
             >
               {saving ? t("Saving…") : t("Save")}
             </Button>
@@ -603,20 +569,14 @@ function EditBotAuthStep(props: {
               presentation="qr-card"
             />
           ) : (
-            <>
-              <div className="add-bot-auth-card-header">
-                <h4>{t("Reauthorize")}</h4>
-                <p>{t("Refresh this account's channel credentials.")}</p>
-              </div>
-              <Button
-                className="add-bot-footer-button primary"
-                onClick={() => onToggleReauthorize(true)}
-                type="button"
-              >
-                <RefreshCw aria-hidden size={13} strokeWidth={2} />
-                {t("Start authorization")}
-              </Button>
-            </>
+            <Button
+              className="add-bot-footer-button primary add-bot-reauthorize-button"
+              onClick={() => onToggleReauthorize(true)}
+              type="button"
+            >
+              <RefreshCw aria-hidden size={13} strokeWidth={2} />
+              {t("Reauthorize")}
+            </Button>
           )}
         </section>
       ))}
@@ -630,7 +590,6 @@ function EditBotAuthStep(props: {
             <details className="add-bot-manual-details">
               <summary>
                 <span>{t("Edit credentials manually")}</span>
-                <span>{t("Use this when config needs a direct correction")}</span>
               </summary>
               <div className="add-bot-manual-form">
                 <JsonSchemaForm
@@ -645,7 +604,6 @@ function EditBotAuthStep(props: {
             <>
               <div className="add-bot-auth-card-header">
                 <h4>{t("Manual setup")}</h4>
-                <p>{t("Before saving, confirm these fields come from the official channel console.")}</p>
               </div>
               <JsonSchemaForm
                 schema={entry.schema as Record<string, unknown>}

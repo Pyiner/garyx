@@ -37,6 +37,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -58,6 +64,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { AddBotDialog } from './app-shell/components/AddBotDialog';
+import { MoreDotsIcon } from './app-shell/icons';
 import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { EditBotDialog, type EditBotDialogContext, type EditBotPatch } from './app-shell/components/EditBotDialog';
@@ -1599,6 +1606,25 @@ export function GatewaySettingsPanel({
 
   const configuredChannels = pluginAccounts;
 
+  async function handleDeleteBotAccount(
+    kind: string,
+    accountId: string,
+    displayName: string,
+  ) {
+    if (!window.confirm(t('Delete {kind} account "{name}"?', { kind, name: displayName || accountId }))) {
+      return;
+    }
+    onMutateGatewayDraft((next) => {
+      next.channels = next.channels || {};
+      if (!next.channels?.[kind]?.accounts) return;
+      delete next.channels[kind].accounts[accountId];
+    });
+    if (editingBot?.kind === kind && editingBot.accountId === accountId) {
+      setEditingBot(null);
+    }
+    await onSaveGatewaySettings();
+  }
+
   const channelsPanel = (
     <>
       <ChannelPluginCatalogPanel />
@@ -1634,6 +1660,7 @@ export function GatewaySettingsPanel({
               <span className="bot-table-col bot-table-col-account">{t('Account')}</span>
               <span className="bot-table-col bot-table-col-agent">{t('Agent')}</span>
               <span className="bot-table-col bot-table-col-status">{t('Enabled')}</span>
+              <span className="bot-table-col bot-table-col-actions">{t('Actions')}</span>
             </div>
             {configuredChannels.map(({ kind, accountId, account }) => {
               const accountAgentId = resolveChannelAgentId(
@@ -1754,6 +1781,39 @@ export function GatewaySettingsPanel({
                       }}
                     />
                   </span>
+                  <span
+                    className="bot-table-cell bot-table-col-actions"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                    }}
+                    onKeyDown={(event) => {
+                      event.stopPropagation();
+                    }}
+                  >
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          aria-label={t('More actions for {name}', { name: displayName })}
+                          className="bot-table-action-button"
+                          disabled={gatewaySaving}
+                          type="button"
+                        >
+                          <MoreDotsIcon size={14} />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" sideOffset={4}>
+                        <DropdownMenuItem
+                          className="bot-table-menu-danger"
+                          disabled={gatewaySaving}
+                          onSelect={() => {
+                            void handleDeleteBotAccount(kind, accountId, displayName);
+                          }}
+                        >
+                          {t('Delete')}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </span>
                 </div>
               );
             })}
@@ -1764,14 +1824,6 @@ export function GatewaySettingsPanel({
         agentTargets={agentTargets}
         context={editingBot}
         onClose={() => setEditingBot(null)}
-        onRemove={async ({ kind, accountId }) => {
-          onMutateGatewayDraft((next) => {
-            next.channels = next.channels || {};
-            if (!next.channels?.[kind]?.accounts) return;
-            delete next.channels[kind].accounts[accountId];
-          });
-          await onSaveGatewaySettings();
-        }}
         onSave={async ({ kind, accountId, patch }) => {
           onMutateGatewayDraft((next) => {
             next.channels = next.channels || {};

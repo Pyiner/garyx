@@ -717,7 +717,6 @@ function AddBotAuthStep(props: {
             <details className="add-bot-manual-details">
               <summary>
                 <span>{t("Enter credentials manually")}</span>
-                <span>{t("Use this when scanning is unavailable")}</span>
               </summary>
               <div className="add-bot-manual-form">
                 <JsonSchemaForm
@@ -731,7 +730,6 @@ function AddBotAuthStep(props: {
             <>
               <div className="add-bot-auth-card-header">
                 <h4>{t("Manual setup")}</h4>
-                <p>{t("Before saving, confirm these fields come from the official channel console.")}</p>
               </div>
               <JsonSchemaForm
                 schema={entry.schema as Record<string, unknown>}
