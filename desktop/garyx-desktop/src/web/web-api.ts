@@ -19,7 +19,6 @@ type BotConsolesResponse = {
 type GatewayOverviewResponse = Record<string, unknown>;
 
 type AgentViewResponse = Record<string, unknown>;
-type HeartbeatSummaryResponse = Record<string, unknown>;
 
 type ThreadSummaryPayload = {
   thread_key?: string;
@@ -242,16 +241,6 @@ export async function fetchOverview(): Promise<GatewayOverviewResponse> {
 
 export async function fetchAgentView(): Promise<AgentViewResponse> {
   return requestJson<AgentViewResponse>('/api/agent-view');
-}
-
-export async function fetchHeartbeatSummary(): Promise<HeartbeatSummaryResponse> {
-  return requestJson<HeartbeatSummaryResponse>('/api/heartbeat/summary?limit=80');
-}
-
-export async function triggerHeartbeat(): Promise<Record<string, unknown>> {
-  return requestJson<Record<string, unknown>>('/api/heartbeat/trigger', {
-    method: 'POST',
-  });
 }
 
 export async function fetchCronJobs(): Promise<CronJobsPayload> {

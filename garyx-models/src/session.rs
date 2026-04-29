@@ -141,12 +141,6 @@ pub struct SessionEntry {
     #[serde(default)]
     pub messages: Vec<HashMap<String, Value>>,
 
-    // === Heartbeat ===
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_heartbeat_text: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_heartbeat_sent_at: Option<DateTime<Utc>>,
-
     // === Custom metadata ===
     #[serde(default)]
     pub metadata: HashMap<String, Value>,
@@ -203,8 +197,6 @@ impl Default for SessionEntry {
             token_usage: SessionTokenUsage::default(),
             compaction_count: 0,
             messages: Vec::new(),
-            last_heartbeat_text: None,
-            last_heartbeat_sent_at: None,
             metadata: HashMap::new(),
         }
     }
@@ -295,8 +287,6 @@ impl SessionEntry {
         crate::thread_record::ThreadUsageState {
             token_usage: self.token_usage.clone(),
             compaction_count: self.compaction_count,
-            last_heartbeat_text: self.last_heartbeat_text.clone(),
-            last_heartbeat_sent_at: self.last_heartbeat_sent_at,
         }
     }
 
@@ -406,8 +396,6 @@ impl From<crate::thread_record::ThreadRecord> for SessionEntry {
             token_usage: value.usage.token_usage,
             compaction_count: value.usage.compaction_count,
             messages: value.messages,
-            last_heartbeat_text: value.usage.last_heartbeat_text,
-            last_heartbeat_sent_at: value.usage.last_heartbeat_sent_at,
             metadata: value.metadata,
         }
     }

@@ -1,6 +1,5 @@
 import { BotConsoleView } from '@renderer/BotConsoleView';
 import { WebCronPage } from '@renderer/WebCronPage';
-import { WebHeartbeatPage } from '@renderer/WebHeartbeatPage';
 import { ThreadsListPage } from '@renderer/ThreadsListPage';
 import { WebLogsPage } from '@renderer/WebLogsPage';
 import { WebSettingsPage } from '@renderer/WebSettingsPage';
@@ -8,7 +7,6 @@ import { WebStatusPage } from '@renderer/WebStatusPage';
 import { useBotConsoleState } from './use-bot-console-state';
 import { useThreadsListState } from './use-threads-list-state';
 import { useWebCronState } from './use-web-cron-state';
-import { useWebHeartbeatState } from './use-web-heartbeat-state';
 import { useWebLogsState } from './use-web-logs-state';
 import { useWebSettingsState } from './use-web-settings-state';
 import { useWebStatusState } from './use-web-status-state';
@@ -35,10 +33,6 @@ export function WebBotConsoleApp() {
 
   if (route.view === 'cron') {
     return <WebCronView route={route} />;
-  }
-
-  if (route.view === 'heartbeat') {
-    return <WebHeartbeatView route={route} />;
   }
 
   return <WebBotConsoleView route={route} />;
@@ -112,22 +106,14 @@ function WebThreadsListView({ route }: { route: Extract<WebRoute, { view: 'threa
     visibleThreads,
     loading,
     error,
-    filter,
-    setFilter,
     refresh,
-    normalThreadsCount,
-    heartbeatThreadsCount,
     totalThreadsCount,
   } = useThreadsListState(route);
 
   return (
     <ThreadsListPage
       error={error}
-      filter={filter}
-      heartbeatThreadsCount={heartbeatThreadsCount}
       loading={loading}
-      normalThreadsCount={normalThreadsCount}
-      onFilterChange={setFilter}
       onRefresh={() => {
         void refresh();
       }}
@@ -152,7 +138,6 @@ function WebSettingsView({ route }: { route: Extract<WebRoute, { view: 'settings
       onChangeJson={settingsState.setJsonDraft}
       onPatchFeishuAccount={settingsState.patchFeishuAccount}
       onPatchGateway={settingsState.patchGateway}
-      onPatchHeartbeat={settingsState.patchHeartbeat}
       onPatchSessions={settingsState.patchSessions}
       onPatchTelegramAccount={settingsState.patchTelegramAccount}
       onRefresh={() => {
@@ -221,25 +206,6 @@ function WebCronView({ route }: { route: Extract<WebRoute, { view: 'cron' }> }) 
       runs={cronState.runsPayload?.runs || []}
       totalJobs={cronState.jobsPayload?.count || (cronState.jobsPayload?.jobs || []).length}
       totalRuns={cronState.runsPayload?.total || (cronState.runsPayload?.runs || []).length}
-    />
-  );
-}
-
-function WebHeartbeatView({ route }: { route: Extract<WebRoute, { view: 'heartbeat' }> }) {
-  const heartbeatState = useWebHeartbeatState(route);
-
-  return (
-    <WebHeartbeatPage
-      error={heartbeatState.error}
-      loading={heartbeatState.loading}
-      onRefresh={() => {
-        void heartbeatState.refresh();
-      }}
-      onTrigger={() => {
-        void heartbeatState.trigger();
-      }}
-      summary={heartbeatState.summary}
-      triggering={heartbeatState.triggering}
     />
   );
 }

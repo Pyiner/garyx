@@ -749,9 +749,9 @@ async fn test_route_and_dispatch_reply_routing_switches_scheduled_thread() {
     let dispatcher = MockDispatcher::new();
     router
         .threads
-        .set("bot1::heartbeat::user42", json!({"messages": []}))
+        .set("cron::daily::user42", json!({"messages": []}))
         .await;
-    router.record_outbound_message("bot1::heartbeat::user42", "telegram", "bot1", "msg42");
+    router.record_outbound_message("cron::daily::user42", "telegram", "bot1", "msg42");
 
     let request = InboundRequest {
         channel: "telegram".to_owned(),
@@ -771,10 +771,10 @@ async fn test_route_and_dispatch_reply_routing_switches_scheduled_thread() {
         .route_and_dispatch(request, &dispatcher, None)
         .await
         .unwrap();
-    assert_eq!(result.thread_id, "bot1::heartbeat::user42");
+    assert_eq!(result.thread_id, "cron::daily::user42");
     assert_eq!(
         router.get_current_thread_id_for_binding("telegram", "bot1", "user42"),
-        Some("bot1::heartbeat::user42")
+        Some("cron::daily::user42")
     );
 }
 
@@ -1549,7 +1549,7 @@ async fn test_route_and_dispatch_scheduled_thread_skips_auto_recovery() {
     let store = Arc::new(InMemoryThreadStore::new());
     store
         .set(
-            "bot1::heartbeat::user42",
+            "cron::daily::user42",
             json!({
                 "auto_recover_next_thread": "bot1::main::recovered"
             }),
@@ -1561,7 +1561,7 @@ async fn test_route_and_dispatch_scheduled_thread_skips_auto_recovery() {
 
     let mut router = MessageRouter::new(store, GaryxConfig::default());
     let dispatcher = MockDispatcher::new();
-    router.record_outbound_message("bot1::heartbeat::user42", "telegram", "bot1", "msg42");
+    router.record_outbound_message("cron::daily::user42", "telegram", "bot1", "msg42");
 
     let request = InboundRequest {
         channel: "telegram".to_owned(),
@@ -1581,9 +1581,9 @@ async fn test_route_and_dispatch_scheduled_thread_skips_auto_recovery() {
         .route_and_dispatch(request, &dispatcher, None)
         .await
         .unwrap();
-    assert_eq!(result.thread_id, "bot1::heartbeat::user42");
+    assert_eq!(result.thread_id, "cron::daily::user42");
     let dispatched = dispatcher.dispatched.lock().await;
-    assert_eq!(dispatched[0].0, "bot1::heartbeat::user42");
+    assert_eq!(dispatched[0].0, "cron::daily::user42");
 }
 
 #[tokio::test]

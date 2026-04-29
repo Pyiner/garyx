@@ -330,8 +330,8 @@ Saving the gateway URL/token pair first verifies connectivity. Only verified
 saves are written to local desktop state and added to the Gateway URL history;
 the field can still be edited manually.
 
-Gateway runtime settings, including `agent_defaults.heartbeat` defaults, are
-edited from the Gateway tab in the desktop Settings view.
+Gateway runtime settings are edited from the Gateway tab in the desktop
+Settings view.
 Thread history is persisted through transcript records; backend selection is no
 longer exposed as a gateway setting.
 

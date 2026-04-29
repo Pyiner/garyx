@@ -20,7 +20,7 @@ const AUTO_RESEARCH_FIRST_PROGRESS_TIMEOUT: Duration = Duration::from_secs(120);
 /// After first progress, if no new event arrives within this window, assume the worker is dead.
 /// Set to 60 min because workers often run long Bash commands (e.g. experiment harnesses with
 /// hundreds of API calls) where Claude Code emits no stream events until the command finishes.
-const AUTO_RESEARCH_PROGRESS_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60 * 60); // 60 min
+const AUTO_RESEARCH_PROGRESS_IDLE_TIMEOUT: Duration = Duration::from_secs(60 * 60); // 60 min
 const AUTO_RESEARCH_PROVIDER_FAILURE_COOLDOWN_SECS: i64 = 10 * 60; // 10 minutes
 const CLAUDE_ENV_METADATA_KEY: &str = "desktop_claude_env";
 const CODEX_ENV_METADATA_KEY: &str = "desktop_codex_env";
@@ -1844,10 +1844,10 @@ async fn await_provider_completion(
         .map_err(|_| "provider run stalled before first progress event".to_owned())?;
     }
 
-    // Phase 2: wait for Done, but with a rolling heartbeat deadline.
+    // Phase 2: wait for Done, but with a rolling inactivity deadline.
     // If no event (Delta/ToolUse/ToolResult/Boundary/Done) arrives within the
-    // heartbeat window, we assume the worker process has died.
-    let heartbeat = AUTO_RESEARCH_PROGRESS_HEARTBEAT_TIMEOUT;
+    // idle window, we assume the worker process has died.
+    let idle_timeout = AUTO_RESEARCH_PROGRESS_IDLE_TIMEOUT;
 
     while !saw_done.load(Ordering::Relaxed) {
         // Respect total timeout
@@ -1856,7 +1856,7 @@ async fn await_provider_completion(
             return Err("provider run timed out (total budget exhausted)".to_owned());
         }
         let remaining = total_timeout.saturating_sub(elapsed);
-        let wait_dur = heartbeat.min(remaining);
+        let wait_dur = idle_timeout.min(remaining);
 
         // Wait for ANY event (progress or done) up to `wait_dur`.
         // Reset saw_progress so we can detect new events in the next iteration.
@@ -1867,7 +1867,7 @@ async fn await_provider_completion(
             if saw_done.load(Ordering::Relaxed) || saw_progress.load(Ordering::Relaxed) {
                 return;
             }
-            // Wait on both channels — any event resets the heartbeat.
+            // Wait on both channels; any event resets the inactivity timer.
             tokio::select! {
                 _ = progress.notified() => {},
                 _ = done.notified() => {},
@@ -1876,10 +1876,10 @@ async fn await_provider_completion(
         .await;
 
         if got_event.is_err() {
-            // No event within heartbeat window — worker is likely dead.
+            // No event within the inactivity window; worker is likely dead.
             return Err(format!(
                 "provider run stalled: no progress event for {} seconds (worker likely dead)",
-                heartbeat.as_secs()
+                idle_timeout.as_secs()
             ));
         }
     }

@@ -34,12 +34,6 @@ export type WebRoute =
       botId: string | null;
       endpointKey: string | null;
       threadId: null;
-    }
-  | {
-      view: 'heartbeat';
-      botId: string | null;
-      endpointKey: string | null;
-      threadId: null;
     };
 
 function decodeLoose(value: string | null): string | null {
@@ -119,15 +113,6 @@ export function resolveWebRoute(href = window.location.href): WebRoute {
     };
   }
 
-  if (view === 'heartbeat') {
-    return {
-      view: 'heartbeat',
-      botId,
-      endpointKey,
-      threadId: null,
-    };
-  }
-
   return {
     view: 'bot-console',
     botId,
@@ -138,7 +123,7 @@ export function resolveWebRoute(href = window.location.href): WebRoute {
 
 export function buildWebRouteHref(
   next: {
-    view: 'bot-console' | 'threads' | 'settings' | 'status' | 'logs' | 'cron' | 'heartbeat';
+    view: 'bot-console' | 'threads' | 'settings' | 'status' | 'logs' | 'cron';
     botId?: string | null;
     endpointKey?: string | null;
   },

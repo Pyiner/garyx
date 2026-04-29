@@ -479,7 +479,6 @@ impl GaryMcpServer {
                 "available": available_bots,
             },
             "cron": { "available": cron_available, "job_count": cron_job_count },
-            "heartbeat": { "available": state.ops.heartbeat_service.is_some() },
             "gateway": { "port": cfg.gateway.port },
             "current_context": {
                 "channel": run_ctx.channel,
@@ -1624,7 +1623,6 @@ impl GaryMcpServer {
 
         match normalized.as_str() {
             "log" => Ok(CronAction::Log),
-            "heartbeat" => Ok(CronAction::Heartbeat),
             "system_event" | "systemevent" => Ok(CronAction::SystemEvent),
             "agent_turn" | "agentturn" => Ok(CronAction::AgentTurn),
             _ => Err(format!("invalid job_action: {raw}")),

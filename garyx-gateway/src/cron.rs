@@ -23,7 +23,6 @@ use crate::agent_identity::create_thread_for_agent_reference;
 use crate::agent_teams::AgentTeamStore;
 use crate::custom_agents::CustomAgentStore;
 use crate::delivery_target::resolve_delivery_target_with_recovery;
-use crate::heartbeat::HeartbeatService;
 use crate::managed_mcp_metadata::inject_managed_mcp_servers;
 use crate::skills::sync_default_external_user_skills;
 
@@ -411,8 +410,6 @@ pub struct CronService {
     scheduler_task: Option<JoinHandle<()>>,
     /// Broadcast channel for SSE events.
     event_tx: Option<broadcast::Sender<String>>,
-    /// Optional heartbeat service used by CronAction::Heartbeat.
-    heartbeat_service: Option<Arc<HeartbeatService>>,
     /// Optional bridge+router runtime for agent-turn/system-event actions.
     dispatch_runtime: Arc<RwLock<Option<CronDispatchRuntime>>>,
 }
@@ -430,7 +427,6 @@ impl CronService {
             stop_tx: None,
             scheduler_task: None,
             event_tx: None,
-            heartbeat_service: None,
             dispatch_runtime: Arc::new(RwLock::new(None)),
         }
     }
@@ -438,11 +434,6 @@ impl CronService {
     /// Attach a broadcast channel for publishing lifecycle events.
     pub fn set_event_tx(&mut self, tx: broadcast::Sender<String>) {
         self.event_tx = Some(tx);
-    }
-
-    /// Attach heartbeat service for `CronAction::Heartbeat` dispatch.
-    pub fn set_heartbeat_service(&mut self, service: Arc<HeartbeatService>) {
-        self.heartbeat_service = Some(service);
     }
 
     /// Attach bridge+router runtime for agent-turn/system-event dispatch.
@@ -562,7 +553,6 @@ impl CronService {
         let active_agent_runs = self.active_agent_runs.clone();
         let data_dir = self.data_dir.clone();
         let event_tx = self.event_tx.clone();
-        let heartbeat_service = self.heartbeat_service.clone();
         let dispatch_runtime = self.dispatch_runtime.clone();
 
         let task = tokio::spawn(async move {
@@ -581,7 +571,6 @@ impl CronService {
                             &active_agent_runs,
                             &data_dir,
                             event_tx.as_ref(),
-                            heartbeat_service.clone(),
                             &dispatch_runtime,
                         ).await;
                     }
@@ -733,7 +722,6 @@ impl CronService {
                             &prepared_job,
                             &self.active_agent_runs,
                             self.event_tx.as_ref(),
-                            self.heartbeat_service.clone(),
                             &self.dispatch_runtime,
                         )
                         .await,
@@ -961,7 +949,6 @@ impl CronService {
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
         data_dir: &Path,
         event_tx: Option<&broadcast::Sender<String>>,
-        heartbeat_service: Option<Arc<HeartbeatService>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
     ) {
         // Collect due job IDs under a read lock.
@@ -998,7 +985,6 @@ impl CronService {
                                 &prepared_job,
                                 active_agent_runs,
                                 event_tx,
-                                heartbeat_service.clone(),
                                 dispatch_runtime,
                             )
                             .await,
@@ -1052,7 +1038,6 @@ impl CronService {
         job: &CronJob,
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
         event_tx: Option<&broadcast::Sender<String>>,
-        heartbeat_service: Option<Arc<HeartbeatService>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
     ) -> RunRecord {
         let run_id = Uuid::new_v4().to_string();
@@ -1076,17 +1061,6 @@ impl CronService {
             CronAction::Log => {
                 tracing::info!(job_id = %job.id, "cron log action fired");
                 (JobRunStatus::Success, None)
-            }
-            CronAction::Heartbeat => {
-                if let Some(hb) = heartbeat_service {
-                    hb.trigger().await;
-                    (JobRunStatus::Success, None)
-                } else {
-                    (
-                        JobRunStatus::Failed,
-                        Some("heartbeat service unavailable".to_owned()),
-                    )
-                }
             }
             CronAction::SystemEvent | CronAction::AgentTurn => {
                 let message = job

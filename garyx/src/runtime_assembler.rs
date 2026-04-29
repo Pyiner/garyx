@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use garyx_bridge::MultiProviderBridge;
 use garyx_gateway::server::{AppState, AppStateBuilder};
-use garyx_gateway::{CronService, HeartbeatService, ThreadFileLogger, default_thread_log_dir};
+use garyx_gateway::{CronService, ThreadFileLogger, default_thread_log_dir};
 use garyx_models::config::GaryxConfig;
 use garyx_models::local_paths::{
     conversation_index_db_path_for_data_dir, default_session_data_dir,
@@ -19,7 +19,6 @@ use std::collections::HashMap;
 pub struct RuntimeAssembly {
     pub state: Arc<AppState>,
     pub bridge: Arc<MultiProviderBridge>,
-    pub heartbeat_service: Arc<HeartbeatService>,
     pub cron_service: Arc<CronService>,
 }
 
@@ -47,15 +46,6 @@ impl RuntimeAssembler {
         {
             Ok(store) => {
                 tracing::info!(data_dir = %session_data_dir, "FileThreadStore initialized");
-                // Clean up stale heartbeat session files (older than 1 day).
-                match store
-                    .cleanup_stale_sessions("::heartbeat::", std::time::Duration::from_secs(86400))
-                    .await
-                {
-                    Ok(0) => {}
-                    Ok(n) => tracing::info!(removed = n, "Cleaned up stale heartbeat sessions"),
-                    Err(e) => tracing::warn!(error = %e, "Failed to clean up heartbeat sessions"),
-                }
                 Arc::new(store)
             }
             Err(error) => {
@@ -108,19 +98,8 @@ impl RuntimeAssembler {
 
         let (event_tx, _) = tokio::sync::broadcast::channel(128);
 
-        let mut heartbeat_service_raw =
-            HeartbeatService::new(self.config.agent_defaults.heartbeat.clone());
-        heartbeat_service_raw.set_event_tx(event_tx.clone());
-        heartbeat_service_raw.set_data_dir(PathBuf::from(&session_data_dir));
-        if let Err(error) = heartbeat_service_raw.load_persisted_records().await {
-            tracing::warn!(error = %error, "Failed to load persisted heartbeat records");
-        }
-        heartbeat_service_raw.start();
-        let heartbeat_service = Arc::new(heartbeat_service_raw);
-
         let mut cron_service_raw = CronService::new(PathBuf::from(&session_data_dir));
         cron_service_raw.set_event_tx(event_tx.clone());
-        cron_service_raw.set_heartbeat_service(heartbeat_service.clone());
         let cron_boot_config = self.config.cron.clone();
         match cron_service_raw.load(&cron_boot_config).await {
             Ok(()) => {
@@ -152,7 +131,6 @@ impl RuntimeAssembler {
             .with_bridge(bridge.clone())
             .with_event_tx(event_tx)
             .with_cron_service(cron_service.clone())
-            .with_heartbeat_service(heartbeat_service.clone())
             .with_config_path(self.config_path)
             .with_restart_tokens(restart_tokens)
             .with_thread_log_sink(thread_logs.clone())
@@ -181,15 +159,6 @@ impl RuntimeAssembler {
                 collect_thread_workspace_bindings(&state.threads.thread_store).await,
             )
             .await;
-        heartbeat_service
-            .set_dispatch_runtime(
-                state.threads.router.clone(),
-                bridge.clone(),
-                state.channel_dispatcher(),
-                state.ops.thread_logs.clone(),
-                self.config.mcp_servers.clone(),
-            )
-            .await;
         cron_service
             .set_dispatch_runtime(
                 state.threads.thread_store.clone(),
@@ -210,7 +179,6 @@ impl RuntimeAssembler {
         Ok(RuntimeAssembly {
             state,
             bridge,
-            heartbeat_service,
             cron_service,
         })
     }

@@ -254,7 +254,7 @@ fn load_trims_gateway_port_env_override() {
 }
 
 #[test]
-fn load_ignores_legacy_agent_defaults_workspace_dir_with_warning() {
+fn load_ignores_legacy_agent_defaults_with_warning() {
     let _env = env_lock();
     clear_gateway_env_overrides();
     let tmp = TempDir::new().unwrap();
@@ -263,10 +263,7 @@ fn load_ignores_legacy_agent_defaults_workspace_dir_with_warning() {
         &config_path,
         &serde_json::json!({
             "agent_defaults": {
-                "workspace_dir": "~/gary",
-                "heartbeat": {
-                    "enabled": false
-                }
+                "workspace_dir": "~/gary"
             }
         }),
     );
@@ -274,14 +271,14 @@ fn load_ignores_legacy_agent_defaults_workspace_dir_with_warning() {
     let loaded = load_config(&config_path, &ConfigLoadOptions::default()).unwrap();
     let serialized = serde_json::to_value(&loaded.config).unwrap();
 
-    assert!(serialized["agent_defaults"].get("workspace_dir").is_none());
+    assert!(serialized.get("agent_defaults").is_none());
     assert!(
         loaded
             .diagnostics
             .warnings
             .iter()
             .any(|warning| warning.code == "CONFIG_DEPRECATED_FIELD_IGNORED"
-                && warning.path.as_deref() == Some("$.agent_defaults.workspace_dir"))
+                && warning.path.as_deref() == Some("$.agent_defaults"))
     );
 }
 
@@ -361,7 +358,7 @@ fn write_config_atomic_creates_backups() {
 }
 
 #[test]
-fn write_config_value_atomic_strips_legacy_agent_defaults_workspace_dir() {
+fn write_config_value_atomic_strips_legacy_agent_defaults() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("gary.json");
 
@@ -369,10 +366,7 @@ fn write_config_value_atomic_strips_legacy_agent_defaults_workspace_dir() {
         &config_path,
         &serde_json::json!({
             "agent_defaults": {
-                "workspace_dir": "~/gary",
-                "heartbeat": {
-                    "enabled": false
-                }
+                "workspace_dir": "~/gary"
             },
             "gateway": {
                 "port": 31337
@@ -384,7 +378,7 @@ fn write_config_value_atomic_strips_legacy_agent_defaults_workspace_dir() {
 
     let persisted =
         serde_json::from_str::<Value>(&fs::read_to_string(&config_path).unwrap()).unwrap();
-    assert!(persisted["agent_defaults"].get("workspace_dir").is_none());
+    assert!(persisted.get("agent_defaults").is_none());
 }
 
 #[test]

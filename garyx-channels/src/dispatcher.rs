@@ -1,6 +1,6 @@
 //! ChannelDispatcher — outbound message delivery to channels.
 //!
-//! Allows any component (MCP tools, cron jobs, heartbeat, API endpoints) to send
+//! Allows any component (MCP tools, cron jobs, API endpoints) to send
 //! messages OUT through channel transports (Telegram, Feishu) without needing
 //! direct access to channel internals.
 

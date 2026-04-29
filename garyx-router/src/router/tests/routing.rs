@@ -113,7 +113,6 @@ fn test_switched_thread_is_account_scoped() {
 
 #[test]
 fn test_is_scheduled_thread() {
-    assert!(MessageRouter::is_scheduled_thread("bot1::heartbeat::user1"));
     assert!(MessageRouter::is_scheduled_thread("cron::daily"));
     assert!(!MessageRouter::is_scheduled_thread("bot1::main::user1"));
 }

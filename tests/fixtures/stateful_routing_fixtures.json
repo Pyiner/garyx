@@ -700,17 +700,17 @@
             "account_id": "bot1",
             "from_id": "user1",
             "reply_to_message_id": "msg_42",
-            "text": "replying to heartbeat",
+            "text": "replying to scheduled",
             "is_group": false,
             "thread_id": null,
-            "resolved_thread_id": "cron::heartbeat::daily",
+            "resolved_thread_id": "cron::daily",
             "is_scheduled_thread": true
           },
           "expected": {
-            "thread_id": "cron::heartbeat::daily",
+            "thread_id": "cron::daily",
             "user_key": "telegram:user1",
             "user_thread_map": {
-              "telegram:user1": "cron::heartbeat::daily"
+              "telegram:user1": "cron::daily"
             },
             "comment": "Reply routed to scheduled thread. Since it is a scheduled thread (cron:: prefix), user is switched to it."
           }
@@ -726,7 +726,7 @@
             "thread_id": null
           },
           "expected": {
-            "thread_id": "cron::heartbeat::daily",
+            "thread_id": "cron::daily",
             "user_key": "telegram:user1",
             "comment": "Subsequent messages continue to go to the switched (scheduled) thread"
           }
@@ -735,21 +735,11 @@
     },
     {
       "name": "scheduled_thread_detection",
-      "description": "Verify which thread keys are considered 'scheduled' (heartbeat or cron prefix).",
+      "description": "Verify which thread keys are considered scheduled cron threads.",
       "config": {
         "agents": null
       },
       "steps": [
-        {
-          "action": "check_scheduled",
-          "params": {
-            "thread_id": "bot1::heartbeat::daily"
-          },
-          "expected": {
-            "is_scheduled": true,
-            "comment": "Contains ::heartbeat::"
-          }
-        },
         {
           "action": "check_scheduled",
           "params": {

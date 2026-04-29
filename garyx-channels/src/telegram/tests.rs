@@ -3309,7 +3309,7 @@ mod e2e_tests {
                 last_name: None,
                 username: Some("garyx".to_string()),
             }),
-            text: Some("#cron::daily_summary\nheartbeat ping".to_string()),
+            text: Some("#cron::daily_summary\nscheduled ping".to_string()),
             caption: None,
             date: 1700000000,
             message_thread_id: None,
@@ -3407,7 +3407,7 @@ mod e2e_tests {
                 last_name: None,
                 username: Some("garyx".to_string()),
             }),
-            text: Some("#cron::daily_summary\nheartbeat ping".to_string()),
+            text: Some("#cron::daily_summary\nscheduled ping".to_string()),
             caption: None,
             date: 1700000000,
             message_thread_id: None,
@@ -3483,7 +3483,7 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_telegram_reply_routing_switches_heartbeat_session() {
+    async fn test_e2e_telegram_reply_routing_switches_cron_session() {
         let (server, capture) = setup_tg_capture_mock(false).await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(ConfigurableTestProvider::echo());
@@ -3495,14 +3495,14 @@ mod e2e_tests {
             let mut router_guard = router.lock().await;
             router_guard
                 .ensure_thread_entry(
-                    "bot1::heartbeat::42",
+                    "cron::daily::42",
                     "telegram",
                     "bot1",
                     "42",
-                    Some("bot1::heartbeat::42"),
+                    Some("cron::daily::42"),
                 )
                 .await;
-            router_guard.record_outbound_message("bot1::heartbeat::42", "telegram", "bot1", "888");
+            router_guard.record_outbound_message("cron::daily::42", "telegram", "bot1", "888");
         }
 
         let bot_reply_msg = TgMessage {
@@ -3520,7 +3520,7 @@ mod e2e_tests {
                 last_name: None,
                 username: Some("garyx".to_string()),
             }),
-            text: Some("#bot1::heartbeat::42\nheartbeat ping".to_string()),
+            text: Some("#cron::daily::42\nscheduled ping".to_string()),
             caption: None,
             date: 1700000000,
             message_thread_id: None,
@@ -3536,7 +3536,7 @@ mod e2e_tests {
             sticker: None,
         };
 
-        let update = TgUpdateBuilder::dm(42, "follow heartbeat context")
+        let update = TgUpdateBuilder::dm(42, "follow scheduled context")
             .with_reply_to(bot_reply_msg)
             .build();
 
@@ -3557,7 +3557,7 @@ mod e2e_tests {
 
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
         let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "bot1::heartbeat::42");
+        assert_eq!(calls[0].thread_id, "cron::daily::42");
         drop(calls);
 
         let switched_thread = {
@@ -3566,7 +3566,7 @@ mod e2e_tests {
                 .get_current_thread_id_for_binding("telegram", "bot1", "42")
                 .map(|s| s.to_owned())
         };
-        assert_eq!(switched_thread.as_deref(), Some("bot1::heartbeat::42"));
+        assert_eq!(switched_thread.as_deref(), Some("cron::daily::42"));
 
         let send_bodies = wait_for_json_capture_quiet_window(
             &capture.send_messages,
@@ -3577,7 +3577,7 @@ mod e2e_tests {
         .await;
         assert!(
             !send_bodies.is_empty(),
-            "heartbeat reply routing should emit a Telegram reply"
+            "cron reply routing should emit a Telegram reply"
         );
     }
 

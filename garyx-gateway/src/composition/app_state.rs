@@ -21,7 +21,6 @@ use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::event_stream_hub::EventStreamHub;
 use crate::health::HealthChecker;
-use crate::heartbeat::HeartbeatService;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
@@ -45,7 +44,6 @@ pub struct OpsState {
     pub restart_tracker: Mutex<RestartTracker>,
     pub settings_mutex: Mutex<()>,
     pub cron_service: Option<Arc<CronService>>,
-    pub heartbeat_service: Option<Arc<HeartbeatService>>,
     pub config_path: Option<PathBuf>,
     pub restart_tokens: Vec<String>,
     pub mcp_tool_metrics: Arc<McpToolMetrics>,
@@ -137,9 +135,9 @@ impl AppState {
         // Subprocess-plugin senders that were previously forked into
         // the swap are dropped by this store; the plugin manager's
         // hot-reload path is responsible for re-registering them
-        // afterwards. Heartbeat / cron hold a cast-to-trait view of
-        // the same swap, so their visible dispatcher follows this
-        // store with no further plumbing.
+        // afterwards. Cron holds a cast-to-trait view of the same swap,
+        // so its visible dispatcher follows this store with no further
+        // plumbing.
         let rebuilt = ChannelDispatcherImpl::from_config(&config.channels);
         self.integration.channel_swap.store(Arc::new(rebuilt));
         let dispatcher: Arc<dyn ChannelDispatcher> = self.integration.channel_swap.clone();
@@ -172,17 +170,6 @@ impl AppState {
         self.threads
             .history
             .update_conversation_index_config(config.gateway.conversation_index.clone());
-        if let Some(heartbeat_service) = &self.ops.heartbeat_service {
-            heartbeat_service
-                .set_dispatch_runtime(
-                    self.threads.router.clone(),
-                    self.integration.bridge.clone(),
-                    dispatcher.clone(),
-                    self.ops.thread_logs.clone(),
-                    managed_mcp_servers.clone(),
-                )
-                .await;
-        }
         if let Some(cron_service) = &self.ops.cron_service {
             cron_service
                 .set_dispatch_runtime(
@@ -231,7 +218,6 @@ impl AppState {
                 restart_tracker: Mutex::new(RestartTracker::new()),
                 settings_mutex: Mutex::new(()),
                 cron_service: self.ops.cron_service.clone(),
-                heartbeat_service: self.ops.heartbeat_service.clone(),
                 config_path: self.ops.config_path.clone(),
                 restart_tokens: self.ops.restart_tokens.clone(),
                 mcp_tool_metrics: self.ops.mcp_tool_metrics.clone(),

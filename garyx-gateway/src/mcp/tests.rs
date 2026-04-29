@@ -690,14 +690,14 @@ fn test_cron_params_camel_case_aliases() {
         "action": "add",
         "jobId": "j1",
         "intervalSecs": 30,
-        "jobAction": "heartbeat",
+        "jobAction": "agent_turn",
         "deleteAfterRun": true
     }))
     .unwrap();
 
     assert_eq!(parsed.job_id.as_deref(), Some("j1"));
     assert_eq!(parsed.interval_secs, Some(30));
-    assert_eq!(parsed.job_action.as_deref(), Some("heartbeat"));
+    assert_eq!(parsed.job_action.as_deref(), Some("agent_turn"));
     assert_eq!(parsed.delete_after_run, Some(true));
 }
 
@@ -1720,12 +1720,12 @@ async fn test_cron_add_rejects_legacy_non_automation_job_action() {
     let result = server
         .cron(Parameters(CronParams {
             action: "add".to_owned(),
-            job_id: Some("heartbeat".to_owned()),
+            job_id: Some("log".to_owned()),
             schedule: None,
             schedule_view: None,
             interval_secs: Some(3600),
             at: None,
-            job_action: Some("heartbeat".to_owned()),
+            job_action: Some("log".to_owned()),
             cron_action: None,
             enabled: Some(true),
             target: None,
@@ -1738,11 +1738,7 @@ async fn test_cron_add_rejects_legacy_non_automation_job_action() {
         }))
         .await;
     assert!(result.is_err());
-    assert!(
-        result
-            .unwrap_err()
-            .contains("unsupported job_action: heartbeat"),
-    );
+    assert!(result.unwrap_err().contains("unsupported job_action: log"),);
 }
 
 // -- image_gen --
@@ -1989,7 +1985,7 @@ async fn test_execute_message_resolves_thread_target_and_dispatches() {
             MessageParams {
                 action: Some("send".to_owned()),
                 target: Some("thread:cron::daily".to_owned()),
-                text: Some("heartbeat".to_owned()),
+                text: Some("scheduled".to_owned()),
                 image: None,
                 file: None,
                 bot: None,
@@ -2012,7 +2008,7 @@ async fn test_execute_message_resolves_thread_target_and_dispatches() {
     assert_eq!(calls[0].channel, "telegram");
     assert_eq!(calls[0].account_id, "main");
     assert_eq!(calls[0].chat_id, "42");
-    assert_eq!(calls[0].text, "#cron::daily\nheartbeat");
+    assert_eq!(calls[0].text, "#cron::daily\nscheduled");
 }
 
 #[tokio::test]
@@ -2041,7 +2037,7 @@ async fn test_execute_message_recovers_thread_target_from_persisted_delivery() {
             MessageParams {
                 action: Some("send".to_owned()),
                 target: Some("thread:cron::daily".to_owned()),
-                text: Some("heartbeat".to_owned()),
+                text: Some("scheduled".to_owned()),
                 image: None,
                 file: None,
                 bot: None,
@@ -2064,7 +2060,7 @@ async fn test_execute_message_recovers_thread_target_from_persisted_delivery() {
     assert_eq!(calls[0].channel, "telegram");
     assert_eq!(calls[0].account_id, "main");
     assert_eq!(calls[0].chat_id, "84");
-    assert_eq!(calls[0].text, "#cron::daily\nheartbeat");
+    assert_eq!(calls[0].text, "#cron::daily\nscheduled");
 }
 
 #[tokio::test]

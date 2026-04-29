@@ -2,7 +2,6 @@ import {
   Bot,
   Command,
   Cpu,
-  HeartPulse,
   Router,
   Settings2,
   SlidersHorizontal,
@@ -235,8 +234,6 @@ export function SettingsTabIcon({ tabId }: { tabId: SettingsTabId }) {
       return <SettingsRailIcon glyph={SlidersHorizontal} />;
     case 'gateway':
       return <SettingsRailIcon glyph={Router} />;
-    case 'heartbeat':
-      return <SettingsRailIcon glyph={HeartPulse} />;
     case 'provider':
       return <SettingsRailIcon glyph={Cpu} />;
     case 'channels':
@@ -255,7 +252,7 @@ export function isLocalSettingsTab(tabId: SettingsTabId): boolean {
 }
 
 export function isGatewayConfigSettingsTab(tabId: SettingsTabId): boolean {
-  return tabId === 'gateway' || tabId === 'heartbeat' || tabId === 'channels' || tabId === 'labs';
+  return tabId === 'gateway' || tabId === 'channels' || tabId === 'labs';
 }
 
 export function FolderIcon() {

@@ -94,18 +94,13 @@ pub fn strip_legacy_config_fields(
         return;
     };
 
-    if let Some(agent_defaults) = root
-        .get_mut("agent_defaults")
-        .and_then(Value::as_object_mut)
-    {
-        if agent_defaults.remove("workspace_dir").is_some() {
-            if let Some(diagnostics) = diagnostics.as_deref_mut() {
-                diagnostics.push_warning(
-                    "CONFIG_DEPRECATED_FIELD_IGNORED",
-                    "agent_defaults.workspace_dir is deprecated and ignored; bind workspace_dir per bot account instead",
-                    Some("$.agent_defaults.workspace_dir"),
-                );
-            }
+    if root.remove("agent_defaults").is_some() {
+        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+            diagnostics.push_warning(
+                "CONFIG_DEPRECATED_FIELD_IGNORED",
+                "agent_defaults is deprecated and ignored",
+                Some("$.agent_defaults"),
+            );
         }
     }
 

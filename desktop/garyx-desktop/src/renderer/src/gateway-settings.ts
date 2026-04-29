@@ -32,9 +32,7 @@ export function stringifyJsonBlock(value: unknown): string {
   stripLegacyChannelAccountFields(config);
   stripLegacyAccountAgentBindings(config);
 
-  const agentDefaults = ensureRecord(config.agent_defaults);
-  delete agentDefaults.workspace_dir;
-  config.agent_defaults = agentDefaults;
+  delete config.agent_defaults;
 
   const sessions = ensureRecord(config.sessions);
   delete sessions.redis;
@@ -304,28 +302,7 @@ export function ensureGatewayConfig(raw: unknown): any {
     config.gateway.image_gen.model || DEFAULT_IMAGE_MODEL,
   );
 
-  config.agent_defaults = ensureRecord(config.agent_defaults);
-  delete config.agent_defaults.workspace_dir;
-  config.agent_defaults.heartbeat = ensureRecord(config.agent_defaults.heartbeat);
-  config.agent_defaults.heartbeat.enabled =
-    typeof config.agent_defaults.heartbeat.enabled === 'boolean'
-      ? config.agent_defaults.heartbeat.enabled
-      : true;
-  config.agent_defaults.heartbeat.every = String(
-    config.agent_defaults.heartbeat.every || '3h',
-  );
-  config.agent_defaults.heartbeat.target = String(
-    config.agent_defaults.heartbeat.target || 'last',
-  );
-  config.agent_defaults.heartbeat.ack_max_chars = coerceInteger(
-    config.agent_defaults.heartbeat.ack_max_chars,
-    500,
-  );
-  config.agent_defaults.heartbeat.active_hours = {
-    start: String(config.agent_defaults.heartbeat.active_hours?.start || '09:00'),
-    end: String(config.agent_defaults.heartbeat.active_hours?.end || '23:00'),
-    timezone: String(config.agent_defaults.heartbeat.active_hours?.timezone || 'user'),
-  };
+  delete config.agent_defaults;
 
   config.sessions = ensureRecord(config.sessions);
   delete config.sessions.redis;

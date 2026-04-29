@@ -594,12 +594,6 @@ pub async fn runtime_info(State(state): State<Arc<AppState>>) -> impl IntoRespon
     }))
 }
 
-#[derive(Deserialize, Default)]
-pub struct LegacyThreadsParams {
-    #[serde(default)]
-    pub filter: Option<String>,
-}
-
 pub async fn redirect_legacy_status() -> impl IntoResponse {
     Redirect::temporary("/?view=status")
 }
@@ -616,18 +610,8 @@ pub async fn redirect_legacy_cron() -> impl IntoResponse {
     Redirect::temporary("/?view=cron")
 }
 
-pub async fn redirect_legacy_heartbeat() -> impl IntoResponse {
-    Redirect::temporary("/?view=heartbeat")
-}
-
-pub async fn redirect_legacy_threads(
-    Query(params): Query<LegacyThreadsParams>,
-) -> impl IntoResponse {
-    let mut location = String::from("/?view=threads");
-    if matches!(params.filter.as_deref(), Some("heartbeat")) {
-        location.push_str("&filter=heartbeat");
-    }
-    Redirect::temporary(&location)
+pub async fn redirect_legacy_threads() -> impl IntoResponse {
+    Redirect::temporary("/?view=threads")
 }
 
 // ---------------------------------------------------------------------------

@@ -56,8 +56,6 @@ pub struct ThreadQueueState {
 pub struct ThreadUsageState {
     pub token_usage: ThreadTokenUsage,
     pub compaction_count: i64,
-    pub last_heartbeat_text: Option<String>,
-    pub last_heartbeat_sent_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 pub const THREAD_HISTORY_SOURCE_TRANSCRIPT_V1: &str = "transcript_v1";

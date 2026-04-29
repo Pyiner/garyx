@@ -749,20 +749,9 @@ function stripLegacyGatewayConfigFields(
   const next = { ...config };
   let mutated = false;
 
-  const agentDefaults = config.agent_defaults;
-  if (
-    agentDefaults &&
-    typeof agentDefaults === "object" &&
-    !Array.isArray(agentDefaults)
-  ) {
-    const nextAgentDefaults = { ...(agentDefaults as Record<string, unknown>) };
-    if (
-      Object.prototype.hasOwnProperty.call(nextAgentDefaults, "workspace_dir")
-    ) {
-      delete nextAgentDefaults.workspace_dir;
-      next.agent_defaults = nextAgentDefaults;
-      mutated = true;
-    }
+  if (Object.prototype.hasOwnProperty.call(next, "agent_defaults")) {
+    delete next.agent_defaults;
+    mutated = true;
   }
 
   const sessions = config.sessions;

@@ -3048,7 +3048,7 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_feishu_reply_routing_switches_heartbeat_session() {
+    async fn test_e2e_feishu_reply_routing_switches_cron_session() {
         let (server, client) = setup_feishu_mock().await;
         let provider = Arc::new(ConfigurableTestProvider::echo());
         let bridge = make_bridge_with(provider.clone()).await;
@@ -3058,16 +3058,16 @@ mod e2e_tests {
         {
             let mut router_guard = router.lock().await;
             router_guard.record_outbound_message(
-                "app1::heartbeat::ou_user123",
+                "cron::daily::ou_user123",
                 "feishu",
                 "app1",
-                "om_hb_reply_001",
+                "om_cron_reply_001",
             );
         }
 
-        let event = FeishuEventBuilder::dm("ou_user123", "follow heartbeat context")
-            .with_message_id("om_test_hb_switch_001")
-            .with_parent_id("om_hb_reply_001")
+        let event = FeishuEventBuilder::dm("ou_user123", "follow scheduled context")
+            .with_message_id("om_test_cron_switch_001")
+            .with_parent_id("om_cron_reply_001")
             .build();
         dispatch_im_message_event(
             "app1",
@@ -3084,7 +3084,7 @@ mod e2e_tests {
 
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
         let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].thread_id, "app1::heartbeat::ou_user123");
+        assert_eq!(calls[0].thread_id, "cron::daily::ou_user123");
         drop(calls);
 
         let switched_thread = {
@@ -3093,21 +3093,16 @@ mod e2e_tests {
                 .get_current_thread_id_for_binding("feishu", "app1", "ou_user123")
                 .map(|s| s.to_owned())
         };
-        assert_eq!(
-            switched_thread.as_deref(),
-            Some("app1::heartbeat::ou_user123")
-        );
+        assert_eq!(switched_thread.as_deref(), Some("cron::daily::ou_user123"));
 
         let requests = server.received_requests().await.unwrap();
         let notice_calls: Vec<_> = requests
             .iter()
             .filter(|r| {
-                r.url.path() == "/im/v1/messages/om_test_hb_switch_001/reply"
+                r.url.path() == "/im/v1/messages/om_test_cron_switch_001/reply"
                     && r.method.as_str() == "POST"
                     && std::str::from_utf8(&r.body)
-                        .map(|body| {
-                            body.contains("你已经切换到 thread:app1::heartbeat::ou_user123")
-                        })
+                        .map(|body| body.contains("你已经切换到 thread:cron::daily::ou_user123"))
                         .unwrap_or(false)
             })
             .collect();

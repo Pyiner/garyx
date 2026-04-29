@@ -605,7 +605,7 @@ async fn test_tick_failure_does_not_advance_schedule() {
         label: None,
         schedule: CronSchedule::Interval { interval_secs: 0 },
         ui_schedule: None,
-        action: CronAction::Heartbeat,
+        action: CronAction::AgentTurn,
         target: None,
         message: None,
         workspace_dir: None,
@@ -630,7 +630,6 @@ async fn test_tick_failure_does_not_advance_schedule() {
         &svc.runs,
         &svc.active_agent_runs,
         tmp.path(),
-        None,
         None,
         &svc.dispatch_runtime,
     )
@@ -878,42 +877,6 @@ async fn test_build_scheduled_response_callback_stops_after_user_ack_boundary() 
 }
 
 #[tokio::test]
-async fn test_heartbeat_action_dispatches_heartbeat_service() {
-    let tmp = TempDir::new().unwrap();
-    let mut svc = CronService::new(tmp.path().to_path_buf());
-    let _ = ensure_dirs(tmp.path()).await;
-
-    let hb = Arc::new(HeartbeatService::new(
-        garyx_models::config::HeartbeatConfig::default(),
-    ));
-    svc.set_heartbeat_service(hb.clone());
-
-    svc.add(CronJobConfig {
-        id: "hb-now".to_owned(),
-        kind: Default::default(),
-        label: None,
-        schedule: CronSchedule::Interval {
-            interval_secs: 9999,
-        },
-        ui_schedule: None,
-        action: CronAction::Heartbeat,
-        target: None,
-        message: None,
-        workspace_dir: None,
-        agent_id: None,
-        thread_id: None,
-        delete_after_run: false,
-        enabled: true,
-    })
-    .await
-    .unwrap();
-
-    let record = svc.run_now("hb-now").await.unwrap();
-    assert_eq!(record.status, JobRunStatus::Success);
-    assert_eq!(hb.recent_records().await.len(), 1);
-}
-
-#[tokio::test]
 async fn test_dispatch_agent_turn_recovers_thread_target_delivery_from_store() {
     let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
     let thread_id = "bot1::main::u1";
@@ -1136,7 +1099,7 @@ async fn test_update_job_keeps_runtime_state() {
                 label: None,
                 schedule: CronSchedule::Interval { interval_secs: 120 },
                 ui_schedule: None,
-                action: CronAction::Heartbeat,
+                action: CronAction::SystemEvent,
                 target: Some("last".to_owned()),
                 message: Some("ping".to_owned()),
                 workspace_dir: None,
@@ -1155,7 +1118,7 @@ async fn test_update_job_keeps_runtime_state() {
         updated.schedule,
         CronSchedule::Interval { interval_secs: 120 }
     );
-    assert_eq!(updated.action, CronAction::Heartbeat);
+    assert_eq!(updated.action, CronAction::SystemEvent);
     assert_eq!(updated.target.as_deref(), Some("last"));
     assert_eq!(updated.message.as_deref(), Some("ping"));
     assert!(updated.delete_after_run);
@@ -1485,7 +1448,6 @@ async fn test_tick_and_run_now_do_not_execute_same_job_twice() {
         &svc.runs,
         &svc.active_agent_runs,
         tmp.path(),
-        None,
         None,
         &svc.dispatch_runtime,
     )

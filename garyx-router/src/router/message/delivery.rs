@@ -35,8 +35,8 @@ impl MessageRouter {
 
     /// Record the last delivery context for a thread.
     ///
-    /// Scheduled tasks (heartbeat, cron) use this to know where to send
-    /// responses when there is no inbound message to reply to.
+    /// Scheduled cron tasks use this to know where to send responses when
+    /// there is no inbound message to reply to.
     pub fn set_last_delivery(&mut self, thread_id: &str, ctx: DeliveryContext) {
         self.delivery_ctx
             .last_delivery

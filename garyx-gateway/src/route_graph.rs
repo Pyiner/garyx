@@ -50,10 +50,6 @@ fn protected_runtime_routes() -> Router<Arc<AppState>> {
         .route("/logs", axum::routing::get(routes::redirect_legacy_logs))
         .route("/cron", axum::routing::get(routes::redirect_legacy_cron))
         .route(
-            "/heartbeat",
-            axum::routing::get(routes::redirect_legacy_heartbeat),
-        )
-        .route(
             "/threads",
             axum::routing::get(routes::redirect_legacy_threads),
         )
@@ -278,14 +274,6 @@ fn operations_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/cron/jobs", axum::routing::get(api::cron_jobs))
         .route("/api/cron/runs", axum::routing::get(api::cron_runs))
-        .route(
-            "/api/heartbeat/summary",
-            axum::routing::get(api::heartbeat_summary),
-        )
-        .route(
-            "/api/heartbeat/trigger",
-            axum::routing::post(api::heartbeat_trigger),
-        )
         .route(
             "/api/channels/plugins",
             axum::routing::get(api::list_channel_plugins),

@@ -1,7 +1,7 @@
 //! Additional observability and operations API endpoints.
 //!
 //! Supplements the existing routes in `routes.rs` and `dashboard.rs` with
-//! thread history, cron/heartbeat data, settings mutation, and restart
+//! thread history, cron data, settings mutation, and restart
 //! controls.
 
 use std::collections::HashSet;
@@ -1254,9 +1254,7 @@ fn last_message_content(messages: &[Value], role: &str) -> Option<String> {
 }
 
 fn infer_thread_type(thread_id: &str) -> &'static str {
-    if thread_id.contains("::heartbeat::") || thread_id.starts_with("heartbeat::") {
-        "heartbeat"
-    } else if thread_id.starts_with("cron::") {
+    if thread_id.starts_with("cron::") {
         "cron"
     } else if thread_id.contains("::group::") {
         "group"
@@ -1637,81 +1635,6 @@ pub async fn cron_runs(
         "offset": params.offset,
         "service_available": true,
     }))
-}
-
-// ---------------------------------------------------------------------------
-// GET /api/heartbeat/summary
-// ---------------------------------------------------------------------------
-
-/// GET /api/heartbeat/summary - heartbeat status with recent records.
-pub async fn heartbeat_summary(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let live_cfg = state.config_snapshot();
-    let enabled = live_cfg.agent_defaults.heartbeat.enabled;
-    let every = live_cfg.agent_defaults.heartbeat.every.clone();
-
-    let hb = match &state.ops.heartbeat_service {
-        Some(svc) => svc,
-        None => {
-            return Json(json!({
-                "enabled": enabled,
-                "interval": every,
-                "agents": [],
-                "recent_count": 0,
-                "last_run": null,
-                "service_available": false,
-            }));
-        }
-    };
-
-    let records = hb.recent_records().await;
-    let recent_count = records.len();
-    let successful = records.iter().filter(|r| !r.skipped).count();
-    let skipped = records.iter().filter(|r| r.skipped).count();
-    let last_run = records.last().map(|r| r.timestamp.to_rfc3339());
-
-    // Per-agent detail: group by target.
-    let mut agent_map: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for r in &records {
-        if !r.skipped {
-            *agent_map.entry(r.target.clone()).or_insert(0) += 1;
-        }
-    }
-    let agents: Vec<Value> = agent_map
-        .into_iter()
-        .map(|(target, count)| json!({"target": target, "count": count}))
-        .collect();
-
-    Json(json!({
-        "enabled": enabled,
-        "interval": every,
-        "agents": agents,
-        "recent_count": recent_count,
-        "successful": successful,
-        "skipped": skipped,
-        "last_run": last_run,
-        "service_available": true,
-    }))
-}
-
-// ---------------------------------------------------------------------------
-// POST /api/heartbeat/trigger
-// ---------------------------------------------------------------------------
-
-/// POST /api/heartbeat/trigger - manually trigger a heartbeat.
-pub async fn heartbeat_trigger(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    match &state.ops.heartbeat_service {
-        Some(svc) => {
-            svc.trigger().await;
-            Json(json!({
-                "ok": true,
-                "message": "heartbeat triggered",
-            }))
-        }
-        None => Json(json!({
-            "ok": true,
-            "message": "heartbeat trigger accepted (no service attached)",
-        })),
-    }
 }
 
 // ---------------------------------------------------------------------------

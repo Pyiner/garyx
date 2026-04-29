@@ -137,53 +137,6 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
     }
   }, [jsonDraft]);
 
-  const patchHeartbeat = useCallback((patch: {
-    enabled?: boolean;
-    every?: string;
-    target?: string;
-    ackMaxChars?: number;
-    activeHoursStart?: string;
-    activeHoursEnd?: string;
-    activeHoursTimezone?: string;
-  }) => {
-    try {
-      const current = cloneJson(JSON.parse(jsonDraft));
-      const next = asRecord(current);
-      const agentDefaults = asRecord(next.agent_defaults);
-      const heartbeat = asRecord(agentDefaults.heartbeat);
-      const activeHours = asRecord(heartbeat.active_hours);
-      if (typeof patch.enabled === 'boolean') {
-        heartbeat.enabled = patch.enabled;
-      }
-      if (typeof patch.every === 'string') {
-        heartbeat.every = patch.every;
-      }
-      if (typeof patch.target === 'string') {
-        heartbeat.target = patch.target;
-      }
-      if (typeof patch.ackMaxChars === 'number' && Number.isFinite(patch.ackMaxChars)) {
-        heartbeat.ack_max_chars = patch.ackMaxChars;
-      }
-      if (typeof patch.activeHoursStart === 'string') {
-        activeHours.start = patch.activeHoursStart;
-      }
-      if (typeof patch.activeHoursEnd === 'string') {
-        activeHours.end = patch.activeHoursEnd;
-      }
-      if (typeof patch.activeHoursTimezone === 'string') {
-        activeHours.timezone = patch.activeHoursTimezone;
-      }
-      heartbeat.active_hours = activeHours;
-      agentDefaults.heartbeat = heartbeat;
-      next.agent_defaults = agentDefaults;
-      setJsonDraft(stringifyJsonBlock(next));
-      setStatus(null);
-      setError(null);
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : 'failed to patch heartbeat settings');
-    }
-  }, [jsonDraft]);
-
   const patchSessions = useCallback((patch: {
     dataDir?: string;
   }) => {
@@ -394,7 +347,6 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
     refresh,
     save,
     patchGateway,
-    patchHeartbeat,
     patchSessions,
     addTelegramAccount,
     removeTelegramAccount,

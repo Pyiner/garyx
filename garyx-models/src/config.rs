@@ -56,80 +56,9 @@ impl Default for TopicSessionMode {
 // Config structs
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ActiveHoursConfig {
-    #[serde(default = "default_start_time")]
-    pub start: String,
-    #[serde(default = "default_end_time")]
-    pub end: String,
-    #[serde(default = "default_timezone")]
-    pub timezone: String,
-}
-
-fn default_start_time() -> String {
-    "09:00".to_owned()
-}
-fn default_end_time() -> String {
-    "23:00".to_owned()
-}
-fn default_timezone() -> String {
-    "user".to_owned()
-}
-
-impl Default for ActiveHoursConfig {
-    fn default() -> Self {
-        Self {
-            start: default_start_time(),
-            end: default_end_time(),
-            timezone: default_timezone(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct HeartbeatConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_heartbeat_every")]
-    pub every: String,
-    #[serde(default = "default_heartbeat_target")]
-    pub target: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_hours: Option<ActiveHoursConfig>,
-    #[serde(default = "default_ack_max_chars")]
-    pub ack_max_chars: i64,
-}
-
 /// Serde helper: returns `true` for use with `#[serde(default = "...")]`.
 pub fn default_true() -> bool {
     true
-}
-fn default_heartbeat_every() -> String {
-    "3h".to_owned()
-}
-fn default_heartbeat_target() -> String {
-    "last".to_owned()
-}
-fn default_ack_max_chars() -> i64 {
-    500
-}
-
-impl Default for HeartbeatConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            every: default_heartbeat_every(),
-            target: default_heartbeat_target(),
-            active_hours: None,
-            ack_max_chars: default_ack_max_chars(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
-pub struct AgentDefaults {
-    #[serde(default)]
-    pub heartbeat: HeartbeatConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -849,8 +778,6 @@ fn extract_slash_command_name(text: &str) -> Option<&str> {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CronAction {
-    /// Send a heartbeat-style prompt through the agent bridge.
-    Heartbeat,
     /// Log a message (useful for testing / keep-alive).
     Log,
     /// Send a system event message into a target session.
@@ -993,8 +920,6 @@ pub struct DesktopConfig {
 pub struct GaryxConfig {
     #[serde(default)]
     pub agents: HashMap<String, Value>,
-    #[serde(default)]
-    pub agent_defaults: AgentDefaults,
     #[serde(default)]
     pub gateway: GatewayConfig,
     #[serde(default)]

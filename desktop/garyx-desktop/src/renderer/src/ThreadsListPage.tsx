@@ -11,11 +11,7 @@ type ThreadsListPageProps = {
   threads: DesktopThreadSummary[];
   loading: boolean;
   error?: string | null;
-  filter: 'normal' | 'heartbeat';
-  normalThreadsCount: number;
-  heartbeatThreadsCount: number;
   totalThreadsCount: number;
-  onFilterChange: (filter: 'normal' | 'heartbeat') => void;
   onOpenThread?: (threadId: string) => void;
   onRefresh?: () => void;
 };
@@ -31,20 +27,11 @@ function formatTimestamp(value?: string | null): string {
   return date.toLocaleString(undefined, { hour12: false });
 }
 
-function isHeartbeatThread(thread: DesktopThreadSummary): boolean {
-  const threadId = (thread.id || '').toLowerCase();
-  return threadId.includes('::heartbeat::') || threadId.startsWith('heartbeat::');
-}
-
 export function ThreadsListPage({
   threads,
   loading,
   error,
-  filter,
-  normalThreadsCount,
-  heartbeatThreadsCount,
   totalThreadsCount,
-  onFilterChange,
   onOpenThread,
   onRefresh,
 }: ThreadsListPageProps) {
@@ -56,20 +43,10 @@ export function ThreadsListPage({
             <p className="shadcn-kicker">Threads</p>
             <h1 className="thread-history-title">Thread overview</h1>
             <p className="thread-history-inline-meta">
-              Showing {threads.length} · normal {normalThreadsCount} · heartbeat {heartbeatThreadsCount} · total {totalThreadsCount}
+              Showing {threads.length} · total {totalThreadsCount}
             </p>
           </div>
           <div className="thread-history-compact-actions">
-            <select
-              className="composer-provider-select"
-              onChange={(event) => {
-                onFilterChange(event.target.value === 'heartbeat' ? 'heartbeat' : 'normal');
-              }}
-              value={filter}
-            >
-              <option value="normal">Threads</option>
-              <option value="heartbeat">Heartbeat</option>
-            </select>
             {onRefresh ? (
               <UIButton onClick={onRefresh} size="sm" type="button" variant="outline">
                 Refresh
@@ -93,7 +70,7 @@ export function ThreadsListPage({
           <div className="empty-state">
             <span className="eyebrow">Threads</span>
             <h3>No threads found</h3>
-            <p>No threads match the current filter.</p>
+            <p>No threads are available.</p>
           </div>
         ) : (
           <div className="thread-overview-grid">
@@ -118,9 +95,7 @@ export function ThreadsListPage({
                   <strong className="thread-overview-title" title={thread.title || thread.id}>
                     {thread.title || thread.id}
                   </strong>
-                  <UIBadge className={`bot-console-status ${isHeartbeatThread(thread) ? 'status-idle' : 'status-connected'}`}>
-                    {isHeartbeatThread(thread) ? 'Heartbeat' : 'Thread'}
-                  </UIBadge>
+                  <UIBadge className="bot-console-status status-connected">Thread</UIBadge>
                 </div>
                 <UICardContent className="thread-overview-card-body">
                   <div className="small-note">

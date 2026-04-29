@@ -72,8 +72,8 @@ const SMOKE_TEXT = {
   language: smokeLabel('Language'),
   followUpsReady: smokeLabel('2 follow-ups ready'),
   tabs: {
+    General: smokeLabel('General'),
     Gateway: smokeLabel('Gateway'),
-    Heartbeat: smokeLabel('Heartbeat'),
     Provider: smokeLabel('Provider'),
     Channels: smokeLabel('Channels'),
   },
@@ -881,15 +881,17 @@ async function main() {
 
       stage = 'settings-navigation';
       await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.settings) }).click();
-      await window.getByText(oneOfExact(SMOKE_TEXT.language)).first().waitFor({
-        timeout: 10000,
-      });
       for (const [tab, labels] of Object.entries(SMOKE_TEXT.tabs)) {
         await window.getByRole('button', { name: oneOfExact(labels) }).click();
         await window
           .locator('.settings-page-header .settings-tab-title')
           .filter({ hasText: oneOfExact(labels) })
           .waitFor({ timeout: 10000 });
+        if (tab === 'Gateway') {
+          await window.getByText(oneOfExact(SMOKE_TEXT.language)).first().waitFor({
+            timeout: 10000,
+          });
+        }
       }
 
       assert.deepEqual(

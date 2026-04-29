@@ -229,7 +229,6 @@ function updateStatusDisplay(
 export type SettingsTabId =
   | 'connection'
   | 'gateway'
-  | 'heartbeat'
   | 'provider'
   | 'channels'
   | 'labs'
@@ -253,12 +252,6 @@ export const SETTINGS_TABS: Array<{
     label: 'Gateway',
     eyebrow: 'Gateway',
     description: 'Gateway URL, runtime, storage, and image generation.',
-  },
-  {
-    id: 'heartbeat',
-    label: 'Heartbeat',
-    eyebrow: 'Heartbeat',
-    description: 'Default heartbeat cadence, target, acknowledgement length, and active hours.',
   },
   {
     id: 'provider',
@@ -1349,125 +1342,6 @@ export function GatewaySettingsPanel({
         </div>
       </div>
     </>
-  );
-
-  const heartbeatPanel = (
-    <div className="codex-section">
-        <div className="codex-section-header">
-          <span className="codex-section-title">{t('Heartbeat Defaults')}</span>
-          {renderGatewaySaveAction()}
-        </div>
-        <div className="codex-list-card">
-          <SettingsControlRow
-            control={
-              <SettingsSwitch
-                checked={Boolean(gatewayDraft?.agent_defaults?.heartbeat?.enabled)}
-                label="heartbeat.enabled"
-                onChange={(nextValue) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.enabled = nextValue;
-                  });
-                }}
-              />
-            }
-            description={t('Turn the shared heartbeat behavior on or off.')}
-            label="enabled"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.every || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.every = event.target.value;
-                  });
-                }}
-              />
-            }
-            description={t('Interval expression used by the default heartbeat schedule.')}
-            label="every"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.target || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.target = event.target.value;
-                  });
-                }}
-              />
-            }
-            description={t('Default target for heartbeat pings and summaries.')}
-            label="target"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                min={1}
-                type="number"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.ack_max_chars ?? 500)}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.ack_max_chars = Number(event.target.value) || 500;
-                  });
-                }}
-              />
-            }
-            description={t('Maximum length of the acknowledgement text.')}
-            label="ack_max_chars"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.start || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.active_hours.start = event.target.value;
-                  });
-                }}
-              />
-            }
-            description={t('Start time for the active window.')}
-            label="active_hours.start"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.end || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.active_hours.end = event.target.value;
-                  });
-                }}
-              />
-            }
-            description={t('End time for the active window.')}
-            label="active_hours.end"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.timezone || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.agent_defaults.heartbeat.active_hours.timezone = event.target.value;
-                  });
-                }}
-              />
-            }
-            description={t('Time zone used when evaluating the active heartbeat window.')}
-            label="active_hours.timezone"
-            stacked
-          />
-        </div>
-      </div>
   );
 
   const gatewayPanel = (
@@ -2722,9 +2596,6 @@ export function GatewaySettingsPanel({
   switch (normalizedActiveTab) {
     case 'gateway':
       tabContent = gatewayPanel;
-      break;
-    case 'heartbeat':
-      tabContent = heartbeatPanel;
       break;
     case 'provider':
       tabContent = providerPanel;

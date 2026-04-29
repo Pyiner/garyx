@@ -30,15 +30,6 @@ type WebSettingsPageProps = {
     port?: number;
     publicUrl?: string;
   }) => void;
-  onPatchHeartbeat: (patch: {
-    enabled?: boolean;
-    every?: string;
-    target?: string;
-    ackMaxChars?: number;
-    activeHoursStart?: string;
-    activeHoursEnd?: string;
-    activeHoursTimezone?: string;
-  }) => void;
   onPatchSessions: (patch: {
     dataDir?: string;
   }) => void;
@@ -111,7 +102,6 @@ export function WebSettingsPage({
   status,
   onChangeJson,
   onPatchGateway,
-  onPatchHeartbeat,
   onPatchSessions,
   onAddTelegramAccount,
   onRemoveTelegramAccount,
@@ -125,7 +115,6 @@ export function WebSettingsPage({
   const [copiedSecretKey, setCopiedSecretKey] = useState<string | null>(null);
   const config = asRecord(payload?.config);
   const gateway = asRecord(config.gateway);
-  const heartbeat = asRecord(asRecord(config.agent_defaults).heartbeat);
   const sessions = asRecord(config.sessions);
   const channels = flatChannelMap(asRecord(config.channels));
   const publicUrl = String(gateway.public_url || '').trim();
@@ -232,15 +221,6 @@ export function WebSettingsPage({
                   </UICard>
                   <UICard className="web-settings-summary-card">
                     <UICardHeader>
-                      <UIBadge>Heartbeat</UIBadge>
-                      <UICardTitle>{heartbeat.enabled === false ? 'Disabled' : 'Enabled'}</UICardTitle>
-                      <UICardDescription>
-                        every {String(heartbeat.every || '--')} · target {String(heartbeat.target || '--')}
-                      </UICardDescription>
-                    </UICardHeader>
-                  </UICard>
-                  <UICard className="web-settings-summary-card">
-                    <UICardHeader>
                       <UIBadge>Threads</UIBadge>
                       <UICardTitle>transcript_v1</UICardTitle>
                       <UICardDescription>
@@ -287,84 +267,6 @@ export function WebSettingsPage({
                   placeholder="https://example.com"
                   type="text"
                   value={String(gateway.public_url || '')}
-                />
-              </label>
-              <label className="web-settings-field">
-                <span className="eyebrow">heartbeat.enabled</span>
-                <select
-                  onChange={(event) => {
-                    onPatchHeartbeat({ enabled: event.target.value === 'true' });
-                  }}
-                  value={heartbeat.enabled === false ? 'false' : 'true'}
-                >
-                  <option value="true">Enabled</option>
-                  <option value="false">Disabled</option>
-                </select>
-              </label>
-              <label className="web-settings-field">
-                <span className="eyebrow">heartbeat.every</span>
-                <input
-                  onChange={(event) => {
-                    onPatchHeartbeat({ every: event.target.value });
-                  }}
-                  placeholder="3h"
-                  type="text"
-                  value={String(heartbeat.every || '')}
-                />
-              </label>
-              <label className="web-settings-field web-settings-field-span">
-                <span className="eyebrow">heartbeat.target</span>
-                <input
-                  onChange={(event) => {
-                    onPatchHeartbeat({ target: event.target.value });
-                  }}
-                  placeholder="last"
-                  type="text"
-                  value={String(heartbeat.target || '')}
-                />
-              </label>
-              <label className="web-settings-field">
-                <span className="eyebrow">heartbeat.ack_max_chars</span>
-                <input
-                  onChange={(event) => {
-                    const parsed = Number.parseInt(event.target.value, 10);
-                    onPatchHeartbeat({ ackMaxChars: Number.isFinite(parsed) ? parsed : 500 });
-                  }}
-                  type="number"
-                  value={String(heartbeat.ack_max_chars ?? 500)}
-                />
-              </label>
-              <label className="web-settings-field">
-                <span className="eyebrow">heartbeat.active_hours.start</span>
-                <input
-                  onChange={(event) => {
-                    onPatchHeartbeat({ activeHoursStart: event.target.value });
-                  }}
-                  placeholder="09:00"
-                  type="text"
-                  value={String(asRecord(heartbeat.active_hours).start || '')}
-                />
-              </label>
-              <label className="web-settings-field">
-                <span className="eyebrow">heartbeat.active_hours.end</span>
-                <input
-                  onChange={(event) => {
-                    onPatchHeartbeat({ activeHoursEnd: event.target.value });
-                  }}
-                  placeholder="23:00"
-                  type="text"
-                  value={String(asRecord(heartbeat.active_hours).end || '')}
-                />
-              </label>
-              <label className="web-settings-field web-settings-field-span">
-                <span className="eyebrow">heartbeat.active_hours.timezone</span>
-                <input
-                  onChange={(event) => {
-                    onPatchHeartbeat({ activeHoursTimezone: event.target.value });
-                  }}
-                  placeholder="user"
-                  type="text"
-                  value={String(asRecord(heartbeat.active_hours).timezone || '')}
                 />
               </label>
               <label className="web-settings-field web-settings-field-span">

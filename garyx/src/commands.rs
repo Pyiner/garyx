@@ -259,7 +259,6 @@ pub(crate) async fn run_gateway(
         .await?;
     let state = assembly.state.clone();
     let bridge = assembly.bridge.clone();
-    let heartbeat_service = assembly.heartbeat_service;
     let cron_service = assembly.cron_service;
 
     // 3.0 Share the channel plugin manager with AppState so HTTP
@@ -341,10 +340,6 @@ pub(crate) async fn run_gateway(
         plugin_manager.cleanup_all().await;
     }
 
-    match Arc::try_unwrap(heartbeat_service) {
-        Ok(mut svc) => svc.stop().await,
-        Err(_) => tracing::warn!("Heartbeat service still has outstanding references on shutdown"),
-    }
     match Arc::try_unwrap(cron_service) {
         Ok(mut svc) => svc.stop().await,
         Err(_) => tracing::warn!("Cron service still has outstanding references on shutdown"),

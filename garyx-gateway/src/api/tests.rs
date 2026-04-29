@@ -102,14 +102,6 @@ fn api_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/cron/jobs", axum::routing::get(cron_jobs))
         .route("/api/cron/runs", axum::routing::get(cron_runs))
-        .route(
-            "/api/heartbeat/summary",
-            axum::routing::get(heartbeat_summary),
-        )
-        .route(
-            "/api/heartbeat/trigger",
-            axum::routing::post(heartbeat_trigger),
-        )
         .route("/api/settings", axum::routing::put(settings_update))
         .route("/api/settings/reload", axum::routing::post(settings_reload))
         .route("/api/restart", axum::routing::post(restart))
@@ -1112,79 +1104,6 @@ async fn test_cron_runs_no_service() {
 }
 
 #[tokio::test]
-async fn test_heartbeat_summary_no_service() {
-    let state = test_state();
-    let router = api_router(state);
-
-    let req = Request::builder()
-        .uri("/api/heartbeat/summary")
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["enabled"], true);
-    assert_eq!(json["recent_count"], 0);
-    assert_eq!(json["service_available"], false);
-}
-
-#[tokio::test]
-async fn test_heartbeat_summary_with_service() {
-    let config = garyx_models::config::HeartbeatConfig::default();
-    let svc = Arc::new(crate::heartbeat::HeartbeatService::new(config));
-    svc.trigger().await;
-
-    let state = test_state();
-    let mut state_with_hb = (*state).clone_for_test();
-    state_with_hb.ops.heartbeat_service = Some(svc);
-    let state_with_hb = Arc::new(state_with_hb);
-
-    let router = api_router(state_with_hb);
-
-    let req = Request::builder()
-        .uri("/api/heartbeat/summary")
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["service_available"], true);
-    assert_eq!(json["recent_count"], 1);
-    assert_eq!(json["successful"], 1);
-}
-
-#[tokio::test]
-async fn test_heartbeat_trigger() {
-    let state = test_state();
-    let router = api_router(state);
-
-    let req = Request::builder()
-        .method("POST")
-        .uri("/api/heartbeat/trigger")
-        .body(Body::empty())
-        .unwrap();
-
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["ok"], true);
-}
-
-#[tokio::test]
 async fn test_settings_update_valid() {
     let state = test_state();
     let router = api_router(state);
@@ -1562,7 +1481,7 @@ async fn test_settings_update_partial_payload_preserves_existing_sections() {
 }
 
 #[tokio::test]
-async fn test_settings_update_strips_legacy_agent_defaults_workspace_dir() {
+async fn test_settings_update_strips_legacy_agent_defaults() {
     let tmp = tempfile::TempDir::new().unwrap();
     let config_path = tmp.path().join("gary.json");
     tokio::fs::write(
@@ -1579,7 +1498,9 @@ async fn test_settings_update_strips_legacy_agent_defaults_workspace_dir() {
     let router = api_router(state_with_path.clone());
 
     let mut body_val = serde_json::to_value(GaryxConfig::default()).unwrap();
-    body_val["agent_defaults"]["workspace_dir"] = json!("~/gary");
+    body_val["agent_defaults"] = json!({
+        "workspace_dir": "~/gary"
+    });
     body_val["gateway"]["port"] = json!(4242);
 
     let req = Request::builder()
@@ -1596,10 +1517,10 @@ async fn test_settings_update_strips_legacy_agent_defaults_workspace_dir() {
         serde_json::from_str::<Value>(&tokio::fs::read_to_string(&config_path).await.unwrap())
             .unwrap();
     assert_eq!(persisted["gateway"]["port"], 4242);
-    assert!(persisted["agent_defaults"].get("workspace_dir").is_none());
+    assert!(persisted.get("agent_defaults").is_none());
 
     let live = serde_json::to_value(state_with_path.config_snapshot()).unwrap();
-    assert!(live["agent_defaults"].get("workspace_dir").is_none());
+    assert!(live.get("agent_defaults").is_none());
 }
 
 #[tokio::test]

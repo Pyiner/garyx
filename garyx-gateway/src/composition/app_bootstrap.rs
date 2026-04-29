@@ -38,7 +38,6 @@ use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::event_stream_hub::EventStreamHub;
 use crate::health::HealthChecker;
-use crate::heartbeat::HeartbeatService;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
@@ -82,7 +81,6 @@ pub struct AppStateBuilder {
     bridge: Arc<MultiProviderBridge>,
     event_tx: broadcast::Sender<String>,
     cron_service: Option<Arc<CronService>>,
-    heartbeat_service: Option<Arc<HeartbeatService>>,
     config_path: Option<PathBuf>,
     restart_tokens: Vec<String>,
     channel_dispatcher: Arc<dyn ChannelDispatcher>,
@@ -136,7 +134,6 @@ impl AppStateBuilder {
             bridge: Arc::new(MultiProviderBridge::new()),
             event_tx,
             cron_service: None,
-            heartbeat_service: None,
             config_path: None,
             restart_tokens: Vec::new(),
             channel_dispatcher,
@@ -202,11 +199,6 @@ impl AppStateBuilder {
 
     pub fn with_cron_service(mut self, cron_service: Arc<CronService>) -> Self {
         self.cron_service = Some(cron_service);
-        self
-    }
-
-    pub fn with_heartbeat_service(mut self, heartbeat_service: Arc<HeartbeatService>) -> Self {
-        self.heartbeat_service = Some(heartbeat_service);
         self
     }
 
@@ -440,7 +432,6 @@ impl AppStateBuilder {
                 restart_tracker: Mutex::new(RestartTracker::new()),
                 settings_mutex: Mutex::new(()),
                 cron_service: self.cron_service,
-                heartbeat_service: self.heartbeat_service,
                 config_path: self.config_path,
                 restart_tokens: self.restart_tokens,
                 mcp_tool_metrics: Arc::new(McpToolMetrics::default()),

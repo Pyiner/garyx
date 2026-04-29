@@ -15,7 +15,6 @@ pub mod dashboard;
 mod delivery_target;
 pub mod gateway_auth;
 pub mod health;
-pub mod heartbeat;
 mod internal_inbound;
 mod loop_continuation;
 mod managed_mcp_metadata;
@@ -39,7 +38,6 @@ mod downstream_real_tests;
 mod managed_mcp_real_tests;
 
 pub use cron::CronService;
-pub use heartbeat::HeartbeatService;
 pub use route_graph::build_router;
 pub use server::{AppState, Gateway};
 pub use thread_logs::{ThreadFileLogger, default_thread_log_dir};
