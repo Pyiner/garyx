@@ -196,6 +196,11 @@ import {
   workspaceFileAbsolutePath,
 } from "./workspace-helpers";
 import { buildAgentOptions, buildAgentTargetOptions } from "./agent-options";
+import {
+  I18nProvider,
+  createTranslator,
+  useResolvedLocale,
+} from "../i18n";
 
 function messagesNearBottom(node: HTMLDivElement | null): boolean {
   if (!node) {
@@ -1481,7 +1486,10 @@ export function AppShell() {
     commandsSaving,
     gatewaySettingsDirty,
     gatewaySettingsDraft,
+    gatewaySettingsJsonDraft,
+    gatewaySettingsJsonError,
     gatewaySettingsLoading,
+    gatewaySettingsMode,
     gatewaySettingsSaving,
     gatewaySettingsSource,
     gatewaySettingsStatus,
@@ -1489,6 +1497,7 @@ export function AppShell() {
     handleCreateSlashCommand,
     handleDeleteMcpServer,
     handleDeleteSlashCommand,
+    handleGatewaySettingsJsonChange,
     handleRetrySettingsView,
     handleSaveGatewaySettings,
     handleSaveLocalSettingsNow,
@@ -1517,6 +1526,8 @@ export function AppShell() {
     setDesktopState,
     setError,
   });
+  const locale = useResolvedLocale(settingsDraft.languagePreference);
+  const t = useMemo(() => createTranslator(locale), [locale]);
 
   const dismissToast = useCallback((id: number) => {
     const timeoutId = toastTimeoutsRef.current[id];
@@ -1615,7 +1626,7 @@ export function AppShell() {
     }
     pushToast(
       gatewaySettingsStatus,
-      /(失败|error|invalid|missing)/i.test(gatewaySettingsStatus)
+      /(cannot|error|failed|failure|invalid|missing|unable)/i.test(gatewaySettingsStatus)
         ? "error"
         : "success",
     );
@@ -5826,16 +5837,18 @@ export function AppShell() {
 
   if (loading) {
     return (
-      <div className="startup-shell" role="status" aria-live="polite">
-        <div className="startup-panel">
-          <div className="startup-mark" aria-hidden="true">G</div>
-          <div className="startup-copy">
-            <strong>Starting Garyx</strong>
-            <span>Syncing workspace state and gateway status...</span>
+      <I18nProvider languagePreference={settingsDraft.languagePreference}>
+        <div className="startup-shell" role="status" aria-live="polite">
+          <div className="startup-panel">
+            <div className="startup-mark" aria-hidden="true">G</div>
+            <div className="startup-copy">
+              <strong>{t('Starting Garyx')}</strong>
+              <span>{t('Syncing workspace state and gateway status...')}</span>
+            </div>
+            <div className="startup-progress" aria-hidden="true" />
           </div>
-          <div className="startup-progress" aria-hidden="true" />
         </div>
-      </div>
+      </I18nProvider>
     );
   }
 
@@ -5851,98 +5864,105 @@ export function AppShell() {
   if (requiresGatewaySetup) {
     const setupMessage =
       gatewaySetupMessage ||
-      "Set the gateway address and token, then save. Saving verifies the gateway before continuing.";
+      t("Set the gateway address and token, then save. Saving verifies the gateway before continuing.");
 
     return (
-      <div className="loading-shell">
-        <div className="loading-panel gateway-setup-panel">
-          <span className="eyebrow">Gateway Setup</span>
-          <h1>Connect this Mac app to your Garyx gateway</h1>
-          <p>
-            Enter the gateway address and token before continuing. The default address is{" "}
-            <code>127.0.0.1:31337</code>. Create or print the token on the
-            gateway host with <code>garyx gateway token</code>.
-          </p>
+      <I18nProvider languagePreference={settingsDraft.languagePreference}>
+        <div className="loading-shell">
+          <div className="loading-panel gateway-setup-panel">
+            <span className="eyebrow">{t('Gateway Setup')}</span>
+            <h1>{t('Connect this Mac app to your Garyx gateway')}</h1>
+            <p>
+              {t(
+                'Enter the gateway address and token before continuing. The default address is {address}. Create or print the token on the gateway host with {command}.',
+                {
+                  address: '127.0.0.1:31337',
+                  command: 'garyx gateway token',
+                },
+              )}
+            </p>
 
-          <div className="gateway-setup-form">
-            <label className="gateway-setup-field">
-              <span>Gateway URL</span>
-              <div className="gateway-url-input-shell">
+            <div className="gateway-setup-form">
+              <label className="gateway-setup-field">
+                <span>{t('Gateway URL')}</span>
+                <div className="gateway-url-input-shell">
+                  <input
+                    autoCapitalize="off"
+                    autoComplete="off"
+                    className="gateway-setup-input gateway-url-input-with-history"
+                    placeholder="http://127.0.0.1:31337"
+                    spellCheck={false}
+                    type="text"
+                    value={settingsDraft.gatewayUrl}
+                    onChange={(event) => {
+                      setSettingsDraft((current) => ({
+                        ...current,
+                        gatewayUrl: event.target.value,
+                      }));
+                    }}
+                  />
+                  <GatewayProfileHistoryButton
+                    profiles={gatewayProfiles}
+                    onSelect={(profile) => {
+                      setSettingsDraft((current) => ({
+                        ...current,
+                        gatewayUrl: profile.gatewayUrl,
+                        gatewayAuthToken: profile.gatewayAuthToken,
+                      }));
+                    }}
+                  />
+                </div>
+              </label>
+
+              <label className="gateway-setup-field">
+                <span>{t('Gateway Token')}</span>
                 <input
                   autoCapitalize="off"
                   autoComplete="off"
-                  className="gateway-setup-input gateway-url-input-with-history"
-                  placeholder="http://127.0.0.1:31337"
+                  className="gateway-setup-input"
+                  placeholder={t('Run `garyx gateway token` on the gateway host')}
                   spellCheck={false}
-                  type="text"
-                  value={settingsDraft.gatewayUrl}
+                  type="password"
+                  value={settingsDraft.gatewayAuthToken}
                   onChange={(event) => {
                     setSettingsDraft((current) => ({
                       ...current,
-                      gatewayUrl: event.target.value,
+                      gatewayAuthToken: event.target.value,
                     }));
                   }}
                 />
-                <GatewayProfileHistoryButton
-                  profiles={gatewayProfiles}
-                  onSelect={(profile) => {
-                    setSettingsDraft((current) => ({
-                      ...current,
-                      gatewayUrl: profile.gatewayUrl,
-                      gatewayAuthToken: profile.gatewayAuthToken,
-                    }));
-                  }}
-                />
-              </div>
-            </label>
+              </label>
+            </div>
 
-            <label className="gateway-setup-field">
-              <span>Gateway Token</span>
-              <input
-                autoCapitalize="off"
-                autoComplete="off"
-                className="gateway-setup-input"
-                placeholder="Run `garyx gateway token` on the gateway host"
-                spellCheck={false}
-                type="password"
-                value={settingsDraft.gatewayAuthToken}
-                onChange={(event) => {
-                  setSettingsDraft((current) => ({
-                    ...current,
-                    gatewayAuthToken: event.target.value,
-                  }));
-                }}
-              />
-            </label>
-          </div>
-
-          <p
-            className={`gateway-setup-status ${gatewaySetupMessage ? "error" : ""}`}
-          >
-            {setupMessage}
-          </p>
-
-          <div className="gateway-setup-actions">
-            <button
-              className="gateway-setup-button primary"
-              disabled={savingSettings}
-              onClick={() => {
-                void handleSaveLocalSettingsNow({
-                  requireGatewayConnection: true,
-                  reloadGatewaySettings: true,
-                });
-              }}
-              type="button"
+            <p
+              className={`gateway-setup-status ${gatewaySetupMessage ? "error" : ""}`}
             >
-              {savingSettings ? "Saving..." : "Save and Continue"}
-            </button>
+              {setupMessage}
+            </p>
+
+            <div className="gateway-setup-actions">
+              <button
+                className="gateway-setup-button primary"
+                disabled={savingSettings}
+                onClick={() => {
+                  void handleSaveLocalSettingsNow({
+                    requireGatewayConnection: true,
+                    reloadGatewaySettings: true,
+                  });
+                }}
+                type="button"
+              >
+                {savingSettings ? t("Saving...") : t("Save and Continue")}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      </I18nProvider>
     );
   }
 
   return (
+    <I18nProvider languagePreference={settingsDraft.languagePreference}>
     <div
       className="app-shell"
       style={
@@ -6161,8 +6181,11 @@ export function AppShell() {
                     connection={connection}
                     gatewayDirty={gatewaySettingsDirty}
                     gatewayDraft={gatewaySettingsDraft}
+                    gatewayJsonDraft={gatewaySettingsJsonDraft}
+                    gatewayJsonError={gatewaySettingsJsonError}
                     gatewayProfiles={desktopState?.gatewayProfiles ?? []}
                     gatewayLoading={gatewaySettingsLoading}
+                    gatewayMode={gatewaySettingsMode}
                     gatewaySettingsSource={gatewaySettingsSource}
                     gatewaySaving={gatewaySettingsSaving}
                     gatewayStatusMessage={gatewaySettingsStatus}
@@ -6189,7 +6212,11 @@ export function AppShell() {
                       return handleDeleteSlashCommand(name);
                     }}
                     onLocalSettingsChange={setSettingsDraft}
+                    onGatewayJsonChange={handleGatewaySettingsJsonChange}
                     onMutateGatewayDraft={mutateGatewaySettingsDraft}
+                    onOpenAdvancedJson={() => {
+                      void handleSelectSettingsTab('advanced');
+                    }}
                     onSaveLocalSettings={(event) => {
                       void handleSaveSettings(event);
                     }}
@@ -6524,5 +6551,6 @@ export function AppShell() {
         title={memoryDialogTarget?.title || "memory.md"}
       />
     </div>
+    </I18nProvider>
   );
 }

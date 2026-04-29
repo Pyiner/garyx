@@ -6,6 +6,7 @@ import type {
 } from '@shared/contracts';
 
 import { InfoIcon } from './app-shell/icons';
+import { useI18n } from './i18n';
 
 type ThreadInfoPopoverProps = {
   threadId: string | null;
@@ -82,6 +83,7 @@ export function ThreadInfoPopover({
   threadInfo,
   threadInfoLoaded,
 }: ThreadInfoPopoverProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'command' | 'session'>('idle');
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -150,7 +152,7 @@ export function ThreadInfoPopover({
         onClick={() => {
           setOpen((current) => !current);
         }}
-        title="Thread information"
+        title={t('Thread information')}
         type="button"
       >
         <InfoIcon />
@@ -158,42 +160,42 @@ export function ThreadInfoPopover({
 
       {open ? (
         <div
-          aria-label="Thread information"
+          aria-label={t('Thread information')}
           className="thread-info-panel"
           role="dialog"
         >
           <div className="thread-info-panel-header">
-            <div className="thread-info-panel-kicker">Thread Info</div>
+            <div className="thread-info-panel-kicker">{t('Thread Info')}</div>
             <div className="thread-info-panel-title">
               {providerDisplayName(threadInfo)}
             </div>
-            <div className="thread-info-panel-subtitle">{threadId || 'No thread selected'}</div>
+            <div className="thread-info-panel-subtitle">{threadId || t('No thread selected')}</div>
           </div>
 
           {threadInfo ? (
             <>
               <div className="thread-info-grid">
                 {threadInfo.agentId ? (
-                  <InfoRow label="Agent" value={threadInfo.agentId} />
+                  <InfoRow label={t('Agent')} value={threadInfo.agentId} />
                 ) : null}
                 {threadInfo.workspacePath ? (
-                  <InfoRow label="Workspace" value={threadInfo.workspacePath} mono />
+                  <InfoRow label={t('Workspace')} value={threadInfo.workspacePath} mono />
                 ) : null}
                 {sessionId ? (
-                  <InfoRow label="Session ID" value={sessionId} mono />
+                  <InfoRow label={t('Session ID')} value={sessionId} mono />
                 ) : null}
               </div>
 
               {resumeCommand ? (
                 <div className="thread-info-command-block">
-                  <div className="thread-info-command-label">Resume command</div>
+                  <div className="thread-info-command-label">{t('Resume command')}</div>
                   <code className="thread-info-command-value">{resumeCommand}</code>
                 </div>
               ) : null}
 
               {bindings.length ? (
                 <div className="thread-info-bindings">
-                  <div className="thread-info-section-label">Bindings</div>
+                  <div className="thread-info-section-label">{t('Bindings')}</div>
                   <div className="thread-info-binding-list">
                     {bindings.map((binding) => (
                       <div className="thread-info-binding-row" key={`${binding.channel}:${binding.accountId}:${binding.bindingKey}`}>
@@ -213,7 +215,7 @@ export function ThreadInfoPopover({
                     }}
                     type="button"
                   >
-                    {copyState === 'session' ? 'Session Copied' : 'Copy Session ID'}
+                    {copyState === 'session' ? t('Session Copied') : t('Copy Session ID')}
                   </button>
                 ) : null}
                 {resumeCommand ? (
@@ -224,18 +226,18 @@ export function ThreadInfoPopover({
                     }}
                     type="button"
                   >
-                    {copyState === 'command' ? 'Command Copied' : 'Copy Resume Command'}
+                    {copyState === 'command' ? t('Command Copied') : t('Copy Resume Command')}
                   </button>
                 ) : null}
               </div>
             </>
           ) : threadInfoLoaded ? (
             <div className="thread-info-empty">
-              No provider runtime details are stored for this thread yet.
+              {t('No provider runtime details are stored for this thread yet.')}
             </div>
           ) : (
             <div className="thread-info-empty">
-              Loading thread info…
+              {t('Loading thread info…')}
             </div>
           )}
         </div>

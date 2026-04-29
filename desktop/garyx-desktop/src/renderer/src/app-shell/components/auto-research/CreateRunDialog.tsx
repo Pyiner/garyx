@@ -29,6 +29,7 @@ import {
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_TIME_BUDGET_MINUTES,
 } from './types';
+import { useI18n } from '../../../i18n';
 
 type CreateRunDialogProps = {
   saving: boolean;
@@ -45,6 +46,7 @@ export function CreateRunDialog({
   onSubmit,
   onClose,
 }: CreateRunDialogProps) {
+  const { t } = useI18n();
   const [goal, setGoal] = useState('');
   const [maxIterations, setMaxIterations] = useState(DEFAULT_MAX_ITERATIONS);
   const [timeBudgetMinutes, setTimeBudgetMinutes] = useState(DEFAULT_TIME_BUDGET_MINUTES);
@@ -83,9 +85,9 @@ export function CreateRunDialog({
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="sm:max-w-[720px]">
         <DialogHeader>
-          <DialogTitle>Create Auto Research Run</DialogTitle>
+          <DialogTitle>{t('Create Auto Research Run')}</DialogTitle>
           <DialogDescription>
-            Define the goal, workspace, and budget for a bounded work-and-verify loop.
+            {t('Define the goal, workspace, and budget for a bounded work-and-verify loop.')}
           </DialogDescription>
         </DialogHeader>
 
@@ -96,21 +98,21 @@ export function CreateRunDialog({
           }}
         >
           <div className="codex-form-field">
-            <Label className="codex-form-label" htmlFor="auto-research-goal">Goal</Label>
+            <Label className="codex-form-label" htmlFor="auto-research-goal">{t('Goal')}</Label>
             <Textarea
               id="auto-research-goal"
               onChange={(event) => setGoal(event.target.value)}
-              placeholder="What should Garyx figure out or produce?"
+              placeholder={t('What should Garyx figure out or produce?')}
               rows={5}
               value={goal}
             />
           </div>
 
           <div className="codex-form-field">
-            <Label className="codex-form-label" htmlFor="auto-research-workspace">Workspace</Label>
+            <Label className="codex-form-label" htmlFor="auto-research-workspace">{t('Workspace')}</Label>
             <Select onValueChange={setSelectedWorkspacePath} value={selectedWorkspacePath}>
-              <SelectTrigger aria-label="Workspace" className="w-full" id="auto-research-workspace">
-                <SelectValue placeholder="Choose workspace" />
+              <SelectTrigger aria-label={t('Workspace')} className="w-full" id="auto-research-workspace">
+                <SelectValue placeholder={t('Choose workspace')} />
               </SelectTrigger>
               <SelectContent>
                 {selectableWorkspaces.length ? (
@@ -120,7 +122,7 @@ export function CreateRunDialog({
                     </SelectItem>
                   ))
                 ) : (
-                  <SelectItem disabled value="no-workspaces">No workspaces available</SelectItem>
+                  <SelectItem disabled value="no-workspaces">{t('No workspaces available')}</SelectItem>
                 )}
               </SelectContent>
             </Select>
@@ -134,18 +136,18 @@ export function CreateRunDialog({
             <svg style={{ width: 10, height: 10, transition: 'transform var(--duration-fast)', transform: showAdvanced ? 'rotate(90deg)' : 'none' }} viewBox="0 0 10 10" fill="none">
               <path d="M3.5 1.5L7 5 3.5 8.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
-            Advanced options
+            {t('Advanced options')}
           </button>
 
           {showAdvanced && (
             <div style={{ display: 'grid', gap: 12 }}>
               <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 1fr' }}>
                 <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="auto-research-max-iterations">Max iterations</Label>
+                  <Label className="codex-form-label" htmlFor="auto-research-max-iterations">{t('Max iterations')}</Label>
                   <Input id="auto-research-max-iterations" inputMode="numeric" min={1} onChange={(event) => setMaxIterations(event.target.value)} placeholder="10" type="number" value={maxIterations} />
                 </div>
                 <div className="codex-form-field">
-                  <Label className="codex-form-label" htmlFor="auto-research-time-budget">Time budget (min)</Label>
+                  <Label className="codex-form-label" htmlFor="auto-research-time-budget">{t('Time budget (min)')}</Label>
                   <Input id="auto-research-time-budget" inputMode="numeric" min={1} onChange={(event) => setTimeBudgetMinutes(event.target.value)} placeholder="15" type="number" value={timeBudgetMinutes} />
                 </div>
               </div>
@@ -153,9 +155,9 @@ export function CreateRunDialog({
           )}
 
           <DialogFooter style={{ justifyContent: 'flex-end' }}>
-            <Button disabled={saving} onClick={onClose} type="button" variant="outline">Cancel</Button>
+            <Button disabled={saving} onClick={onClose} type="button" variant="outline">{t('Cancel')}</Button>
             <Button disabled={saving || !canCreateRun} type="submit">
-              {saving ? 'Starting...' : 'Start Run'}
+              {saving ? t('Starting...') : t('Start Run')}
             </Button>
           </DialogFooter>
         </form>

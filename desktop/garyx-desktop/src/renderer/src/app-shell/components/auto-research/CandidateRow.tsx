@@ -2,6 +2,7 @@ import type { ResearchCandidate } from '@shared/contracts';
 
 import { RichMessageContent } from '../../../message-rich-content';
 
+import { useI18n } from '../../../i18n';
 import { scoreBgColor, scoreColor } from './helpers';
 
 /* Candidate leaderboard row */
@@ -28,6 +29,7 @@ export function CandidateRow({
   candidateText?: string | null;
   saving: boolean;
 }) {
+  const { t } = useI18n();
   const score = candidate.verdict?.score ?? 0;
 
   return (
@@ -64,7 +66,10 @@ export function CandidateRow({
         {/* Summary */}
         <div style={{ minWidth: 0, flex: 1 }}>
           <p style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, fontWeight: 500, color: 'var(--color-token-text-primary)' }}>
-            Iter {candidate.iteration}: {preview || candidate.output || 'No candidate output'}
+            {t('Iter {iteration}: {text}', {
+              iteration: candidate.iteration,
+              text: preview || candidate.output || t('No candidate output'),
+            })}
           </p>
           {candidate.output ? (
             <p className="codex-command-row-desc" style={{ marginTop: 4, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
@@ -79,7 +84,7 @@ export function CandidateRow({
         <div style={{ borderTop: '1px solid var(--color-token-border)', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {candidateText ? (
             <div>
-              <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--color-token-description-foreground)' }}>Candidate Output</p>
+              <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--color-token-description-foreground)' }}>{t('Candidate Output')}</p>
               <div style={{ marginTop: 6, borderRadius: 12, border: '1px solid var(--color-token-border)', background: 'var(--color-token-bg-secondary)', padding: 12 }}>
                 <RichMessageContent altPrefix="auto-research-candidate" text={candidateText} />
               </div>
@@ -88,7 +93,7 @@ export function CandidateRow({
 
           {candidate.verdict ? (
             <div>
-              <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--color-token-description-foreground)' }}>Verdict</p>
+              <p style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--color-token-description-foreground)' }}>{t('Verdict')}</p>
               <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 14, fontWeight: 700, color: scoreColor(candidate.verdict.score) }}>
                   {candidate.verdict.score.toFixed(1)}/10
@@ -114,11 +119,11 @@ export function CandidateRow({
               style={{ alignSelf: 'flex-start', color: 'var(--color-token-text-primary)', fontWeight: 500 }}
               type="button"
             >
-              Select as Winner
+              {t('Select as Winner')}
             </button>
           ) : (
             <span className="codex-sync-pill ok">
-              Selected Winner
+              {t('Selected Winner')}
             </span>
           )}
         </div>

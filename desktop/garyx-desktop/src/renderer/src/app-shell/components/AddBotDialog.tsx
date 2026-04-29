@@ -57,6 +57,7 @@ import { AuthFlowDriver } from "../../channel-plugins/AuthFlowDriver";
 import { DirectoryInput } from "../../components/DirectoryInput";
 import { JsonSchemaForm } from "../../channel-plugins/JsonSchemaForm";
 import { useChannelPluginCatalog } from "../../channel-plugins/useChannelPluginCatalog";
+import { useI18n, type Translate } from "../../i18n";
 
 type FeishuDomain = "feishu" | "lark";
 type AgentTargetOption = { value: string; label: string };
@@ -222,15 +223,17 @@ function channelInitials(entry: ChannelPluginCatalogEntry | null): string {
 function compactAgentLabel(
   targets: AgentTargetOption[],
   value: string,
+  t: Translate,
 ): string {
   return (
     targets.find((target) => target.value === value)?.label ||
     value ||
-    "Default route"
+    t("Default route")
   );
 }
 
 export function AddBotDialog(props: AddBotDialogProps) {
+  const { t } = useI18n();
   const { open, initialValues, onClose, onCreateChannel, agentTargets } = props;
   const { entries: allEntries, loading: catalogLoading, error: catalogError } =
     useChannelPluginCatalog();
@@ -350,11 +353,11 @@ export function AddBotDialog(props: AddBotDialogProps) {
 
   const goToAuthStep = useCallback(() => {
     if (!selectedEntry) {
-      setSaveError("请先选择一个渠道");
+      setSaveError(t("Choose a channel first."));
       return;
     }
     if (!accountId.trim() && !selectedHasAutoLogin) {
-      setSaveError("请填写 account id");
+      setSaveError(t("Account ID is required."));
       return;
     }
     setSaveError(null);
@@ -363,7 +366,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
 
   const handleSave = async () => {
     if (!selectedEntry) {
-      setSaveError("请先选择一个渠道");
+      setSaveError(t("Choose a channel first."));
       return;
     }
     // Let auto-login-supplied account_id win if the user didn't
@@ -375,7 +378,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
         ? configAccountId
         : typedAccountId || configAccountId || "";
     if (!resolvedAccountId) {
-      setSaveError("请填写 account id");
+      setSaveError(t("Account ID is required."));
       return;
     }
     setSaving(true);
@@ -398,25 +401,25 @@ export function AddBotDialog(props: AddBotDialogProps) {
   };
 
   const accountDisplay =
-    accountId.trim() || configAccountIdOverride(pluginConfig) || "保存时确认";
-  const selectedAgentLabel = compactAgentLabel(agentTargets, agentId);
-  const workspaceDisplay = workspaceDir.trim() || "默认主工作区";
+    accountId.trim() || configAccountIdOverride(pluginConfig) || t("Confirm on save");
+  const selectedAgentLabel = compactAgentLabel(agentTargets, agentId, t);
+  const workspaceDisplay = workspaceDir.trim() || t("Default main workspace");
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="add-bot-dialog">
         <DialogHeader className="add-bot-dialog-header">
-          <DialogTitle className="add-bot-dialog-title">添加渠道账号</DialogTitle>
+          <DialogTitle className="add-bot-dialog-title">{t("Add channel account")}</DialogTitle>
           <DialogDescription className="add-bot-dialog-description">
             {step === 1
-              ? "先确认要绑定的渠道与基础信息，下一步填写认证。"
+              ? t("Confirm the channel and basic info first, then fill in authentication.")
               : selectedHasAutoLogin
-                ? "用手机扫码绑定，凭证会自动写入。"
-                : "填写该渠道需要的认证信息。"}
+                ? t("Scan with your phone to bind. Credentials are written automatically.")
+                : t("Fill in the authentication fields required by this channel.")}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="add-bot-stepper" aria-label="添加 Bot 步骤">
+        <div className="add-bot-stepper" aria-label={t("Add bot steps")}>
           <button
             className={`add-bot-step ${step === 1 ? "current" : "done"}`}
             onClick={() => setStep(1)}
@@ -425,7 +428,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
             <span className="add-bot-step-num">
               {step === 2 ? <Check aria-hidden size={11} strokeWidth={2.4} /> : "1"}
             </span>
-            <span>基础信息</span>
+            <span>{t("Basic Info")}</span>
           </button>
           <span className={`add-bot-step-line ${step === 2 ? "filled" : ""}`} />
           <button
@@ -435,14 +438,14 @@ export function AddBotDialog(props: AddBotDialogProps) {
             type="button"
           >
             <span className="add-bot-step-num">2</span>
-            <span>渠道认证</span>
+            <span>{t("Channel Auth")}</span>
           </button>
         </div>
 
         <div className="add-bot-dialog-body">
           {catalogError ? (
             <div className="add-bot-alert error">
-              获取渠道目录失败：{catalogError}
+              {t("Failed to load channel catalog: {error}", { error: catalogError })}
             </div>
           ) : null}
 
@@ -451,7 +454,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
               <div className="add-bot-field-grid">
                 <div className="add-bot-field">
                   <Label className="add-bot-label" htmlFor="add-bot-channel">
-                    渠道
+                    {t("Channel")}
                   </Label>
                   <Select
                     value={pluginId}
@@ -459,7 +462,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
                     disabled={catalogLoading || !entries || entries.length === 0}
                   >
                     <SelectTrigger className="add-bot-control" id="add-bot-channel">
-                      <SelectValue placeholder={catalogLoading ? "加载中…" : "选择渠道"} />
+                      <SelectValue placeholder={catalogLoading ? t("Loading...") : t("Choose channel")} />
                     </SelectTrigger>
                     <SelectContent>
                       {(entries ?? []).map((entry) => (
@@ -502,20 +505,20 @@ export function AddBotDialog(props: AddBotDialogProps) {
                     id="add-bot-account-id"
                     value={accountId}
                     onChange={(e) => handleAccountIdChange(e.target.value)}
-                    placeholder="唯一标识，例如 product-ship"
+                    placeholder={t("Unique identifier, for example product-ship")}
                   />
                 </div>
 
                 <div className="add-bot-field">
                   <Label className="add-bot-label" htmlFor="add-bot-name">
-                    显示名 <span className="add-bot-optional">可选</span>
+                    {t("Display name")} <span className="add-bot-optional">{t("Optional")}</span>
                   </Label>
                   <Input
                     className="add-bot-control"
                     id="add-bot-name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="用于侧边栏的名称"
+                    placeholder={t("Name shown in the sidebar")}
                   />
                 </div>
 
@@ -529,7 +532,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
                     disabled={agentTargets.length === 0}
                   >
                     <SelectTrigger className="add-bot-control" id="add-bot-agent">
-                      <SelectValue placeholder="选择 agent" />
+                      <SelectValue placeholder={t("Choose agent")} />
                     </SelectTrigger>
                     <SelectContent>
                       {agentTargets.map((target) => (
@@ -541,20 +544,20 @@ export function AddBotDialog(props: AddBotDialogProps) {
                   </Select>
                   {selectedAgentMissing ? (
                     <span className="add-bot-field-warning">
-                      当前 agent `{agentId}` 已不存在，请重新选择
+                      {t('Agent "{id}" no longer exists. Choose again.', { id: agentId })}
                     </span>
                   ) : null}
                 </div>
 
                 <div className="add-bot-field add-bot-field-wide">
                   <Label className="add-bot-label" htmlFor="add-bot-workspace">
-                    工作目录 <span className="add-bot-optional">可选</span>
+                    {t("Working directory")} <span className="add-bot-optional">{t("Optional")}</span>
                   </Label>
                   <DirectoryInput
                     id="add-bot-workspace"
                     value={workspaceDir}
                     onChange={setWorkspaceDir}
-                    placeholder="默认沿用主工作区"
+                    placeholder={t("Use the main workspace by default")}
                   />
                 </div>
               </div>
@@ -580,7 +583,10 @@ export function AddBotDialog(props: AddBotDialogProps) {
                     {selectedEntry.display_name || selectedEntry.id} · {accountDisplay}
                   </div>
                   <div className="add-bot-channel-context-sub">
-                    绑定到 {selectedAgentLabel} · {workspaceDisplay}
+                    {t("Bound to {agent} · {workspace}", {
+                      agent: selectedAgentLabel,
+                      workspace: workspaceDisplay,
+                    })}
                   </div>
                 </div>
                 <button
@@ -588,7 +594,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
                   onClick={() => setStep(1)}
                   type="button"
                 >
-                  编辑
+                  {t("Edit")}
                 </button>
               </div>
 
@@ -602,7 +608,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
             </div>
           ) : !catalogLoading ? (
             <div className="add-bot-alert">
-              请选择渠道以继续。
+              {t("Choose a channel to continue.")}
             </div>
           ) : null}
         </div>
@@ -623,7 +629,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
             disabled={saving}
             variant="ghost"
           >
-            取消
+            {t("Cancel")}
           </Button>
           {step === 2 ? (
             <Button
@@ -633,7 +639,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
               variant="secondary"
             >
               <ChevronLeft aria-hidden size={13} strokeWidth={2} />
-              上一步
+              {t("Back")}
             </Button>
           ) : null}
           {step === 1 ? (
@@ -642,7 +648,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
               onClick={goToAuthStep}
               disabled={!selectedEntry}
             >
-              下一步
+              {t("Next")}
               <ChevronRight aria-hidden size={13} strokeWidth={2} />
             </Button>
           ) : (
@@ -651,7 +657,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
               onClick={() => void handleSave()}
               disabled={saving || !selectedEntry}
             >
-              {saving ? "保存中…" : "保存"}
+              {saving ? t("Saving…") : t("Save")}
             </Button>
           )}
         </DialogFooter>
@@ -667,12 +673,13 @@ function AddBotAuthStep(props: {
   onChange: (next: Record<string, unknown>) => void;
   onAuthConfirmed: (values: Record<string, unknown>) => void;
 }) {
+  const { t } = useI18n();
   const { entry, methods, value, onChange, onAuthConfirmed } = props;
 
   if (methods === "empty") {
     return (
       <div className="add-bot-alert error">
-        该插件未声明任何配置方法（<code>config_methods</code> 为空）。
+        {t("This plugin does not declare any config methods.")} (<code>config_methods</code> {t("is empty")}).
       </div>
     );
   }
@@ -709,8 +716,8 @@ function AddBotAuthStep(props: {
           {hasAutoLogin ? (
             <details className="add-bot-manual-details">
               <summary>
-                <span>手动填写凭证</span>
-                <span>扫码不可用时使用</span>
+                <span>{t("Enter credentials manually")}</span>
+                <span>{t("Use this when scanning is unavailable")}</span>
               </summary>
               <div className="add-bot-manual-form">
                 <JsonSchemaForm
@@ -723,8 +730,8 @@ function AddBotAuthStep(props: {
           ) : (
             <>
               <div className="add-bot-auth-card-header">
-                <h4>手动填写</h4>
-                <p>保存前请确认这些字段来自官方渠道后台。</p>
+                <h4>{t("Manual setup")}</h4>
+                <p>{t("Before saving, confirm these fields come from the official channel console.")}</p>
               </div>
               <JsonSchemaForm
                 schema={entry.schema as Record<string, unknown>}

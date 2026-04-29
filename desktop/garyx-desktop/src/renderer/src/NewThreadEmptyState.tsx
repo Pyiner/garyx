@@ -29,6 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useI18n } from "./i18n";
 
 const ADD_WORKSPACE_VALUE = "__add_workspace__";
 
@@ -52,6 +53,7 @@ export function NewThreadEmptyState({
   onSelectWorkspace,
   onResumeProviderSession,
 }: NewThreadEmptyStateProps) {
+  const { t } = useI18n();
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
@@ -80,7 +82,7 @@ export function NewThreadEmptyState({
   async function submitResume() {
     const trimmed = resumeSessionId.trim();
     if (!trimmed) {
-      setResumeError("Paste a session ID to continue.");
+      setResumeError(t("Paste a session ID to continue."));
       return;
     }
     setResumeLoading(true);
@@ -90,7 +92,7 @@ export function NewThreadEmptyState({
       closeResume();
     } catch (error) {
       setResumeError(
-        error instanceof Error ? error.message : "Resume failed.",
+        error instanceof Error ? error.message : t("Resume failed."),
       );
     } finally {
       setResumeLoading(false);
@@ -103,7 +105,7 @@ export function NewThreadEmptyState({
         <div className="new-thread-empty-mark" aria-hidden>
           <IconSparkles size={22} stroke={1.5} />
         </div>
-        <h3>Start a new thread</h3>
+        <h3>{t("Start a new thread")}</h3>
 
         {selectableNewThreadWorkspaces.length ? (
           <Select
@@ -117,18 +119,18 @@ export function NewThreadEmptyState({
             value={selectedWorkspace?.id ?? ""}
           >
             <SelectTrigger
-              aria-label="Workspace for the new thread"
+              aria-label={t("Workspace for the new thread")}
               className="new-thread-workspace-trigger"
               title={newThreadWorkspaceEntry?.path ?? undefined}
             >
-              <SelectValue placeholder="Select a workspace" />
+              <SelectValue placeholder={t("Select a workspace")} />
             </SelectTrigger>
             <SelectContent
               align="start"
               className="min-w-[var(--radix-select-trigger-width)]"
             >
               <SelectGroup>
-                <SelectLabel>Workspaces</SelectLabel>
+                <SelectLabel>{t("Workspaces")}</SelectLabel>
                 {selectableNewThreadWorkspaces.map((workspace) => (
                   <SelectItem
                     disabled={!workspace.available}
@@ -137,7 +139,7 @@ export function NewThreadEmptyState({
                   >
                     {workspace.available
                       ? workspace.name
-                      : `${workspace.name} (Unavailable)`}
+                      : t("{name} (Unavailable)", { name: workspace.name })}
                   </SelectItem>
                 ))}
               </SelectGroup>
@@ -148,8 +150,8 @@ export function NewThreadEmptyState({
               >
                 <IconPlus aria-hidden size={13} stroke={1.8} />
                 {workspaceMutation === "add"
-                  ? "Opening folder…"
-                  : "Add workspace…"}
+                  ? t("Opening folder…")
+                  : t("Add workspace…")}
               </SelectItem>
             </SelectContent>
           </Select>
@@ -162,8 +164,8 @@ export function NewThreadEmptyState({
           >
             <IconPlus aria-hidden size={14} stroke={1.8} />
             {workspaceMutation === "add"
-              ? "Opening folder…"
-              : "Add a workspace to begin"}
+              ? t("Opening folder…")
+              : t("Add a workspace to begin")}
           </Button>
         )}
 
@@ -174,7 +176,7 @@ export function NewThreadEmptyState({
           onClick={() => setResumeOpen(true)}
         >
           <IconHistory aria-hidden size={13} stroke={1.8} />
-          Resume existing session
+          {t("Resume existing session")}
         </Button>
       </div>
 
@@ -194,15 +196,14 @@ export function NewThreadEmptyState({
           showCloseButton={!resumeLoading}
         >
           <DialogHeader>
-            <DialogTitle>Resume session</DialogTitle>
+            <DialogTitle>{t("Resume session")}</DialogTitle>
             <DialogDescription>
-              Paste a Claude, Codex, or Gemini session ID. Garyx will recover
-              its workspace and bind a thread to it.
+              {t("Paste a Claude, Codex, or Gemini session ID. Garyx will recover its workspace and bind a thread to it.")}
             </DialogDescription>
           </DialogHeader>
 
           <Input
-            aria-label="Existing provider session ID"
+            aria-label={t("Existing provider session ID")}
             autoFocus
             disabled={resumeLoading}
             onChange={(event) => setResumeSessionId(event.target.value)}
@@ -212,7 +213,7 @@ export function NewThreadEmptyState({
                 void submitResume();
               }
             }}
-            placeholder="Session ID"
+            placeholder={t("Session ID")}
             spellCheck={false}
             value={resumeSessionId}
           />
@@ -228,14 +229,14 @@ export function NewThreadEmptyState({
               onClick={closeResume}
               type="button"
             >
-              Cancel
+              {t("Cancel")}
             </Button>
             <Button
               disabled={resumeLoading || !resumeSessionId.trim()}
               onClick={() => void submitResume()}
               type="button"
             >
-              {resumeLoading ? "Searching…" : "Resume"}
+              {resumeLoading ? t("Searching…") : t("Resume")}
             </Button>
           </DialogFooter>
         </DialogContent>

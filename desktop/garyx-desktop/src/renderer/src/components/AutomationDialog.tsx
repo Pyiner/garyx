@@ -18,6 +18,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { useI18n } from '@/i18n';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -97,6 +98,7 @@ export function AutomationDialog({
   onSubmit,
   onClose,
 }: AutomationDialogProps) {
+  const { t } = useI18n();
   const { mode, draft } = state;
 
   return (
@@ -104,10 +106,10 @@ export function AutomationDialog({
       <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
           <DialogDescription className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-            Automation
+            {t('Automation')}
           </DialogDescription>
           <DialogTitle className="text-base font-semibold">
-            {mode === 'create' ? 'Create Automation' : 'Edit Automation'}
+            {mode === 'create' ? t('Create Automation') : t('Edit Automation')}
           </DialogTitle>
         </DialogHeader>
 
@@ -120,10 +122,10 @@ export function AutomationDialog({
         >
           {/* Name */}
           <div className="grid gap-2">
-            <Label className="text-[12px] font-medium">Name</Label>
+            <Label className="text-[12px] font-medium">{t('Name')}</Label>
             <Input
               autoFocus
-              placeholder="Daily repo triage"
+              placeholder={t('Daily repo triage')}
               value={draft.label}
               onChange={(e) =>
                 onDraftChange((d) => ({ ...d, label: e.target.value }))
@@ -133,7 +135,7 @@ export function AutomationDialog({
 
           {/* Agent */}
           <div className="grid gap-2">
-            <Label className="text-[12px] font-medium">Agent or Team</Label>
+            <Label className="text-[12px] font-medium">{t('Agent or Team')}</Label>
             <select
               className="h-10 w-full rounded-lg border border-[#e1e1e1] bg-white px-3 py-2 text-[13px] outline-none focus-visible:border-[#ccc] focus-visible:ring-[3px] focus-visible:ring-ring/50"
               value={draft.agentId}
@@ -143,7 +145,7 @@ export function AutomationDialog({
             >
               {draft.agentId && !agentOptions.some((option) => option.id === draft.agentId) ? (
                 <option value={draft.agentId}>
-                  {draft.agentId} (unavailable)
+                  {t('{name} (unavailable)', { name: draft.agentId })}
                 </option>
               ) : null}
               {agentOptions.map((option) => (
@@ -156,7 +158,7 @@ export function AutomationDialog({
 
           {/* Workspace */}
           <div className="grid gap-2">
-            <Label className="text-[12px] font-medium">Workspace</Label>
+            <Label className="text-[12px] font-medium">{t('Workspace')}</Label>
             <select
               className="h-10 w-full rounded-lg border border-[#e1e1e1] bg-white px-3 py-2 text-[13px] outline-none focus-visible:border-[#ccc] focus-visible:ring-[3px] focus-visible:ring-ring/50"
               value={draft.workspaceId}
@@ -167,7 +169,7 @@ export function AutomationDialog({
               {currentWorkspace &&
                 !workspaces.some((w) => w.id === currentWorkspace.id) && (
                   <option value={currentWorkspace.id}>
-                    {currentWorkspace.name} (unavailable)
+                    {t('{name} (unavailable)', { name: currentWorkspace.name })}
                   </option>
                 )}
               {workspaces.map((w) => (
@@ -180,9 +182,9 @@ export function AutomationDialog({
 
           {/* Prompt */}
           <div className="grid gap-2">
-            <Label className="text-[12px] font-medium">Prompt</Label>
+            <Label className="text-[12px] font-medium">{t('Prompt')}</Label>
             <Textarea
-              placeholder="Summarize Sentry issues that need action."
+              placeholder={t('Summarize Sentry issues that need action.')}
               rows={6}
               value={draft.prompt}
               onChange={(e) =>
@@ -193,7 +195,7 @@ export function AutomationDialog({
 
           {/* Schedule */}
           <div className="grid gap-3">
-            <Label className="text-[12px] font-medium">Schedule</Label>
+            <Label className="text-[12px] font-medium">{t('Schedule')}</Label>
             <div className="flex items-center gap-2">
               <Button
                 type="button"
@@ -207,7 +209,7 @@ export function AutomationDialog({
                   }))
                 }
               >
-                Daily
+                {t('Daily')}
               </Button>
               <Button
                 type="button"
@@ -221,7 +223,7 @@ export function AutomationDialog({
                   }))
                 }
               >
-                Interval
+                {t('Interval')}
               </Button>
               <Button
                 type="button"
@@ -235,7 +237,7 @@ export function AutomationDialog({
                   }))
                 }
               >
-                Once
+                {t('Once')}
               </Button>
             </div>
 
@@ -243,7 +245,7 @@ export function AutomationDialog({
               <div className="grid grid-cols-2 gap-3">
                 {/* Time */}
                 <div className="grid gap-2">
-                  <Label className="text-[11px] text-muted-foreground">Time</Label>
+                  <Label className="text-[11px] text-muted-foreground">{t('Time')}</Label>
                   <Input
                     type="time"
                     value={draft.schedule.time}
@@ -258,7 +260,7 @@ export function AutomationDialog({
                 </div>
                 {/* Timezone */}
                 <div className="grid gap-2">
-                  <Label className="text-[11px] text-muted-foreground">Timezone</Label>
+                  <Label className="text-[11px] text-muted-foreground">{t('Timezone')}</Label>
                   <Input
                     placeholder="Asia/Shanghai"
                     value={draft.schedule.timezone}
@@ -302,7 +304,7 @@ export function AutomationDialog({
               </div>
             ) : draft.schedule.kind === 'interval' ? (
               <div className="grid gap-2">
-                <Label className="text-[11px] text-muted-foreground">Every</Label>
+                <Label className="text-[11px] text-muted-foreground">{t('Every')}</Label>
                 <div className="flex items-center gap-2.5">
                   <Input
                     type="number"
@@ -317,12 +319,12 @@ export function AutomationDialog({
                       )
                     }
                   />
-                  <span className="text-[12px] text-muted-foreground">hours</span>
+                  <span className="text-[12px] text-muted-foreground">{t('hours')}</span>
                 </div>
               </div>
             ) : (
               <div className="grid gap-2">
-                <Label className="text-[11px] text-muted-foreground">Run At</Label>
+                <Label className="text-[11px] text-muted-foreground">{t('Run At')}</Label>
                 <Input
                   type="datetime-local"
                   value={draft.schedule.at}
@@ -335,7 +337,7 @@ export function AutomationDialog({
                   }
                 />
                 <p className="text-[11px] text-muted-foreground">
-                  Uses this machine&apos;s local time.
+                  {t("Uses this machine's local time.")}
                 </p>
               </div>
             )}
@@ -349,14 +351,14 @@ export function AutomationDialog({
               className="h-8 rounded-full px-4 text-[12px]"
               onClick={onClose}
             >
-              Cancel
+              {t('Cancel')}
             </Button>
             <Button
               type="submit"
               className="h-8 rounded-full px-4 text-[12px] shadow-sm active:scale-[0.96]"
               disabled={saving}
             >
-              {saving ? 'Saving…' : mode === 'create' ? 'Create' : 'Save'}
+              {saving ? t('Saving…') : mode === 'create' ? t('Create') : t('Save')}
             </Button>
           </DialogFooter>
         </form>

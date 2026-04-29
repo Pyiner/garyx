@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { useI18n } from '@/i18n';
 
 type DirectoryInputProps = {
   value: string;
@@ -9,6 +10,8 @@ type DirectoryInputProps = {
 };
 
 export function DirectoryInput({ value, onChange, id, placeholder }: DirectoryInputProps) {
+  const { t } = useI18n();
+
   async function handleBrowse() {
     const picked = await window.garyxDesktop.pickDirectory({
       defaultPath: value || null,
@@ -34,7 +37,7 @@ export function DirectoryInput({ value, onChange, id, placeholder }: DirectoryIn
         type="button"
         variant="outline"
       >
-        Browse…
+        {t('Browse...')}
       </Button>
     </div>
   );

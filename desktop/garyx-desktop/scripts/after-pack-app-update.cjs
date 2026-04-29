@@ -1,5 +1,5 @@
 const { mkdir, readFile, writeFile } = require("node:fs/promises");
-const { dirname, join, resolve } = require("node:path");
+const { join, resolve } = require("node:path");
 
 function yamlScalar(value) {
   if (typeof value === "string") {
@@ -58,7 +58,10 @@ async function ensureAppUpdateConfig(context = {}) {
     return;
   }
 
-  const resourcesDir = join(appOutDir, "Contents", "Resources");
+  const resourcesDir =
+    typeof context.packager?.getResourcesDir === "function"
+      ? context.packager.getResourcesDir(appOutDir)
+      : join(appOutDir, "Contents", "Resources");
   const updaterCacheDirName =
     context.packager?.appInfo?.updaterCacheDirName
     || `${String(packageJson.name || "garyx-desktop").toLowerCase()}-updater`;

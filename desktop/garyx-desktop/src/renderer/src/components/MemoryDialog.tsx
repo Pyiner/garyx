@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import { useI18n } from '../i18n';
 
 type MemoryDialogProps = {
   open: boolean;
@@ -65,6 +66,7 @@ export function MemoryDialog({
   onSave,
   onClose,
 }: MemoryDialogProps) {
+  const { t } = useI18n();
   const modifiedLabel = formatTimestamp(modifiedAt);
 
   return (
@@ -78,7 +80,7 @@ export function MemoryDialog({
         <DialogHeader>
           <DialogTitle className="text-base font-semibold">{title}</DialogTitle>
           <DialogDescription className="break-all font-mono text-[11px] leading-5 text-muted-foreground">
-            {path || 'Resolving memory path…'}
+            {path || t('Resolving memory path…')}
           </DialogDescription>
         </DialogHeader>
 
@@ -88,20 +90,20 @@ export function MemoryDialog({
               variant="secondary"
               className="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
             >
-              {scope === 'global' ? 'Global Memory' : 'Automation Memory'}
+              {scope === 'global' ? t('Global Memory') : t('Automation Memory')}
             </Badge>
             <Badge
               variant={exists ? 'outline' : 'secondary'}
               className="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
             >
-              {exists ? 'Existing File' : 'Create On Save'}
+              {exists ? t('Existing File') : t('Create On Save')}
             </Badge>
             {modifiedLabel ? (
               <Badge
                 variant="secondary"
                 className="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
               >
-                Updated {modifiedLabel}
+                {t('Updated {time}', { time: modifiedLabel })}
               </Badge>
             ) : null}
             {dirty ? (
@@ -109,7 +111,7 @@ export function MemoryDialog({
                 variant="secondary"
                 className="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
               >
-                Unsaved Changes
+                {t('Unsaved Changes')}
               </Badge>
             ) : null}
             {status ? (
@@ -125,14 +127,14 @@ export function MemoryDialog({
 
           {!exists && !loading ? (
             <div className="rounded-2xl border border-[#ece5d9] bg-[#fffaf2] px-4 py-3 text-[13px] leading-6 text-[#6a5840]">
-              This memory file does not exist yet. Save once to create it.
+              {t('This memory file does not exist yet. Save once to create it.')}
             </div>
           ) : null}
 
           <Textarea
             className="min-h-[420px] resize-y rounded-2xl border-[#e7e7e5] bg-white font-mono text-[13px] leading-6 shadow-none"
             disabled={loading || saving}
-            placeholder={loading ? 'Loading memory…' : 'Write durable notes for future runs.'}
+            placeholder={loading ? t('Loading memory…') : t('Write durable notes for future runs.')}
             spellCheck={false}
             value={draftContent}
             onChange={(event) => {
@@ -143,10 +145,10 @@ export function MemoryDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} type="button">
-            Close
+            {t('Close')}
           </Button>
           <Button disabled={loading || saving || !dirty} onClick={onSave} type="button">
-            {saving ? 'Saving…' : 'Save Memory'}
+            {saving ? t('Saving…') : t('Save Memory')}
           </Button>
         </DialogFooter>
       </DialogContent>

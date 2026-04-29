@@ -10,7 +10,7 @@
  *   fields (accountId, name, workspaceDir).
  *
  * - [`PluginConfigPanel`] — standalone: `PluginConfigSections`
- *   wrapped with its own state + "保存" button. Useful as a
+ *   wrapped with its own state + Save button. Useful as a
  *   drop-in in settings panels where the plugin's config is the
  *   only thing being edited.
  *
@@ -34,6 +34,7 @@ import type {
 
 import { AuthFlowDriver } from "./AuthFlowDriver";
 import { JsonSchemaForm } from "./JsonSchemaForm";
+import { useI18n } from "@/i18n";
 
 /** Discriminator over `config_methods[].kind`. */
 function methodKind(method: ChannelPluginConfigMethod): string {
@@ -74,6 +75,7 @@ export interface PluginConfigSectionsProps {
 export function PluginConfigSections(
   props: PluginConfigSectionsProps,
 ): ReactElement {
+  const { t } = useI18n();
   const {
     entry,
     value,
@@ -98,8 +100,8 @@ export function PluginConfigSections(
   if (methods === "empty") {
     return (
       <div className="rounded-md border border-[#eeeeee] bg-[#fafaf9] p-4 text-sm text-red-700">
-        该插件未声明任何配置方法（<code>config_methods</code> 为空）。
-        这是插件或网关的配置错误，请检查 manifest 或联系插件作者。
+        {t("This plugin does not declare any config methods.")} (<code>config_methods</code> {t("is empty")}).
+        {t(" This is a plugin or gateway configuration error. Check the manifest or contact the plugin author.")}
       </div>
     );
   }
@@ -115,7 +117,7 @@ export function PluginConfigSections(
                 className="flex flex-col gap-3 rounded-md border border-[#eeeeee] bg-white p-4"
               >
                 <h4 className="text-sm font-medium text-neutral-900">
-                  手动填写
+                  {t("Manual setup")}
                 </h4>
                 <JsonSchemaForm
                   schema={entry.schema as Record<string, unknown>}
@@ -136,7 +138,7 @@ export function PluginConfigSections(
               >
                 <div className="flex items-center justify-between">
                   <h4 className="text-sm font-medium text-neutral-900">
-                    一键登录
+                    {t("One-click login")}
                   </h4>
                   {!showAutoLogin && (
                     <button
@@ -144,7 +146,7 @@ export function PluginConfigSections(
                       onClick={() => setShowAutoLogin(true)}
                       className="rounded-md bg-[#2e7d32] px-3 py-1.5 text-sm text-white"
                     >
-                      开始登录
+                      {t("Start login")}
                     </button>
                   )}
                 </div>
@@ -158,7 +160,7 @@ export function PluginConfigSections(
                   />
                 )}
                 <p className="text-xs text-neutral-500">
-                  登录成功后，上方表单会自动填入获取到的账号信息，你可以再次检查后保存。
+                  {t("After login succeeds, the form above is filled with account info. Review it before saving.")}
                 </p>
               </section>
             );
@@ -186,6 +188,7 @@ export interface PluginConfigPanelProps {
 }
 
 export function PluginConfigPanel(props: PluginConfigPanelProps): ReactElement {
+  const { t } = useI18n();
   const { entry, initialValue = {}, onSave, onCancel } = props;
   const [value, setValue] = useState<Record<string, unknown>>(initialValue);
   const [saving, setSaving] = useState(false);
@@ -238,7 +241,7 @@ export function PluginConfigPanel(props: PluginConfigPanelProps): ReactElement {
             disabled={saving}
             className="rounded-md border border-[#eeeeee] px-3 py-1.5 text-sm text-neutral-700 disabled:opacity-50"
           >
-            取消
+            {t("Cancel")}
           </button>
         )}
         <button
@@ -247,7 +250,7 @@ export function PluginConfigPanel(props: PluginConfigPanelProps): ReactElement {
           disabled={saving}
           className="rounded-md bg-[#2e7d32] px-3 py-1.5 text-sm text-white disabled:opacity-50"
         >
-          {saving ? "保存中…" : "保存"}
+          {saving ? t("Saving…") : t("Save")}
         </button>
       </footer>
     </div>

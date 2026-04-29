@@ -330,13 +330,17 @@ Saving the gateway URL/token pair first verifies connectivity. Only verified
 saves are written to local desktop state and added to the Gateway URL history;
 the field can still be edited manually.
 
-Gateway runtime settings and `agent_defaults.heartbeat` defaults are edited from
-separate Gateway and Heartbeat tabs in the desktop Settings view.
+Gateway runtime settings, including `agent_defaults.heartbeat` defaults, are
+edited from the Gateway tab in the desktop Settings view.
 
 Packaged macOS builds check for app updates automatically. You can also open
 Settings > Mac App and use Check Now to manually refresh the update state.
 Development builds report update checks as unavailable because there is no
 signed app bundle to replace.
+
+The desktop language preference is stored in local desktop state. The default
+is `system`, which follows macOS and falls back to English; users can also
+choose English or Chinese explicitly from Settings.
 
 ## CLI Update
 

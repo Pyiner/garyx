@@ -221,8 +221,6 @@ export function SettingsTabIcon({ tabId }: { tabId: SettingsTabId }) {
   switch (tabId) {
     case 'gateway':
       return <GatewayIcon />;
-    case 'heartbeat':
-      return <HeartbeatIcon />;
     case 'provider':
       return <ProviderIcon />;
     case 'channels':
@@ -239,7 +237,7 @@ export function isLocalSettingsTab(tabId: SettingsTabId): boolean {
 }
 
 export function isGatewayConfigSettingsTab(tabId: SettingsTabId): boolean {
-  return tabId === 'gateway' || tabId === 'heartbeat' || tabId === 'channels' || tabId === 'labs';
+  return tabId === 'gateway' || tabId === 'channels' || tabId === 'labs' || tabId === 'advanced';
 }
 
 export function FolderIcon() {

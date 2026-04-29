@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
+import { useI18n } from '@/i18n';
 
 type ThreadMemoryPanelProps = {
   workspacePath?: string | null;
@@ -61,6 +62,7 @@ function buildReadInput(target: MemoryTarget) {
 }
 
 export function ThreadMemoryPanel({ workspacePath }: ThreadMemoryPanelProps) {
+  const { t } = useI18n();
   const [activeScope, setActiveScope] = useState<DesktopMemoryDocumentScope>(
     workspacePath?.trim() ? 'workspace' : 'global',
   );
@@ -101,7 +103,7 @@ export function ThreadMemoryPanel({ workspacePath }: ThreadMemoryPanelProps) {
         setDocument(null);
         setDraft('');
         setSavedContent('');
-        setError(loadError instanceof Error ? loadError.message : 'Failed to load memory.md.');
+        setError(loadError instanceof Error ? loadError.message : t('Failed to load memory.md.'));
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -112,7 +114,7 @@ export function ThreadMemoryPanel({ workspacePath }: ThreadMemoryPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeScope, workspacePath]);
+  }, [activeScope, workspacePath, t]);
 
   const dirty = draft !== savedContent;
   const modifiedLabel = formatTimestamp(document?.modifiedAt);
@@ -131,9 +133,9 @@ export function ThreadMemoryPanel({ workspacePath }: ThreadMemoryPanelProps) {
       setDocument(nextDocument);
       setDraft(nextDocument.content);
       setSavedContent(nextDocument.content);
-      setStatus('Saved memory.md.');
+      setStatus(t('Saved memory.md.'));
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to save memory.md.');
+      setError(saveError instanceof Error ? saveError.message : t('Failed to save memory.md.'));
     } finally {
       setSaving(false);
     }
@@ -144,9 +146,9 @@ export function ThreadMemoryPanel({ workspacePath }: ThreadMemoryPanelProps) {
       <CardHeader className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle className="text-base">Memory</CardTitle>
+            <CardTitle className="text-base">{t('Memory')}</CardTitle>
             <CardDescription>
-              Edit durable memory without leaving the thread.
+              {t('Edit durable memory without leaving the thread.')}
             </CardDescription>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -159,7 +161,7 @@ export function ThreadMemoryPanel({ workspacePath }: ThreadMemoryPanelProps) {
                 setActiveScope('workspace');
               }}
             >
-              Workspace
+              {t('Workspace')}
             </Button>
             <Button
               size="sm"
@@ -169,32 +171,32 @@ export function ThreadMemoryPanel({ workspacePath }: ThreadMemoryPanelProps) {
                 setActiveScope('global');
               }}
             >
-              Global
+              {t('Global')}
             </Button>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="secondary">
-            {activeScope === 'workspace' ? 'Workspace Memory' : 'Global Memory'}
+            {activeScope === 'workspace' ? t('Workspace Memory') : t('Global Memory')}
           </Badge>
           <Badge variant={document?.exists ? 'outline' : 'secondary'}>
-            {document?.exists ? 'Existing File' : 'Create On Save'}
+            {document?.exists ? t('Existing File') : t('Create On Save')}
           </Badge>
-          {modifiedLabel ? <Badge variant="secondary">Updated {modifiedLabel}</Badge> : null}
-          {dirty ? <Badge variant="secondary">Unsaved Changes</Badge> : null}
+          {modifiedLabel ? <Badge variant="secondary">{t('Updated {time}', { time: modifiedLabel })}</Badge> : null}
+          {dirty ? <Badge variant="secondary">{t('Unsaved Changes')}</Badge> : null}
           {status ? <span className="text-[12px] font-medium text-emerald-700">{status}</span> : null}
         </div>
 
         <div className="break-all font-mono text-[11px] leading-5 text-muted-foreground">
-          {document?.path || 'Resolving memory path…'}
+          {document?.path || t('Resolving memory path…')}
         </div>
       </CardHeader>
 
       <CardContent className="grid gap-3">
         {!canUseWorkspace && activeScope === 'global' ? (
           <div className="rounded-2xl border border-[#ece5d9] bg-[#fffaf2] px-4 py-3 text-[13px] leading-6 text-[#6a5840]">
-            This thread is not bound to a workspace, so only global memory is available.
+            {t('This thread is not bound to a workspace, so only global memory is available.')}
           </div>
         ) : null}
 
@@ -206,14 +208,14 @@ export function ThreadMemoryPanel({ workspacePath }: ThreadMemoryPanelProps) {
 
         {!document?.exists && !loading ? (
           <div className="rounded-2xl border border-[#ece5d9] bg-[#fffaf2] px-4 py-3 text-[13px] leading-6 text-[#6a5840]">
-            This memory file does not exist yet. Save once to create it.
+            {t('This memory file does not exist yet. Save once to create it.')}
           </div>
         ) : null}
 
         <Textarea
           className="min-h-[420px] resize-y rounded-2xl border-[#e7e7e5] bg-white font-mono text-[13px] leading-6 shadow-none"
           disabled={loading || saving}
-          placeholder={loading ? 'Loading memory…' : 'Write durable notes for future runs.'}
+          placeholder={loading ? t('Loading memory…') : t('Write durable notes for future runs.')}
           spellCheck={false}
           value={draft}
           onChange={(event) => {
@@ -223,7 +225,7 @@ export function ThreadMemoryPanel({ workspacePath }: ThreadMemoryPanelProps) {
 
         <div className="flex justify-end">
           <Button disabled={loading || saving || !dirty} onClick={() => { void handleSave(); }} type="button">
-            {saving ? 'Saving…' : 'Save Memory'}
+            {saving ? t('Saving…') : t('Save Memory')}
           </Button>
         </div>
       </CardContent>

@@ -4,6 +4,8 @@ const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 const DEFAULT_THREAD_HISTORY_BACKEND = 'transcript_v1';
 const DEFAULT_CHANNEL_AGENT_ID = 'claude';
 
+export type GatewaySettingsMode = 'form' | 'json';
+
 export function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? {})) as T;
 }

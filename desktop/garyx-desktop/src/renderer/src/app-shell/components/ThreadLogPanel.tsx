@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 
 import type { ClientLogEntry, ThreadLogLine, ThreadLogTab } from '../types';
+import { useI18n } from '../../i18n';
 
 type ThreadLogPanelProps = {
   activeThreadTitle: string | null;
@@ -40,7 +41,8 @@ export function ThreadLogPanel({
   onContentScroll,
   onToggleClientLogEntry,
 }: ThreadLogPanelProps) {
-  const threadLogsLabel = activeThreadTitle || selectedThreadId || 'Current thread logs';
+  const { t } = useI18n();
+  const threadLogsLabel = activeThreadTitle || selectedThreadId || t('Current thread logs');
 
   return (
     <aside
@@ -50,7 +52,7 @@ export function ThreadLogPanel({
     >
       <div className="thread-log-panel-toolbar">
         <ToggleGroup
-          aria-label="Log sources"
+          aria-label={t('Log sources')}
           className="thread-log-panel-tabs"
           onValueChange={(value) => {
             if (value === 'client' || value === 'mobile') {
@@ -63,8 +65,8 @@ export function ThreadLogPanel({
           value={threadLogsActiveTab}
           variant="outline"
         >
-          <ToggleGroupItem value="client">Client Logs</ToggleGroupItem>
-          <ToggleGroupItem value="mobile">Mobile Logs</ToggleGroupItem>
+          <ToggleGroupItem value="client">{t('Client Logs')}</ToggleGroupItem>
+          <ToggleGroupItem value="mobile">{t('Mobile Logs')}</ToggleGroupItem>
         </ToggleGroup>
         <div className="thread-log-panel-actions">
           {activeThreadLogsHasUnread ? (
@@ -75,7 +77,7 @@ export function ThreadLogPanel({
               type="button"
               variant="ghost"
             >
-              Latest
+              {t('Latest')}
             </Button>
           ) : null}
         </div>
@@ -114,7 +116,7 @@ export function ThreadLogPanel({
                       <span className="thread-log-client-entry-summary" title={entry.summary}>
                         {entry.summary || '\u00A0'}
                       </span>
-                      <span className="thread-log-client-entry-caret">{expanded ? 'Hide' : 'Show'}</span>
+                      <span className="thread-log-client-entry-caret">{expanded ? t('Hide') : t('Show')}</span>
                     </button>
                     {expanded ? (
                       <pre className="thread-log-client-entry-detail">{entry.detail}</pre>
@@ -124,7 +126,7 @@ export function ThreadLogPanel({
               })}
             </div>
           ) : (
-            <div className="thread-log-panel-empty">No client stream events yet.</div>
+            <div className="thread-log-panel-empty">{t('No client stream events yet.')}</div>
           )
         ) : (
           mobileThreadLogLines.length ? (
@@ -138,7 +140,7 @@ export function ThreadLogPanel({
             ))
           ) : (
             <div className="thread-log-panel-empty">
-              {threadLogsLoading ? 'Loading logs…' : 'No logs yet.'}
+              {threadLogsLoading ? t('Loading logs…') : t('No logs yet.')}
             </div>
           )
         )}

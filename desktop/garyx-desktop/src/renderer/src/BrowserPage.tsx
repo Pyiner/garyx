@@ -5,6 +5,7 @@ import type { DesktopBrowserState } from '@shared/contracts';
 
 import { getDesktopApi } from './platform/desktop-api';
 import { BrowserBackIcon, BrowserForwardIcon, BrowserRefreshIcon, BrowserCloseTabIcon, ExternalLinkIcon, NewTabIcon, BrowserIcon, LockIcon, InfoIcon } from './app-shell/icons';
+import { useI18n } from './i18n';
 
 function isHttpsUrl(url: string) {
   return url.startsWith('https://');
@@ -15,6 +16,7 @@ function activeTab(state: DesktopBrowserState | null) {
 }
 
 export function BrowserPage() {
+  const { t } = useI18n();
   const api = getDesktopApi();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const browserInfoButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -173,8 +175,8 @@ export function BrowserPage() {
                   }}
                   type="button"
                 >
-                  <span className="browser-tab-title">{tab.title || tab.url || 'New Tab'}</span>
-                  {tab.isLoading && <span aria-label="Loading" className="browser-tab-spinner" />}
+                  <span className="browser-tab-title">{tab.title || tab.url || t('New Tab')}</span>
+                  {tab.isLoading && <span aria-label={t('Loading')} className="browser-tab-spinner" />}
                 </button>
                 <button
                   className="codex-icon-button browser-tab-close"
@@ -189,7 +191,7 @@ export function BrowserPage() {
               </div>
             ))}
             <button
-              aria-label="New Tab"
+              aria-label={t('New Tab')}
               className="codex-icon-button browser-tab-add"
               onClick={() => {
                 void api.createBrowserTab();
@@ -264,7 +266,7 @@ export function BrowserPage() {
               onFocus={(event) => {
                 event.target.select();
               }}
-              placeholder="Search or enter address"
+              placeholder={t('Search or enter address')}
               value={addressValue}
             />
           </form>
@@ -276,7 +278,7 @@ export function BrowserPage() {
                 void api.browserOpenExternal(active.id);
               }
             }}
-            title="Open in Browser"
+            title={t('Open in Browser')}
             type="button"
           >
             <ExternalLinkIcon />
@@ -299,7 +301,7 @@ export function BrowserPage() {
               zIndex: 2000,
             }}
           >
-            <div className="browser-connection-menu" role="menu" aria-label="Browser connection details">
+            <div className="browser-connection-menu" role="menu" aria-label={t('Browser connection details')}>
               <div className="browser-connection-info">
                 <span className="browser-connection-label">CDP</span>
                 <code>{browserState.debugEndpoint.origin}</code>
@@ -317,7 +319,7 @@ export function BrowserPage() {
                   role="menuitem"
                   type="button"
                 >
-                  Copy CDP Endpoint
+                  {t('Copy CDP Endpoint')}
                 </button>
                 <button
                   className="browser-connection-action"
@@ -327,7 +329,7 @@ export function BrowserPage() {
                   role="menuitem"
                   type="button"
                 >
-                  Copy CDP List URL
+                  {t('Copy CDP List URL')}
                 </button>
               </div>
             </div>

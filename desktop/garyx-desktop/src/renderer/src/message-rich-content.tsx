@@ -10,6 +10,7 @@ import {
   RichMessageText,
   type LocalFileLinkHandler,
 } from "./message-rich-text";
+import { useI18n, type Translate } from "./i18n";
 
 type TranscriptSegment =
   | {
@@ -402,12 +403,13 @@ export function splitRichMessageContentIntoBubbleParts({
 
 function formatFileSegmentMeta(
   segment: Extract<TranscriptSegment, { kind: "file" }>,
+  t: Translate,
 ): string {
   const mediaType = segment.mediaType?.trim();
   if (mediaType) {
     return mediaType;
   }
-  return segment.path ? "Local attachment" : "Attached file";
+  return segment.path ? t("Local attachment") : t("Attached file");
 }
 
 function MessageFileAttachmentCard({
@@ -417,19 +419,23 @@ function MessageFileAttachmentCard({
   segment: Extract<TranscriptSegment, { kind: "file" }>;
   onLocalFileLinkClick?: LocalFileLinkHandler;
 }) {
+  const { t } = useI18n();
   const previewPath = segment.path;
   const canPreview = Boolean(previewPath && onLocalFileLinkClick);
+  const label = segment.label === "Attached file" || segment.label === "Attached image"
+    ? t(segment.label)
+    : segment.label;
   const body = (
     <>
       <span aria-hidden="true" className="message-file-card-icon">
         <FileText size={18} strokeWidth={1.8} />
       </span>
       <span className="message-file-card-copy">
-        <span className="message-file-card-name" title={segment.label}>
-          {segment.label}
+        <span className="message-file-card-name" title={label}>
+          {label}
         </span>
         <span className="message-file-card-meta">
-          {formatFileSegmentMeta(segment)}
+          {formatFileSegmentMeta(segment, t)}
         </span>
       </span>
     </>
@@ -439,7 +445,7 @@ function MessageFileAttachmentCard({
     return (
       <div
         className="message-file-card"
-        title={segment.path || segment.label}
+        title={segment.path || label}
       >
         {body}
       </div>
@@ -448,7 +454,7 @@ function MessageFileAttachmentCard({
 
   return (
     <button
-      aria-label={`Preview attached file ${segment.label}`}
+      aria-label={t('Preview attached file {name}', { name: label })}
       className="message-file-card message-file-card-clickable"
       onClick={() => onLocalFileLinkClick(previewPath)}
       title={previewPath}

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 
 import type { DesktopUpdateStatus } from '@shared/contracts';
+import { useI18n } from '../../i18n';
 
 const IDLE_STATUS: DesktopUpdateStatus = { phase: 'idle' };
 
 export function UpdatePill() {
+  const { t } = useI18n();
   const [status, setStatus] = useState<DesktopUpdateStatus>(IDLE_STATUS);
   const [installing, setInstalling] = useState(false);
 
@@ -43,11 +45,11 @@ export function UpdatePill() {
           setInstalling(false);
         });
       }}
-      title={`Update to v${status.info.version} and restart`}
+      title={t('Update to v{version} and restart', { version: status.info.version })}
       type="button"
     >
       <span className="update-pill-dot" />
-      <span className="update-pill-label">Update</span>
+      <span className="update-pill-label">{t('Update')}</span>
       <span className="update-pill-version">v{status.info.version}</span>
     </button>
   );

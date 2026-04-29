@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { IconUsersGroup } from '@tabler/icons-react';
 
 import { AgentAvatar } from './app-shell/components/AgentAvatar';
+import { useI18n, type Translate } from './i18n';
 
 export type ConversationTeamMember = {
   agentId: string;
@@ -22,14 +23,15 @@ type ConversationTeamMembersProps = {
   onOpenThread: (threadId: string) => void;
 };
 
-function memberCountLabel(count: number): string {
-  return `${count} member${count === 1 ? '' : 's'}`;
+function memberCountLabel(count: number, t: Translate): string {
+  return count === 1 ? t('1 member') : t('{count} members', { count });
 }
 
 export function ConversationTeamMembers({
   teamSummary,
   onOpenThread,
 }: ConversationTeamMembersProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const shellRef = useRef<HTMLDivElement | null>(null);
 
@@ -63,7 +65,7 @@ export function ConversationTeamMembers({
   }, [open]);
 
   const visibleMembers = teamSummary.members.slice(0, 3);
-  const countLabel = memberCountLabel(teamSummary.members.length);
+  const countLabel = memberCountLabel(teamSummary.members.length, t);
 
   return (
     <div className={`conversation-team-members${open ? ' is-open' : ''}`} ref={shellRef}>
@@ -94,7 +96,7 @@ export function ConversationTeamMembers({
 
       {open ? (
         <div
-          aria-label={`${teamSummary.teamName} team members`}
+          aria-label={t('{name} team members', { name: teamSummary.teamName })}
           className="conversation-team-members-panel"
           role="dialog"
         >
@@ -102,7 +104,7 @@ export function ConversationTeamMembers({
             <div className="conversation-team-members-panel-title">
               <div className="conversation-team-members-panel-eyebrow">
                 <IconUsersGroup aria-hidden size={14} stroke={1.8} />
-                <span>Team</span>
+                <span>{t('Team')}</span>
                 <span aria-hidden="true">•</span>
                 <span>{countLabel}</span>
               </div>
@@ -136,10 +138,10 @@ export function ConversationTeamMembers({
                   <div className="conversation-team-member-name-row">
                     <span className="conversation-team-member-name">{member.displayName}</span>
                     {member.role === 'leader' ? (
-                      <span className="conversation-team-member-pill">Leader</span>
+                      <span className="conversation-team-member-pill">{t('Leader')}</span>
                     ) : null}
                     {member.isCurrentAgent ? (
-                      <span className="conversation-team-member-pill is-current">Current</span>
+                      <span className="conversation-team-member-pill is-current">{t('Current')}</span>
                     ) : null}
                   </div>
                   <div className="conversation-team-member-meta">{member.agentId}</div>

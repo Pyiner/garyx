@@ -19,6 +19,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,6 +41,40 @@ const OUT_FILE = path.join(OUT_DIR, 'catalog-panel.png');
 // Short: macOS caps UNIX socket paths at ~104 chars and playwright-cli
 // appends a session-name-based suffix in a deep /var/folders/... path.
 const SESSION_NAME = 'gx';
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function unescapeJsString(value) {
+  return value
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\r')
+    .replace(/\\t/g, '\t')
+    .replace(/\\'/g, "'")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
+function loadZhTranslation(key) {
+  const i18nSource = readFileSync(
+    path.join(projectDir, 'src/renderer/src/i18n/index.tsx'),
+    'utf8',
+  );
+  const escapedKey = escapeRegExp(key).replace(/'/g, "\\'");
+  const match = i18nSource.match(
+    new RegExp(`['"]${escapedKey}['"]\\s*:\\s*(['"])((?:\\\\.|(?!\\1).)*)\\1`),
+  );
+  return match ? unescapeJsString(match[2]) : key;
+}
+
+function oneOfExact(values) {
+  return new RegExp(`^(?:${values.map(escapeRegExp).join('|')})$`);
+}
+
+function captureLabel(key) {
+  return [key, loadZhTranslation(key)];
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -315,17 +350,13 @@ async function main() {
     // not necessarily a <button role=button> — match on visible
     // text, filtering to an element whose content is exactly
     // "Settings" (not something like "Open Settings").
-    const settingsEntry = firstWindow
-      .locator('text=/^\\s*(Settings|设置)\\s*$/')
-      .first();
+    const settingsEntry = firstWindow.getByText(oneOfExact(captureLabel('Settings'))).first();
     await settingsEntry.waitFor({ timeout: 10_000 });
     await settingsEntry.click();
     console.log('[capture] Settings opened');
     await sleep(600);
 
-    const channelsTab = firstWindow
-      .locator('text=/^\\s*(Channels|渠道)\\s*$/')
-      .first();
+    const channelsTab = firstWindow.getByText(oneOfExact(captureLabel('Channels'))).first();
     await channelsTab.waitFor({ timeout: 10_000 });
     await channelsTab.click();
     console.log('[capture] Channels tab opened');

@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { I18nConsumer } from './i18n';
 
 type SettingsErrorBoundaryProps = {
   activeTab: string;
@@ -41,38 +42,43 @@ export class SettingsErrorBoundary extends Component<
     if (!this.state.error) {
       return this.props.children;
     }
+    const errorMessage = this.state.error.message;
 
     return (
-      <section className="panel settings-section">
-        <div className="panel-header settings-section-header">
-          <div className="settings-section-copy">
-            <span className="eyebrow">Settings Error</span>
-            <h3 className="settings-section-title">The current settings tab failed to render</h3>
-            <p className="small-note">
-              Garyx kept the rest of the app alive. Reload this tab or switch to another one.
-            </p>
-          </div>
-        </div>
-        <div className="settings-section-body">
-          <div className="settings-surface-group">
-            <div className="settings-surface-list">
-              <div className="settings-control-row stacked">
-                <div className="settings-control-row-copy">
-                  <div className="settings-control-row-label">Error</div>
-                  <p className="settings-control-row-description">
-                    {this.state.error.message || 'Unknown renderer error'}
-                  </p>
-                </div>
-                <div className="settings-control-row-control">
-                  <button className="primary-button" onClick={this.handleRetry} type="button">
-                    Reload Tab
-                  </button>
+      <I18nConsumer>
+        {({ t }) => (
+          <section className="panel settings-section">
+            <div className="panel-header settings-section-header">
+              <div className="settings-section-copy">
+                <span className="eyebrow">{t('Settings Error')}</span>
+                <h3 className="settings-section-title">{t('The current settings tab failed to render')}</h3>
+                <p className="small-note">
+                  {t('Garyx kept the rest of the app alive. Reload this tab or switch to another one.')}
+                </p>
+              </div>
+            </div>
+            <div className="settings-section-body">
+              <div className="settings-surface-group">
+                <div className="settings-surface-list">
+                  <div className="settings-control-row stacked">
+                    <div className="settings-control-row-copy">
+                      <div className="settings-control-row-label">{t('Error')}</div>
+                      <p className="settings-control-row-description">
+                        {errorMessage || t('Unknown renderer error')}
+                      </p>
+                    </div>
+                    <div className="settings-control-row-control">
+                      <button className="primary-button" onClick={this.handleRetry} type="button">
+                        {t('Reload Tab')}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        </div>
-      </section>
+          </section>
+        )}
+      </I18nConsumer>
     );
   }
 }

@@ -1,5 +1,6 @@
 import { IconGripVertical, IconX } from '@tabler/icons-react';
 
+import { useI18n, type Translate } from './i18n';
 import type { MessageIntent } from './message-machine';
 
 type QueueDropTarget = {
@@ -24,28 +25,29 @@ type ComposerQueueProps = {
   onSteerQueuedPrompt: (item: MessageIntent) => void;
 };
 
-function formatAttachmentSummary(imageCount: number, fileCount: number): string {
+function formatAttachmentSummary(imageCount: number, fileCount: number, t: Translate): string {
   const parts: string[] = [];
   if (imageCount > 0) {
-    parts.push(`${imageCount} image${imageCount === 1 ? '' : 's'}`);
+    parts.push(imageCount === 1 ? t('1 image') : t('{count} images', { count: imageCount }));
   }
   if (fileCount > 0) {
-    parts.push(`${fileCount} file${fileCount === 1 ? '' : 's'}`);
+    parts.push(fileCount === 1 ? t('1 file') : t('{count} files', { count: fileCount }));
   }
   return parts.join(', ');
 }
 
-function buildIntentPreview(item: MessageIntent): string {
+function buildIntentPreview(item: MessageIntent, t: Translate): string {
   const trimmed = item.text.trim();
   const attachmentSummary = formatAttachmentSummary(
     item.images.length,
     item.files.length,
+    t,
   );
   if (!trimmed && attachmentSummary) {
     return attachmentSummary;
   }
   if (!trimmed) {
-    return 'Queued follow-up';
+    return t('Queued follow-up');
   }
   if (!attachmentSummary) {
     return trimmed;
@@ -64,6 +66,8 @@ export function ComposerQueue({
   onSetDraggedQueueIntentId,
   onSteerQueuedPrompt,
 }: ComposerQueueProps) {
+  const { t } = useI18n();
+
   if (!activeQueue.length) {
     return null;
   }
@@ -74,7 +78,9 @@ export function ComposerQueue({
         <div className="composer-queue-copy">
           <IconGripVertical aria-hidden className="composer-queue-summary-icon" size={16} stroke={1.7} />
           <span className="composer-queue-note">
-            {activeQueue.length} follow-up{activeQueue.length === 1 ? '' : 's'} ready
+            {activeQueue.length === 1
+              ? t('1 follow-up ready')
+              : t('{count} follow-ups ready', { count: activeQueue.length })}
           </span>
         </div>
       </div>
@@ -141,18 +147,18 @@ export function ComposerQueue({
                     event.dataTransfer.setDragImage(row, 28, 18);
                   }
                 }}
-                title={activeQueue.length > 1 ? 'Drag to reorder' : 'Queue order locked'}
+                title={activeQueue.length > 1 ? t('Drag to reorder') : t('Queue order locked')}
                 tabIndex={-1}
                 type="button"
               >
                 <IconGripVertical aria-hidden size={16} stroke={1.7} />
-                <span className="sr-only">Drag to reorder queued follow-up</span>
+                <span className="sr-only">{t('Drag to reorder queued follow-up')}</span>
               </button>
               <span
                 className="composer-queue-text"
-                title={buildIntentPreview(item)}
+                title={buildIntentPreview(item, t)}
               >
-                {buildIntentPreview(item)}
+                {buildIntentPreview(item, t)}
               </span>
               {isActiveSendingThread && canSteerNow ? (
                 <button
@@ -163,7 +169,7 @@ export function ComposerQueue({
                   }}
                   type="button"
                 >
-                  <span>{isSteering ? 'Steering…' : 'Steer'}</span>
+                  <span>{isSteering ? t('Steering…') : t('Steer')}</span>
                 </button>
               ) : null}
               <button
@@ -176,7 +182,7 @@ export function ComposerQueue({
                 type="button"
               >
                 <IconX aria-hidden size={16} stroke={1.7} />
-                <span className="sr-only">Remove queued follow-up</span>
+                <span className="sr-only">{t('Remove queued follow-up')}</span>
               </button>
             </div>
           );

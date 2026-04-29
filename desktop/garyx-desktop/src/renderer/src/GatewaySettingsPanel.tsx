@@ -30,6 +30,7 @@ import {
 
 import {
   defaultChannelAgentId,
+  type GatewaySettingsMode,
 } from '@renderer/gateway-settings';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -66,6 +67,7 @@ import { AddBotDialog } from './app-shell/components/AddBotDialog';
 import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { EditBotDialog, type EditBotDialogContext, type EditBotPatch } from './app-shell/components/EditBotDialog';
+import { languagePreferenceLabel, type Translate, useI18n } from './i18n';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
 type GatewaySettingsPanelProps = {
@@ -84,8 +86,11 @@ type GatewaySettingsPanelProps = {
   gatewayDirty?: boolean;
   gatewayLoading?: boolean;
   gatewaySaving?: boolean;
+  gatewayMode?: GatewaySettingsMode;
   gatewaySettingsSource?: GatewaySettingsSource;
   gatewayStatusMessage?: string | null;
+  gatewayJsonDraft?: string;
+  gatewayJsonError?: string | null;
   savingLocalSettings?: boolean;
   agents?: DesktopCustomAgent[];
   teams?: DesktopTeam[];
@@ -103,8 +108,10 @@ type GatewaySettingsPanelProps = {
     requireGatewayConnection?: boolean;
     reloadGatewaySettings?: boolean;
   }) => Promise<boolean>;
+  onGatewayJsonChange?: (value: string) => void;
   onSaveGatewaySettings?: () => Promise<boolean>;
   onMutateGatewayDraft?: DraftMutator;
+  onOpenAdvancedJson?: () => void;
   onRefreshAgentTargets?: () => Promise<void>;
   onAddChannelAccount?: (input: {
     channel: string;
@@ -136,6 +143,7 @@ type GatewaySettingsPanelProps = {
 
 type AgentProviderFieldsProps = {
   provider: any;
+  onOpenAdvancedJson: () => void;
   onMutate: (mutator: (provider: any) => void) => void;
 };
 
@@ -171,44 +179,51 @@ type UpdateFeedback = {
   tone: 'info' | 'success' | 'danger';
 };
 
-function updateCheckFailureMessage(reason: string): string {
+function updateCheckFailureMessage(reason: string, t: Translate): string {
   if (reason === 'dev-build') {
-    return 'Update checks are available in packaged Mac builds.';
+    return t('Update checks are available in packaged Mac builds.');
   }
   if (reason === 'update-not-downloaded') {
-    return 'The update is not ready to install yet.';
+    return t('The update is not ready to install yet.');
   }
-  return reason || 'Failed to check for updates.';
+  return reason || t('Failed to check for updates.');
 }
 
 function updateStatusDisplay(
   status: DesktopUpdateStatus,
   feedback: UpdateFeedback | null,
+  t: Translate,
 ): UpdateFeedback {
   switch (status.phase) {
     case 'checking':
-      return { message: 'Checking for updates...', tone: 'info' };
+      return { message: t('Checking for updates...'), tone: 'info' };
     case 'available':
       return {
-        message: `Update v${status.info.version} found. Downloading will start automatically.`,
+        message: t('Update v{version} found. Downloading will start automatically.', {
+          version: status.info.version,
+        }),
         tone: 'info',
       };
     case 'downloading':
       return {
-        message: `Downloading update (${Math.round(status.percent)}%).`,
+        message: t('Downloading update ({percent}%).', {
+          percent: Math.round(status.percent),
+        }),
         tone: 'info',
       };
     case 'downloaded':
       return {
-        message: `Update v${status.info.version} is ready to install.`,
+        message: t('Update v{version} is ready to install.', {
+          version: status.info.version,
+        }),
         tone: 'success',
       };
     case 'error':
-      return { message: status.message || 'Update check failed.', tone: 'danger' };
+      return { message: status.message ? t(status.message) : t('Update check failed.'), tone: 'danger' };
     case 'idle':
     default:
       return feedback || {
-        message: 'Garyx checks for updates automatically in the background.',
+        message: t('Garyx checks for updates automatically in the background.'),
         tone: 'info',
       };
   }
@@ -217,12 +232,12 @@ function updateStatusDisplay(
 export type SettingsTabId =
   | 'connection'
   | 'gateway'
-  | 'heartbeat'
   | 'provider'
   | 'channels'
   | 'labs'
   | 'commands'
-  | 'mcp';
+  | 'mcp'
+  | 'advanced';
 
 export const SETTINGS_TABS: Array<{
   id: SettingsTabId;
@@ -234,13 +249,7 @@ export const SETTINGS_TABS: Array<{
     id: 'gateway',
     label: 'Gateway',
     eyebrow: 'Gateway',
-    description: 'Gateway URL, runtime, storage, and image generation.',
-  },
-  {
-    id: 'heartbeat',
-    label: 'Heartbeat',
-    eyebrow: 'Heartbeat',
-    description: 'Default heartbeat cadence, target, acknowledgement length, and active hours.',
+    description: 'Gateway URL, runtime, storage, image generation, and heartbeat defaults.',
   },
   {
     id: 'provider',
@@ -271,6 +280,12 @@ export const SETTINGS_TABS: Array<{
     label: 'MCP Servers',
     eyebrow: 'MCP',
     description: 'Manage external MCP server definitions and local tool config sync.',
+  },
+  {
+    id: 'advanced',
+    label: 'Advanced',
+    eyebrow: 'JSON',
+    description: '',
   },
 ];
 
@@ -816,8 +831,9 @@ function ChannelAccountCard({
   onRemove,
   children,
 }: ChannelAccountCardProps) {
+  const { t } = useI18n();
   const summaryItems: SummaryItem[] = [
-    { label: 'provider', value: providerTypeLabel(provider) },
+    { label: t('provider'), value: providerTypeLabel(provider) },
     ...summaries.filter((item) => item.value.trim().length > 0),
   ];
 
@@ -828,7 +844,7 @@ function ChannelAccountCard({
           <div className="settings-card-summary-title">
             <strong>{accountId}</strong>
             <span className={`status-pill ${enabled ? '' : 'offline'}`}>
-              {enabled ? 'enabled' : 'disabled'}
+              {enabled ? t('enabled') : t('disabled')}
             </span>
           </div>
           <div className="settings-card-summary-meta">
@@ -840,7 +856,7 @@ function ChannelAccountCard({
       </summary>
       <div className="settings-card-body">
         <div className="row-between wrap">
-          <p className="small-note">Open only when you need detailed config for this bot.</p>
+          <p className="small-note">{t('Open only when you need detailed config for this bot.')}</p>
           <Button
             className="rounded-xl border-[#f0d9d9] bg-white text-[#9b3d3d] shadow-none hover:bg-[#fdf3f3]"
             onClick={onRemove}
@@ -848,7 +864,7 @@ function ChannelAccountCard({
             type="button"
             variant="outline"
           >
-            Remove
+            {t('Remove')}
           </Button>
         </div>
         {children}
@@ -859,15 +875,17 @@ function ChannelAccountCard({
 
 function AgentProviderFields({
   provider,
+  onOpenAdvancedJson,
   onMutate,
 }: AgentProviderFieldsProps) {
+  const { t } = useI18n();
   const providerType = providerTypeValue(provider);
 
   return (
     <div className="codex-section">
       <div className="codex-section-header">
-        <span className="codex-section-title">Agent Provider</span>
-        <span className="codex-section-note">Provider runtime</span>
+        <span className="codex-section-title">{t('Agent Provider')}</span>
+        <span className="codex-section-note">{t('Provider runtime')}</span>
       </div>
       <div className="codex-list-card">
         <SettingsControlRow
@@ -890,7 +908,7 @@ function AgentProviderFields({
               </SelectContent>
             </Select>
           }
-          description="Select the runtime backing this bot."
+          description={t('Select the runtime backing this bot.')}
           label="provider_type"
         />
         <SettingsControlRow
@@ -905,7 +923,7 @@ function AgentProviderFields({
               }}
             />
           }
-          description="Workspace bound to this bot. When the bot creates its first thread, that thread starts in this workspace."
+          description={t('Workspace bound to this bot. When the bot creates its first thread, that thread starts in this workspace.')}
           label="workspace_dir"
           stacked
         />
@@ -934,8 +952,11 @@ export function GatewaySettingsPanel({
   gatewayDirty = false,
   gatewayLoading = false,
   gatewaySaving = false,
+  gatewayMode = 'form',
   gatewaySettingsSource = 'gateway_api',
   gatewayStatusMessage = null,
+  gatewayJsonDraft = '{}',
+  gatewayJsonError = null,
   savingLocalSettings = false,
   agents = [],
   teams = [],
@@ -950,8 +971,10 @@ export function GatewaySettingsPanel({
   onLocalSettingsChange = noop,
   onSaveLocalSettings = noop,
   onSaveLocalSettingsNow = noopAsyncBoolean,
+  onGatewayJsonChange = noop,
   onSaveGatewaySettings = noopAsyncBoolean,
   onMutateGatewayDraft = noop,
+  onOpenAdvancedJson = noop,
   onRefreshAgentTargets = noopAsync,
   onAddChannelAccount = noopAsync,
   onStartWeixinChannelAuth = async () => ({ sessionId: '', qrCodeDataUrl: '' }),
@@ -967,6 +990,7 @@ export function GatewaySettingsPanel({
   }),
   onPollFeishuChannelAuth = async () => ({ status: 'pending' as const, accountId: null }),
 }: GatewaySettingsPanelProps) {
+  const { t } = useI18n();
   const normalizedActiveTab: SettingsTabId =
     activeTab === 'connection' ? 'gateway' : activeTab;
   const pluginAccounts = configuredChannelAccountsFromDraft(gatewayDraft?.channels);
@@ -985,6 +1009,7 @@ export function GatewaySettingsPanel({
     });
     return map;
   }, [pluginCatalog]);
+  const [isAdvancedJsonEditing, setIsAdvancedJsonEditing] = useState(false);
   const [editingCommandName, setEditingCommandName] = useState<string | null>(null);
   const [commandDraft, setCommandDraft] = useState<CommandDraft>(() => emptyCommandDraft());
   const [commandDialogOpen, setCommandDialogOpen] = useState(false);
@@ -992,32 +1017,33 @@ export function GatewaySettingsPanel({
   const [mcpServerDraft, setMcpServerDraft] = useState<McpServerDraft>(() => emptyMcpServerDraft());
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
-  const updateStatusRef = useRef<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
-  const [checkingForUpdate, setCheckingForUpdate] = useState(false);
-  const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateFeedback, setUpdateFeedback] = useState<UpdateFeedback | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
+  const updateStatusRef = useRef<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
   const statusClass =
-    gatewayStatusMessage && /(failed|error|invalid)/i.test(gatewayStatusMessage)
+    gatewayJsonError
+      || (gatewayStatusMessage && /(failed|error|invalid)/i.test(gatewayStatusMessage))
       ? 'error'
       : 'info';
   const remoteSyncLabel = gatewayLoading
-    ? 'Refreshing latest remote config…'
+    ? t('Refreshing latest remote config…')
     : gatewaySaving
-      ? 'Saving config…'
+      ? t('Saving config…')
       : gatewayDirty
-        ? 'Unsaved config changes. Click Save to persist them.'
-        : 'Config changes save only when you click Save.';
+        ? t('Unsaved config changes. Click Save to persist them.')
+        : t('Config changes save only when you click Save.');
   const activeTabMeta =
     SETTINGS_TABS.find((tab) => tab.id === normalizedActiveTab) || SETTINGS_TABS[0];
   const configuredChannelCount = pluginAccounts.length;
   const enabledMcpServerCount = mcpServers.filter((server) => server.enabled).length;
   const syncStateLabel = gatewaySaving
-    ? 'Saving'
+    ? t('Saving')
     : gatewayLoading
-      ? 'Refreshing'
+      ? t('Refreshing')
       : gatewayDirty
-        ? 'Unsaved'
-        : 'Saved';
+        ? t('Unsaved')
+        : t('Saved');
   const syncFactTone: SettingsFactTone =
     statusClass === 'error'
       ? 'danger'
@@ -1027,89 +1053,100 @@ export function GatewaySettingsPanel({
   const desktopStateTone: SettingsFactTone = connection?.ok ? 'success' : 'danger';
   const claudeEnvLineCount = countNonEmptyLines(localSettings.providerClaudeEnv);
   const channelsSourceMessage = gatewaySettingsSource === 'local_file'
-    ? 'Editing the gateway runtime config file on the gateway host.'
-    : 'Editing live gateway settings over the API.';
+    ? t('Editing the gateway runtime config file on the gateway host.')
+    : t('Editing live gateway settings over the API.');
   const showGatewayHeaderStatus = normalizedActiveTab === 'gateway';
-  const updateDisplay = updateStatusDisplay(updateStatus, updateFeedback);
-  const updateCheckBusy = checkingForUpdate || updateStatus.phase === 'checking';
-  const updateCheckDisabled =
-    updateCheckBusy
-    || updateStatus.phase === 'available'
-    || updateStatus.phase === 'downloading'
-    || updateStatus.phase === 'downloaded';
   const headerFacts: Array<{
     label: string;
     value: string;
     tone?: SettingsFactTone;
   }> = [
     {
-      label: 'desktop',
-      value: connection?.ok ? 'online' : 'offline',
+      label: t('desktop'),
+      value: connection?.ok ? t('online') : t('offline'),
       tone: desktopStateTone,
     },
     {
-      label: 'sync',
+      label: t('sync'),
       value: syncStateLabel.toLowerCase(),
       tone: syncFactTone,
     },
     {
-      label: 'saved',
+      label: t('saved'),
       value: localSettings.gatewayUrl.replace(/^https?:\/\//, '') || '(empty)',
     },
     {
-      label: 'auth',
-      value: localSettings.gatewayAuthToken.trim() ? 'configured' : 'required',
+      label: t('auth'),
+      value: localSettings.gatewayAuthToken.trim() ? t('configured') : t('required'),
       tone: localSettings.gatewayAuthToken.trim() ? 'success' : 'danger',
     },
     {
-      label: 'host',
+      label: t('host'),
       value: `${String(gatewayDraft?.gateway?.host || '0.0.0.0')}:${String(gatewayDraft?.gateway?.port ?? '--')}`,
     },
   ];
+  const updateDisplay = updateStatusDisplay(updateStatus, updateFeedback, t);
+  const updateCheckBusy =
+    checkingUpdate
+    || updateStatus.phase === 'checking'
+    || updateStatus.phase === 'available'
+    || updateStatus.phase === 'downloading';
+  const updateCheckDisabled = updateCheckBusy || installingUpdate;
 
   useEffect(() => {
     const api = window.garyxDesktop;
     let cancelled = false;
-    const applyStatus = (nextStatus: DesktopUpdateStatus) => {
-      updateStatusRef.current = nextStatus;
-      if (cancelled) {
-        return;
-      }
-      setUpdateStatus(nextStatus);
-      if (nextStatus.phase !== 'idle') {
+    const listener = (next: DesktopUpdateStatus) => {
+      if (cancelled) return;
+      updateStatusRef.current = next;
+      setUpdateStatus(next);
+      if (next.phase !== 'idle') {
         setUpdateFeedback(null);
       }
     };
 
-    void api.getUpdateStatus()
-      .then(applyStatus)
-      .catch((error) => {
-        if (cancelled) {
-          return;
-        }
-        setUpdateFeedback({
-          message: error instanceof Error ? error.message : 'Failed to read update status.',
-          tone: 'danger',
-        });
+    void api.getUpdateStatus().then((initial) => {
+      if (cancelled) return;
+      updateStatusRef.current = initial;
+      setUpdateStatus(initial);
+    }).catch(() => {
+      if (cancelled) return;
+      setUpdateFeedback({
+        message: t('Failed to read update status.'),
+        tone: 'danger',
       });
-    api.subscribeUpdateStatus(applyStatus);
+    });
+    api.subscribeUpdateStatus(listener);
 
     return () => {
       cancelled = true;
-      api.unsubscribeUpdateStatus(applyStatus);
+      api.unsubscribeUpdateStatus(listener);
     };
-  }, []);
+  }, [t]);
 
-  function renderGatewaySaveAction() {
+  function renderGatewaySaveAction(buttonLabel = t('Save JSON')) {
+    if (gatewayMode === 'json') {
+      return (
+        <Button
+          className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
+          disabled={!gatewayDirty || gatewayLoading || gatewaySaving}
+          onClick={() => { void onSaveGatewaySettings(); }}
+          size="sm"
+          type="button"
+        >
+          {gatewaySaving ? t('Saving…') : buttonLabel}
+        </Button>
+      );
+    }
     const statusLabel = gatewaySaving
-      ? '保存中…'
+      ? t('Saving…')
       : gatewayDirty
-        ? '未保存…'
-        : '已自动保存';
+        ? t('Unsaved')
+        : t('Saved');
     return <span className="codex-autosave-status">{statusLabel}</span>;
   }
 
-  function renderLocalSaveAction(label = 'Save Desktop Settings') {
+  function renderLocalSaveAction(label = t('Save Desktop Settings')) {
     return (
       <Button
         className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
@@ -1120,62 +1157,60 @@ export function GatewaySettingsPanel({
         size="sm"
         type="button"
       >
-        {savingLocalSettings ? 'Saving…' : label}
+        {savingLocalSettings ? t('Saving…') : label}
       </Button>
     );
   }
 
   async function handleCheckForUpdatesNow() {
-    if (updateCheckDisabled) {
+    if (checkingUpdate || installingUpdate) {
       return;
     }
-
-    setCheckingForUpdate(true);
+    setCheckingUpdate(true);
     setUpdateFeedback(null);
     try {
       const result = await window.garyxDesktop.checkForUpdatesNow();
       if (!result.ok) {
         setUpdateFeedback({
-          message: updateCheckFailureMessage(result.reason),
+          message: updateCheckFailureMessage(result.reason, t),
           tone: 'danger',
         });
         return;
       }
       if (updateStatusRef.current.phase === 'idle') {
         setUpdateFeedback({
-          message: 'No update found.',
+          message: t('No update found.'),
           tone: 'success',
         });
       }
-    } catch (error) {
+    } catch {
       setUpdateFeedback({
-        message: error instanceof Error ? error.message : 'Failed to check for updates.',
+        message: t('Failed to check for updates.'),
         tone: 'danger',
       });
     } finally {
-      setCheckingForUpdate(false);
+      setCheckingUpdate(false);
     }
   }
 
   async function handleInstallUpdate() {
-    if (installingUpdate || updateStatus.phase !== 'downloaded') {
+    if (installingUpdate) {
       return;
     }
-
     setInstallingUpdate(true);
     setUpdateFeedback(null);
     try {
       const result = await window.garyxDesktop.installUpdate();
       if (!result.ok) {
         setUpdateFeedback({
-          message: updateCheckFailureMessage(result.reason),
+          message: updateCheckFailureMessage(result.reason, t),
           tone: 'danger',
         });
         setInstallingUpdate(false);
       }
-    } catch (error) {
+    } catch {
       setUpdateFeedback({
-        message: error instanceof Error ? error.message : 'Failed to install update.',
+        message: t('Failed to install update.'),
         tone: 'danger',
       });
       setInstallingUpdate(false);
@@ -1185,10 +1220,36 @@ export function GatewaySettingsPanel({
   const connectionPanel = (
     <div className="codex-section">
       <div className="codex-section-header">
-        <span className="codex-section-title">Gateway URL</span>
+        <span className="codex-section-title">{t('Desktop Settings')}</span>
       </div>
       <form className="settings-form" onSubmit={onSaveLocalSettings}>
         <div className="codex-list-card">
+          <SettingsControlRow
+            control={
+              <Select
+                value={localSettings.languagePreference}
+                onValueChange={(value) => {
+                  onLocalSettingsChange((current) => ({
+                    ...current,
+                    languagePreference: value === 'en' || value === 'zh-CN' ? value : 'system',
+                  }));
+                }}
+              >
+                <SelectTrigger className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none">
+                  <SelectValue
+                    placeholder={languagePreferenceLabel(localSettings.languagePreference, t)}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="system">{t('Follow System')}</SelectItem>
+                  <SelectItem value="en">{t('English')}</SelectItem>
+                  <SelectItem value="zh-CN">{t('Chinese')}</SelectItem>
+                </SelectContent>
+              </Select>
+            }
+            description={t('Select the language used by this Mac app. System follows macOS language and falls back to English.')}
+            label={t('Language')}
+          />
           <SettingsControlRow
             control={
               <div className="gateway-url-input-shell">
@@ -1214,8 +1275,8 @@ export function GatewaySettingsPanel({
                 />
               </div>
             }
-            description="Desktop-side saved endpoint for the Garyx gateway."
-            label="Gateway URL"
+            description={t('Desktop-side saved endpoint for the Garyx gateway.')}
+            label={t('Gateway URL')}
             stacked
           />
           <SettingsControlRow
@@ -1224,7 +1285,7 @@ export function GatewaySettingsPanel({
                 autoCapitalize="off"
                 autoComplete="off"
                 className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                placeholder="garyx gateway token"
+                placeholder={t('garyx gateway token')}
                 spellCheck={false}
                 type="password"
                 value={localSettings.gatewayAuthToken}
@@ -1236,8 +1297,8 @@ export function GatewaySettingsPanel({
                 }}
               />
             }
-            description="Required for protected gateway APIs. Run `garyx gateway token` on the gateway host, then paste the token here."
-            label="Gateway Token"
+            description={t('Required for protected gateway APIs. Run `garyx gateway token` on the gateway host, then paste the token here.')}
+            label={t('Gateway Token')}
             stacked
           />
           <SettingsControlRow
@@ -1248,12 +1309,12 @@ export function GatewaySettingsPanel({
                   disabled={savingLocalSettings}
                   type="submit"
                 >
-                  {savingLocalSettings ? 'Saving…' : 'Save Gateway'}
+                  {savingLocalSettings ? t('Saving…') : t('Save Gateway')}
                 </Button>
               </div>
             }
-            description="Verifies the gateway connection before saving."
-            label="Save"
+            description={t('Verifies the gateway connection before saving.')}
+            label={t('Save')}
           />
         </div>
       </form>
@@ -1264,7 +1325,7 @@ export function GatewaySettingsPanel({
     <>
       <div className="codex-section">
         <div className="codex-section-header">
-          <span className="codex-section-title">Gateway</span>
+          <span className="codex-section-title">{t('Gateway')}</span>
           {renderGatewaySaveAction()}
         </div>
         <div className="codex-list-card">
@@ -1280,7 +1341,7 @@ export function GatewaySettingsPanel({
                 }}
               />
             }
-            description="HTTP listen address for the gateway runtime."
+            description={t('HTTP listen address for the gateway runtime.')}
             label="gateway.host"
           />
           <SettingsControlRow
@@ -1296,7 +1357,7 @@ export function GatewaySettingsPanel({
                 }}
               />
             }
-            description="Port used by the desktop client and other runtime callers."
+            description={t('Port used by the desktop client and other runtime callers.')}
             label="gateway.port"
           />
           <SettingsControlRow
@@ -1311,7 +1372,7 @@ export function GatewaySettingsPanel({
                 }}
               />
             }
-            description="API key used by the image generation runtime."
+            description={t('API key used by the image generation runtime.')}
             label="gateway.image_gen.api_key"
           />
           <SettingsControlRow
@@ -1326,14 +1387,14 @@ export function GatewaySettingsPanel({
                 }}
               />
             }
-            description="Default image model for generated image requests."
+            description={t('Default image model for generated image requests.')}
             label="gateway.image_gen.model"
           />
         </div>
       </div>
       <div className="codex-section">
         <div className="codex-section-header">
-          <span className="codex-section-title">Defaults</span>
+          <span className="codex-section-title">{t('Defaults')}</span>
           {renderGatewaySaveAction()}
         </div>
         <div className="codex-list-card">
@@ -1350,7 +1411,7 @@ export function GatewaySettingsPanel({
                 }}
               />
             }
-            description="Directory used by the gateway to persist thread history."
+            description={t('Directory used by the gateway to persist thread history.')}
             label="sessions.data_dir"
             stacked
           />
@@ -1370,7 +1431,7 @@ export function GatewaySettingsPanel({
                 }
               >
                 <SelectTrigger className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none">
-                  <SelectValue placeholder="Select backend" />
+                  <SelectValue placeholder={t('Select backend')} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="transcript_v1">transcript_v1</SelectItem>
@@ -1378,8 +1439,124 @@ export function GatewaySettingsPanel({
                 </SelectContent>
               </Select>
             }
-            description="Persist thread history as append-only transcripts or legacy inline message snapshots."
+            description={t('Persist thread history as append-only transcripts or legacy inline message snapshots.')}
             label="sessions.thread_history_backend"
+          />
+        </div>
+      </div>
+      <div className="codex-section">
+        <div className="codex-section-header">
+          <span className="codex-section-title">{t('Heartbeat Defaults')}</span>
+          {renderGatewaySaveAction()}
+        </div>
+        <div className="codex-list-card">
+          <SettingsControlRow
+            control={
+              <SettingsSwitch
+                checked={Boolean(gatewayDraft?.agent_defaults?.heartbeat?.enabled)}
+                label="heartbeat.enabled"
+                onChange={(nextValue) => {
+                  onMutateGatewayDraft((next) => {
+                    next.agent_defaults.heartbeat.enabled = nextValue;
+                  });
+                }}
+              />
+            }
+            description={t('Turn the shared heartbeat behavior on or off.')}
+            label="enabled"
+          />
+          <SettingsControlRow
+            control={
+              <Input
+                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+                value={String(gatewayDraft?.agent_defaults?.heartbeat?.every || '')}
+                onChange={(event) => {
+                  onMutateGatewayDraft((next) => {
+                    next.agent_defaults.heartbeat.every = event.target.value;
+                  });
+                }}
+              />
+            }
+            description={t('Interval expression used by the default heartbeat schedule.')}
+            label="every"
+          />
+          <SettingsControlRow
+            control={
+              <Input
+                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+                value={String(gatewayDraft?.agent_defaults?.heartbeat?.target || '')}
+                onChange={(event) => {
+                  onMutateGatewayDraft((next) => {
+                    next.agent_defaults.heartbeat.target = event.target.value;
+                  });
+                }}
+              />
+            }
+            description={t('Default target for heartbeat pings and summaries.')}
+            label="target"
+          />
+          <SettingsControlRow
+            control={
+              <Input
+                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+                min={1}
+                type="number"
+                value={String(gatewayDraft?.agent_defaults?.heartbeat?.ack_max_chars ?? 500)}
+                onChange={(event) => {
+                  onMutateGatewayDraft((next) => {
+                    next.agent_defaults.heartbeat.ack_max_chars = Number(event.target.value) || 500;
+                  });
+                }}
+              />
+            }
+            description={t('Maximum length of the acknowledgement text.')}
+            label="ack_max_chars"
+          />
+          <SettingsControlRow
+            control={
+              <Input
+                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+                value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.start || '')}
+                onChange={(event) => {
+                  onMutateGatewayDraft((next) => {
+                    next.agent_defaults.heartbeat.active_hours.start = event.target.value;
+                  });
+                }}
+              />
+            }
+            description={t('Start time for the active window.')}
+            label="active_hours.start"
+          />
+          <SettingsControlRow
+            control={
+              <Input
+                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+                value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.end || '')}
+                onChange={(event) => {
+                  onMutateGatewayDraft((next) => {
+                    next.agent_defaults.heartbeat.active_hours.end = event.target.value;
+                  });
+                }}
+              />
+            }
+            description={t('End time for the active window.')}
+            label="active_hours.end"
+          />
+          <SettingsControlRow
+            control={
+              <Input
+                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+                value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.timezone || '')}
+                onChange={(event) => {
+                  onMutateGatewayDraft((next) => {
+                    next.agent_defaults.heartbeat.active_hours.timezone = event.target.value;
+                  });
+                }}
+              />
+            }
+            description={t('Time zone used when evaluating the active heartbeat window.')}
+            label="active_hours.timezone"
+            stacked
           />
         </div>
       </div>
@@ -1393,137 +1570,18 @@ export function GatewaySettingsPanel({
     </>
   );
 
-  const heartbeatPanel = (
-    <div className="codex-section">
-      <div className="codex-section-header">
-        <span className="codex-section-title">Heartbeat Defaults</span>
-        {renderGatewaySaveAction()}
-      </div>
-      <div className="codex-list-card">
-        <SettingsControlRow
-          control={
-            <SettingsSwitch
-              checked={Boolean(gatewayDraft?.agent_defaults?.heartbeat?.enabled)}
-              label="heartbeat.enabled"
-              onChange={(nextValue) => {
-                onMutateGatewayDraft((next) => {
-                  next.agent_defaults.heartbeat.enabled = nextValue;
-                });
-              }}
-            />
-          }
-          description="Turn the shared heartbeat behavior on or off."
-          label="enabled"
-        />
-        <SettingsControlRow
-          control={
-            <Input
-              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-              value={String(gatewayDraft?.agent_defaults?.heartbeat?.every || '')}
-              onChange={(event) => {
-                onMutateGatewayDraft((next) => {
-                  next.agent_defaults.heartbeat.every = event.target.value;
-                });
-              }}
-            />
-          }
-          description="Interval expression used by the default heartbeat schedule."
-          label="every"
-        />
-        <SettingsControlRow
-          control={
-            <Input
-              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-              value={String(gatewayDraft?.agent_defaults?.heartbeat?.target || '')}
-              onChange={(event) => {
-                onMutateGatewayDraft((next) => {
-                  next.agent_defaults.heartbeat.target = event.target.value;
-                });
-              }}
-            />
-          }
-          description="Default target for heartbeat pings and summaries."
-          label="target"
-        />
-        <SettingsControlRow
-          control={
-            <Input
-              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-              min={1}
-              type="number"
-              value={String(gatewayDraft?.agent_defaults?.heartbeat?.ack_max_chars ?? 500)}
-              onChange={(event) => {
-                onMutateGatewayDraft((next) => {
-                  next.agent_defaults.heartbeat.ack_max_chars = Number(event.target.value) || 500;
-                });
-              }}
-            />
-          }
-          description="Maximum length of the acknowledgement text."
-          label="ack_max_chars"
-        />
-        <SettingsControlRow
-          control={
-            <Input
-              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-              value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.start || '')}
-              onChange={(event) => {
-                onMutateGatewayDraft((next) => {
-                  next.agent_defaults.heartbeat.active_hours.start = event.target.value;
-                });
-              }}
-            />
-          }
-          description="Start time for the active window."
-          label="active_hours.start"
-        />
-        <SettingsControlRow
-          control={
-            <Input
-              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-              value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.end || '')}
-              onChange={(event) => {
-                onMutateGatewayDraft((next) => {
-                  next.agent_defaults.heartbeat.active_hours.end = event.target.value;
-                });
-              }}
-            />
-          }
-          description="End time for the active window."
-          label="active_hours.end"
-        />
-        <SettingsControlRow
-          control={
-            <Input
-              className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-              value={String(gatewayDraft?.agent_defaults?.heartbeat?.active_hours?.timezone || '')}
-              onChange={(event) => {
-                onMutateGatewayDraft((next) => {
-                  next.agent_defaults.heartbeat.active_hours.timezone = event.target.value;
-                });
-              }}
-            />
-          }
-          description="Time zone used when evaluating the active heartbeat window."
-          label="active_hours.timezone"
-          stacked
-        />
-      </div>
-    </div>
-  );
-
   const providerPanel = (
     <div className="settings-form provider-panel">
       <section className="provider-section">
         <div className="provider-section-head">
-          <h2 className="provider-section-title">Claude Code</h2>
+          <h2 className="provider-section-title">{t('Claude Code')}</h2>
           <a
             className="provider-view-docs"
             href="https://docs.claude.com/claude-code/settings"
             rel="noreferrer"
             target="_blank"
           >
-            View docs
+            {t('View docs')}
             <svg aria-hidden className="provider-view-docs-icon" fill="none" viewBox="0 0 10 10">
               <path d="M3 3h4v4M7 3L3 7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.3" />
             </svg>
@@ -1548,16 +1606,19 @@ export function GatewaySettingsPanel({
         />
         <p className="provider-hint">
           {claudeEnvLineCount
-            ? `${claudeEnvLineCount} ${claudeEnvLineCount === 1 ? 'variable' : 'variables'} · one per line, format: `
-            : 'One per line, format: '}
+            ? t('{count} {unit} · one per line, format: ', {
+                count: claudeEnvLineCount,
+                unit: claudeEnvLineCount === 1 ? t('variable') : t('variables'),
+              })
+            : t('One per line, format: ')}
           <code>VAR_NAME=value</code> or <code>export VAR_NAME=value</code>
         </p>
       </section>
       <section className="provider-section">
         <div className="provider-section-head">
-          <h2 className="provider-section-title">Codex</h2>
+          <h2 className="provider-section-title">{t('Codex')}</h2>
         </div>
-        <div aria-label="Codex auth mode" className="provider-tiles">
+        <div aria-label={t('Codex auth mode')} className="provider-tiles">
           <button
             aria-pressed={localSettings.providerCodexAuthMode === 'cli'}
             className={classNames(
@@ -1575,12 +1636,12 @@ export function GatewaySettingsPanel({
           >
             <span aria-hidden className="provider-tile-radio" />
             <span className="provider-tile-body">
-              <span className="provider-tile-label">CLI</span>
+              <span className="provider-tile-label">{t('CLI')}</span>
               <span className="provider-tile-desc">
-                Reuse the local <code>codex</code> login on this Mac.
+                {t('Reuse the local {command} login on this Mac.', { command: 'codex' })}
               </span>
             </span>
-            <span className="provider-tile-badge">no key</span>
+            <span className="provider-tile-badge">{t('no key')}</span>
           </button>
           <button
             aria-pressed={localSettings.providerCodexAuthMode === 'api_key'}
@@ -1599,15 +1660,15 @@ export function GatewaySettingsPanel({
           >
             <span aria-hidden className="provider-tile-radio" />
             <span className="provider-tile-body">
-              <span className="provider-tile-label">API Key</span>
-              <span className="provider-tile-desc">Desktop-only key, stored in macOS Keychain.</span>
+              <span className="provider-tile-label">{t('API Key')}</span>
+              <span className="provider-tile-desc">{t('Desktop-only key, stored in macOS Keychain.')}</span>
             </span>
-            <span className="provider-tile-badge">keychain</span>
+            <span className="provider-tile-badge">{t('keychain')}</span>
           </button>
         </div>
         {localSettings.providerCodexAuthMode === 'api_key' ? (
           <div className="provider-api-field">
-            <label className="provider-api-label" htmlFor="codex-api-key">API Key</label>
+            <label className="provider-api-label" htmlFor="codex-api-key">{t('API Key')}</label>
             <Input
               autoCapitalize="off"
               autoComplete="off"
@@ -1625,7 +1686,7 @@ export function GatewaySettingsPanel({
               }}
             />
             <p className="provider-hint">
-              Sets <code>CODEX_API_KEY</code>
+              {t('Sets')} <code>CODEX_API_KEY</code>
             </p>
           </div>
         ) : null}
@@ -1644,7 +1705,7 @@ export function GatewaySettingsPanel({
       <section className="bot-panel">
         <div className="bot-panel-toolbar">
           <div className="bot-panel-title-row">
-            <h3 className="bot-panel-title">Bots</h3>
+            <h3 className="bot-panel-title">{t('Bots')}</h3>
             <span className="bot-panel-count">{configuredChannels.length}</span>
             <span className="bot-panel-source">{channelsSourceMessage}</span>
           </div>
@@ -1660,19 +1721,19 @@ export function GatewaySettingsPanel({
             type="button"
             variant="outline"
           >
-            添加 Bot
+            {t('Add bot')}
           </Button>
         </div>
         {!configuredChannels.length ? (
-          <div className="bot-panel-empty">还没有配置 Bot，点上方"添加 Bot"创建。</div>
+          <div className="bot-panel-empty">{t('No bots configured. Click Add bot above to create one.')}</div>
         ) : (
           <div className="bot-table">
             <div className="bot-table-head">
-              <span className="bot-table-col bot-table-col-name">Name</span>
-              <span className="bot-table-col bot-table-col-channel">Channel</span>
-              <span className="bot-table-col bot-table-col-account">Account</span>
-              <span className="bot-table-col bot-table-col-agent">Agent</span>
-              <span className="bot-table-col bot-table-col-status">Enabled</span>
+              <span className="bot-table-col bot-table-col-name">{t('Name')}</span>
+              <span className="bot-table-col bot-table-col-channel">{t('Channel')}</span>
+              <span className="bot-table-col bot-table-col-account">{t('Account')}</span>
+              <span className="bot-table-col bot-table-col-agent">{t('Agent')}</span>
+              <span className="bot-table-col bot-table-col-status">{t('Enabled')}</span>
             </div>
             {configuredChannels.map(({ kind, accountId, account }) => {
               const accountAgentId = resolveChannelAgentId(
@@ -1686,10 +1747,10 @@ export function GatewaySettingsPanel({
               const selectedAgentMissing = Boolean(accountAgentId && !selectedTarget);
               const agentLabel = selectedTarget
                 ? selectedTarget.label
-                : (accountAgentId || 'Default route');
+                : (accountAgentId || t('Default route'));
               const agentDisplayName = compactAgentTargetLabel(
                 selectedTarget,
-                accountAgentId || 'Default route',
+                accountAgentId || t('Default route'),
               );
               const agentDotSeed = selectedTarget?.value || accountAgentId || 'default';
               const displayName = String(account?.name || accountId);
@@ -1781,7 +1842,7 @@ export function GatewaySettingsPanel({
                   </span>
                   <span className="bot-table-cell bot-table-col-status">
                     <Switch
-                      aria-label={`${displayName} enabled`}
+                      aria-label={t('{name} enabled', { name: displayName })}
                       checked={enabled}
                       disabled={gatewaySaving}
                       onCheckedChange={toggleEnabled}
@@ -1818,15 +1879,10 @@ export function GatewaySettingsPanel({
             next.channels[kind].accounts = next.channels[kind].accounts || {};
             const account = next.channels[kind].accounts[accountId];
             if (!account) return;
-            const targetAccountId = patch.nextAccountId?.trim() || accountId;
             if (patch.name !== undefined) account.name = patch.name;
             if (patch.workspaceDir !== undefined) account.workspace_dir = patch.workspaceDir;
             if (patch.agentId !== undefined) account.agent_id = patch.agentId;
             if (patch.config !== undefined) account.config = patch.config;
-            if (targetAccountId !== accountId) {
-              next.channels[kind].accounts[targetAccountId] = account;
-              delete next.channels[kind].accounts[accountId];
-            }
           });
           await onSaveGatewaySettings();
         }}
@@ -1858,12 +1914,12 @@ export function GatewaySettingsPanel({
       && commandDraftPrompt,
   );
   const commandDraftValidationMessage = commandNameTaken
-    ? '同名命令已存在。'
+    ? t('A command with this name already exists.')
     : normalizedCommandDraftName && !SLASH_COMMAND_NAME_PATTERN.test(normalizedCommandDraftName)
-      ? '命令名仅支持小写字母、数字和下划线，最长 32 个字符。'
+      ? t('Command names only support lowercase letters, numbers, and underscores, up to 32 characters.')
       : !commandDraftPrompt
-        ? '请填写命令内容。'
-          : '保存后会加入命令列表。';
+        ? t('Enter command content.')
+          : t('The command will be added to the list after saving.');
   const commandPromptPreview = (command: SlashCommand) => {
     const preview = (command.prompt || command.description || '').trim();
     return preview.length > 140 ? `${preview.slice(0, 137)}…` : preview;
@@ -1923,7 +1979,7 @@ export function GatewaySettingsPanel({
     <>
       <div className="codex-section">
         <div className="codex-section-header">
-          <span className="codex-section-title">命令列表</span>
+          <span className="codex-section-title">{t('Command List')}</span>
           <div className="codex-list-row-actions">
             <button
               className="codex-section-action"
@@ -1933,25 +1989,25 @@ export function GatewaySettingsPanel({
               <svg aria-hidden width="14" height="14" viewBox="0 0 20 20" fill="none">
                 <path d="M9.33496 16.5V10.665H3.5C3.13273 10.665 2.83496 10.3673 2.83496 10C2.83496 9.63273 3.13273 9.33496 3.5 9.33496H9.33496V3.5C9.33496 3.13273 9.63273 2.83496 10 2.83496C10.3673 2.83496 10.665 3.13273 10.665 3.5V9.33496H16.5C16.8673 9.33496 17.165 9.63273 17.165 10C17.165 10.3673 16.8673 10.665 16.5 10.665H10.665V16.5C10.665 16.8673 10.3673 17.165 10 17.165C9.63273 17.165 9.33496 16.8673 9.33496 16.5Z" fill="currentColor"/>
               </svg>
-              添加命令
+              {t('Add Command')}
             </button>
           </div>
         </div>
 
         {commandsLoading ? (
           <div className="commands-empty-state">
-            <strong>正在读取快捷指令…</strong>
-            <span>会从当前 Gateway 配置里拉取全局 prompt shortcut。</span>
+            <strong>{t('Loading shortcuts...')}</strong>
+            <span>{t('Global prompt shortcuts are loaded from the current Gateway config.')}</span>
           </div>
         ) : commands.length ? (
           <div className="commands-table">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="commands-table-col-command">Command</TableHead>
-                  <TableHead className="commands-table-col-description">Description</TableHead>
-                  <TableHead className="commands-table-col-prompt">Prompt</TableHead>
-                  <TableHead className="commands-table-col-actions">Actions</TableHead>
+                  <TableHead className="commands-table-col-command">{t('Command')}</TableHead>
+                  <TableHead className="commands-table-col-description">{t('Description')}</TableHead>
+                  <TableHead className="commands-table-col-prompt">{t('Prompt')}</TableHead>
+                  <TableHead className="commands-table-col-actions">{t('Actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1965,15 +2021,15 @@ export function GatewaySettingsPanel({
                     </TableCell>
                     <TableCell
                       className="commands-table-col-description"
-                      title={command.description || 'Prompt shortcut'}
+                      title={command.description || t('Prompt shortcut')}
                     >
-                      {command.description || 'Prompt shortcut'}
+                      {command.description || t('Prompt shortcut')}
                     </TableCell>
                     <TableCell
                       className="commands-table-col-prompt"
-                      title={commandPromptPreview(command) || 'No prompt configured.'}
+                      title={commandPromptPreview(command) || t('No prompt configured.')}
                     >
-                      {commandPromptPreview(command) || 'No prompt configured.'}
+                      {commandPromptPreview(command) || t('No prompt configured.')}
                     </TableCell>
                     <TableCell className="commands-table-col-actions">
                       <div className="command-list-actions">
@@ -1982,7 +2038,7 @@ export function GatewaySettingsPanel({
                           onClick={() => { openEditCommandDialog(command); }}
                           type="button"
                         >
-                          编辑
+                          {t('Edit')}
                         </button>
                         <button
                           className="command-row-action danger"
@@ -1990,7 +2046,7 @@ export function GatewaySettingsPanel({
                           onClick={() => { void handleDeleteCommandClick(command.name); }}
                           type="button"
                         >
-                          删除
+                          {t('Delete')}
                         </button>
                       </div>
                     </TableCell>
@@ -2001,8 +2057,8 @@ export function GatewaySettingsPanel({
           </div>
         ) : (
           <div className="commands-empty-state">
-            <strong>还没有快捷指令</strong>
-            <span>点上方“添加命令”，创建一个 /summary 这样的 prompt shortcut。</span>
+            <strong>{t('No shortcuts yet')}</strong>
+            <span>{t('Click Add Command above to create a prompt shortcut like /summary.')}</span>
           </div>
         )}
       </div>
@@ -2023,14 +2079,14 @@ export function GatewaySettingsPanel({
               variant="outline"
               className="commands-dialog-badge"
             >
-              {editingCommandName ? 'Edit Command' : 'Add Command'}
+              {editingCommandName ? t('Edit Command') : t('Add Command')}
             </Badge>
             <div className="commands-dialog-title-group">
               <DialogTitle className="commands-dialog-title">
-                {editingCommandName ? `编辑 /${editingCommandName}` : '添加命令'}
+                {editingCommandName ? t('Edit /{name}', { name: editingCommandName }) : t('Add Command')}
               </DialogTitle>
               <DialogDescription className="commands-dialog-description">
-                只保留命令名和内容。保存时会自动为 Telegram 同步生成描述。
+                {t('Only the command name and content are needed. Telegram descriptions are generated on save.')}
               </DialogDescription>
             </div>
           </DialogHeader>
@@ -2038,8 +2094,8 @@ export function GatewaySettingsPanel({
           <div className="commands-dialog-body">
             <div className="commands-field">
               <div className="commands-field-header">
-                <Label className="commands-field-label" htmlFor="slash-command-name">命令名</Label>
-                <span className="commands-field-hint">仅支持 a-z、0-9、_</span>
+                <Label className="commands-field-label" htmlFor="slash-command-name">{t('Command name')}</Label>
+                <span className="commands-field-hint">{t('Only a-z, 0-9, and _')}</span>
               </div>
               <div className="commands-name-input">
                 <span aria-hidden>/</span>
@@ -2060,13 +2116,13 @@ export function GatewaySettingsPanel({
 
             <div className="commands-field">
               <div className="commands-field-header">
-                <Label className="commands-field-label" htmlFor="slash-command-prompt">内容</Label>
-                <span className="commands-field-hint">执行 /command 时会替换成这段 prompt</span>
+                <Label className="commands-field-label" htmlFor="slash-command-prompt">{t('Content')}</Label>
+                <span className="commands-field-hint">{t('This prompt runs when /command is invoked.')}</span>
               </div>
               <Textarea
                 className="commands-prompt-control"
                 id="slash-command-prompt"
-                placeholder="请总结我们的对话要点"
+                placeholder={t('Summarize the key points of our conversation.')}
                 value={String(commandDraft.prompt || '')}
                 onChange={(event) => {
                   setCommandDraft((current) => ({
@@ -2089,7 +2145,7 @@ export function GatewaySettingsPanel({
               type="button"
               variant="outline"
             >
-              取消
+              {t('Cancel')}
             </Button>
             <Button
               className="commands-dialog-button primary"
@@ -2099,7 +2155,7 @@ export function GatewaySettingsPanel({
               }}
               type="button"
             >
-              {commandsSaving ? '保存中…' : '保存命令'}
+              {commandsSaving ? t('Saving…') : t('Save Command')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2125,14 +2181,14 @@ export function GatewaySettingsPanel({
       && !mcpServerNameTaken,
   );
   const mcpServerDraftValidationMessage = mcpServerNameTaken
-    ? '同名 MCP server 已存在。'
+    ? t('An MCP server with this name already exists.')
     : !normalizedMcpServerName
-      ? '请填写 server 名称。'
+      ? t('Enter a server name.')
       : mcpServerDraft.transport === 'stdio' && !normalizedMcpServerCommand
-        ? '请填写启动命令。'
+        ? t('Enter a start command.')
         : mcpServerDraft.transport === 'streamable_http' && !normalizedMcpUrl
-          ? '请填写 URL。'
-          : '保存后会更新 gateway 端的 garyx.json，并同步 Claude / Codex 的本地 MCP 配置。';
+          ? t('Enter a URL.')
+          : t('Saving updates garyx.json on the gateway and syncs local Claude / Codex MCP config.');
 
   function resetMcpServerEditor() {
     setEditingMcpServerName(null);
@@ -2199,7 +2255,7 @@ export function GatewaySettingsPanel({
   }
 
   async function handleDeleteMcpServer(name: string) {
-    if (!window.confirm(`删除 MCP 服务器 "${name}"？`)) return;
+    if (!window.confirm(t('Delete MCP server "{name}"?', { name }))) return;
     await onDeleteMcpServer(name);
     if (editingMcpServerName === name) {
       closeMcpDialog();
@@ -2210,7 +2266,7 @@ export function GatewaySettingsPanel({
     <>
       <div className="codex-section">
         <div className="codex-section-header">
-          <span className="codex-section-title">自定义服务器</span>
+          <span className="codex-section-title">{t('Custom Servers')}</span>
           <button
             className="codex-section-action"
             disabled={mcpServersSaving}
@@ -2220,11 +2276,11 @@ export function GatewaySettingsPanel({
             <svg aria-hidden width="14" height="14" viewBox="0 0 20 20" fill="none">
               <path d="M9.33496 16.5V10.665H3.5C3.13273 10.665 2.83496 10.3673 2.83496 10C2.83496 9.63273 3.13273 9.33496 3.5 9.33496H9.33496V3.5C9.33496 3.13273 9.63273 2.83496 10 2.83496C10.3673 2.83496 10.665 3.13273 10.665 3.5V9.33496H16.5C16.8673 9.33496 17.165 9.63273 17.165 10C17.165 10.3673 16.8673 10.665 16.5 10.665H10.665V16.5C10.665 16.8673 10.3673 17.165 10 17.165C9.63273 17.165 9.33496 16.8673 9.33496 16.5Z" fill="currentColor"/>
             </svg>
-            添加服务器
+            {t('Add Server')}
           </button>
         </div>
         {mcpServersLoading ? (
-          <div className="codex-empty-state">正在读取当前配置…</div>
+          <div className="codex-empty-state">{t('Loading current config...')}</div>
         ) : mcpServers.length ? (
           <div className="codex-list-card">
             {mcpServers.map((server) => (
@@ -2238,7 +2294,7 @@ export function GatewaySettingsPanel({
                   <button
                     className="codex-icon-button"
                     onClick={() => { openEditMcpDialog(server); }}
-                    title="配置"
+                    title={t('Configure')}
                     type="button"
                   >
                     <svg aria-hidden width="18" height="18" viewBox="0 0 21 21" fill="none">
@@ -2253,11 +2309,11 @@ export function GatewaySettingsPanel({
                     }}
                   />
                   <button
-                    aria-label={`删除 ${server.name}`}
+                    aria-label={t('Delete {name}', { name: server.name })}
                     className="codex-icon-button codex-icon-button-danger"
                     disabled={mcpServersSaving}
                     onClick={() => { void handleDeleteMcpServer(server.name); }}
-                    title="删除"
+                    title={t('Delete')}
                     type="button"
                   >
                     <svg aria-hidden width="16" height="16" viewBox="0 0 20 20" fill="none">
@@ -2269,7 +2325,7 @@ export function GatewaySettingsPanel({
             ))}
           </div>
         ) : (
-          <div className="codex-empty-state">还没有 MCP 服务器，点上方"添加服务器"创建。</div>
+          <div className="codex-empty-state">{t('No MCP servers yet. Click Add Server above to create one.')}</div>
         )}
       </div>
       <Dialog
@@ -2286,17 +2342,17 @@ export function GatewaySettingsPanel({
         >
           <DialogHeader className="border-b border-[#efefec] px-4 py-3">
             <DialogTitle className="text-[14px] font-semibold tracking-[-0.01em] text-[#111111]">
-              {editingMcpServerName ? `编辑 ${editingMcpServerName}` : '添加服务器'}
+              {editingMcpServerName ? t('Edit {name}', { name: editingMcpServerName }) : t('Add Server')}
             </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-3 px-4 py-4">
             <div className="grid gap-3 md:grid-cols-[1fr_auto]">
               <div className="space-y-1.5">
-                <Label className="text-[11px] font-medium text-[#666663]">名称</Label>
+                <Label className="text-[11px] font-medium text-[#666663]">{t('Name')}</Label>
                 <Input
                   className="h-8 rounded-[8px] border-[#e7e7e5] bg-white text-[13px] shadow-none"
-                  placeholder="MCP server name"
+                  placeholder={t('MCP server name')}
                   value={mcpServerDraft.name}
                   onChange={(event) => {
                     setMcpServerDraft((current) => ({
@@ -2308,7 +2364,7 @@ export function GatewaySettingsPanel({
               </div>
 
               <div className="space-y-1.5">
-                <Label className="text-[11px] font-medium text-[#666663]">Transport</Label>
+                <Label className="text-[11px] font-medium text-[#666663]">{t('Transport')}</Label>
                 <ToggleGroup
                   className="h-8 rounded-[8px] bg-[#f3f3f1] p-0.5"
                   type="single"
@@ -2342,7 +2398,7 @@ export function GatewaySettingsPanel({
             {mcpServerDraft.transport === 'stdio' ? (
               <>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] font-medium text-[#666663]">启动命令</Label>
+                  <Label className="text-[11px] font-medium text-[#666663]">{t('Start command')}</Label>
                   <Input
                     className="h-8 rounded-[8px] border-[#e7e7e5] bg-white text-[13px] shadow-none"
                     placeholder="openai-dev-mcp serve-sqlite"
@@ -2358,7 +2414,7 @@ export function GatewaySettingsPanel({
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <Label className="text-[11px] font-medium text-[#666663]">参数</Label>
+                    <Label className="text-[11px] font-medium text-[#666663]">{t('Arguments')}</Label>
                     <button
                       className="text-[11px] text-[#666663] hover:text-[#111111]"
                       onClick={() => {
@@ -2369,7 +2425,7 @@ export function GatewaySettingsPanel({
                       }}
                       type="button"
                     >
-                      + 添加
+                      + {t('Add')}
                     </button>
                   </div>
                   <div className="space-y-1.5">
@@ -2398,7 +2454,7 @@ export function GatewaySettingsPanel({
                           }}
                           type="button"
                         >
-                          删除
+                          {t('Delete')}
                         </button>
                       </div>
                     ))}
@@ -2407,7 +2463,7 @@ export function GatewaySettingsPanel({
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <Label className="text-[11px] font-medium text-[#666663]">环境变量</Label>
+                    <Label className="text-[11px] font-medium text-[#666663]">{t('Environment variables')}</Label>
                     <button
                       className="text-[11px] text-[#666663] hover:text-[#111111]"
                       onClick={() => {
@@ -2418,7 +2474,7 @@ export function GatewaySettingsPanel({
                       }}
                       type="button"
                     >
-                      + 添加
+                      + {t('Add')}
                     </button>
                   </div>
                   <div className="space-y-1.5">
@@ -2426,7 +2482,7 @@ export function GatewaySettingsPanel({
                       <div className="grid gap-1.5 md:grid-cols-[0.9fr_1.1fr_auto]" key={`env-${index}`}>
                         <Input
                           className="h-8 rounded-[8px] border-[#e7e7e5] bg-white text-[13px] shadow-none"
-                          placeholder="键"
+                          placeholder={t('Key')}
                           value={entry.key}
                           onChange={(event) => {
                             setMcpServerDraft((current) => ({
@@ -2441,7 +2497,7 @@ export function GatewaySettingsPanel({
                         />
                         <Input
                           className="h-8 rounded-[8px] border-[#e7e7e5] bg-white text-[13px] shadow-none"
-                          placeholder="值"
+                          placeholder={t('Value')}
                           value={entry.value}
                           onChange={(event) => {
                             setMcpServerDraft((current) => ({
@@ -2465,7 +2521,7 @@ export function GatewaySettingsPanel({
                           }}
                           type="button"
                         >
-                          删除
+                          {t('Delete')}
                         </button>
                       </div>
                     ))}
@@ -2473,7 +2529,7 @@ export function GatewaySettingsPanel({
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] font-medium text-[#666663]">Working directory</Label>
+                  <Label className="text-[11px] font-medium text-[#666663]">{t('Working directory')}</Label>
                   <Input
                     className="h-8 rounded-[8px] border-[#e7e7e5] bg-white text-[13px] shadow-none"
                     placeholder="/path/to/workspace"
@@ -2506,7 +2562,7 @@ export function GatewaySettingsPanel({
 
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
-                    <Label className="text-[11px] font-medium text-[#666663]">标头</Label>
+                    <Label className="text-[11px] font-medium text-[#666663]">{t('Headers')}</Label>
                     <button
                       className="text-[11px] text-[#666663] hover:text-[#111111]"
                       onClick={() => {
@@ -2517,7 +2573,7 @@ export function GatewaySettingsPanel({
                       }}
                       type="button"
                     >
-                      + 添加
+                      + {t('Add')}
                     </button>
                   </div>
                   <div className="space-y-1.5">
@@ -2525,7 +2581,7 @@ export function GatewaySettingsPanel({
                       <div className="grid gap-1.5 md:grid-cols-[0.9fr_1.1fr_auto]" key={`header-${index}`}>
                         <Input
                           className="h-8 rounded-[8px] border-[#e7e7e5] bg-white text-[13px] shadow-none"
-                          placeholder="键"
+                          placeholder={t('Key')}
                           value={entry.key}
                           onChange={(event) => {
                             setMcpServerDraft((current) => ({
@@ -2540,7 +2596,7 @@ export function GatewaySettingsPanel({
                         />
                         <Input
                           className="h-8 rounded-[8px] border-[#e7e7e5] bg-white text-[13px] shadow-none"
-                          placeholder="值"
+                          placeholder={t('Value')}
                           value={entry.value}
                           onChange={(event) => {
                             setMcpServerDraft((current) => ({
@@ -2564,7 +2620,7 @@ export function GatewaySettingsPanel({
                           }}
                           type="button"
                         >
-                          删除
+                          {t('Delete')}
                         </button>
                       </div>
                     ))}
@@ -2588,7 +2644,7 @@ export function GatewaySettingsPanel({
                   type="button"
                   variant="outline"
                 >
-                  删除
+                  {t('Delete')}
                 </Button>
               ) : null}
             </div>
@@ -2599,7 +2655,7 @@ export function GatewaySettingsPanel({
                 type="button"
                 variant="outline"
               >
-                取消
+                {t('Cancel')}
               </Button>
               <Button
                 className="h-8 rounded-[8px] bg-[#111111] px-3 text-[12px] text-white shadow-none hover:bg-[#1c1c1c]"
@@ -2609,7 +2665,7 @@ export function GatewaySettingsPanel({
                 }}
                 type="button"
               >
-                {mcpServersSaving ? '保存中…' : '保存'}
+                {mcpServersSaving ? t('Saving…') : t('Save')}
               </Button>
             </div>
           </DialogFooter>
@@ -2622,7 +2678,7 @@ export function GatewaySettingsPanel({
     <>
       <div className="codex-section">
         <div className="codex-section-header">
-          <span className="codex-section-title">Updates</span>
+          <span className="codex-section-title">{t('Updates')}</span>
         </div>
         <div className="codex-list-card">
           <SettingsControlRow
@@ -2641,7 +2697,7 @@ export function GatewaySettingsPanel({
                       size="sm"
                       type="button"
                     >
-                      {installingUpdate ? 'Restarting...' : 'Restart to Update'}
+                      {installingUpdate ? t('Restarting...') : t('Restart to Update')}
                     </Button>
                   ) : null}
                   {updateStatus.phase !== 'downloaded' ? (
@@ -2650,7 +2706,7 @@ export function GatewaySettingsPanel({
                       disabled={updateCheckDisabled}
                       onClick={() => { void handleCheckForUpdatesNow(); }}
                       size="sm"
-                      title="Check for updates"
+                      title={t('Check for updates')}
                       type="button"
                       variant="outline"
                     >
@@ -2660,22 +2716,22 @@ export function GatewaySettingsPanel({
                         size={13}
                         strokeWidth={2}
                       />
-                      {updateCheckBusy ? 'Checking...' : 'Check Now'}
+                      {updateCheckBusy ? t('Checking...') : t('Check Now')}
                     </Button>
                   ) : null}
                 </div>
               </div>
             }
-            description="Automatic checks run in packaged Mac builds. Use this to refresh the update state immediately."
-            label="Garyx updates"
+            description={t('Automatic checks run in packaged Mac builds. Use this to refresh the update state immediately.')}
+            label={t('Garyx updates')}
             stacked
           />
         </div>
       </div>
       <div className="codex-section">
         <div className="codex-section-header">
-          <span className="codex-section-title">Mac Labs</span>
-          {renderGatewaySaveAction()}
+          <span className="codex-section-title">{t('Mac Labs')}</span>
+          {renderGatewaySaveAction(t('Save Labs'))}
         </div>
         <div className="codex-list-card">
           <SettingsControlRow
@@ -2692,21 +2748,52 @@ export function GatewaySettingsPanel({
                 }}
               />
             }
-            description="Show or hide the Auto Research entry in the Mac app. Disabling it only hides the Mac surface."
-            label="Auto Research"
+            description={t('Show or hide the Auto Research entry in the Mac app. Disabling it only hides the Mac surface.')}
+            label={t('Auto Research')}
           />
         </div>
       </div>
     </>
   );
 
+  const advancedPanel = (
+    <div className="codex-section">
+      <div className="codex-section-header">
+        <span className="codex-section-title">{t('Config JSON')}</span>
+        <div className="codex-list-row-actions">
+          {renderGatewaySaveAction()}
+          <button
+            className="codex-section-action"
+            onClick={() => { setIsAdvancedJsonEditing((current) => !current); }}
+            type="button"
+          >
+            {isAdvancedJsonEditing ? t('Done') : t('Edit')}
+          </button>
+        </div>
+      </div>
+      <div className="codex-list-card">
+        <div className="settings-editor-block">
+          {isAdvancedJsonEditing ? (
+            <Textarea
+              className="settings-json-editor min-h-[360px] rounded-[16px] border-[#e7e7e5] bg-[#fafaf9] font-mono text-[12px] shadow-none"
+              value={gatewayJsonDraft}
+              onChange={(event) => {
+                onGatewayJsonChange(event.target.value);
+              }}
+            />
+          ) : (
+            <pre className="settings-json-preview">{gatewayJsonDraft}</pre>
+          )}
+          {gatewayJsonError ? <span className="settings-json-error">{gatewayJsonError}</span> : null}
+        </div>
+      </div>
+    </div>
+  );
+
   let tabContent: ReactNode;
   switch (normalizedActiveTab) {
     case 'gateway':
       tabContent = gatewayPanel;
-      break;
-    case 'heartbeat':
-      tabContent = heartbeatPanel;
       break;
     case 'provider':
       tabContent = providerPanel;
@@ -2723,6 +2810,9 @@ export function GatewaySettingsPanel({
     case 'mcp':
       tabContent = mcpPanel;
       break;
+    case 'advanced':
+      tabContent = advancedPanel;
+      break;
     default:
       tabContent = gatewayPanel;
       break;
@@ -2733,23 +2823,23 @@ export function GatewaySettingsPanel({
       <div className="settings-content-column">
         <section className="settings-page-header">
           <div className="settings-page-header-main">
-            <span className="eyebrow">{activeTabMeta.eyebrow}</span>
-            <h3 className="settings-tab-title">{activeTabMeta.label}</h3>
-            <p className="small-note">{activeTabMeta.description}</p>
+            <span className="eyebrow">{t(activeTabMeta.eyebrow)}</span>
+            <h3 className="settings-tab-title">{t(activeTabMeta.label)}</h3>
+            <p className="small-note">{t(activeTabMeta.description)}</p>
             {showGatewayHeaderStatus ? (
               <p
                 className={`small-note settings-tab-hint ${
                   statusClass === 'error' ? 'error' : ''
                 }`}
               >
-                {gatewayStatusMessage || remoteSyncLabel}
+                {gatewayStatusMessage ? t(gatewayStatusMessage) : remoteSyncLabel}
               </p>
             ) : null}
           </div>
           {showGatewayHeaderStatus ? (
             <div className="settings-page-header-aside">
               <span className={`status-pill ${connection?.ok ? '' : 'offline'}`}>
-                {connection?.ok ? 'online' : 'offline'}
+                {connection?.ok ? t('online') : t('offline')}
               </span>
             </div>
           ) : null}

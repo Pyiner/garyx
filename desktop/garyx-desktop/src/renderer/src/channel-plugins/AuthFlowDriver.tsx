@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Copy, ExternalLink, RefreshCw } from "lucide-react";
 import QRCode from "qrcode";
+import { isAuthFlowQrCardBoilerplateText, useI18n } from "@/i18n";
 
 /** One renderable item, matching `plugin_host::AuthFlowDisplayItem`. */
 type DisplayItem = { kind: string; value?: string; label?: string };
@@ -77,6 +78,7 @@ type DriverPhase =
   | { tag: "failed"; reason: string };
 
 export function AuthFlowDriver(props: AuthFlowDriverProps) {
+  const { t } = useI18n();
   const {
     pluginId,
     formState,
@@ -146,7 +148,7 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
           return;
         }
         if (result.status === "failed") {
-          setPhase({ tag: "failed", reason: result.reason ?? "unknown" });
+          setPhase({ tag: "failed", reason: result.reason ?? t("unknown") });
           return;
         }
         // pending — possibly with a display refresh + backoff.
@@ -188,7 +190,7 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [phase, pluginId, onConfirmed, presentation]);
+  }, [phase, pluginId, onConfirmed, presentation, t]);
 
   useEffect(() => {
     if (phase.tag !== "polling") return;
@@ -211,7 +213,7 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
               onClick={() => void start()}
               className="auth-flow-primary-action"
             >
-              重试
+              {t("Retry")}
             </button>
             {onCancel && (
               <button
@@ -219,7 +221,7 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
                 onClick={onCancel}
                 className="auth-flow-secondary-action"
               >
-                取消
+                {t("Cancel")}
               </button>
             )}
           </div>
@@ -228,7 +230,7 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
     }
     return (
       <DriverShell presentation={presentation}>
-        <p className="auth-flow-muted">正在启动登录会话…</p>
+        <p className="auth-flow-muted">{t("Starting login session...")}</p>
       </DriverShell>
     );
   }
@@ -245,7 +247,9 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
         />
         {presentation === "default" ? (
           <p className="auth-flow-muted small">
-            正在等待确认…（约每 {phase.intervalSecs} 秒刷新）
+            {t("Waiting for confirmation... Refreshes about every {seconds} seconds.", {
+              seconds: phase.intervalSecs,
+            })}
           </p>
         ) : null}
         {onCancel && presentation === "default" ? (
@@ -254,7 +258,7 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
             onClick={onCancel}
             className="auth-flow-secondary-action"
           >
-            取消
+            {t("Cancel")}
           </button>
         ) : null}
       </DriverShell>
@@ -264,8 +268,8 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
   if (phase.tag === "confirmed") {
     return (
       <DriverShell presentation={presentation}>
-        <p className="auth-flow-success">登录成功，已将账号信息填入表单。</p>
-        <p className="auth-flow-muted small">请确认信息无误后点击保存。</p>
+        <p className="auth-flow-success">{t("Login succeeded. Account info has been filled into the form.")}</p>
+        <p className="auth-flow-muted small">{t("Review the info, then click Save.")}</p>
       </DriverShell>
     );
   }
@@ -273,14 +277,14 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
   // failed
   return (
     <DriverShell presentation={presentation}>
-      <p className="auth-flow-error">登录失败：{phase.reason}</p>
+      <p className="auth-flow-error">{t("Login failed: {reason}", { reason: phase.reason })}</p>
       <div className="auth-flow-actions">
         <button
           type="button"
           onClick={() => void start()}
           className="auth-flow-primary-action"
         >
-          再试一次
+          {t("Try again")}
         </button>
         {onCancel && (
           <button
@@ -288,7 +292,7 @@ export function AuthFlowDriver(props: AuthFlowDriverProps) {
             onClick={onCancel}
             className="auth-flow-secondary-action"
           >
-            关闭
+            {t("Close")}
           </button>
         )}
       </div>
@@ -324,6 +328,7 @@ function DisplayList(props: {
   iconDataUrl?: string | null;
   onRefresh?: () => void;
 }) {
+  const { locale, t } = useI18n();
   const { items, presentation = "default", badge, iconDataUrl, onRefresh } = props;
 
   if (presentation === "qr-card") {
@@ -335,7 +340,7 @@ function DisplayList(props: {
       .map((item) => item.value?.trim() || "")
       .filter((text) => {
         if (!text) return false;
-        return !/(扫码|扫描|打开以下链接|等待扫码|等待确认|确认登录)/.test(text);
+        return !isAuthFlowQrCardBoilerplateText(text, locale);
       });
 
     if (!qrItem?.value) {
@@ -388,7 +393,7 @@ function DisplayList(props: {
           return (
             <AuthInlineLink
               key={idx}
-              label={item.label || "打开授权链接"}
+              label={item.label || t("Open authorization link")}
               value={item.value}
             />
           );
@@ -481,6 +486,7 @@ function AuthLinkCard(props: {
   linkValue: string;
   onRefresh?: () => void;
 }) {
+  const { t } = useI18n();
   const { importantText, linkValue, onRefresh } = props;
   const [copied, setCopied] = useState(false);
 
@@ -501,13 +507,13 @@ function AuthLinkCard(props: {
           <ExternalLink size={17} strokeWidth={1.9} />
         </span>
         <div className="auth-link-card-copy">
-          <p>已在浏览器中打开授权链接</p>
+          <p>{t("Authorization link opened in the browser")}</p>
           <button
             className="auth-link-card-open"
             onClick={() => void openExternalAuthUrl(linkValue)}
             type="button"
           >
-            重新打开
+            {t("Open again")}
           </button>
         </div>
       </div>
@@ -521,10 +527,10 @@ function AuthLinkCard(props: {
       <div className="auth-qr-link-row device">
         <code className="auth-qr-link-url">{linkValue}</code>
         <button
-          aria-label="复制授权链接"
+          aria-label={t("Copy authorization link")}
           className="auth-qr-link-copy"
           onClick={() => void copyLink()}
-          title={copied ? "已复制" : "复制"}
+          title={copied ? t("Copied") : t("Copy")}
           type="button"
         >
           <Copy aria-hidden size={13} strokeWidth={1.7} />
@@ -537,7 +543,7 @@ function AuthLinkCard(props: {
           type="button"
         >
           <RefreshCw aria-hidden size={11} strokeWidth={1.8} />
-          刷新
+          {t("Refresh")}
         </button>
       ) : null}
     </div>
@@ -548,6 +554,7 @@ function QrLinkActions(props: {
   linkValue: string;
   onRefresh?: () => void;
 }) {
+  const { t } = useI18n();
   const { linkValue, onRefresh } = props;
   const [copied, setCopied] = useState(false);
   const linkIsUrl = isUrl(linkValue);
@@ -573,7 +580,7 @@ function QrLinkActions(props: {
               type="button"
             >
               <ExternalLink aria-hidden size={11} strokeWidth={1.8} />
-              打开链接
+              {t("Open link")}
             </button>
           ) : null}
           {onRefresh ? (
@@ -585,7 +592,7 @@ function QrLinkActions(props: {
                 type="button"
               >
                 <RefreshCw aria-hidden size={11} strokeWidth={1.8} />
-                刷新
+                {t("Refresh")}
               </button>
             </>
           ) : null}
@@ -608,10 +615,10 @@ function QrLinkActions(props: {
             </code>
           )}
           <button
-            aria-label="复制二维码链接"
+            aria-label={t("Copy QR link")}
             className="auth-qr-link-copy"
             onClick={() => void copyLink()}
-            title={copied ? "已复制" : "复制"}
+            title={copied ? t("Copied") : t("Copy")}
             type="button"
           >
             <Copy aria-hidden size={13} strokeWidth={1.7} />
@@ -629,6 +636,7 @@ function QrItem(props: {
   badge?: string;
   iconDataUrl?: string | null;
 }) {
+  const { t } = useI18n();
   const [dataUrl, setDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const qrWidth = props.presentation === "qr-card" ? 172 : 240;
@@ -658,7 +666,7 @@ function QrItem(props: {
   if (!dataUrl) {
     return (
       <div className={props.presentation === "qr-card" ? "auth-qr-card loading" : "auth-qr-default loading"}>
-        渲染二维码…
+        {t("Rendering QR code...")}
       </div>
     );
   }
@@ -668,7 +676,7 @@ function QrItem(props: {
       <div className="auth-qr-card">
         <img
           src={dataUrl}
-          alt="auth QR code"
+          alt={t("auth QR code")}
           width={172}
           height={172}
           className="auth-qr-image"
@@ -693,7 +701,7 @@ function QrItem(props: {
   return (
     <img
       src={dataUrl}
-      alt="auth QR code"
+      alt={t("auth QR code")}
       width={240}
       height={240}
       className="auth-qr-default"

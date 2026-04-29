@@ -38,6 +38,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useI18n, type Translate } from "@/i18n";
 
 type JsonValue =
   | string
@@ -86,6 +87,7 @@ export function JsonSchemaForm({
   redactSecrets = false,
   disabled = false,
 }: JsonSchemaFormProps): ReactElement {
+  const { t } = useI18n();
   const node = schema as unknown as JsonSchemaNode;
   const required = useMemo(
     () => new Set(Array.isArray(node.required) ? node.required : []),
@@ -117,7 +119,7 @@ export function JsonSchemaForm({
   if (entries.length === 0) {
     return (
       <div className="json-schema-form-empty">
-        This plugin declares no configurable fields.
+        {t("This plugin declares no configurable fields.")}
       </div>
     );
   }
@@ -165,6 +167,7 @@ function SchemaField({
   redactSecrets,
   onChange,
 }: SchemaFieldProps): ReactElement {
+  const { t } = useI18n();
   const label = prettifyKey(fieldKey);
   const description = schema.description;
   const isSecret = schema["x-garyx"]?.secret === true;
@@ -185,7 +188,7 @@ function SchemaField({
           onValueChange={(next) => onChange(next)}
         >
           <SelectTrigger id={fieldId} className="w-full bg-white">
-            <SelectValue placeholder="Choose…" />
+            <SelectValue placeholder={t("Choose...")} />
           </SelectTrigger>
           <SelectContent>
             {schema.enum.map((option) => {
@@ -260,7 +263,7 @@ function SchemaField({
     case "array": {
       const isStringArray = schema.items?.type === "string";
       if (!isStringArray) {
-        return unsupported(label, schema, value, onChange);
+        return unsupported(label, schema, value, onChange, t);
       }
       const list = Array.isArray(value) ? (value as string[]) : [];
       const joined = list.join("\n");
@@ -270,7 +273,7 @@ function SchemaField({
             id={fieldId}
             disabled={disabled}
             value={joined}
-            placeholder="One per line"
+            placeholder={t("One per line")}
             rows={Math.min(8, Math.max(2, list.length + 1))}
             onChange={(e) => {
               const next = e.target.value
@@ -328,7 +331,7 @@ function SchemaField({
               disabled={disabled}
               type="password"
               value="••••••••"
-              placeholder="Click to replace"
+              placeholder={t("Click to replace")}
               onFocus={(e) => {
                 e.target.value = "";
                 onChange("");
@@ -358,13 +361,14 @@ function unsupported(
   schema: JsonSchemaNode,
   value: JsonValue | undefined,
   onChange: (next: JsonValue) => void,
+  t: Translate,
 ): ReactElement {
   const asText =
     value === undefined ? "" : JSON.stringify(value, null, 2);
   return (
     <LabelledField label={label} description={schema.description}>
       <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-        This field's schema isn't rendered natively — edit the raw JSON below.
+        {t("This field's schema is not rendered natively. Edit the raw JSON below.")}
       </div>
       <Textarea
         value={asText}
