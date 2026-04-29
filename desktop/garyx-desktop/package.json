@@ -61,6 +61,7 @@
     "appId": "com.garyx.desktop",
     "productName": "Garyx",
     "artifactName": "Garyx-${version}-${arch}.${ext}",
+    "afterPack": "scripts/after-pack-app-update.cjs",
     "afterSign": "scripts/notarize.mjs",
     "icon": "resources/garyx.icns",
     "directories": {

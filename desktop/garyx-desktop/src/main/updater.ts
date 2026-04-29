@@ -36,6 +36,14 @@ function toUpdateInfo(info: UpdateInfo): { version: string; releaseNotes?: strin
   };
 }
 
+function updateErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/app-update\.yml/i.test(message) && /ENOENT|no such file/i.test(message)) {
+    return "Update metadata is missing from this app bundle. Rebuild or reinstall Garyx, then try again.";
+  }
+  return message;
+}
+
 export function registerUpdaterIpc(): void {
   ipcMain.handle("garyx:get-update-status", () => lastStatus);
   ipcMain.handle("garyx:install-update", () => {
@@ -60,8 +68,7 @@ export function registerUpdaterIpc(): void {
       await autoUpdater.checkForUpdates();
       return { ok: true as const };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { ok: false as const, reason: message };
+      return { ok: false as const, reason: updateErrorMessage(error) };
     }
   });
 }
@@ -105,8 +112,7 @@ export function bootstrapAutoUpdater(): void {
     broadcast({ phase: "downloaded", info: toUpdateInfo(info) });
   });
   autoUpdater.on("error", (error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    broadcast({ phase: "error", message });
+    broadcast({ phase: "error", message: updateErrorMessage(error) });
   });
 
   setTimeout(() => {
