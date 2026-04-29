@@ -2092,19 +2092,32 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
   flex: 0 0 auto;
+  gap: 0;
   color: var(--color-token-text-primary);
   background: transparent;
+  box-shadow: none;
 }
 
 .thread-bot-inline-trigger.empty {
   color: var(--color-token-description-foreground);
 }
 
+.thread-bot-inline-trigger[data-slot="select-trigger"][data-state="open"],
 .thread-bot-inline-trigger:hover {
+  background: color-mix(in oklab, var(--color-token-foreground) 6%, transparent);
   color: var(--color-token-text-primary);
+}
+
+.thread-bot-inline-trigger[data-slot="select-trigger"]:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-token-accent) 45%, transparent);
+  outline-offset: 2px;
 }
 
 .thread-bot-inline-trigger .channel-logo,
@@ -2113,18 +2126,43 @@ code {
   height: 14px;
 }
 
-.thread-bot-inline-select {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  min-width: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
+.thread-bot-inline-trigger[data-slot="select-trigger"] > svg:last-child {
+  display: none;
 }
 
-.thread-bot-inline-select:focus {
-  outline: none;
+.thread-bot-select-content {
+  min-width: 190px;
+  max-width: min(260px, calc(100vw - 32px));
+  border-radius: 10px;
+}
+
+.thread-bot-select-item {
+  min-height: 34px;
+}
+
+.thread-bot-select-option {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.thread-bot-select-logo,
+.thread-bot-select-option > .icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.thread-bot-select-option > .icon {
+  color: var(--color-token-description-foreground);
+}
+
+.thread-bot-select-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ghost-button-xs {
