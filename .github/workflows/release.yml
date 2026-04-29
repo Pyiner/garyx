@@ -157,12 +157,6 @@ jobs:
         if: steps.desktop_secrets.outputs.ready == 'true'
         run: npm run verify:mac:release
 
-      - name: Generate desktop checksums
-        if: steps.desktop_secrets.outputs.ready == 'true'
-        shell: bash
-        run: |
-          shasum -a 256 dist-release/*.dmg dist-release/*.zip > "dist-release/garyx-mac-${{ steps.desktop_version.outputs.value }}.sha256"
-
       - name: Upload desktop artifacts
         if: steps.desktop_secrets.outputs.ready == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -171,8 +165,7 @@ jobs:
           path: |
             desktop/garyx-desktop/dist-release/*.dmg
             desktop/garyx-desktop/dist-release/*.zip
-            desktop/garyx-desktop/dist-release/*.blockmap
-            desktop/garyx-desktop/dist-release/*.sha256
+            desktop/garyx-desktop/dist-release/*.zip.blockmap
             desktop/garyx-desktop/dist-release/latest-mac.yml
 
   release:
@@ -191,7 +184,7 @@ jobs:
       # electron-updater reads latest-mac.yml from the release assets; if
       # the repo is ever made private the app has to be configured with a
       # PAT (see updater.ts). The `*.yml` glob is required so latest-mac.yml
-      # is uploaded alongside the .dmg / .zip / .blockmap artifacts.
+      # is uploaded alongside the .dmg / .zip / zip.blockmap artifacts.
       - name: Publish release
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
