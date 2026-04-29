@@ -536,19 +536,14 @@ function EditBotAuthStep(props: {
           key={`form-${idx}`}
         >
           {hasAutoLogin ? (
-            <details className="add-bot-manual-details">
-              <summary>
-                <span>{t("Edit credentials manually")}</span>
-              </summary>
-              <div className="add-bot-manual-form">
-                <JsonSchemaForm
-                  schema={entry.schema as Record<string, unknown>}
-                  secretInputType="text"
-                  value={value}
-                  onChange={onChange}
-                />
-              </div>
-            </details>
+            <div className="add-bot-manual-form">
+              <JsonSchemaForm
+                schema={entry.schema as Record<string, unknown>}
+                secretInputType="text"
+                value={value}
+                onChange={onChange}
+              />
+            </div>
           ) : (
             <>
               <div className="add-bot-auth-card-header">

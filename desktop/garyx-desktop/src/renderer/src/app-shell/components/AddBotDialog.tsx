@@ -663,18 +663,13 @@ function AddBotAuthStep(props: {
           key={`form-${idx}`}
         >
           {hasAutoLogin ? (
-            <details className="add-bot-manual-details">
-              <summary>
-                <span>{t("Enter credentials manually")}</span>
-              </summary>
-              <div className="add-bot-manual-form">
-                <JsonSchemaForm
-                  schema={entry.schema as Record<string, unknown>}
-                  value={value}
-                  onChange={onChange}
-                />
-              </div>
-            </details>
+            <div className="add-bot-manual-form">
+              <JsonSchemaForm
+                schema={entry.schema as Record<string, unknown>}
+                value={value}
+                onChange={onChange}
+              />
+            </div>
           ) : (
             <>
               <div className="add-bot-auth-card-header">
