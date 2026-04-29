@@ -1186,13 +1186,13 @@ function showBrowserConnectionMenu(input: ShowBrowserConnectionMenuInput): void 
     { label: state.partition, enabled: false },
     { type: "separator" },
     {
-      label: "Copy CDP Endpoint",
+      label: input.labels?.copyCdpEndpoint || "Copy CDP Endpoint",
       click: () => {
         clipboard.writeText(state.debugEndpoint.origin);
       },
     },
     {
-      label: "Copy CDP List URL",
+      label: input.labels?.copyCdpListUrl || "Copy CDP List URL",
       click: () => {
         clipboard.writeText(state.debugEndpoint.listUrl);
       },

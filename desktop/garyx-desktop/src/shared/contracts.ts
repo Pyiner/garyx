@@ -1230,6 +1230,10 @@ export interface BrowserBoundsInput {
 export interface ShowBrowserConnectionMenuInput {
   x: number;
   y: number;
+  labels?: {
+    copyCdpEndpoint?: string;
+    copyCdpListUrl?: string;
+  };
 }
 
 export type DesktopBrowserStateListener = (state: DesktopBrowserState) => void;

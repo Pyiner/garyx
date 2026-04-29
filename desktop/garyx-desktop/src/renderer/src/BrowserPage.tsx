@@ -1,5 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 
 import type { DesktopBrowserState } from '@shared/contracts';
 
@@ -20,8 +19,6 @@ export function BrowserPage() {
   const api = getDesktopApi();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const browserInfoButtonRef = useRef<HTMLButtonElement | null>(null);
-  const [connectionMenuOpen, setConnectionMenuOpen] = useState(false);
-  const [connectionMenuStyle, setConnectionMenuStyle] = useState<CSSProperties | null>(null);
   const [browserState, setBrowserState] = useState<DesktopBrowserState | null>(null);
   const [addressValue, setAddressValue] = useState('');
   const active = activeTab(browserState);
@@ -91,80 +88,27 @@ export function BrowserPage() {
     });
   }
 
-  async function copyBrowserConnectionValue(value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      // Ignore clipboard failures in constrained environments.
-    } finally {
-      setConnectionMenuOpen(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!connectionMenuOpen) {
-      setConnectionMenuStyle(null);
+  function showBrowserConnectionMenu() {
+    const button = browserInfoButtonRef.current;
+    if (!button) {
       return;
     }
-
-    const updatePosition = () => {
-      const button = browserInfoButtonRef.current;
-      if (!button) {
-        return;
-      }
-      const rect = button.getBoundingClientRect();
-      const viewportPadding = 12;
-      const menuWidth = 252;
-      const gap = 6;
-      const nextLeft = Math.max(
-        viewportPadding,
-        Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding),
-      );
-      const nextTop = Math.max(viewportPadding, rect.bottom + gap);
-      setConnectionMenuStyle({
-        left: `${nextLeft}px`,
-        top: `${nextTop}px`,
-      });
-    };
-
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element)) {
-        return;
-      }
-      if (target.closest('.browser-connection-popover') || target.closest('.browser-info-button')) {
-        return;
-      }
-      setConnectionMenuOpen(false);
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setConnectionMenuOpen(false);
-      }
-    };
-
-    updatePosition();
-    window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
-    window.addEventListener('pointerdown', handlePointerDown);
-    window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
-      window.removeEventListener('pointerdown', handlePointerDown);
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [connectionMenuOpen]);
-
-  useEffect(() => {
-    void api.setBrowserOverlayPaused(connectionMenuOpen);
-    return () => {
-      if (connectionMenuOpen) {
-        void api.setBrowserOverlayPaused(false);
-      }
-    };
-  }, [api, connectionMenuOpen]);
+    const rect = button.getBoundingClientRect();
+    const viewportPadding = 8;
+    const menuWidth = 252;
+    const nextX = Math.max(
+      viewportPadding,
+      Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding),
+    );
+    void api.showBrowserConnectionMenu({
+      x: nextX,
+      y: rect.bottom + 6,
+      labels: {
+        copyCdpEndpoint: t('Copy CDP Endpoint'),
+        copyCdpListUrl: t('Copy CDP List URL'),
+      },
+    });
+  }
 
   return (
     <div className="browser-page">
@@ -212,11 +156,10 @@ export function BrowserPage() {
           </div>
           <div className="workspace-more-menu-shell browser-menu-shell">
             <button
-              aria-expanded={connectionMenuOpen}
               aria-haspopup="menu"
               className="codex-icon-button browser-toolbar-icon browser-info-button"
               onClick={() => {
-                setConnectionMenuOpen((current) => !current);
+                showBrowserConnectionMenu();
               }}
               ref={browserInfoButtonRef}
               type="button"
@@ -300,52 +243,6 @@ export function BrowserPage() {
           <div className="browser-stage-host" ref={hostRef} />
         </div>
       </div>
-      {connectionMenuOpen && connectionMenuStyle && browserState && typeof document !== 'undefined'
-        ? createPortal(
-          <div
-            className="browser-connection-popover"
-            style={{
-              position: 'fixed',
-              ...connectionMenuStyle,
-              zIndex: 2000,
-            }}
-          >
-            <div className="browser-connection-menu" role="menu" aria-label={t('Browser connection details')}>
-              <div className="browser-connection-info">
-                <span className="browser-connection-label">CDP</span>
-                <code>{browserState.debugEndpoint.origin}</code>
-              </div>
-              <div className="browser-connection-info">
-                <span className="browser-connection-label">PROFILE</span>
-                <code>{browserState.partition}</code>
-              </div>
-              <div className="browser-connection-actions">
-                <button
-                  className="browser-connection-action"
-                  onClick={() => {
-                    void copyBrowserConnectionValue(browserState.debugEndpoint.origin);
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  {t('Copy CDP Endpoint')}
-                </button>
-                <button
-                  className="browser-connection-action"
-                  onClick={() => {
-                    void copyBrowserConnectionValue(browserState.debugEndpoint.listUrl);
-                  }}
-                  role="menuitem"
-                  type="button"
-                >
-                  {t('Copy CDP List URL')}
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )
-        : null}
     </div>
   );
 }
