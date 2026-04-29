@@ -28,10 +28,7 @@ import {
   type PollFeishuChannelAuthResult,
 } from '@shared/contracts';
 
-import {
-  defaultChannelAgentId,
-  type GatewaySettingsMode,
-} from '@renderer/gateway-settings';
+import { defaultChannelAgentId } from '@renderer/gateway-settings';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -86,11 +83,8 @@ type GatewaySettingsPanelProps = {
   gatewayDirty?: boolean;
   gatewayLoading?: boolean;
   gatewaySaving?: boolean;
-  gatewayMode?: GatewaySettingsMode;
   gatewaySettingsSource?: GatewaySettingsSource;
   gatewayStatusMessage?: string | null;
-  gatewayJsonDraft?: string;
-  gatewayJsonError?: string | null;
   savingLocalSettings?: boolean;
   agents?: DesktopCustomAgent[];
   teams?: DesktopTeam[];
@@ -108,10 +102,8 @@ type GatewaySettingsPanelProps = {
     requireGatewayConnection?: boolean;
     reloadGatewaySettings?: boolean;
   }) => Promise<boolean>;
-  onGatewayJsonChange?: (value: string) => void;
   onSaveGatewaySettings?: () => Promise<boolean>;
   onMutateGatewayDraft?: DraftMutator;
-  onOpenAdvancedJson?: () => void;
   onRefreshAgentTargets?: () => Promise<void>;
   onAddChannelAccount?: (input: {
     channel: string;
@@ -143,7 +135,6 @@ type GatewaySettingsPanelProps = {
 
 type AgentProviderFieldsProps = {
   provider: any;
-  onOpenAdvancedJson: () => void;
   onMutate: (mutator: (provider: any) => void) => void;
 };
 
@@ -232,12 +223,12 @@ function updateStatusDisplay(
 export type SettingsTabId =
   | 'connection'
   | 'gateway'
+  | 'heartbeat'
   | 'provider'
   | 'channels'
   | 'labs'
   | 'commands'
-  | 'mcp'
-  | 'advanced';
+  | 'mcp';
 
 export const SETTINGS_TABS: Array<{
   id: SettingsTabId;
@@ -249,7 +240,13 @@ export const SETTINGS_TABS: Array<{
     id: 'gateway',
     label: 'Gateway',
     eyebrow: 'Gateway',
-    description: 'Gateway URL, runtime, storage, image generation, and heartbeat defaults.',
+    description: 'Gateway URL, runtime, storage, and image generation.',
+  },
+  {
+    id: 'heartbeat',
+    label: 'Heartbeat',
+    eyebrow: 'Heartbeat',
+    description: 'Default heartbeat cadence, target, acknowledgement length, and active hours.',
   },
   {
     id: 'provider',
@@ -280,12 +277,6 @@ export const SETTINGS_TABS: Array<{
     label: 'MCP Servers',
     eyebrow: 'MCP',
     description: 'Manage external MCP server definitions and local tool config sync.',
-  },
-  {
-    id: 'advanced',
-    label: 'Advanced',
-    eyebrow: 'JSON',
-    description: '',
   },
 ];
 
@@ -875,7 +866,6 @@ function ChannelAccountCard({
 
 function AgentProviderFields({
   provider,
-  onOpenAdvancedJson,
   onMutate,
 }: AgentProviderFieldsProps) {
   const { t } = useI18n();
@@ -952,11 +942,8 @@ export function GatewaySettingsPanel({
   gatewayDirty = false,
   gatewayLoading = false,
   gatewaySaving = false,
-  gatewayMode = 'form',
   gatewaySettingsSource = 'gateway_api',
   gatewayStatusMessage = null,
-  gatewayJsonDraft = '{}',
-  gatewayJsonError = null,
   savingLocalSettings = false,
   agents = [],
   teams = [],
@@ -971,10 +958,8 @@ export function GatewaySettingsPanel({
   onLocalSettingsChange = noop,
   onSaveLocalSettings = noop,
   onSaveLocalSettingsNow = noopAsyncBoolean,
-  onGatewayJsonChange = noop,
   onSaveGatewaySettings = noopAsyncBoolean,
   onMutateGatewayDraft = noop,
-  onOpenAdvancedJson = noop,
   onRefreshAgentTargets = noopAsync,
   onAddChannelAccount = noopAsync,
   onStartWeixinChannelAuth = async () => ({ sessionId: '', qrCodeDataUrl: '' }),
@@ -1009,7 +994,6 @@ export function GatewaySettingsPanel({
     });
     return map;
   }, [pluginCatalog]);
-  const [isAdvancedJsonEditing, setIsAdvancedJsonEditing] = useState(false);
   const [editingCommandName, setEditingCommandName] = useState<string | null>(null);
   const [commandDraft, setCommandDraft] = useState<CommandDraft>(() => emptyCommandDraft());
   const [commandDialogOpen, setCommandDialogOpen] = useState(false);
@@ -1022,8 +1006,7 @@ export function GatewaySettingsPanel({
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const updateStatusRef = useRef<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
   const statusClass =
-    gatewayJsonError
-      || (gatewayStatusMessage && /(failed|error|invalid)/i.test(gatewayStatusMessage))
+    gatewayStatusMessage && /(failed|error|invalid)/i.test(gatewayStatusMessage)
       ? 'error'
       : 'info';
   const remoteSyncLabel = gatewayLoading
@@ -1124,20 +1107,7 @@ export function GatewaySettingsPanel({
     };
   }, [t]);
 
-  function renderGatewaySaveAction(buttonLabel = t('Save JSON')) {
-    if (gatewayMode === 'json') {
-      return (
-        <Button
-          className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
-          disabled={!gatewayDirty || gatewayLoading || gatewaySaving}
-          onClick={() => { void onSaveGatewaySettings(); }}
-          size="sm"
-          type="button"
-        >
-          {gatewaySaving ? t('Saving…') : buttonLabel}
-        </Button>
-      );
-    }
+  function renderGatewaySaveAction(_buttonLabel?: string) {
     const statusLabel = gatewaySaving
       ? t('Saving…')
       : gatewayDirty
@@ -1444,7 +1414,11 @@ export function GatewaySettingsPanel({
           />
         </div>
       </div>
-      <div className="codex-section">
+    </>
+  );
+
+  const heartbeatPanel = (
+    <div className="codex-section">
         <div className="codex-section-header">
           <span className="codex-section-title">{t('Heartbeat Defaults')}</span>
           {renderGatewaySaveAction()}
@@ -1560,7 +1534,6 @@ export function GatewaySettingsPanel({
           />
         </div>
       </div>
-    </>
   );
 
   const gatewayPanel = (
@@ -2756,44 +2729,13 @@ export function GatewaySettingsPanel({
     </>
   );
 
-  const advancedPanel = (
-    <div className="codex-section">
-      <div className="codex-section-header">
-        <span className="codex-section-title">{t('Config JSON')}</span>
-        <div className="codex-list-row-actions">
-          {renderGatewaySaveAction()}
-          <button
-            className="codex-section-action"
-            onClick={() => { setIsAdvancedJsonEditing((current) => !current); }}
-            type="button"
-          >
-            {isAdvancedJsonEditing ? t('Done') : t('Edit')}
-          </button>
-        </div>
-      </div>
-      <div className="codex-list-card">
-        <div className="settings-editor-block">
-          {isAdvancedJsonEditing ? (
-            <Textarea
-              className="settings-json-editor min-h-[360px] rounded-[16px] border-[#e7e7e5] bg-[#fafaf9] font-mono text-[12px] shadow-none"
-              value={gatewayJsonDraft}
-              onChange={(event) => {
-                onGatewayJsonChange(event.target.value);
-              }}
-            />
-          ) : (
-            <pre className="settings-json-preview">{gatewayJsonDraft}</pre>
-          )}
-          {gatewayJsonError ? <span className="settings-json-error">{gatewayJsonError}</span> : null}
-        </div>
-      </div>
-    </div>
-  );
-
   let tabContent: ReactNode;
   switch (normalizedActiveTab) {
     case 'gateway':
       tabContent = gatewayPanel;
+      break;
+    case 'heartbeat':
+      tabContent = heartbeatPanel;
       break;
     case 'provider':
       tabContent = providerPanel;
@@ -2809,9 +2751,6 @@ export function GatewaySettingsPanel({
       break;
     case 'mcp':
       tabContent = mcpPanel;
-      break;
-    case 'advanced':
-      tabContent = advancedPanel;
       break;
     default:
       tabContent = gatewayPanel;

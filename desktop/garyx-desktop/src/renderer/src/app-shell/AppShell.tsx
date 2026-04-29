@@ -1486,10 +1486,7 @@ export function AppShell() {
     commandsSaving,
     gatewaySettingsDirty,
     gatewaySettingsDraft,
-    gatewaySettingsJsonDraft,
-    gatewaySettingsJsonError,
     gatewaySettingsLoading,
-    gatewaySettingsMode,
     gatewaySettingsSaving,
     gatewaySettingsSource,
     gatewaySettingsStatus,
@@ -1497,7 +1494,6 @@ export function AppShell() {
     handleCreateSlashCommand,
     handleDeleteMcpServer,
     handleDeleteSlashCommand,
-    handleGatewaySettingsJsonChange,
     handleRetrySettingsView,
     handleSaveGatewaySettings,
     handleSaveLocalSettingsNow,
@@ -6181,11 +6177,8 @@ export function AppShell() {
                     connection={connection}
                     gatewayDirty={gatewaySettingsDirty}
                     gatewayDraft={gatewaySettingsDraft}
-                    gatewayJsonDraft={gatewaySettingsJsonDraft}
-                    gatewayJsonError={gatewaySettingsJsonError}
                     gatewayProfiles={desktopState?.gatewayProfiles ?? []}
                     gatewayLoading={gatewaySettingsLoading}
-                    gatewayMode={gatewaySettingsMode}
                     gatewaySettingsSource={gatewaySettingsSource}
                     gatewaySaving={gatewaySettingsSaving}
                     gatewayStatusMessage={gatewaySettingsStatus}
@@ -6212,11 +6205,7 @@ export function AppShell() {
                       return handleDeleteSlashCommand(name);
                     }}
                     onLocalSettingsChange={setSettingsDraft}
-                    onGatewayJsonChange={handleGatewaySettingsJsonChange}
                     onMutateGatewayDraft={mutateGatewaySettingsDraft}
-                    onOpenAdvancedJson={() => {
-                      void handleSelectSettingsTab('advanced');
-                    }}
                     onSaveLocalSettings={(event) => {
                       void handleSaveSettings(event);
                     }}

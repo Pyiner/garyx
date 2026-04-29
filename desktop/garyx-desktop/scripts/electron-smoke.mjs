@@ -73,9 +73,9 @@ const SMOKE_TEXT = {
   followUpsReady: smokeLabel('2 follow-ups ready'),
   tabs: {
     Gateway: smokeLabel('Gateway'),
+    Heartbeat: smokeLabel('Heartbeat'),
     Provider: smokeLabel('Provider'),
     Channels: smokeLabel('Channels'),
-    Advanced: smokeLabel('Advanced'),
   },
 };
 
