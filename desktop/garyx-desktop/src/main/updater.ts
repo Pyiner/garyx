@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { dirname } from "node:path";
+
 import { app, BrowserWindow, ipcMain } from "electron";
 // `electron-updater` is CommonJS and our compiled bundle is ESM
 // (`"type": "module"` in package.json), so a named import would
@@ -14,10 +17,13 @@ import type { DesktopUpdateStatus } from "@shared/contracts";
 // 8 seconds after app ready to avoid competing with gateway startup.
 const RECURRING_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const INITIAL_CHECK_DELAY_MS = 8_000;
+const INVALID_MAC_SIGNATURE_UPDATE_MESSAGE =
+  "This Garyx app bundle is not signed with a valid Developer ID signature. Download and install the latest Garyx DMG once, then updates will work normally.";
 
 let lastStatus: DesktopUpdateStatus = { phase: "idle" };
 let subscribers = new Set<BrowserWindow>();
 let bootstrapped = false;
+let updatePreflightPromise: Promise<string | null> | null = null;
 
 function broadcast(status: DesktopUpdateStatus): void {
   lastStatus = status;
@@ -41,7 +47,78 @@ function updateErrorMessage(error: unknown): string {
   if (/app-update\.yml/i.test(message) && /ENOENT|no such file/i.test(message)) {
     return "Update metadata is missing from this app bundle. Rebuild or reinstall Garyx, then try again.";
   }
+  if (/Code signature .* did not pass validation/i.test(message)) {
+    return INVALID_MAC_SIGNATURE_UPDATE_MESSAGE;
+  }
   return message;
+}
+
+function currentMacAppBundlePath(): string {
+  return dirname(dirname(dirname(app.getPath("exe"))));
+}
+
+function runCodesign(args: string[]): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    execFile("/usr/bin/codesign", args, (error, stdout, stderr) => {
+      resolve({
+        ok: !error,
+        output: `${stdout || ""}${stderr || ""}`,
+      });
+    });
+  });
+}
+
+async function detectMacUpdateBlocker(): Promise<string | null> {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+
+  const appPath = currentMacAppBundlePath();
+  const verification = await runCodesign([
+    "--verify",
+    "--deep",
+    "--strict",
+    "--verbose=2",
+    appPath,
+  ]);
+  if (!verification.ok) {
+    console.warn(
+      "[updater] macOS app signature verification failed",
+      verification.output.trim(),
+    );
+    return INVALID_MAC_SIGNATURE_UPDATE_MESSAGE;
+  }
+
+  const details = await runCodesign(["-dv", "--verbose=4", appPath]);
+  const teamIdentifier = details.output
+    .match(/^TeamIdentifier=(.+)$/m)?.[1]
+    ?.trim();
+  const isDeveloperIdSigned = /^Authority=Developer ID Application:/m.test(details.output);
+  if (
+    !details.ok ||
+    !teamIdentifier ||
+    teamIdentifier === "not set" ||
+    !isDeveloperIdSigned ||
+    /^Signature=adhoc$/im.test(details.output)
+  ) {
+    console.warn(
+      "[updater] macOS app is not signed for automatic updates",
+      details.output.trim(),
+    );
+    return INVALID_MAC_SIGNATURE_UPDATE_MESSAGE;
+  }
+
+  return null;
+}
+
+function ensureUpdatePreflight(): Promise<string | null> {
+  if (!updatePreflightPromise) {
+    updatePreflightPromise = detectMacUpdateBlocker().catch((error) => {
+      console.warn("[updater] macOS app signature preflight failed", error);
+      return INVALID_MAC_SIGNATURE_UPDATE_MESSAGE;
+    });
+  }
+  return updatePreflightPromise;
 }
 
 export function registerUpdaterIpc(): void {
@@ -63,6 +140,11 @@ export function registerUpdaterIpc(): void {
   ipcMain.handle("garyx:check-for-updates-now", async () => {
     if (!app.isPackaged) {
       return { ok: false, reason: "dev-build" as const };
+    }
+    const blocker = await ensureUpdatePreflight();
+    if (blocker) {
+      broadcast({ phase: "error", message: blocker });
+      return { ok: false as const, reason: blocker };
     }
     try {
       await autoUpdater.checkForUpdates();
@@ -90,40 +172,47 @@ export function bootstrapAutoUpdater(): void {
     return;
   }
 
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  void ensureUpdatePreflight().then((blocker) => {
+    if (blocker) {
+      broadcast({ phase: "error", message: blocker });
+      return;
+    }
 
-  autoUpdater.on("checking-for-update", () => {
-    broadcast({ phase: "checking" });
-  });
-  autoUpdater.on("update-available", (info: UpdateInfo) => {
-    broadcast({ phase: "available", info: toUpdateInfo(info) });
-  });
-  autoUpdater.on("update-not-available", () => {
-    broadcast({ phase: "idle" });
-  });
-  autoUpdater.on("download-progress", (progress) => {
-    broadcast({
-      phase: "downloading",
-      percent: typeof progress.percent === "number" ? progress.percent : 0,
-    });
-  });
-  autoUpdater.on("update-downloaded", (info: UpdateInfo) => {
-    broadcast({ phase: "downloaded", info: toUpdateInfo(info) });
-  });
-  autoUpdater.on("error", (error) => {
-    broadcast({ phase: "error", message: updateErrorMessage(error) });
-  });
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
 
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((error) => {
-      console.warn("[updater] initial check failed", error);
+    autoUpdater.on("checking-for-update", () => {
+      broadcast({ phase: "checking" });
     });
-  }, INITIAL_CHECK_DELAY_MS);
+    autoUpdater.on("update-available", (info: UpdateInfo) => {
+      broadcast({ phase: "available", info: toUpdateInfo(info) });
+    });
+    autoUpdater.on("update-not-available", () => {
+      broadcast({ phase: "idle" });
+    });
+    autoUpdater.on("download-progress", (progress) => {
+      broadcast({
+        phase: "downloading",
+        percent: typeof progress.percent === "number" ? progress.percent : 0,
+      });
+    });
+    autoUpdater.on("update-downloaded", (info: UpdateInfo) => {
+      broadcast({ phase: "downloaded", info: toUpdateInfo(info) });
+    });
+    autoUpdater.on("error", (error) => {
+      broadcast({ phase: "error", message: updateErrorMessage(error) });
+    });
 
-  setInterval(() => {
-    autoUpdater.checkForUpdates().catch((error) => {
-      console.warn("[updater] periodic check failed", error);
-    });
-  }, RECURRING_CHECK_INTERVAL_MS);
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch((error) => {
+        console.warn("[updater] initial check failed", error);
+      });
+    }, INITIAL_CHECK_DELAY_MS);
+
+    setInterval(() => {
+      autoUpdater.checkForUpdates().catch((error) => {
+        console.warn("[updater] periodic check failed", error);
+      });
+    }, RECURRING_CHECK_INTERVAL_MS);
+  });
 }

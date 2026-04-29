@@ -695,6 +695,7 @@ const zhCN: Record<string, string> = {
   'Update check failed.': '检查更新失败。',
   'Update checks are available in packaged builds.': '打包版才可检查更新。',
   'Update metadata is missing from this app bundle. Rebuild or reinstall Garyx, then try again.': '当前应用包缺少更新元数据。请重新构建或重新安装 Garyx 后再试。',
+  'This Garyx app bundle is not signed with a valid Developer ID signature. Download and install the latest Garyx DMG once, then updates will work normally.': '当前 Garyx 应用包没有有效的 Developer ID 签名，macOS 无法安全自动更新。请先下载最新 DMG 重新安装一次，之后自动更新会正常工作。',
   'Update to v{version} and restart': '更新到 v{version} 并重启',
   'Update v{version} found. Downloading will start automatically.': '发现 v{version} 更新，将自动开始下载。',
   'Update v{version} is ready to install.': 'v{version} 更新已准备好安装。',

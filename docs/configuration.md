@@ -338,7 +338,9 @@ longer exposed as a gateway setting.
 Packaged macOS builds check for app updates automatically. You can also open
 Settings > Mac App and use Check Now to manually refresh the update state.
 Development builds report update checks as unavailable because there is no
-signed app bundle to replace.
+signed app bundle to replace. Locally copied or ad-hoc signed `.app` bundles
+also disable automatic updates; install a signed DMG once so macOS ShipIt can
+validate future updates against the app's Developer ID signature.
 
 The desktop language preference is stored in local desktop state. The default
 is `system`, which follows macOS and falls back to English; users can also
