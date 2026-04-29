@@ -57,7 +57,7 @@ import { AuthFlowDriver } from "../../channel-plugins/AuthFlowDriver";
 import { DirectoryInput } from "../../components/DirectoryInput";
 import { JsonSchemaForm } from "../../channel-plugins/JsonSchemaForm";
 import { useChannelPluginCatalog } from "../../channel-plugins/useChannelPluginCatalog";
-import { useI18n, type Translate } from "../../i18n";
+import { useI18n } from "../../i18n";
 
 type FeishuDomain = "feishu" | "lark";
 type AgentTargetOption = { value: string; label: string };
@@ -218,18 +218,6 @@ function channelInitials(entry: ChannelPluginCatalogEntry | null): string {
     return `${words[0][0]}${words[1][0]}`.toUpperCase();
   }
   return (source.slice(0, 2) || "CH").toUpperCase();
-}
-
-function compactAgentLabel(
-  targets: AgentTargetOption[],
-  value: string,
-  t: Translate,
-): string {
-  return (
-    targets.find((target) => target.value === value)?.label ||
-    value ||
-    t("Default route")
-  );
 }
 
 export function AddBotDialog(props: AddBotDialogProps) {
@@ -400,11 +388,6 @@ export function AddBotDialog(props: AddBotDialogProps) {
     }
   };
 
-  const accountDisplay =
-    accountId.trim() || configAccountIdOverride(pluginConfig) || t("Confirm on save");
-  const selectedAgentLabel = compactAgentLabel(agentTargets, agentId, t);
-  const workspaceDisplay = workspaceDir.trim() || t("Default main workspace");
-
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="add-bot-dialog">
@@ -564,40 +547,6 @@ export function AddBotDialog(props: AddBotDialogProps) {
             </div>
           ) : selectedEntry ? (
             <div className="add-bot-step-panel">
-              <div className="add-bot-channel-context">
-                {selectedEntry.icon_data_url ? (
-                  <img
-                    alt=""
-                    className="add-bot-channel-context-icon"
-                    height={26}
-                    src={selectedEntry.icon_data_url}
-                    width={26}
-                  />
-                ) : (
-                  <span className="add-bot-channel-context-badge">
-                    {channelInitials(selectedEntry)}
-                  </span>
-                )}
-                <div className="add-bot-channel-context-meta">
-                  <div className="add-bot-channel-context-name">
-                    {selectedEntry.display_name || selectedEntry.id} · {accountDisplay}
-                  </div>
-                  <div className="add-bot-channel-context-sub">
-                    {t("Bound to {agent} · {workspace}", {
-                      agent: selectedAgentLabel,
-                      workspace: workspaceDisplay,
-                    })}
-                  </div>
-                </div>
-                <button
-                  className="add-bot-channel-context-edit"
-                  onClick={() => setStep(1)}
-                  type="button"
-                >
-                  {t("Edit")}
-                </button>
-              </div>
-
               <AddBotAuthStep
                 entry={selectedEntry}
                 methods={selectedMethods}

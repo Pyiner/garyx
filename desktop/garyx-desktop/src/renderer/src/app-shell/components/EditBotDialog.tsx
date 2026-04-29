@@ -36,7 +36,7 @@ import { AuthFlowDriver } from "../../channel-plugins/AuthFlowDriver";
 import { JsonSchemaForm } from "../../channel-plugins/JsonSchemaForm";
 import { DirectoryInput } from "../../components/DirectoryInput";
 import { useChannelPluginCatalog } from "../../channel-plugins/useChannelPluginCatalog";
-import { useI18n, type Translate } from "../../i18n";
+import { useI18n } from "../../i18n";
 
 type AgentTargetOption = { value: string; label: string };
 type EditBotStep = 1 | 2;
@@ -154,18 +154,6 @@ function channelInitials(entry: ChannelPluginCatalogEntry | null): string {
   return (source.slice(0, 2) || "CH").toUpperCase();
 }
 
-function compactAgentLabel(
-  targets: AgentTargetOption[],
-  value: string,
-  t: Translate,
-): string {
-  return (
-    targets.find((target) => target.value === value)?.label ||
-    value ||
-    t("Default route")
-  );
-}
-
 export function EditBotDialog(props: EditBotDialogProps) {
   const { t } = useI18n();
   const { open, context, agentTargets, saving, onClose, onSave } =
@@ -231,11 +219,6 @@ export function EditBotDialog(props: EditBotDialogProps) {
     reauthorizedAccountId && reauthorizedAccountId !== accountId
       ? reauthorizedAccountId
       : null;
-  const accountDisplay = nextAccountId
-    ? `${accountId} -> ${nextAccountId}`
-    : accountId;
-  const selectedAgentLabel = compactAgentLabel(agentTargets, agentId, t);
-  const workspaceDisplay = workspaceDir.trim() || t("Default main workspace");
   const selectedAgentMissing = Boolean(
     agentId &&
       agentTargets.length > 0 &&
@@ -407,40 +390,6 @@ export function EditBotDialog(props: EditBotDialogProps) {
             </div>
           ) : selectedEntry ? (
             <div className="add-bot-step-panel">
-              <div className="add-bot-channel-context">
-                {selectedEntry.icon_data_url ? (
-                  <img
-                    alt=""
-                    className="add-bot-channel-context-icon"
-                    height={26}
-                    src={selectedEntry.icon_data_url}
-                    width={26}
-                  />
-                ) : (
-                  <span className="add-bot-channel-context-badge">
-                    {channelInitials(selectedEntry)}
-                  </span>
-                )}
-                <div className="add-bot-channel-context-meta">
-                  <div className="add-bot-channel-context-name">
-                    {selectedEntry.display_name || selectedEntry.id} · {accountDisplay}
-                  </div>
-                  <div className="add-bot-channel-context-sub">
-                    {t("Bound to {agent} · {workspace}", {
-                      agent: selectedAgentLabel,
-                      workspace: workspaceDisplay,
-                    })}
-                  </div>
-                </div>
-                <button
-                  className="add-bot-channel-context-edit"
-                  onClick={() => setStep(1)}
-                  type="button"
-                >
-                  {t("Edit")}
-                </button>
-              </div>
-
               <EditBotAuthStep
                 entry={selectedEntry}
                 methods={selectedMethods}
