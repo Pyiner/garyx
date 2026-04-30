@@ -25,6 +25,10 @@ let subscribers = new Set<BrowserWindow>();
 let bootstrapped = false;
 let updatePreflightPromise: Promise<string | null> | null = null;
 
+type UpdaterIpcOptions = {
+  prepareForInstall?: () => void;
+};
+
 function broadcast(status: DesktopUpdateStatus): void {
   lastStatus = status;
   for (const window of subscribers) {
@@ -121,7 +125,7 @@ function ensureUpdatePreflight(): Promise<string | null> {
   return updatePreflightPromise;
 }
 
-export function registerUpdaterIpc(): void {
+export function registerUpdaterIpc(options: UpdaterIpcOptions = {}): void {
   ipcMain.handle("garyx:get-update-status", () => lastStatus);
   ipcMain.handle("garyx:install-update", () => {
     if (lastStatus.phase !== "downloaded") {
@@ -130,6 +134,7 @@ export function registerUpdaterIpc(): void {
     // setImmediate so the IPC response flushes before the app quits.
     setImmediate(() => {
       try {
+        options.prepareForInstall?.();
         autoUpdater.quitAndInstall(false, true);
       } catch (error) {
         console.error("[updater] quitAndInstall failed", error);

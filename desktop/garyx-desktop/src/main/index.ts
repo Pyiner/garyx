@@ -281,6 +281,11 @@ function showMainWindow(): void {
   mainWindow = createMainWindow();
 }
 
+function prepareForAppQuit(): void {
+  isQuitting = true;
+  stopGateway();
+}
+
 function queueDeepLink(rawUrl: string): void {
   if (!rememberRecentDeepLink(rawUrl)) {
     return;
@@ -1168,8 +1173,7 @@ function buildTrayMenu(): Menu {
     {
       label: "Quit Garyx",
       click: () => {
-        isQuitting = true;
-        stopGateway();
+        prepareForAppQuit();
         app.quit();
       },
     },
@@ -1240,7 +1244,7 @@ app
     app.setName("Garyx");
     registerDeepLinkProtocol();
     registerIpcHandlers();
-    registerUpdaterIpc();
+    registerUpdaterIpc({ prepareForInstall: prepareForAppQuit });
 
     // Ensure the launchd-managed gateway owns the configured port.
     startGateway();
@@ -1285,8 +1289,7 @@ app
   });
 
 app.on("before-quit", () => {
-  isQuitting = true;
-  stopGateway();
+  prepareForAppQuit();
 });
 
 app.on("window-all-closed", () => {
