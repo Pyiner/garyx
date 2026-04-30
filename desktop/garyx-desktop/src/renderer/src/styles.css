@@ -14603,8 +14603,7 @@ button.codex-list-row {
   width: min(100%, 1180px);
   margin: 0 auto;
   padding: 0 4px 64px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  overflow: visible;
 }
 
 .ar-runs-hero {
@@ -14684,15 +14683,16 @@ button.codex-list-row {
 }
 
 .ar-run-goal-title {
-  display: -webkit-box;
+  display: block;
+  min-width: 0;
   overflow: hidden;
   color: var(--color-token-text-primary);
   font-size: var(--text-md);
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0;
   line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ar-run-goal-meta {
@@ -14756,8 +14756,19 @@ button.codex-list-row {
   width: min(100%, 1040px);
   margin: 0 auto;
   padding: 0 4px 80px;
-  overflow-y: auto;
+  overflow: visible;
+}
+
+.conversation-body:has(.ar-runs-page),
+.conversation-body:has(.ar-detail-page) {
+  display: block;
   overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.ar-runs-page [data-slot="table-container"],
+.ar-detail-page [data-slot="table-container"] {
+  overflow: visible;
 }
 
 .ar-detail-toolbar {
