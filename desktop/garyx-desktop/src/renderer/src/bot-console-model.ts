@@ -26,6 +26,38 @@ export function botGroupIdForEndpoint(
   return `${endpoint.channel || 'unknown'}::${endpoint.accountId || 'default'}`;
 }
 
+function sortKey(value?: string | null): string {
+  return value?.trim().toLowerCase() || '';
+}
+
+function compareSortKey(left?: string | null, right?: string | null): number {
+  const leftKey = sortKey(left);
+  const rightKey = sortKey(right);
+  if (leftKey < rightKey) {
+    return -1;
+  }
+  if (leftKey > rightKey) {
+    return 1;
+  }
+  return 0;
+}
+
+function compareConfiguredBotsByIdentity(left: ConfiguredBot, right: ConfiguredBot): number {
+  return compareSortKey(left.channel, right.channel)
+    || compareSortKey(left.accountId, right.accountId)
+    || compareSortKey(left.displayName, right.displayName);
+}
+
+function compareBotGroupsByIdentity(
+  left: Pick<DesktopBotConsoleSummary, 'id' | 'channel' | 'accountId' | 'title'>,
+  right: Pick<DesktopBotConsoleSummary, 'id' | 'channel' | 'accountId' | 'title'>,
+): number {
+  return compareSortKey(left.channel, right.channel)
+    || compareSortKey(left.accountId, right.accountId)
+    || compareSortKey(left.id, right.id)
+    || compareSortKey(left.title, right.title);
+}
+
 export function latestEndpointActivity(
   endpoint: DesktopChannelEndpoint,
 ): string | null {
@@ -180,15 +212,17 @@ export function buildBotGroups(
   const groups = new Map<string, DesktopBotConsoleSummary>();
   const configuredGroupIds = new Set<string>();
   const orderByGroupId = new Map<string, number>();
+  const sortedConfiguredBots = [...configuredBots].sort(compareConfiguredBotsByIdentity);
+  const sortedBotConsoles = [...botConsoles].sort(compareBotGroupsByIdentity);
   let nextOrder = 0;
-  for (const bot of configuredBots) {
+  for (const bot of sortedConfiguredBots) {
     const id = `${bot.channel}::${bot.accountId}`;
     if (!orderByGroupId.has(id)) {
       orderByGroupId.set(id, nextOrder);
       nextOrder += 1;
     }
   }
-  for (const group of botConsoles) {
+  for (const group of sortedBotConsoles) {
     if (!orderByGroupId.has(group.id)) {
       orderByGroupId.set(group.id, nextOrder);
       nextOrder += 1;
@@ -200,7 +234,7 @@ export function buildBotGroups(
       endpoints: [...group.endpoints],
     });
   }
-  for (const bot of configuredBots) {
+  for (const bot of sortedConfiguredBots) {
     const id = `${bot.channel}::${bot.accountId}`;
     configuredGroupIds.add(id);
     const existing = groups.get(id);
@@ -314,7 +348,6 @@ export function buildBotGroups(
       const leftOrder = orderByGroupId.get(left.id) ?? Number.MAX_SAFE_INTEGER;
       const rightOrder = orderByGroupId.get(right.id) ?? Number.MAX_SAFE_INTEGER;
       return leftOrder - rightOrder
-        || left.title.localeCompare(right.title)
-        || left.id.localeCompare(right.id);
+        || compareBotGroupsByIdentity(left, right);
     });
 }

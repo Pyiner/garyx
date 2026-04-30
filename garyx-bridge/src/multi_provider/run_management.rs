@@ -1393,6 +1393,13 @@ impl MultiProviderBridge {
                             "agent run completed via run graph",
                         );
                     }
+                    if !res.success {
+                        tracing::warn!(
+                            run_id = %run_id_owned,
+                            error = %res.error.as_deref().unwrap_or("unknown error"),
+                            "agent run failed via run graph",
+                        );
+                    }
 
                     // Record health metrics.
                     if res.success {
@@ -1470,6 +1477,14 @@ impl MultiProviderBridge {
                     if let Some(actual_model) = res.actual_model.as_ref() {
                         completed_event =
                             completed_event.with_field("actual_model", json!(actual_model));
+                    }
+                    if let Some(error) = res
+                        .error
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|error| !error.is_empty())
+                    {
+                        completed_event = completed_event.with_field("error", json!(error));
                     }
                     record_thread_log(
                         thread_logs_for_task.clone(),

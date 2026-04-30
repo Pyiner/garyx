@@ -1241,6 +1241,17 @@ impl CodexAgentProvider {
             None
         };
 
+        if !success {
+            tracing::warn!(
+                run_id = %run_id,
+                thread_id = %options.thread_id,
+                sdk_session_id = %thread_id,
+                status = %status,
+                error = %error.as_deref().unwrap_or("unknown codex turn failure"),
+                "codex turn completed with failure",
+            );
+        }
+
         let (input_tokens, output_tokens, cost) = extract_usage(&completed);
 
         live_callback(StreamEvent::Done);

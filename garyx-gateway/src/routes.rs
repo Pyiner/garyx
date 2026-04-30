@@ -171,6 +171,11 @@ fn configured_channel_accounts(channels: &ChannelsConfig) -> Vec<ConfiguredChann
             });
         }
     }
+    accounts.sort_by(|left, right| {
+        left.channel
+            .cmp(&right.channel)
+            .then_with(|| left.account_id.cmp(&right.account_id))
+    });
     accounts
 }
 
