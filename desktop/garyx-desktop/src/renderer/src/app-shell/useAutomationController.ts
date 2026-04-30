@@ -7,10 +7,9 @@ import type {
   DesktopCustomAgent,
   DesktopState,
   DesktopTeam,
-  DesktopWorkspace,
 } from '@shared/contracts';
 
-import { selectedAutomation, selectedWorkspace } from '../thread-model';
+import { selectedAutomation } from '../thread-model';
 import type {
   AutomationDraft,
   AutomationAgentOption,
@@ -33,7 +32,7 @@ function defaultAutomationSchedule(): DesktopAutomationSchedule {
 }
 
 function buildAutomationDraft(
-  workspaces: DesktopWorkspace[],
+  workspaces: DesktopState['workspaces'],
   agents: DesktopCustomAgent[],
   automation?: DesktopAutomationSummary | null,
 ): AutomationDraft {
@@ -45,7 +44,7 @@ function buildAutomationDraft(
     label: automation?.label || '',
     prompt: automation?.prompt || '',
     agentId: automation?.agentId || defaultAgentId,
-    workspaceId: automation?.workspaceId || workspaces[0]?.id || '',
+    workspacePath: automation?.workspacePath || workspaces[0]?.path || '',
     schedule: automation?.schedule || defaultAutomationSchedule(),
   };
 }
@@ -138,9 +137,6 @@ export function useAutomationController({
   const automationWorkspaces = (desktopState?.workspaces || []).filter((workspace) => {
     return Boolean(workspace.path) && workspace.available;
   });
-  const automationDialogWorkspace = automationDialog
-    ? selectedWorkspace(desktopState, automationDialog.draft.workspaceId)
-    : null;
   const activeAutomationUnreadAt = activeAutomation ? automationUnreadTimestamp(activeAutomation) : null;
   const activeAutomationSeenAt = activeAutomation
     ? desktopState?.lastSeenRunAtByAutomation?.[activeAutomation.id] || null
@@ -176,11 +172,6 @@ export function useAutomationController({
     mode: 'create' | 'edit',
     automation?: DesktopAutomationSummary | null,
   ) {
-    if (!automationWorkspaces.length && mode === 'create') {
-      setError('Add an available local workspace before creating an automation.');
-      return;
-    }
-
     if (!automationAgentOptions.length && mode === 'create') {
       setError('Add or restore an agent or team before creating an automation.');
       return;
@@ -226,8 +217,9 @@ export function useAutomationController({
       setError('Choose an agent or team for this automation.');
       return;
     }
-    if (!automationDialog.draft.workspaceId) {
-      setError('Choose a workspace for this automation.');
+    const workspacePath = automationDialog.draft.workspacePath.trim();
+    if (!workspacePath) {
+      setError('Choose a directory for this automation.');
       return;
     }
     if (
@@ -253,11 +245,11 @@ export function useAutomationController({
 
     try {
       const result = automationDialog.mode === 'create'
-        ? await window.garyxDesktop.createAutomation({
+          ? await window.garyxDesktop.createAutomation({
             label,
             prompt,
             agentId: automationDialog.draft.agentId,
-            workspaceId: automationDialog.draft.workspaceId,
+            workspacePath,
             schedule: automationDialog.draft.schedule,
           })
         : await window.garyxDesktop.updateAutomation({
@@ -265,7 +257,7 @@ export function useAutomationController({
             label,
             prompt,
             agentId: automationDialog.draft.agentId,
-            workspaceId: automationDialog.draft.workspaceId,
+            workspacePath,
             schedule: automationDialog.draft.schedule,
           });
       setDesktopState(result.state);
@@ -486,7 +478,6 @@ export function useAutomationController({
     activeAutomation,
     automationActivityLoadingId,
     automationDialog,
-    automationDialogWorkspace,
     automationMutation,
     automationStatus,
     automationAgentOptions,

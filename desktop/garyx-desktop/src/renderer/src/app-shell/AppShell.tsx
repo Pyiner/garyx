@@ -1442,11 +1442,9 @@ export function AppShell() {
   );
   const {
     automationDialog,
-    automationDialogWorkspace,
     automationMutation,
     automationStatus,
     automationAgentOptions,
-    automationWorkspaces,
     automations,
     handleDeleteAutomation,
     handleOpenAutomationThread,
@@ -2252,7 +2250,7 @@ export function AppShell() {
       ? "Queue another follow-up for Garyx..."
       : preferredWorkspaceForNewThread
         ? `Ask Garyx to inspect code in ${preferredWorkspaceForNewThread.name}...`
-        : "Add a workspace folder to start a Garyx thread.";
+        : "Choose a folder to start a Garyx thread.";
   const showAutomationRunInitialPlaceholder = Boolean(
     activePendingAutomationRun &&
     !activeMessages.length &&
@@ -6558,8 +6556,6 @@ export function AppShell() {
         <AutomationDialog
           state={automationDialog}
           agentOptions={automationAgentOptions}
-          workspaces={automationWorkspaces}
-          currentWorkspace={automationDialogWorkspace}
           saving={
             automationMutation === "create" ||
             automationMutation === `edit:${automationDialog.automationId || ""}`

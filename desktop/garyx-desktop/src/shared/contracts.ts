@@ -32,6 +32,9 @@ export type DesktopThreadProviderType =
 
 export type DesktopWorkspaceKind = "local";
 
+// Path-derived directory group used by the desktop UI. This is not a durable
+// Garyx domain entity; the thread/automation source of truth remains
+// `workspace_dir`.
 export interface DesktopWorkspace {
   id: string;
   name: string;
@@ -998,7 +1001,8 @@ export interface CreateAutomationInput {
   label: string;
   prompt: string;
   agentId: string;
-  workspaceId: string;
+  workspaceId?: string;
+  workspacePath?: string;
   schedule: DesktopAutomationSchedule;
 }
 
@@ -1008,6 +1012,7 @@ export interface UpdateAutomationInput {
   prompt?: string;
   agentId?: string;
   workspaceId?: string;
+  workspacePath?: string;
   schedule?: DesktopAutomationSchedule;
   enabled?: boolean;
 }

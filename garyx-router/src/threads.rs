@@ -508,6 +508,7 @@ pub async fn update_thread_record(
     let Some(mut value) = store.get(thread_id).await else {
         return Err(format!("thread not found: {thread_id}"));
     };
+    let existing_workspace_dir = workspace_dir_from_value(&value);
     let Some(obj) = ensure_object(&mut value) else {
         return Err(format!("thread payload is not an object: {thread_id}"));
     };
@@ -520,11 +521,23 @@ pub async fn update_thread_record(
         obj.insert("label".to_owned(), Value::String(label.to_owned()));
     }
     if let Some(workspace_dir_input) = workspace_dir {
-        match normalize_workspace_dir(Some(workspace_dir_input.as_str())) {
-            Some(workspace_dir) => {
-                obj.insert("workspace_dir".to_owned(), Value::String(workspace_dir));
+        let requested_workspace_dir = normalize_workspace_dir(Some(workspace_dir_input.as_str()));
+        match (existing_workspace_dir.as_deref(), requested_workspace_dir) {
+            (Some(existing), Some(requested)) if existing != requested => {
+                return Err(format!(
+                    "thread workspace_dir is immutable; create a new thread to use {requested}"
+                ));
             }
-            None => {
+            (Some(_), None) => {
+                return Err(
+                    "thread workspace_dir is immutable; cannot clear workspace_dir".to_owned(),
+                );
+            }
+            (Some(_), Some(_)) => {}
+            (None, Some(requested)) => {
+                obj.insert("workspace_dir".to_owned(), Value::String(requested));
+            }
+            (None, None) => {
                 obj.insert("workspace_dir".to_owned(), Value::Null);
             }
         }

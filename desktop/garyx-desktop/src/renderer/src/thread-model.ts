@@ -209,7 +209,7 @@ export function buildWorkspaceThreadGroups(input: {
     const automationCount = input.state!.automations.filter((automation) => {
       return automation.workspaceId === workspace.id;
     }).length;
-    const canManageWorkspace = workspace.kind === 'local';
+    const canManageWorkspace = false;
 
     return {
       workspace,

@@ -61,7 +61,7 @@ export type AutomationDraft = {
   label: string;
   prompt: string;
   agentId: string;
-  workspaceId: string;
+  workspacePath: string;
   schedule: DesktopAutomationSchedule;
 };
 

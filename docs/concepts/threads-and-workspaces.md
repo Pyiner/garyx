@@ -36,11 +36,19 @@ The same thread can be bound to multiple endpoints. The Garyx desktop app
 reuses one thread across DMs and group mentions when you want continuity;
 each WeChat / Telegram bot uses its own thread per conversation by default.
 
-## Workspaces
+## Workspace directories
 
 `workspace_dir` is what the agent actually sees as its working directory
 when it executes tool calls. For Claude Code or Codex, this is the cwd
 passed to the SDK; for Gemini, the project root.
+
+Garyx does not treat a workspace as a separate domain entity. A
+`workspace_dir` is just a directory path recorded on the thread (or supplied
+as a default when the thread is created). Desktop folder groups are derived
+from these paths for navigation only.
+
+Once a thread has a `workspace_dir`, that execution directory is immutable.
+Create a new thread when you want to work from a different directory.
 
 A few ways `workspace_dir` gets set:
 

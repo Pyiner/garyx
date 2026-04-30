@@ -130,7 +130,7 @@ export function NewThreadEmptyState({
               className="min-w-[var(--radix-select-trigger-width)]"
             >
               <SelectGroup>
-                <SelectLabel>{t("Workspaces")}</SelectLabel>
+              <SelectLabel>{t("Folders")}</SelectLabel>
                 {selectableNewThreadWorkspaces.map((workspace) => (
                   <SelectItem
                     disabled={!workspace.available}
@@ -151,7 +151,7 @@ export function NewThreadEmptyState({
                 <IconPlus aria-hidden size={13} stroke={1.8} />
                 {workspaceMutation === "add"
                   ? t("Opening folder…")
-                  : t("Add workspace…")}
+                  : t("Choose folder…")}
               </SelectItem>
             </SelectContent>
           </Select>
@@ -165,7 +165,7 @@ export function NewThreadEmptyState({
             <IconPlus aria-hidden size={14} stroke={1.8} />
             {workspaceMutation === "add"
               ? t("Opening folder…")
-              : t("Add a workspace to begin")}
+              : t("Choose a folder to begin")}
           </Button>
         )}
 

@@ -187,7 +187,7 @@ async fn update_thread_record_preserves_workspace_when_not_provided() {
 }
 
 #[tokio::test]
-async fn update_thread_record_clears_workspace_when_empty_string_provided() {
+async fn update_thread_record_rejects_clearing_workspace() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     store
         .set(
@@ -199,15 +199,101 @@ async fn update_thread_record_clears_workspace_when_empty_string_provided() {
         )
         .await;
 
-    let updated = update_thread_record(&store, "thread::clear", None, Some("   ".to_owned()))
+    let error = update_thread_record(&store, "thread::clear", None, Some("   ".to_owned()))
         .await
-        .unwrap();
+        .unwrap_err();
 
-    assert!(workspace_dir_from_value(&updated).is_none());
-    assert!(
-        updated
-            .get("workspace_dir")
-            .is_some_and(|value| value.is_null())
+    assert!(error.contains("workspace_dir is immutable"));
+    let stored = store.get("thread::clear").await.unwrap();
+    assert_eq!(
+        workspace_dir_from_value(&stored).as_deref(),
+        Some("/tmp/workspace-b")
+    );
+}
+
+#[tokio::test]
+async fn update_thread_record_rejects_workspace_change() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::move",
+            json!({
+                "thread_id": "thread::move",
+                "workspace_dir": "/tmp/workspace-a"
+            }),
+        )
+        .await;
+
+    let error = update_thread_record(
+        &store,
+        "thread::move",
+        None,
+        Some("/tmp/workspace-b".to_owned()),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("workspace_dir is immutable"));
+    let stored = store.get("thread::move").await.unwrap();
+    assert_eq!(
+        workspace_dir_from_value(&stored).as_deref(),
+        Some("/tmp/workspace-a")
+    );
+}
+
+#[tokio::test]
+async fn update_thread_record_allows_initial_workspace_set() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::initial",
+            json!({
+                "thread_id": "thread::initial"
+            }),
+        )
+        .await;
+
+    let updated = update_thread_record(
+        &store,
+        "thread::initial",
+        None,
+        Some("/tmp/workspace-c".to_owned()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        workspace_dir_from_value(&updated).as_deref(),
+        Some("/tmp/workspace-c")
+    );
+}
+
+#[tokio::test]
+async fn update_thread_record_allows_same_workspace_value() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::same",
+            json!({
+                "thread_id": "thread::same",
+                "workspace_dir": "/tmp/workspace-d"
+            }),
+        )
+        .await;
+
+    let updated = update_thread_record(
+        &store,
+        "thread::same",
+        Some("Same".to_owned()),
+        Some("/tmp/workspace-d".to_owned()),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(label_from_value(&updated).as_deref(), Some("Same"));
+    assert_eq!(
+        workspace_dir_from_value(&updated).as_deref(),
+        Some("/tmp/workspace-d")
     );
 }
 

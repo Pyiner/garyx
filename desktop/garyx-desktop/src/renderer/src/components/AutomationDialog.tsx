@@ -2,11 +2,11 @@ import React from 'react';
 
 import type {
   DesktopAutomationSchedule,
-  DesktopWorkspace,
 } from '@shared/contracts';
 import type { AutomationAgentOption } from '@renderer/app-shell/types';
 
 import { Button } from '@/components/ui/button';
+import { DirectoryInput } from '@/components/DirectoryInput';
 import {
   Dialog,
   DialogContent,
@@ -28,7 +28,7 @@ export type AutomationDraft = {
   label: string;
   prompt: string;
   agentId: string;
-  workspaceId: string;
+  workspacePath: string;
   schedule: DesktopAutomationSchedule;
 };
 
@@ -41,8 +41,6 @@ export type AutomationDialogState = {
 export interface AutomationDialogProps {
   state: AutomationDialogState;
   agentOptions: AutomationAgentOption[];
-  workspaces: DesktopWorkspace[];
-  currentWorkspace?: DesktopWorkspace | null;
   saving: boolean;
   onDraftChange: (mutator: (draft: AutomationDraft) => AutomationDraft) => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
@@ -91,8 +89,6 @@ const WEEKDAYS = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su'] as const;
 export function AutomationDialog({
   state,
   agentOptions,
-  workspaces,
-  currentWorkspace,
   saving,
   onDraftChange,
   onSubmit,
@@ -156,28 +152,19 @@ export function AutomationDialog({
             </select>
           </div>
 
-          {/* Workspace */}
+          {/* Directory */}
           <div className="grid gap-2">
-            <Label className="text-[12px] font-medium">{t('Workspace')}</Label>
-            <select
-              className="h-10 w-full rounded-lg border border-[#e1e1e1] bg-white px-3 py-2 text-[13px] outline-none focus-visible:border-[#ccc] focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              value={draft.workspaceId}
-              onChange={(e) =>
-                onDraftChange((d) => ({ ...d, workspaceId: e.target.value }))
+            <Label className="text-[12px] font-medium" htmlFor="automation-workspace-dir">
+              {t('Directory')}
+            </Label>
+            <DirectoryInput
+              id="automation-workspace-dir"
+              onChange={(value) =>
+                onDraftChange((d) => ({ ...d, workspacePath: value }))
               }
-            >
-              {currentWorkspace &&
-                !workspaces.some((w) => w.id === currentWorkspace.id) && (
-                  <option value={currentWorkspace.id}>
-                    {t('{name} (unavailable)', { name: currentWorkspace.name })}
-                  </option>
-                )}
-              {workspaces.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name}
-                </option>
-              ))}
-            </select>
+              placeholder={t('/path/to/project')}
+              value={draft.workspacePath}
+            />
           </div>
 
           {/* Prompt */}

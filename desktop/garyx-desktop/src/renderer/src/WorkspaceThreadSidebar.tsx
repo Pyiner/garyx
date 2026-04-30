@@ -200,11 +200,11 @@ export function WorkspaceThreadSidebar({
           />
         </button>
         <button
-          aria-label={workspaceMutation === 'add' ? t('Opening folder') : t('New folder')}
+          aria-label={workspaceMutation === 'add' ? t('Opening folder') : t('Choose folder')}
           className="sidebar-section-action"
           disabled={workspaceMutation === 'add'}
           onClick={onOpenFolder}
-          title={workspaceMutation === 'add' ? t('Opening folder…') : t('New folder')}
+          title={workspaceMutation === 'add' ? t('Opening folder…') : t('Choose folder')}
           type="button"
         >
           <NewFolderIcon />
@@ -556,7 +556,7 @@ export function WorkspaceThreadSidebar({
 
         {!workspaceThreadGroups.length ? (
           <div className="workspace-empty-block">
-            <span className="eyebrow">{t('No Workspaces')}</span>
+            <span className="eyebrow">{t('No Folders')}</span>
             <p>{t('Add a folder to start grouping Garyx threads by workspace.')}</p>
           </div>
         ) : null}

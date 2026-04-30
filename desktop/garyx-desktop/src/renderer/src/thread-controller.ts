@@ -315,7 +315,7 @@ export async function ensureWorkspaceForNewThread(input: {
     }
   }
 
-  input.setError("Select or add an available folder before creating a thread.");
+  input.setError("Choose an available folder before creating a thread.");
   return null;
 }
 

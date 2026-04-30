@@ -96,9 +96,9 @@ function normalizeWorkspacePathKey(path: string): string {
   return path.trim().toLowerCase();
 }
 
-function buildManagedWorkspaceId(path: string): string {
+function buildWorkspaceIdForPath(path: string): string {
   const digest = createHash('sha1').update(normalizeWorkspacePathKey(path)).digest('hex');
-  return `workspace::managed::${digest}`;
+  return `workspace::path::${digest}`;
 }
 
 function sortAutomations(automations: DesktopAutomationSummary[]): DesktopAutomationSummary[] {
@@ -387,7 +387,7 @@ function upgradeDesktopSettings(
 
 function workspaceNameFromPath(path: string | null | undefined): string {
   if (!path) {
-    return 'Unknown Workspace';
+    return 'Unknown Folder';
   }
   const resolved = path.trim();
   return basename(resolved) || resolved;
@@ -396,9 +396,9 @@ function workspaceNameFromPath(path: string | null | undefined): string {
 function normalizeWorkspace(value?: Partial<DesktopWorkspace>): DesktopWorkspace {
   const now = new Date().toISOString();
   const path = value?.path?.trim() || null;
-  const name = value?.name?.trim() || workspaceNameFromPath(path);
+  const name = workspaceNameFromPath(path);
   return {
-    id: value?.id?.trim() || buildWorkspaceId(),
+    id: path ? buildWorkspaceIdForPath(path) : value?.id?.trim() || buildWorkspaceId(),
     name,
     path,
     kind: 'local',
@@ -446,15 +446,27 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
       ? (value as Partial<DesktopState> & { botBindings?: Record<string, string> }).botBindings
       : undefined;
   const rawWorkspaces = Array.isArray(value?.workspaces)
-    ? value.workspaces.filter((workspace) => !workspace?.managed)
+    ? value.workspaces.filter((workspace) => workspace?.path?.trim())
     : [];
   const threads: DesktopThreadSummary[] = Array.isArray(value?.threads)
     ? value.threads
     : Array.isArray(value?.sessions)
       ? value.sessions
       : [];
+  const normalizedWorkspacesByPath = new Map<string, DesktopWorkspace>();
+  for (const workspace of rawWorkspaces) {
+    const normalizedWorkspace = normalizeWorkspace(workspace);
+    const workspacePath = normalizedWorkspace.path?.trim();
+    if (!workspacePath) {
+      continue;
+    }
+    normalizedWorkspacesByPath.set(
+      normalizeWorkspacePathKey(workspacePath),
+      normalizedWorkspace,
+    );
+  }
   const workspaces = sortWorkspaces(
-    rawWorkspaces.map((workspace) => normalizeWorkspace(workspace)),
+    Array.from(normalizedWorkspacesByPath.values()),
     threads,
   );
 
@@ -521,7 +533,7 @@ async function writeState(state: DesktopState): Promise<void> {
 async function canonicalizeWorkspacePath(path: string): Promise<string> {
   const trimmed = path.trim();
   if (!trimmed) {
-    throw new Error('Choose a folder to add as a workspace.');
+    throw new Error('Choose a folder.');
   }
 
   const resolved = resolvePath(trimmed);
@@ -550,18 +562,6 @@ async function resolveWorkspaceAvailability(workspace: DesktopWorkspace): Promis
       available: false,
     };
   }
-}
-
-function replaceWorkspace(
-  workspaces: DesktopWorkspace[],
-  nextWorkspace: DesktopWorkspace,
-): DesktopWorkspace[] {
-  return workspaces.map((workspace) => {
-    if (workspace.id !== nextWorkspace.id) {
-      return workspace;
-    }
-    return nextWorkspace;
-  });
 }
 
 function withSortedEntities(
@@ -740,7 +740,7 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
       Array.from(inferredWorkspacePaths.values()).map(async (path) => {
         const now = new Date().toISOString();
         return resolveWorkspaceAvailability({
-          id: buildManagedWorkspaceId(path),
+          id: buildWorkspaceIdForPath(path),
           name: workspaceNameFromPath(path),
           path,
           kind: 'local',
@@ -1012,7 +1012,8 @@ export async function addDesktopWorkspace(path: string): Promise<{
   const current = await getLocalDesktopState();
   const canonicalPath = await canonicalizeWorkspacePath(path);
   const duplicate = current.workspaces.find((workspace) => {
-    return workspace.kind === 'local' && workspace.path === canonicalPath;
+    return workspace.kind === 'local'
+      && normalizeWorkspacePathKey(workspace.path || '') === normalizeWorkspacePathKey(canonicalPath);
   });
 
   if (duplicate) {
@@ -1029,7 +1030,7 @@ export async function addDesktopWorkspace(path: string): Promise<{
 
   const now = new Date().toISOString();
   const workspace: DesktopWorkspace = {
-    id: buildWorkspaceId(),
+    id: buildWorkspaceIdForPath(canonicalPath),
     name: workspaceNameFromPath(canonicalPath),
     path: canonicalPath,
     kind: 'local',
@@ -1052,69 +1053,18 @@ export async function relinkDesktopWorkspace(
   workspaceId: string,
   path: string,
 ): Promise<{ state: DesktopState; workspace: DesktopWorkspace }> {
-  const current = await getLocalDesktopState();
-  const workspace = requireWorkspace(current, workspaceId);
-
-  const canonicalPath = await canonicalizeWorkspacePath(path);
-  const duplicate = current.workspaces.find((entry) => {
-    return entry.id !== workspaceId && entry.kind === 'local' && entry.path === canonicalPath;
-  });
-  if (duplicate) {
-    throw new Error('That folder is already added as a workspace.');
-  }
-
-  const updatedAt = new Date().toISOString();
-  const nextWorkspace: DesktopWorkspace = {
-    ...workspace,
-    name: workspaceNameFromPath(canonicalPath),
-    path: canonicalPath,
-    available: true,
-    updatedAt,
-  };
-
-  const next = withSortedEntities({
-    ...current,
-    workspaces: replaceWorkspace(current.workspaces, nextWorkspace),
-    hiddenWorkspacePaths: (current.hiddenWorkspacePaths || []).filter((entry) => entry !== canonicalPath),
-    selectedWorkspaceId: workspaceId,
-  });
-  await writeState(next);
-  return { state: await getDesktopState(), workspace: nextWorkspace };
+  void workspaceId;
+  void path;
+  throw new Error('Folders are selected by path; choose a different folder instead.');
 }
 
 export async function renameDesktopWorkspace(
   workspaceId: string,
   name: string,
 ): Promise<DesktopState> {
-  const trimmedName = name.trim();
-  if (!trimmedName) {
-    throw new Error('Workspace name cannot be empty.');
-  }
-
-  const current = await getDesktopState();
-  requireWorkspace(current, workspaceId);
-
-  const local = await getLocalDesktopState();
-  if (!local.workspaces.some((entry) => entry.id === workspaceId)) {
-    throw new Error('Only local workspaces can be renamed.');
-  }
-
-  const updatedAt = new Date().toISOString();
-  const next = withSortedEntities({
-    ...local,
-    workspaces: local.workspaces.map((entry) => {
-      if (entry.id !== workspaceId) {
-        return entry;
-      }
-      return {
-        ...entry,
-        name: trimmedName,
-        updatedAt,
-      };
-    }),
-  });
-  await writeState(next);
-  return getDesktopState();
+  void workspaceId;
+  void name;
+  throw new Error('Folder labels come from the directory name.');
 }
 
 export async function removeDesktopWorkspace(workspaceId: string): Promise<DesktopState> {
@@ -1231,16 +1181,36 @@ function requireAvailableAutomationWorkspace(
   return workspace;
 }
 
+function resolveAutomationWorkspacePath(
+  state: DesktopState,
+  input: { workspaceId?: string | null; workspacePath?: string | null },
+  fallbackPath?: string | null,
+): string {
+  const explicitPath = normalizeWorkspacePathInput(input.workspacePath);
+  if (explicitPath) {
+    return explicitPath;
+  }
+  const workspaceId = input.workspaceId?.trim();
+  if (workspaceId) {
+    return requireAvailableAutomationWorkspace(state, workspaceId).path!;
+  }
+  const fallback = normalizeWorkspacePathInput(fallbackPath);
+  if (fallback) {
+    return fallback;
+  }
+  throw new Error('Choose a directory for this automation.');
+}
+
 export async function createDesktopAutomation(
   input: CreateAutomationInput,
 ): Promise<{ state: DesktopState; automation: DesktopAutomationSummary }> {
   const current = await getDesktopState();
-  const workspace = requireAvailableAutomationWorkspace(current, input.workspaceId);
+  const workspacePath = resolveAutomationWorkspacePath(current, input);
   const created = await createRemoteAutomation(current.settings, {
     label: input.label.trim(),
     prompt: input.prompt.trim(),
     agentId: input.agentId.trim(),
-    workspacePath: workspace.path!,
+    workspacePath,
     schedule: input.schedule,
   });
   const local = await getLocalDesktopState();
@@ -1255,7 +1225,8 @@ export async function createDesktopAutomation(
     automation: state.automations.find((entry) => entry.id === created.id) || {
       ...created,
       agentId: input.agentId.trim(),
-      workspaceId: workspace.id,
+      workspaceId: buildWorkspaceIdForPath(workspacePath),
+      workspacePath,
     },
   };
 }
@@ -1271,14 +1242,12 @@ export async function updateDesktopAutomation(input: {
 }): Promise<{ state: DesktopState; automation: DesktopAutomationSummary }> {
   const current = await getDesktopState();
   const existing = requireAutomation(current, input.automationId);
-  const workspace = input.workspaceId
-    ? requireAvailableAutomationWorkspace(current, input.workspaceId)
-    : requireWorkspace(current, existing.workspaceId);
+  const workspacePath = resolveAutomationWorkspacePath(current, input, existing.workspacePath);
   const updated = await updateRemoteAutomation(current.settings, input.automationId, {
     label: input.label?.trim(),
     prompt: input.prompt?.trim(),
     agentId: input.agentId?.trim(),
-    workspacePath: workspace.path || undefined,
+    workspacePath,
     schedule: input.schedule,
     enabled: input.enabled,
   });
@@ -1294,7 +1263,8 @@ export async function updateDesktopAutomation(input: {
     automation: state.automations.find((entry) => entry.id === updated.id) || {
       ...updated,
       agentId: input.agentId?.trim() || existing.agentId,
-      workspaceId: workspace.id,
+      workspaceId: buildWorkspaceIdForPath(workspacePath),
+      workspacePath,
     },
   };
 }

@@ -91,7 +91,7 @@ Common account fields:
 | `enabled` | Whether the account should run. |
 | `name` | Optional display name in the desktop app. |
 | `agent_id` | Agent or team used for new inbound threads. |
-| `workspace_dir` | Default workspace for new threads from this account. |
+| `workspace_dir` | Default execution directory path for new threads from this account. |
 | `config` | Channel-specific fields declared by the built-in channel or plugin. |
 
 The desktop Add Bot flow validates account connectivity through the gateway
