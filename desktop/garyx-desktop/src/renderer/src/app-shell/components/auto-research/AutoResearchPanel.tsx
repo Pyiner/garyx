@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   ArrowDownUp,
   ArrowLeft,
@@ -315,6 +315,7 @@ export function AutoResearchPanel({
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [expandedIterationIndex, setExpandedIterationIndex] = useState<number | null>(null);
+  const detailRunIdRef = useRef<string | null>(null);
 
   const selectableWorkspaces = workspaces.filter((workspace) => workspace.available && workspace.path);
   const defaultWorkspacePath = currentWorkspace?.path || selectableWorkspaces[0]?.path || '';
@@ -342,21 +343,18 @@ export function AutoResearchPanel({
   const bestScore = verdictScore(currentBestCandidate?.verdict);
 
   useEffect(() => {
-    if (!runDetail) {
-      setExpandedIterationIndex(null);
-      return;
-    }
-
+    const runId = runDetail?.run.runId ?? null;
     setExpandedIterationIndex((current) => {
+      if (!runId || detailRunIdRef.current !== runId) {
+        return null;
+      }
       if (current != null && timelineIterations.some((iteration) => iteration.iterationIndex === current)) {
         return current;
       }
-      const latestCompleted = [...timelineIterations]
-        .filter((iteration) => iteration.state === 'completed')
-        .sort((a, b) => b.iterationIndex - a.iterationIndex)[0];
-      return latestCompleted?.iterationIndex ?? displayIterations[0]?.iterationIndex ?? null;
+      return null;
     });
-  }, [displayIterations, runDetail?.run.runId, timelineIterations]);
+    detailRunIdRef.current = runId;
+  }, [runDetail?.run.runId, timelineIterations]);
 
   async function handleCreateRun(input: CreateAutoResearchRunInput) {
     await onCreateRun(input);
