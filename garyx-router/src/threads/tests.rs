@@ -298,6 +298,27 @@ async fn update_thread_record_allows_same_workspace_value() {
 }
 
 #[tokio::test]
+async fn create_thread_record_persists_workspace_dir_as_plain_path() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let (_thread_id, created) = create_thread_record(
+        &store,
+        ThreadEnsureOptions {
+            label: Some("Path backed thread".to_owned()),
+            workspace_dir: Some("  /tmp/path-only-workspace  ".to_owned()),
+            ..ThreadEnsureOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        workspace_dir_from_value(&created).as_deref(),
+        Some("/tmp/path-only-workspace")
+    );
+    assert!(created.get("workspace_id").is_none());
+}
+
+#[tokio::test]
 async fn create_thread_record_persists_metadata_object() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     let (thread_id, created) = create_thread_record(

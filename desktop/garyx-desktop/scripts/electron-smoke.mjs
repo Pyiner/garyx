@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
@@ -237,6 +237,7 @@ async function createMockGateway(workspaceDir) {
   const state = {
     offlineUntil: 0,
     nextStreamDisconnect: null,
+    threadCreateRequests: [],
     sessions: [
       {
         thread_id: THREAD_ID,
@@ -529,6 +530,7 @@ async function createMockGateway(workspaceDir) {
     }
     if (req.method === 'POST' && (pathname === '/api/threads' || pathname === '/api/sessions')) {
       const body = await readJson(req);
+      state.threadCreateRequests.push(body);
       const now = new Date().toISOString();
       const threadId = `thread::smoke-${Date.now()}`;
       const session = {
@@ -722,6 +724,7 @@ async function createMockGateway(workspaceDir) {
   const port = typeof address === 'object' && address ? address.port : 0;
   return {
     gatewayUrl: `http://127.0.0.1:${port}`,
+    createdThreadRequests: () => [...state.threadCreateRequests],
     scheduleTransientDisconnect: ({ offlineMs = 3500 } = {}) => {
       state.nextStreamDisconnect = { offlineMs };
     },
@@ -831,6 +834,21 @@ async function main() {
       await composer.fill(`Return exactly the token ${WARMUP_TOKEN} and nothing else.`);
       await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) }).click();
       await window.locator('.tool-trace').first().waitFor({ timeout: 20000 });
+      stage = 'verify-new-thread-workspace-path';
+      const createRequests = gateway.createdThreadRequests();
+      const expectedLocalBookmarkPath = await realpath(path.join(isolatedHome, 'local-bookmark'));
+      assert.ok(createRequests.length >= 1, 'expected a new thread create request');
+      const firstCreateRequest = createRequests[0];
+      assert.equal(
+        firstCreateRequest.workspaceDir,
+        expectedLocalBookmarkPath,
+        `new thread should use the selected workspace path, got ${JSON.stringify(firstCreateRequest)}`,
+      );
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(firstCreateRequest, 'workspaceId'),
+        false,
+        `new thread request should not send a workspace entity id, got ${JSON.stringify(firstCreateRequest)}`,
+      );
       stage = 'queue-followups';
       await composer.fill(`Return exactly the token ${TOKENS[0]} and nothing else.`);
       await composer.press('Enter');
