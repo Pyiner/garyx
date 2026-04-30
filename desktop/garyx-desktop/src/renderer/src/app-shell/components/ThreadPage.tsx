@@ -279,7 +279,7 @@ type ThreadPageProps = {
   onResumeProviderSession: (sessionId: string) => Promise<void>;
   onSelectThreadLogsTab: (tab: ThreadLogTab) => void;
   onSelectBotBinding: (botId: string | null) => void;
-  onSelectWorkspace: (workspaceId: string) => void;
+  onSelectWorkspace: (workspacePath: string) => void;
   onSetDraggedQueueIntentId: (intentId: string | null) => void;
   onThreadLogsContentScroll: () => void;
   onThreadLogsResizeKeyDown: (

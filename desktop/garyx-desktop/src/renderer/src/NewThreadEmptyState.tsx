@@ -38,7 +38,7 @@ type NewThreadEmptyStateProps = {
   selectableNewThreadWorkspaces: DesktopWorkspace[];
   workspaceMutation: string | null;
   onAddWorkspace: () => void;
-  onSelectWorkspace: (workspaceId: string) => void;
+  onSelectWorkspace: (workspacePath: string) => void;
   onResumeProviderSession: (
     sessionId: string,
     providerHint?: DesktopSessionProviderHint | null,
@@ -66,11 +66,11 @@ export function NewThreadEmptyState({
   const selectedWorkspace = useMemo(
     () =>
       selectableNewThreadWorkspaces.find(
-        (workspace) => workspace.id === (newThreadWorkspaceEntry?.id || ""),
+        (workspace) => workspace.path === (newThreadWorkspaceEntry?.path || ""),
       ) ??
       selectableNewThreadWorkspaces[0] ??
       null,
-    [newThreadWorkspaceEntry?.id, selectableNewThreadWorkspaces],
+    [newThreadWorkspaceEntry?.path, selectableNewThreadWorkspaces],
   );
 
   function closeResume() {
@@ -116,7 +116,7 @@ export function NewThreadEmptyState({
               }
               onSelectWorkspace(value);
             }}
-            value={selectedWorkspace?.id ?? ""}
+            value={selectedWorkspace?.path ?? ""}
           >
             <SelectTrigger
               aria-label={t("Workspace for the new thread")}
@@ -134,8 +134,8 @@ export function NewThreadEmptyState({
                 {selectableNewThreadWorkspaces.map((workspace) => (
                   <SelectItem
                     disabled={!workspace.available}
-                    key={workspace.id}
-                    value={workspace.id}
+                    key={workspace.path || workspace.name}
+                    value={workspace.path || ""}
                   >
                     {workspace.available
                       ? workspace.name

@@ -1242,7 +1242,6 @@ function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
     updatedAt:
       value.updated_at || value.created_at || new Date(0).toISOString(),
     lastMessagePreview,
-    workspaceId: "",
     workspacePath: value.workspace_dir ?? null,
     messageCount:
       typeof value.message_count === "number" &&
@@ -1461,7 +1460,6 @@ function mapAutomationSummary(
     agentId:
       typeof agentId === "string" && agentId.trim() ? agentId.trim() : "claude",
     enabled: value.enabled !== false,
-    workspaceId: "",
     workspacePath: value.workspaceDir || value.workspace_dir || "",
     threadId: value.threadId || value.thread_id || "",
     nextRun: value.nextRun || value.next_run || new Date(0).toISOString(),

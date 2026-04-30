@@ -315,7 +315,6 @@ async fn create_thread_record_persists_workspace_dir_as_plain_path() {
         workspace_dir_from_value(&created).as_deref(),
         Some("/tmp/path-only-workspace")
     );
-    assert!(created.get("workspace_id").is_none());
 }
 
 #[tokio::test]

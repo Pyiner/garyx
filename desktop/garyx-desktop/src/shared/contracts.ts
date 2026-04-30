@@ -32,11 +32,9 @@ export type DesktopThreadProviderType =
 
 export type DesktopWorkspaceKind = "local";
 
-// Path-derived directory group used by the desktop UI. This is not a durable
-// Garyx domain entity; the thread/automation source of truth remains
-// `workspace_dir`.
+// Directory summary used by the desktop UI. The path string is the identity;
+// thread/automation source of truth remains `workspace_dir`.
 export interface DesktopWorkspace {
-  id: string;
   name: string;
   path: string | null;
   kind: DesktopWorkspaceKind;
@@ -90,7 +88,6 @@ export interface DesktopAutomationSummary {
   prompt: string;
   agentId: string;
   enabled: boolean;
-  workspaceId: string;
   workspacePath: string;
   // Latest execution thread for this automation. Empty until it has run at least once.
   threadId: string;
@@ -447,7 +444,6 @@ export interface DesktopThreadSummary {
   createdAt: string;
   updatedAt: string;
   lastMessagePreview: string;
-  workspaceId: string;
   workspacePath?: string | null;
   messageCount?: number;
   agentId?: string | null;
@@ -542,7 +538,7 @@ export interface DesktopState {
   gatewayProfiles: DesktopGatewayProfile[];
   workspaces: DesktopWorkspace[];
   hiddenWorkspacePaths: string[];
-  selectedWorkspaceId: string | null;
+  selectedWorkspacePath: string | null;
   threads: DesktopThreadSummary[];
   sessions: DesktopThreadSummary[];
   endpoints: DesktopChannelEndpoint[];
@@ -974,7 +970,6 @@ export interface ThreadLogChunk {
 
 export interface CreateThreadInput {
   title?: string;
-  workspaceId?: string | null;
   workspacePath?: string | null;
   /** Agent or team ID. Backend resolves whether it's a team leader or custom agent. */
   agentId?: string | null;
@@ -1001,7 +996,6 @@ export interface CreateAutomationInput {
   label: string;
   prompt: string;
   agentId: string;
-  workspaceId?: string;
   workspacePath?: string;
   schedule: DesktopAutomationSchedule;
 }
@@ -1011,7 +1005,6 @@ export interface UpdateAutomationInput {
   label?: string;
   prompt?: string;
   agentId?: string;
-  workspaceId?: string;
   workspacePath?: string;
   schedule?: DesktopAutomationSchedule;
   enabled?: boolean;
@@ -1126,19 +1119,19 @@ export interface DetachChannelEndpointInput {
 }
 
 export interface SelectWorkspaceInput {
-  workspaceId: string | null;
+  workspacePath: string | null;
 }
 
 export interface RemoveWorkspaceInput {
-  workspaceId: string;
+  workspacePath: string;
 }
 
 export interface RelinkWorkspaceInput {
-  workspaceId: string;
+  workspacePath: string;
 }
 
 export interface RenameWorkspaceInput {
-  workspaceId: string;
+  workspacePath: string;
   name: string;
 }
 

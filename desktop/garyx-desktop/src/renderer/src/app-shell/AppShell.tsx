@@ -1244,7 +1244,7 @@ export function AppShell() {
   const [gatewaySetupForced, setGatewaySetupForced] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [newThreadDraftActive, setNewThreadDraftActive] = useState(false);
-  const [pendingWorkspaceId, setPendingWorkspaceId] = useState<string | null>(
+  const [pendingWorkspacePath, setPendingWorkspacePath] = useState<string | null>(
     null,
   );
   const [pendingBotId, setPendingBotId] = useState<string | null>(null);
@@ -1340,10 +1340,10 @@ export function AppShell() {
   const [workspaceMutation, setWorkspaceMutation] = useState<
     "add" | "assign" | "relink" | "remove" | null
   >(null);
-  const [workspaceMenuOpenId, setWorkspaceMenuOpenId] = useState<string | null>(
+  const [workspaceMenuOpenPath, setWorkspaceMenuOpenPath] = useState<string | null>(
     null,
   );
-  const [renamingWorkspaceId, setRenamingWorkspaceId] = useState<string | null>(
+  const [renamingWorkspacePath, setRenamingWorkspacePath] = useState<string | null>(
     null,
   );
   const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
@@ -2003,7 +2003,7 @@ export function AppShell() {
       : threadLogsHasUnread;
   const selectedWorkspaceEntry = selectedWorkspace(
     desktopState,
-    desktopState?.selectedWorkspaceId || null,
+    desktopState?.selectedWorkspacePath || null,
   );
   const activeThreadWorkspace = workspaceForThread(
     desktopState,
@@ -2011,7 +2011,7 @@ export function AppShell() {
   );
   const pendingWorkspaceEntry = selectedWorkspace(
     desktopState,
-    pendingWorkspaceId,
+    pendingWorkspacePath,
   );
   const activeMessages = selectedThreadId
     ? messagesByThread[selectedThreadId] || []
@@ -2802,7 +2802,7 @@ export function AppShell() {
       if (target.closest(".workspace-actions")) {
         return;
       }
-      setWorkspaceMenuOpenId(null);
+      setWorkspaceMenuOpenPath(null);
     };
     window.addEventListener("pointerdown", handlePointerDown);
     return () => {
@@ -2918,31 +2918,33 @@ export function AppShell() {
   }, [commandsLoaded, commandsLoading, composer]);
 
   useEffect(() => {
-    const workspaceIds = new Set(
-      (desktopState?.workspaces || []).map((workspace) => workspace.id),
+    const workspacePaths = new Set(
+      (desktopState?.workspaces || [])
+        .map((workspace) => workspace.path)
+        .filter((path): path is string => Boolean(path)),
     );
-    if (pendingWorkspaceId && !workspaceIds.has(pendingWorkspaceId)) {
-      setPendingWorkspaceId(null);
+    if (pendingWorkspacePath && !workspacePaths.has(pendingWorkspacePath)) {
+      setPendingWorkspacePath(null);
     }
-    if (workspaceMenuOpenId && !workspaceIds.has(workspaceMenuOpenId)) {
-      setWorkspaceMenuOpenId(null);
+    if (workspaceMenuOpenPath && !workspacePaths.has(workspaceMenuOpenPath)) {
+      setWorkspaceMenuOpenPath(null);
     }
-    if (renamingWorkspaceId && !workspaceIds.has(renamingWorkspaceId)) {
-      setRenamingWorkspaceId(null);
+    if (renamingWorkspacePath && !workspacePaths.has(renamingWorkspacePath)) {
+      setRenamingWorkspacePath(null);
       setWorkspaceNameDraft("");
     }
   }, [
     desktopState,
-    pendingWorkspaceId,
-    renamingWorkspaceId,
-    workspaceMenuOpenId,
+    pendingWorkspacePath,
+    renamingWorkspacePath,
+    workspaceMenuOpenPath,
   ]);
 
   useEffect(() => {
-    if (selectedThreadId && pendingWorkspaceId) {
-      setPendingWorkspaceId(null);
+    if (selectedThreadId && pendingWorkspacePath) {
+      setPendingWorkspacePath(null);
     }
-  }, [pendingWorkspaceId, selectedThreadId]);
+  }, [pendingWorkspacePath, selectedThreadId]);
 
   useEffect(() => {
     if (!shouldFocusComposerRef.current) {
@@ -4480,12 +4482,12 @@ export function AppShell() {
   }
 
   async function handleSelectWorkspace(
-    workspaceId: string,
+    workspacePath: string,
     threadId?: string | null,
   ) {
     await selectWorkspaceForThread({
       api: getDesktopApi(),
-      workspaceId,
+      workspacePath,
       threadId,
       setError,
       setContentView: () => {
@@ -4494,7 +4496,7 @@ export function AppShell() {
       setDesktopState,
       setSelectedThreadId,
       setNewThreadDraftActive,
-      setPendingWorkspaceId,
+      setPendingWorkspacePath,
       requestComposerFocus,
     });
   }
@@ -4503,10 +4505,10 @@ export function AppShell() {
     return ensureThread({
       api: getDesktopApi(),
       selectedThreadId,
-      pendingWorkspaceId,
+      pendingWorkspacePath,
       pendingAgentId,
-      preferredWorkspaceId: preferredWorkspaceForNewThread?.available
-        ? preferredWorkspaceForNewThread.id
+      preferredWorkspacePath: preferredWorkspaceForNewThread?.available
+        ? preferredWorkspaceForNewThread.path
         : null,
       selectableWorkspaceCount: selectableNewThreadWorkspaces.length,
       setWorkspaceMutation,
@@ -4519,7 +4521,7 @@ export function AppShell() {
         }));
       },
       setNewThreadDraftActive,
-      setPendingWorkspaceId,
+      setPendingWorkspacePath,
       setPendingBotId,
       setPendingAgentId,
       setError,
@@ -4549,7 +4551,7 @@ export function AppShell() {
         ...current,
         [created.thread.id]: current[created.thread.id] || [],
       }));
-      setPendingWorkspaceId(null);
+      setPendingWorkspacePath(null);
       setPendingBotId(null);
       setPendingAgentId(created.thread.agentId || providerHint || "claude");
       requestComposerFocus();
@@ -4711,7 +4713,7 @@ export function AppShell() {
       },
       setNewThreadDraftActive,
       setSelectedThreadId,
-      setPendingWorkspaceId,
+      setPendingWorkspacePath,
       setPendingBotId,
       setPendingAgentId,
       clearComposerDraft,
@@ -4731,7 +4733,7 @@ export function AppShell() {
     setContentView("thread");
     setNewThreadDraftActive(true);
     setSelectedThreadId(null);
-    setPendingWorkspaceId(nextWorkspace?.id || null);
+    setPendingWorkspacePath(nextWorkspace?.path || null);
     setPendingBotId(null);
     setPendingAgentId(agentId);
     clearComposerDraft();
@@ -4753,7 +4755,7 @@ export function AppShell() {
         setContentView("thread");
         setNewThreadDraftActive(false);
         setSelectedThreadId(threadId);
-        setPendingWorkspaceId(null);
+        setPendingWorkspacePath(null);
         setPendingBotId(null);
       },
       setError,
@@ -4762,7 +4764,7 @@ export function AppShell() {
       },
       setNewThreadDraftActive,
       setSelectedThreadId,
-      setPendingWorkspaceId,
+      setPendingWorkspacePath,
       setPendingBotId,
       clearComposerDraft,
       syncComposerPhase,
@@ -4770,20 +4772,20 @@ export function AppShell() {
     });
   }
 
-  function handleCreateThreadForWorkspace(workspaceId: string) {
+  function handleCreateThreadForWorkspace(workspacePath: string) {
     startNewThreadDraft({
       selectableNewThreadWorkspaces,
       pendingNewThreadWorkspaceEntry,
       activeThreadNewThreadWorkspace: activeThreadNewThreadWorkspace,
       selectedNewThreadWorkspaceEntry,
-      workspaceId,
+      workspacePath,
       setError,
       setContentView: () => {
         setContentView("thread");
       },
       setNewThreadDraftActive,
       setSelectedThreadId,
-      setPendingWorkspaceId,
+      setPendingWorkspacePath,
       setPendingBotId,
       setPendingAgentId,
       clearComposerDraft,
@@ -4800,7 +4802,7 @@ export function AppShell() {
       setDesktopState(result.state);
       if (result.workspace) {
         setNewThreadDraftActive(true);
-        setPendingWorkspaceId(result.workspace.id);
+        setPendingWorkspacePath(result.workspace.path);
         requestComposerFocus();
       }
     } catch (workspaceError) {
@@ -4814,11 +4816,11 @@ export function AppShell() {
     }
   }
 
-  async function handleRelinkWorkspace(workspaceId: string) {
+  async function handleRelinkWorkspace(workspacePath: string) {
     setError(null);
     setWorkspaceMutation("relink");
     try {
-      const result = await window.garyxDesktop.relinkWorkspace({ workspaceId });
+      const result = await window.garyxDesktop.relinkWorkspace({ workspacePath });
       setDesktopState(result.state);
     } catch (relinkError) {
       setError(
@@ -4832,17 +4834,17 @@ export function AppShell() {
   }
 
   function handleBeginRenameWorkspace(workspace: DesktopWorkspace) {
-    setWorkspaceMenuOpenId(null);
-    setRenamingWorkspaceId(workspace.id);
+    setWorkspaceMenuOpenPath(null);
+    setRenamingWorkspacePath(workspace.path);
     setWorkspaceNameDraft(workspace.name);
   }
 
   function handleCancelRenameWorkspace() {
-    setRenamingWorkspaceId(null);
+    setRenamingWorkspacePath(null);
     setWorkspaceNameDraft("");
   }
 
-  async function handleSubmitRenameWorkspace(workspaceId: string) {
+  async function handleSubmitRenameWorkspace(workspacePath: string) {
     setError(null);
     const nextName = workspaceNameDraft.trim();
     if (!nextName) {
@@ -4851,11 +4853,11 @@ export function AppShell() {
     }
     try {
       const nextState = await window.garyxDesktop.renameWorkspace({
-        workspaceId,
+        workspacePath,
         name: nextName,
       });
       setDesktopState(nextState);
-      setRenamingWorkspaceId(null);
+      setRenamingWorkspacePath(null);
       setWorkspaceNameDraft("");
     } catch (renameError) {
       setError(
@@ -4866,12 +4868,12 @@ export function AppShell() {
     }
   }
 
-  async function handleRemoveWorkspace(workspaceId: string) {
+  async function handleRemoveWorkspace(workspacePath: string) {
     setError(null);
     setWorkspaceMutation("remove");
     try {
       const nextState = await window.garyxDesktop.removeWorkspace({
-        workspaceId,
+        workspacePath,
       });
       setDesktopState(nextState);
       if (selectedThreadId) {
@@ -4894,10 +4896,10 @@ export function AppShell() {
   }
 
   async function handleRequestRemoveWorkspace(workspace: DesktopWorkspace) {
-    setWorkspaceMenuOpenId(null);
-    setRenamingWorkspaceId(null);
+    setWorkspaceMenuOpenPath(null);
+    setRenamingWorkspacePath(null);
     setWorkspaceNameDraft("");
-    await handleRemoveWorkspace(workspace.id);
+    await handleRemoveWorkspace(workspace.path || "");
   }
 
   function beginThreadTitleEdit() {
@@ -6032,8 +6034,8 @@ export function AppShell() {
         }}
         onBeginRenameWorkspace={handleBeginRenameWorkspace}
         onCancelRenameWorkspace={handleCancelRenameWorkspace}
-        onCreateThreadForWorkspace={(workspaceId) => {
-          void handleCreateThreadForWorkspace(workspaceId);
+        onCreateThreadForWorkspace={(workspacePath) => {
+          void handleCreateThreadForWorkspace(workspacePath);
         }}
         onDeleteThread={(threadId) => {
           void handleDeleteThread(threadId);
@@ -6088,20 +6090,20 @@ export function AppShell() {
         onSelectSettingsTab={(tabId) => {
           void handleSelectSettingsTab(tabId);
         }}
-        onSelectWorkspace={(workspaceId, preferredThreadId) => {
-          void handleSelectWorkspace(workspaceId, preferredThreadId);
+        onSelectWorkspace={(workspacePath, preferredThreadId) => {
+          void handleSelectWorkspace(workspacePath, preferredThreadId);
         }}
-        onSubmitRenameWorkspace={(workspaceId) => {
-          void handleSubmitRenameWorkspace(workspaceId);
+        onSubmitRenameWorkspace={(workspacePath) => {
+          void handleSubmitRenameWorkspace(workspacePath);
         }}
-        renamingWorkspaceId={renamingWorkspaceId}
+        renamingWorkspacePath={renamingWorkspacePath}
         selectedAutomationId={selectedAutomationId}
         selectedThreadId={selectedThreadId}
         setContentView={setContentView}
-        setWorkspaceMenuOpenId={setWorkspaceMenuOpenId}
+        setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
         setWorkspaceNameDraft={setWorkspaceNameDraft}
         settingsActiveTab={settingsActiveTab}
-        workspaceMenuOpenId={workspaceMenuOpenId}
+        workspaceMenuOpenPath={workspaceMenuOpenPath}
         workspaceMutation={workspaceMutation}
         workspaceNameDraft={workspaceNameDraft}
         workspaceThreadGroups={workspaceThreadGroups}
@@ -6477,8 +6479,8 @@ export function AppShell() {
                 onOpenThreadById={(threadId) => {
                   void openExistingThread(threadId);
                 }}
-                onSelectWorkspace={(workspaceId) => {
-                  void handleSelectWorkspace(workspaceId, null);
+                onSelectWorkspace={(workspacePath) => {
+                  void handleSelectWorkspace(workspacePath, null);
                 }}
                 onSetDraggedQueueIntentId={setDraggedQueueIntentId}
                 onSteerQueuedPrompt={(item) => {

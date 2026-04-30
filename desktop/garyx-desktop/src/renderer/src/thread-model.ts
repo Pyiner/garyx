@@ -121,7 +121,6 @@ export function latestAutomationThreadSummary(
     createdAt: automation.lastRunAt || automation.nextRun,
     updatedAt: automation.lastRunAt || automation.nextRun,
     lastMessagePreview: automation.prompt,
-    workspaceId: automation.workspaceId,
     workspacePath: automation.workspacePath,
   };
 }
@@ -152,12 +151,13 @@ export function selectedAutomation(
 
 export function selectedWorkspace(
   state: DesktopState | null,
-  workspaceId: string | null,
+  workspacePath: string | null,
 ): DesktopWorkspace | null {
-  if (!state || !workspaceId) {
+  if (!state || !workspacePath) {
     return null;
   }
-  return state.workspaces.find((entry) => entry.id === workspaceId) || null;
+  const pathKey = workspacePath.trim().toLowerCase();
+  return state.workspaces.find((entry) => entry.path?.trim().toLowerCase() === pathKey) || null;
 }
 
 export function workspaceForThread(
@@ -168,7 +168,7 @@ export function workspaceForThread(
   if (!thread) {
     return null;
   }
-  return selectedWorkspace(state, thread.workspaceId);
+  return selectedWorkspace(state, thread.workspacePath || null);
 }
 
 export function isAvailableWorkspace(
@@ -205,9 +205,13 @@ export function buildWorkspaceThreadGroups(input: {
   }
 
   return input.state.workspaces.map((workspace) => {
-    const threads = input.state!.threads.filter((thread) => thread.workspaceId === workspace.id);
+    const workspacePath = workspace.path || '';
+    const workspacePathKey = workspacePath.trim().toLowerCase();
+    const threads = input.state!.threads.filter((thread) => {
+      return (thread.workspacePath || '').trim().toLowerCase() === workspacePathKey;
+    });
     const automationCount = input.state!.automations.filter((automation) => {
-      return automation.workspaceId === workspace.id;
+      return automation.workspacePath.trim().toLowerCase() === workspacePathKey;
     }).length;
     const canManageWorkspace = false;
 
@@ -217,10 +221,11 @@ export function buildWorkspaceThreadGroups(input: {
       automationCount,
       status: !workspace.available ? 'Unavailable' : null,
       preferredThreadId:
-        input.activeThread?.workspaceId === workspace.id
+        (input.activeThread?.workspacePath || '').trim().toLowerCase() === workspacePathKey
           ? input.selectedThreadId
           : threads[0]?.id || null,
-      isSelected: input.workspaceSelectionEntry?.id === workspace.id,
+      isSelected:
+        (input.workspaceSelectionEntry?.path || '').trim().toLowerCase() === workspacePathKey,
       canManageWorkspace,
     };
   });

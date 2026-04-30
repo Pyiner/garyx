@@ -40,7 +40,7 @@ function getWorkspaceLabel(
   t: Translate,
 ): string {
   return (
-    selectedWorkspace(state, automation.workspaceId)?.name
+    selectedWorkspace(state, automation.workspacePath)?.name
     || compactPathLabel(automation.workspacePath)
     || t('Workspace unavailable')
   );
@@ -178,7 +178,7 @@ export function AutomationListPage({
           {automations.map((automation) => {
             const wsLabel = getWorkspaceLabel(desktopState, automation, t);
             const agentLabel = getAgentLabel(agents, automation);
-            const workspace = selectedWorkspace(desktopState, automation.workspaceId);
+            const workspace = selectedWorkspace(desktopState, automation.workspacePath);
             const nextTitle = automation.schedule.kind === 'once' ? t('Run At') : t('Next');
             const nextRunLabel = automation.schedule.kind === 'once'
               ? formatOneTimeSchedule(automation.schedule.at) || formatTimestamp(automation.nextRun) || automation.nextRun

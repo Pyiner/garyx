@@ -117,7 +117,7 @@ export function CreateRunDialog({
               <SelectContent>
                 {selectableWorkspaces.length ? (
                   selectableWorkspaces.map((workspace) => (
-                    <SelectItem key={workspace.id} value={workspace.path || ''}>
+                    <SelectItem key={workspace.path || workspace.name} value={workspace.path || ''}>
                       {workspace.name}
                     </SelectItem>
                   ))

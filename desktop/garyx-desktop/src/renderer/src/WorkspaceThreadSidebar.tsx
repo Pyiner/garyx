@@ -21,20 +21,20 @@ type WorkspaceThreadSidebarProps = {
   selectedThreadId: string | null;
   deletingThreadId: string | null;
   workspaceMutation: WorkspaceMutation;
-  workspaceMenuOpenId: string | null;
-  renamingWorkspaceId: string | null;
+  workspaceMenuOpenPath: string | null;
+  renamingWorkspacePath: string | null;
   workspaceNameDraft: string;
-  setWorkspaceMenuOpenId: (value: string | ((current: string | null) => string | null) | null) => void;
+  setWorkspaceMenuOpenPath: (value: string | ((current: string | null) => string | null) | null) => void;
   setWorkspaceNameDraft: (value: string) => void;
   setContentView: (view: 'thread') => void;
   isThreadRuntimeBusy: (threadId: string) => boolean;
   formatThreadTimestamp: (value?: string | null) => string;
   onOpenFolder: () => void;
   onOpenThread: (threadId: string) => void;
-  onSelectWorkspace: (workspaceId: string, preferredThreadId: string | null) => void;
-  onCreateThreadForWorkspace: (workspaceId: string) => void;
+  onSelectWorkspace: (workspacePath: string, preferredThreadId: string | null) => void;
+  onCreateThreadForWorkspace: (workspacePath: string) => void;
   onBeginRenameWorkspace: (workspace: DesktopWorkspace) => void;
-  onSubmitRenameWorkspace: (workspaceId: string) => void;
+  onSubmitRenameWorkspace: (workspacePath: string) => void;
   onCancelRenameWorkspace: () => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
   onDeleteThread: (threadId: string) => void;
@@ -46,10 +46,10 @@ export function WorkspaceThreadSidebar({
   selectedThreadId,
   deletingThreadId,
   workspaceMutation,
-  workspaceMenuOpenId,
-  renamingWorkspaceId,
+  workspaceMenuOpenPath,
+  renamingWorkspacePath,
   workspaceNameDraft,
-  setWorkspaceMenuOpenId,
+  setWorkspaceMenuOpenPath,
   setWorkspaceNameDraft,
   setContentView,
   isThreadRuntimeBusy,
@@ -66,10 +66,10 @@ export function WorkspaceThreadSidebar({
 }: WorkspaceThreadSidebarProps) {
   const { t } = useI18n();
   const [sectionCollapsed, setSectionCollapsed] = useState(false);
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [confirmRemoveWorkspaceId, setConfirmRemoveWorkspaceId] = useState<string | null>(null);
-  const [expandedWorkspacePreviewIds, setExpandedWorkspacePreviewIds] = useState<Set<string>>(new Set());
+  const [confirmRemoveWorkspacePath, setConfirmRemoveWorkspacePath] = useState<string | null>(null);
+  const [expandedWorkspacePreviewPaths, setExpandedWorkspacePreviewPaths] = useState<Set<string>>(new Set());
   const [workspaceMenuStyle, setWorkspaceMenuStyle] = useState<CSSProperties | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -87,13 +87,13 @@ export function WorkspaceThreadSidebar({
     };
   }, [confirmDeleteId]);
 
-  const updateWorkspaceMenuPosition = useCallback((workspaceId: string | null) => {
-    if (!workspaceId) {
+  const updateWorkspaceMenuPosition = useCallback((workspacePath: string | null) => {
+    if (!workspacePath) {
       setWorkspaceMenuStyle(null);
       return;
     }
 
-    const button = menuButtonRefs.current[workspaceId];
+    const button = menuButtonRefs.current[workspacePath];
     if (!button) {
       setWorkspaceMenuStyle(null);
       return;
@@ -101,8 +101,8 @@ export function WorkspaceThreadSidebar({
 
     const rect = button.getBoundingClientRect();
     const viewportPadding = 12;
-    const menuWidth = confirmRemoveWorkspaceId === workspaceId ? 228 : 196;
-    const estimatedHeight = confirmRemoveWorkspaceId === workspaceId ? 154 : 104;
+    const menuWidth = confirmRemoveWorkspacePath === workspacePath ? 228 : 196;
+    const estimatedHeight = confirmRemoveWorkspacePath === workspacePath ? 154 : 104;
     const gap = 6;
     const nextLeft = Math.max(
       viewportPadding,
@@ -117,17 +117,17 @@ export function WorkspaceThreadSidebar({
       left: `${nextLeft}px`,
       top: `${nextTop}px`,
     });
-  }, [confirmRemoveWorkspaceId]);
+  }, [confirmRemoveWorkspacePath]);
 
   useEffect(() => {
-    if (!workspaceMenuOpenId) {
+    if (!workspaceMenuOpenPath) {
       setWorkspaceMenuStyle(null);
-      setConfirmRemoveWorkspaceId(null);
+      setConfirmRemoveWorkspacePath(null);
       return;
     }
 
     const update = () => {
-      updateWorkspaceMenuPosition(workspaceMenuOpenId);
+      updateWorkspaceMenuPosition(workspaceMenuOpenPath);
     };
 
     update();
@@ -137,48 +137,48 @@ export function WorkspaceThreadSidebar({
       window.removeEventListener('resize', update);
       window.removeEventListener('scroll', update, true);
     };
-  }, [updateWorkspaceMenuPosition, workspaceMenuOpenId]);
+  }, [updateWorkspaceMenuPosition, workspaceMenuOpenPath]);
 
   useEffect(() => {
-    if (!workspaceMenuOpenId && confirmRemoveWorkspaceId) {
-      setConfirmRemoveWorkspaceId(null);
+    if (!workspaceMenuOpenPath && confirmRemoveWorkspacePath) {
+      setConfirmRemoveWorkspacePath(null);
       return;
     }
     if (
-      confirmRemoveWorkspaceId
-      && workspaceMenuOpenId
-      && confirmRemoveWorkspaceId !== workspaceMenuOpenId
+      confirmRemoveWorkspacePath
+      && workspaceMenuOpenPath
+      && confirmRemoveWorkspacePath !== workspaceMenuOpenPath
     ) {
-      setConfirmRemoveWorkspaceId(null);
+      setConfirmRemoveWorkspacePath(null);
     }
-  }, [confirmRemoveWorkspaceId, workspaceMenuOpenId]);
+  }, [confirmRemoveWorkspacePath, workspaceMenuOpenPath]);
 
   const handleWorkspaceClick = useCallback(
-    (workspaceId: string, preferredThreadId: string | null) => {
+    (workspacePath: string, preferredThreadId: string | null) => {
       // If clicking the same workspace that already has a selected thread, toggle collapse
       const hasSelectedThread = workspaceThreadGroups.some(
-        (g) => g.workspace.id === workspaceId && g.threads.some((t) => t.id === selectedThreadId),
+        (g) => g.workspace.path === workspacePath && g.threads.some((t) => t.id === selectedThreadId),
       );
       if (hasSelectedThread) {
-        setCollapsedIds((prev) => {
+        setCollapsedPaths((prev) => {
           const next = new Set(prev);
-          if (next.has(workspaceId)) {
-            next.delete(workspaceId);
+          if (next.has(workspacePath)) {
+            next.delete(workspacePath);
           } else {
-            next.add(workspaceId);
+            next.add(workspacePath);
           }
           return next;
         });
         return;
       }
       // Expanding a different workspace — uncollapse it and select
-      setCollapsedIds((prev) => {
-        if (!prev.has(workspaceId)) return prev;
+      setCollapsedPaths((prev) => {
+        if (!prev.has(workspacePath)) return prev;
         const next = new Set(prev);
-        next.delete(workspaceId);
+        next.delete(workspacePath);
         return next;
       });
-      onSelectWorkspace(workspaceId, preferredThreadId);
+      onSelectWorkspace(workspacePath, preferredThreadId);
     },
     [onSelectWorkspace, selectedThreadId, workspaceThreadGroups],
   );
@@ -214,10 +214,11 @@ export function WorkspaceThreadSidebar({
       {!sectionCollapsed ? <div className="workspace-list">
         {workspaceThreadGroups.map((group) => {
           const { workspace } = group;
-          const isMenuOpen = workspaceMenuOpenId === workspace.id;
-          const isRemoveConfirming = confirmRemoveWorkspaceId === workspace.id;
-          const isRenaming = renamingWorkspaceId === workspace.id;
-          const isPreviewExpanded = expandedWorkspacePreviewIds.has(workspace.id);
+          const workspacePath = workspace.path || workspace.name;
+          const isMenuOpen = workspaceMenuOpenPath === workspacePath;
+          const isRemoveConfirming = confirmRemoveWorkspacePath === workspacePath;
+          const isRenaming = renamingWorkspacePath === workspacePath;
+          const isPreviewExpanded = expandedWorkspacePreviewPaths.has(workspacePath);
           const rows = buildWorkspaceThreadRows({
             state: desktopState,
             threads: group.threads,
@@ -234,7 +235,7 @@ export function WorkspaceThreadSidebar({
           const handleRenameInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
             if (event.key === 'Enter') {
               event.preventDefault();
-              onSubmitRenameWorkspace(workspace.id);
+              onSubmitRenameWorkspace(workspacePath);
             } else if (event.key === 'Escape') {
               event.preventDefault();
               onCancelRenameWorkspace();
@@ -244,22 +245,22 @@ export function WorkspaceThreadSidebar({
           return (
             <section
               className={`workspace-group ${!workspace.available ? 'missing' : ''}`}
-              key={workspace.id}
+              key={workspacePath}
             >
               <div className="workspace-row workspace-row-shell">
                 <button
                   className="workspace-row-main"
-                  onClick={() => handleWorkspaceClick(workspace.id, group.preferredThreadId)}
+                  onClick={() => handleWorkspaceClick(workspacePath, group.preferredThreadId)}
                   tabIndex={-1}
                   type="button"
                 >
                   <div className="workspace-row-copy">
                     <span className="workspace-folder-icon">
                       <span className="workspace-folder-icon-default">
-                        {collapsedIds.has(workspace.id) ? <FolderIcon /> : <FolderOpenIcon />}
+                        {collapsedPaths.has(workspacePath) ? <FolderIcon /> : <FolderOpenIcon />}
                       </span>
                       <span className="workspace-folder-icon-hover">
-                        {collapsedIds.has(workspace.id) ? <FolderOpenIcon /> : <FolderIcon />}
+                        {collapsedPaths.has(workspacePath) ? <FolderOpenIcon /> : <FolderIcon />}
                       </span>
                     </span>
                     {isRenaming ? (
@@ -300,7 +301,7 @@ export function WorkspaceThreadSidebar({
                         className="workspace-action-button workspace-action-confirm"
                         onClick={(event) => {
                           event.stopPropagation();
-                          onSubmitRenameWorkspace(workspace.id);
+                          onSubmitRenameWorkspace(workspacePath);
                         }}
                         tabIndex={-1}
                         type="button"
@@ -327,7 +328,7 @@ export function WorkspaceThreadSidebar({
                         disabled={!workspace.available || workspaceMutation === 'assign'}
                         onClick={(event) => {
                           event.stopPropagation();
-                          onCreateThreadForWorkspace(workspace.id);
+                          onCreateThreadForWorkspace(workspacePath);
                         }}
                         tabIndex={-1}
                         title={
@@ -347,12 +348,12 @@ export function WorkspaceThreadSidebar({
                             aria-label={t('More actions for {name}', { name: workspace.name })}
                             className="workspace-action-icon-button"
                             ref={(node) => {
-                              menuButtonRefs.current[workspace.id] = node;
+                              menuButtonRefs.current[workspacePath] = node;
                             }}
                             onClick={(event) => {
                               event.stopPropagation();
-                              setWorkspaceMenuOpenId((current) => {
-                                return current === workspace.id ? null : workspace.id;
+                              setWorkspaceMenuOpenPath((current) => {
+                                return current === workspacePath ? null : workspacePath;
                               });
                             }}
                             tabIndex={-1}
@@ -388,7 +389,7 @@ export function WorkspaceThreadSidebar({
                                     className="workspace-menu-item"
                                     onClick={(event) => {
                                       event.stopPropagation();
-                                      setConfirmRemoveWorkspaceId(null);
+                                      setConfirmRemoveWorkspacePath(null);
                                       onBeginRenameWorkspace(workspace);
                                     }}
                                     role="menuitem"
@@ -410,7 +411,7 @@ export function WorkspaceThreadSidebar({
                                           className="workspace-menu-confirm-button"
                                           onClick={(event) => {
                                             event.stopPropagation();
-                                            setConfirmRemoveWorkspaceId(null);
+                                            setConfirmRemoveWorkspacePath(null);
                                           }}
                                           type="button"
                                         >
@@ -420,7 +421,7 @@ export function WorkspaceThreadSidebar({
                                           className="workspace-menu-confirm-button danger"
                                           onClick={(event) => {
                                             event.stopPropagation();
-                                            setConfirmRemoveWorkspaceId(null);
+                                            setConfirmRemoveWorkspacePath(null);
                                             onRequestRemoveWorkspace(workspace);
                                           }}
                                           type="button"
@@ -434,7 +435,7 @@ export function WorkspaceThreadSidebar({
                                       className="workspace-menu-item workspace-menu-item-danger"
                                       onClick={(event) => {
                                         event.stopPropagation();
-                                        setConfirmRemoveWorkspaceId(workspace.id);
+                                        setConfirmRemoveWorkspacePath(workspacePath);
                                       }}
                                       role="menuitem"
                                       title={t('Remove this workspace from Garyx')}
@@ -456,8 +457,8 @@ export function WorkspaceThreadSidebar({
                 </div>
               </div>
 
-              <div className={`thread-list workspace-thread-list ${collapsedIds.has(workspace.id) ? 'collapsed' : ''}`}>
-                {visibleRows.length && !collapsedIds.has(workspace.id) ? (
+              <div className={`thread-list workspace-thread-list ${collapsedPaths.has(workspacePath) ? 'collapsed' : ''}`}>
+                {visibleRows.length && !collapsedPaths.has(workspacePath) ? (
                   previewRows.map((row) => {
                     const { thread } = row;
                     return (
@@ -524,21 +525,21 @@ export function WorkspaceThreadSidebar({
                       </div>
                     );
                   })
-                ) : collapsedIds.has(workspace.id) ? null : (
+                ) : collapsedPaths.has(workspacePath) ? null : (
                   <p className="workspace-empty-note">{t('No threads yet')}</p>
                 )}
-                {!collapsedIds.has(workspace.id) && hasPreviewOverflow ? (
+                {!collapsedPaths.has(workspacePath) && hasPreviewOverflow ? (
                   <div className="workspace-thread-preview-row">
                     <button
                       aria-expanded={isPreviewExpanded}
                       className="workspace-thread-preview-toggle"
                       onClick={() => {
-                        setExpandedWorkspacePreviewIds((current) => {
+                        setExpandedWorkspacePreviewPaths((current) => {
                           const next = new Set(current);
-                          if (next.has(workspace.id)) {
-                            next.delete(workspace.id);
+                          if (next.has(workspacePath)) {
+                            next.delete(workspacePath);
                           } else {
-                            next.add(workspace.id);
+                            next.add(workspacePath);
                           }
                           return next;
                         });

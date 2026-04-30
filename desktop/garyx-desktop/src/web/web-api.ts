@@ -260,7 +260,6 @@ function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
     createdAt: value.created_at || '',
     updatedAt: value.updated_at || value.created_at || '',
     lastMessagePreview: preview,
-    workspaceId: value.workspace_dir || '',
     workspacePath: value.workspace_dir || null,
     messageCount: value.message_count,
   };

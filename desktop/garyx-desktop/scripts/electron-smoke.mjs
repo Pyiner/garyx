@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
@@ -113,7 +113,6 @@ async function prepareIsolatedHome(gatewayUrl, homeDirOverride = null) {
         },
         workspaces: [
           {
-            id: 'workspace::smoke-local',
             name: path.basename(localBookmarkDir),
             path: localBookmarkDir,
             kind: 'local',
@@ -122,7 +121,7 @@ async function prepareIsolatedHome(gatewayUrl, homeDirOverride = null) {
             available: true,
           },
         ],
-        selectedWorkspaceId: 'workspace::smoke-local',
+        selectedWorkspacePath: localBookmarkDir,
         sessions: [],
       },
       null,
@@ -836,7 +835,7 @@ async function main() {
       await window.locator('.tool-trace').first().waitFor({ timeout: 20000 });
       stage = 'verify-new-thread-workspace-path';
       const createRequests = gateway.createdThreadRequests();
-      const expectedLocalBookmarkPath = await realpath(path.join(isolatedHome, 'local-bookmark'));
+      const expectedLocalBookmarkPath = path.join(isolatedHome, 'local-bookmark');
       assert.ok(createRequests.length >= 1, 'expected a new thread create request');
       const firstCreateRequest = createRequests[0];
       assert.equal(
@@ -845,9 +844,9 @@ async function main() {
         `new thread should use the selected workspace path, got ${JSON.stringify(firstCreateRequest)}`,
       );
       assert.equal(
-        Object.prototype.hasOwnProperty.call(firstCreateRequest, 'workspaceId'),
+        Object.prototype.hasOwnProperty.call(firstCreateRequest, 'workspacePath'),
         false,
-        `new thread request should not send a workspace entity id, got ${JSON.stringify(firstCreateRequest)}`,
+        `new thread request should send only workspaceDir, got ${JSON.stringify(firstCreateRequest)}`,
       );
       stage = 'queue-followups';
       await composer.fill(`Return exactly the token ${TOKENS[0]} and nothing else.`);

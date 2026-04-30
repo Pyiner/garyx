@@ -43,7 +43,7 @@ function resolveBotGroupById(
   ).find((group) => group.id === groupId) || null;
 }
 
-export function resolveBotWorkspaceId(
+export function resolveBotWorkspacePath(
   desktopState: DesktopState | null,
   group: DesktopBotConsoleSummary,
 ): string | null {
@@ -55,16 +55,16 @@ export function resolveBotWorkspaceId(
   const match = allWorkspaces.find(
     (workspace) => workspace.path && workspace.path.toLowerCase() === dir,
   );
-  return match?.id ?? null;
+  return match?.path ?? null;
 }
 
-export async function ensureBotWorkspaceId(
+export async function ensureBotWorkspacePath(
   platform: BotConsolePlatform,
   desktopState: DesktopState | null,
   group: DesktopBotConsoleSummary,
   onState: (state: DesktopState) => void,
 ): Promise<string | null> {
-  const existing = resolveBotWorkspaceId(desktopState, group);
+  const existing = resolveBotWorkspacePath(desktopState, group);
   if (existing) {
     return existing;
   }
@@ -75,12 +75,23 @@ export async function ensureBotWorkspaceId(
     const result = await platform.addWorkspaceByPath({ path: group.workspaceDir });
     if (result.workspace) {
       onState(result.state);
-      return result.workspace.id;
+      return result.workspace.path;
     }
-  } catch {
-    // Ignore missing local path and let the caller continue without a workspace.
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? error.message
+        : 'Bot directory is unavailable.',
+    );
   }
-  return null;
+  throw new Error('Bot directory is unavailable.');
+}
+
+function botWorkspaceErrorMessage(group: DesktopBotConsoleSummary, error: unknown): string {
+  const reason = error instanceof Error ? error.message : String(error || 'Unknown error');
+  return group.workspaceDir
+    ? `Bot directory is unavailable: ${group.workspaceDir}. ${reason}`
+    : reason;
 }
 
 function resolveMainThreadId(group: DesktopBotConsoleSummary): {
@@ -105,7 +116,7 @@ export async function activateBotDraftThread(input: {
   setContentView: (view: 'thread') => void;
   setNewThreadDraftActive: (value: boolean) => void;
   setSelectedThreadId: (value: string | null) => void;
-  setPendingWorkspaceId: (value: string | null) => void;
+  setPendingWorkspacePath: (value: string | null) => void;
   setPendingBotId: (value: string | null) => void;
   clearComposerDraft: () => void;
   syncComposerPhase: (value: string) => void;
@@ -142,17 +153,23 @@ export async function activateBotDraftThread(input: {
     return;
   }
 
+  let workspacePath: string | null;
+  try {
+    workspacePath = await ensureBotWorkspacePath(
+      input.platform,
+      nextDesktopState,
+      nextGroup,
+      input.onState,
+    );
+  } catch (error) {
+    input.setError(botWorkspaceErrorMessage(nextGroup, error));
+    return;
+  }
   input.setError(null);
   input.setContentView('thread');
   input.setNewThreadDraftActive(true);
   input.setSelectedThreadId(null);
-  const workspaceId = await ensureBotWorkspaceId(
-    input.platform,
-    nextDesktopState,
-    nextGroup,
-    input.onState,
-  );
-  input.setPendingWorkspaceId(workspaceId);
+  input.setPendingWorkspacePath(workspacePath);
   input.setPendingBotId(nextGroup.id);
   input.clearComposerDraft();
   input.syncComposerPhase('');

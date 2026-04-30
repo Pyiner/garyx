@@ -14,21 +14,21 @@ export function startNewThreadDraft(input: {
   pendingNewThreadWorkspaceEntry?: DesktopWorkspace | null;
   activeThreadNewThreadWorkspace?: DesktopWorkspace | null;
   selectedNewThreadWorkspaceEntry?: DesktopWorkspace | null;
-  workspaceId?: string | null;
+  workspacePath?: string | null;
   setError: (value: string | null) => void;
   setContentView: (view: "thread") => void;
   setNewThreadDraftActive: (value: boolean) => void;
   setSelectedThreadId: (value: string | null) => void;
-  setPendingWorkspaceId: (value: string | null) => void;
+  setPendingWorkspacePath: (value: string | null) => void;
   setPendingBotId: (value: string | null) => void;
   setPendingAgentId: (value: string) => void;
   clearComposerDraft: () => void;
   syncComposerPhase: (value: string) => void;
   requestComposerFocus: () => void;
 }) {
-  const nextWorkspace = input.workspaceId
+  const nextWorkspace = input.workspacePath
     ? (input.selectableNewThreadWorkspaces.find(
-        (workspace) => workspace.id === input.workspaceId,
+        (workspace) => workspace.path === input.workspacePath,
       ) ?? null)
     : pickPreferredWorkspace(
         input.selectableNewThreadWorkspaces,
@@ -40,7 +40,7 @@ export function startNewThreadDraft(input: {
   input.setContentView("thread");
   input.setNewThreadDraftActive(true);
   input.setSelectedThreadId(null);
-  input.setPendingWorkspaceId(nextWorkspace?.id || null);
+  input.setPendingWorkspacePath(nextWorkspace?.path || null);
   input.setPendingBotId(null);
   input.setPendingAgentId("claude");
   input.clearComposerDraft();
@@ -50,27 +50,27 @@ export function startNewThreadDraft(input: {
 
 export async function selectWorkspaceForThread(input: {
   api: GaryxDesktopApi;
-  workspaceId: string;
+  workspacePath: string;
   threadId?: string | null;
   setError: (value: string | null) => void;
   setContentView: (view: "thread") => void;
   setDesktopState: (value: DesktopState) => void;
   setSelectedThreadId: (value: string | null) => void;
   setNewThreadDraftActive: (value: boolean) => void;
-  setPendingWorkspaceId: (value: string | null) => void;
+  setPendingWorkspacePath: (value: string | null) => void;
   requestComposerFocus: () => void;
 }): Promise<void> {
   input.setError(null);
   input.setContentView("thread");
   try {
     const nextState = await input.api.selectWorkspace({
-      workspaceId: input.workspaceId,
+      workspacePath: input.workspacePath,
     });
     input.setDesktopState(nextState);
     if (input.threadId !== undefined) {
       input.setSelectedThreadId(input.threadId);
       input.setNewThreadDraftActive(!input.threadId);
-      input.setPendingWorkspaceId(input.threadId ? null : input.workspaceId);
+      input.setPendingWorkspacePath(input.threadId ? null : input.workspacePath);
       if (!input.threadId) {
         input.requestComposerFocus();
       }
@@ -282,7 +282,7 @@ export async function updateThreadBotBinding(input: {
 
 export async function ensureWorkspaceForNewThread(input: {
   api: GaryxDesktopApi;
-  preferredWorkspaceId?: string | null;
+  preferredWorkspacePath?: string | null;
   selectableWorkspaceCount: number;
   setWorkspaceMutation: (
     value: "assign" | "add" | "relink" | "remove" | null,
@@ -290,8 +290,8 @@ export async function ensureWorkspaceForNewThread(input: {
   setDesktopState: (value: DesktopState) => void;
   setError: (value: string | null) => void;
 }): Promise<string | null> {
-  if (input.preferredWorkspaceId) {
-    return input.preferredWorkspaceId;
+  if (input.preferredWorkspacePath) {
+    return input.preferredWorkspacePath;
   }
 
   if (input.selectableWorkspaceCount === 0) {
@@ -302,7 +302,7 @@ export async function ensureWorkspaceForNewThread(input: {
       if (result.cancelled || !result.workspace) {
         return null;
       }
-      return result.workspace.id;
+      return result.workspace.path;
     } catch (workspaceError) {
       input.setError(
         workspaceError instanceof Error
@@ -322,9 +322,9 @@ export async function ensureWorkspaceForNewThread(input: {
 export async function ensureThread(input: {
   api: GaryxDesktopApi;
   selectedThreadId?: string | null;
-  pendingWorkspaceId?: string | null;
+  pendingWorkspacePath?: string | null;
   pendingAgentId?: string | null;
-  preferredWorkspaceId?: string | null;
+  preferredWorkspacePath?: string | null;
   selectableWorkspaceCount: number;
   setWorkspaceMutation: (
     value: "assign" | "add" | "relink" | "remove" | null,
@@ -333,7 +333,7 @@ export async function ensureThread(input: {
   setSelectedThreadId: (value: string | null) => void;
   initializeThreadMessages: (threadId: string) => void;
   setNewThreadDraftActive: (value: boolean) => void;
-  setPendingWorkspaceId: (value: string | null) => void;
+  setPendingWorkspacePath: (value: string | null) => void;
   setPendingBotId: (value: string | null) => void;
   setPendingAgentId: (value: string) => void;
   setError: (value: string | null) => void;
@@ -344,23 +344,23 @@ export async function ensureThread(input: {
   }
 
   const agentId = input.pendingAgentId?.trim() || null;
-  const workspaceId =
-    input.pendingWorkspaceId ||
+  const workspacePath =
+    input.pendingWorkspacePath ||
     (await ensureWorkspaceForNewThread({
       api: input.api,
-      preferredWorkspaceId: input.preferredWorkspaceId,
+      preferredWorkspacePath: input.preferredWorkspacePath,
       selectableWorkspaceCount: input.selectableWorkspaceCount,
       setWorkspaceMutation: input.setWorkspaceMutation,
       setDesktopState: input.setDesktopState,
       setError: input.setError,
     }));
-  if (!workspaceId) {
+  if (!workspacePath) {
     return null;
   }
 
   try {
     const created = await input.api.createThread({
-      workspaceId,
+      workspacePath,
       agentId,
     });
     input.setDesktopState(created.state);
@@ -368,7 +368,7 @@ export async function ensureThread(input: {
     input.initializeThreadMessages(created.thread.id);
     threadId = created.thread.id;
     input.setNewThreadDraftActive(false);
-    input.setPendingWorkspaceId(null);
+    input.setPendingWorkspacePath(null);
     input.setPendingBotId(null);
     input.setPendingAgentId("claude");
     return threadId;

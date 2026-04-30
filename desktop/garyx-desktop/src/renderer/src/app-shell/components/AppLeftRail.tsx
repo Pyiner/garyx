@@ -40,9 +40,9 @@ type AppLeftRailProps = {
   formatThreadTimestamp: (value?: string | null) => string;
   isThreadRuntimeBusy: (threadId: string) => boolean;
   workspaceThreadGroups: ReturnType<typeof buildWorkspaceThreadGroups>;
-  renamingWorkspaceId: string | null;
+  renamingWorkspacePath: string | null;
   selectedThreadId: string | null;
-  workspaceMenuOpenId: string | null;
+  workspaceMenuOpenPath: string | null;
   workspaceMutation: 'add' | 'assign' | 'relink' | 'remove' | null;
   workspaceNameDraft: string;
   onSelectSettingsTab: (tabId: SettingsTabId) => void;
@@ -59,15 +59,15 @@ type AppLeftRailProps = {
   onAddBot: () => void;
   onBeginRenameWorkspace: (workspace: DesktopWorkspace) => void;
   onCancelRenameWorkspace: () => void;
-  onCreateThreadForWorkspace: (workspaceId: string) => void;
+  onCreateThreadForWorkspace: (workspacePath: string) => void;
   onDeleteThread: (threadId: string) => void;
   onOpenFolder: () => void;
   onOpenThread: (threadId: string) => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
-  onSelectWorkspace: (workspaceId: string, preferredThreadId?: string | null) => void;
-  onSubmitRenameWorkspace: (workspaceId: string) => void;
+  onSelectWorkspace: (workspacePath: string, preferredThreadId?: string | null) => void;
+  onSubmitRenameWorkspace: (workspacePath: string) => void;
   setContentView: Dispatch<SetStateAction<ContentView>>;
-  setWorkspaceMenuOpenId: Dispatch<SetStateAction<string | null>>;
+  setWorkspaceMenuOpenPath: Dispatch<SetStateAction<string | null>>;
   setWorkspaceNameDraft: Dispatch<SetStateAction<string>>;
   onOpenSettings: () => void;
   onSidebarResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
@@ -91,9 +91,9 @@ export function AppLeftRail({
   formatThreadTimestamp,
   isThreadRuntimeBusy,
   workspaceThreadGroups,
-  renamingWorkspaceId,
+  renamingWorkspacePath,
   selectedThreadId,
-  workspaceMenuOpenId,
+  workspaceMenuOpenPath,
   workspaceMutation,
   workspaceNameDraft,
   onSelectSettingsTab,
@@ -118,7 +118,7 @@ export function AppLeftRail({
   onSelectWorkspace,
   onSubmitRenameWorkspace,
   setContentView,
-  setWorkspaceMenuOpenId,
+  setWorkspaceMenuOpenPath,
   setWorkspaceNameDraft,
   onOpenSettings,
   onSidebarResizeStart,
@@ -255,12 +255,12 @@ export function AppLeftRail({
             onRequestRemoveWorkspace={onRequestRemoveWorkspace}
             onSelectWorkspace={onSelectWorkspace}
             onSubmitRenameWorkspace={onSubmitRenameWorkspace}
-            renamingWorkspaceId={renamingWorkspaceId}
+            renamingWorkspacePath={renamingWorkspacePath}
             selectedThreadId={visibleSelectedThreadId}
             setContentView={setContentView}
-            setWorkspaceMenuOpenId={setWorkspaceMenuOpenId}
+            setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
             setWorkspaceNameDraft={setWorkspaceNameDraft}
-            workspaceMenuOpenId={workspaceMenuOpenId}
+            workspaceMenuOpenPath={workspaceMenuOpenPath}
             workspaceMutation={workspaceMutation}
             workspaceNameDraft={workspaceNameDraft}
             workspaceThreadGroups={workspaceThreadGroups}

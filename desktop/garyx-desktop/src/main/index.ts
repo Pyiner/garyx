@@ -510,7 +510,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "garyx:select-workspace",
     async (_event, input: SelectWorkspaceInput) => {
-      return selectDesktopWorkspace(input.workspaceId);
+      return selectDesktopWorkspace(input.workspacePath);
     },
   );
 
@@ -560,7 +560,7 @@ function registerIpcHandlers(): void {
         };
       }
       const result = await relinkDesktopWorkspace(
-        input.workspaceId,
+        input.workspacePath,
         selectedPath,
       );
       return {
@@ -573,14 +573,14 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "garyx:rename-workspace",
     async (_event, input: RenameWorkspaceInput) => {
-      return renameDesktopWorkspace(input.workspaceId, input.name);
+      return renameDesktopWorkspace(input.workspacePath, input.name);
     },
   );
 
   ipcMain.handle(
     "garyx:remove-workspace",
     async (_event, input: RemoveWorkspaceInput) => {
-      return removeDesktopWorkspace(input.workspaceId);
+      return removeDesktopWorkspace(input.workspacePath);
     },
   );
 
@@ -1038,7 +1038,7 @@ function registerIpcHandlers(): void {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         lastMessagePreview: messagePreviewText(input),
-        workspaceId: "",
+        workspacePath: "",
       };
       return {
         ...result,
