@@ -24,6 +24,7 @@ const CHINESE_LOCALE: AppLocale = 'zh-CN';
 
 const zhCN: Record<string, string> = {
   'Add bot': '添加机器人',
+  'Add photos and files': '添加照片和文件',
   'Add a folder to start grouping Garyx threads by workspace.': '添加文件夹后，Garyx 线程会按工作区分组。',
   'Add a workspace to begin': '添加工作区开始',
   'Add workspace…': '添加工作区…',

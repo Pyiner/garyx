@@ -7,9 +7,10 @@
  * Icons arrive as base64 `data:` URLs baked into the catalog
  * payload by the gateway — a remote gateway works identically.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { ChannelPluginCatalogEntry } from "@shared/contracts";
+import { measureUiAction } from "../perf-metrics";
 
 export interface ChannelPluginCatalogState {
   /** `null` until the first successful fetch; the empty array is a
@@ -25,53 +26,80 @@ export interface ChannelPluginCatalogState {
   refresh: () => Promise<void>;
 }
 
-export function useChannelPluginCatalog(): ChannelPluginCatalogState {
-  const [entries, setEntries] = useState<ChannelPluginCatalogEntry[] | null>(
-    null,
-  );
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  // Guard against state updates after unmount (React strict mode /
-  // rapid navigation would otherwise surface a console warning).
-  const mountedRef = useRef(true);
+type CatalogSnapshot = Omit<ChannelPluginCatalogState, "refresh">;
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+const catalogListeners = new Set<() => void>();
+let cachedEntries: ChannelPluginCatalogEntry[] | null = null;
+let cachedError: string | null = null;
+let cachedLoading = false;
+let catalogRequest: Promise<void> | null = null;
+
+function currentSnapshot(): CatalogSnapshot {
+  return {
+    entries: cachedEntries,
+    error: cachedError,
+    loading: cachedLoading,
+  };
+}
+
+function emitCatalogChange() {
+  for (const listener of catalogListeners) {
+    listener();
+  }
+}
+
+async function loadChannelPluginCatalog(force = false): Promise<void> {
+  if (!force && cachedEntries !== null) {
+    return;
+  }
+  if (catalogRequest) {
+    return catalogRequest;
+  }
+
+  cachedLoading = true;
+  emitCatalogChange();
+
+  catalogRequest = measureUiAction("channel_plugin_catalog.fetch", async () => {
     try {
       const api = window.garyxDesktop;
       if (!api?.fetchChannelPlugins) {
-        // Electron preload didn't expose the method — likely running
-        // in the web preview bundle. Degrade quietly rather than
-        // throwing; callers can check `entries === null` to know.
-        if (mountedRef.current) {
-          setEntries([]);
-          setError(null);
-        }
+        cachedEntries = [];
+        cachedError = null;
         return;
       }
-      const next = await api.fetchChannelPlugins();
-      if (mountedRef.current) {
-        setEntries(next);
-        setError(null);
-      }
+      cachedEntries = await api.fetchChannelPlugins();
+      cachedError = null;
     } catch (err) {
-      if (mountedRef.current) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
+      cachedError = err instanceof Error ? err.message : String(err);
     } finally {
-      if (mountedRef.current) {
-        setLoading(false);
-      }
+      cachedLoading = false;
+      catalogRequest = null;
+      emitCatalogChange();
     }
+  });
+
+  return catalogRequest;
+}
+
+export function useChannelPluginCatalog(): ChannelPluginCatalogState {
+  const [snapshot, setSnapshot] = useState<CatalogSnapshot>(
+    currentSnapshot,
+  );
+
+  const refresh = useCallback(async () => {
+    await loadChannelPluginCatalog(true);
   }, []);
 
   useEffect(() => {
-    mountedRef.current = true;
-    void refresh();
-    return () => {
-      mountedRef.current = false;
+    const listener = () => {
+      setSnapshot(currentSnapshot());
     };
-  }, [refresh]);
+    catalogListeners.add(listener);
+    void loadChannelPluginCatalog(false);
+    return () => {
+      catalogListeners.delete(listener);
+    };
+  }, []);
 
-  return { entries, error, loading, refresh };
+  return { ...snapshot, refresh };
 }

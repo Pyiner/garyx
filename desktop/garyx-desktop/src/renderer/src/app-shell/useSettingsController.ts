@@ -19,6 +19,7 @@ import {
   cloneJson,
   ensureGatewayConfig,
 } from '../gateway-settings';
+import { measureUiAction } from '../perf-metrics';
 import { isGatewayConfigSettingsTab, isLocalSettingsTab } from './icons';
 
 function desktopSettingsEqual(
@@ -473,19 +474,29 @@ export function useSettingsController({
     nextConfig.gateway.public_url = settingsDraft.gatewayUrl || '';
 
     try {
-      const result = await window.garyxDesktop.saveGatewaySettings(nextConfig);
+      const result = await measureUiAction("bot.modify.save_gateway_settings", () =>
+        window.garyxDesktop.saveGatewaySettings(nextConfig),
+      );
       replaceGatewaySettings(result.settings);
       if (!silent) {
         setGatewaySettingsStatus(result.message || 'Saved gateway config.');
       }
-      const status = await window.garyxDesktop.checkConnection();
-      setConnection(status);
       // saveGatewaySettings only returns the gateway config payload, so
       // configuredBots / botMainThreads in DesktopState stay stale after a
       // bot delete until the next poll. Refresh the whole state so the
       // sidebar reflects the save immediately.
-      const nextState = await window.garyxDesktop.getState();
-      setDesktopState(nextState);
+      const [status, nextState] = await measureUiAction(
+        "bot.modify.refresh_desktop_state",
+        () =>
+          Promise.all([
+            window.garyxDesktop.checkConnection(),
+            window.garyxDesktop.getState(),
+          ]),
+      );
+      startTransition(() => {
+        setConnection(status);
+        setDesktopState(nextState);
+      });
       return true;
     } catch (gatewayError) {
       setGatewaySettingsStatus(

@@ -101,6 +101,7 @@ import {
 } from "../transcript-render";
 import { WorkspaceFilePreview } from "../workspace-file-preview";
 import { BotConsolePage } from "../BotConsolePage";
+import { measureUiAction } from "../perf-metrics";
 import {
   activateBotDraftThread,
   openThreadFromEndpoint,
@@ -1247,6 +1248,10 @@ export function AppShell() {
     null,
   );
   const [pendingBotId, setPendingBotId] = useState<string | null>(null);
+  const [optimisticThreadBotBinding, setOptimisticThreadBotBinding] = useState<{
+    botId: string | null;
+    threadId: string;
+  } | null>(null);
   const [pendingAgentId, setPendingAgentId] = useState<string>("claude");
   const [messagesByThread, setMessagesByThread] = useState<MessageMap>({});
   const [threadInfoByThread, setThreadInfoByThread] = useState<
@@ -1387,6 +1392,7 @@ export function AppShell() {
   const toastSequenceRef = useRef(1);
   const toastTimeoutsRef = useRef<Record<number, number>>({});
   const gatewayRetryStepRef = useRef(0);
+  const botBindingRequestSequenceRef = useRef(0);
   const previousConnectionOkRef = useRef<boolean | null>(null);
   const lastRemoteStateWarningKeyRef = useRef<string | null>(null);
   const threadLogsPanelWidthRef = useRef(
@@ -2157,11 +2163,20 @@ export function AppShell() {
       isActiveStreamingThread),
   );
   const composerLocked = composerAttachmentUploadPending;
-  const botGroups = buildBotGroups(
-    desktopState?.endpoints || [],
-    desktopState?.configuredBots || [],
-    desktopState?.botMainThreads || {},
-    desktopState?.botConsoles || [],
+  const botGroups = useMemo(
+    () =>
+      buildBotGroups(
+        desktopState?.endpoints || [],
+        desktopState?.configuredBots || [],
+        desktopState?.botMainThreads || {},
+        desktopState?.botConsoles || [],
+      ),
+    [
+      desktopState?.botConsoles,
+      desktopState?.botMainThreads,
+      desktopState?.configuredBots,
+      desktopState?.endpoints,
+    ],
   );
   const activeThreadEndpoints =
     activeThread && !activeAutomationThread
@@ -2175,12 +2190,25 @@ export function AppShell() {
         ([, threadId]) => threadId === activeThread.id,
       )?.[0] ?? null)
     : null;
-  const explicitThreadBotId = activeThread ? mappedThreadBotId : pendingBotId;
+  const hasOptimisticActiveThreadBotBinding = Boolean(
+    activeThread &&
+      optimisticThreadBotBinding?.threadId === activeThread.id,
+  );
+  const optimisticActiveThreadBotId = hasOptimisticActiveThreadBotBinding
+    ? (optimisticThreadBotBinding?.botId ?? null)
+    : undefined;
+  const explicitThreadBotId = activeThread
+    ? (optimisticActiveThreadBotId !== undefined
+        ? optimisticActiveThreadBotId
+        : mappedThreadBotId)
+    : pendingBotId;
   const inferredThreadBotId =
-    !explicitThreadBotId && activeThreadBots.length === 1
+    !hasOptimisticActiveThreadBotBinding &&
+    !explicitThreadBotId &&
+    activeThreadBots.length === 1
       ? (activeThreadBots[0]?.id ?? null)
       : null;
-  const activeThreadBotId = explicitThreadBotId || inferredThreadBotId;
+  const activeThreadBotId = explicitThreadBotId ?? inferredThreadBotId;
   const activeThreadBot = activeThreadBotId
     ? (botGroups.find((g) => g.id === activeThreadBotId) ?? null)
     : null;
@@ -2444,8 +2472,10 @@ export function AppShell() {
   }
 
   async function openAddBotDialog() {
-    await refreshAgentTargets();
     setAddBotDialogOpen(true);
+    void measureUiAction("bot.add_dialog.refresh_agent_targets", () =>
+      refreshAgentTargets(),
+    );
   }
 
   async function handleAddChannelAccount(input: {
@@ -2464,19 +2494,15 @@ export function AppShell() {
     /** Opaque plugin config for subprocess plugins. */
     config?: Record<string, unknown> | null;
   }) {
-    const nextState = await window.garyxDesktop.addChannelAccount(input);
-    const [nextAgents, nextTeams] = await Promise.all([
-      window.garyxDesktop
-        .listCustomAgents()
-        .catch(() => [] as DesktopCustomAgent[]),
-      window.garyxDesktop.listTeams().catch(() => [] as DesktopTeam[]),
-    ]);
-    startTransition(() => {
-      setDesktopState(nextState);
-      setDesktopAgents(nextAgents);
-      setDesktopTeams(nextTeams);
+    await measureUiAction("bot.add_channel_account", async () => {
+      const nextState = await window.garyxDesktop.addChannelAccount(input);
+      startTransition(() => {
+        setDesktopState(nextState);
+      });
     });
-    await loadGatewaySettings({ clearStatus: true });
+    await measureUiAction("bot.add_channel_account.reload_settings", () =>
+      loadGatewaySettings({ clearStatus: true }),
+    );
     pushToast("Bot added.", "success");
   }
 
@@ -4573,62 +4599,77 @@ export function AppShell() {
     threadId: string,
     botId: string | null,
   ): Promise<void> {
-    const currentEndpoints = (desktopState?.endpoints || []).filter(
-      (endpoint) => endpoint.threadId === threadId,
-    );
+    const requestSequence = botBindingRequestSequenceRef.current + 1;
+    botBindingRequestSequenceRef.current = requestSequence;
+    await measureUiAction("bot.bind_thread", async () => {
+      const currentEndpoints = (desktopState?.endpoints || []).filter(
+        (endpoint) => endpoint.threadId === threadId,
+      );
+      let nextDesktopState: DesktopState | null = null;
 
-    if (!botId) {
-      const clearedState = await window.garyxDesktop.setBotBinding({
+      if (!botId) {
+        nextDesktopState = await window.garyxDesktop.setBotBinding({
+          threadId,
+          botId: null,
+        });
+        for (const endpoint of currentEndpoints) {
+          nextDesktopState = await window.garyxDesktop.detachChannelEndpoint({
+            endpointKey: endpoint.endpointKey,
+          });
+        }
+        if (nextDesktopState) {
+          const finalState = nextDesktopState;
+          if (botBindingRequestSequenceRef.current !== requestSequence) {
+            return;
+          }
+          startTransition(() => {
+            setDesktopState(finalState);
+          });
+        }
+        return;
+      }
+
+      const targetGroup = botGroups.find((group) => group.id === botId);
+      const targetEndpoint =
+        targetGroup?.defaultOpenEndpoint || targetGroup?.mainEndpoint || null;
+      nextDesktopState = await window.garyxDesktop.setBotBinding({
         threadId,
-        botId: null,
+        botId,
       });
-      setDesktopState(clearedState);
+
       for (const endpoint of currentEndpoints) {
-        const nextState = await window.garyxDesktop.detachChannelEndpoint({
+        if (endpoint.endpointKey === targetEndpoint?.endpointKey) {
+          continue;
+        }
+        if (botGroupIdForEndpoint(endpoint) === botId) {
+          continue;
+        }
+        nextDesktopState = await window.garyxDesktop.detachChannelEndpoint({
           endpointKey: endpoint.endpointKey,
         });
-        setDesktopState(nextState);
       }
-      return;
-    }
 
-    const targetGroup = botGroups.find((group) => group.id === botId);
-    const targetEndpoint = targetGroup?.defaultOpenEndpoint || targetGroup?.mainEndpoint || null;
-    const localState = await window.garyxDesktop.setBotBinding({
-      threadId,
-      botId,
+      if (
+        targetEndpoint?.endpointKey &&
+        targetGroup?.mainThreadId !== threadId &&
+        targetEndpoint.threadId !== threadId
+      ) {
+        nextDesktopState = await window.garyxDesktop.bindChannelEndpoint({
+          endpointKey: targetEndpoint.endpointKey,
+          threadId,
+        });
+      }
+
+      if (nextDesktopState) {
+        const finalState = nextDesktopState;
+        if (botBindingRequestSequenceRef.current !== requestSequence) {
+          return;
+        }
+        startTransition(() => {
+          setDesktopState(finalState);
+        });
+      }
     });
-    setDesktopState(localState);
-
-    for (const endpoint of currentEndpoints) {
-      if (endpoint.endpointKey === targetEndpoint?.endpointKey) {
-        continue;
-      }
-      if (botGroupIdForEndpoint(endpoint) === botId) {
-        continue;
-      }
-      const nextState = await window.garyxDesktop.detachChannelEndpoint({
-        endpointKey: endpoint.endpointKey,
-      });
-      setDesktopState(nextState);
-    }
-
-    if (!targetEndpoint?.endpointKey) {
-      return;
-    }
-
-    if (
-      targetGroup?.mainThreadId === threadId ||
-      targetEndpoint.threadId === threadId
-    ) {
-      return;
-    }
-
-    const nextState = await window.garyxDesktop.bindChannelEndpoint({
-      endpointKey: targetEndpoint.endpointKey,
-      threadId,
-    });
-    setDesktopState(nextState);
   }
 
   async function ensureThreadBotRouting(threadId: string): Promise<boolean> {
@@ -6100,6 +6141,7 @@ export function AppShell() {
           ) : (
             <header className="conversation-header">
               <ConversationHeaderTitle
+                activeThreadBot={activeThreadBot}
                 activeThreadTitle={activeThread?.title || null}
                 activeWorkspaceName={activeWorkspace?.name || null}
                 canEditThreadTitle={canEditThreadTitle}
@@ -6419,7 +6461,16 @@ export function AppShell() {
                 onResumeProviderSession={handleResumeProviderSession}
                 onSelectBotBinding={(botId) => {
                   if (selectedThreadId) {
-                    void handleSetBotBinding(botId);
+                    const threadId = selectedThreadId;
+                    setOptimisticThreadBotBinding({ threadId, botId });
+                    void handleSetBotBinding(botId).finally(() => {
+                      setOptimisticThreadBotBinding((current) => {
+                        return current?.threadId === threadId &&
+                          current.botId === botId
+                          ? null
+                          : current;
+                      });
+                    });
                   } else {
                     setPendingBotId(botId);
                   }

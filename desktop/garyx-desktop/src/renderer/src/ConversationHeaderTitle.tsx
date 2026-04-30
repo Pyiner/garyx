@@ -1,8 +1,13 @@
-import type { KeyboardEvent, RefObject } from 'react';
+import { useMemo, type KeyboardEvent, type RefObject } from 'react';
 
+import type { DesktopBotConsoleSummary } from '@shared/contracts';
+
+import { ChannelLogo } from './channel-logo';
+import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { useI18n } from './i18n';
 
 type ConversationHeaderTitleProps = {
+  activeThreadBot: DesktopBotConsoleSummary | null;
   activeThreadTitle: string | null;
   activeWorkspaceName: string | null;
   canEditThreadTitle: boolean;
@@ -20,6 +25,7 @@ type ConversationHeaderTitleProps = {
 };
 
 export function ConversationHeaderTitle({
+  activeThreadBot,
   activeThreadTitle,
   activeWorkspaceName,
   canEditThreadTitle,
@@ -36,6 +42,17 @@ export function ConversationHeaderTitle({
   titleInputRef,
 }: ConversationHeaderTitleProps) {
   const { t } = useI18n();
+  const { entries: pluginCatalog } = useChannelPluginCatalog();
+  const iconDataUrlByChannel = useMemo(
+    () =>
+      new Map(
+        (pluginCatalog || []).map((entry) => [
+          entry.id.toLowerCase(),
+          entry.icon_data_url || null,
+        ]),
+      ),
+    [pluginCatalog],
+  );
   const fallbackTitle = activeThreadTitle || activeWorkspaceName || t('Select a thread');
   const staticTitle = isAutomationView
     ? t('Automation')
@@ -96,6 +113,25 @@ export function ConversationHeaderTitle({
           )}
           {contextText ? (
             <span className="conversation-context">{contextText}</span>
+          ) : null}
+          {activeThreadBot ? (
+            <span
+              aria-label={t('Bound to {name}', { name: activeThreadBot.title })}
+              className="conversation-bot-binding-status"
+              title={t('Bound to {name}', { name: activeThreadBot.title })}
+            >
+              <ChannelLogo
+                channel={activeThreadBot.channel}
+                className="channel-logo header-channel-logo conversation-bot-binding-logo"
+                iconDataUrl={
+                  iconDataUrlByChannel.get(activeThreadBot.channel.toLowerCase()) || null
+                }
+                fallbackLabel={activeThreadBot.title}
+              />
+              <span className="conversation-bot-binding-name">
+                {activeThreadBot.title}
+              </span>
+            </span>
           ) : null}
         </div>
       </div>

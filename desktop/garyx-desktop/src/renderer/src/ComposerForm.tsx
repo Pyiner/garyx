@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -16,7 +17,6 @@ import {
   IconArrowsMinimize,
   IconBolt,
   IconBrain,
-  IconCheck,
   IconCode,
   IconCloud,
   IconCommand,
@@ -47,14 +47,16 @@ import type {
 
 import {
   DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  FloatingActionMenuContent,
+  FloatingActionMenuItem,
+  FloatingActionMenuSubContent,
+  FloatingActionMenuSubTrigger,
+} from '@/components/ui/floating-action-menu';
 import {
   groupAgentOptions,
   type ComposerAgentOption,
@@ -295,23 +297,26 @@ function renderComposerProviderControl({
           <span className="composer-provider-label">{providerLabel}</span>
           {PROVIDER_CHEVRON_GLYPH}
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" side="top" sideOffset={6}>
+        <FloatingActionMenuContent
+          align="start"
+          side="top"
+        >
           {grouped.builtin.map((option) => (
-            <DropdownMenuItem
+            <FloatingActionMenuItem
               data-active={option.id === selectedAgentId ? '' : undefined}
               key={option.id}
               onSelect={() => onSelectAgent(option.id)}
             >
               {option.label}
-            </DropdownMenuItem>
+            </FloatingActionMenuItem>
           ))}
           {hasAgents || hasTeams ? <DropdownMenuSeparator /> : null}
           {hasAgents ? (
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>{t("Agents")}</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
+              <FloatingActionMenuSubTrigger>{t("Agents")}</FloatingActionMenuSubTrigger>
+              <FloatingActionMenuSubContent>
                 {grouped.agent.map((option) => (
-                  <DropdownMenuItem
+                  <FloatingActionMenuItem
                     data-active={
                       option.id === selectedAgentId ? '' : undefined
                     }
@@ -321,17 +326,17 @@ function renderComposerProviderControl({
                     {option.detail
                       ? `${option.label} (${option.detail})`
                       : option.label}
-                  </DropdownMenuItem>
+                  </FloatingActionMenuItem>
                 ))}
-              </DropdownMenuSubContent>
+              </FloatingActionMenuSubContent>
             </DropdownMenuSub>
           ) : null}
           {hasTeams ? (
             <DropdownMenuSub>
-              <DropdownMenuSubTrigger>{t("Agent Teams")}</DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
+              <FloatingActionMenuSubTrigger>{t("Agent Teams")}</FloatingActionMenuSubTrigger>
+              <FloatingActionMenuSubContent>
                 {grouped.team.map((option) => (
-                  <DropdownMenuItem
+                  <FloatingActionMenuItem
                     data-active={
                       option.id === selectedAgentId ? '' : undefined
                     }
@@ -339,12 +344,12 @@ function renderComposerProviderControl({
                     onSelect={() => onSelectAgent(option.id)}
                   >
                     {option.label}
-                  </DropdownMenuItem>
+                  </FloatingActionMenuItem>
                 ))}
-              </DropdownMenuSubContent>
+              </FloatingActionMenuSubContent>
             </DropdownMenuSub>
           ) : null}
-        </DropdownMenuContent>
+        </FloatingActionMenuContent>
       </DropdownMenu>
     );
   }
@@ -361,7 +366,6 @@ function renderComposerProviderControl({
 function renderComposerBotBindingSubmenu({
   activeThreadBot,
   activeThreadBotId,
-  botBindingDisabled,
   botGroups,
   iconDataUrlByChannel,
   onSelectBotBinding,
@@ -369,7 +373,6 @@ function renderComposerBotBindingSubmenu({
 }: {
   activeThreadBot?: DesktopBotConsoleSummary | null;
   activeThreadBotId?: string | null;
-  botBindingDisabled?: boolean;
   botGroups?: DesktopBotConsoleSummary[];
   iconDataUrlByChannel: Map<string, string | null>;
   onSelectBotBinding?: (botId: string | null) => void;
@@ -387,37 +390,42 @@ function renderComposerBotBindingSubmenu({
     selectedBot && !groups.some((group) => group.id === selectedBot.id)
       ? [selectedBot, ...groups]
       : groups;
-  const currentLabel = selectedBot?.title || t('No bot');
 
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger
-        className="composer-menu-subtrigger"
-        disabled={botBindingDisabled}
+      <FloatingActionMenuSubTrigger
+        className={`composer-menu-subtrigger ${selectedBot ? 'selected' : ''}`}
       >
-        <IconPlugConnected aria-hidden size={15} stroke={1.7} />
-        <span className="composer-menu-label">{t('Bind bot')}</span>
-        <span className="composer-menu-current">{currentLabel}</span>
-      </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="composer-bot-submenu" sideOffset={8}>
-        <DropdownMenuItem
-          className={`composer-bot-menu-item ${!activeThreadBotId ? 'active' : ''}`}
+        {selectedBot ? (
+          <ChannelLogo
+            channel={selectedBot.channel}
+            className="channel-logo composer-menu-bot-logo"
+            iconDataUrl={iconDataUrlByChannel.get(selectedBot.channel.toLowerCase()) || null}
+            fallbackLabel={selectedBot.title}
+          />
+        ) : (
+          <IconPlugConnected aria-hidden size={15} stroke={1.7} />
+        )}
+        <span className="composer-menu-label">{selectedBot?.title || t('Bind bot')}</span>
+      </FloatingActionMenuSubTrigger>
+      <FloatingActionMenuSubContent className="composer-bot-submenu">
+        <FloatingActionMenuItem
+          className="composer-bot-menu-item"
+          data-active={!activeThreadBotId ? '' : undefined}
           onSelect={() => {
             onSelectBotBinding(null);
           }}
         >
           <IconPlugConnected aria-hidden size={16} stroke={1.7} />
           <span className="composer-menu-label">{t('No bot')}</span>
-          {!activeThreadBotId ? (
-            <IconCheck aria-hidden className="composer-menu-check" size={14} stroke={2} />
-          ) : null}
-        </DropdownMenuItem>
+        </FloatingActionMenuItem>
         {visibleGroups.length ? (
           visibleGroups.map((group) => {
             const isActive = group.id === activeThreadBotId;
             return (
-              <DropdownMenuItem
-                className={`composer-bot-menu-item ${isActive ? 'active' : ''}`}
+              <FloatingActionMenuItem
+                className="composer-bot-menu-item"
+                data-active={isActive ? '' : undefined}
                 key={group.id}
                 onSelect={() => {
                   onSelectBotBinding(group.id);
@@ -430,18 +438,15 @@ function renderComposerBotBindingSubmenu({
                   fallbackLabel={group.title}
                 />
                 <span className="composer-menu-label">{group.title}</span>
-                {isActive ? (
-                  <IconCheck aria-hidden className="composer-menu-check" size={14} stroke={2} />
-                ) : null}
-              </DropdownMenuItem>
+              </FloatingActionMenuItem>
             );
           })
         ) : (
-          <DropdownMenuItem className="composer-bot-menu-item muted" disabled>
+          <FloatingActionMenuItem className="composer-bot-menu-item muted" disabled>
             {t('No bots configured')}
-          </DropdownMenuItem>
+          </FloatingActionMenuItem>
         )}
-      </DropdownMenuSubContent>
+      </FloatingActionMenuSubContent>
     </DropdownMenuSub>
   );
 }
@@ -484,11 +489,15 @@ export function ComposerForm({
 }: ComposerFormProps) {
   const { t } = useI18n();
   const { entries: pluginCatalog } = useChannelPluginCatalog();
-  const iconDataUrlByChannel = new Map(
-    (pluginCatalog || []).map((entry) => [
-      entry.id.toLowerCase(),
-      entry.icon_data_url || null,
-    ]),
+  const iconDataUrlByChannel = useMemo(
+    () =>
+      new Map(
+        (pluginCatalog || []).map((entry) => [
+          entry.id.toLowerCase(),
+          entry.icon_data_url || null,
+        ]),
+      ),
+    [pluginCatalog],
   );
   const [composerCursor, setComposerCursor] = useState(composer.length);
   const [highlightedSlashCommandIndex, setHighlightedSlashCommandIndex] = useState(0);
@@ -822,13 +831,11 @@ export function ComposerForm({
           >
             <IconPlus aria-hidden size={18} stroke={1.8} />
           </DropdownMenuTrigger>
-          <DropdownMenuContent
+          <FloatingActionMenuContent
             align="start"
-            className="composer-plus-menu"
             side="top"
-            sideOffset={8}
           >
-            <DropdownMenuItem
+            <FloatingActionMenuItem
               className="composer-menu-item"
               disabled={composerLocked}
               onSelect={() => {
@@ -836,19 +843,20 @@ export function ComposerForm({
               }}
             >
               <IconPaperclip aria-hidden size={16} stroke={1.75} />
-              <span className="composer-menu-label">{t('Attach files')}</span>
-            </DropdownMenuItem>
+              <span className="composer-menu-label">
+                {t('Add photos and files')}
+              </span>
+            </FloatingActionMenuItem>
             {onSelectBotBinding ? <DropdownMenuSeparator /> : null}
             {renderComposerBotBindingSubmenu({
               activeThreadBot,
               activeThreadBotId,
-              botBindingDisabled,
               botGroups,
               iconDataUrlByChannel,
               onSelectBotBinding,
               t,
             })}
-          </DropdownMenuContent>
+          </FloatingActionMenuContent>
         </DropdownMenu>
         <div className="composer-buttons">
           {renderComposerProviderControl({

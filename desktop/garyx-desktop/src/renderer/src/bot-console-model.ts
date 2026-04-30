@@ -179,7 +179,20 @@ export function buildBotGroups(
 ): DesktopBotConsoleSummary[] {
   const groups = new Map<string, DesktopBotConsoleSummary>();
   const configuredGroupIds = new Set<string>();
+  const orderByGroupId = new Map<string, number>();
+  let nextOrder = 0;
+  for (const bot of configuredBots) {
+    const id = `${bot.channel}::${bot.accountId}`;
+    if (!orderByGroupId.has(id)) {
+      orderByGroupId.set(id, nextOrder);
+      nextOrder += 1;
+    }
+  }
   for (const group of botConsoles) {
+    if (!orderByGroupId.has(group.id)) {
+      orderByGroupId.set(group.id, nextOrder);
+      nextOrder += 1;
+    }
     configuredGroupIds.add(group.id);
     groups.set(group.id, {
       ...group,
@@ -230,6 +243,10 @@ export function buildBotGroups(
     const id = `${channel}::${accountId}`;
     if (configuredGroupIds.size > 0 && !configuredGroupIds.has(id)) {
       continue;
+    }
+    if (!orderByGroupId.has(id)) {
+      orderByGroupId.set(id, nextOrder);
+      nextOrder += 1;
     }
     const existing = groups.get(id) || {
       id,
@@ -294,6 +311,10 @@ export function buildBotGroups(
       }),
     }))
     .sort((left, right) => {
-      return (right.latestActivity || '').localeCompare(left.latestActivity || '') || left.title.localeCompare(right.title);
+      const leftOrder = orderByGroupId.get(left.id) ?? Number.MAX_SAFE_INTEGER;
+      const rightOrder = orderByGroupId.get(right.id) ?? Number.MAX_SAFE_INTEGER;
+      return leftOrder - rightOrder
+        || left.title.localeCompare(right.title)
+        || left.id.localeCompare(right.id);
     });
 }

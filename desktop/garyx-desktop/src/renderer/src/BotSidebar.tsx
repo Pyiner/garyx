@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import type { DesktopBotConsoleSummary, DesktopChannelEndpoint } from '@shared/contracts';
 
@@ -6,6 +6,18 @@ import { ChevronDownIcon, MoreDotsIcon } from './app-shell/icons';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { ChannelLogo } from './channel-logo';
 import { useI18n } from './i18n';
+
+function setsEqual(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const value of left) {
+    if (!right.has(value)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 type BotSidebarProps = {
   groups: DesktopBotConsoleSummary[];
@@ -28,8 +40,15 @@ export function BotSidebar({
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
   const { entries: pluginCatalog } = useChannelPluginCatalog();
 
-  const iconDataUrlByChannel = new Map(
-    (pluginCatalog || []).map((entry) => [entry.id.toLowerCase(), entry.icon_data_url || null]),
+  const iconDataUrlByChannel = useMemo(
+    () =>
+      new Map(
+        (pluginCatalog || []).map((entry) => [
+          entry.id.toLowerCase(),
+          entry.icon_data_url || null,
+        ]),
+      ),
+    [pluginCatalog],
   );
 
   useEffect(() => {
@@ -44,7 +63,7 @@ export function BotSidebar({
           next.add(group.id);
         }
       }
-      return next;
+      return setsEqual(current, next) ? current : next;
     });
   }, [groups, selectedThreadId]);
 

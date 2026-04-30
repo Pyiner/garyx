@@ -2004,6 +2004,32 @@ code {
   min-width: 0;
 }
 
+.conversation-bot-binding-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 180px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(13, 13, 13, 0.045);
+  color: rgba(13, 13, 13, 0.66);
+  font-size: var(--text-sm);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.conversation-bot-binding-logo {
+  flex: 0 0 auto;
+}
+
+.conversation-bot-binding-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .conversation-header h2 {
   margin: 0;
   min-width: 0;
@@ -6987,34 +7013,38 @@ button.team-agent-speaker:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
   padding: 0;
-  border: 0;
-  border-radius: 9999px;
-  background: color-mix(
+  border: 1px solid color-mix(
     in oklab,
-    var(--color-token-foreground) 5%,
+    var(--color-token-foreground) 7%,
     transparent
   );
-  color: rgba(13, 13, 13, 0.58);
-  box-shadow: none;
+  border-radius: 9999px;
+  background: rgba(250, 250, 249, 0.92);
+  color: rgba(13, 13, 13, 0.56);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.85) inset,
+    0 1px 2px rgba(13, 13, 13, 0.03);
   cursor: pointer;
   transition:
     background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard),
     transform var(--duration-fast) var(--ease-standard);
 }
 
 .composer-plus-trigger:hover,
 .composer-plus-trigger[data-state="open"] {
-  background: color-mix(
+  border-color: color-mix(
     in oklab,
-    var(--color-token-foreground) 8%,
+    var(--color-token-foreground) 11%,
     transparent
   );
-  color: rgba(13, 13, 13, 0.82);
+  background: #f4f4f2;
+  color: rgba(13, 13, 13, 0.78);
 }
 
 .composer-plus-trigger:active {
@@ -7026,56 +7056,31 @@ button.team-agent-speaker:focus-visible {
   opacity: 0.5;
 }
 
-.composer-plus-menu {
-  min-width: 226px;
-  max-width: min(300px, calc(100vw - 32px));
+.floating-action-menu {
+  min-width: 10rem;
+  max-width: min(220px, calc(100vw - 32px));
 }
 
-.composer-menu-item,
-.composer-menu-subtrigger,
-.composer-bot-menu-item {
+.floating-action-menu-row {
   min-height: 34px;
   color: var(--color-token-text-primary);
+  line-height: 1;
 }
 
-.composer-menu-subtrigger {
-  min-width: 210px;
+.floating-action-menu-row > svg:first-child {
+  color: rgba(13, 13, 13, 0.52);
 }
 
-.composer-menu-subtrigger > svg:last-child {
-  margin-left: 4px;
+.floating-action-menu-subtrigger.selected .composer-menu-label {
+  font-weight: var(--font-weight-semibold);
 }
 
 .composer-menu-label {
   min-width: 0;
   overflow: hidden;
-  line-height: 1.2;
+  line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.composer-menu-current {
-  max-width: 92px;
-  margin-left: auto;
-  overflow: hidden;
-  color: var(--color-token-description-foreground);
-  font-size: var(--text-sm);
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-bot-submenu {
-  min-width: 220px;
-  max-width: min(300px, calc(100vw - 32px));
-}
-
-.composer-bot-menu-item.active {
-  background: color-mix(
-    in oklab,
-    var(--color-token-foreground) 5%,
-    transparent
-  );
 }
 
 .composer-bot-menu-item.muted {
@@ -7084,16 +7089,9 @@ button.team-agent-speaker:focus-visible {
 
 .composer-menu-bot-logo,
 .composer-bot-menu-item > .icon {
-  width: 16px;
-  height: 16px;
+  width: 17px;
+  height: 17px;
   flex: 0 0 auto;
-}
-
-.composer-menu-check {
-  width: 14px;
-  height: 14px;
-  margin-left: auto;
-  color: var(--color-token-text-primary);
 }
 
 .composer-actions {
@@ -7113,22 +7111,24 @@ button.team-agent-speaker:focus-visible {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  height: 28px;
-  padding: 0 4px;
-  border: none;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
-  background: transparent;
-  color: rgba(13, 13, 13, 0.5);
+  background: rgba(13, 13, 13, 0.035);
+  color: rgba(13, 13, 13, 0.6);
   box-shadow: none;
   cursor: default;
   transition:
     background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
 }
 
 .composer-provider-control:hover {
-  background: rgba(13, 13, 13, 0.04);
-  color: rgba(13, 13, 13, 0.7);
+  border-color: rgba(13, 13, 13, 0.045);
+  background: rgba(13, 13, 13, 0.055);
+  color: rgba(13, 13, 13, 0.76);
 }
 
 .composer-provider-control .icon,
@@ -7171,14 +7171,14 @@ button.composer-provider-trigger {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 28px;
+  height: 32px;
   width: auto;
   min-height: 0;
-  padding: 0 8px;
-  border: 0;
+  padding: 0 10px;
+  border: 1px solid transparent;
   border-radius: var(--radius-pill);
-  background: transparent;
-  color: rgba(13, 13, 13, 0.55);
+  background: rgba(13, 13, 13, 0.035);
+  color: rgba(13, 13, 13, 0.62);
   box-shadow: none;
   font-size: var(--text-sm);
   font-weight: var(--font-weight-normal);
@@ -7189,12 +7189,14 @@ button.composer-provider-trigger {
 }
 
 button.composer-provider-trigger:hover {
-  background: rgba(13, 13, 13, 0.04);
+  border-color: rgba(13, 13, 13, 0.045);
+  background: rgba(13, 13, 13, 0.055);
   color: rgba(13, 13, 13, 0.78);
 }
 
 button.composer-provider-trigger[data-state="open"] {
-  background: rgba(13, 13, 13, 0.06);
+  border-color: rgba(13, 13, 13, 0.06);
+  background: rgba(13, 13, 13, 0.07);
   color: rgba(13, 13, 13, 0.88);
 }
 
@@ -7227,7 +7229,7 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 .composer-buttons {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   margin-left: auto;
   flex-shrink: 0;
@@ -7242,9 +7244,9 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 
 .primary-send-button {
   position: relative;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
   padding: 0;
   gap: 0;
   border-radius: 9999px;
