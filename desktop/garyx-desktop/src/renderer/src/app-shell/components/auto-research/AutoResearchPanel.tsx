@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   ArrowDownUp,
   ArrowLeft,
@@ -477,9 +477,18 @@ export function AutoResearchPanel({
           </div>
         </div>
 
-        <Card className="ar-iteration-card">
-          {displayIterations.length ? (
-            <div className="ar-iteration-list">
+        {displayIterations.length ? (
+          <Table className="ar-iterations-table">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="ar-iteration-table-index">{t('Iteration')}</TableHead>
+                <TableHead>{t('Candidate output')}</TableHead>
+                <TableHead className="ar-iteration-table-score">{t('Score')}</TableHead>
+                <TableHead className="ar-iteration-table-action">{t('Actions')}</TableHead>
+                <TableHead className="ar-iteration-table-expand" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {displayIterations.map((iteration) => {
                 const candidate = candidateByIteration.get(iteration.iterationIndex) ?? null;
                 const score = verdictScore(candidate?.verdict);
@@ -493,18 +502,15 @@ export function AutoResearchPanel({
                   || (running ? t('This round is still running…') : t('No candidate output yet'));
 
                 return (
-                  <div
-                    className={cn(
-                      'ar-iteration-row',
-                      expanded ? 'is-expanded' : null,
-                      running ? 'is-running' : null,
-                      isBest ? 'is-best' : null,
-                      isSelected ? 'is-selected' : null,
-                    )}
-                    key={`${iteration.runId}:${iteration.iterationIndex}`}
-                  >
-                    <div
-                      className="ar-iteration-head"
+                  <Fragment key={`${iteration.runId}:${iteration.iterationIndex}`}>
+                    <TableRow
+                      className={cn(
+                        'ar-iteration-table-row',
+                        expanded ? 'is-expanded' : null,
+                        running ? 'is-running' : null,
+                        isBest ? 'is-best' : null,
+                        isSelected ? 'is-selected' : null,
+                      )}
                       onClick={() => {
                         if (!running || candidate) {
                           setExpandedIterationIndex((current) => (
@@ -525,22 +531,25 @@ export function AutoResearchPanel({
                       role="button"
                       tabIndex={0}
                     >
-                      <span className="ar-iteration-num">
-                        <span className="ar-node-dot" />
-                        i{iteration.iterationIndex}
-                      </span>
-                      <span className="ar-iteration-summary">
-                        <span>{summary}</span>
-                        {isSelected ? <Badge className="ar-selected-tag" variant="secondary">{t('Winner')}</Badge> : null}
-                        {!isSelected && isBest && score != null ? <Badge className="ar-best-tag" variant="secondary">{t('Current best')}</Badge> : null}
-                      </span>
-                      <span className="ar-iteration-score" style={score != null ? { '--ar-score-color': scoreColor(score) } as CSSProperties : undefined}>
-                        <span className="ar-iteration-score-value">{score != null ? score.toFixed(1) : '--'}</span>
-                        <span className="ar-iteration-score-bar">
-                          <span style={{ width: score != null ? `${pct(score, 10)}%` : '0%' }} />
+                      <TableCell className="ar-iteration-index-cell">
+                        <span className="ar-iteration-num">i{iteration.iterationIndex}</span>
+                      </TableCell>
+                      <TableCell className="ar-iteration-summary-cell">
+                        <span className="ar-iteration-summary">
+                          <span>{summary}</span>
+                          {isSelected ? <Badge className="ar-selected-tag" variant="secondary">{t('Winner')}</Badge> : null}
+                          {!isSelected && isBest && score != null ? <Badge className="ar-best-tag" variant="secondary">{t('Current best')}</Badge> : null}
                         </span>
-                      </span>
-                      <span className="ar-iteration-action">
+                      </TableCell>
+                      <TableCell>
+                        <span className="ar-iteration-score" style={score != null ? { '--ar-score-color': scoreColor(score) } as CSSProperties : undefined}>
+                          <span className="ar-iteration-score-value">{score != null ? score.toFixed(1) : '--'}</span>
+                          <span className="ar-iteration-score-bar">
+                            <span style={{ width: score != null ? `${pct(score, 10)}%` : '0%' }} />
+                          </span>
+                        </span>
+                      </TableCell>
+                      <TableCell className="ar-iteration-action-cell">
                         {running ? (
                           <Badge className="ar-running-tag" variant="secondary">
                             <LoaderCircle className="ar-spin" />
@@ -570,22 +579,28 @@ export function AutoResearchPanel({
                         ) : (
                           <span className="ar-no-action">{t('Pending verdict')}</span>
                         )}
-                      </span>
-                      <ChevronRight className="ar-iteration-chevron" />
-                    </div>
+                      </TableCell>
+                      <TableCell className="ar-iteration-chevron-cell">
+                        <ChevronRight className="ar-iteration-chevron" />
+                      </TableCell>
+                    </TableRow>
                     {expanded ? (
-                      <CandidatePanel candidate={candidate} iteration={iteration} onOpenThread={onOpenThread} />
+                      <TableRow className="ar-iteration-expanded-row">
+                        <TableCell className="ar-iteration-expanded-cell" colSpan={5}>
+                          <CandidatePanel candidate={candidate} iteration={iteration} onOpenThread={onOpenThread} />
+                        </TableCell>
+                      </TableRow>
                     ) : null}
-                  </div>
+                  </Fragment>
                 );
               })}
-            </div>
-          ) : (
-            <CardContent className="ar-empty-iterations">
-              {t('The run has not produced iteration records yet.')}
-            </CardContent>
-          )}
-        </Card>
+            </TableBody>
+          </Table>
+        ) : (
+          <div className="ar-empty-iterations">
+            {t('The run has not produced iteration records yet.')}
+          </div>
+        )}
 
         {createDialogOpen ? (
           <CreateRunDialog defaultWorkspacePath={defaultWorkspacePath} onClose={() => setCreateDialogOpen(false)} onSubmit={handleCreateRun} saving={saving} workspaces={workspaces} />
