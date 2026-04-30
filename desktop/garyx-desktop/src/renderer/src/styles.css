@@ -14599,6 +14599,159 @@ button.codex-list-row {
   font-size: var(--text-xs);
 }
 
+.ar-runs-page {
+  width: min(100%, 1180px);
+  margin: 0 auto;
+  padding: 0 4px 64px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.ar-runs-hero {
+  padding: 0 2px 2px;
+}
+
+.ar-runs-page .ar-page-title {
+  font-size: var(--text-display-xl);
+  letter-spacing: 0;
+}
+
+.ar-runs-table-card {
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.ar-runs-table {
+  table-layout: fixed;
+}
+
+.ar-runs-table [data-slot="table-head"] {
+  height: 42px;
+  padding: 0 20px;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.ar-runs-table [data-slot="table-cell"] {
+  padding: 18px 20px;
+  vertical-align: middle;
+}
+
+.ar-runs-table [data-slot="table-row"] {
+  border-color: var(--color-token-border-light);
+}
+
+.ar-runs-table [data-slot="table-body"] [data-slot="table-row"] {
+  min-height: 74px;
+}
+
+.ar-run-row {
+  cursor: default;
+}
+
+.ar-run-row:hover {
+  background: var(--color-token-bg-fog);
+}
+
+.ar-run-goal-col {
+  width: 44%;
+}
+
+.ar-run-state-col {
+  width: 15%;
+}
+
+.ar-run-iterations-col {
+  width: 14%;
+}
+
+.ar-run-updated-col {
+  width: 15%;
+}
+
+.ar-run-actions-col {
+  width: 12%;
+  text-align: right;
+}
+
+.ar-run-goal-cell {
+  min-width: 0;
+}
+
+.ar-run-goal-title {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-md);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ar-run-goal-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 5px;
+  color: var(--color-token-description-foreground);
+  font-family: var(--message-code-font);
+  font-size: var(--text-xs-plus);
+  line-height: 1.35;
+}
+
+.ar-run-goal-meta span:not(.ar-meta-dot) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ar-run-iterations {
+  display: grid;
+  gap: 4px;
+  color: var(--color-token-text-primary);
+  font-family: var(--message-code-font);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.ar-run-iterations span + span {
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs-plus);
+}
+
+.ar-run-updated {
+  color: var(--color-token-text-primary);
+  font-family: var(--message-code-font);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.ar-run-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.ar-run-delete-button {
+  color: color-mix(in srgb, var(--color-token-error-foreground) 84%, var(--color-token-text-primary));
+}
+
+.ar-run-delete-button:hover {
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
+}
+
 .ar-detail-page {
   width: min(100%, 1040px);
   margin: 0 auto;

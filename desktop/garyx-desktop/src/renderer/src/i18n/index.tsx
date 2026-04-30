@@ -498,6 +498,7 @@ const zhCN: Record<string, string> = {
   'New Agent': '新建 Agent',
   'New File': '新建文件',
   'New Folder': '新建文件夹',
+  'New Run': '新建运行',
   'New Skill': '新建技能',
   'New Tab': '新标签页',
   'New Team': '新建团队',

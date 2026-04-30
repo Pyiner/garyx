@@ -6,8 +6,10 @@ import {
   ChevronRight,
   ExternalLink,
   LoaderCircle,
+  Plus,
   RefreshCw,
   Square,
+  Trash2,
 } from 'lucide-react';
 
 import type {
@@ -43,7 +45,6 @@ import {
   formatRunStateLabel,
   formatTimestamp,
   isTerminalRunState,
-  runPreview,
   scoreColor,
   verdictFeedback,
   verdictScore,
@@ -594,12 +595,13 @@ export function AutoResearchPanel({
   }
 
   return (
-    <div className="agents-hub">
-      <div className="agents-hub-hero">
+    <div className="agents-hub ar-runs-page">
+      <div className="agents-hub-hero ar-runs-hero">
         <span className="ar-page-title">{t('Auto Research')}</span>
         <div className="agents-hub-controls">
           <Button onClick={() => setCreateDialogOpen(true)} size="sm">
-            {t('+ New Run')}
+            <Plus />
+            {t('New Run')}
           </Button>
         </div>
       </div>
@@ -607,61 +609,78 @@ export function AutoResearchPanel({
       {loading && !runs.length ? (
         <div className="agents-hub-empty-state">{t('Loading runs...')}</div>
       ) : runs.length ? (
-        <Table className="agents-hub-table">
-          <TableHeader>
-            <TableRow>
-              <TableHead style={{ width: '40%' }}>{t('Goal')}</TableHead>
-              <TableHead style={{ width: '15%' }}>{t('State')}</TableHead>
-              <TableHead style={{ width: '15%' }}>{t('Iterations')}</TableHead>
-              <TableHead style={{ width: '15%' }}>{t('Updated')}</TableHead>
-              <TableHead className="text-right" style={{ width: '15%' }}>{t('Actions')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {runs.map((run) => (
-              <TableRow className="cursor-pointer" key={run.runId} onClick={() => handleSelectRun(run.runId)}>
-                <TableCell>
-                  <div className="agents-hub-cell-name" style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                    {run.goal}
-                  </div>
-                  <div className="agents-hub-cell-id">{runPreview(run)}</div>
-                </TableCell>
-                <TableCell>
-                  <RunStateBadge active={!isTerminalRunState(run.state) && run.state !== 'queued'} state={run.state} />
-                </TableCell>
-                <TableCell>
-                  {run.iterationsUsed}/{run.maxIterations}
-                </TableCell>
-                <TableCell>
-                  {formatCompactTimestamp(run.updatedAt)}
-                </TableCell>
-                <TableCell className="text-right">
-                  <div className="agents-hub-row-actions">
-                    {!isTerminalRunState(run.state) ? (
-                      <Button
-                        disabled={saving}
-                        onClick={(e) => { e.stopPropagation(); void onStop(run.runId); }}
-                        size="sm"
-                        variant="destructive"
-                      >
-                        {t('Stop')}
-                      </Button>
-                    ) : null}
-                    <Button
-                      className="text-destructive"
-                      disabled={saving}
-                      onClick={(e) => { e.stopPropagation(); void onDelete(run.runId); }}
-                      size="sm"
-                      variant="ghost"
-                    >
-                      {t('Delete')}
-                    </Button>
-                  </div>
-                </TableCell>
+        <Card className="ar-runs-table-card">
+          <Table className="ar-runs-table">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="ar-run-goal-col">{t('Goal')}</TableHead>
+                <TableHead className="ar-run-state-col">{t('State')}</TableHead>
+                <TableHead className="ar-run-iterations-col">{t('Iterations')}</TableHead>
+                <TableHead className="ar-run-updated-col">{t('Updated')}</TableHead>
+                <TableHead className="ar-run-actions-col">{t('Actions')}</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {runs.map((run) => {
+                const runBest = bestCandidate(run.candidates, run.selectedCandidate);
+                const runBestScore = verdictScore(runBest?.verdict);
+                const workspace = shortWorkspace(run.workspaceDir) || t('Workspace not set');
+
+                return (
+                  <TableRow className="ar-run-row" key={run.runId} onClick={() => handleSelectRun(run.runId)}>
+                    <TableCell className="ar-run-goal-cell">
+                      <div className="ar-run-goal-title">{firstNonEmptyLine(run.goal) || run.goal}</div>
+                      <div className="ar-run-goal-meta">
+                        <span>{workspace}</span>
+                        <span className="ar-meta-dot" />
+                        <span>{run.runId}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <RunStateBadge active={!isTerminalRunState(run.state) && run.state !== 'queued'} state={run.state} />
+                    </TableCell>
+                    <TableCell>
+                      <div className="ar-run-iterations">
+                        <span>{run.iterationsUsed}/{run.maxIterations}</span>
+                        {runBestScore != null ? (
+                          <span>{t('best {score}', { score: runBestScore.toFixed(1) })}</span>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell className="ar-run-updated">
+                      {formatCompactTimestamp(run.updatedAt)}
+                    </TableCell>
+                    <TableCell className="ar-run-actions-col">
+                      <div className="ar-run-actions">
+                        {!isTerminalRunState(run.state) ? (
+                          <Button
+                            disabled={saving}
+                            onClick={(e) => { e.stopPropagation(); void onStop(run.runId); }}
+                            size="xs"
+                            variant="outline"
+                          >
+                            <Square />
+                            {t('Stop')}
+                          </Button>
+                        ) : null}
+                        <Button
+                          className="ar-run-delete-button"
+                          disabled={saving}
+                          onClick={(e) => { e.stopPropagation(); void onDelete(run.runId); }}
+                          size="icon-xs"
+                          title={t('Delete')}
+                          variant="ghost"
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </Card>
       ) : (
         <div className="agents-hub-empty-state" style={{ padding: '48px 0' }}>
           {t('No runs yet. Click + New Run to start a bounded research loop.')}
