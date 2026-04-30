@@ -14744,7 +14744,7 @@ button.codex-list-row {
 }
 
 .ar-run-delete-button {
-  color: color-mix(in srgb, var(--color-token-error-foreground) 84%, var(--color-token-text-primary));
+  color: var(--color-token-description-foreground);
 }
 
 .ar-run-delete-button:hover {

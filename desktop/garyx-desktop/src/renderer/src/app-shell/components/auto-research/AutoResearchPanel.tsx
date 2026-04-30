@@ -9,7 +9,7 @@ import {
   Plus,
   RefreshCw,
   Square,
-  Trash2,
+  Trash,
 } from 'lucide-react';
 
 import type {
@@ -677,6 +677,7 @@ export function AutoResearchPanel({
                           </Button>
                         ) : null}
                         <Button
+                          aria-label={t('Delete')}
                           className="ar-run-delete-button"
                           disabled={saving}
                           onClick={(e) => { e.stopPropagation(); void onDelete(run.runId); }}
@@ -684,7 +685,7 @@ export function AutoResearchPanel({
                           title={t('Delete')}
                           variant="ghost"
                         >
-                          <Trash2 />
+                          <Trash />
                         </Button>
                       </div>
                     </TableCell>
