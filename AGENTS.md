@@ -25,7 +25,12 @@ This file is the short repo-level guide for coding agents.
 2. Keep the change scoped to the smallest correct surface.
 3. Prefer existing crate and UI patterns over new abstractions.
 4. Run focused deterministic tests for the touched area.
-5. Update [docs/configuration.md](docs/configuration.md) when user-facing configuration or behavior changes.
+5. When touching the macOS app under `desktop/garyx-desktop`, package and launch
+   the app before handoff so the installed desktop surface is verified, not only
+   the dev build.
+6. Update [docs/configuration.md](docs/configuration.md) when user-facing configuration or behavior changes.
+7. Commit every completed code change before handoff. Stage only the files changed
+   for the current task, and leave unrelated user work untouched.
 
 ## Validation
 
@@ -35,6 +40,13 @@ Useful commands:
 cargo test --workspace --all-targets
 cd desktop/garyx-desktop && npm run build:ui
 cd desktop/garyx-desktop && npm run test:smoke
+```
+
+For macOS app changes, run the packaging flow and launch the installed app:
+
+```bash
+cd desktop/garyx-desktop && npm run dist:dir
+open -a Garyx
 ```
 
 For narrower Rust checks, run the package-level target that matches the edit,
