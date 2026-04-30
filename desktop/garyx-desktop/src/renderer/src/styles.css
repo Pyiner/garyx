@@ -13299,6 +13299,31 @@ button.codex-list-row {
   flex-wrap: wrap;
 }
 
+.skills-icon-button {
+  color: var(--color-token-description-foreground);
+}
+
+.skills-icon-button svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.75;
+}
+
+.skills-icon-button:hover {
+  background: color-mix(in srgb, var(--color-token-text-primary) 7%, transparent);
+  color: var(--color-token-text-primary);
+}
+
+.skills-icon-button-danger:hover {
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
+}
+
+.skills-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .skills-empty-simple {
   gap: 12px;
   justify-items: start;
