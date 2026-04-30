@@ -6983,6 +6983,119 @@ button.team-agent-speaker:focus-visible {
   border-radius: 9999px;
 }
 
+.composer-plus-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 9999px;
+  background: color-mix(
+    in oklab,
+    var(--color-token-foreground) 5%,
+    transparent
+  );
+  color: rgba(13, 13, 13, 0.58);
+  box-shadow: none;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.composer-plus-trigger:hover,
+.composer-plus-trigger[data-state="open"] {
+  background: color-mix(
+    in oklab,
+    var(--color-token-foreground) 8%,
+    transparent
+  );
+  color: rgba(13, 13, 13, 0.82);
+}
+
+.composer-plus-trigger:active {
+  transform: translateY(1px);
+}
+
+.composer-plus-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.composer-plus-menu {
+  min-width: 226px;
+  max-width: min(300px, calc(100vw - 32px));
+}
+
+.composer-menu-item,
+.composer-menu-subtrigger,
+.composer-bot-menu-item {
+  min-height: 34px;
+  color: var(--color-token-text-primary);
+}
+
+.composer-menu-subtrigger {
+  min-width: 210px;
+}
+
+.composer-menu-subtrigger > svg:last-child {
+  margin-left: 4px;
+}
+
+.composer-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-menu-current {
+  max-width: 92px;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-sm);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-bot-submenu {
+  min-width: 220px;
+  max-width: min(300px, calc(100vw - 32px));
+}
+
+.composer-bot-menu-item.active {
+  background: color-mix(
+    in oklab,
+    var(--color-token-foreground) 5%,
+    transparent
+  );
+}
+
+.composer-bot-menu-item.muted {
+  color: var(--color-token-description-foreground);
+}
+
+.composer-menu-bot-logo,
+.composer-bot-menu-item > .icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.composer-menu-check {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  color: var(--color-token-text-primary);
+}
+
 .composer-actions {
   display: flex;
   align-items: center;
@@ -7115,6 +7228,8 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  margin-left: auto;
   flex-shrink: 0;
 }
 
@@ -12785,6 +12900,11 @@ button.codex-list-row {
     flex-direction: column;
   }
 
+  .composer .composer-actions {
+    align-items: center;
+    flex-direction: row;
+  }
+
   .conversation-heading-row {
     align-items: flex-start;
     flex-direction: column;
@@ -12808,6 +12928,15 @@ button.codex-list-row {
   .composer-buttons {
     margin-left: 0;
     justify-content: flex-end;
+  }
+
+  .composer .composer-buttons {
+    margin-left: auto;
+    min-width: 0;
+  }
+
+  .composer-provider-label {
+    max-width: 118px;
   }
 
   .composer-command-item,

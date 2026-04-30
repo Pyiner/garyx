@@ -16,6 +16,7 @@ import {
   IconArrowsMinimize,
   IconBolt,
   IconBrain,
+  IconCheck,
   IconCode,
   IconCloud,
   IconCommand,
@@ -26,6 +27,8 @@ import {
   IconMessageCircle,
   IconPaperclip,
   IconPlayerStopFilled,
+  IconPlugConnected,
+  IconPlus,
   IconServer,
   IconSettings,
   IconTerminal2,
@@ -35,6 +38,7 @@ import {
 } from '@tabler/icons-react';
 
 import type {
+  DesktopBotConsoleSummary,
   DesktopApiProviderType,
   MessageFileAttachment,
   MessageImageAttachment,
@@ -58,6 +62,8 @@ import {
 
 export type { ComposerAgentOption };
 
+import { ChannelLogo } from './channel-logo';
+import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { buildMessageImageDataUrl } from './message-rich-content';
 import { useI18n, type Translate } from './i18n';
 
@@ -72,6 +78,10 @@ type ComposerFormProps = {
   composerPlaceholder: string;
   composerProviderType: DesktopApiProviderType;
   composerTextareaRef: RefObject<HTMLTextAreaElement | null>;
+  activeThreadBot?: DesktopBotConsoleSummary | null;
+  activeThreadBotId?: string | null;
+  botBindingDisabled?: boolean;
+  botGroups?: DesktopBotConsoleSummary[];
   /** Display name of the selected agent, shown in the provider pill. */
   agentLabel?: string | null;
   /** When provided, the provider pill becomes a dropdown to change the agent. */
@@ -88,6 +98,7 @@ type ComposerFormProps = {
   onInterrupt: () => void;
   onRemoveComposerFile: (fileId: string) => void;
   onRemoveComposerImage: (imageId: string) => void;
+  onSelectBotBinding?: (botId: string | null) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   slashPanelContainerRef: RefObject<HTMLDivElement | null>;
   slashCommands: SlashCommand[];
@@ -278,6 +289,7 @@ function renderComposerProviderControl({
         <DropdownMenuTrigger
           aria-label={t("Change agent for this thread")}
           className="composer-provider-trigger"
+          type="button"
         >
           {providerIcon}
           <span className="composer-provider-label">{providerLabel}</span>
@@ -346,6 +358,94 @@ function renderComposerProviderControl({
   );
 }
 
+function renderComposerBotBindingSubmenu({
+  activeThreadBot,
+  activeThreadBotId,
+  botBindingDisabled,
+  botGroups,
+  iconDataUrlByChannel,
+  onSelectBotBinding,
+  t,
+}: {
+  activeThreadBot?: DesktopBotConsoleSummary | null;
+  activeThreadBotId?: string | null;
+  botBindingDisabled?: boolean;
+  botGroups?: DesktopBotConsoleSummary[];
+  iconDataUrlByChannel: Map<string, string | null>;
+  onSelectBotBinding?: (botId: string | null) => void;
+  t: Translate;
+}) {
+  if (!onSelectBotBinding) {
+    return null;
+  }
+
+  const groups = botGroups ?? [];
+  const selectedBot = activeThreadBotId
+    ? groups.find((group) => group.id === activeThreadBotId) || activeThreadBot
+    : null;
+  const visibleGroups =
+    selectedBot && !groups.some((group) => group.id === selectedBot.id)
+      ? [selectedBot, ...groups]
+      : groups;
+  const currentLabel = selectedBot?.title || t('No bot');
+
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger
+        className="composer-menu-subtrigger"
+        disabled={botBindingDisabled}
+      >
+        <IconPlugConnected aria-hidden size={15} stroke={1.7} />
+        <span className="composer-menu-label">{t('Bind bot')}</span>
+        <span className="composer-menu-current">{currentLabel}</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="composer-bot-submenu" sideOffset={8}>
+        <DropdownMenuItem
+          className={`composer-bot-menu-item ${!activeThreadBotId ? 'active' : ''}`}
+          onSelect={() => {
+            onSelectBotBinding(null);
+          }}
+        >
+          <IconPlugConnected aria-hidden size={16} stroke={1.7} />
+          <span className="composer-menu-label">{t('No bot')}</span>
+          {!activeThreadBotId ? (
+            <IconCheck aria-hidden className="composer-menu-check" size={14} stroke={2} />
+          ) : null}
+        </DropdownMenuItem>
+        {visibleGroups.length ? (
+          visibleGroups.map((group) => {
+            const isActive = group.id === activeThreadBotId;
+            return (
+              <DropdownMenuItem
+                className={`composer-bot-menu-item ${isActive ? 'active' : ''}`}
+                key={group.id}
+                onSelect={() => {
+                  onSelectBotBinding(group.id);
+                }}
+              >
+                <ChannelLogo
+                  channel={group.channel}
+                  className="channel-logo composer-menu-bot-logo"
+                  iconDataUrl={iconDataUrlByChannel.get(group.channel.toLowerCase()) || null}
+                  fallbackLabel={group.title}
+                />
+                <span className="composer-menu-label">{group.title}</span>
+                {isActive ? (
+                  <IconCheck aria-hidden className="composer-menu-check" size={14} stroke={2} />
+                ) : null}
+              </DropdownMenuItem>
+            );
+          })
+        ) : (
+          <DropdownMenuItem className="composer-bot-menu-item muted" disabled>
+            {t('No bots configured')}
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
+}
+
 export function ComposerForm({
   activeQueueLength,
   composer,
@@ -357,6 +457,10 @@ export function ComposerForm({
   composerPlaceholder,
   composerProviderType,
   composerTextareaRef,
+  activeThreadBot,
+  activeThreadBotId,
+  botBindingDisabled = false,
+  botGroups,
   agentLabel,
   agentOptions,
   selectedAgentId,
@@ -371,6 +475,7 @@ export function ComposerForm({
   onInterrupt,
   onRemoveComposerFile,
   onRemoveComposerImage,
+  onSelectBotBinding,
   onSubmit,
   slashPanelContainerRef,
   slashCommands,
@@ -378,6 +483,13 @@ export function ComposerForm({
   slashCommandsLoading,
 }: ComposerFormProps) {
   const { t } = useI18n();
+  const { entries: pluginCatalog } = useChannelPluginCatalog();
+  const iconDataUrlByChannel = new Map(
+    (pluginCatalog || []).map((entry) => [
+      entry.id.toLowerCase(),
+      entry.icon_data_url || null,
+    ]),
+  );
   const [composerCursor, setComposerCursor] = useState(composer.length);
   const [highlightedSlashCommandIndex, setHighlightedSlashCommandIndex] = useState(0);
   const [dismissedSlashQuery, setDismissedSlashQuery] = useState<string | null>(null);
@@ -701,27 +813,52 @@ export function ComposerForm({
         placeholder={composerPlaceholder}
       />
       <div className="composer-actions composer-footer">
-        {renderComposerProviderControl({
-          composerProviderType,
-          agentLabel,
-          agentOptions,
-          selectedAgentId,
-          onSelectAgent,
-          t,
-        })}
-        <div className="composer-buttons">
-          <button
-            aria-label={t("Attach files")}
-            className="ghost-button composer-attach-button"
-            disabled={composerLocked}
-            onClick={() => {
-              composerAttachmentInputRef.current?.click();
-            }}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={t('Composer actions')}
+            className="ghost-button composer-plus-trigger"
+            disabled={composerLocked && botBindingDisabled}
             type="button"
           >
-            <IconPaperclip aria-hidden size={14} stroke={1.8} />
-            <span className="sr-only">{t("Attach files")}</span>
-          </button>
+            <IconPlus aria-hidden size={18} stroke={1.8} />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            align="start"
+            className="composer-plus-menu"
+            side="top"
+            sideOffset={8}
+          >
+            <DropdownMenuItem
+              className="composer-menu-item"
+              disabled={composerLocked}
+              onSelect={() => {
+                composerAttachmentInputRef.current?.click();
+              }}
+            >
+              <IconPaperclip aria-hidden size={16} stroke={1.75} />
+              <span className="composer-menu-label">{t('Attach files')}</span>
+            </DropdownMenuItem>
+            {onSelectBotBinding ? <DropdownMenuSeparator /> : null}
+            {renderComposerBotBindingSubmenu({
+              activeThreadBot,
+              activeThreadBotId,
+              botBindingDisabled,
+              botGroups,
+              iconDataUrlByChannel,
+              onSelectBotBinding,
+              t,
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <div className="composer-buttons">
+          {renderComposerProviderControl({
+            composerProviderType,
+            agentLabel,
+            agentOptions,
+            selectedAgentId,
+            onSelectAgent,
+            t,
+          })}
           {isActiveSendingThread ? (
             <button
               aria-label={t("Interrupt")}

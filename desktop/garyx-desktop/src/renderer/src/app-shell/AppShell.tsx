@@ -6100,13 +6100,8 @@ export function AppShell() {
           ) : (
             <header className="conversation-header">
               <ConversationHeaderTitle
-                activeThread={activeThread ? { id: activeThread.id } : null}
-                activeThreadBot={activeThreadBot}
-                activeThreadBotId={activeThreadBotId}
                 activeThreadTitle={activeThread?.title || null}
                 activeWorkspaceName={activeWorkspace?.name || null}
-                bindingMutation={bindingMutation}
-                botGroups={botGroups}
                 canEditThreadTitle={canEditThreadTitle}
                 contextText={conversationContextText}
                 editingThreadTitle={editingThreadTitle}
@@ -6118,11 +6113,7 @@ export function AppShell() {
                 onSaveTitle={() => {
                   void handleSaveTitle({ closeEditor: true });
                 }}
-                onSetBotBinding={(botId) => {
-                  void handleSetBotBinding(botId);
-                }}
                 onTitleDraftChange={setTitleDraft}
-                setPendingBotId={setPendingBotId}
                 titleDraft={titleDraft}
                 titleInputRef={threadTitleInputRef}
               />
@@ -6352,6 +6343,10 @@ export function AppShell() {
                 composerLocked={composerLocked}
                 composerPlaceholder={composerPlaceholder}
                 composerProviderType={composerProviderType}
+                activeThreadBot={activeThreadBot}
+                activeThreadBotId={activeThreadBotId}
+                botBindingDisabled={bindingMutation === "bot-binding"}
+                botGroups={botGroups}
                 slashCommands={commands}
                 slashCommandsLoaded={commandsLoaded}
                 slashCommandsLoading={commandsLoading}
@@ -6422,6 +6417,13 @@ export function AppShell() {
                   setPendingAgentId(agentId);
                 }}
                 onResumeProviderSession={handleResumeProviderSession}
+                onSelectBotBinding={(botId) => {
+                  if (selectedThreadId) {
+                    void handleSetBotBinding(botId);
+                  } else {
+                    setPendingBotId(botId);
+                  }
+                }}
                 onSelectThreadLogsTab={setThreadLogsActiveTab}
                 onOpenThreadById={(threadId) => {
                   void openExistingThread(threadId);

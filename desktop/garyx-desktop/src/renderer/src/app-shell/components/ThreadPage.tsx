@@ -8,6 +8,7 @@ import {
 
 import type {
   DesktopApiProviderType,
+  DesktopBotConsoleSummary,
   MessageFileAttachment,
   MessageImageAttachment,
   DesktopThreadSummary,
@@ -212,6 +213,10 @@ type ThreadPageProps = {
   composerLocked: boolean;
   composerPlaceholder: string;
   composerProviderType: DesktopApiProviderType;
+  activeThreadBot: DesktopBotConsoleSummary | null;
+  activeThreadBotId: string | null;
+  botBindingDisabled: boolean;
+  botGroups: DesktopBotConsoleSummary[];
   slashCommands: SlashCommand[];
   slashCommandsLoaded: boolean;
   slashCommandsLoading: boolean;
@@ -273,6 +278,7 @@ type ThreadPageProps = {
   onSelectNewThreadAgent: (agentId: string) => void;
   onResumeProviderSession: (sessionId: string) => Promise<void>;
   onSelectThreadLogsTab: (tab: ThreadLogTab) => void;
+  onSelectBotBinding: (botId: string | null) => void;
   onSelectWorkspace: (workspaceId: string) => void;
   onSetDraggedQueueIntentId: (intentId: string | null) => void;
   onThreadLogsContentScroll: () => void;
@@ -309,6 +315,10 @@ export function ThreadPage({
   composerLocked,
   composerPlaceholder,
   composerProviderType,
+  activeThreadBot,
+  activeThreadBotId,
+  botBindingDisabled,
+  botGroups,
   slashCommands,
   slashCommandsLoaded,
   slashCommandsLoading,
@@ -342,6 +352,7 @@ export function ThreadPage({
   onReorderQueuedIntent,
   onSelectNewThreadAgent,
   onResumeProviderSession,
+  onSelectBotBinding,
   onSelectThreadLogsTab,
   onSelectWorkspace,
   onSetDraggedQueueIntentId,
@@ -675,6 +686,10 @@ export function ThreadPage({
               composerPlaceholder={composerPlaceholder}
               composerProviderType={composerProviderType}
               composerTextareaRef={composerTextareaRef}
+              activeThreadBot={activeThreadBot}
+              activeThreadBotId={activeThreadBotId}
+              botBindingDisabled={botBindingDisabled}
+              botGroups={botGroups}
               agentLabel={agentLabel}
               agentOptions={
                 !selectedThreadId ? composerAgentOptions : undefined
@@ -708,6 +723,7 @@ export function ThreadPage({
               onInterrupt={onComposerInterrupt}
               onRemoveComposerFile={onRemoveComposerFile}
               onRemoveComposerImage={onRemoveComposerImage}
+              onSelectBotBinding={onSelectBotBinding}
               onSubmit={(event) => {
                 event.preventDefault();
                 if (

@@ -38,6 +38,7 @@ const zhCN: Record<string, string> = {
   'Close': '关闭',
   'Close Logs': '关闭日志',
   'Collapse threads': '收起线程',
+  'Composer actions': '输入框操作',
   'Confirm': '确认',
   'Confirm delete {name}': '确认删除 {name}',
   'Confirm removal of {name}': '确认移除 {name}',
