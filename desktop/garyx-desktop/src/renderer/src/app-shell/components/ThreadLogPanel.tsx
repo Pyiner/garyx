@@ -66,7 +66,7 @@ export function ThreadLogPanel({
           variant="outline"
         >
           <ToggleGroupItem value="client">{t('Client Logs')}</ToggleGroupItem>
-          <ToggleGroupItem value="mobile">{t('Mobile Logs')}</ToggleGroupItem>
+          <ToggleGroupItem value="mobile">{t('Gateway Logs')}</ToggleGroupItem>
         </ToggleGroup>
         <div className="thread-log-panel-actions">
           {activeThreadLogsHasUnread ? (
