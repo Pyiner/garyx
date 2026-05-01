@@ -779,19 +779,19 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
           }
         }}
       >
-        <DialogContent className="sm:max-w-[720px]">
-          <DialogHeader>
-            <DialogDescription className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+        <DialogContent className="agents-hub-agent-dialog">
+          <DialogHeader className="agents-hub-dialog-header">
+            <DialogDescription className="agents-hub-dialog-kicker">
               {t('Agent')}
             </DialogDescription>
-            <DialogTitle>
+            <DialogTitle className="agents-hub-dialog-title">
               {agentDialogMode === 'create'
                 ? t('Create agent')
                 : agentDialogMode === 'edit'
                   ? t('Edit agent')
                   : selectedAgent?.displayName || t('Agent')}
             </DialogTitle>
-            <DialogDescription>
+            <DialogDescription className="agents-hub-dialog-description">
               {agentDialogMode === 'create'
                 ? t('Create a reusable agent identity with its own provider and system prompt.')
                 : t('Inspect or adjust how this agent shows up in the desktop app.')}
@@ -866,7 +866,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
               <div className="codex-form-field">
                 <Label className="codex-form-label" htmlFor="agent-dialog-prompt">{t('System Prompt')}</Label>
                 <Textarea
-                  className="min-h-[260px]"
+                  className="agents-hub-system-prompt"
                   id="agent-dialog-prompt"
                   onChange={(event) => {
                     setAgentDraft((current) => ({ ...current, systemPrompt: event.target.value }));
