@@ -2062,6 +2062,13 @@ code {
 
 .conversation-bot-binding-logo {
   flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 50%;
+}
+
+.conversation-bot-binding-logo .channel-logo-svg,
+.conversation-bot-binding-logo .channel-logo-fallback {
+  border-radius: 50%;
 }
 
 .conversation-bot-binding-name {
