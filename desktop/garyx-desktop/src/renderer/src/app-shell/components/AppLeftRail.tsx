@@ -61,7 +61,6 @@ type AppLeftRailProps = {
   onCancelRenameWorkspace: () => void;
   onCreateThreadForWorkspace: (workspacePath: string) => void;
   onDeleteThread: (threadId: string) => void;
-  onOpenFolder: () => void;
   onOpenThread: (threadId: string) => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
   onSelectWorkspace: (workspacePath: string, preferredThreadId?: string | null) => void;
@@ -112,7 +111,6 @@ export function AppLeftRail({
   onCancelRenameWorkspace,
   onCreateThreadForWorkspace,
   onDeleteThread,
-  onOpenFolder,
   onOpenThread,
   onRequestRemoveWorkspace,
   onSelectWorkspace,
@@ -250,7 +248,6 @@ export function AppLeftRail({
             onCancelRenameWorkspace={onCancelRenameWorkspace}
             onCreateThreadForWorkspace={onCreateThreadForWorkspace}
             onDeleteThread={onDeleteThread}
-            onOpenFolder={onOpenFolder}
             onOpenThread={onOpenThread}
             onRequestRemoveWorkspace={onRequestRemoveWorkspace}
             onSelectWorkspace={onSelectWorkspace}

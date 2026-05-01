@@ -6177,9 +6177,6 @@ export function AppShell() {
         onAddBot={() => {
           void openAddBotDialog();
         }}
-        onOpenFolder={() => {
-          void handleAddWorkspace();
-        }}
         onOpenSettings={() => {
           openSettingsView();
         }}

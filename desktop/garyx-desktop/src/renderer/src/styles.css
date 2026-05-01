@@ -851,6 +851,10 @@ code {
   min-height: 0;
 }
 
+.workspace-thread-block {
+  gap: 2px;
+}
+
 .sidebar-bot-block {
   flex: 0 0 auto;
 }
@@ -859,7 +863,7 @@ code {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 14px;
+  gap: 6px;
   min-height: 0;
   overflow: auto;
   padding: 0;
@@ -1431,6 +1435,10 @@ code {
 
 .sidebar-section-header {
   padding: 0 4px 4px var(--padding-row-x);
+}
+
+.workspace-thread-block .sidebar-section-header {
+  padding-bottom: 2px;
 }
 
 .sidebar-section-copy {

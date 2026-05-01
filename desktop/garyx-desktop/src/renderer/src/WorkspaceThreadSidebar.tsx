@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 
 import { NewTabIcon } from './app-shell/icons';
 
-import { ChevronDownIcon, DeleteIcon, FolderIcon, FolderOpenIcon, MoreDotsIcon, NewFolderIcon, RenameIcon } from './app-shell/icons';
+import { ChevronDownIcon, DeleteIcon, FolderIcon, FolderOpenIcon, MoreDotsIcon, RenameIcon } from './app-shell/icons';
 
 import type { DesktopState, DesktopWorkspace } from '@shared/contracts';
 
@@ -29,7 +29,6 @@ type WorkspaceThreadSidebarProps = {
   setContentView: (view: 'thread') => void;
   isThreadRuntimeBusy: (threadId: string) => boolean;
   formatThreadTimestamp: (value?: string | null) => string;
-  onOpenFolder: () => void;
   onOpenThread: (threadId: string) => void;
   onSelectWorkspace: (workspacePath: string, preferredThreadId: string | null) => void;
   onCreateThreadForWorkspace: (workspacePath: string) => void;
@@ -54,7 +53,6 @@ export function WorkspaceThreadSidebar({
   setContentView,
   isThreadRuntimeBusy,
   formatThreadTimestamp,
-  onOpenFolder,
   onOpenThread,
   onSelectWorkspace,
   onCreateThreadForWorkspace,
@@ -187,7 +185,7 @@ export function WorkspaceThreadSidebar({
   );
 
   return (
-    <div className="sidebar-thread-block">
+    <div className="sidebar-thread-block workspace-thread-block">
       <div className="panel-header sidebar-section-header sidebar-section-header-interactive">
         <button
           aria-expanded={!sectionCollapsed}
@@ -201,16 +199,6 @@ export function WorkspaceThreadSidebar({
             size={16}
             className={`icon sidebar-section-chevron ${sectionCollapsed ? 'collapsed' : ''}`}
           />
-        </button>
-        <button
-          aria-label={workspaceMutation === 'add' ? t('Opening folder') : t('Choose folder')}
-          className="sidebar-section-action"
-          disabled={workspaceMutation === 'add'}
-          onClick={onOpenFolder}
-          title={workspaceMutation === 'add' ? t('Opening folder…') : t('Choose folder')}
-          type="button"
-        >
-          <NewFolderIcon />
         </button>
       </div>
 
