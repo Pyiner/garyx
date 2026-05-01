@@ -1305,6 +1305,7 @@ mod e2e_tests {
     struct TelegramRequestCapture {
         send_messages: Arc<StdMutex<Vec<Value>>>,
         edit_messages: Arc<StdMutex<Vec<Value>>>,
+        delete_messages: Arc<StdMutex<Vec<Value>>>,
         chat_actions: Arc<StdMutex<Vec<Value>>>,
     }
 
@@ -1319,6 +1320,11 @@ mod e2e_tests {
             self.edit_messages.lock().unwrap().push(body);
         }
 
+        fn push_delete(&self, req: &Request) {
+            let body = serde_json::from_slice(&req.body).expect("valid deleteMessage body");
+            self.delete_messages.lock().unwrap().push(body);
+        }
+
         fn push_action(&self, req: &Request) {
             let body = serde_json::from_slice(&req.body).expect("valid sendChatAction body");
             self.chat_actions.lock().unwrap().push(body);
@@ -1330,6 +1336,10 @@ mod e2e_tests {
 
         fn edit_bodies(&self) -> Vec<Value> {
             self.edit_messages.lock().unwrap().clone()
+        }
+
+        fn delete_bodies(&self) -> Vec<Value> {
+            self.delete_messages.lock().unwrap().clone()
         }
     }
 
@@ -1503,6 +1513,19 @@ mod e2e_tests {
             .mount(&server)
             .await;
 
+        Mock::given(method("POST"))
+            .and(path_regex(&format!(r"{api_prefix}/bot.+/deleteMessage")))
+            .respond_with({
+                let capture = capture.clone();
+                move |req: &Request| {
+                    capture.push_delete(req);
+                    ResponseTemplate::new(200)
+                        .set_body_json(serde_json::json!({"ok": true, "result": true}))
+                }
+            })
+            .mount(&server)
+            .await;
+
         (server, capture)
     }
 
@@ -1647,7 +1670,7 @@ mod e2e_tests {
                 ),
             });
             on_chunk(StreamEvent::Delta {
-                text: "next".to_owned(),
+                text: "\nnext".to_owned(),
             });
             on_chunk(StreamEvent::Done);
             Ok(ProviderRunResult {
@@ -1661,6 +1684,85 @@ mod e2e_tests {
                 error: None,
                 input_tokens: 10,
                 output_tokens: 5,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
+    struct StreamingToolOnlyProvider {
+        call_count: AtomicUsize,
+    }
+
+    impl StreamingToolOnlyProvider {
+        fn new() -> Self {
+            Self {
+                call_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentLoopProvider for StreamingToolOnlyProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::ClaudeCode
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Read"}),
+                    Some("tool-read-1".to_owned()),
+                    Some("Read".to_owned()),
+                ),
+            });
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Read"}),
+                    Some("tool-read-2".to_owned()),
+                    Some("Read".to_owned()),
+                ),
+            });
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Bash"}),
+                    Some("tool-bash".to_owned()),
+                    Some("Bash".to_owned()),
+                ),
+            });
+            on_chunk(StreamEvent::Done);
+            Ok(ProviderRunResult {
+                run_id: "stream-tools-only".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: String::new(),
+                session_messages: vec![],
+                sdk_session_id: None,
+                actual_model: None,
+                success: true,
+                error: None,
+                input_tokens: 10,
+                output_tokens: 0,
                 cost: 0.0,
                 duration_ms: 1,
             })
@@ -2315,7 +2417,7 @@ mod e2e_tests {
 
         wait_for_counter_at_least(&provider.call_count, 1).await;
 
-        let _placeholder =
+        let first_placeholder =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
                 body["text"]
                     .as_str()
@@ -2323,32 +2425,28 @@ mod e2e_tests {
                     .contains("🔧 Bash")
             })
             .await;
+        assert_eq!(first_placeholder["text"], "🔧 Bash");
 
-        let first_text =
+        let combined_placeholder =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body["text"].as_str().unwrap_or_default() == "done"
+                body["text"].as_str().unwrap_or_default() == "🔧 Bash\n🔧 Read"
             })
             .await;
-        assert!(
-            first_text["text"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("done")
-        );
+        assert_eq!(combined_placeholder["text"], "🔧 Bash\n🔧 Read");
 
         let second_placeholder =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body["text"].as_str().unwrap_or_default() == "🔧 Write"
+                body["text"].as_str().unwrap_or_default() == "done\n\n🔧 Write"
             })
             .await;
-        assert_eq!(second_placeholder["text"], "🔧 Write");
+        assert_eq!(second_placeholder["text"], "done\n\n🔧 Write");
 
         let final_body =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body["text"].as_str().unwrap_or_default() == "next"
+                body["text"].as_str().unwrap_or_default() == "done\nnext"
             })
             .await;
-        assert_eq!(final_body["text"], "next");
+        assert_eq!(final_body["text"], "done\nnext");
 
         let all_texts = capture
             .send_bodies()
@@ -2357,17 +2455,89 @@ mod e2e_tests {
             .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
             .collect::<Vec<_>>();
         assert!(
-            all_texts.iter().any(|text| text.contains("🔧 Read")),
-            "second tool placeholder should be rendered before text replaces it: {all_texts:?}"
+            all_texts.iter().any(|text| text == "🔧 Bash\n🔧 Read"),
+            "all pre-text tool placeholders should be rendered together: {all_texts:?}"
         );
         assert!(
-            all_texts.iter().any(|text| text == "done"),
-            "tool placeholder should be overwritten by first text: {all_texts:?}"
+            all_texts.iter().any(|text| {
+                text.contains("done") && !text.contains("🔧 Bash") && !text.contains("🔧 Read")
+            }),
+            "pre-text tool placeholders should be overwritten by first text: {all_texts:?}"
         );
         assert!(
-            all_texts.iter().any(|text| text == "next"),
-            "second tool placeholder should be overwritten by later text: {all_texts:?}"
+            all_texts.iter().any(|text| text == "done\n\n🔧 Write"),
+            "post-text tool placeholder should be appended to the existing Telegram message: {all_texts:?}"
         );
+        assert!(
+            all_texts.iter().any(|text| text == "done\nnext"),
+            "post-text tool placeholder should be overwritten by later text in the same message: {all_texts:?}"
+        );
+
+        let send_bodies = wait_for_json_capture_quiet_window(
+            &capture.send_messages,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+        )
+        .await;
+        let relevant_sends = send_bodies
+            .iter()
+            .filter(|body| {
+                body["text"].as_str().is_some_and(|text| {
+                    text.contains("🔧") || text.contains("done") || text.contains("next")
+                })
+            })
+            .count();
+        assert_eq!(
+            relevant_sends, 1,
+            "tool and text phases in one assistant response should reuse one Telegram message"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_e2e_streaming_tool_only_placeholders_show_all_then_delete_on_done() {
+        let (server, capture) = setup_tg_capture_mock(false).await;
+        let api_base = unique_api_base(&server);
+        let provider = Arc::new(StreamingToolOnlyProvider::new());
+        let bridge = make_bridge_with(provider.clone()).await;
+        let router = make_router();
+        let http = reqwest::Client::new();
+
+        let account = default_account();
+        let update = TgUpdateBuilder::dm(42, "only tools").build();
+
+        dispatch_update(
+            &http,
+            "bot1",
+            "fake-token",
+            "garyx",
+            999,
+            &account,
+            &update,
+            &router,
+            &bridge,
+            &api_base,
+        )
+        .await;
+
+        wait_for_counter_at_least(&provider.call_count, 1).await;
+
+        let all_tools =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body["text"].as_str().unwrap_or_default() == "🔧 Read\n🔧 Read\n🔧 Bash"
+            })
+            .await;
+        assert_eq!(all_tools["text"], "🔧 Read\n🔧 Read\n🔧 Bash");
+
+        wait_for_json_capture_len(
+            &capture.delete_messages,
+            1,
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        let deletes = capture.delete_bodies();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0]["message_id"], 1000);
     }
 
     #[tokio::test]

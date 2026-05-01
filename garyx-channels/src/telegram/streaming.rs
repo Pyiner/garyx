@@ -9,7 +9,7 @@ use garyx_models::config::ReplyToMode;
 use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
 use garyx_router::MessageRouter;
 
-use super::api::{TelegramSendTarget, edit_message_text, send_message_chunks};
+use super::api::{TelegramSendTarget, delete_message, edit_message_text, send_message_chunks};
 use super::text::split_message;
 use super::{MAX_MESSAGE_LENGTH, resolve_reply_to, send_response};
 
@@ -87,12 +87,33 @@ fn render_tool_placeholder(names: &[String]) -> String {
         .join("\n")
 }
 
+fn render_stream_display_text(state: &StreamState) -> String {
+    if !state.tool_placeholder_active {
+        return state.accumulated_text.clone();
+    }
+
+    let placeholder = render_tool_placeholder(&state.pending_tool_names);
+    if placeholder.trim().is_empty() {
+        return state.accumulated_text.clone();
+    }
+    if state.accumulated_text.trim().is_empty() {
+        return placeholder;
+    }
+    if state.accumulated_text.ends_with("\n\n") {
+        format!("{}{}", state.accumulated_text, placeholder)
+    } else if state.accumulated_text.ends_with('\n') {
+        format!("{}\n{}", state.accumulated_text, placeholder)
+    } else {
+        format!("{}\n\n{}", state.accumulated_text, placeholder)
+    }
+}
+
 impl StreamingCallbackShared {
     async fn flush_pending_stream_text(&self, thread_id: &str) {
         let mut state = self.state.lock().await;
         state.flush_scheduled = false;
 
-        if state.finalized {
+        if state.finalized || state.tool_placeholder_active {
             return;
         }
 
@@ -260,16 +281,32 @@ impl StreamingCallbackShared {
         state: &mut StreamState,
         message: ProviderMessage,
     ) {
-        if !state.tool_placeholder_active && !state.accumulated_text.trim().is_empty() {
-            self.process_boundary(thread_id, state).await;
+        if !state.accumulated_text.trim().is_empty() {
+            let accumulated_text = state.accumulated_text.clone();
+            if self
+                .roll_stream_segment_if_needed(thread_id, state, &accumulated_text)
+                .await
+            {
+                state.tool_placeholder_active = false;
+                state.pending_tool_names.clear();
+            }
         }
 
         let name = telegram_tool_display_name(&message);
-        if state.pending_tool_names.last() != Some(&name) {
-            state.pending_tool_names.push(name);
-        }
-        let display_text = render_tool_placeholder(&state.pending_tool_names);
+        state.pending_tool_names.push(name);
+        state.tool_placeholder_active = true;
+        let display_text = render_stream_display_text(state);
         if display_text.trim().is_empty() {
+            return;
+        }
+        if display_text.len() > MAX_MESSAGE_LENGTH {
+            warn!(
+                account_id = %self.cfg.account_id,
+                display_len = display_text.len(),
+                "Telegram tool placeholder skipped because it would exceed message length"
+            );
+            state.tool_placeholder_active = false;
+            state.pending_tool_names.clear();
             return;
         }
 
@@ -290,7 +327,6 @@ impl StreamingCallbackShared {
                     state.last_edit_time = Instant::now();
                     state.flush_scheduled = false;
                     state.finalized = false;
-                    state.tool_placeholder_active = true;
                     return;
                 }
                 Err(error) => {
@@ -324,7 +360,6 @@ impl StreamingCallbackShared {
                     state.last_edit_time = Instant::now();
                     state.flush_scheduled = false;
                     state.finalized = false;
-                    state.tool_placeholder_active = true;
                 }
             }
             Err(error) => {
@@ -333,6 +368,76 @@ impl StreamingCallbackShared {
                     chat_id = self.cfg.chat_id,
                     error = %error,
                     "failed to send Telegram tool placeholder"
+                );
+            }
+        }
+    }
+
+    async fn clear_tool_placeholder(&self, state: &mut StreamState) {
+        if !state.tool_placeholder_active {
+            return;
+        }
+
+        state.tool_placeholder_active = false;
+        state.pending_tool_names.clear();
+        state.flush_scheduled = false;
+
+        let display_text = state.accumulated_text.clone();
+        let Some(msg_id) = state.message_id else {
+            state.last_rendered_text.clear();
+            return;
+        };
+
+        if display_text.trim().is_empty() {
+            match delete_message(
+                &self.cfg.http,
+                &self.cfg.token,
+                self.cfg.chat_id,
+                msg_id,
+                &self.cfg.api_base,
+            )
+            .await
+            {
+                Ok(()) => {
+                    state.message_id = None;
+                    state.last_rendered_text.clear();
+                    state.last_edit_time = Instant::now();
+                }
+                Err(error) => {
+                    warn!(
+                        account_id = %self.cfg.account_id,
+                        error = %error,
+                        "failed to delete Telegram tool placeholder"
+                    );
+                }
+            }
+            return;
+        }
+
+        if display_text.trim() == state.last_rendered_text.trim() {
+            return;
+        }
+
+        match edit_message_text(
+            &self.cfg.http,
+            &self.cfg.token,
+            self.cfg.chat_id,
+            msg_id,
+            &display_text,
+            None,
+            &self.cfg.api_base,
+        )
+        .await
+        {
+            Ok(()) => {
+                state.last_rendered_text = display_text;
+                state.last_edit_time = Instant::now();
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %self.cfg.account_id,
+                    error = %error,
+                    "failed to clear Telegram tool placeholder"
                 );
             }
         }
@@ -469,9 +574,8 @@ impl StreamingCallbackShared {
                     return;
                 }
                 if state.tool_placeholder_active {
-                    state.accumulated_text.clear();
-                    state.pending_tool_names.clear();
                     state.tool_placeholder_active = false;
+                    state.pending_tool_names.clear();
                 }
                 state.accumulated_text =
                     crate::streaming_core::merge_stream_text(&state.accumulated_text, &text);
@@ -489,6 +593,7 @@ impl StreamingCallbackShared {
         };
 
         if is_final && state.tool_placeholder_active {
+            self.clear_tool_placeholder(&mut state).await;
             state.finalized = true;
             state.flush_scheduled = false;
             if let Some(msg_id) = state.message_id {

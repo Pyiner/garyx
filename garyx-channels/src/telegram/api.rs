@@ -31,6 +31,13 @@ struct EditMessageTextBody {
     parse_mode: Option<String>,
 }
 
+/// Body for deleteMessage.
+#[derive(Debug, Serialize)]
+struct DeleteMessageBody {
+    chat_id: i64,
+    message_id: i64,
+}
+
 /// Body for sendChatAction.
 #[derive(Debug, Serialize)]
 struct SendChatActionBody {
@@ -350,6 +357,42 @@ pub(super) async fn edit_message_text(
                 "editMessageText error: {desc}"
             )));
         }
+    }
+
+    Ok(())
+}
+
+/// Delete an existing message.
+pub(super) async fn delete_message(
+    http: &Client,
+    token: &str,
+    chat_id: i64,
+    message_id: i64,
+    api_base: &str,
+) -> Result<(), ChannelError> {
+    let body = DeleteMessageBody {
+        chat_id,
+        message_id,
+    };
+
+    let url = format!("{api_base}/bot{token}/deleteMessage");
+    let resp = http
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| ChannelError::SendFailed(format!("deleteMessage failed: {e}")))?;
+
+    let result: TgResponse<bool> = resp
+        .json()
+        .await
+        .map_err(|e| ChannelError::SendFailed(format!("deleteMessage parse failed: {e}")))?;
+
+    if !result.ok {
+        let desc = result.description.unwrap_or_default();
+        return Err(ChannelError::SendFailed(format!(
+            "deleteMessage error: {desc}"
+        )));
     }
 
     Ok(())
