@@ -1399,13 +1399,11 @@ export function GatewaySettingsPanel({
         <div className="provider-section-head">
           <h2 className="provider-section-title">{t('Codex')}</h2>
         </div>
-        <div aria-label={t('Codex auth mode')} className="provider-tiles">
+        <div aria-label={t('Codex auth mode')} className="provider-tiles" role="radiogroup">
           <button
-            aria-pressed={localSettings.providerCodexAuthMode === 'cli'}
-            className={classNames(
-              'provider-tile',
-              localSettings.providerCodexAuthMode === 'cli' && 'selected',
-            )}
+            aria-checked={localSettings.providerCodexAuthMode === 'cli'}
+            className="provider-tile"
+            data-state={localSettings.providerCodexAuthMode === 'cli' ? 'checked' : 'unchecked'}
             disabled={savingLocalSettings}
             onClick={() => {
               onLocalSettingsChange((current) => ({
@@ -1413,23 +1411,21 @@ export function GatewaySettingsPanel({
                 providerCodexAuthMode: 'cli',
               }));
             }}
+            role="radio"
             type="button"
           >
-            <span aria-hidden className="provider-tile-radio" />
             <span className="provider-tile-body">
               <span className="provider-tile-label">{t('CLI')}</span>
               <span className="provider-tile-desc">
                 {t('Reuse the local {command} login on this Mac.', { command: 'codex' })}
               </span>
             </span>
-            <span className="provider-tile-badge">{t('no key')}</span>
+            <Badge className="provider-tile-badge" variant="outline">{t('no key')}</Badge>
           </button>
           <button
-            aria-pressed={localSettings.providerCodexAuthMode === 'api_key'}
-            className={classNames(
-              'provider-tile',
-              localSettings.providerCodexAuthMode === 'api_key' && 'selected',
-            )}
+            aria-checked={localSettings.providerCodexAuthMode === 'api_key'}
+            className="provider-tile"
+            data-state={localSettings.providerCodexAuthMode === 'api_key' ? 'checked' : 'unchecked'}
             disabled={savingLocalSettings}
             onClick={() => {
               onLocalSettingsChange((current) => ({
@@ -1437,14 +1433,14 @@ export function GatewaySettingsPanel({
                 providerCodexAuthMode: 'api_key',
               }));
             }}
+            role="radio"
             type="button"
           >
-            <span aria-hidden className="provider-tile-radio" />
             <span className="provider-tile-body">
               <span className="provider-tile-label">{t('API Key')}</span>
               <span className="provider-tile-desc">{t('Desktop-only key, stored in macOS Keychain.')}</span>
             </span>
-            <span className="provider-tile-badge">{t('keychain')}</span>
+            <Badge className="provider-tile-badge" variant="outline">{t('keychain')}</Badge>
           </button>
         </div>
         {localSettings.providerCodexAuthMode === 'api_key' ? (
