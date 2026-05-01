@@ -32,6 +32,7 @@ import {
   type DesktopChatStreamEvent,
   type DesktopChannelEndpoint,
   type DesktopDeepLinkEvent,
+  type DesktopSettings,
   type DesktopSessionProviderHint,
   type DesktopState,
   type DesktopWorkspace,
@@ -473,6 +474,21 @@ function seededAssistantBubble(): TranscriptMessage {
 
 function normalizeMessageText(value: string | undefined): string {
   return value?.trim() || "";
+}
+
+function normalizeGatewayUrlForMatch(value: string): string {
+  return value.trim().replace(/\/+$/, "").toLowerCase();
+}
+
+function isConnectionValidForSettings(
+  status: ConnectionStatus | null,
+  settings: DesktopSettings | null | undefined,
+): boolean {
+  const savedGatewayUrl = normalizeGatewayUrlForMatch(settings?.gatewayUrl || "");
+  if (!savedGatewayUrl || !status?.ok) {
+    return false;
+  }
+  return normalizeGatewayUrlForMatch(status.gatewayUrl) === savedGatewayUrl;
 }
 
 function transcriptMessageImageCount(message: TranscriptMessage): number {
@@ -1242,6 +1258,7 @@ export function AppShell() {
   );
   const [gatewayFailureCount, setGatewayFailureCount] = useState(0);
   const [gatewaySetupForced, setGatewaySetupForced] = useState(false);
+  const [gatewaySetupCanCancel, setGatewaySetupCanCancel] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [newThreadDraftActive, setNewThreadDraftActive] = useState(false);
   const [pendingWorkspacePath, setPendingWorkspacePath] = useState<string | null>(
@@ -1392,6 +1409,7 @@ export function AppShell() {
   const toastSequenceRef = useRef(1);
   const toastTimeoutsRef = useRef<Record<number, number>>({});
   const gatewayRetryStepRef = useRef(0);
+  const gatewaySetupSavedConnectionRef = useRef<ConnectionStatus | null>(null);
   const botBindingRequestSequenceRef = useRef(0);
   const previousConnectionOkRef = useRef<boolean | null>(null);
   const lastRemoteStateWarningKeyRef = useRef<string | null>(null);
@@ -1639,6 +1657,64 @@ export function AppShell() {
     pushToast,
     settingsDraft.gatewayUrl,
   ]);
+
+  async function handleOpenGatewaySetup() {
+    const savedSettings = desktopState?.settings;
+    const savedConnection = isConnectionValidForSettings(connection, savedSettings)
+      ? connection
+      : null;
+    gatewaySetupSavedConnectionRef.current = savedConnection;
+    setGatewaySetupCanCancel(Boolean(savedConnection));
+    setGatewaySetupForced(true);
+
+    if (!savedSettings?.gatewayUrl.trim()) {
+      gatewaySetupSavedConnectionRef.current = null;
+      setGatewaySetupCanCancel(false);
+      return;
+    }
+
+    try {
+      const status = await window.garyxDesktop.checkConnection({
+        gatewayUrl: savedSettings.gatewayUrl,
+        gatewayAuthToken: savedSettings.gatewayAuthToken,
+      });
+      setConnection(status);
+      if (isConnectionValidForSettings(status, savedSettings)) {
+        gatewaySetupSavedConnectionRef.current = status;
+        setGatewaySetupCanCancel(true);
+      } else {
+        gatewaySetupSavedConnectionRef.current = null;
+        setGatewaySetupCanCancel(false);
+      }
+    } catch {
+      gatewaySetupSavedConnectionRef.current = null;
+      setGatewaySetupCanCancel(false);
+    }
+  }
+
+  function handleCancelGatewaySetup() {
+    const savedSettings = desktopState?.settings;
+    const savedConnection = gatewaySetupSavedConnectionRef.current;
+    if (
+      !gatewaySetupCanCancel ||
+      !savedSettings ||
+      !isConnectionValidForSettings(savedConnection, savedSettings)
+    ) {
+      return;
+    }
+
+    setSettingsDraft((current) => ({
+      ...current,
+      gatewayUrl: savedSettings.gatewayUrl,
+      gatewayAuthToken: savedSettings.gatewayAuthToken,
+    }));
+    setConnection(savedConnection);
+    setError(null);
+    setGatewaySettingsStatus(null);
+    setGatewaySetupForced(false);
+    setGatewaySetupCanCancel(false);
+    gatewaySetupSavedConnectionRef.current = null;
+  }
 
   useEffect(() => {
     if (!automationStatus) {
@@ -5900,6 +5976,7 @@ export function AppShell() {
     const setupMessage =
       gatewaySetupMessage ||
       t("Set the gateway address and token, then save. Saving verifies the gateway before continuing.");
+    const canCancelGatewaySetup = gatewaySetupForced && gatewaySetupCanCancel;
 
     return (
       <I18nProvider languagePreference={settingsDraft.languagePreference}>
@@ -5976,6 +6053,16 @@ export function AppShell() {
             </p>
 
             <div className="gateway-setup-actions">
+              {canCancelGatewaySetup ? (
+                <button
+                  className="gateway-setup-button secondary"
+                  disabled={savingSettings}
+                  onClick={handleCancelGatewaySetup}
+                  type="button"
+                >
+                  {t("Cancel")}
+                </button>
+              ) : null}
               <button
                 className="gateway-setup-button primary"
                 disabled={savingSettings}
@@ -5986,6 +6073,8 @@ export function AppShell() {
                   }).then((saved) => {
                     if (saved) {
                       setGatewaySetupForced(false);
+                      setGatewaySetupCanCancel(false);
+                      gatewaySetupSavedConnectionRef.current = null;
                     }
                   });
                 }}
@@ -6247,7 +6336,7 @@ export function AppShell() {
                       return handleSaveGatewaySettings();
                     }}
                     onOpenGatewaySetup={() => {
-                      setGatewaySetupForced(true);
+                      void handleOpenGatewaySetup();
                     }}
                     onRefreshAgentTargets={refreshAgentTargets}
                     onToggleMcpServer={handleToggleMcpServer}
