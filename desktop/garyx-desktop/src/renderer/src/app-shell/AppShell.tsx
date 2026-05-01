@@ -1644,7 +1644,7 @@ export function AppShell() {
       return undefined;
     }
     pushToast(
-      gatewaySettingsStatus,
+      t(gatewaySettingsStatus),
       /(cannot|error|failed|failure|invalid|missing|unable)/i.test(gatewaySettingsStatus)
         ? "error"
         : "success",
@@ -1656,6 +1656,7 @@ export function AppShell() {
     gatewaySettingsStatus,
     pushToast,
     settingsDraft.gatewayUrl,
+    t,
   ]);
 
   async function handleOpenGatewaySetup() {
@@ -2577,7 +2578,7 @@ export function AppShell() {
     await measureUiAction("bot.add_channel_account.reload_settings", () =>
       loadGatewaySettings({ clearStatus: true }),
     );
-    pushToast("Bot added.", "success");
+    pushToast(t("Bot added."), "success");
   }
 
   async function handleStartWeixinChannelAuth(input: {
@@ -2594,7 +2595,7 @@ export function AppShell() {
     if (result.status === "confirmed") {
       await refreshDesktopState();
       await loadGatewaySettings({ clearStatus: true });
-      pushToast("Weixin bot connected.", "success");
+      pushToast(t("Weixin bot connected."), "success");
     }
     return result;
   }
@@ -2613,7 +2614,7 @@ export function AppShell() {
     if (result.status === "confirmed") {
       await refreshDesktopState();
       await loadGatewaySettings({ clearStatus: true });
-      pushToast("Feishu bot connected.", "success");
+      pushToast(t("Feishu bot connected."), "success");
     }
     return result;
   }

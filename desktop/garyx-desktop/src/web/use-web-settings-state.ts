@@ -101,7 +101,7 @@ export function useWebSettingsState(route: Extract<WebRoute, { view: 'settings' 
       const result = await saveGatewaySettings(nextConfig);
       setPayload(result.settings);
       setJsonDraft(stringifyJsonBlock(result.settings.config));
-      setStatus(result.message || 'Settings saved.');
+      setStatus('Saved.');
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : 'failed to save gateway settings');
     } finally {

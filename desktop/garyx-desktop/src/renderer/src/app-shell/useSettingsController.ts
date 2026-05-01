@@ -479,7 +479,7 @@ export function useSettingsController({
       );
       replaceGatewaySettings(result.settings);
       if (!silent) {
-        setGatewaySettingsStatus(result.message || 'Saved gateway config.');
+        setGatewaySettingsStatus('Saved');
       }
       // saveGatewaySettings only returns the gateway config payload, so
       // configuredBots / botMainThreads in DesktopState stay stale after a
