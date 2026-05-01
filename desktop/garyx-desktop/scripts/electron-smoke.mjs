@@ -83,10 +83,6 @@ function oneOfExact(values) {
   return new RegExp(`^(?:${values.map(escapeRegExp).join('|')})$`);
 }
 
-function createThreadInLabel(name) {
-  return oneOfExact(smokeLabel('Create thread in {name}').map((label) => label.replace('{name}', name)));
-}
-
 function sleep(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -745,7 +741,6 @@ async function createMockGateway(workspaceDir) {
 async function main() {
   const homeDir = await mkdtemp(path.join(os.tmpdir(), 'garyx-desktop-smoke-home-'));
   const workspaceDir = path.join(homeDir, 'workspace');
-  const localBookmarkName = 'local-bookmark';
   const gateway = await createMockGateway(workspaceDir);
   const { homeDir: isolatedHome, userDataDir } = await prepareIsolatedHome(
     gateway.gatewayUrl,
@@ -783,17 +778,12 @@ async function main() {
           timeout: 6000,
         });
       }
-      stage = 'workspace-plus-shared-new-thread';
-      const localBookmarkRow = window.locator('.workspace-row-shell').filter({ hasText: localBookmarkName }).first();
-      await localBookmarkRow.hover();
-      await localBookmarkRow.getByRole('button', { name: createThreadInLabel(localBookmarkName) }).click();
+      stage = 'selected-workspace-new-thread';
+      await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.newThread) }).click();
       await window.getByText(oneOfExact(SMOKE_TEXT.startNewThread)).waitFor({
         timeout: 10000,
       });
       await window.getByText(oneOfExact(SMOKE_TEXT.resumeExistingSession)).waitFor({
-        timeout: 10000,
-      });
-      await window.getByText(localBookmarkName, { exact: true }).first().waitFor({
         timeout: 10000,
       });
 
@@ -803,9 +793,6 @@ async function main() {
         timeout: 10000,
       });
       await window.getByText(oneOfExact(SMOKE_TEXT.resumeExistingSession)).waitFor({
-        timeout: 10000,
-      });
-      await window.getByText(localBookmarkName, { exact: true }).first().waitFor({
         timeout: 10000,
       });
 
@@ -835,13 +822,13 @@ async function main() {
       await window.locator('.tool-trace').first().waitFor({ timeout: 20000 });
       stage = 'verify-new-thread-workspace-path';
       const createRequests = gateway.createdThreadRequests();
-      const expectedLocalBookmarkPath = path.join(isolatedHome, 'local-bookmark');
+      const expectedWorkspacePath = path.join(isolatedHome, 'workspace');
       assert.ok(createRequests.length >= 1, 'expected a new thread create request');
       const firstCreateRequest = createRequests[0];
       assert.equal(
         firstCreateRequest.workspaceDir,
-        expectedLocalBookmarkPath,
-        `new thread should use the selected workspace path, got ${JSON.stringify(firstCreateRequest)}`,
+        expectedWorkspacePath,
+        `new thread should use the active workspace path, got ${JSON.stringify(firstCreateRequest)}`,
       );
       assert.equal(
         Object.prototype.hasOwnProperty.call(firstCreateRequest, 'workspacePath'),

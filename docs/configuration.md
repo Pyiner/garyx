@@ -293,6 +293,11 @@ Use a custom agent or an agent team by setting the same `agent_id` used in your
 Garyx agent/team configuration. The CLI account setup flow can also prompt for
 an agent when `--agent-id` is omitted.
 
+Custom agent model selection is provider-specific. Claude and Codex use their
+provider defaults in the desktop app. Gemini only shows a model picker when the
+gateway can discover models from the local Gemini ACP process; Garyx does not
+use a Gemini API key to populate that list.
+
 ## Managed MCP Servers
 
 Put managed MCP servers under `mcp_servers` in `~/.garyx/garyx.json`.

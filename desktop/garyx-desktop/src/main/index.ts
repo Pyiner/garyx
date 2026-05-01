@@ -40,6 +40,7 @@ import type {
   CreateAutomationInput,
   CreateThreadInput,
   DesktopDeepLinkEvent,
+  DesktopApiProviderType,
   DeleteSkillEntryInput,
   DeleteSkillInput,
   DeleteCustomAgentInput,
@@ -117,6 +118,7 @@ import {
   listAutoResearchRuns,
   listAutoResearchIterations,
   listCustomAgents,
+  listProviderModels,
   listTeams,
   listWorkspaceFiles,
   listMcpServers,
@@ -628,6 +630,14 @@ function registerIpcHandlers(): void {
     const settings = await resolveSettings();
     return listCustomAgents(settings);
   });
+
+  ipcMain.handle(
+    "garyx:list-provider-models",
+    async (_event, providerType: DesktopApiProviderType) => {
+      const settings = await resolveSettings();
+      return listProviderModels(settings, providerType);
+    },
+  );
 
   ipcMain.handle(
     "garyx:create-custom-agent",

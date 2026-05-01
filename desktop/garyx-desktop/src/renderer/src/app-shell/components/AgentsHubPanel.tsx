@@ -14,6 +14,7 @@ import type {
   CreateCustomAgentInput,
   CreateTeamInput,
   DesktopCustomAgent,
+  DesktopProviderModels,
   DesktopTeam,
   UpdateCustomAgentInput,
   UpdateTeamInput,
@@ -63,7 +64,7 @@ type AgentDraft = {
   systemPrompt: string;
 };
 
-const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
+const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default__';
 
 type TeamDraft = {
   teamId: string;
@@ -126,6 +127,18 @@ function previewText(value: string | null | undefined, fallback: string): string
   return normalized.length > 140 ? `${normalized.slice(0, 137)}...` : normalized;
 }
 
+function providerModelsWithCurrent(
+  providerModels: DesktopProviderModels | undefined,
+  currentModel: string,
+): DesktopProviderModels['models'] {
+  const models = providerModels?.models || [];
+  const normalized = currentModel.trim();
+  if (!normalized || models.some((model) => model.id === normalized)) {
+    return models;
+  }
+  return [{ id: normalized, label: normalized, description: null, recommended: false }, ...models];
+}
+
 function avatarLabel(value: string): string {
   return value
     .split(/\s+/)
@@ -161,11 +174,11 @@ function sortedAgents(value: DesktopCustomAgent[]): DesktopCustomAgent[] {
   return [...value]
     .filter((agent) => agent.standalone)
     .sort((left, right) => {
-    if (left.builtIn !== right.builtIn) {
-      return left.builtIn ? -1 : 1;
-    }
-    return left.displayName.localeCompare(right.displayName) || left.agentId.localeCompare(right.agentId);
-  });
+      if (left.builtIn !== right.builtIn) {
+        return left.builtIn ? -1 : 1;
+      }
+      return left.displayName.localeCompare(right.displayName) || left.agentId.localeCompare(right.agentId);
+    });
 }
 
 function sortedTeams(value: DesktopTeam[]): DesktopTeam[] {
@@ -197,6 +210,12 @@ export function AgentsHubPanel({
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentDraft, setAgentDraft] = useState<AgentDraft>(() => emptyAgentDraft());
   const [agentIdTouched, setAgentIdTouched] = useState(false);
+  const [providerModelsByType, setProviderModelsByType] = useState<
+    Partial<Record<ProviderType, DesktopProviderModels>>
+  >({});
+  const [providerModelsLoading, setProviderModelsLoading] = useState<
+    Partial<Record<ProviderType, boolean>>
+  >({});
 
   const [teamDialogMode, setTeamDialogMode] = useState<TeamDialogMode>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
@@ -236,9 +255,40 @@ export function AgentsHubPanel({
     }
   }
 
+  async function ensureProviderModels(providerType: ProviderType) {
+    if (providerModelsByType[providerType] || providerModelsLoading[providerType]) {
+      return;
+    }
+    setProviderModelsLoading((current) => ({ ...current, [providerType]: true }));
+    try {
+      const result = await window.garyxDesktop.listProviderModels(providerType);
+      setProviderModelsByType((current) => ({ ...current, [providerType]: result }));
+    } catch (error) {
+      setProviderModelsByType((current) => ({
+        ...current,
+        [providerType]: {
+          providerType,
+          supportsModelSelection: false,
+          models: [],
+          defaultModel: null,
+          source: 'desktop',
+          error: error instanceof Error ? error.message : t('Failed to load models'),
+        },
+      }));
+    } finally {
+      setProviderModelsLoading((current) => ({ ...current, [providerType]: false }));
+    }
+  }
+
   useEffect(() => {
     void loadData();
   }, []);
+
+  useEffect(() => {
+    if (agentDialogMode === 'create' || agentDialogMode === 'edit') {
+      void ensureProviderModels(agentDraft.providerType);
+    }
+  }, [agentDialogMode, agentDraft.providerType]);
 
   useEffect(() => {
     if (agentDialogMode !== 'create' || agentIdTouched) {
@@ -314,6 +364,19 @@ export function AgentsHubPanel({
     : teamSelectionCount > 0
       ? 'indeterminate'
       : false;
+  const activeAgentProviderModels = providerModelsByType[agentDraft.providerType];
+  const agentProviderModelsLoading = providerModelsLoading[agentDraft.providerType] === true;
+  const agentModelOptions = providerModelsWithCurrent(activeAgentProviderModels, agentDraft.model);
+  const agentSupportsModelSelection =
+    activeAgentProviderModels?.supportsModelSelection === true && agentModelOptions.length > 0;
+  const agentModelStatus =
+    agentDraft.providerType === 'gemini_cli' && !agentSupportsModelSelection
+      ? agentProviderModelsLoading
+        ? t('Loading models from local Gemini ACP...')
+        : activeAgentProviderModels?.error
+          ? t('Local Gemini ACP does not expose a model list yet.')
+          : null
+      : null;
 
   function closeAgentDialog() {
     setAgentDialogMode(null);
@@ -336,7 +399,7 @@ export function AgentsHubPanel({
     setAgentIdTouched(false);
   }
 
-function openViewAgentDialog(agent: DesktopCustomAgent) {
+  function openViewAgentDialog(agent: DesktopCustomAgent) {
     setAgentDialogMode('view');
     setSelectedAgentId(agent.agentId);
     setAgentDraft({
@@ -454,7 +517,7 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
         agentId: agentDraft.agentId.trim(),
         displayName: agentDraft.displayName.trim(),
         providerType: agentDraft.providerType,
-        model: agentDraft.model.trim(),
+        model: agentSupportsModelSelection ? agentDraft.model.trim() : '',
         systemPrompt: agentDraft.systemPrompt.trim(),
       };
 
@@ -832,11 +895,9 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     setAgentDraft((current) => ({
                       ...current,
                       providerType: value,
-                      model:
-                        value === 'gemini_cli' && !current.model.trim()
-                          ? DEFAULT_GEMINI_MODEL
-                          : current.model,
+                      model: '',
                     }));
+                    void ensureProviderModels(value);
                   }}
                   value={agentDraft.providerType}
                 >
@@ -849,19 +910,40 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                     <SelectItem value="gemini_cli">Gemini</SelectItem>
                   </SelectContent>
                 </Select>
+                {agentModelStatus ? <span className="codex-form-hint">{agentModelStatus}</span> : null}
               </div>
 
-              <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="agent-dialog-model">{t('Model')}</Label>
-                <Input
-                  id="agent-dialog-model"
-                  onChange={(event) => {
-                    setAgentDraft((current) => ({ ...current, model: event.target.value }));
-                  }}
-                  placeholder={agentDraft.providerType === 'gemini_cli' ? DEFAULT_GEMINI_MODEL : t('provider default')}
-                  value={agentDraft.model}
-                />
-              </div>
+              {agentSupportsModelSelection ? (
+                <div className="codex-form-field">
+                  <Label className="codex-form-label" htmlFor="agent-dialog-model">{t('Model')}</Label>
+                  <Select
+                    onValueChange={(value) => {
+                      setAgentDraft((current) => ({
+                        ...current,
+                        model: value === PROVIDER_DEFAULT_MODEL_VALUE ? '' : value,
+                      }));
+                    }}
+                    value={agentDraft.model.trim() || PROVIDER_DEFAULT_MODEL_VALUE}
+                  >
+                    <SelectTrigger className="agents-hub-model-select" id="agent-dialog-model">
+                      <SelectValue placeholder={t('Select model')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={PROVIDER_DEFAULT_MODEL_VALUE}>{t('Provider default')}</SelectItem>
+                      {agentModelOptions.map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          {model.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="codex-form-hint">
+                    {activeAgentProviderModels?.defaultModel
+                      ? t('Gateway default: {model}', { model: activeAgentProviderModels.defaultModel })
+                      : t('Optional. Leave empty to use the provider default.')}
+                  </span>
+                </div>
+              ) : null}
 
               <div className="codex-form-field">
                 <Label className="codex-form-label" htmlFor="agent-dialog-prompt">{t('System Prompt')}</Label>
@@ -905,7 +987,9 @@ function openViewAgentDialog(agent: DesktopCustomAgent) {
                 </div>
                 <h3>{selectedAgent?.displayName || t('Agent')}</h3>
                 <p>{selectedAgent?.agentId || ''}</p>
-                {selectedAgent ? <p>{selectedAgent.model || t('(provider default)')}</p> : null}
+                {selectedAgent && (selectedAgent.providerType === 'gemini_cli' || selectedAgent.model.trim()) ? (
+                  <p>{selectedAgent.model || t('(provider default)')}</p>
+                ) : null}
               </div>
               </div>
 

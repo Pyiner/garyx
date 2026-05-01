@@ -63,6 +63,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:delete-automation", input),
   listSkills: () => ipcRenderer.invoke("garyx:list-skills"),
   listCustomAgents: () => ipcRenderer.invoke("garyx:list-custom-agents"),
+  listProviderModels: (providerType) =>
+    ipcRenderer.invoke("garyx:list-provider-models", providerType),
   createCustomAgent: (input) =>
     ipcRenderer.invoke("garyx:create-custom-agent", input),
   updateCustomAgent: (input) =>

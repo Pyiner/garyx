@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type {
   CreateCustomAgentInput,
   DesktopCustomAgent,
+  DesktopProviderModels,
   UpdateCustomAgentInput,
 } from '@shared/contracts';
 
@@ -33,7 +34,7 @@ type AgentDraft = {
   systemPrompt: string;
 };
 
-const DEFAULT_GEMINI_MODEL = 'gemini-3-flash-preview';
+const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default__';
 
 function emptyDraft(): AgentDraft {
   return {
@@ -64,6 +65,18 @@ function providerLabel(value: ProviderType): string {
   return 'Claude';
 }
 
+function providerModelsWithCurrent(
+  providerModels: DesktopProviderModels | undefined,
+  currentModel: string,
+): DesktopProviderModels['models'] {
+  const models = providerModels?.models || [];
+  const normalized = currentModel.trim();
+  if (!normalized || models.some((model) => model.id === normalized)) {
+    return models;
+  }
+  return [{ id: normalized, label: normalized, description: null, recommended: false }, ...models];
+}
+
 const plusIcon = (
   <svg aria-hidden width="14" height="14" viewBox="0 0 20 20" fill="none">
     <path d="M9.33496 16.5V10.665H3.5C3.13273 10.665 2.83496 10.3673 2.83496 10C2.83496 9.63273 3.13273 9.33496 3.5 9.33496H9.33496V3.5C9.33496 3.13273 9.63273 2.83496 10 2.83496C10.3673 2.83496 10.665 3.13273 10.665 3.5V9.33496H16.5C16.8673 9.33496 17.165 9.63273 17.165 10C17.165 10.3673 16.8673 10.665 16.5 10.665H10.665V16.5C10.665 16.8673 10.3673 17.165 10 17.165C9.63273 17.165 9.33496 16.8673 9.33496 16.5Z" fill="currentColor"/>
@@ -79,6 +92,12 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
   const [editorMode, setEditorMode] = useState<EditorMode>('inspect');
   const [draft, setDraft] = useState<AgentDraft>(() => emptyDraft());
   const [draftIdTouched, setDraftIdTouched] = useState(false);
+  const [providerModelsByType, setProviderModelsByType] = useState<
+    Partial<Record<ProviderType, DesktopProviderModels>>
+  >({});
+  const [providerModelsLoading, setProviderModelsLoading] = useState<
+    Partial<Record<ProviderType, boolean>>
+  >({});
 
   async function loadAgents(preferredAgentId?: string | null) {
     setLoading(true);
@@ -101,9 +120,40 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     }
   }
 
+  async function ensureProviderModels(providerType: ProviderType) {
+    if (providerModelsByType[providerType] || providerModelsLoading[providerType]) {
+      return;
+    }
+    setProviderModelsLoading((current) => ({ ...current, [providerType]: true }));
+    try {
+      const result = await window.garyxDesktop.listProviderModels(providerType);
+      setProviderModelsByType((current) => ({ ...current, [providerType]: result }));
+    } catch (error) {
+      setProviderModelsByType((current) => ({
+        ...current,
+        [providerType]: {
+          providerType,
+          supportsModelSelection: false,
+          models: [],
+          defaultModel: null,
+          source: 'desktop',
+          error: error instanceof Error ? error.message : t('Failed to load models'),
+        },
+      }));
+    } finally {
+      setProviderModelsLoading((current) => ({ ...current, [providerType]: false }));
+    }
+  }
+
   useEffect(() => {
     void loadAgents();
   }, []);
+
+  useEffect(() => {
+    if (editorMode === 'create' || editorMode === 'edit') {
+      void ensureProviderModels(draft.providerType);
+    }
+  }, [draft.providerType, editorMode]);
 
   useEffect(() => {
     if (editorMode !== 'create' || draftIdTouched) {
@@ -117,6 +167,19 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     () => agents.find((agent) => agent.agentId === selectedAgentId) || null,
     [agents, selectedAgentId],
   );
+  const activeProviderModels = providerModelsByType[draft.providerType];
+  const providerModelsBusy = providerModelsLoading[draft.providerType] === true;
+  const modelOptions = providerModelsWithCurrent(activeProviderModels, draft.model);
+  const supportsModelSelection =
+    activeProviderModels?.supportsModelSelection === true && modelOptions.length > 0;
+  const modelStatus =
+    draft.providerType === 'gemini_cli' && !supportsModelSelection
+      ? providerModelsBusy
+        ? t('Loading models from local Gemini ACP...')
+        : activeProviderModels?.error
+          ? t('Local Gemini ACP does not expose a model list yet.')
+          : null
+      : null;
 
   function openCreateEditor() {
     setEditorMode('create');
@@ -164,7 +227,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
         agentId: draft.agentId.trim(),
         displayName: draft.displayName.trim(),
         providerType: draft.providerType,
-        model: draft.model.trim(),
+        model: supportsModelSelection ? draft.model.trim() : '',
         systemPrompt: draft.systemPrompt.trim(),
       };
       let saved: DesktopCustomAgent;
@@ -288,11 +351,9 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                     setDraft((current) => ({
                       ...current,
                       providerType: value,
-                      model:
-                        value === 'gemini_cli' && !current.model.trim()
-                          ? DEFAULT_GEMINI_MODEL
-                          : current.model,
+                      model: '',
                     }));
+                    void ensureProviderModels(value);
                   }}
                   value={draft.providerType}
                 >
@@ -305,18 +366,39 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                     <SelectItem value="gemini_cli">Gemini</SelectItem>
                   </SelectContent>
                 </Select>
+                {modelStatus ? <span className="codex-form-hint">{modelStatus}</span> : null}
               </div>
-              <div className="codex-form-field">
-                <Label className="codex-form-label" htmlFor="agent-model">{t('Model')}</Label>
-                <Input
-                  id="agent-model"
-                  onChange={(event) => {
-                    setDraft((current) => ({ ...current, model: event.target.value }));
-                  }}
-                  placeholder={draft.providerType === 'gemini_cli' ? DEFAULT_GEMINI_MODEL : t('provider default')}
-                  value={draft.model}
-                />
-              </div>
+              {supportsModelSelection ? (
+                <div className="codex-form-field">
+                  <Label className="codex-form-label" htmlFor="agent-model">{t('Model')}</Label>
+                  <Select
+                    onValueChange={(value) => {
+                      setDraft((current) => ({
+                        ...current,
+                        model: value === PROVIDER_DEFAULT_MODEL_VALUE ? '' : value,
+                      }));
+                    }}
+                    value={draft.model.trim() || PROVIDER_DEFAULT_MODEL_VALUE}
+                  >
+                    <SelectTrigger id="agent-model">
+                      <SelectValue placeholder={t('Select model')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={PROVIDER_DEFAULT_MODEL_VALUE}>{t('Provider default')}</SelectItem>
+                      {modelOptions.map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          {model.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="codex-form-hint">
+                    {activeProviderModels?.defaultModel
+                      ? t('Gateway default: {model}', { model: activeProviderModels.defaultModel })
+                      : t('Optional. Leave empty to use the provider default.')}
+                  </span>
+                </div>
+              ) : null}
               <div className="codex-form-field">
                 <Label className="codex-form-label" htmlFor="agent-system-prompt">{t('System Prompt')}</Label>
                 <Textarea
@@ -387,10 +469,12 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 <span className="codex-list-row-name">{t('Provider')}</span>
                 <span className="codex-command-row-desc">{providerLabel(selectedAgent.providerType)}</span>
               </div>
-              <div className="codex-list-row">
-                <span className="codex-list-row-name">{t('Model')}</span>
-                <span className="codex-command-row-desc">{selectedAgent.model || t('(provider default)')}</span>
-              </div>
+              {selectedAgent.providerType === 'gemini_cli' || selectedAgent.model.trim() ? (
+                <div className="codex-list-row">
+                  <span className="codex-list-row-name">{t('Model')}</span>
+                  <span className="codex-command-row-desc">{selectedAgent.model || t('(provider default)')}</span>
+                </div>
+              ) : null}
               <div style={{ padding: '12px 16px' }}>
                 <div className="codex-list-row-name" style={{ marginBottom: 8 }}>{t('System Prompt')}</div>
                 <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6, color: 'var(--color-token-text-secondary)', fontFamily: 'var(--font-mono)' }}>

@@ -19,6 +19,8 @@ import type {
   ChatStreamToolMessage,
   ConnectionStatus,
   DesktopCustomAgent,
+  DesktopProviderModels,
+  DesktopProviderModelOption,
   DesktopBotConsoleSummary,
   DesktopBotConversationNode,
   DesktopTeam,
@@ -568,6 +570,25 @@ interface CustomAgentPayload {
 
 interface CustomAgentsPayload {
   agents?: CustomAgentPayload[];
+}
+
+interface ProviderModelOptionPayload {
+  id?: unknown;
+  label?: unknown;
+  description?: unknown;
+  recommended?: unknown;
+}
+
+interface ProviderModelsPayload {
+  provider_type?: unknown;
+  providerType?: unknown;
+  supports_model_selection?: unknown;
+  supportsModelSelection?: unknown;
+  models?: unknown;
+  default_model?: unknown;
+  defaultModel?: unknown;
+  source?: unknown;
+  error?: unknown;
 }
 
 interface TeamPayload {
@@ -1828,6 +1849,62 @@ function mapCustomAgent(value: CustomAgentPayload): DesktopCustomAgent {
   };
 }
 
+function mapProviderModelOption(
+  value: ProviderModelOptionPayload,
+): DesktopProviderModelOption | null {
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  if (!id) {
+    return null;
+  }
+  const label =
+    typeof value.label === "string" && value.label.trim()
+      ? value.label.trim()
+      : id;
+  return {
+    id,
+    label,
+    description:
+      typeof value.description === "string" && value.description.trim()
+        ? value.description.trim()
+        : null,
+    recommended: value.recommended === true,
+  };
+}
+
+function mapProviderModels(value: ProviderModelsPayload): DesktopProviderModels {
+  const models: DesktopProviderModelOption[] = [];
+  if (Array.isArray(value.models)) {
+    for (const item of value.models) {
+      if (item && typeof item === "object") {
+        const option = mapProviderModelOption(
+          item as ProviderModelOptionPayload,
+        );
+        if (option) {
+          models.push(option);
+        }
+      }
+    }
+  }
+
+  return {
+    providerType: normalizeDesktopProviderType(
+      value.provider_type || value.providerType,
+    ),
+    supportsModelSelection:
+      value.supports_model_selection === true ||
+      value.supportsModelSelection === true,
+    models,
+    defaultModel:
+      typeof value.default_model === "string"
+        ? value.default_model
+        : typeof value.defaultModel === "string"
+          ? value.defaultModel
+          : null,
+    source: typeof value.source === "string" ? value.source : "",
+    error: typeof value.error === "string" ? value.error : null,
+  };
+}
+
 export async function checkConnection(
   settings: DesktopSettings,
 ): Promise<ConnectionStatus> {
@@ -2817,6 +2894,21 @@ export async function listCustomAgents(
   return Array.isArray(payload.agents)
     ? payload.agents.map(mapCustomAgent)
     : [];
+}
+
+export async function listProviderModels(
+  settings: DesktopSettings,
+  providerType: DesktopApiProviderType,
+): Promise<DesktopProviderModels> {
+  const payload = await requestJson<ProviderModelsPayload>(
+    settings,
+    `/api/provider-models/${encodeURIComponent(providerType)}`,
+    {
+      signal: AbortSignal.timeout(30000),
+    },
+  );
+
+  return mapProviderModels(payload);
 }
 
 export async function listTeams(

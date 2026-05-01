@@ -154,6 +154,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(api::list_custom_agents).post(api::create_custom_agent),
         )
         .route(
+            "/api/provider-models/{provider_type}",
+            axum::routing::get(api::list_provider_models),
+        )
+        .route(
             "/api/teams",
             axum::routing::get(api::list_agent_teams).post(api::create_agent_team),
         )

@@ -26,6 +26,22 @@ export type DesktopApiProviderType =
   | "codex_app_server"
   | "gemini_cli";
 
+export interface DesktopProviderModelOption {
+  id: string;
+  label: string;
+  description?: string | null;
+  recommended?: boolean;
+}
+
+export interface DesktopProviderModels {
+  providerType: DesktopApiProviderType;
+  supportsModelSelection: boolean;
+  models: DesktopProviderModelOption[];
+  defaultModel?: string | null;
+  source: string;
+  error?: string | null;
+}
+
 export type DesktopThreadProviderType =
   | DesktopApiProviderType
   | "agent_team";
@@ -1299,6 +1315,9 @@ export interface GaryxDesktopApi {
   deleteAutomation: (input: DeleteAutomationInput) => Promise<DesktopState>;
   listSkills: () => Promise<DesktopSkillInfo[]>;
   listCustomAgents: () => Promise<DesktopCustomAgent[]>;
+  listProviderModels: (
+    providerType: DesktopApiProviderType,
+  ) => Promise<DesktopProviderModels>;
   createCustomAgent: (
     input: CreateCustomAgentInput,
   ) => Promise<DesktopCustomAgent>;

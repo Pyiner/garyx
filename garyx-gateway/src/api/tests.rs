@@ -85,6 +85,10 @@ fn api_router(state: Arc<AppState>) -> Router {
             axum::routing::get(list_custom_agents).post(create_custom_agent),
         )
         .route(
+            "/api/provider-models/{provider_type}",
+            axum::routing::get(list_provider_models),
+        )
+        .route(
             "/api/custom-agents/{agent_id}",
             axum::routing::get(get_custom_agent)
                 .put(update_custom_agent)
@@ -526,6 +530,41 @@ async fn test_create_custom_agent_allows_omitted_model() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["model"], "");
+}
+
+#[tokio::test]
+async fn test_provider_models_reports_claude_unsupported() {
+    let state = test_state();
+    let router = api_router(state);
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/provider-models/claude_code")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["provider_type"], "claude_code");
+    assert_eq!(json["supports_model_selection"], false);
+    assert!(json["models"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn test_provider_models_rejects_unknown_provider() {
+    let state = test_state();
+    let router = api_router(state);
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/provider-models/openai")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

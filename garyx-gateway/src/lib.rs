@@ -20,6 +20,7 @@ mod loop_continuation;
 mod managed_mcp_metadata;
 pub mod mcp;
 pub mod mcp_config;
+mod provider_models;
 mod provider_session_locator;
 pub mod restart;
 mod restart_resume;

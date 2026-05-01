@@ -9601,6 +9601,10 @@ button.codex-list-row {
   width: 140px;
 }
 
+.agents-hub-agent-dialog .agents-hub-model-select[data-slot="select-trigger"] {
+  width: 100%;
+}
+
 .agents-hub-agent-dialog [data-slot="input"]:focus,
 .agents-hub-agent-dialog [data-slot="select-trigger"]:focus,
 .agents-hub-agent-dialog [data-slot="select-trigger"][data-state="open"] {

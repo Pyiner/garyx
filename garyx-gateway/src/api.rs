@@ -2365,6 +2365,24 @@ pub async fn list_custom_agents(State(state): State<Arc<AppState>>) -> impl Into
     }))
 }
 
+pub async fn list_provider_models(
+    State(state): State<Arc<AppState>>,
+    Path(provider_type): Path<String>,
+) -> impl IntoResponse {
+    let Some(provider_type) = provider_type_from_key(&provider_type) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "unsupported provider type" })),
+        )
+            .into_response();
+    };
+
+    let config = state.config_snapshot();
+    let response =
+        crate::provider_models::list_provider_models(config.as_ref(), provider_type).await;
+    (StatusCode::OK, Json(response)).into_response()
+}
+
 pub async fn get_custom_agent(
     State(state): State<Arc<AppState>>,
     Path(agent_id): Path<String>,
