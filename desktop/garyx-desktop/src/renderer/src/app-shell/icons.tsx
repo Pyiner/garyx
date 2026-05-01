@@ -158,11 +158,12 @@ export function AutoResearchIcon() {
 export function AgentsIcon() {
   return (
     <svg aria-hidden width="16" height="16" viewBox={vb} fill="none" className="icon" style={sw}>
-      <g transform="translate(2.4,2.4) scale(0.96,0.9933)">
-        <path d="M8.5 8.73053C7.87444 8.583 7.20127 8.5 6.5 8.5C3.18629 8.5 0.5 10.3532 0.5 12.1118C0.5 13.8704 3.18629 14.5 6.5 14.5C7.01795 14.5 7.52057 14.4846 8 14.4519M6.5 6.5C4.84315 6.5 3.5 5.15685 3.5 3.5C3.5 1.84315 4.84315 0.5 6.5 0.5C8.15685 0.5 9.5 1.84315 9.5 3.5C9.5 5.15685 8.15685 6.5 6.5 6.5Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
+      <g transform="translate(3,2.6) scale(0.875)">
+        <path d="M14.5 16C14.5 12.9624 11.5899 10.5 8 10.5C4.41015 10.5 1.5 12.9624 1.5 16" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M8 7.5C6.067 7.5 4.5 5.933 4.5 4C4.5 2.067 6.067 0.5 8 0.5C9.933 0.5 11.5 2.067 11.5 4C11.5 5.933 9.933 7.5 8 7.5Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
       </g>
-      <g transform="translate(10.4,10.4)">
-        <path d="M0 3.5C0 3.67258 0.110917 3.77112 0.271125 3.80813C2.61267 4.22711 2.76056 4.23942 3.19189 6.71658C3.21654 6.88905 3.32746 7 3.49999 7C3.67253 7 3.77113 6.88905 3.80809 6.71658C4.22711 4.23942 4.37499 4.22711 6.71655 3.80813C6.87676 3.77112 7 3.67258 7 3.5C7 3.32743 6.87676 3.22888 6.71655 3.19187C4.37499 2.77289 4.22711 2.76058 3.80809 0.283419C3.77113 0.123252 3.67253 0 3.49999 0C3.32746 0 3.21654 0.123252 3.19189 0.283419C2.76056 2.76058 2.61267 2.77289 0.271125 3.19187C0.110917 3.22888 0 3.32742 0 3.5Z" fill="currentColor"/>
+      <g transform="translate(12.15,2.35) scale(0.7)">
+        <path d="M2.8 0.35L3.34 2.1L5.05 2.72L3.34 3.34L2.8 5.1L2.26 3.34L0.55 2.72L2.26 2.1L2.8 0.35Z" fill="currentColor"/>
       </g>
     </svg>
   );
