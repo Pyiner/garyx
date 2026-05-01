@@ -157,12 +157,15 @@ export function AutoResearchIcon() {
 
 export function AgentsIcon() {
   return (
-    <svg aria-hidden width="16" height="16" viewBox={vb} fill="none" className="icon" style={sw}>
-      <g transform="translate(2.4,2.4) scale(0.96,0.9933)">
-        <path d="M8.5 8.73053C7.87444 8.583 7.20127 8.5 6.5 8.5C3.18629 8.5 0.5 10.3532 0.5 12.1118C0.5 13.8704 3.18629 14.5 6.5 14.5C7.01795 14.5 7.52057 14.4846 8 14.4519M6.5 6.5C4.84315 6.5 3.5 5.15685 3.5 3.5C3.5 1.84315 4.84315 0.5 6.5 0.5C8.15685 0.5 9.5 1.84315 9.5 3.5C9.5 5.15685 8.15685 6.5 6.5 6.5Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
-      </g>
-      <g transform="translate(10.4,10.4)">
-        <path d="M0 3.5C0 3.67258 0.110917 3.77112 0.271125 3.80813C2.61267 4.22711 2.76056 4.23942 3.19189 6.71658C3.21654 6.88905 3.32746 7 3.49999 7C3.67253 7 3.77113 6.88905 3.80809 6.71658C4.22711 4.23942 4.37499 4.22711 6.71655 3.80813C6.87676 3.77112 7 3.67258 7 3.5C7 3.32743 6.87676 3.22888 6.71655 3.19187C4.37499 2.77289 4.22711 2.76058 3.80809 0.283419C3.77113 0.123252 3.67253 0 3.49999 0C3.32746 0 3.21654 0.123252 3.19189 0.283419C2.76056 2.76058 2.61267 2.77289 0.271125 3.19187C0.110917 3.22888 0 3.32742 0 3.5Z" fill="currentColor"/>
+    <svg aria-hidden width="16" height="16" viewBox={vb} fill="none" className="icon">
+      <g stroke="currentColor" strokeWidth={1} strokeLinecap="round" strokeLinejoin="round">
+        <line x1="10" y1="5.25" x2="10" y2="7.25" />
+        <circle cx="10" cy="3.9" r="1.25" />
+        <rect x="1.55" y="9.75" width="2.05" height="5.1" rx="0.45" />
+        <rect x="16.4" y="9.75" width="2.05" height="5.1" rx="0.45" />
+        <rect x="3.7" y="7.25" width="12.6" height="10.1" rx="0.9" />
+        <circle cx="6.85" cy="12.3" r="0.95" />
+        <circle cx="13.15" cy="12.3" r="0.95" />
       </g>
     </svg>
   );
