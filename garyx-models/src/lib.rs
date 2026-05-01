@@ -14,6 +14,7 @@ pub mod messages;
 pub mod provider;
 pub mod routing;
 pub mod session;
+pub mod task;
 pub mod thread_logs;
 pub mod thread_record;
 pub mod threading;
@@ -34,7 +35,7 @@ pub use command_catalog::{
     CommandCatalog, CommandCatalogEntry, CommandCatalogOptions, CommandDispatch, CommandKind,
     CommandSource, CommandSurface, CommandVisibility, CommandWarning,
 };
-pub use config::GaryxConfig;
+pub use config::{GaryxConfig, TasksConfig};
 pub use config_loader::{
     ConfigDiagnostic, ConfigDiagnostics, ConfigHotReloadOptions, ConfigHotReloader,
     ConfigLoadFailure, ConfigLoadOptions, ConfigReloadMetricsSnapshot, ConfigRuntimeOverrides,
@@ -60,6 +61,9 @@ pub use provider::{
 };
 pub use routing::DeliveryContext;
 pub use session::{ChatType, SessionEntry, SessionOrigin, SessionTokenUsage};
+pub use task::{
+    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskScope, TaskStatus, ThreadTask,
+};
 pub use thread_logs::{
     CANONICAL_THREAD_PREFIX, NoopThreadLogSink, ThreadLogChunk, ThreadLogEvent, ThreadLogLevel,
     ThreadLogSink, is_canonical_thread_id, resolve_thread_log_thread_id,

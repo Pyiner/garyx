@@ -15,8 +15,8 @@ mod main_tests;
 
 use cli::{
     AgentAction, AutoResearchAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction,
-    DebugAction, GatewayAction, LogsAction, MigrateAction, PluginsAction, TeamAction, ThreadAction,
-    WikiAction,
+    DebugAction, GatewayAction, LogsAction, MigrateAction, PluginsAction, TaskAction, TeamAction,
+    ThreadAction, WikiAction,
 };
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
@@ -31,9 +31,12 @@ use commands::{
     cmd_config_validate, cmd_debug_bot, cmd_debug_thread, cmd_doctor, cmd_gateway_install,
     cmd_gateway_reload_config, cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop,
     cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail,
-    cmd_migrate_thread_transcripts, cmd_onboard, cmd_send_message, cmd_status, cmd_thread_create,
-    cmd_thread_get, cmd_thread_list, cmd_thread_send, cmd_update, cmd_wiki_delete, cmd_wiki_get,
-    cmd_wiki_init, cmd_wiki_list, cmd_wiki_status, run_gateway,
+    cmd_migrate_thread_transcripts, cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign,
+    cmd_task_claim, cmd_task_create, cmd_task_get, cmd_task_history, cmd_task_list,
+    cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_unassign,
+    cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_list, cmd_thread_send,
+    cmd_update, cmd_wiki_delete, cmd_wiki_get, cmd_wiki_init, cmd_wiki_list, cmd_wiki_status,
+    run_gateway,
 };
 
 #[tokio::main]
@@ -489,6 +492,93 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 agent_id,
                 json,
             } => cmd_thread_create(config_path, title, workspace_dir, agent_id, json).await,
+        },
+        Some(Commands::Task { action }) => match action {
+            TaskAction::List {
+                scope,
+                status,
+                assignee,
+                include_done,
+                limit,
+                offset,
+                json,
+            } => {
+                cmd_task_list(
+                    config_path,
+                    &scope,
+                    status.as_deref(),
+                    assignee.as_deref(),
+                    include_done,
+                    limit,
+                    offset,
+                    json,
+                )
+                .await
+            }
+            TaskAction::Get { task_ref, json } => cmd_task_get(config_path, &task_ref, json).await,
+            TaskAction::Create {
+                scope,
+                title,
+                body,
+                assignee,
+                start,
+                agent_id,
+                json,
+            } => {
+                cmd_task_create(
+                    config_path,
+                    &scope,
+                    title,
+                    body,
+                    assignee.as_deref(),
+                    start,
+                    agent_id,
+                    json,
+                )
+                .await
+            }
+            TaskAction::Promote {
+                thread_id,
+                title,
+                assignee,
+                json,
+            } => cmd_task_promote(config_path, &thread_id, title, assignee.as_deref(), json).await,
+            TaskAction::Claim {
+                task_ref,
+                actor,
+                json,
+            } => cmd_task_claim(config_path, &task_ref, actor.as_deref(), json).await,
+            TaskAction::Release { task_ref, json } => {
+                cmd_task_release(config_path, &task_ref, json).await
+            }
+            TaskAction::Assign {
+                task_ref,
+                principal,
+                json,
+            } => cmd_task_assign(config_path, &task_ref, &principal, json).await,
+            TaskAction::Unassign { task_ref, json } => {
+                cmd_task_unassign(config_path, &task_ref, json).await
+            }
+            TaskAction::Update {
+                task_ref,
+                status,
+                note,
+                force,
+                json,
+            } => cmd_task_update(config_path, &task_ref, &status, note, force, json).await,
+            TaskAction::Reopen { task_ref, json } => {
+                cmd_task_reopen(config_path, &task_ref, json).await
+            }
+            TaskAction::SetTitle {
+                task_ref,
+                title,
+                json,
+            } => cmd_task_set_title(config_path, &task_ref, &title, json).await,
+            TaskAction::History {
+                task_ref,
+                limit,
+                json,
+            } => cmd_task_history(config_path, &task_ref, limit, json).await,
         },
         Some(Commands::Migrate { action }) => match action {
             MigrateAction::ThreadTranscripts {

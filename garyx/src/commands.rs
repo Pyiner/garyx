@@ -2542,6 +2542,479 @@ pub(crate) async fn cmd_thread_send(
     Ok(())
 }
 
+pub(crate) async fn cmd_task_list(
+    config_path: &str,
+    scope: &str,
+    status: Option<&str>,
+    assignee: Option<&str>,
+    include_done: bool,
+    limit: usize,
+    offset: usize,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut params = vec![
+        ("scope".to_owned(), normalize_scope_query(scope)?),
+        ("limit".to_owned(), limit.clamp(1, 200).to_string()),
+        ("offset".to_owned(), offset.to_string()),
+    ];
+    if let Some(status) = status {
+        params.push(("status".to_owned(), normalize_task_status(status)?));
+    }
+    if let Some(assignee) = assignee.map(str::trim).filter(|value| !value.is_empty()) {
+        params.push(("assignee".to_owned(), assignee.to_owned()));
+    }
+    if include_done {
+        params.push(("include_done".to_owned(), "true".to_owned()));
+    }
+    let query = params
+        .iter()
+        .map(|(key, value)| format!("{key}={}", urlencoding::encode(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(&gateway, &format!("/api/tasks?{query}")).await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    let tasks = payload["tasks"].as_array().cloned().unwrap_or_default();
+    if tasks.is_empty() {
+        println!("Tasks: (none)");
+        return Ok(());
+    }
+    for task in tasks {
+        print_task_summary(&task);
+        println!();
+    }
+    if payload["has_more"].as_bool().unwrap_or(false) {
+        println!("More tasks available; increase --offset to continue.");
+    }
+    Ok(())
+}
+
+pub(crate) async fn cmd_task_get(
+    config_path: &str,
+    task_ref: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!("/api/tasks/{}", encode_task_ref(task_ref)?),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_task_create(
+    config_path: &str,
+    scope: &str,
+    title: Option<String>,
+    body: Option<String>,
+    assignee: Option<&str>,
+    start: bool,
+    agent_id: Option<String>,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let assignee = assignee.map(principal_payload).transpose()?;
+    let agent_id = agent_id
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = post_gateway_json(
+        &gateway,
+        "/api/tasks",
+        &json!({
+            "scope": scope_payload(scope)?,
+            "title": title,
+            "body": body,
+            "assignee": assignee,
+            "start": start,
+            "agent_id": agent_id,
+            "actor": cli_actor_payload(),
+        }),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_task_promote(
+    config_path: &str,
+    thread_id: &str,
+    title: Option<String>,
+    assignee: Option<&str>,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty() {
+        return Err("thread_id cannot be empty".into());
+    }
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = post_gateway_json(
+        &gateway,
+        "/api/tasks/promote",
+        &json!({
+            "thread_id": thread_id,
+            "title": title,
+            "assignee": assignee.map(principal_payload).transpose()?,
+            "actor": cli_actor_payload(),
+        }),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_task_claim(
+    config_path: &str,
+    task_ref: &str,
+    actor: Option<&str>,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    patch_task_status(
+        config_path,
+        task_ref,
+        "in_progress",
+        None,
+        false,
+        actor,
+        json_output,
+    )
+    .await
+}
+
+pub(crate) async fn cmd_task_release(
+    config_path: &str,
+    task_ref: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    patch_task_status(
+        config_path,
+        task_ref,
+        "todo",
+        None,
+        false,
+        None,
+        json_output,
+    )
+    .await
+}
+
+pub(crate) async fn cmd_task_assign(
+    config_path: &str,
+    task_ref: &str,
+    principal: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = patch_gateway_json(
+        &gateway,
+        &format!("/api/tasks/{}/assign", encode_task_ref(task_ref)?),
+        &json!({
+            "to": principal_payload(principal)?,
+            "actor": cli_actor_payload(),
+        }),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_task_unassign(
+    config_path: &str,
+    task_ref: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = delete_gateway_json(
+        &gateway,
+        &format!("/api/tasks/{}/assign", encode_task_ref(task_ref)?),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_task_update(
+    config_path: &str,
+    task_ref: &str,
+    status: &str,
+    note: Option<String>,
+    force: bool,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    patch_task_status(
+        config_path,
+        task_ref,
+        status,
+        note,
+        force,
+        None,
+        json_output,
+    )
+    .await
+}
+
+pub(crate) async fn cmd_task_reopen(
+    config_path: &str,
+    task_ref: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    patch_task_status(
+        config_path,
+        task_ref,
+        "todo",
+        None,
+        false,
+        None,
+        json_output,
+    )
+    .await
+}
+
+pub(crate) async fn cmd_task_set_title(
+    config_path: &str,
+    task_ref: &str,
+    title: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("title cannot be empty".into());
+    }
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = patch_gateway_json(
+        &gateway,
+        &format!("/api/tasks/{}/title", encode_task_ref(task_ref)?),
+        &json!({
+            "title": title,
+            "actor": cli_actor_payload(),
+        }),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_task_history(
+    config_path: &str,
+    task_ref: &str,
+    limit: usize,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!(
+            "/api/tasks/{}/history?limit={}",
+            encode_task_ref(task_ref)?,
+            limit.clamp(1, 200)
+        ),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    let events = payload["events"].as_array().cloned().unwrap_or_default();
+    if events.is_empty() {
+        println!("Events: (none)");
+        return Ok(());
+    }
+    for event in events {
+        let at = event["at"].as_str().unwrap_or("-");
+        let actor = format_principal(&event["actor"]);
+        let kind = event["kind"]["type"].as_str().unwrap_or("-");
+        println!("- {at}  {actor}  {kind}");
+    }
+    Ok(())
+}
+
+async fn patch_task_status(
+    config_path: &str,
+    task_ref: &str,
+    status: &str,
+    note: Option<String>,
+    force: bool,
+    actor: Option<&str>,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = patch_gateway_json(
+        &gateway,
+        &format!("/api/tasks/{}/status", encode_task_ref(task_ref)?),
+        &json!({
+            "to": normalize_task_status(status)?,
+            "note": note,
+            "force": force,
+            "actor": actor.map(principal_payload).transpose()?.unwrap_or_else(cli_actor_payload),
+        }),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    Ok(())
+}
+
+fn normalize_scope_query(scope: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let scope = scope.trim().to_ascii_lowercase();
+    if scope_payload(&scope).is_err() {
+        return Err("scope must be <channel>/<account_id>".into());
+    }
+    Ok(scope)
+}
+
+fn scope_payload(scope: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    let parts = scope
+        .trim()
+        .split('/')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() != 2 {
+        return Err("scope must be <channel>/<account_id>".into());
+    }
+    Ok(json!({
+        "channel": parts[0].to_ascii_lowercase(),
+        "account_id": parts[1].to_ascii_lowercase(),
+    }))
+}
+
+fn principal_payload(principal: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    let principal = principal.trim();
+    if principal.is_empty() {
+        return Err("principal cannot be empty".into());
+    }
+    if let Some(user_id) = principal.strip_prefix("human:") {
+        let user_id = user_id.trim();
+        if user_id.is_empty() {
+            return Err("human principal cannot be empty".into());
+        }
+        return Ok(json!({ "type": "human", "user_id": user_id }));
+    }
+    if let Some(agent_id) = principal.strip_prefix("agent:") {
+        let agent_id = agent_id.trim();
+        if agent_id.is_empty() {
+            return Err("agent principal cannot be empty".into());
+        }
+        return Ok(json!({ "type": "agent", "agent_id": agent_id }));
+    }
+    Ok(json!({ "type": "agent", "agent_id": principal }))
+}
+
+fn cli_actor_payload() -> Value {
+    let user_id = std::env::var("GARYX_USER")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "owner".to_owned());
+    json!({ "type": "human", "user_id": user_id })
+}
+
+fn normalize_task_status(status: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let normalized = status.trim().to_ascii_lowercase().replace('-', "_");
+    match normalized.as_str() {
+        "todo" | "to_do" | "open" => Ok("todo".to_owned()),
+        "in_progress" | "progress" | "doing" | "claimed" => Ok("in_progress".to_owned()),
+        "in_review" | "review" | "reviewing" => Ok("in_review".to_owned()),
+        "done" | "complete" | "completed" | "closed" => Ok("done".to_owned()),
+        _ => Err(format!("unknown task status: {status}").into()),
+    }
+}
+
+fn encode_task_ref(task_ref: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let task_ref = task_ref.trim();
+    if task_ref.is_empty() {
+        return Err("task_ref cannot be empty".into());
+    }
+    Ok(urlencoding::encode(task_ref).into_owned())
+}
+
+fn print_task_summary(value: &Value) {
+    let task = value.get("task").unwrap_or(value);
+    let task_ref = value
+        .get("task_ref")
+        .and_then(Value::as_str)
+        .or_else(|| task.get("task_ref").and_then(Value::as_str))
+        .unwrap_or("-");
+    let thread_id = value
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .or_else(|| task.get("thread_id").and_then(Value::as_str))
+        .unwrap_or("-");
+    let title = task
+        .get("title")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("title").and_then(Value::as_str))
+        .unwrap_or("-");
+    let status = task
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("status").and_then(Value::as_str))
+        .unwrap_or("-");
+    let scope_label = task
+        .get("scope")
+        .or_else(|| value.get("scope"))
+        .and_then(|scope| {
+            Some(format!(
+                "{}/{}",
+                scope.get("channel")?.as_str()?,
+                scope.get("account_id")?.as_str()?
+            ))
+        })
+        .unwrap_or_else(|| "-".to_owned());
+    let unassigned = Value::Null;
+    let assignee = task
+        .get("assignee")
+        .or_else(|| value.get("assignee"))
+        .unwrap_or(&unassigned);
+    println!("Task: {task_ref}");
+    println!("Title: {title}");
+    println!("Status: {status}");
+    println!("Scope: {scope_label}");
+    println!("Assignee: {}", format_principal(assignee));
+    if thread_id != "-" {
+        println!("Thread: {thread_id}");
+    }
+}
+
+fn format_principal(value: &Value) -> String {
+    if value.is_null() {
+        return "(unassigned)".to_owned();
+    }
+    match value.get("type").and_then(Value::as_str).unwrap_or("-") {
+        "human" => format!(
+            "human:{}",
+            value.get("user_id").and_then(Value::as_str).unwrap_or("-")
+        ),
+        "agent" => format!(
+            "agent:{}",
+            value.get("agent_id").and_then(Value::as_str).unwrap_or("-")
+        ),
+        other => other.to_owned(),
+    }
+}
+
 pub(crate) async fn cmd_debug_thread(
     config_path: &str,
     thread_id: &str,

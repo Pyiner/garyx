@@ -2,6 +2,7 @@ use crate::execution::{
     ElevatedLevel, ExecAsk, ExecHost, ExecSecurity, ReasoningLevel, ResponseUsage,
 };
 use crate::routing::DeliveryContext;
+use crate::task::ThreadTask;
 use crate::threading::{GroupActivation, QueueDrop, QueueMode, SendPolicy, ThreadTokenUsage};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -116,6 +117,7 @@ pub struct ThreadRecordView<'a> {
     pub queue: ThreadQueueState,
     pub usage: ThreadUsageState,
     pub history: ThreadHistoryState,
+    pub task: Option<&'a ThreadTask>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -136,4 +138,5 @@ pub struct ThreadRecord {
     pub queue: ThreadQueueState,
     pub usage: ThreadUsageState,
     pub history: ThreadHistoryState,
+    pub task: Option<ThreadTask>,
 }

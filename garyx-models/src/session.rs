@@ -233,6 +233,7 @@ impl SessionEntry {
             queue: self.thread_queue_state(),
             usage: self.thread_usage_state(),
             history: crate::thread_record::ThreadHistoryState::default(),
+            task: None,
         }
     }
 
@@ -345,6 +346,7 @@ impl From<&SessionEntry> for crate::thread_record::ThreadRecord {
             queue: value.thread_queue_state(),
             usage: value.thread_usage_state(),
             history: crate::thread_record::ThreadHistoryState::default(),
+            task: None,
         }
     }
 }

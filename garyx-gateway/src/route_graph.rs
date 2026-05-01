@@ -4,7 +4,7 @@ use axum::Router;
 
 use crate::server::AppState;
 use crate::{
-    api, automation, chat, commands, dashboard, gateway_auth, mcp, mcp_config, routes,
+    api, automation, chat, commands, dashboard, gateway_auth, mcp, mcp_config, routes, tasks,
     workspace_files,
 };
 
@@ -76,6 +76,35 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/threads/{key}/logs",
             axum::routing::get(routes::get_thread_logs),
+        )
+        .route(
+            "/api/tasks",
+            axum::routing::get(tasks::list_tasks).post(tasks::create_task),
+        )
+        .route(
+            "/api/tasks/batch",
+            axum::routing::post(tasks::create_tasks_batch),
+        )
+        .route(
+            "/api/tasks/promote",
+            axum::routing::post(tasks::promote_task),
+        )
+        .route("/api/tasks/{task_ref}", axum::routing::get(tasks::get_task))
+        .route(
+            "/api/tasks/{task_ref}/history",
+            axum::routing::get(tasks::task_history),
+        )
+        .route(
+            "/api/tasks/{task_ref}/assign",
+            axum::routing::patch(tasks::assign_task).delete(tasks::unassign_task),
+        )
+        .route(
+            "/api/tasks/{task_ref}/status",
+            axum::routing::patch(tasks::update_task_status),
+        )
+        .route(
+            "/api/tasks/{task_ref}/title",
+            axum::routing::patch(tasks::set_task_title),
         )
         .route(
             "/api/channel-endpoints",

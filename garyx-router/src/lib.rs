@@ -6,6 +6,8 @@ pub mod message_routing;
 pub mod router;
 pub mod scrub;
 pub mod store;
+pub mod task_counter;
+pub mod tasks;
 pub mod thread_history;
 pub mod threads;
 
@@ -72,6 +74,13 @@ pub use router::{
 };
 pub use scrub::{cleanup_legacy_team_runs_dir, scrub_legacy_team_fields};
 pub use store::{ThreadStore, ThreadStoreError};
+pub use task_counter::{
+    FileTaskCounterStore, InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore,
+};
+pub use tasks::{
+    CreateTaskInput, PromoteTaskInput, TaskListFilter, TaskRef, TaskService, TaskServiceError,
+    TaskSummary, UpdateTaskStatusInput,
+};
 pub use thread_history::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT, ThreadHistoryError,
     ThreadHistoryRepository, ThreadHistorySnapshot, ThreadTranscriptRecord, ThreadTranscriptStore,

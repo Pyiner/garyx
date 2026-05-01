@@ -168,6 +168,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: ThreadAction,
     },
+    /// Task overlay utilities
+    #[command(alias = "tasks")]
+    Task {
+        #[command(subcommand)]
+        action: TaskAction,
+    },
     /// Data migrations
     Migrate {
         #[command(subcommand)]
@@ -813,6 +819,119 @@ pub(crate) enum ThreadAction {
         #[arg(long)]
         agent_id: Option<String>,
         /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum TaskAction {
+    /// List tasks in a channel/account scope
+    List {
+        #[arg(long)]
+        scope: String,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        assignee: Option<String>,
+        #[arg(long)]
+        include_done: bool,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get one task by ref
+    Get {
+        task_ref: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a new task thread
+    Create {
+        scope: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        assignee: Option<String>,
+        #[arg(long)]
+        start: bool,
+        #[arg(long)]
+        agent_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Promote an existing thread into a task
+    Promote {
+        thread_id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        assignee: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Claim a task
+    Claim {
+        task_ref: String,
+        #[arg(long)]
+        actor: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Release a task
+    Release {
+        task_ref: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Assign a task
+    Assign {
+        task_ref: String,
+        principal: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Clear task assignee
+    Unassign {
+        task_ref: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update task status
+    Update {
+        task_ref: String,
+        #[arg(long)]
+        status: String,
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reopen a done task
+    Reopen {
+        task_ref: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set task title
+    SetTitle {
+        task_ref: String,
+        title: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show task history
+    History {
+        task_ref: String,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
         #[arg(long)]
         json: bool,
     },

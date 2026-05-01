@@ -915,6 +915,12 @@ pub struct DesktopConfig {
     pub labs: DesktopLabsConfig,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct TasksConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
 /// Root configuration for Garyx.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct GaryxConfig {
@@ -928,6 +934,8 @@ pub struct GaryxConfig {
     pub sessions: SessionConfig,
     #[serde(default)]
     pub desktop: DesktopConfig,
+    #[serde(default)]
+    pub tasks: TasksConfig,
     #[serde(default)]
     pub cron: CronConfig,
     #[serde(default)]

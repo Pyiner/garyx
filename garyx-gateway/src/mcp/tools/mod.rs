@@ -9,3 +9,4 @@ pub(super) mod restart;
 pub(super) mod search;
 pub(super) mod status;
 pub(super) mod stop_loop;
+pub(super) mod tasks;

@@ -1713,3 +1713,48 @@ async fn thread_summary_omits_team_block_for_standalone_agent_thread() {
         "standalone-agent summary must not emit `team`, got: {summary}"
     );
 }
+
+#[tokio::test]
+async fn task_routes_resolve_percent_encoded_qualified_refs() {
+    let dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.tasks.enabled = true;
+    config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
+    let state = AppStateBuilder::new(config).build();
+    let router = build_router(state);
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/tasks")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "scope": {"channel": "telegram", "account_id": "main"},
+                "title": "Check task routing"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let task_ref = payload["task_ref"].as_str().unwrap();
+    assert_eq!(task_ref, "#telegram/main/1");
+
+    let request = authed_request()
+        .method("GET")
+        .uri(format!("/api/tasks/{}", urlencoding::encode(task_ref)))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["task_ref"], "#telegram/main/1");
+    assert_eq!(payload["task"]["title"], "Check task routing");
+}
