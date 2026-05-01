@@ -73,6 +73,9 @@ export function WorkspaceThreadSidebar({
   const [workspaceMenuStyle, setWorkspaceMenuStyle] = useState<CSSProperties | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const visibleWorkspaceThreadGroups = workspaceThreadGroups.filter((group) => {
+    return group.threads.some((thread) => thread.id !== deletingThreadId);
+  });
 
   // Auto-dismiss the confirm state after 3 seconds
   useEffect(() => {
@@ -212,7 +215,7 @@ export function WorkspaceThreadSidebar({
       </div>
 
       {!sectionCollapsed ? <div className="workspace-list">
-        {workspaceThreadGroups.map((group) => {
+        {visibleWorkspaceThreadGroups.map((group) => {
           const { workspace } = group;
           const workspacePath = workspace.path || workspace.name;
           const isMenuOpen = workspaceMenuOpenPath === workspacePath;
@@ -555,7 +558,7 @@ export function WorkspaceThreadSidebar({
           );
         })}
 
-        {!workspaceThreadGroups.length ? (
+        {!visibleWorkspaceThreadGroups.length && !desktopState?.workspaces.length ? (
           <div className="workspace-empty-block">
             <span className="eyebrow">{t('No Folders')}</span>
             <p>{t('Add a folder to start grouping Garyx threads by workspace.')}</p>

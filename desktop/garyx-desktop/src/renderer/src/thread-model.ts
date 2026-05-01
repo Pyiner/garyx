@@ -228,7 +228,7 @@ export function buildWorkspaceThreadGroups(input: {
         (input.workspaceSelectionEntry?.path || '').trim().toLowerCase() === workspacePathKey,
       canManageWorkspace,
     };
-  });
+  }).filter((group) => group.threads.length > 0);
 }
 
 export interface SubAgentThreadLink {
