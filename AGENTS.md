@@ -32,6 +32,19 @@ This file is the short repo-level guide for coding agents.
 7. Commit every completed code change before handoff. Stage only the files changed
    for the current task, and leave unrelated user work untouched.
 
+## Desktop Dev Mode
+
+For fast macOS UI iteration, run the Electron dev build:
+
+```bash
+cd desktop/garyx-desktop && npm run dev
+```
+
+This launches the Garyx Mac app in development mode. Renderer changes are visible
+directly in the running Mac app as you edit, so use this mode for quick visual
+and interaction feedback. Before handoff, still run the packaged-app validation
+flow below so the installed desktop surface is verified too.
+
 ## Validation
 
 Useful commands:
