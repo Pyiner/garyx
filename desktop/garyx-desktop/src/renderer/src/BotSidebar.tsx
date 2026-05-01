@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from 'react';
 
 import type { DesktopBotConsoleSummary, DesktopChannelEndpoint } from '@shared/contracts';
 
-import { ChevronDownIcon, MoreDotsIcon } from './app-shell/icons';
+import { ChevronDownIcon } from './app-shell/icons';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { ChannelLogo } from './channel-logo';
 import { useI18n } from './i18n';
@@ -17,6 +17,44 @@ function setsEqual(left: Set<string>, right: Set<string>): boolean {
     }
   }
   return true;
+}
+
+function botRootThreadIds(
+  group: DesktopBotConsoleSummary,
+  includeDefaultOpenThread: boolean,
+): Set<string> {
+  const ids = [
+    group.mainThreadId,
+    group.mainEndpoint?.threadId,
+  ].filter((value): value is string => Boolean(value));
+  if (includeDefaultOpenThread) {
+    if (group.defaultOpenThreadId) {
+      ids.push(group.defaultOpenThreadId);
+    }
+    if (group.defaultOpenEndpoint?.threadId) {
+      ids.push(group.defaultOpenEndpoint.threadId);
+    }
+  }
+  return new Set(ids);
+}
+
+function botRootCanOpen(group: DesktopBotConsoleSummary): boolean {
+  return group.rootBehavior !== 'expand_only' || botRootThreadIds(group, true).size > 0;
+}
+
+function toggleGroupExpanded(
+  groupId: string,
+  setExpandedGroupIds: Dispatch<SetStateAction<Set<string>>>,
+): void {
+  setExpandedGroupIds((current) => {
+    const next = new Set(current);
+    if (next.has(groupId)) {
+      next.delete(groupId);
+    } else {
+      next.add(groupId);
+    }
+    return next;
+  });
 }
 
 type BotSidebarProps = {
@@ -94,48 +132,60 @@ export function BotSidebar({
           {groups.map((group) => {
             const childEntries = group.conversationNodes || [];
             const isExpanded = expandedGroupIds.has(group.id);
-            const rootOpensDefault = group.rootBehavior !== 'expand_only';
+            const rootThreadIds = botRootThreadIds(group, childEntries.length === 0);
+            const rootCanOpen = botRootCanOpen(group);
+            const rootIsSelected = selectedThreadId ? rootThreadIds.has(selectedThreadId) : false;
 
             return (
               <section className="workspace-group" key={group.id}>
-                <button
-                  className="workspace-row workspace-row-shell bot-group-shell"
-                  onClick={() => {
-                    if (!rootOpensDefault || childEntries.length) {
-                      setExpandedGroupIds((current) => {
-                        const next = new Set(current);
-                        if (next.has(group.id)) {
-                          next.delete(group.id);
-                        } else {
-                          next.add(group.id);
-                        }
-                        return next;
-                      });
-                    } else if (rootOpensDefault) {
-                      onOpenBot(group);
-                    }
-                  }}
-                  tabIndex={-1}
-                  type="button"
+                <div
+                  className={`workspace-row workspace-row-shell bot-group-shell ${rootIsSelected ? 'active' : ''}`}
                 >
-                  <div className="workspace-row-copy">
-                    <ChannelLogo
-                      channel={group.channel}
-                      className="channel-logo bot-row-logo"
-                      iconDataUrl={iconDataUrlByChannel.get(group.channel.toLowerCase()) || null}
-                      fallbackLabel={group.title}
-                    />
-                    <span className="workspace-name" title={group.title}>
-                      {group.title}
-                    </span>
-                    {childEntries.length ? (
+                  <button
+                    aria-current={rootIsSelected ? 'page' : undefined}
+                    aria-label={t('Open {name} thread', { name: group.title })}
+                    className="workspace-row-main bot-group-main"
+                    disabled={!rootCanOpen}
+                    onClick={() => {
+                      if (!rootCanOpen) {
+                        return;
+                      }
+                      onOpenBot(group);
+                    }}
+                    tabIndex={-1}
+                    type="button"
+                  >
+                    <div className="workspace-row-copy">
+                      <ChannelLogo
+                        channel={group.channel}
+                        className="channel-logo bot-row-logo"
+                        iconDataUrl={iconDataUrlByChannel.get(group.channel.toLowerCase()) || null}
+                        fallbackLabel={group.title}
+                      />
+                      <span className="workspace-name" title={group.title}>
+                        {group.title}
+                      </span>
+                    </div>
+                  </button>
+                  {childEntries.length ? (
+                    <button
+                      aria-expanded={isExpanded}
+                      aria-label={isExpanded ? t('Collapse') : t('Expand')}
+                      className="bot-group-expand-button"
+                      onClick={() => {
+                        toggleGroupExpanded(group.id, setExpandedGroupIds);
+                      }}
+                      tabIndex={-1}
+                      title={isExpanded ? t('Collapse') : t('Expand')}
+                      type="button"
+                    >
                       <ChevronDownIcon
                         size={16}
                         className={`icon sidebar-section-chevron ${isExpanded ? '' : 'collapsed'}`}
                       />
-                    ) : null}
-                  </div>
-                </button>
+                    </button>
+                  ) : null}
+                </div>
                 {isExpanded && childEntries.length ? (
                   <div className="bot-thread-list">
                     {childEntries.map((entry) => {

@@ -949,8 +949,48 @@ code {
   padding-right: 2px;
 }
 
+.bot-group-shell.active,
+.bot-group-shell.active:hover {
+  background: var(--color-token-row-selected);
+  color: var(--color-token-text-primary);
+}
+
 .bot-group-main {
   min-height: 30px;
+}
+
+.bot-group-main:disabled {
+  cursor: default;
+}
+
+.bot-group-expand-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: color-mix(in srgb, var(--color-token-text-primary) 58%, transparent);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.bot-group-expand-button:hover {
+  background: color-mix(
+    in oklab,
+    var(--color-token-text-primary) 8%,
+    transparent
+  );
+  color: var(--color-token-text-primary);
+}
+
+.bot-group-expand-button .sidebar-section-chevron {
+  opacity: 1;
 }
 
 .workspace-row:hover .sidebar-section-chevron {

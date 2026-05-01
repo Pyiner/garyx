@@ -42,6 +42,7 @@ const zhCN: Record<string, string> = {
   'Client Logs': '客户端日志',
   'Close': '关闭',
   'Close Logs': '关闭日志',
+  'Collapse': '收起',
   'Collapse threads': '收起线程',
   'Composer actions': '输入框操作',
   'Confirm': '确认',
