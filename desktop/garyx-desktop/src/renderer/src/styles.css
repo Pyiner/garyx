@@ -5088,12 +5088,15 @@ button.new-thread-resume-link:hover {
 
 .toast-viewport {
   position: fixed;
-  top: max(18px, env(safe-area-inset-top));
+  top: max(16px, env(safe-area-inset-top));
   left: 50%;
   z-index: 120;
-  display: grid;
-  gap: 10px;
-  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
   pointer-events: none;
   transform: translateX(-50%);
 }
@@ -5101,20 +5104,17 @@ button.new-thread-resume-link:hover {
 .toast-card {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 10px;
-  padding: 12px 14px;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  min-width: min(220px, calc(100vw - 32px));
+  max-width: min(356px, calc(100vw - 32px));
+  min-height: 44px;
+  padding: 10px 12px;
   border: 1px solid var(--color-token-border);
-  border-radius: 18px;
-  background: color-mix(
-    in srgb,
-    var(--color-token-bg-primary) 96%,
-    rgba(255, 255, 255, 0.7)
-  );
-  box-shadow:
-    0 20px 50px rgba(15, 15, 15, 0.14),
-    0 6px 18px rgba(15, 15, 15, 0.08);
-  backdrop-filter: blur(18px);
+  border-radius: var(--radius);
+  background: var(--color-token-bg-primary);
+  box-shadow: var(--shadow-lg);
   pointer-events: auto;
   animation: toast-enter 160ms cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -5147,9 +5147,8 @@ button.new-thread-resume-link:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  margin-top: 1px;
+  width: 16px;
+  height: 16px;
   color: var(--color-token-text-secondary);
 }
 
@@ -5170,7 +5169,7 @@ button.new-thread-resume-link:hover {
   color: var(--color-token-text-primary);
   font-size: var(--text-base);
   font-weight: var(--font-weight-medium);
-  line-height: 1.45;
+  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
@@ -5178,11 +5177,11 @@ button.new-thread-resume-link:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  margin: -2px -4px 0 0;
+  width: 20px;
+  height: 20px;
+  margin: 0 -2px 0 4px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-token-description-foreground);
 }
