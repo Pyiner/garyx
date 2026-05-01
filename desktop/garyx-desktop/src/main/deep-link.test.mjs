@@ -31,12 +31,36 @@ test("parses canonical provider-specific resume deep link", () => {
   });
 });
 
+test("parses new thread deep link with workspace query", () => {
+  assert.deepEqual(
+    parseDesktopDeepLink("garyx://new?workspace=%2FUsers%2Fgary%2Frepo&agent=codex"),
+    {
+      type: "new-thread",
+      url: "garyx://new?workspace=%2FUsers%2Fgary%2Frepo&agent=codex",
+      workspacePath: "/Users/gary/repo",
+      agentId: "codex",
+    },
+  );
+});
+
+test("parses new thread deep link with encoded workspace path segment", () => {
+  assert.deepEqual(
+    parseDesktopDeepLink("garyx://new/%2FUsers%2Fgary%2Frepo"),
+    {
+      type: "new-thread",
+      url: "garyx://new/%2FUsers%2Fgary%2Frepo",
+      workspacePath: "/Users/gary/repo",
+      agentId: null,
+    },
+  );
+});
+
 test("rejects legacy query-based thread links", () => {
   assert.deepEqual(parseDesktopDeepLink("garyx://open?thread=thread::abc123"), {
     type: "error",
     url: "garyx://open?thread=thread::abc123",
     error:
-      "Unsupported garyx:// format. Use garyx://thread/<thread-id>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.",
+      "Unsupported garyx:// target. Use garyx://thread/<thread-id>, garyx://new?workspace=<path>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.",
   });
 });
 
@@ -55,7 +79,7 @@ test("rejects extra path segments", () => {
       type: "error",
       url: "garyx://resume/codex/session-123/extra",
       error:
-        "Unsupported garyx:// format. Use garyx://thread/<thread-id>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.",
+        "Unsupported garyx:// format. Use garyx://thread/<thread-id>, garyx://new?workspace=<path>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.",
     },
   );
 });

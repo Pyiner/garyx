@@ -340,6 +340,14 @@ Settings view.
 Thread history is persisted through transcript records; backend selection is no
 longer exposed as a gateway setting.
 
+The desktop app mirrors its current view into the window URL hash. For example,
+thread pages use `#/thread/<thread-id>`, new-thread drafts can use
+`#/new?workspace=<path>`, and settings pages use `#/settings/<tab>`. This is a
+desktop navigation aid only: it lets Command-R reload the app without losing
+the active thread, draft directory, or settings tab. The registered `garyx://`
+protocol uses matching paths such as `garyx://thread/<thread-id>` and
+`garyx://new?workspace=<path>`.
+
 Packaged macOS builds check for app updates automatically. You can also open
 Settings > Mac App and use Check Now to manually refresh the update state.
 Development builds report update checks as unavailable because there is no

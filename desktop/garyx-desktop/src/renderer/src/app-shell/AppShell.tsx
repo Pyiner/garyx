@@ -204,6 +204,12 @@ import {
   createTranslator,
   useResolvedLocale,
 } from "../i18n";
+import {
+  contentViewForDesktopRoute,
+  parseDesktopRoute,
+  replaceDesktopRoute,
+  type DesktopRoute,
+} from "./desktop-route";
 
 function messagesNearBottom(node: HTMLDivElement | null): boolean {
   if (!node) {
@@ -1084,6 +1090,59 @@ const ERROR_TOAST_MS = 4400;
 const GATEWAY_HEALTHY_POLL_MS = 12000;
 const GATEWAY_RETRY_BACKOFF_MS = [2500, 4000, 6500, 10000, 15000];
 
+function savedContentView(): ContentView {
+  const saved = sessionStorage.getItem("gary-content-view");
+  const valid: ContentView[] = [
+    "thread",
+    "browser",
+    "bots",
+    "automation",
+    "auto_research",
+    "agents",
+    "teams",
+    "skills",
+    "settings",
+  ];
+  return saved && valid.includes(saved as ContentView)
+    ? (saved as ContentView)
+    : "thread";
+}
+
+function initialContentView(route: DesktopRoute): ContentView {
+  return contentViewForDesktopRoute(route) || savedContentView();
+}
+
+function currentDesktopRoute(input: {
+  contentView: ContentView;
+  newThreadDraftActive: boolean;
+  pendingAgentId: string | null;
+  pendingWorkspacePath: string | null;
+  selectedAutomationId: string | null;
+  selectedThreadId: string | null;
+  settingsActiveTab: SettingsTabId;
+}): DesktopRoute {
+  if (input.contentView === "thread") {
+    if (input.selectedThreadId) {
+      return { kind: "thread", threadId: input.selectedThreadId };
+    }
+    if (input.newThreadDraftActive || input.pendingWorkspacePath) {
+      return {
+        kind: "new-thread",
+        workspacePath: input.pendingWorkspacePath,
+        agentId: input.pendingAgentId,
+      };
+    }
+    return { kind: "thread-home" };
+  }
+  if (input.contentView === "automation") {
+    return { kind: "automation", automationId: input.selectedAutomationId };
+  }
+  if (input.contentView === "settings") {
+    return { kind: "settings", tabId: input.settingsActiveTab };
+  }
+  return { kind: "view", view: input.contentView };
+}
+
 function waitForMs(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -1249,6 +1308,11 @@ function inferProviderTypeForThread(
 }
 
 export function AppShell() {
+  const initialRouteRef = useRef<DesktopRoute | null>(null);
+  if (!initialRouteRef.current) {
+    initialRouteRef.current = parseDesktopRoute();
+  }
+  const initialRouteValue = initialRouteRef.current;
   const [desktopState, setDesktopState] = useState<DesktopState | null>(null);
   const [desktopAgents, setDesktopAgents] = useState<DesktopCustomAgent[]>([]);
   const [desktopTeams, setDesktopTeams] = useState<DesktopTeam[]>([]);
@@ -1259,17 +1323,27 @@ export function AppShell() {
   const [gatewayFailureCount, setGatewayFailureCount] = useState(0);
   const [gatewaySetupForced, setGatewaySetupForced] = useState(false);
   const [gatewaySetupCanCancel, setGatewaySetupCanCancel] = useState(false);
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
-  const [newThreadDraftActive, setNewThreadDraftActive] = useState(false);
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() =>
+    initialRouteValue.kind === "thread" ? initialRouteValue.threadId : null,
+  );
+  const [newThreadDraftActive, setNewThreadDraftActive] = useState(
+    initialRouteValue.kind === "new-thread",
+  );
   const [pendingWorkspacePath, setPendingWorkspacePath] = useState<string | null>(
-    null,
+    initialRouteValue.kind === "new-thread"
+      ? initialRouteValue.workspacePath || null
+      : null,
   );
   const [pendingBotId, setPendingBotId] = useState<string | null>(null);
   const [optimisticThreadBotBinding, setOptimisticThreadBotBinding] = useState<{
     botId: string | null;
     threadId: string;
   } | null>(null);
-  const [pendingAgentId, setPendingAgentId] = useState<string>("claude");
+  const [pendingAgentId, setPendingAgentId] = useState<string>(
+    initialRouteValue.kind === "new-thread" && initialRouteValue.agentId
+      ? initialRouteValue.agentId
+      : "claude",
+  );
   const [messagesByThread, setMessagesByThread] = useState<MessageMap>({});
   const [threadInfoByThread, setThreadInfoByThread] = useState<
     Record<string, ThreadRuntimeInfo | null>
@@ -1322,23 +1396,9 @@ export function AppShell() {
     startX: number;
     startWidth: number;
   } | null>(null);
-  const [contentView, setContentViewRaw] = useState<ContentView>(() => {
-    const saved = sessionStorage.getItem("gary-content-view");
-    const valid: ContentView[] = [
-      "thread",
-      "browser",
-      "bots",
-      "automation",
-      "auto_research",
-      "agents",
-      "teams",
-      "skills",
-      "settings",
-    ];
-    return saved && valid.includes(saved as ContentView)
-      ? (saved as ContentView)
-      : "thread";
-  });
+  const [contentView, setContentViewRaw] = useState<ContentView>(() =>
+    initialContentView(initialRouteValue),
+  );
   const setContentView: typeof setContentViewRaw = (action) => {
     setContentViewRaw((prev) => {
       const next = typeof action === "function" ? action(prev) : action;
@@ -1545,6 +1605,8 @@ export function AppShell() {
     settingsDraft,
   } = useSettingsController({
     desktopState,
+    initialSettingsTab:
+      initialRouteValue.kind === "settings" ? initialRouteValue.tabId : null,
     setConnection,
     setDesktopState,
     setError,
@@ -2697,6 +2759,98 @@ export function AppShell() {
     setSelectedThreadId(threadId);
   }
 
+  const applyDesktopRoute = useCallback(
+    async (route: DesktopRoute): Promise<void> => {
+      switch (route.kind) {
+        case "thread":
+          await openExistingThread(route.threadId);
+          return;
+        case "new-thread":
+          setError(null);
+          setContentView("thread");
+          setNewThreadDraftActive(true);
+          setSelectedThreadId(null);
+          setPendingWorkspacePath(route.workspacePath || null);
+          setPendingBotId(null);
+          setPendingAgentId(route.agentId || "claude");
+          clearComposerDraft();
+          requestComposerFocus();
+          return;
+        case "automation":
+          if (route.automationId) {
+            await handleSelectAutomation(route.automationId);
+          } else {
+            setContentView("automation");
+          }
+          return;
+        case "settings":
+          setContentView("settings");
+          if (route.tabId) {
+            await handleSelectSettingsTab(route.tabId);
+          }
+          return;
+        case "view":
+          setContentView(route.view);
+          return;
+        case "thread-home":
+          setContentView("thread");
+          setNewThreadDraftActive(false);
+          setPendingWorkspacePath(null);
+          setSelectedThreadId((current) =>
+            isKnownThreadId(desktopState, current)
+              ? current
+              : desktopState?.threads[0]?.id || null,
+          );
+          return;
+      }
+    },
+    [
+      desktopState,
+      handleSelectAutomation,
+      handleSelectSettingsTab,
+      openExistingThread,
+      setContentView,
+    ],
+  );
+
+  useEffect(() => {
+    const handleRouteChange = () => {
+      void applyDesktopRoute(parseDesktopRoute());
+    };
+    window.addEventListener("hashchange", handleRouteChange);
+    window.addEventListener("popstate", handleRouteChange);
+    return () => {
+      window.removeEventListener("hashchange", handleRouteChange);
+      window.removeEventListener("popstate", handleRouteChange);
+    };
+  }, [applyDesktopRoute]);
+
+  useEffect(() => {
+    if (loading) {
+      return;
+    }
+    replaceDesktopRoute(
+      currentDesktopRoute({
+        contentView,
+        newThreadDraftActive,
+        pendingAgentId,
+        pendingWorkspacePath,
+        selectedAutomationId,
+        selectedThreadId,
+        settingsActiveTab,
+      }),
+    );
+  }, [
+    contentView,
+    loading,
+    newThreadDraftActive,
+    pendingAgentId,
+    pendingWorkspacePath,
+    selectedAutomationId,
+    selectedThreadId,
+    settingsActiveTab,
+  ]);
+
   function requestComposerFocus() {
     shouldFocusComposerRef.current = true;
   }
@@ -3123,12 +3277,48 @@ export function AppShell() {
           throw new Error("Failed to load desktop state");
         }
 
-        const hydratedState = state;
-        setSelectedThreadId((current) =>
-          isKnownThreadId(hydratedState, current)
-            ? current
-            : hydratedState.threads[0]?.id || null,
-        );
+        let hydratedState = state;
+        const startupRoute = initialRouteRef.current || { kind: "thread-home" };
+        if (startupRoute.kind === "automation" && startupRoute.automationId) {
+          try {
+            hydratedState = await window.garyxDesktop.selectAutomation({
+              automationId: startupRoute.automationId,
+            });
+            if (cancelled) {
+              return;
+            }
+            setDesktopState(hydratedState);
+          } catch (automationRouteError) {
+            if (!cancelled) {
+              setError(
+                automationRouteError instanceof Error
+                  ? automationRouteError.message
+                  : `Automation not found: ${startupRoute.automationId}`,
+              );
+            }
+          }
+        }
+
+        if (startupRoute.kind === "thread") {
+          if (isKnownThreadId(hydratedState, startupRoute.threadId)) {
+            setSelectedThreadId(startupRoute.threadId);
+          } else {
+            setError(`Thread not found: ${startupRoute.threadId}`);
+            setSelectedThreadId(hydratedState.threads[0]?.id || null);
+          }
+        } else if (startupRoute.kind === "new-thread") {
+          setContentView("thread");
+          setNewThreadDraftActive(true);
+          setSelectedThreadId(null);
+          setPendingWorkspacePath(startupRoute.workspacePath || null);
+          setPendingAgentId(startupRoute.agentId || "claude");
+        } else {
+          setSelectedThreadId((current) =>
+            isKnownThreadId(hydratedState, current)
+              ? current
+              : hydratedState.threads[0]?.id || null,
+          );
+        }
         await loadGatewaySettings();
       } catch (bootstrapError) {
         if (!cancelled) {
@@ -4674,6 +4864,13 @@ export function AppShell() {
             case "open-thread":
               await openThreadFromDeepLink(event.threadId);
               return;
+            case "new-thread":
+              await applyDesktopRoute({
+                kind: "new-thread",
+                workspacePath: event.workspacePath || null,
+                agentId: event.agentId || null,
+              });
+              return;
             case "resume-session":
               await waitForGatewayReadyForDeepLink();
               await handleResumeProviderSession(
@@ -4691,7 +4888,7 @@ export function AppShell() {
         }
       })();
     };
-  }, [handleResumeProviderSession, openThreadFromDeepLink, pushToast]);
+  }, [applyDesktopRoute, handleResumeProviderSession, openThreadFromDeepLink, pushToast]);
 
   async function syncThreadBotBinding(
     threadId: string,

@@ -192,6 +192,25 @@ function serializeMessageAttachments(
   };
 }
 
+export function closeActiveChatStreams(): void {
+  for (const [threadId, active] of activeStreamRequests.entries()) {
+    activeStreamRequests.delete(threadId);
+    const pendingInput = active.pendingInputWaiters.splice(0);
+    for (const waiter of pendingInput) {
+      waiter.reject(new Error("renderer reloaded"));
+    }
+    const pendingInterrupt = active.pendingInterruptWaiters.splice(0);
+    for (const waiter of pendingInterrupt) {
+      waiter.reject(new Error("renderer reloaded"));
+    }
+    try {
+      active.socket.close();
+    } catch {
+      activeStreamRequests.delete(threadId);
+    }
+  }
+}
+
 function formatLocalChatTimestamp(date = new Date()): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");

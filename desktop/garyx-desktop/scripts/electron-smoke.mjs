@@ -835,9 +835,36 @@ async function main() {
         false,
         `new thread request should send only workspaceDir, got ${JSON.stringify(firstCreateRequest)}`,
       );
+      stage = 'reload-preserves-thread-route';
+      await window.waitForFunction(
+        () => window.location.hash.startsWith('#/thread/'),
+        null,
+        { timeout: 10000 },
+      );
+      const routeHashBeforeReload = await window.evaluate(() => window.location.hash);
+      await window.reload({ waitUntil: 'domcontentloaded' });
+      await window.locator('.app-shell').waitFor({ timeout: 15000 });
+      await window.waitForFunction(
+        (expectedHash) => window.location.hash === expectedHash,
+        routeHashBeforeReload,
+        { timeout: 10000 },
+      );
+      await window
+        .locator('.message-bubble.assistant p')
+        .filter({ hasText: WARMUP_TOKEN })
+        .first()
+        .waitFor({ timeout: 20000 });
+      await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) }).waitFor({
+        timeout: 15000,
+      });
       stage = 'queue-followups';
       await composer.fill(`Return exactly the token ${TOKENS[0]} and nothing else.`);
       await composer.press('Enter');
+      await window
+        .locator('.message-bubble.user')
+        .filter({ hasText: TOKENS[0] })
+        .first()
+        .waitFor({ timeout: 10000 });
       await composer.fill(`Return exactly the token ${TOKENS[1]} and nothing else.`);
       await composer.press('Enter');
       await window.getByText(oneOfExact(SMOKE_TEXT.followUpsReady)).waitFor({ timeout: 3000 }).catch(() => {});

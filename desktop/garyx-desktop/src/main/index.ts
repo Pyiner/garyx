@@ -97,6 +97,7 @@ import {
   createSlashCommand,
   bindRemoteChannelEndpoint,
   checkConnection,
+  closeActiveChatStreams,
   deleteCustomAgent,
   deleteTeam,
   deleteMcpServer,
@@ -296,6 +297,8 @@ function queueDeepLink(rawUrl: string): void {
   const traceLabel =
     event.type === "open-thread"
       ? `open-thread:${event.threadId}`
+      : event.type === "new-thread"
+        ? `new-thread:${event.workspacePath || "default"}`
       : event.type === "resume-session"
         ? `resume-session:${event.providerHint || "auto"}`
         : `error:${event.error}`;
@@ -339,6 +342,17 @@ function createMainWindow(): BrowserWindow {
       void shell.openExternal(url);
     }
     return { action: "deny" };
+  });
+  window.webContents.on(
+    "did-start-navigation",
+    (_event, _url, isInPlace, isMainFrame) => {
+      if (isMainFrame && !isInPlace) {
+        closeActiveChatStreams();
+      }
+    },
+  );
+  window.webContents.on("destroyed", () => {
+    closeActiveChatStreams();
   });
 
   const devServerUrl = process.env.ELECTRON_RENDERER_URL;

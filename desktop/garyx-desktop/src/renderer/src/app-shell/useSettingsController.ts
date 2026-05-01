@@ -14,7 +14,7 @@ import {
   type UpsertSlashCommandInput,
 } from '@shared/contracts';
 
-import type { SettingsTabId } from '../GatewaySettingsPanel';
+import { SETTINGS_TABS, type SettingsTabId } from '../GatewaySettingsPanel';
 import {
   cloneJson,
   ensureGatewayConfig,
@@ -40,8 +40,16 @@ function desktopSettingsEqual(
   );
 }
 
+function normalizeSettingsTab(value?: SettingsTabId | null): SettingsTabId {
+  if (value === 'connection') {
+    return 'gateway';
+  }
+  return value && SETTINGS_TABS.some((tab) => tab.id === value) ? value : 'labs';
+}
+
 type UseSettingsControllerArgs = {
   desktopState: DesktopState | null;
+  initialSettingsTab?: SettingsTabId | null;
   setDesktopState: React.Dispatch<React.SetStateAction<DesktopState | null>>;
   setConnection: React.Dispatch<React.SetStateAction<ConnectionStatus | null>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
@@ -49,6 +57,7 @@ type UseSettingsControllerArgs = {
 
 export function useSettingsController({
   desktopState,
+  initialSettingsTab,
   setDesktopState,
   setConnection,
   setError,
@@ -72,7 +81,9 @@ export function useSettingsController({
   const [mcpServersLoading, setMcpServersLoading] = useState(false);
   const [mcpServersSaving, setMcpServersSaving] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTabId>('labs');
+  const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTabId>(() =>
+    normalizeSettingsTab(initialSettingsTab),
+  );
 
   const gatewaySettingsDraftRef = useRef<any>(ensureGatewayConfig({}));
   const gatewaySettingsSavingRef = useRef(false);

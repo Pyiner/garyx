@@ -939,6 +939,12 @@ export type DesktopDeepLinkEvent =
       threadId: string;
     }
   | {
+      type: "new-thread";
+      url: string;
+      workspacePath?: string | null;
+      agentId?: string | null;
+    }
+  | {
       type: "resume-session";
       url: string;
       sessionId: string;

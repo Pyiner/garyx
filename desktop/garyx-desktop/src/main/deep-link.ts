@@ -5,7 +5,7 @@ import type {
 
 export const GARYX_PROTOCOL = "garyx";
 const DEEP_LINK_USAGE =
-  "Use garyx://thread/<thread-id>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.";
+  "Use garyx://thread/<thread-id>, garyx://new?workspace=<path>, garyx://resume/<session-id>, or garyx://resume/<provider>/<session-id>.";
 
 function decodeLoose(value: string | null | undefined): string | null {
   if (!value) {
@@ -80,7 +80,7 @@ export function parseDesktopDeepLink(rawUrl: string): DesktopDeepLinkEvent {
     );
   }
 
-  if (url.search || url.hash) {
+  if (url.hash) {
     return deepLinkError(
       normalizedUrl,
       `Unsupported garyx:// format. ${DEEP_LINK_USAGE}`,
@@ -93,6 +93,12 @@ export function parseDesktopDeepLink(rawUrl: string): DesktopDeepLinkEvent {
   const secondSegment = segments[1] || null;
 
   if (action === "thread") {
+    if (url.search) {
+      return deepLinkError(
+        normalizedUrl,
+        `Unsupported garyx:// format. ${DEEP_LINK_USAGE}`,
+      );
+    }
     if (!firstSegment) {
       return deepLinkError(
         normalizedUrl,
@@ -112,7 +118,31 @@ export function parseDesktopDeepLink(rawUrl: string): DesktopDeepLinkEvent {
     };
   }
 
+  if (action === "new") {
+    if (segments.length > 1) {
+      return deepLinkError(
+        normalizedUrl,
+        `Unsupported garyx:// format. ${DEEP_LINK_USAGE}`,
+      );
+    }
+    return {
+      type: "new-thread",
+      url: normalizedUrl,
+      workspacePath:
+        decodeLoose(url.searchParams.get("workspace")) ||
+        decodeLoose(url.searchParams.get("workspacePath")) ||
+        firstSegment,
+      agentId: decodeLoose(url.searchParams.get("agent")),
+    };
+  }
+
   if (action === "resume") {
+    if (url.search) {
+      return deepLinkError(
+        normalizedUrl,
+        `Unsupported garyx:// format. ${DEEP_LINK_USAGE}`,
+      );
+    }
     if (!firstSegment) {
       return deepLinkError(
         normalizedUrl,
