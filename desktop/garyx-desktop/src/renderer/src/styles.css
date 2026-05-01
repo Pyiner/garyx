@@ -7187,6 +7187,21 @@ button.team-agent-speaker:focus-visible {
   flex-shrink: 0;
 }
 
+.composer-provider-agent-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+  flex-shrink: 0;
+}
+
+.composer-provider-agent-icon .icon {
+  width: 14px;
+  height: 14px;
+}
+
 .composer-provider-label {
   min-width: 0;
   color: currentColor;

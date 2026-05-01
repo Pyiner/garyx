@@ -61,6 +61,7 @@ import {
   groupAgentOptions,
   type ComposerAgentOption,
 } from './app-shell/agent-options';
+import { AgentsIcon } from './app-shell/icons';
 
 export type { ComposerAgentOption };
 
@@ -224,22 +225,6 @@ function slashCommandIcon(command: SlashCommand): Icon {
   return IconCommand;
 }
 
-const PROVIDER_ICON_GLYPH = (
-  <svg
-    aria-hidden
-    width="14"
-    height="14"
-    viewBox="0 0 24 24"
-    fill="none"
-    className="composer-provider-icon"
-  >
-    <path
-      d="M11.912 21.413c-.383.45-.883.683-1.5.7-.616.016-1.116-.192-1.5-.625-.375-.434-.454-1.034-.237-1.8L9.687 16H4.575c-.567 0-1.008-.162-1.325-.488a1.68 1.68 0 0 1-.475-1.2c0-.474.154-.9.462-1.274l8.9-10.563c.384-.45.884-.683 1.5-.7.617-.017 1.113.192 1.488.625.383.433.467 1.033.25 1.8L14.312 8h5.113c.567 0 1.008.167 1.325.5.325.333.488.737.488 1.213 0 .466-.159.891-.475 1.274l-8.85 10.426Z"
-      fill="currentColor"
-    />
-  </svg>
-);
-
 const PROVIDER_CHEVRON_GLYPH = (
   <svg
     aria-hidden
@@ -259,6 +244,12 @@ const PROVIDER_CHEVRON_GLYPH = (
   </svg>
 );
 
+const AGENT_PROVIDER_GLYPH = (
+  <span aria-hidden className="composer-provider-agent-icon">
+    <AgentsIcon />
+  </span>
+);
+
 function renderComposerProviderControl({
   composerProviderType,
   agentLabel,
@@ -274,12 +265,7 @@ function renderComposerProviderControl({
   onSelectAgent?: (agentId: string) => void;
   t: Translate;
 }) {
-  const providerIcon =
-    composerProviderType === 'codex_app_server' ? (
-      <IconCode aria-hidden size={14} stroke={1.7} />
-    ) : (
-      PROVIDER_ICON_GLYPH
-    );
+  const providerIcon = AGENT_PROVIDER_GLYPH;
   const providerLabel = agentLabel || providerOptionLabel(composerProviderType);
 
   if (onSelectAgent) {
