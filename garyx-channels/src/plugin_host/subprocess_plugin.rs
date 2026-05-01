@@ -220,7 +220,7 @@ impl ChannelPlugin for SubprocessChannelPlugin {
             chat_id: msg.chat_id,
             delivery_target_type: msg.delivery_target_type,
             delivery_target_id: msg.delivery_target_id,
-            text: msg.text,
+            content: msg.content,
             reply_to: msg.reply_to,
             thread_id: msg.thread_id,
         };

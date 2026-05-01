@@ -1,4 +1,5 @@
 use super::*;
+use garyx_models::ProviderMessage;
 use serde_json::json;
 
 #[test]
@@ -35,6 +36,37 @@ fn stream_event_tagged_serialization() {
     let ser = serde_json::to_value(&boundary).unwrap();
     assert_eq!(ser["type"], "boundary");
     assert_eq!(ser["kind"], "user_ack");
+
+    let tool_use = StreamEventFrame::ToolUse {
+        message: ProviderMessage::tool_use(
+            json!({"name": "Bash"}),
+            Some("tool-1".to_owned()),
+            Some("Bash".to_owned()),
+        ),
+    };
+    let ser = serde_json::to_value(&tool_use).unwrap();
+    assert_eq!(ser["type"], "tool_use");
+    assert_eq!(ser["message"]["tool_name"], "Bash");
+}
+
+#[test]
+fn dispatch_outbound_content_is_structured() {
+    let raw = json!({
+        "account_id": "acct",
+        "chat_id": "chat",
+        "delivery_target_type": "chat_id",
+        "delivery_target_id": "chat",
+        "content": {
+            "type": "tool_use",
+            "message": {
+                "role": "tool_use",
+                "content": {"name": "Read"},
+                "tool_name": "Read"
+            }
+        }
+    });
+    let parsed: DispatchOutbound = serde_json::from_value(raw).unwrap();
+    assert_eq!(parsed.content.kind(), "tool_use");
 }
 
 #[test]

@@ -43,6 +43,7 @@ pub use dispatcher::{
     TelegramSender,
 };
 pub use feishu::FeishuChannel;
+pub use garyx_models::ChannelOutboundContent;
 pub use plugin::{
     BuiltInPluginDiscoverer, ChannelPluginManager, LocalDescriptorDiscoverer, PluginMetadata,
     PluginState, PluginStatus, SubprocessPluginCatalogEntry, SubprocessPluginError,

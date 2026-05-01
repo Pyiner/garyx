@@ -15,6 +15,7 @@
 
 use std::collections::BTreeMap;
 
+use garyx_models::{ChannelOutboundContent, ProviderMessage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -289,12 +290,18 @@ pub enum StreamEventFrame {
     Delta {
         text: String,
     },
+    ToolUse {
+        message: ProviderMessage,
+    },
+    ToolResult {
+        message: ProviderMessage,
+    },
     Boundary {
         kind: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
     },
-    /// Tool-call narration or other host-emitted metadata.
+    /// Other host-emitted metadata.
     Meta {
         #[serde(default)]
         label: Option<String>,
@@ -363,7 +370,7 @@ pub struct DispatchOutbound {
     pub chat_id: String,
     pub delivery_target_type: String,
     pub delivery_target_id: String,
-    pub text: String,
+    pub content: ChannelOutboundContent,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

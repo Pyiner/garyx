@@ -1586,6 +1586,91 @@ mod e2e_tests {
         }
     }
 
+    struct StreamingToolPlaceholderProvider {
+        call_count: AtomicUsize,
+    }
+
+    impl StreamingToolPlaceholderProvider {
+        fn new() -> Self {
+            Self {
+                call_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentLoopProvider for StreamingToolPlaceholderProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::ClaudeCode
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Bash"}),
+                    Some("tool-bash".to_owned()),
+                    Some("Bash".to_owned()),
+                ),
+            });
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Read"}),
+                    Some("tool-read".to_owned()),
+                    Some("Read".to_owned()),
+                ),
+            });
+            on_chunk(StreamEvent::Delta {
+                text: "done".to_owned(),
+            });
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Write"}),
+                    Some("tool-write".to_owned()),
+                    Some("Write".to_owned()),
+                ),
+            });
+            on_chunk(StreamEvent::Delta {
+                text: "next".to_owned(),
+            });
+            on_chunk(StreamEvent::Done);
+            Ok(ProviderRunResult {
+                run_id: "stream-tools".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "done\nnext".to_owned(),
+                session_messages: vec![],
+                sdk_session_id: None,
+                actual_model: None,
+                success: true,
+                error: None,
+                input_tokens: 10,
+                output_tokens: 5,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
     struct StreamingSegmentBoundaryProvider {
         call_count: AtomicUsize,
     }
@@ -2200,6 +2285,89 @@ mod e2e_tests {
         let final_text = final_body["text"].as_str().unwrap();
         assert_eq!(final_text, "你好！👋");
         assert!(final_body["parse_mode"].is_null());
+    }
+
+    #[tokio::test]
+    async fn test_e2e_streaming_tool_placeholders_are_replaced_by_text() {
+        let (server, capture) = setup_tg_capture_mock(false).await;
+        let api_base = unique_api_base(&server);
+        let provider = Arc::new(StreamingToolPlaceholderProvider::new());
+        let bridge = make_bridge_with(provider.clone()).await;
+        let router = make_router();
+        let http = reqwest::Client::new();
+
+        let account = default_account();
+        let update = TgUpdateBuilder::dm(42, "run tools").build();
+
+        dispatch_update(
+            &http,
+            "bot1",
+            "fake-token",
+            "garyx",
+            999,
+            &account,
+            &update,
+            &router,
+            &bridge,
+            &api_base,
+        )
+        .await;
+
+        wait_for_counter_at_least(&provider.call_count, 1).await;
+
+        let _placeholder =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("🔧 Bash")
+            })
+            .await;
+
+        let first_text =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body["text"].as_str().unwrap_or_default() == "done"
+            })
+            .await;
+        assert!(
+            first_text["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("done")
+        );
+
+        let second_placeholder =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body["text"].as_str().unwrap_or_default() == "🔧 Write"
+            })
+            .await;
+        assert_eq!(second_placeholder["text"], "🔧 Write");
+
+        let final_body =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body["text"].as_str().unwrap_or_default() == "next"
+            })
+            .await;
+        assert_eq!(final_body["text"], "next");
+
+        let all_texts = capture
+            .send_bodies()
+            .into_iter()
+            .chain(capture.edit_bodies().into_iter())
+            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+        assert!(
+            all_texts.iter().any(|text| text.contains("🔧 Read")),
+            "second tool placeholder should be rendered before text replaces it: {all_texts:?}"
+        );
+        assert!(
+            all_texts.iter().any(|text| text == "done"),
+            "tool placeholder should be overwritten by first text: {all_texts:?}"
+        );
+        assert!(
+            all_texts.iter().any(|text| text == "next"),
+            "second tool placeholder should be overwritten by later text: {all_texts:?}"
+        );
     }
 
     #[tokio::test]

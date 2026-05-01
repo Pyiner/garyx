@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use garyx_channels::StreamingDispatchTarget;
 use garyx_channels::{ChannelError, OutboundMessage, SendMessageResult};
+use garyx_models::ChannelOutboundContent;
 use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_models::{MessageLifecycleStatus, MessageTerminalReason};
@@ -160,15 +161,9 @@ impl BoundThreadDeliveryBuffer {
         }
     }
 
-    pub(crate) fn flush(
-        &self,
-        state: Arc<AppState>,
-        thread_id: String,
-        run_id: String,
-        warn_context: &'static str,
-    ) {
+    fn take_pending_text(&self, warn_context: &'static str) -> Option<String> {
         if self.suppressed.load(Ordering::Relaxed) {
-            return;
+            return None;
         }
 
         let merged = match self.pending.lock() {
@@ -177,12 +172,22 @@ impl BoundThreadDeliveryBuffer {
                 tracing::warn!(
                     "{warn_context}: buffer lock poisoned while finalizing assistant delivery"
                 );
-                return;
+                return None;
             }
         };
-        if merged.trim().is_empty() {
+        (!merged.trim().is_empty()).then_some(merged)
+    }
+
+    pub(crate) fn flush(
+        &self,
+        state: Arc<AppState>,
+        thread_id: String,
+        run_id: String,
+        warn_context: &'static str,
+    ) {
+        let Some(merged) = self.take_pending_text(warn_context) else {
             return;
-        }
+        };
 
         let delivery_gate = self.delivery_gate.clone();
         let inflight = self.inflight.clone();
@@ -191,6 +196,37 @@ impl BoundThreadDeliveryBuffer {
         tokio::spawn(async move {
             let _guard = delivery_gate.lock().await;
             deliver_assistant_reply_to_bound_channels(state, thread_id, run_id, merged).await;
+            if inflight.fetch_sub(1, Ordering::Relaxed) == 1 {
+                idle_notify.notify_waiters();
+            }
+        });
+    }
+
+    pub(crate) fn dispatch_content_after_flush(
+        &self,
+        state: Arc<AppState>,
+        thread_id: String,
+        run_id: String,
+        content: ChannelOutboundContent,
+        warn_context: &'static str,
+    ) {
+        let pending_text = self.take_pending_text(warn_context);
+        let delivery_gate = self.delivery_gate.clone();
+        let inflight = self.inflight.clone();
+        let idle_notify = self.idle_notify.clone();
+        inflight.fetch_add(1, Ordering::Relaxed);
+        tokio::spawn(async move {
+            let _guard = delivery_gate.lock().await;
+            if let Some(text) = pending_text {
+                deliver_assistant_reply_to_bound_channels(
+                    state.clone(),
+                    thread_id.clone(),
+                    run_id.clone(),
+                    text,
+                )
+                .await;
+            }
+            deliver_structured_content_to_bound_channels(state, thread_id, run_id, content).await;
             if inflight.fetch_sub(1, Ordering::Relaxed) == 1 {
                 idle_notify.notify_waiters();
             }
@@ -355,7 +391,7 @@ async fn deliver_assistant_reply_to_bound_channels(
             chat_id: target.chat_id.clone(),
             delivery_target_type: target.delivery_target_type.clone(),
             delivery_target_id: target.delivery_target_id.clone(),
-            text: text.clone(),
+            content: ChannelOutboundContent::text(text.clone()),
             reply_to: None,
             thread_id: target.thread_id.clone(),
         };
@@ -443,6 +479,67 @@ async fn deliver_assistant_reply_to_bound_channels(
     }
 }
 
+async fn deliver_structured_content_to_bound_channels(
+    state: Arc<AppState>,
+    thread_id: String,
+    run_id: String,
+    content: ChannelOutboundContent,
+) {
+    let Some(session_data) = state.threads.thread_store.get(&thread_id).await else {
+        return;
+    };
+    let targets = bound_thread_delivery_targets(&session_data);
+    if targets.is_empty() {
+        return;
+    }
+
+    record_api_thread_log(
+        &state,
+        ThreadLogEvent::info(
+            &thread_id,
+            "delivery",
+            "structured assistant event forwarding to bound endpoints",
+        )
+        .with_run_id(run_id.clone())
+        .with_field("target_count", json!(targets.len()))
+        .with_field("content_kind", json!(content.kind())),
+    )
+    .await;
+
+    let dispatcher = state.channel_dispatcher();
+    for target in targets {
+        let request = OutboundMessage {
+            channel: target.channel.clone(),
+            account_id: target.account_id.clone(),
+            chat_id: target.chat_id.clone(),
+            delivery_target_type: target.delivery_target_type.clone(),
+            delivery_target_id: target.delivery_target_id.clone(),
+            content: content.clone(),
+            reply_to: None,
+            thread_id: target.thread_id.clone(),
+        };
+
+        if let Err(error) = dispatcher.send_message(request).await {
+            record_api_thread_log(
+                &state,
+                ThreadLogEvent::warn(
+                    &thread_id,
+                    "delivery",
+                    "structured assistant event forwarding failed",
+                )
+                .with_run_id(run_id.clone())
+                .with_field("endpoint_key", json!(target.endpoint_key))
+                .with_field("channel", json!(target.channel))
+                .with_field("account_id", json!(target.account_id))
+                .with_field("chat_id", json!(target.chat_id))
+                .with_field("content_kind", json!(content.kind()))
+                .with_field("error", json!(error.to_string())),
+            )
+            .await;
+        }
+    }
+}
+
 pub(crate) fn schedule_loop_bound_delivery_flush(
     buffer: BoundThreadDeliveryBuffer,
     scheduled: Arc<AtomicBool>,
@@ -497,6 +594,15 @@ pub async fn build_bound_response_callback(
             }
         }
         StreamEvent::ToolResult { message } => {
+            callback_delivery.dispatch_content_after_flush(
+                callback_state.clone(),
+                callback_thread_id.clone(),
+                callback_run_id.clone(),
+                ChannelOutboundContent::ToolResult {
+                    message: message.clone(),
+                },
+                "bound delivery",
+            );
             if message_tool_mirror_text(&message).is_some() {
                 callback_delivery.suppress();
             }
@@ -522,15 +628,16 @@ pub async fn build_bound_response_callback(
                 "bound delivery",
             );
         }
-        StreamEvent::ToolUse { .. } => {
+        StreamEvent::ToolUse { message } => {
             // Flush any accumulated assistant text before a tool call so that
             // channels without native streaming (e.g. WeChat) deliver messages
             // incrementally between tool invocations instead of batching
             // everything until the run completes.
-            callback_delivery.flush(
+            callback_delivery.dispatch_content_after_flush(
                 callback_state.clone(),
                 callback_thread_id.clone(),
                 callback_run_id.clone(),
+                ChannelOutboundContent::ToolUse { message },
                 "bound delivery",
             );
         }

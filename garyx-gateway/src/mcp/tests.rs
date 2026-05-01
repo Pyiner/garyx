@@ -2008,7 +2008,7 @@ async fn test_execute_message_resolves_thread_target_and_dispatches() {
     assert_eq!(calls[0].channel, "telegram");
     assert_eq!(calls[0].account_id, "main");
     assert_eq!(calls[0].chat_id, "42");
-    assert_eq!(calls[0].text, "#cron::daily\nscheduled");
+    assert_eq!(calls[0].text_content(), Some("#cron::daily\nscheduled"));
 }
 
 #[tokio::test]
@@ -2060,7 +2060,7 @@ async fn test_execute_message_recovers_thread_target_from_persisted_delivery() {
     assert_eq!(calls[0].channel, "telegram");
     assert_eq!(calls[0].account_id, "main");
     assert_eq!(calls[0].chat_id, "84");
-    assert_eq!(calls[0].text, "#cron::daily\nscheduled");
+    assert_eq!(calls[0].text_content(), Some("#cron::daily\nscheduled"));
 }
 
 #[tokio::test]
@@ -2169,7 +2169,7 @@ async fn test_execute_message_without_target_prefers_current_thread_over_last() 
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].account_id, "office_codex");
     assert_eq!(calls[0].chat_id, "current-chat");
-    assert_eq!(calls[0].text, "hello current");
+    assert_eq!(calls[0].text_content(), Some("hello current"));
 }
 
 #[tokio::test]

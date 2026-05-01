@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
+use garyx_models::ChannelOutboundContent;
 use garyx_models::provider::StreamEvent;
 use garyx_models::routing::{infer_delivery_target_id, infer_delivery_target_type};
 use garyx_router::MessageRouter;
@@ -41,8 +42,8 @@ pub struct OutboundMessage {
     pub delivery_target_type: String,
     /// Channel-specific delivery target value. Falls back to `chat_id`.
     pub delivery_target_id: String,
-    /// Message text.
-    pub text: String,
+    /// Structured channel-facing content.
+    pub content: ChannelOutboundContent,
     /// Optional message ID to reply to.
     pub reply_to: Option<String>,
     /// Optional thread/topic ID (Telegram forum topics, Feishu threads).
@@ -154,15 +155,16 @@ impl OutboundSender for TelegramSender {
         &self,
         request: OutboundMessage,
     ) -> Result<SendMessageResult, ChannelError> {
+        let Some(text) = request.text_content() else {
+            return Ok(SendMessageResult::default());
+        };
         let chat_id = parse_telegram_id("chat_id", &request.chat_id)?;
         let reply_to = parse_optional_telegram_id("reply_to", request.reply_to.as_deref())?;
         // `thread_id` may carry a Garyx-internal thread key or a
         // legacy private-chat binding. Only a real numeric topic id
         // distinct from `chat_id` is a valid Telegram thread.
         let thread_id = normalize_telegram_thread_id(chat_id, request.thread_id.as_deref());
-        let message_ids = self
-            .send_text(chat_id, &request.text, reply_to, thread_id)
-            .await?;
+        let message_ids = self.send_text(chat_id, text, reply_to, thread_id).await?;
         Ok(SendMessageResult {
             message_ids: message_ids.into_iter().map(|id| id.to_string()).collect(),
         })
@@ -217,6 +219,9 @@ impl OutboundSender for FeishuSender {
         &self,
         request: OutboundMessage,
     ) -> Result<SendMessageResult, ChannelError> {
+        let Some(text) = request.text_content() else {
+            return Ok(SendMessageResult::default());
+        };
         let reply_target =
             resolve_feishu_reply_target(request.reply_to.as_deref(), request.thread_id.as_deref());
         let delivery_target_type = request.resolved_delivery_target_type();
@@ -225,7 +230,7 @@ impl OutboundSender for FeishuSender {
             .send_text(
                 &delivery_target_type,
                 &delivery_target_id,
-                &request.text,
+                text,
                 reply_target.as_deref(),
             )
             .await?;
@@ -740,6 +745,30 @@ impl FeishuSender {
 }
 
 impl OutboundMessage {
+    pub fn text(
+        channel: impl Into<String>,
+        account_id: impl Into<String>,
+        chat_id: impl Into<String>,
+        delivery_target_type: impl Into<String>,
+        delivery_target_id: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Self {
+        Self {
+            channel: channel.into(),
+            account_id: account_id.into(),
+            chat_id: chat_id.into(),
+            delivery_target_type: delivery_target_type.into(),
+            delivery_target_id: delivery_target_id.into(),
+            content: ChannelOutboundContent::text(text),
+            reply_to: None,
+            thread_id: None,
+        }
+    }
+
+    pub fn text_content(&self) -> Option<&str> {
+        self.content.as_text()
+    }
+
     pub fn resolved_delivery_target_type(&self) -> String {
         infer_delivery_target_type(
             &self.channel,
@@ -1032,6 +1061,7 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
             channel = %request.channel,
             account = %request.account_id,
             chat = %request.chat_id,
+            content_kind = %request.content.kind(),
             delivery_target_type = %request.resolved_delivery_target_type(),
             delivery_target_id = %request.resolved_delivery_target_id(),
             "Dispatching outbound message"
@@ -1039,6 +1069,9 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
 
         match request.channel.as_str() {
             "telegram" => {
+                let Some(text) = request.text_content() else {
+                    return Ok(SendMessageResult::default());
+                };
                 let sender = self
                     .telegram_senders
                     .get(&request.account_id)
@@ -1056,14 +1089,15 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                 // ids that differ from chat_id are valid Telegram thread ids.
                 let thread_id = normalize_telegram_thread_id(chat_id, request.thread_id.as_deref());
 
-                let message_ids = sender
-                    .send_text(chat_id, &request.text, reply_to, thread_id)
-                    .await?;
+                let message_ids = sender.send_text(chat_id, text, reply_to, thread_id).await?;
                 Ok(SendMessageResult {
                     message_ids: message_ids.into_iter().map(|id| id.to_string()).collect(),
                 })
             }
             "feishu" | "lark" => {
+                let Some(text) = request.text_content() else {
+                    return Ok(SendMessageResult::default());
+                };
                 let sender = self
                     .feishu_senders
                     .get(&request.account_id)
@@ -1084,13 +1118,16 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                     .send_text(
                         &delivery_target_type,
                         &delivery_target_id,
-                        &request.text,
+                        text,
                         reply_target.as_deref(),
                     )
                     .await?;
                 Ok(SendMessageResult { message_ids })
             }
             "weixin" | "wechat" => {
+                let Some(text) = request.text_content() else {
+                    return Ok(SendMessageResult::default());
+                };
                 let sender = self
                     .weixin_senders
                     .get(&request.account_id)
@@ -1109,7 +1146,7 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                 )
                 .await;
                 match sender
-                    .send_text(&delivery_target_id, &request.text, context_token.as_deref())
+                    .send_text(&delivery_target_id, text, context_token.as_deref())
                     .await
                 {
                     Ok(message_ids) => Ok(SendMessageResult { message_ids }),
@@ -1125,7 +1162,7 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                             weixin::queue_pending_outbound(
                                 &request.account_id,
                                 &delivery_target_id,
-                                &request.text,
+                                text,
                             )
                             .await;
                         }
@@ -1145,7 +1182,7 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                         chat_id: request.chat_id.clone(),
                         delivery_target_type,
                         delivery_target_id,
-                        text: request.text.clone(),
+                        content: request.content.clone(),
                         reply_to: request.reply_to.clone(),
                         thread_id: request.thread_id.clone(),
                     };
@@ -1354,6 +1391,9 @@ impl OutboundSender for WeixinSender {
         &self,
         request: OutboundMessage,
     ) -> Result<SendMessageResult, ChannelError> {
+        let Some(text) = request.text_content() else {
+            return Ok(SendMessageResult::default());
+        };
         let delivery_target_id = request.resolved_delivery_target_id();
         let context_token = weixin::get_context_token_for_thread(
             &request.account_id,
@@ -1362,7 +1402,7 @@ impl OutboundSender for WeixinSender {
         )
         .await;
         match self
-            .send_text(&delivery_target_id, &request.text, context_token.as_deref())
+            .send_text(&delivery_target_id, text, context_token.as_deref())
             .await
         {
             Ok(message_ids) => Ok(SendMessageResult { message_ids }),
@@ -1378,12 +1418,8 @@ impl OutboundSender for WeixinSender {
                     || error_str.contains("context_token")
                     || error_str.contains("send limit");
                 if is_token_error {
-                    weixin::queue_pending_outbound(
-                        &request.account_id,
-                        &delivery_target_id,
-                        &request.text,
-                    )
-                    .await;
+                    weixin::queue_pending_outbound(&request.account_id, &delivery_target_id, text)
+                        .await;
                 }
                 Err(error)
             }

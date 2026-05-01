@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{error, warn};
 
 use garyx_models::config::ReplyToMode;
-use garyx_models::provider::{StreamBoundaryKind, StreamEvent};
+use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
 use garyx_router::MessageRouter;
 
 use super::api::{TelegramSendTarget, edit_message_text, send_message_chunks};
@@ -21,6 +21,8 @@ struct StreamState {
     last_edit_time: Instant,
     flush_scheduled: bool,
     finalized: bool,
+    tool_placeholder_active: bool,
+    pending_tool_names: Vec<String>,
 }
 
 impl Default for StreamState {
@@ -32,6 +34,8 @@ impl Default for StreamState {
             last_edit_time: Instant::now(),
             flush_scheduled: false,
             finalized: false,
+            tool_placeholder_active: false,
+            pending_tool_names: Vec::new(),
         }
     }
 }
@@ -52,6 +56,35 @@ pub(crate) struct StreamingCallbackConfig {
 struct StreamingCallbackShared {
     cfg: StreamingCallbackConfig,
     state: Mutex<StreamState>,
+}
+
+fn telegram_tool_display_name(message: &ProviderMessage) -> String {
+    message
+        .tool_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            message
+                .content
+                .pointer("/name")
+                .or_else(|| message.content.pointer("/tool_name"))
+                .or_else(|| message.content.pointer("/tool"))
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "tool".to_owned())
+}
+
+fn render_tool_placeholder(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("🔧 {name}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl StreamingCallbackShared {
@@ -217,6 +250,92 @@ impl StreamingCallbackShared {
         state.last_edit_time = Instant::now();
         state.flush_scheduled = false;
         state.finalized = false;
+        state.tool_placeholder_active = false;
+        state.pending_tool_names.clear();
+    }
+
+    async fn process_tool_use(
+        &self,
+        thread_id: &str,
+        state: &mut StreamState,
+        message: ProviderMessage,
+    ) {
+        if !state.tool_placeholder_active && !state.accumulated_text.trim().is_empty() {
+            self.process_boundary(thread_id, state).await;
+        }
+
+        let name = telegram_tool_display_name(&message);
+        if state.pending_tool_names.last() != Some(&name) {
+            state.pending_tool_names.push(name);
+        }
+        let display_text = render_tool_placeholder(&state.pending_tool_names);
+        if display_text.trim().is_empty() {
+            return;
+        }
+
+        if let Some(msg_id) = state.message_id {
+            match edit_message_text(
+                &self.cfg.http,
+                &self.cfg.token,
+                self.cfg.chat_id,
+                msg_id,
+                &display_text,
+                None,
+                &self.cfg.api_base,
+            )
+            .await
+            {
+                Ok(()) => {
+                    state.last_rendered_text = display_text;
+                    state.last_edit_time = Instant::now();
+                    state.flush_scheduled = false;
+                    state.finalized = false;
+                    state.tool_placeholder_active = true;
+                    return;
+                }
+                Err(error) => {
+                    warn!(
+                        account_id = %self.cfg.account_id,
+                        error = %error,
+                        "Telegram tool placeholder edit failed; sending a fresh message"
+                    );
+                    state.message_id = None;
+                }
+            }
+        }
+
+        match send_response(
+            TelegramSendTarget::new(
+                &self.cfg.http,
+                &self.cfg.token,
+                self.cfg.chat_id,
+                self.cfg.outbound_thread_id,
+                &self.cfg.api_base,
+            ),
+            &display_text,
+            self.effective_reply_to(),
+        )
+        .await
+        {
+            Ok(msg_ids) => {
+                if let Some(&last_id) = msg_ids.last() {
+                    state.message_id = Some(last_id);
+                    state.last_rendered_text = display_text;
+                    state.last_edit_time = Instant::now();
+                    state.flush_scheduled = false;
+                    state.finalized = false;
+                    state.tool_placeholder_active = true;
+                }
+            }
+            Err(error) => {
+                error!(
+                    account_id = %self.cfg.account_id,
+                    chat_id = self.cfg.chat_id,
+                    error = %error,
+                    "failed to send Telegram tool placeholder"
+                );
+            }
+        }
     }
 
     async fn roll_stream_segment_if_needed(
@@ -349,16 +468,34 @@ impl StreamingCallbackShared {
                 if text.is_empty() {
                     return;
                 }
+                if state.tool_placeholder_active {
+                    state.accumulated_text.clear();
+                    state.pending_tool_names.clear();
+                    state.tool_placeholder_active = false;
+                }
                 state.accumulated_text =
                     crate::streaming_core::merge_stream_text(&state.accumulated_text, &text);
                 state.finalized = false;
                 false
             }
-            StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {
+            StreamEvent::ToolUse { message } => {
+                self.process_tool_use(thread_id, &mut state, message).await;
+                return;
+            }
+            StreamEvent::ToolResult { .. } => {
                 return;
             }
             StreamEvent::Done => true,
         };
+
+        if is_final && state.tool_placeholder_active {
+            state.finalized = true;
+            state.flush_scheduled = false;
+            if let Some(msg_id) = state.message_id {
+                self.record_outbound_messages(thread_id, &[msg_id]).await;
+            }
+            return;
+        }
 
         if is_final && state.flush_scheduled {
             let pending_text = state.accumulated_text.clone();

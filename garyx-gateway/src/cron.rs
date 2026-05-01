@@ -8,6 +8,7 @@ use chrono_tz::Tz;
 use cron::Schedule;
 use garyx_bridge::MultiProviderBridge;
 use garyx_channels::{ChannelDispatcher, OutboundMessage, SendMessageResult};
+use garyx_models::ChannelOutboundContent;
 use garyx_models::config::{
     CronAction, CronConfig, CronJobConfig, CronJobKind, CronSchedule, McpServerConfig,
 };
@@ -1489,7 +1490,7 @@ fn build_scheduled_response_callback(
             chat_id: chat_id.clone(),
             delivery_target_type: delivery_target_type.clone(),
             delivery_target_id: delivery_target_id.clone(),
-            text: outbound_text,
+            content: ChannelOutboundContent::text(outbound_text),
             reply_to: None,
             thread_id: delivery_thread_id.clone(),
         };

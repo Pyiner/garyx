@@ -28,6 +28,7 @@ use garyx_channels::plugin_host::{
     AccountDescriptor, HostContext, InboundHandler, PluginErrorCode, PluginManifest, RpcError,
     SpawnOptions,
 };
+use garyx_models::ChannelOutboundContent;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -120,7 +121,7 @@ fn dispatch_request(channel: &str, account: &str, chat: &str) -> OutboundMessage
         chat_id: chat.to_owned(),
         delivery_target_type: "chat_id".to_owned(),
         delivery_target_id: chat.to_owned(),
-        text: "hi".to_owned(),
+        content: ChannelOutboundContent::text("hi"),
         reply_to: None,
         thread_id: None,
     }

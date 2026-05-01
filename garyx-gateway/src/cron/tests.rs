@@ -723,7 +723,7 @@ async fn test_build_scheduled_response_callback_sends_final_message() {
     assert_eq!(calls[0].account_id, "main");
     assert_eq!(calls[0].chat_id, "42");
     assert_eq!(calls[0].thread_id.as_deref(), Some("100"));
-    assert_eq!(calls[0].text, "#cron::daily\nhello world");
+    assert_eq!(calls[0].text_content(), Some("#cron::daily\nhello world"));
 }
 
 #[tokio::test]
@@ -830,7 +830,10 @@ async fn test_build_scheduled_response_callback_preserves_assistant_segments() {
 
     let calls = dispatcher.calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].text, "#cron::daily\nfirst\n\nsecond");
+    assert_eq!(
+        calls[0].text_content(),
+        Some("#cron::daily\nfirst\n\nsecond")
+    );
 }
 
 #[tokio::test]
@@ -873,7 +876,7 @@ async fn test_build_scheduled_response_callback_stops_after_user_ack_boundary() 
 
     let calls = dispatcher.calls();
     assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].text, "#cron::daily\nfirst");
+    assert_eq!(calls[0].text_content(), Some("#cron::daily\nfirst"));
 }
 
 #[tokio::test]

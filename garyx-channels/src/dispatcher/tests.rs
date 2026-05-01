@@ -1,4 +1,5 @@
 use super::*;
+use garyx_models::ChannelOutboundContent;
 use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -138,7 +139,7 @@ async fn test_send_unknown_channel() {
             chat_id: "123".to_string(),
             delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
             delivery_target_id: "123".to_string(),
-            text: "hello".to_string(),
+            content: ChannelOutboundContent::text("hello"),
             reply_to: None,
             thread_id: None,
         })
@@ -158,7 +159,7 @@ async fn test_send_unregistered_telegram_account() {
             chat_id: "123".to_string(),
             delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
             delivery_target_id: "123".to_string(),
-            text: "hello".to_string(),
+            content: ChannelOutboundContent::text("hello"),
             reply_to: None,
             thread_id: None,
         })
@@ -186,7 +187,7 @@ async fn test_send_invalid_telegram_chat_id() {
             chat_id: "not-a-number".to_string(),
             delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
             delivery_target_id: "not-a-number".to_string(),
-            text: "hello".to_string(),
+            content: ChannelOutboundContent::text("hello"),
             reply_to: None,
             thread_id: None,
         })
@@ -214,7 +215,7 @@ async fn test_send_invalid_telegram_reply_to() {
             chat_id: "123".to_string(),
             delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
             delivery_target_id: "123".to_string(),
-            text: "hello".to_string(),
+            content: ChannelOutboundContent::text("hello"),
             reply_to: Some("bad-reply-id".to_string()),
             thread_id: None,
         })
@@ -242,7 +243,7 @@ async fn test_send_invalid_telegram_thread_id() {
             chat_id: "123".to_string(),
             delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
             delivery_target_id: "123".to_string(),
-            text: "hello".to_string(),
+            content: ChannelOutboundContent::text("hello"),
             reply_to: None,
             thread_id: Some("bad-thread-id".to_string()),
         })
@@ -345,7 +346,7 @@ async fn test_send_feishu_topic_thread_replies_to_root_message() {
             chat_id: "oc_group_123".to_string(),
             delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
             delivery_target_id: "oc_group_123".to_string(),
-            text: "hello thread".to_string(),
+            content: ChannelOutboundContent::text("hello thread"),
             reply_to: None,
             thread_id: Some("oc_group_123:topic:om_root_123".to_string()),
         })
@@ -496,7 +497,7 @@ async fn test_send_feishu_open_id_target_uses_open_id_receive_type() {
             chat_id: "ou_owner_123".to_string(),
             delivery_target_type: "open_id".to_string(),
             delivery_target_id: "ou_owner_123".to_string(),
-            text: "hello owner".to_string(),
+            content: ChannelOutboundContent::text("hello owner"),
             reply_to: None,
             thread_id: None,
         })
@@ -618,7 +619,7 @@ mod plugin_routing {
             chat_id: "chat-1".to_owned(),
             delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
             delivery_target_id: "chat-1".to_owned(),
-            text: "hi".to_owned(),
+            content: ChannelOutboundContent::text("hi"),
             reply_to: None,
             thread_id: None,
         }

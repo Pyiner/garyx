@@ -14,11 +14,11 @@
 //! [`MessageRouter`]: assemble an [`InboundRequest`], await
 //! `route_and_dispatch` with a response callback that accumulates
 //! streamed text and, on `Done`, posts it back out through the
-//! plugin's own `dispatch_outbound` via the [`ChannelDispatcher`].
+//! plugin's own `dispatch_outbound` via the [`ChannelDispatcher`];
+//! structured tool events are forwarded without text rendering.
 //! `record_outbound` is a no-op for now — the stream-driven
 //! callback already handles the write-path bookkeeping. `abandon_inbound`
-//! and streaming notifications are still stubbed; they come in
-//! follow-ups once a plugin actually needs them.
+//! tombstones a live stream so later provider events stop fanning out.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -36,6 +36,7 @@ use garyx_channels::plugin_host::{
     PluginErrorCode, PluginManifest, SpawnOptions, StreamId, StreamIdGenerator, StreamRegistry,
     TombstoneReason, preflight,
 };
+use garyx_models::ChannelOutboundContent;
 use garyx_models::command_catalog::{CommandCatalogOptions, CommandSurface};
 use garyx_models::config::GaryxConfig;
 use garyx_models::local_paths::{default_session_data_dir, gary_home_dir};
@@ -366,7 +367,7 @@ impl HostInboundHandler {
                 chat_id: parsed.thread_binding_key.clone(),
                 delivery_target_type: "chat_id".into(),
                 delivery_target_id: parsed.thread_binding_key.clone(),
-                text: text.to_owned(),
+                content: ChannelOutboundContent::text(text),
                 reply_to: None,
                 thread_id: Some(result.thread_id.clone()),
             };
@@ -440,7 +441,7 @@ struct StreamCallbackCtx {
 /// event:
 ///
 /// 1. **§7.1 streaming.** Emit `inbound/stream_frame` notifications
-///    (one per `Delta`, one per `Boundary`) to the plugin's
+///    (one per `Delta`, `ToolUse`, `ToolResult`, and `Boundary`) to the plugin's
 ///    transport, monotonically numbered with `seq`. On
 ///    `StreamEvent::Done` emit `inbound/stream_end`. This lets
 ///    streaming-aware plugins drive a real-time UI; batch-upstream
@@ -513,6 +514,70 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
                         let _ = sender.notify("inbound/stream_frame", &params).await;
                     }
                 }
+                StreamEvent::ToolUse { ref message } => {
+                    if let Some(sender) = sender.as_ref() {
+                        let params = json!({
+                            "stream_id": stream_id,
+                            "seq": seq.fetch_add(1, Ordering::Relaxed),
+                            "event": {
+                                "type": "tool_use",
+                                "message": message,
+                            },
+                        });
+                        let _ = sender.notify("inbound/stream_frame", &params).await;
+                    }
+                    let outbound = OutboundMessage {
+                        channel: plugin_id.clone(),
+                        account_id: account_id.clone(),
+                        chat_id: chat_id.clone(),
+                        delivery_target_type: "chat_id".into(),
+                        delivery_target_id: chat_id.clone(),
+                        content: ChannelOutboundContent::ToolUse {
+                            message: message.clone(),
+                        },
+                        reply_to: None,
+                        thread_id: thread_holder.lock().ok().and_then(|g| g.clone()),
+                    };
+                    if let Err(err) = swap.send_message(outbound).await {
+                        debug!(
+                            plugin_id = %plugin_id,
+                            error = %err,
+                            "failed to forward tool_use to plugin"
+                        );
+                    }
+                }
+                StreamEvent::ToolResult { ref message } => {
+                    if let Some(sender) = sender.as_ref() {
+                        let params = json!({
+                            "stream_id": stream_id,
+                            "seq": seq.fetch_add(1, Ordering::Relaxed),
+                            "event": {
+                                "type": "tool_result",
+                                "message": message,
+                            },
+                        });
+                        let _ = sender.notify("inbound/stream_frame", &params).await;
+                    }
+                    let outbound = OutboundMessage {
+                        channel: plugin_id.clone(),
+                        account_id: account_id.clone(),
+                        chat_id: chat_id.clone(),
+                        delivery_target_type: "chat_id".into(),
+                        delivery_target_id: chat_id.clone(),
+                        content: ChannelOutboundContent::ToolResult {
+                            message: message.clone(),
+                        },
+                        reply_to: None,
+                        thread_id: thread_holder.lock().ok().and_then(|g| g.clone()),
+                    };
+                    if let Err(err) = swap.send_message(outbound).await {
+                        debug!(
+                            plugin_id = %plugin_id,
+                            error = %err,
+                            "failed to forward tool_result to plugin"
+                        );
+                    }
+                }
                 StreamEvent::Done => {
                     let text = accumulated.trim().to_owned();
                     accumulated.clear();
@@ -545,7 +610,7 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
                         chat_id: chat_id.clone(),
                         delivery_target_type: "chat_id".into(),
                         delivery_target_id: chat_id.clone(),
-                        text,
+                        content: ChannelOutboundContent::text(text),
                         reply_to: None,
                         thread_id: if thread_id.is_empty() {
                             None
@@ -561,7 +626,6 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
                         );
                     }
                 }
-                _ => {}
             }
         }
     });

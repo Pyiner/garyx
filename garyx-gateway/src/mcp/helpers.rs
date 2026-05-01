@@ -158,7 +158,7 @@ impl GaryMcpServer {
                 chat_id: target.chat_id.clone(),
                 delivery_target_type: target.delivery_target_type.clone(),
                 delivery_target_id: target.delivery_target_id.clone(),
-                text: text.clone(),
+                content: garyx_models::ChannelOutboundContent::text(text.clone()),
                 reply_to: params.reply_to.clone(),
                 thread_id: target.delivery_thread_id.clone(),
             })

@@ -1,6 +1,7 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use garyx_models::ChannelOutboundContent;
 use garyx_models::config::{FeishuAccount, GaryxConfig, TelegramAccount, WeixinAccount};
 use garyx_router::{InMemoryThreadStore, ThreadStore};
 
@@ -622,7 +623,7 @@ async fn reload_builtin_senders_picks_up_new_account() {
         chat_id: "123".into(),
         delivery_target_type: "chat_id".into(),
         delivery_target_id: "123".into(),
-        text: "x".into(),
+        content: ChannelOutboundContent::text("x"),
         reply_to: None,
         thread_id: None,
     };
@@ -727,7 +728,7 @@ async fn managed_channel_plugin_dispatch_outbound_routes_by_account() {
         chat_id: "123".into(),
         delivery_target_type: "chat_id".into(),
         delivery_target_id: "123".into(),
-        text: "hello".into(),
+        content: ChannelOutboundContent::text("hello"),
         reply_to: None,
         thread_id: None,
     };
@@ -761,7 +762,7 @@ async fn managed_channel_plugin_dispatch_outbound_routes_by_account() {
         chat_id: "123".into(),
         delivery_target_type: "chat_id".into(),
         delivery_target_id: "123".into(),
-        text: "x".into(),
+        content: ChannelOutboundContent::text("x"),
         reply_to: None,
         thread_id: None,
     };

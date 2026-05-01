@@ -1,6 +1,7 @@
 use super::*;
 use crate::plugin_host::transport::{InboundHandler, Transport, TransportConfig};
 use async_trait::async_trait;
+use garyx_models::ChannelOutboundContent;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -22,7 +23,7 @@ fn sample_request() -> DispatchOutbound {
         chat_id: "chat-1".into(),
         delivery_target_type: "chat_id".into(),
         delivery_target_id: "chat-1".into(),
-        text: "hi".into(),
+        content: ChannelOutboundContent::text("hi"),
         reply_to: None,
         thread_id: None,
     }
@@ -482,7 +483,7 @@ async fn dispatch_outbound_request_carries_every_field() {
         chat_id: "c".into(),
         delivery_target_type: "chat_id".into(),
         delivery_target_id: "c".into(),
-        text: "body".into(),
+        content: ChannelOutboundContent::text("body"),
         reply_to: Some("r".into()),
         thread_id: Some("t".into()),
     };
@@ -492,7 +493,7 @@ async fn dispatch_outbound_request_carries_every_field() {
     assert_eq!(got.chat_id, req.chat_id);
     assert_eq!(got.delivery_target_type, req.delivery_target_type);
     assert_eq!(got.delivery_target_id, req.delivery_target_id);
-    assert_eq!(got.text, req.text);
+    assert_eq!(got.content, req.content);
     assert_eq!(got.reply_to, req.reply_to);
     assert_eq!(got.thread_id, req.thread_id);
 }

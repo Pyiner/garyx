@@ -15,6 +15,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::Utc;
+use garyx_models::ChannelOutboundContent;
 use garyx_models::config_loader::{
     ConfigLoadOptions, ConfigWriteOptions, load_config, write_config_value_atomic,
 };
@@ -2308,7 +2309,7 @@ pub async fn send_message(
             chat_id: endpoint.chat_id.clone(),
             delivery_target_type: endpoint.delivery_target_type.clone(),
             delivery_target_id: endpoint.delivery_target_id.clone(),
-            text,
+            content: ChannelOutboundContent::text(text),
             reply_to: None,
             thread_id: endpoint.delivery_thread_id.clone(),
         })

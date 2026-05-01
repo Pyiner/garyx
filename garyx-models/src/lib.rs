@@ -2,6 +2,7 @@ pub mod agent;
 pub mod agent_reference;
 pub mod agent_team;
 pub mod auto_research;
+pub mod channel_outbound;
 pub mod command_catalog;
 pub mod config;
 pub mod config_loader;
@@ -28,6 +29,7 @@ pub use auto_research::{
     AutoResearchIteration, AutoResearchIterationState, AutoResearchRun, AutoResearchRunState,
     Candidate, Verdict,
 };
+pub use channel_outbound::ChannelOutboundContent;
 pub use command_catalog::{
     CommandCatalog, CommandCatalogEntry, CommandCatalogOptions, CommandDispatch, CommandKind,
     CommandSource, CommandSurface, CommandVisibility, CommandWarning,

@@ -672,7 +672,7 @@ fn assert_bot_route_result(
     assert_eq!(calls[0].chat_id, "84");
     assert_eq!(calls[0].delivery_target_type, "chat_id");
     assert_eq!(calls[0].delivery_target_id, "84");
-    assert_eq!(calls[0].text, response_token);
+    assert_eq!(calls[0].text_content(), Some(response_token.as_str()));
 }
 
 #[tokio::test]
