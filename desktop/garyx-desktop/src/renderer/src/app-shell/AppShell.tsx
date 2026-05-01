@@ -1386,6 +1386,10 @@ export function AppShell() {
   const threadLogsRef = useRef<HTMLDivElement | null>(null);
   const threadLayoutRef = useRef<HTMLDivElement | null>(null);
   const selectedThreadIdRef = useRef<string | null>(null);
+  const newThreadDraftActiveRef = useRef(false);
+  const pendingWorkspacePathRef = useRef<string | null>(null);
+  const pendingBotIdRef = useRef<string | null>(null);
+  const composerHasPayloadRef = useRef(false);
   const threadLogsOpenRef = useRef(false);
   const threadLogsActiveTabRef = useRef<ThreadLogTab>("client");
   const clientLogSequenceRef = useRef(1);
@@ -2292,6 +2296,11 @@ export function AppShell() {
   const composerHasFiles = composerFiles.length > 0;
   const composerHasPayload =
     composerHasText || composerHasImages || composerHasFiles;
+
+  useEffect(() => {
+    composerHasPayloadRef.current = composerHasPayload;
+  }, [composerHasPayload]);
+
   const activeThreadHasMessages = Boolean(
     (activeThread?.messageCount ?? 0) > 0 || activeMessages.length > 0,
   );
@@ -2806,6 +2815,18 @@ export function AppShell() {
   useEffect(() => {
     selectedThreadIdRef.current = selectedThreadId;
   }, [selectedThreadId]);
+
+  useEffect(() => {
+    newThreadDraftActiveRef.current = newThreadDraftActive;
+  }, [newThreadDraftActive]);
+
+  useEffect(() => {
+    pendingWorkspacePathRef.current = pendingWorkspacePath;
+  }, [pendingWorkspacePath]);
+
+  useEffect(() => {
+    pendingBotIdRef.current = pendingBotId;
+  }, [pendingBotId]);
 
   useEffect(() => {
     threadLogsOpenRef.current = threadLogsOpen;
@@ -4835,6 +4856,17 @@ export function AppShell() {
         setPendingWorkspacePath(null);
         setPendingBotId(null);
       },
+      shouldKeepNewDraft: (groupId, initialWorkspacePath) =>
+        newThreadDraftActiveRef.current &&
+        selectedThreadIdRef.current === null &&
+        pendingBotIdRef.current === groupId &&
+        pendingWorkspacePathRef.current === initialWorkspacePath,
+      shouldOpenResolvedThread: (groupId, initialWorkspacePath) =>
+        newThreadDraftActiveRef.current &&
+        selectedThreadIdRef.current === null &&
+        pendingBotIdRef.current === groupId &&
+        pendingWorkspacePathRef.current === initialWorkspacePath &&
+        !composerHasPayloadRef.current,
       setError,
       setContentView: () => {
         setContentView("thread");
