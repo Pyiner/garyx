@@ -158,12 +158,12 @@ export function AutoResearchIcon() {
 export function AgentsIcon() {
   return (
     <svg aria-hidden width="16" height="16" viewBox={vb} fill="none" className="icon" style={sw}>
-      <g transform="translate(3,2.6) scale(0.875)">
-        <path d="M14.5 16C14.5 12.9624 11.5899 10.5 8 10.5C4.41015 10.5 1.5 12.9624 1.5 16" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
-        <path d="M8 7.5C6.067 7.5 4.5 5.933 4.5 4C4.5 2.067 6.067 0.5 8 0.5C9.933 0.5 11.5 2.067 11.5 4C11.5 5.933 9.933 7.5 8 7.5Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
-      </g>
-      <g transform="translate(12.15,2.35) scale(0.7)">
-        <path d="M2.8 0.35L3.34 2.1L5.05 2.72L3.34 3.34L2.8 5.1L2.26 3.34L0.55 2.72L2.26 2.1L2.8 0.35Z" fill="currentColor"/>
+      <g transform="translate(1.85,1.85) scale(0.956)">
+        <path d="M8.5 0.75L15.25 4.65V12.35L8.5 16.25L1.75 12.35V4.65L8.5 0.75Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M8.5 5.35V8.5M8.5 8.5L5.9 10M8.5 8.5L11.1 10" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
+        <circle cx="8.5" cy="4.55" r="1.05" fill="currentColor"/>
+        <circle cx="5.05" cy="10.5" r="1.05" fill="currentColor"/>
+        <circle cx="11.95" cy="10.5" r="1.05" fill="currentColor"/>
       </g>
     </svg>
   );
