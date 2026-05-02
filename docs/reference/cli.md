@@ -31,6 +31,10 @@ command with `--help` for the full flag list and arg descriptions.
 build from source; install or copy a new binary first when you need code changes
 to take effect.
 
+`garyx gateway restart --wake <thread|task|bot> <target> --wake-message "..."`
+restarts the managed gateway and, after the service is healthy again, sends the
+wake message through the same target resolution used by `garyx thread send`.
+
 See [Service manager](/reference/service-manager) for what `install` actually
 writes to disk.
 

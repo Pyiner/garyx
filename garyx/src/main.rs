@@ -122,6 +122,28 @@ fn resolve_thread_send_destination(
     }
 }
 
+fn resolve_gateway_restart_wake_destination(
+    wake: Vec<String>,
+    wake_message: Option<String>,
+) -> Result<Option<ThreadSendDestination>, Box<dyn std::error::Error>> {
+    if wake.is_empty() {
+        return Ok(None);
+    }
+    if wake.len() != 2 {
+        return Err("wake target must be `thread|task|bot <target>`".into());
+    }
+    let message = trim_optional(wake_message).ok_or_else(|| {
+        "wake message is required: use `--wake-message \"...\"` with `--wake`".to_owned()
+    })?;
+    resolve_thread_send_destination(
+        Some(wake[0].clone()),
+        Some(wake[1].clone()),
+        vec![message],
+        None,
+    )
+    .map(Some)
+}
+
 fn trim_optional(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_owned())
@@ -192,7 +214,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             GatewayAction::Install => cmd_gateway_install(config_path).await,
             GatewayAction::Uninstall => cmd_gateway_uninstall().await,
             GatewayAction::Start => cmd_gateway_start(config_path).await,
-            GatewayAction::Restart => cmd_gateway_restart(config_path).await,
+            GatewayAction::Restart {
+                wake,
+                wake_message,
+                wake_workspace_dir,
+                wake_json,
+            } => {
+                let wake_destination =
+                    resolve_gateway_restart_wake_destination(wake, wake_message)?;
+                cmd_gateway_restart(config_path).await?;
+                if let Some(destination) = wake_destination {
+                    match destination.target {
+                        ThreadSendTarget::Thread(thread_id) => {
+                            cmd_thread_send(
+                                config_path,
+                                thread_id,
+                                destination.message_parts.join(" "),
+                                wake_workspace_dir,
+                                300,
+                                wake_json,
+                            )
+                            .await
+                        }
+                        ThreadSendTarget::Task(task_ref) => {
+                            cmd_thread_send_to_task(
+                                config_path,
+                                task_ref,
+                                destination.message_parts.join(" "),
+                                wake_workspace_dir,
+                                300,
+                                wake_json,
+                            )
+                            .await
+                        }
+                        ThreadSendTarget::Bot(bot) => {
+                            cmd_thread_send_to_bot(
+                                config_path,
+                                bot,
+                                destination.message_parts.join(" "),
+                                wake_workspace_dir,
+                                300,
+                                wake_json,
+                            )
+                            .await
+                        }
+                    }
+                } else {
+                    Ok(())
+                }
+            }
             GatewayAction::Stop => cmd_gateway_stop().await,
             GatewayAction::ReloadConfig => cmd_gateway_reload_config(config_path).await,
             GatewayAction::Token { rotate, json } => {

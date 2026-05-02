@@ -64,8 +64,106 @@ fn parse_gateway_restart() {
     let cli = Cli::parse_from(["garyx", "gateway", "restart"]);
     match cli.command {
         Some(Commands::Gateway {
-            action: GatewayAction::Restart,
-        }) => {}
+            action:
+                GatewayAction::Restart {
+                    wake,
+                    wake_message,
+                    wake_workspace_dir,
+                    wake_json,
+                },
+        }) => {
+            assert!(wake.is_empty());
+            assert_eq!(wake_message, None);
+            assert_eq!(wake_workspace_dir, None);
+            assert!(!wake_json);
+        }
+        _ => panic!("expected Gateway restart"),
+    }
+}
+
+#[test]
+fn parse_gateway_restart_wake_thread() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "gateway",
+        "restart",
+        "--wake",
+        "thread",
+        "thread::abc",
+        "--wake-message",
+        "continue",
+        "--wake-workspace-dir",
+        "/tmp/garyx",
+        "--wake-json",
+    ]);
+    match cli.command {
+        Some(Commands::Gateway {
+            action:
+                GatewayAction::Restart {
+                    wake,
+                    wake_message,
+                    wake_workspace_dir,
+                    wake_json,
+                },
+        }) => {
+            assert_eq!(wake, vec!["thread".to_owned(), "thread::abc".to_owned()]);
+            assert_eq!(wake_message.as_deref(), Some("continue"));
+            assert_eq!(wake_workspace_dir.as_deref(), Some("/tmp/garyx"));
+            assert!(wake_json);
+        }
+        _ => panic!("expected Gateway restart"),
+    }
+}
+
+#[test]
+fn parse_gateway_restart_wake_task() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "gateway",
+        "restart",
+        "--wake",
+        "task",
+        "#telegram/main/1",
+        "--wake-message",
+        "status?",
+    ]);
+    match cli.command {
+        Some(Commands::Gateway {
+            action: GatewayAction::Restart {
+                wake, wake_message, ..
+            },
+        }) => {
+            assert_eq!(wake, vec!["task".to_owned(), "#telegram/main/1".to_owned()]);
+            assert_eq!(wake_message.as_deref(), Some("status?"));
+        }
+        _ => panic!("expected Gateway restart"),
+    }
+}
+
+#[test]
+fn parse_gateway_restart_wake_bot() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "gateway",
+        "restart",
+        "--wake",
+        "bot",
+        "telegram:codex_bot",
+        "--wake-message",
+        "continue",
+    ]);
+    match cli.command {
+        Some(Commands::Gateway {
+            action: GatewayAction::Restart {
+                wake, wake_message, ..
+            },
+        }) => {
+            assert_eq!(
+                wake,
+                vec!["bot".to_owned(), "telegram:codex_bot".to_owned()]
+            );
+            assert_eq!(wake_message.as_deref(), Some("continue"));
+        }
         _ => panic!("expected Gateway restart"),
     }
 }

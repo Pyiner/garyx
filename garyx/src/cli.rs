@@ -218,7 +218,24 @@ pub(crate) enum GatewayAction {
     /// Start the already-installed managed gateway service
     Start,
     /// Restart the managed gateway service (refreshes the unit / plist file first)
-    Restart,
+    Restart {
+        /// Wake a target after restart: `thread <thread_id>`, `task <task_ref>`, or `bot <channel:account_id>`
+        #[arg(long, value_names = ["KIND", "TARGET"], num_args = 2, requires = "wake_message")]
+        wake: Vec<String>,
+        /// Message to send to the wake target after the gateway is healthy
+        #[arg(long, value_name = "MESSAGE")]
+        wake_message: Option<String>,
+        /// Workspace directory for the wake run
+        #[arg(
+            long = "wake-workspace-dir",
+            alias = "workspace-dir",
+            requires = "wake"
+        )]
+        wake_workspace_dir: Option<String>,
+        /// Output raw JSON events for the wake run
+        #[arg(long, requires = "wake")]
+        wake_json: bool,
+    },
     /// Stop the managed gateway service
     Stop,
     /// Reload the running gateway config from disk without restart
