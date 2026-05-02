@@ -7,9 +7,9 @@ pub mod command_catalog;
 pub mod config;
 pub mod config_loader;
 pub mod custom_agent;
-pub mod debug_runtime;
 pub mod execution;
 pub mod local_paths;
+pub mod message_lifecycle;
 pub mod messages;
 pub mod provider;
 pub mod routing;
@@ -43,12 +43,12 @@ pub use config_loader::{
     restore_config, write_config_atomic, write_config_value_atomic,
 };
 pub use custom_agent::{CustomAgentProfile, builtin_provider_agent_profiles};
-pub use debug_runtime::{
-    BotThreadDebugSummary, MessageLedgerEvent, MessageLedgerRecord, MessageLifecycleStatus,
-    MessageTerminalReason,
-};
 pub use execution::{
     ElevatedLevel, ExecAsk, ExecHost, ExecSecurity, ReasoningLevel, ResponseUsage,
+};
+pub use message_lifecycle::{
+    BotThreadProblemSummary, MessageLedgerEvent, MessageLedgerRecord, MessageLifecycleStatus,
+    MessageTerminalReason,
 };
 pub use messages::MessageMetadata;
 pub use provider::{

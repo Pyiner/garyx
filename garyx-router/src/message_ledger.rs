@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use garyx_models::{
-    BotThreadDebugSummary, MessageLedgerEvent, MessageLedgerRecord, MessageTerminalReason,
+    BotThreadProblemSummary, MessageLedgerEvent, MessageLedgerRecord, MessageTerminalReason,
 };
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -194,9 +194,9 @@ impl MessageLedgerStore {
         &self,
         bot_id: &str,
         limit: usize,
-    ) -> Result<Vec<BotThreadDebugSummary>, MessageLedgerError> {
+    ) -> Result<Vec<BotThreadProblemSummary>, MessageLedgerError> {
         let records = self.records_for_bot(bot_id, usize::MAX).await?;
-        let mut by_thread: HashMap<String, BotThreadDebugSummary> = HashMap::new();
+        let mut by_thread: HashMap<String, BotThreadProblemSummary> = HashMap::new();
         for record in records.into_iter().filter(|record| record.is_problem()) {
             let Some(thread_id) = record.thread_id.clone() else {
                 continue;
@@ -204,7 +204,7 @@ impl MessageLedgerStore {
             let entry =
                 by_thread
                     .entry(thread_id.clone())
-                    .or_insert_with(|| BotThreadDebugSummary {
+                    .or_insert_with(|| BotThreadProblemSummary {
                         bot_id: record.bot_id.clone(),
                         thread_id: thread_id.clone(),
                         last_status: record.status,

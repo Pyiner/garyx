@@ -115,7 +115,7 @@ const CATALOG_RESPONSE = {
       auth_flows: [],
       accounts: [
         { id: 'novelist_bot', enabled: true, config: { token: '***' } },
-        { id: 'debug_bot', enabled: false, config: { token: '***' } },
+        { id: 'garyx_bot', enabled: false, config: { token: '***' } },
       ],
     },
     {

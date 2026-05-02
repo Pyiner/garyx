@@ -286,7 +286,10 @@ fn observability_routes() -> Router<Arc<AppState>> {
         .route("/api/overview", axum::routing::get(dashboard::overview))
         .route("/api/agent-view", axum::routing::get(dashboard::agent_view))
         .route("/api/logs/tail", axum::routing::get(dashboard::logs_tail))
-        .route("/api/debug/thread", axum::routing::get(api::debug_thread))
+        .route(
+            "/api/threads/diagnostics",
+            axum::routing::get(api::thread_diagnostics),
+        )
         .route("/api/bot/status", axum::routing::get(api::bot_status))
         .route(
             "/api/settings",

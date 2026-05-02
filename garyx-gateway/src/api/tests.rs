@@ -54,7 +54,10 @@ async fn seed_transcript_backed_thread(state: &Arc<AppState>, thread_id: &str, m
 fn api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/threads/history", axum::routing::get(thread_history))
-        .route("/api/debug/thread", axum::routing::get(debug_thread))
+        .route(
+            "/api/threads/diagnostics",
+            axum::routing::get(thread_diagnostics),
+        )
         .route("/api/bot/status", axum::routing::get(bot_status))
         .route(
             "/api/auto-research/runs",
@@ -215,11 +218,11 @@ async fn test_thread_history_with_data() {
 }
 
 #[tokio::test]
-async fn test_debug_thread_returns_ledger_records() {
+async fn test_thread_diagnostics_returns_ledger_records() {
     let state = test_state();
     seed_transcript_backed_thread(
         &state,
-        "thread::debug-alpha",
+        "thread::diagnostics-alpha",
         json!({
             "messages": [{
                 "role": "user",
@@ -237,7 +240,7 @@ async fn test_debug_thread_returns_ledger_records() {
             bot_id: "telegram:main".to_owned(),
             status: garyx_models::MessageLifecycleStatus::RunInterrupted,
             created_at: "2026-03-22T10:00:01Z".to_owned(),
-            thread_id: Some("thread::debug-alpha".to_owned()),
+            thread_id: Some("thread::diagnostics-alpha".to_owned()),
             run_id: Some("run-1".to_owned()),
             channel: Some("telegram".to_owned()),
             account_id: Some("main".to_owned()),
@@ -255,9 +258,9 @@ async fn test_debug_thread_returns_ledger_records() {
         .threads
         .thread_store
         .set(
-            "thread::debug-alpha",
+            "thread::diagnostics-alpha",
             json!({
-                "thread_id": "thread::debug-alpha",
+                "thread_id": "thread::diagnostics-alpha",
                 "provider_type": "claude_code",
                 "sdk_session_id": "sdk-123",
                 "history": {
@@ -274,7 +277,7 @@ async fn test_debug_thread_returns_ledger_records() {
 
     let router = api_router(state);
     let req = Request::builder()
-        .uri("/api/debug/thread?thread_id=thread::debug-alpha")
+        .uri("/api/threads/diagnostics?thread_id=thread::diagnostics-alpha")
         .body(Body::empty())
         .unwrap();
 
@@ -285,7 +288,7 @@ async fn test_debug_thread_returns_ledger_records() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"], true);
-    assert_eq!(json["thread_id"], "thread::debug-alpha");
+    assert_eq!(json["thread_id"], "thread::diagnostics-alpha");
     assert_eq!(json["thread_runtime"]["provider_type"], "claude_code");
     assert_eq!(json["thread_runtime"]["provider_label"], "Claude");
     assert_eq!(json["thread_runtime"]["sdk_session_id"], "sdk-123");

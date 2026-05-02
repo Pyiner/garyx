@@ -1,9 +1,9 @@
 ---
-name: garyx-debugger
-description: Use when Garyx/Codex needs to investigate why a bot or thread did not respond, responded incorrectly, or needs runtime diagnostics from Garyx. Prefer this skill when the user can provide a `thread_id` or `bot_id`, or when you need to inspect the current bot binding, a thread runtime state, lifecycle records, terminal reasons, bindings, or transcript paths through the Garyx CLI.
+name: garyx-inspector
+description: Use when Garyx/Codex needs to inspect why a bot or thread did not respond, responded incorrectly, or needs runtime diagnostics from Garyx. Prefer this skill when the user can provide a `thread_id` or `bot_id`, or when you need to inspect the current bot binding, a thread runtime state, lifecycle records, terminal reasons, bindings, or transcript paths through the Garyx CLI.
 ---
 
-# Garyx Debugger
+# Garyx Inspector
 
 Use this skill to inspect Garyx runtime diagnostics from the terminal.
 
@@ -14,7 +14,7 @@ Use this skill to inspect Garyx runtime diagnostics from the terminal.
 - By bot:
   `garyx bot status <bot_id>`
 - Repo-local helper script:
-  `garyx-gateway/builtin-skills/garyx-debugger/scripts/gary-debug.sh thread <thread_id>`
+  `garyx-gateway/builtin-skills/garyx-inspector/scripts/gary-thread-history.sh <thread_id>`
 
 Examples:
 
@@ -24,7 +24,7 @@ Examples:
 
 ## Workflow
 
-1. If the user already has a `thread_id`, start with `thread`.
+1. If the user already has a `thread_id`, start with `garyx thread history <thread_id>`.
 2. If the user only knows the bot, start with `garyx bot status <bot_id>` to identify the current bound thread.
 3. Read the lifecycle summary first:
    - `filtered`
@@ -42,7 +42,7 @@ Examples:
 
 ## Rules
 
-- Prefer `thread_id` as the primary debug key.
+- Prefer `thread_id` as the primary inspection key.
 - Prefer `bot_id` only when you need the bot's current main endpoint and bound thread.
 - Use `--json` when you need to inspect full payloads or pass results into another tool.
 - Do not claim a message was never received unless the diagnostics actually show no ingress/lifecycle record.

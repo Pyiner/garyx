@@ -90,7 +90,7 @@ pub struct MessageLedgerRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BotThreadDebugSummary {
+pub struct BotThreadProblemSummary {
     pub bot_id: String,
     pub thread_id: String,
     pub last_status: MessageLifecycleStatus,

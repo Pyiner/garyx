@@ -225,7 +225,7 @@ async fn reload_team_registry(state: &Arc<AppState>) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-fn build_debug_thread_runtime(thread_value: Option<&Value>) -> Value {
+fn build_thread_runtime_summary(thread_value: Option<&Value>) -> Value {
     let Some(thread_value) = thread_value else {
         return Value::Null;
     };
@@ -354,7 +354,7 @@ fn default_include_tool_messages() -> bool {
 const MAX_THREAD_HISTORY_LIMIT: usize = 500;
 
 #[derive(Deserialize)]
-pub struct DebugThreadParams {
+pub struct ThreadDiagnosticsParams {
     pub thread_id: String,
     #[serde(default = "default_limit")]
     pub limit: usize,
@@ -748,9 +748,9 @@ pub async fn thread_history(
     }))
 }
 
-pub async fn debug_thread(
+pub async fn thread_diagnostics(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<DebugThreadParams>,
+    Query(params): Query<ThreadDiagnosticsParams>,
 ) -> impl IntoResponse {
     let thread_id = params.thread_id.trim();
     if thread_id.is_empty() {
@@ -815,7 +815,7 @@ pub async fn debug_thread(
         "ok": true,
         "thread_id": thread_id,
         "thread": thread_value,
-        "thread_runtime": build_debug_thread_runtime(thread_value.as_ref()),
+        "thread_runtime": build_thread_runtime_summary(thread_value.as_ref()),
         "bindings": bindings,
         "history": thread_history_for_key(&state, thread_id, limit, true).await,
         "message_ledger": ledger,
@@ -861,7 +861,7 @@ async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value 
             "current_thread_status": "unresolved",
             "current_thread_id": Value::Null,
             "current_thread": Value::Null,
-            "thread_runtime": build_debug_thread_runtime(None),
+            "thread_runtime": build_thread_runtime_summary(None),
         });
     };
 
@@ -891,7 +891,7 @@ async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value 
         "current_thread_status": current_thread_status,
         "current_thread_id": current_thread_id,
         "current_thread": current_thread,
-        "thread_runtime": build_debug_thread_runtime(current_thread.as_ref()),
+        "thread_runtime": build_thread_runtime_summary(current_thread.as_ref()),
     })
 }
 
