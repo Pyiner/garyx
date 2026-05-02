@@ -3,6 +3,7 @@ pub mod builtin_catalog;
 pub mod channel_trait;
 pub mod dispatcher;
 pub mod feishu;
+pub(crate) mod generated_images;
 pub mod plugin;
 pub mod plugin_host;
 pub mod streaming_core;

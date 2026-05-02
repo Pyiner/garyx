@@ -1,11 +1,13 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use base64::{Engine as _, engine::general_purpose};
 use reqwest::Client;
 use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{error, warn};
 
+use crate::generated_images::{
+    extract_image_generation_result, provider_message_item_type, write_generated_image_temp,
+};
 use garyx_models::config::ReplyToMode;
 use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
 use garyx_router::MessageRouter;
@@ -85,13 +87,7 @@ fn telegram_tool_display_name(message: &ProviderMessage) -> String {
 }
 
 fn telegram_tool_item_type(message: &ProviderMessage) -> Option<&str> {
-    message
-        .metadata
-        .get("item_type")
-        .and_then(|value| value.as_str())
-        .or_else(|| message.content.get("type").and_then(|value| value.as_str()))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    provider_message_item_type(message)
 }
 
 fn telegram_should_hide_tool_placeholder(message: &ProviderMessage) -> bool {
@@ -121,100 +117,6 @@ fn telegram_should_hide_tool_placeholder(message: &ProviderMessage) -> bool {
 
 fn render_tool_placeholder(index: usize, name: &str) -> String {
     format!("🔧 #{index} {name}")
-}
-
-struct GeneratedTelegramImage {
-    bytes: Vec<u8>,
-    extension: &'static str,
-    id: String,
-}
-
-fn generated_image_extension(result: &str, content_type: Option<&str>) -> &'static str {
-    if let Some(content_type) = content_type {
-        let lower = content_type.trim().to_ascii_lowercase();
-        if lower.contains("jpeg") || lower.contains("jpg") {
-            return "jpg";
-        }
-        if lower.contains("webp") {
-            return "webp";
-        }
-        if lower.contains("gif") {
-            return "gif";
-        }
-    }
-
-    if let Some(prefix) = result
-        .strip_prefix("data:")
-        .and_then(|value| value.split_once(';').map(|(prefix, _)| prefix))
-    {
-        let lower = prefix.trim().to_ascii_lowercase();
-        if lower.contains("jpeg") || lower.contains("jpg") {
-            return "jpg";
-        }
-        if lower.contains("webp") {
-            return "webp";
-        }
-        if lower.contains("gif") {
-            return "gif";
-        }
-    }
-
-    "png"
-}
-
-fn extract_image_generation_result(message: &ProviderMessage) -> Option<GeneratedTelegramImage> {
-    if telegram_tool_item_type(message) != Some("imageGeneration") {
-        return None;
-    }
-
-    let result = message
-        .content
-        .get("result")
-        .and_then(|value| value.as_str())?;
-    let result = result.trim();
-    if result.is_empty() {
-        return None;
-    }
-
-    let encoded = result
-        .split_once(',')
-        .filter(|(prefix, _)| prefix.trim_start().starts_with("data:"))
-        .map(|(_, payload)| payload)
-        .unwrap_or(result)
-        .trim();
-    let bytes = general_purpose::STANDARD.decode(encoded).ok()?;
-    if bytes.is_empty() {
-        return None;
-    }
-
-    let content_type = message
-        .content
-        .get("media_type")
-        .or_else(|| message.content.get("mime_type"))
-        .or_else(|| message.content.get("contentType"))
-        .and_then(|value| value.as_str());
-    let extension = generated_image_extension(result, content_type);
-    let id = message
-        .content
-        .get("id")
-        .and_then(|value| value.as_str())
-        .or(message.tool_use_id.as_deref())
-        .unwrap_or("image-generation")
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-
-    Some(GeneratedTelegramImage {
-        bytes,
-        extension,
-        id,
-    })
 }
 
 fn render_stream_content_text(state: &StreamState) -> String {
@@ -639,33 +541,17 @@ impl StreamingCallbackShared {
         }
         let prior_text_msg_id = state.message_id;
 
-        let image_dir = std::env::temp_dir()
-            .join("garyx-telegram")
-            .join("generated-images");
-        if let Err(error) = tokio::fs::create_dir_all(&image_dir).await {
-            warn!(
-                account_id = %self.cfg.account_id,
-                error = %error,
-                "failed to create Telegram generated image temp dir"
-            );
-            return;
-        }
-
-        let image_path = image_dir.join(format!(
-            "{}-{}.{}",
-            image.id,
-            uuid::Uuid::new_v4(),
-            image.extension
-        ));
-        if let Err(error) = tokio::fs::write(&image_path, &image.bytes).await {
-            warn!(
-                account_id = %self.cfg.account_id,
-                path = %image_path.display(),
-                error = %error,
-                "failed to write Telegram generated image temp file"
-            );
-            return;
-        }
+        let image_path = match write_generated_image_temp("telegram", &image).await {
+            Ok(path) => path,
+            Err(error) => {
+                warn!(
+                    account_id = %self.cfg.account_id,
+                    error = %error,
+                    "failed to write Telegram generated image temp file"
+                );
+                return;
+            }
+        };
 
         let send_result = send_photo(
             TelegramSendTarget::new(

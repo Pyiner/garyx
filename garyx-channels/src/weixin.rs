@@ -31,6 +31,7 @@ use garyx_router::{
 };
 
 use crate::channel_trait::{Channel, ChannelError};
+use crate::generated_images::extract_image_generation_result;
 use crate::streaming_core::merge_stream_text;
 
 const DEFAULT_LONG_POLL_TIMEOUT_MS: u64 = 35_000;
@@ -425,6 +426,11 @@ fn markdown_image_regex() -> &'static Regex {
 enum OutboundMediaRef {
     RemoteUrl(String),
     LocalPath(String),
+    InlineImage {
+        id: String,
+        bytes: Vec<u8>,
+        file_name: String,
+    },
 }
 
 impl OutboundMediaRef {
@@ -432,6 +438,7 @@ impl OutboundMediaRef {
         match self {
             Self::RemoteUrl(url) => format!("url:{url}"),
             Self::LocalPath(path) => format!("path:{path}"),
+            Self::InlineImage { id, .. } => format!("inline:{id}"),
         }
     }
 
@@ -439,6 +446,7 @@ impl OutboundMediaRef {
         match self {
             Self::RemoteUrl(url) => classify_media_type_from_url(url),
             Self::LocalPath(path) => classify_media_type_from_url(path),
+            Self::InlineImage { .. } => 1,
         }
     }
 
@@ -449,6 +457,7 @@ impl OutboundMediaRef {
         let raw = match self {
             Self::RemoteUrl(url) => url.as_str(),
             Self::LocalPath(path) => path.as_str(),
+            Self::InlineImage { file_name, .. } => return Some(file_name.clone()),
         };
         // Drop URL query/fragment before taking the basename.
         let without_query = raw.split(['?', '#']).next().unwrap_or(raw);
@@ -1983,6 +1992,14 @@ fn extract_media_refs_from_value(value: &Value, out: &mut Vec<OutboundMediaRef>,
 fn extract_media_refs_from_provider_message(
     message: &garyx_models::provider::ProviderMessage,
 ) -> Vec<OutboundMediaRef> {
+    if let Some(image) = extract_image_generation_result(message) {
+        return vec![OutboundMediaRef::InlineImage {
+            id: image.id.clone(),
+            file_name: image.file_name(),
+            bytes: image.bytes,
+        }];
+    }
+
     let mut refs = Vec::new();
     if let Some(text) = message.text.as_deref() {
         extract_media_refs_from_value(&Value::String(text.to_owned()), &mut refs, 4);
@@ -2000,6 +2017,7 @@ async fn load_media_bytes(
         OutboundMediaRef::LocalPath(path) => fs::read(path).await.map_err(|error| {
             ChannelError::SendFailed(format!("Weixin local media read failed ({path}): {error}"))
         }),
+        OutboundMediaRef::InlineImage { bytes, .. } => Ok(bytes.clone()),
     }
 }
 
@@ -2509,6 +2527,9 @@ impl WeixinChannel {
                                 let media_str = match media_ref {
                                     OutboundMediaRef::RemoteUrl(url) => url.clone(),
                                     OutboundMediaRef::LocalPath(path) => path.clone(),
+                                    OutboundMediaRef::InlineImage { file_name, .. } => {
+                                        format!("[generated image: {file_name}]")
+                                    }
                                 };
                                 if !queue_text.is_empty() {
                                     queue_text.push('\n');

@@ -1377,6 +1377,82 @@ mod e2e_tests {
         }
     }
 
+    struct FeishuImageGenerationProvider;
+
+    #[async_trait]
+    impl AgentLoopProvider for FeishuImageGenerationProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::CodexAppServer
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            let tool_use = ProviderMessage::tool_use(
+                serde_json::json!({
+                    "type": "imageGeneration",
+                    "id": "ig-feishu-test",
+                    "status": "in_progress",
+                    "result": "",
+                }),
+                Some("ig-feishu-test".to_owned()),
+                Some("imageGeneration".to_owned()),
+            )
+            .with_metadata_value("item_type", serde_json::json!("imageGeneration"));
+            on_chunk(StreamEvent::ToolUse { message: tool_use });
+
+            let tool_result = ProviderMessage::tool_result(
+                serde_json::json!({
+                    "type": "imageGeneration",
+                    "id": "ig-feishu-test",
+                    "status": "completed",
+                    "result": "iVBORw0KGgo=",
+                }),
+                Some("ig-feishu-test".to_owned()),
+                Some("imageGeneration".to_owned()),
+                Some(false),
+            )
+            .with_metadata_value("item_type", serde_json::json!("imageGeneration"));
+            on_chunk(StreamEvent::ToolResult {
+                message: tool_result,
+            });
+            on_chunk(StreamEvent::Done);
+
+            Ok(ProviderRunResult {
+                run_id: "feishu-image-generation".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: String::new(),
+                session_messages: Vec::new(),
+                sdk_session_id: None,
+                actual_model: None,
+                success: true,
+                error: None,
+                input_tokens: 1,
+                output_tokens: 1,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
     /// Create a default permissive FeishuAccount for testing (open DM + open group).
     fn make_default_account() -> FeishuAccount {
         FeishuAccount {
@@ -1428,6 +1504,16 @@ mod e2e_tests {
                 "code": 0,
                 "msg": "ok",
                 "data": {"message_id": "om_mock_reply_group"}
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/im/v1/images"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "code": 0,
+                "msg": "ok",
+                "data": {"image_key": "img_mock_generated"}
             })))
             .mount(&server)
             .await;
@@ -2004,6 +2090,76 @@ mod e2e_tests {
         assert!(
             !close_calls.is_empty(),
             "assistant continuation after tool trace should close the existing Feishu Card Kit stream"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_e2e_feishu_image_generation_result_sends_image_only() {
+        let (server, client) = setup_feishu_mock().await;
+
+        let provider = Arc::new(FeishuImageGenerationProvider);
+        let bridge = make_bridge_with(provider).await;
+        let router = make_router();
+        let account = make_default_account();
+
+        let event = FeishuEventBuilder::group("ou_user123", "oc_group456", "make image")
+            .with_root_id("om_thread_root")
+            .build();
+
+        dispatch_im_message_event(
+            "app1",
+            &event,
+            &router,
+            &bridge,
+            &client,
+            &account,
+            "",
+            &account.app_id,
+        )
+        .await;
+
+        let upload_calls =
+            wait_for_matching_requests(&server, std::time::Duration::from_secs(5), 1, |r| {
+                r.method.as_str() == "POST" && r.url.path() == "/im/v1/images"
+            })
+            .await;
+        assert_eq!(
+            upload_calls.len(),
+            1,
+            "generated image should be uploaded once"
+        );
+
+        let reply_calls = wait_for_matching_requests_quiet_window(
+            &server,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+            |r| {
+                r.url.path().contains("/reply")
+                    && std::str::from_utf8(&r.body)
+                        .map(|body| body.contains("\"msg_type\":\"image\""))
+                        .unwrap_or(false)
+            },
+        )
+        .await;
+        assert_eq!(
+            reply_calls.len(),
+            1,
+            "imageGeneration should produce one Feishu image reply"
+        );
+        let reply_body: Value = serde_json::from_slice(&reply_calls[0].body).unwrap();
+        assert_eq!(reply_body["msg_type"], "image");
+        let content: Value = serde_json::from_str(reply_body["content"].as_str().unwrap()).unwrap();
+        assert_eq!(content["image_key"], "img_mock_generated");
+
+        let requests = server.received_requests().await.unwrap_or_default();
+        let card_calls = requests
+            .iter()
+            .filter(|r| r.url.path().starts_with("/cardkit/v1/cards"))
+            .count();
+        assert_eq!(
+            card_calls, 0,
+            "image-only tool results should not render tool text or Card Kit messages"
         );
     }
 

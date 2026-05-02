@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -370,6 +371,83 @@ impl FeishuClient {
         }
 
         Ok(api_resp.data.map(|d| d.message_id).unwrap_or_default())
+    }
+
+    async fn upload_message_image(&self, image_path: &Path) -> Result<String, FeishuError> {
+        let token = self.get_access_token().await?;
+        let image_bytes = tokio::fs::read(image_path)
+            .await
+            .map_err(|e| FeishuError::Http(format!("image read failed: {e}")))?;
+        let filename = image_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("image.png")
+            .to_owned();
+        let image_part = reqwest::multipart::Part::bytes(image_bytes).file_name(filename);
+        let upload_form = reqwest::multipart::Form::new()
+            .text("image_type", "message")
+            .part("image", image_part);
+        let url = format!("{}/im/v1/images", self.api_base());
+
+        let resp = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .multipart(upload_form)
+            .send()
+            .await
+            .map_err(|e| FeishuError::Http(e.to_string()))?;
+
+        let value: Value = resp
+            .json()
+            .await
+            .map_err(|e| FeishuError::Http(e.to_string()))?;
+        let code = value.get("code").and_then(|v| v.as_i64()).unwrap_or(-1);
+        if code != 0 {
+            let msg = value
+                .get("msg")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            return Err(FeishuError::Api {
+                code,
+                msg: msg.to_owned(),
+            });
+        }
+
+        let image_key = value
+            .get("data")
+            .and_then(|v| v.get("image_key"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| FeishuError::Api {
+                code: -1,
+                msg: "image upload returned empty image_key".to_owned(),
+            })?;
+        Ok(image_key.to_owned())
+    }
+
+    pub(super) async fn send_image(
+        &self,
+        chat_id: &str,
+        image_path: &Path,
+    ) -> Result<String, FeishuError> {
+        let image_key = self.upload_message_image(image_path).await?;
+        let content = serde_json::json!({ "image_key": image_key }).to_string();
+        self.send_message(chat_id, &content, "image").await
+    }
+
+    pub(super) async fn reply_image_ext(
+        &self,
+        message_id: &str,
+        image_path: &Path,
+        reply_in_thread: bool,
+    ) -> Result<String, FeishuError> {
+        let image_key = self.upload_message_image(image_path).await?;
+        let content = serde_json::json!({ "image_key": image_key }).to_string();
+        self.reply_message_ext(message_id, &content, "image", reply_in_thread)
+            .await
     }
 
     /// Domain base without the `/open-apis` path suffix.

@@ -31,6 +31,7 @@ use super::{
     prune_sender_name_cache_locked, record_policy_block, requires_group_mention,
     resolve_topic_session_mode, send_native_command_reply, sender_name_cache, strip_mention_tokens,
 };
+use crate::generated_images::{extract_image_generation_result, write_generated_image_temp};
 
 #[derive(Clone, Copy)]
 pub(super) struct FeishuRuntimeContext<'a> {
@@ -893,7 +894,78 @@ pub(super) async fn handle_im_message_event(
                     }
                     continue;
                 }
-                StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {
+                StreamEvent::ToolUse { .. } => {
+                    continue;
+                }
+                StreamEvent::ToolResult { message } => {
+                    let Some(image) = extract_image_generation_result(&message) else {
+                        continue;
+                    };
+                    drop(state);
+
+                    let image_path = match write_generated_image_temp("feishu", &image).await {
+                        Ok(path) => path,
+                        Err(err) => {
+                            warn!(
+                                account_id = %worker_account_id,
+                                error = %err,
+                                "failed to write Feishu generated image temp file"
+                            );
+                            continue;
+                        }
+                    };
+
+                    let image_send_result = if worker_is_group {
+                        worker_client
+                            .reply_image_ext(&worker_msg_id, &image_path, worker_reply_in_thread)
+                            .await
+                    } else {
+                        worker_client.send_image(&worker_chat_id, &image_path).await
+                    };
+                    let _ = tokio::fs::remove_file(&image_path).await;
+
+                    match image_send_result {
+                        Ok(outbound_msg_id) => {
+                            info!(
+                                account_id = %worker_account_id,
+                                outbound_message_id = %outbound_msg_id,
+                                "Feishu generated image sent"
+                            );
+                            if !outbound_msg_id.is_empty() && !canonical_thread_id.is_empty() {
+                                let mut r = worker_router.lock().await;
+                                r.record_outbound_message_with_persistence(
+                                    &canonical_thread_id,
+                                    "feishu",
+                                    &worker_account_id,
+                                    &worker_chat_id,
+                                    worker_native_thread_scope.as_deref(),
+                                    &outbound_msg_id,
+                                )
+                                .await;
+                            } else if canonical_thread_id.is_empty() {
+                                warn!(
+                                    account_id = %worker_account_id,
+                                    outbound_message_id = %outbound_msg_id,
+                                    "Feishu generated image not indexed: thread key unavailable"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                account_id = %worker_account_id,
+                                error = %e,
+                                "Failed to send Feishu generated image"
+                            );
+                            notify_permission_error_if_needed(
+                                &worker_client,
+                                &worker_account_id,
+                                &worker_chat_id,
+                                &worker_msg_id,
+                                &e.to_string(),
+                            )
+                            .await;
+                        }
+                    }
                     continue;
                 }
                 StreamEvent::Done => {}

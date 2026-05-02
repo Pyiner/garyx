@@ -149,6 +149,52 @@ fn test_extract_media_refs_from_value_supports_local_and_remote() {
 }
 
 #[test]
+fn test_extract_media_refs_from_provider_message_supports_image_generation_base64() {
+    let message = garyx_models::provider::ProviderMessage::tool_result(
+        json!({
+            "type": "imageGeneration",
+            "id": "ig-weixin-test",
+            "status": "completed",
+            "result": "iVBORw0KGgo=",
+        }),
+        Some("ig-weixin-test".to_owned()),
+        Some("imageGeneration".to_owned()),
+        Some(false),
+    )
+    .with_metadata_value("item_type", json!("imageGeneration"));
+
+    let refs = extract_media_refs_from_provider_message(&message);
+    assert_eq!(refs.len(), 1);
+    match &refs[0] {
+        OutboundMediaRef::InlineImage {
+            id,
+            bytes,
+            file_name,
+        } => {
+            assert_eq!(id, "ig-weixin-test");
+            assert_eq!(bytes, &vec![137, 80, 78, 71, 13, 10, 26, 10]);
+            assert_eq!(file_name, "ig-weixin-test.png");
+        }
+        other => panic!("expected inline image ref, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn test_load_media_bytes_supports_inline_image_generation() {
+    let media_ref = OutboundMediaRef::InlineImage {
+        id: "ig-inline".to_owned(),
+        bytes: vec![1, 2, 3, 4],
+        file_name: "ig-inline.png".to_owned(),
+    };
+    let bytes = load_media_bytes(&reqwest::Client::new(), &media_ref)
+        .await
+        .unwrap();
+    assert_eq!(bytes, vec![1, 2, 3, 4]);
+    assert_eq!(media_ref.classify_media_type(), 1);
+    assert_eq!(media_ref.file_name().as_deref(), Some("ig-inline.png"));
+}
+
+#[test]
 fn test_markdown_to_plain_text_strips_image_and_link_markup() {
     let plain = markdown_to_plain_text("![img](https://a)\n[txt](https://b)");
     assert_eq!(plain.trim(), "txt");
