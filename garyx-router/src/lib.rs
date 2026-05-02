@@ -78,8 +78,8 @@ pub use task_counter::{
     FileTaskCounterStore, InMemoryTaskCounterStore, TaskCounterError, TaskCounterStore,
 };
 pub use tasks::{
-    CreateTaskInput, PromoteTaskInput, TaskListFilter, TaskRef, TaskService, TaskServiceError,
-    TaskSummary, UpdateTaskStatusInput,
+    CreateTaskInput, PromoteTaskInput, TaskHistoryPage, TaskListFilter, TaskRef, TaskRuntimeInput,
+    TaskService, TaskServiceError, TaskSummary, UpdateTaskStatusInput,
 };
 pub use thread_history::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT, ThreadHistoryError,

@@ -204,7 +204,7 @@ pub struct McpTaskScope {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case", tag = "type")]
+#[serde(rename_all = "snake_case", tag = "kind")]
 pub enum McpPrincipal {
     Human {
         #[serde(alias = "userId")]
@@ -233,6 +233,16 @@ pub struct TaskCreateItemParams {
     pub assignee: Option<McpPrincipalInput>,
     #[serde(default)]
     pub start: bool,
+    #[serde(default)]
+    pub runtime: Option<TaskRuntimeParams>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct TaskRuntimeParams {
+    #[serde(default, alias = "agentId")]
+    pub agent_id: Option<String>,
+    #[serde(default, alias = "workspaceDir")]
+    pub workspace_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -248,6 +258,10 @@ pub struct TaskCreateParams {
     pub start: bool,
     #[serde(default, alias = "agentId")]
     pub agent_id: Option<String>,
+    #[serde(default, alias = "workspaceDir")]
+    pub workspace_dir: Option<String>,
+    #[serde(default)]
+    pub runtime: Option<TaskRuntimeParams>,
     #[serde(default)]
     pub tasks: Option<Vec<TaskCreateItemParams>>,
 }
@@ -295,6 +309,8 @@ pub struct TaskHistoryParams {
     pub thread_id: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub before: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

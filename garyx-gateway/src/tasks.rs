@@ -9,12 +9,13 @@ use axum::{
 use garyx_models::local_paths::default_session_data_dir;
 use garyx_models::{Principal, TaskScope, TaskStatus};
 use garyx_router::{
-    CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskService,
-    TaskServiceError, UpdateTaskStatusInput,
+    CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
+    TaskService, TaskServiceError, UpdateTaskStatusInput,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::agent_identity::resolve_agent_reference_from_stores;
 use crate::server::AppState;
 
 const ACTOR_HEADER: &str = "x-garyx-actor";
@@ -34,6 +35,10 @@ pub struct CreateTaskBody {
     pub actor: Option<Principal>,
     #[serde(default)]
     pub agent_id: Option<String>,
+    #[serde(default)]
+    pub workspace_dir: Option<String>,
+    #[serde(default)]
+    pub runtime: Option<TaskRuntimeBody>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +49,10 @@ pub struct BatchCreateTaskBody {
     pub actor: Option<Principal>,
     #[serde(default)]
     pub agent_id: Option<String>,
+    #[serde(default)]
+    pub workspace_dir: Option<String>,
+    #[serde(default)]
+    pub runtime: Option<TaskRuntimeBody>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +65,16 @@ pub struct BatchTaskItem {
     pub assignee: Option<Principal>,
     #[serde(default)]
     pub start: bool,
+    #[serde(default)]
+    pub runtime: Option<TaskRuntimeBody>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TaskRuntimeBody {
+    #[serde(default, alias = "agentId")]
+    pub agent_id: Option<String>,
+    #[serde(default, alias = "workspaceDir")]
+    pub workspace_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,6 +135,8 @@ pub struct TaskListQuery {
 pub struct TaskHistoryQuery {
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub before: Option<String>,
 }
 
 pub async fn create_task(
@@ -130,6 +151,10 @@ pub async fn create_task(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
+    let runtime = task_runtime_input(body.runtime, body.agent_id, body.workspace_dir);
+    if let Err(error) = validate_runtime_agent(&state, &runtime).await {
+        return task_error_response(error);
+    }
     match service
         .create_task(CreateTaskInput {
             scope: body.scope,
@@ -138,20 +163,26 @@ pub async fn create_task(
             assignee: body.assignee,
             start: body.start,
             actor,
-            agent_id: body.agent_id,
+            agent_id: None,
+            workspace_dir: None,
+            runtime,
         })
         .await
     {
-        Ok((thread_id, task)) => (
-            StatusCode::CREATED,
-            Json(json!({
-                "thread_id": thread_id,
-                "task_ref": garyx_router::tasks::canonical_task_ref(&task),
-                "number": task.number,
-                "status": task.status,
-                "task": task,
-            })),
-        ),
+        Ok((thread_id, task)) => {
+            let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
+            (
+                StatusCode::CREATED,
+                Json(json!({
+                    "thread_id": thread_id,
+                    "task_ref": garyx_router::tasks::canonical_task_ref(&task),
+                    "number": task.number,
+                    "status": task.status,
+                    "runtime_agent_id": runtime_agent_id,
+                    "task": task,
+                })),
+            )
+        }
         Err(error) => task_error_response(error),
     }
 }
@@ -174,8 +205,19 @@ pub async fn create_tasks_batch(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
+    let top_runtime = task_runtime_input(body.runtime, body.agent_id, body.workspace_dir);
+    if let Err(error) = validate_runtime_agent(&state, &top_runtime).await {
+        return task_error_response(error);
+    }
     let mut created = Vec::new();
     for item in body.tasks {
+        let runtime = item
+            .runtime
+            .map(TaskRuntimeInput::from)
+            .or_else(|| top_runtime.clone());
+        if let Err(error) = validate_runtime_agent(&state, &runtime).await {
+            return task_error_response(error);
+        }
         match service
             .create_task(CreateTaskInput {
                 scope: body.scope.clone(),
@@ -184,17 +226,23 @@ pub async fn create_tasks_batch(
                 assignee: item.assignee,
                 start: item.start,
                 actor: actor.clone(),
-                agent_id: body.agent_id.clone(),
+                agent_id: None,
+                workspace_dir: None,
+                runtime,
             })
             .await
         {
-            Ok((thread_id, task)) => created.push(json!({
-                "thread_id": thread_id,
-                "task_ref": garyx_router::tasks::canonical_task_ref(&task),
-                "number": task.number,
-                "status": task.status,
-                "task": task,
-            })),
+            Ok((thread_id, task)) => {
+                let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
+                created.push(json!({
+                    "thread_id": thread_id,
+                    "task_ref": garyx_router::tasks::canonical_task_ref(&task),
+                    "number": task.number,
+                    "status": task.status,
+                    "runtime_agent_id": runtime_agent_id,
+                    "task": task,
+                }))
+            }
             Err(error) => return task_error_response(error),
         }
     }
@@ -213,24 +261,29 @@ pub async fn promote_task(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
+    let thread_id = body.thread_id;
     match service
         .promote_task(PromoteTaskInput {
-            thread_id: body.thread_id,
+            thread_id: thread_id.clone(),
             title: body.title,
             assignee: body.assignee,
             actor,
         })
         .await
     {
-        Ok(task) => (
-            StatusCode::OK,
-            Json(json!({
-                "task_ref": garyx_router::tasks::canonical_task_ref(&task),
-                "number": task.number,
-                "status": task.status,
-                "task": task,
-            })),
-        ),
+        Ok(task) => {
+            let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "task_ref": garyx_router::tasks::canonical_task_ref(&task),
+                    "number": task.number,
+                    "status": task.status,
+                    "runtime_agent_id": runtime_agent_id,
+                    "task": task,
+                })),
+            )
+        }
         Err(error) => task_error_response(error),
     }
 }
@@ -288,8 +341,14 @@ pub async fn task_history(
     let Some(service) = task_service(&state) else {
         return tasks_disabled();
     };
-    match service.task_history(&task_ref, None, query.limit).await {
-        Ok(events) => (StatusCode::OK, Json(json!({ "events": events }))),
+    match service
+        .task_history(&task_ref, None, query.limit, query.before.as_deref())
+        .await
+    {
+        Ok(page) => (
+            StatusCode::OK,
+            Json(json!({ "events": page.events, "has_more": page.has_more })),
+        ),
         Err(error) => task_error_response(error),
     }
 }
@@ -453,6 +512,75 @@ fn actor_from_request(
     parse_principal(value).map(Some)
 }
 
+impl From<TaskRuntimeBody> for TaskRuntimeInput {
+    fn from(value: TaskRuntimeBody) -> Self {
+        Self {
+            agent_id: normalized_nonempty(value.agent_id),
+            workspace_dir: normalized_nonempty(value.workspace_dir),
+        }
+    }
+}
+
+fn task_runtime_input(
+    runtime: Option<TaskRuntimeBody>,
+    legacy_agent_id: Option<String>,
+    legacy_workspace_dir: Option<String>,
+) -> Option<TaskRuntimeInput> {
+    let mut input = runtime
+        .map(TaskRuntimeInput::from)
+        .unwrap_or(TaskRuntimeInput {
+            agent_id: None,
+            workspace_dir: None,
+        });
+    if input.agent_id.is_none() {
+        input.agent_id = normalized_nonempty(legacy_agent_id);
+    }
+    if input.workspace_dir.is_none() {
+        input.workspace_dir = normalized_nonempty(legacy_workspace_dir);
+    }
+    (input.agent_id.is_some() || input.workspace_dir.is_some()).then_some(input)
+}
+
+fn normalized_nonempty(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+async fn validate_runtime_agent(
+    state: &Arc<AppState>,
+    runtime: &Option<TaskRuntimeInput>,
+) -> Result<(), TaskServiceError> {
+    let Some(agent_id) = runtime
+        .as_ref()
+        .and_then(|runtime| runtime.agent_id.as_deref())
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        })
+    else {
+        return Ok(());
+    };
+    resolve_agent_reference_from_stores(
+        state.ops.custom_agents.as_ref(),
+        state.ops.agent_teams.as_ref(),
+        agent_id,
+    )
+    .await
+    .map(|_| ())
+    .map_err(TaskServiceError::UnknownAgent)
+}
+
+async fn runtime_agent_id_for_thread(state: &Arc<AppState>, thread_id: &str) -> String {
+    state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .and_then(|record| garyx_router::agent_id_from_value(&record))
+        .unwrap_or_default()
+}
+
 fn tasks_disabled() -> (StatusCode, Json<Value>) {
     (
         StatusCode::NOT_FOUND,
@@ -472,6 +600,7 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
         TaskServiceError::InvalidScope(_) => "InvalidScope",
         TaskServiceError::BadRequest(_) => "BadRequest",
         TaskServiceError::UnknownPrincipal(_) => "UnknownPrincipal",
+        TaskServiceError::UnknownAgent(_) => "UnknownAgent",
         TaskServiceError::Store(_) | TaskServiceError::Counter(_) | TaskServiceError::Serde(_) => {
             "Internal"
         }
@@ -479,7 +608,7 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
     let status = match code {
         "NotFound" => StatusCode::NOT_FOUND,
         "NotATask" | "AlreadyATask" | "InvalidTransition" | "InvalidScope" | "BadRequest"
-        | "UnknownPrincipal" => StatusCode::BAD_REQUEST,
+        | "UnknownPrincipal" | "UnknownAgent" => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (

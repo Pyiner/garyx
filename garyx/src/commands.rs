@@ -1487,6 +1487,26 @@ async fn post_gateway_json(
     Ok(serde_json::from_str(&body)?)
 }
 
+async fn post_gateway_json_as_cli_actor(
+    gateway: &GatewayEndpoint,
+    path: &str,
+    payload: &Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let url = format!("{}{}", gateway.base_url, path);
+    let response = gateway_request(reqwest::Client::new().post(&url), gateway)
+        .header("X-Garyx-Actor", cli_actor_header_value())
+        .json(payload)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(format!("gateway request failed: {status} {body}").into());
+    }
+    Ok(serde_json::from_str(&body)?)
+}
+
 async fn patch_gateway_json(
     gateway: &GatewayEndpoint,
     path: &str,
@@ -1494,6 +1514,26 @@ async fn patch_gateway_json(
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
     let response = gateway_request(reqwest::Client::new().patch(&url), gateway)
+        .json(payload)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(format!("gateway request failed: {status} {body}").into());
+    }
+    Ok(serde_json::from_str(&body)?)
+}
+
+async fn patch_gateway_json_as_cli_actor(
+    gateway: &GatewayEndpoint,
+    path: &str,
+    payload: &Value,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let url = format!("{}{}", gateway.base_url, path);
+    let response = gateway_request(reqwest::Client::new().patch(&url), gateway)
+        .header("X-Garyx-Actor", cli_actor_header_value())
         .json(payload)
         .timeout(std::time::Duration::from_secs(10))
         .send()
@@ -1514,6 +1554,24 @@ async fn put_gateway_json(
     let url = format!("{}{}", gateway.base_url, path);
     let response = gateway_request(reqwest::Client::new().put(&url), gateway)
         .json(payload)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        return Err(format!("gateway request failed: {status} {body}").into());
+    }
+    Ok(serde_json::from_str(&body)?)
+}
+
+async fn delete_gateway_json_as_cli_actor(
+    gateway: &GatewayEndpoint,
+    path: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let url = format!("{}{}", gateway.base_url, path);
+    let response = gateway_request(reqwest::Client::new().delete(&url), gateway)
+        .header("X-Garyx-Actor", cli_actor_header_value())
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await?;
@@ -2624,7 +2682,7 @@ pub(crate) async fn cmd_task_create(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let gateway = gateway_endpoint(config_path)?;
-    let payload = post_gateway_json(
+    let payload = post_gateway_json_as_cli_actor(
         &gateway,
         "/api/tasks",
         &json!({
@@ -2633,8 +2691,9 @@ pub(crate) async fn cmd_task_create(
             "body": body,
             "assignee": assignee,
             "start": start,
-            "agent_id": agent_id,
-            "actor": cli_actor_payload(),
+            "runtime": {
+                "agent_id": agent_id,
+            },
         }),
     )
     .await?;
@@ -2657,14 +2716,13 @@ pub(crate) async fn cmd_task_promote(
         return Err("thread_id cannot be empty".into());
     }
     let gateway = gateway_endpoint(config_path)?;
-    let payload = post_gateway_json(
+    let payload = post_gateway_json_as_cli_actor(
         &gateway,
         "/api/tasks/promote",
         &json!({
             "thread_id": thread_id,
             "title": title,
             "assignee": assignee.map(principal_payload).transpose()?,
-            "actor": cli_actor_payload(),
         }),
     )
     .await?;
@@ -2681,16 +2739,43 @@ pub(crate) async fn cmd_task_claim(
     actor: Option<&str>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    patch_task_status(
-        config_path,
-        task_ref,
-        "in_progress",
-        None,
-        false,
-        actor,
-        json_output,
+    let gateway = gateway_endpoint(config_path)?;
+    let encoded_ref = encode_task_ref(task_ref)?;
+    let assignee = actor
+        .map(principal_payload)
+        .transpose()?
+        .unwrap_or_else(cli_actor_payload);
+    let assign_path = format!("/api/tasks/{encoded_ref}/assign");
+    let status_path = format!("/api/tasks/{encoded_ref}/status");
+    patch_gateway_json_as_cli_actor(
+        &gateway,
+        &assign_path,
+        &json!({
+            "to": assignee.clone(),
+        }),
+    )
+    .await?;
+    let payload = patch_gateway_json_as_cli_actor(
+        &gateway,
+        &status_path,
+        &json!({
+            "to": "in_progress",
+            "note": Value::Null,
+            "force": false,
+        }),
     )
     .await
+    .map_err(|error| {
+        format!(
+            "assigned to {} but status update to in_progress failed: {error}",
+            format_principal(&assignee)
+        )
+    })?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    Ok(())
 }
 
 pub(crate) async fn cmd_task_release(
@@ -2698,16 +2783,28 @@ pub(crate) async fn cmd_task_release(
     task_ref: &str,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    patch_task_status(
-        config_path,
-        task_ref,
-        "todo",
-        None,
-        false,
-        None,
-        json_output,
+    let gateway = gateway_endpoint(config_path)?;
+    let encoded_ref = encode_task_ref(task_ref)?;
+    let status_path = format!("/api/tasks/{encoded_ref}/status");
+    let assign_path = format!("/api/tasks/{encoded_ref}/assign");
+    patch_gateway_json_as_cli_actor(
+        &gateway,
+        &status_path,
+        &json!({
+            "to": "todo",
+            "note": Value::Null,
+            "force": false,
+        }),
     )
-    .await
+    .await?;
+    let payload = delete_gateway_json_as_cli_actor(&gateway, &assign_path)
+        .await
+        .map_err(|error| format!("status moved to todo but unassign failed: {error}"))?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    Ok(())
 }
 
 pub(crate) async fn cmd_task_assign(
@@ -2717,12 +2814,11 @@ pub(crate) async fn cmd_task_assign(
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
-    let payload = patch_gateway_json(
+    let payload = patch_gateway_json_as_cli_actor(
         &gateway,
         &format!("/api/tasks/{}/assign", encode_task_ref(task_ref)?),
         &json!({
             "to": principal_payload(principal)?,
-            "actor": cli_actor_payload(),
         }),
     )
     .await?;
@@ -2739,7 +2835,7 @@ pub(crate) async fn cmd_task_unassign(
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
-    let payload = delete_gateway_json(
+    let payload = delete_gateway_json_as_cli_actor(
         &gateway,
         &format!("/api/tasks/{}/assign", encode_task_ref(task_ref)?),
     )
@@ -2759,16 +2855,7 @@ pub(crate) async fn cmd_task_update(
     force: bool,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    patch_task_status(
-        config_path,
-        task_ref,
-        status,
-        note,
-        force,
-        None,
-        json_output,
-    )
-    .await
+    patch_task_status(config_path, task_ref, status, note, force, json_output).await
 }
 
 pub(crate) async fn cmd_task_reopen(
@@ -2776,16 +2863,7 @@ pub(crate) async fn cmd_task_reopen(
     task_ref: &str,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    patch_task_status(
-        config_path,
-        task_ref,
-        "todo",
-        None,
-        false,
-        None,
-        json_output,
-    )
-    .await
+    patch_task_status(config_path, task_ref, "todo", None, false, json_output).await
 }
 
 pub(crate) async fn cmd_task_set_title(
@@ -2799,12 +2877,11 @@ pub(crate) async fn cmd_task_set_title(
         return Err("title cannot be empty".into());
     }
     let gateway = gateway_endpoint(config_path)?;
-    let payload = patch_gateway_json(
+    let payload = patch_gateway_json_as_cli_actor(
         &gateway,
         &format!("/api/tasks/{}/title", encode_task_ref(task_ref)?),
         &json!({
             "title": title,
-            "actor": cli_actor_payload(),
         }),
     )
     .await?;
@@ -2842,7 +2919,10 @@ pub(crate) async fn cmd_task_history(
     for event in events {
         let at = event["at"].as_str().unwrap_or("-");
         let actor = format_principal(&event["actor"]);
-        let kind = event["kind"]["type"].as_str().unwrap_or("-");
+        let kind = event["kind"]["kind"]
+            .as_str()
+            .or_else(|| event["kind"]["type"].as_str())
+            .unwrap_or("-");
         println!("- {at}  {actor}  {kind}");
     }
     Ok(())
@@ -2854,18 +2934,16 @@ async fn patch_task_status(
     status: &str,
     note: Option<String>,
     force: bool,
-    actor: Option<&str>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
-    let payload = patch_gateway_json(
+    let payload = patch_gateway_json_as_cli_actor(
         &gateway,
         &format!("/api/tasks/{}/status", encode_task_ref(task_ref)?),
         &json!({
             "to": normalize_task_status(status)?,
             "note": note,
             "force": force,
-            "actor": actor.map(principal_payload).transpose()?.unwrap_or_else(cli_actor_payload),
         }),
     )
     .await?;
@@ -2910,32 +2988,40 @@ fn principal_payload(principal: &str) -> Result<Value, Box<dyn std::error::Error
         if user_id.is_empty() {
             return Err("human principal cannot be empty".into());
         }
-        return Ok(json!({ "type": "human", "user_id": user_id }));
+        return Ok(json!({ "kind": "human", "user_id": user_id }));
     }
     if let Some(agent_id) = principal.strip_prefix("agent:") {
         let agent_id = agent_id.trim();
         if agent_id.is_empty() {
             return Err("agent principal cannot be empty".into());
         }
-        return Ok(json!({ "type": "agent", "agent_id": agent_id }));
+        return Ok(json!({ "kind": "agent", "agent_id": agent_id }));
     }
-    Ok(json!({ "type": "agent", "agent_id": principal }))
+    Ok(json!({ "kind": "agent", "agent_id": principal }))
 }
 
 fn cli_actor_payload() -> Value {
+    json!({ "kind": "human", "user_id": cli_actor_user_id() })
+}
+
+fn cli_actor_user_id() -> String {
     let user_id = std::env::var("GARYX_USER")
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "owner".to_owned());
-    json!({ "type": "human", "user_id": user_id })
+    user_id
+}
+
+fn cli_actor_header_value() -> String {
+    format!("human:{}", cli_actor_user_id())
 }
 
 fn normalize_task_status(status: &str) -> Result<String, Box<dyn std::error::Error>> {
     let normalized = status.trim().to_ascii_lowercase().replace('-', "_");
     match normalized.as_str() {
         "todo" | "to_do" | "open" => Ok("todo".to_owned()),
-        "in_progress" | "progress" | "doing" | "claimed" => Ok("in_progress".to_owned()),
+        "in_progress" | "progress" | "doing" => Ok("in_progress".to_owned()),
         "in_review" | "review" | "reviewing" => Ok("in_review".to_owned()),
         "done" | "complete" | "completed" | "closed" => Ok("done".to_owned()),
         _ => Err(format!("unknown task status: {status}").into()),
@@ -3002,7 +3088,12 @@ fn format_principal(value: &Value) -> String {
     if value.is_null() {
         return "(unassigned)".to_owned();
     }
-    match value.get("type").and_then(Value::as_str).unwrap_or("-") {
+    match value
+        .get("kind")
+        .or_else(|| value.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or("-")
+    {
         "human" => format!(
             "human:{}",
             value.get("user_id").and_then(Value::as_str).unwrap_or("-")

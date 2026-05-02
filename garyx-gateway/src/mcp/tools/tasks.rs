@@ -5,8 +5,8 @@ use std::time::Instant;
 use garyx_models::local_paths::default_session_data_dir;
 use garyx_models::{Principal, TaskScope, TaskStatus};
 use garyx_router::{
-    CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskService,
-    UpdateTaskStatusInput,
+    CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
+    TaskService, UpdateTaskStatusInput,
 };
 use serde_json::{Value, json};
 
@@ -22,7 +22,8 @@ pub(crate) async fn create(
         let run_ctx = RunContext::from_request_context(&ctx);
         let actor = actor_from_context(server, &run_ctx).await?;
         let scope = task_scope(params.scope);
-        let agent_id = normalized_nonempty(params.agent_id);
+        let top_runtime = task_runtime_input(params.runtime, params.agent_id, params.workspace_dir);
+        validate_runtime_agent(server, &top_runtime).await?;
         let mut created = Vec::new();
 
         if let Some(items) = params.tasks {
@@ -30,6 +31,11 @@ pub(crate) async fn create(
                 return Err("tasks cannot be empty".to_owned());
             }
             for item in items {
+                let runtime = item
+                    .runtime
+                    .map(TaskRuntimeInput::from)
+                    .or_else(|| top_runtime.clone());
+                validate_runtime_agent(server, &runtime).await?;
                 let (thread_id, task) = service
                     .create_task(CreateTaskInput {
                         scope: scope.clone(),
@@ -38,11 +44,13 @@ pub(crate) async fn create(
                         assignee: item.assignee.map(principal_from_input).transpose()?,
                         start: item.start,
                         actor: Some(actor.clone()),
-                        agent_id: agent_id.clone(),
+                        agent_id: None,
+                        workspace_dir: None,
+                        runtime,
                     })
                     .await
                     .map_err(|error| error.to_string())?;
-                created.push(task_result(thread_id, task));
+                created.push(task_result(server, thread_id, task).await);
             }
         } else {
             let (thread_id, task) = service
@@ -53,11 +61,13 @@ pub(crate) async fn create(
                     assignee: params.assignee.map(principal_from_input).transpose()?,
                     start: params.start,
                     actor: Some(actor),
-                    agent_id,
+                    agent_id: None,
+                    workspace_dir: None,
+                    runtime: top_runtime,
                 })
                 .await
                 .map_err(|error| error.to_string())?;
-            created.push(task_result(thread_id, task));
+            created.push(task_result(server, thread_id, task).await);
         }
 
         Ok(json!({
@@ -78,9 +88,10 @@ pub(crate) async fn promote(
         let service = task_service(server)?;
         let run_ctx = RunContext::from_request_context(&ctx);
         let actor = actor_from_context(server, &run_ctx).await?;
+        let thread_id = params.thread_id;
         let task = service
             .promote_task(PromoteTaskInput {
-                thread_id: params.thread_id,
+                thread_id: thread_id.clone(),
                 title: params.title,
                 assignee: params.assignee.map(principal_from_input).transpose()?,
                 actor: Some(actor),
@@ -92,6 +103,7 @@ pub(crate) async fn promote(
             "status": "ok",
             "task_ref": garyx_router::tasks::canonical_task_ref(&task),
             "number": task.number,
+            "runtime_agent_id": runtime_agent_id_for_thread(server, &thread_id).await,
             "task": task,
         }))
     })
@@ -158,14 +170,15 @@ pub(crate) async fn history(
         let service = task_service(server)?;
         let run_ctx = RunContext::from_request_context(&ctx);
         let task_ref = task_ref_from(run_ctx.thread_id, params.task_ref, params.thread_id)?;
-        let events = service
-            .task_history(&task_ref, None, params.limit)
+        let page = service
+            .task_history(&task_ref, None, params.limit, params.before.as_deref())
             .await
             .map_err(|error| error.to_string())?;
         Ok(json!({
             "tool": "task_history",
             "status": "ok",
-            "events": events,
+            "events": page.events,
+            "has_more": page.has_more,
         }))
     })
     .await
@@ -385,7 +398,7 @@ fn parse_status(value: &str) -> Result<TaskStatus, String> {
     let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
     match normalized.as_str() {
         "todo" | "to_do" | "open" => Ok(TaskStatus::Todo),
-        "in_progress" | "progress" | "doing" | "claimed" => Ok(TaskStatus::InProgress),
+        "in_progress" | "progress" | "doing" => Ok(TaskStatus::InProgress),
         "in_review" | "review" | "reviewing" => Ok(TaskStatus::InReview),
         "done" | "complete" | "completed" | "closed" => Ok(TaskStatus::Done),
         _ => Err(format!("unknown task status: {value}")),
@@ -411,12 +424,82 @@ fn normalized_nonempty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn task_result(thread_id: String, task: garyx_models::ThreadTask) -> Value {
+impl From<TaskRuntimeParams> for TaskRuntimeInput {
+    fn from(value: TaskRuntimeParams) -> Self {
+        Self {
+            agent_id: normalized_nonempty(value.agent_id),
+            workspace_dir: normalized_nonempty(value.workspace_dir),
+        }
+    }
+}
+
+fn task_runtime_input(
+    runtime: Option<TaskRuntimeParams>,
+    legacy_agent_id: Option<String>,
+    legacy_workspace_dir: Option<String>,
+) -> Option<TaskRuntimeInput> {
+    let mut input = runtime
+        .map(TaskRuntimeInput::from)
+        .unwrap_or(TaskRuntimeInput {
+            agent_id: None,
+            workspace_dir: None,
+        });
+    if input.agent_id.is_none() {
+        input.agent_id = normalized_nonempty(legacy_agent_id);
+    }
+    if input.workspace_dir.is_none() {
+        input.workspace_dir = normalized_nonempty(legacy_workspace_dir);
+    }
+    (input.agent_id.is_some() || input.workspace_dir.is_some()).then_some(input)
+}
+
+async fn validate_runtime_agent(
+    server: &GaryMcpServer,
+    runtime: &Option<TaskRuntimeInput>,
+) -> Result<(), String> {
+    let Some(agent_id) = runtime
+        .as_ref()
+        .and_then(|runtime| runtime.agent_id.as_deref())
+        .and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then_some(trimmed)
+        })
+    else {
+        return Ok(());
+    };
+    crate::agent_identity::resolve_agent_reference_from_stores(
+        server.app_state.ops.custom_agents.as_ref(),
+        server.app_state.ops.agent_teams.as_ref(),
+        agent_id,
+    )
+    .await
+    .map(|_| ())
+    .map_err(|error| format!("UnknownAgent: {error}"))
+}
+
+async fn runtime_agent_id_for_thread(server: &GaryMcpServer, thread_id: &str) -> String {
+    server
+        .app_state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .and_then(|record| garyx_router::agent_id_from_value(&record))
+        .unwrap_or_default()
+}
+
+async fn task_result(
+    server: &GaryMcpServer,
+    thread_id: String,
+    task: garyx_models::ThreadTask,
+) -> Value {
+    let runtime_agent_id = runtime_agent_id_for_thread(server, &thread_id).await;
     json!({
         "thread_id": thread_id,
         "task_ref": garyx_router::tasks::canonical_task_ref(&task),
         "number": task.number,
         "status": task.status,
+        "runtime_agent_id": runtime_agent_id,
         "task": task,
     })
 }

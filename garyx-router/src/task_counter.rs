@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
@@ -80,7 +80,12 @@ fn allocate_blocking(path: &Path) -> std::io::Result<u64> {
         .open(path)?;
     let _guard = FlockGuard::lock(&file)?;
     let current = read_counter(&mut file)?.unwrap_or(1);
-    let next = current.saturating_add(1);
+    let next = current.checked_add(1).ok_or_else(|| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("task counter overflow at {}", path.display()),
+        )
+    })?;
     file.set_len(0)?;
     file.seek(SeekFrom::Start(0))?;
     write!(file, "{next}\n")?;
@@ -104,7 +109,12 @@ fn read_counter(file: &mut std::fs::File) -> std::io::Result<Option<u64>> {
     if trimmed.is_empty() {
         return Ok(None);
     }
-    Ok(trimmed.parse::<u64>().ok())
+    trimmed.parse::<u64>().map(Some).map_err(|error| {
+        Error::new(
+            ErrorKind::InvalidData,
+            format!("invalid task counter value '{trimmed}': {error}"),
+        )
+    })
 }
 
 struct FlockGuard {
@@ -148,7 +158,9 @@ impl TaskCounterStore for InMemoryTaskCounterStore {
         let mut counters = self.counters.lock().await;
         let current = counters.entry(scope.clone()).or_insert(1);
         let allocated = *current;
-        *current = current.saturating_add(1);
+        *current = current
+            .checked_add(1)
+            .ok_or_else(|| TaskCounterError::Io(std::io::ErrorKind::InvalidData.into()))?;
         Ok(allocated)
     }
 
@@ -216,5 +228,24 @@ mod tests {
         numbers.sort_unstable();
         assert_eq!(numbers, (1..=12).collect::<Vec<_>>());
         assert_eq!(store.peek(&scope).await.unwrap(), 13);
+    }
+
+    #[tokio::test]
+    async fn file_counter_rejects_corrupt_counter_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let scope = TaskScope::new("telegram", "main");
+        let path = temp.path().join("task-counters/telegram/main.txt");
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&path, "not-a-number\n").await.unwrap();
+
+        let store = FileTaskCounterStore::new(temp.path());
+        let error = store.allocate(&scope).await.unwrap_err();
+        assert!(matches!(error, TaskCounterError::Io(_)));
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            "not-a-number\n"
+        );
     }
 }
