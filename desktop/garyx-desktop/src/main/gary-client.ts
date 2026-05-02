@@ -3453,7 +3453,7 @@ export async function createTask(
   const assignee = input.assignee?.trim()
     ? principalPayload(input.assignee)
     : null;
-  const runtimeAgentId = input.agentId?.trim() || "";
+  const runtimeAgentId = assignee?.kind === "agent" ? assignee.agent_id : "";
   const runtimeWorkspaceDir = input.workspaceDir?.trim() || "";
   const payload = await requestJson<TaskSummaryPayload>(settings, "/api/tasks", {
     method: "POST",
@@ -3463,7 +3463,7 @@ export async function createTask(
       title: input.title?.trim() || null,
       body: input.body?.trim() || null,
       assignee,
-      start: input.start === true,
+      start: input.start === true || assignee !== null,
       runtime: {
         agent_id: runtimeAgentId || null,
         workspace_dir: runtimeWorkspaceDir || null,

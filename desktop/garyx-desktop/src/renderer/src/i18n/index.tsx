@@ -139,6 +139,7 @@ const zhCN: Record<string, string> = {
   'Task title': '任务标题',
   'Optional task detail': '可选任务说明',
   'Start now': '立即开始',
+  'Assigned tasks start automatically': '已分配任务会自动开始',
   'Loading tasks…': '正在加载任务…',
   'Task updated.': '任务已更新。',
   'Task update failed.': '任务更新失败。',

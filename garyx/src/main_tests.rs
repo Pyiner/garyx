@@ -918,8 +918,6 @@ fn parse_task_create_runtime_options() {
         "--assignee",
         "agent:reviewer",
         "--start",
-        "--agent-id",
-        "codex",
         "--workspace-dir",
         "/tmp/garyx-task",
         "--json",
@@ -933,7 +931,6 @@ fn parse_task_create_runtime_options() {
                     body,
                     assignee,
                     start,
-                    agent_id,
                     workspace_dir,
                     json,
                 },
@@ -943,7 +940,6 @@ fn parse_task_create_runtime_options() {
             assert_eq!(body.as_deref(), Some("Check logs"));
             assert_eq!(assignee.as_deref(), Some("agent:reviewer"));
             assert!(start);
-            assert_eq!(agent_id.as_deref(), Some("codex"));
             assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx-task"));
             assert!(json);
         }

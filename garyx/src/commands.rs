@@ -3261,14 +3261,11 @@ pub(crate) async fn cmd_task_create(
     body: Option<String>,
     assignee: Option<&str>,
     start: bool,
-    agent_id: Option<String>,
     workspace_dir: Option<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let agent_id = agent_id
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty());
-    let assignee = task_create_assignee_payload(assignee, agent_id.as_deref())?;
+    let assignee = task_create_assignee_payload(assignee)?;
+    let runtime_agent_id = task_runtime_agent_id_from_assignee(&assignee);
     let start = start || assignee.is_some();
     let workspace_dir = workspace_dir
         .map(|value| value.trim().to_owned())
@@ -3280,7 +3277,7 @@ pub(crate) async fn cmd_task_create(
         "assignee": assignee,
         "start": start,
         "runtime": {
-            "agent_id": agent_id,
+            "agent_id": runtime_agent_id,
             "workspace_dir": workspace_dir,
         },
     });
@@ -3297,16 +3294,18 @@ pub(crate) async fn cmd_task_create(
 
 fn task_create_assignee_payload(
     assignee: Option<&str>,
-    agent_id: Option<&str>,
 ) -> Result<Option<Value>, Box<dyn std::error::Error>> {
-    if let Some(assignee) = assignee {
-        return Ok(Some(principal_payload(assignee)?));
-    }
+    assignee.map(principal_payload).transpose()
+}
 
-    let Some(agent_id) = agent_id.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    Ok(Some(json!({ "kind": "agent", "agent_id": agent_id })))
+fn task_runtime_agent_id_from_assignee(assignee: &Option<Value>) -> Option<String> {
+    let assignee = assignee.as_ref()?.as_object()?;
+    (assignee.get("kind").and_then(Value::as_str) == Some("agent"))
+        .then(|| assignee.get("agent_id").and_then(Value::as_str))
+        .flatten()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 pub(crate) async fn cmd_task_promote(

@@ -1164,8 +1164,8 @@ fn upsert_plugin_account_rejects_missing_required_fields() {
 }
 
 #[test]
-fn task_create_assignee_defaults_from_agent_id() {
-    let payload = task_create_assignee_payload(None, Some(" plain-claude ")).unwrap();
+fn task_create_assignee_accepts_bare_agent_id() {
+    let payload = task_create_assignee_payload(Some(" plain-claude ")).unwrap();
 
     assert_eq!(
         payload,
@@ -1174,14 +1174,20 @@ fn task_create_assignee_defaults_from_agent_id() {
 }
 
 #[test]
-fn task_create_explicit_assignee_wins_over_agent_id() {
-    let payload =
-        task_create_assignee_payload(Some("agent:reviewer"), Some("plain-claude")).unwrap();
+fn task_runtime_agent_id_is_derived_from_agent_assignee() {
+    let payload = task_create_assignee_payload(Some("agent:reviewer")).unwrap();
 
     assert_eq!(
-        payload,
-        Some(json!({ "kind": "agent", "agent_id": "reviewer" }))
+        task_runtime_agent_id_from_assignee(&payload).as_deref(),
+        Some("reviewer")
     );
+}
+
+#[test]
+fn task_runtime_agent_id_is_not_derived_from_human_assignee() {
+    let payload = task_create_assignee_payload(Some("human:alice")).unwrap();
+
+    assert_eq!(task_runtime_agent_id_from_assignee(&payload), None);
 }
 
 #[test]

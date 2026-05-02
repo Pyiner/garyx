@@ -182,7 +182,7 @@ export function TasksPanel({
   const [draftTitle, setDraftTitle] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [draftStart, setDraftStart] = useState(false);
-  const [draftAgentId, setDraftAgentId] = useState('');
+  const [draftAssignee, setDraftAssignee] = useState('');
   const [draftScope, setDraftScope] = useState('');
   const [creating, setCreating] = useState(false);
 
@@ -289,20 +289,22 @@ export function TasksPanel({
       return;
     }
     const scope = createScopeOptions.find((option) => option.value === draftScope);
+    const assignee = draftAssignee.trim();
     setCreating(true);
     try {
       await getDesktopApi().createTask({
         scope: draftScope,
         title,
         body: draftBody.trim() || null,
-        start: draftStart,
-        agentId: draftAgentId.trim() || null,
+        assignee: assignee || null,
+        start: draftStart || Boolean(assignee),
         workspaceDir: scope?.workspaceDir || null,
       });
       setDraftOpen(false);
       setDraftTitle('');
       setDraftBody('');
       setDraftStart(false);
+      setDraftAssignee('');
       await loadTasks({ silent: true });
       onToast(t('Task created.'), 'success');
     } catch (createError) {
@@ -487,12 +489,12 @@ export function TasksPanel({
               />
             </label>
             <label className="tasks-field">
-              <span>{t('Agent')}</span>
+              <span>{t('Assignee')}</span>
               <select
-                onChange={(event) => setDraftAgentId(event.target.value)}
-                value={draftAgentId}
+                onChange={(event) => setDraftAssignee(event.target.value)}
+                value={draftAssignee}
               >
-                <option value="">{t('Provider default')}</option>
+                <option value="">{t('Unassigned')}</option>
                 {agents.map((agent) => (
                   <option key={agent.agentId} value={agent.agentId}>
                     {agent.displayName || agent.agentId}
@@ -512,11 +514,12 @@ export function TasksPanel({
           <div className="tasks-create-actions">
             <label className="tasks-checkbox">
               <input
-                checked={draftStart}
+                checked={draftStart || Boolean(draftAssignee.trim())}
+                disabled={Boolean(draftAssignee.trim())}
                 onChange={(event) => setDraftStart(event.target.checked)}
                 type="checkbox"
               />
-              <span>{t('Start now')}</span>
+              <span>{draftAssignee.trim() ? t('Assigned tasks start automatically') : t('Start now')}</span>
             </label>
             <button className="tasks-secondary-button" onClick={() => setDraftOpen(false)} type="button">
               {t('Cancel')}

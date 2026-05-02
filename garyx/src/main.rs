@@ -812,7 +812,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 body,
                 assignee,
                 start,
-                agent_id,
                 workspace_dir,
                 json,
             } => {
@@ -823,7 +822,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     body,
                     assignee.as_deref(),
                     start,
-                    agent_id,
                     workspace_dir,
                     json,
                 )

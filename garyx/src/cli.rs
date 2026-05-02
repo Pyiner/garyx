@@ -1031,8 +1031,6 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         start: bool,
         #[arg(long)]
-        agent_id: Option<String>,
-        #[arg(long)]
         workspace_dir: Option<String>,
         #[arg(long)]
         json: bool,

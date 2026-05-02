@@ -185,7 +185,6 @@ export interface CreateTaskInput {
   body?: string | null;
   assignee?: string | null;
   start?: boolean;
-  agentId?: string | null;
   workspaceDir?: string | null;
 }
 
