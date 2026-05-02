@@ -55,6 +55,11 @@ type UseSettingsControllerArgs = {
   setError: React.Dispatch<React.SetStateAction<string | null>>;
 };
 
+export type GatewaySettingsSaveOptions = {
+  silent?: boolean;
+  refreshDesktopState?: 'await' | 'background' | 'skip';
+};
+
 export function useSettingsController({
   desktopState,
   initialSettingsTab,
@@ -87,6 +92,7 @@ export function useSettingsController({
 
   const gatewaySettingsDraftRef = useRef<any>(ensureGatewayConfig({}));
   const gatewaySettingsSavingRef = useRef(false);
+  const gatewaySaveGenerationRef = useRef(0);
   const gatewayAutoSaveTimerRef = useRef<number | null>(null);
   const localSettingsDirty = Boolean(
     desktopState && !desktopSettingsEqual(settingsDraft, desktopState.settings),
@@ -471,13 +477,40 @@ export function useSettingsController({
     });
   }
 
+  async function refreshDesktopStateAfterGatewaySave(
+    saveGeneration: number,
+  ): Promise<void> {
+    const [status, nextState] = await measureUiAction(
+      "bot.modify.refresh_desktop_state",
+      () =>
+        Promise.all([
+          window.garyxDesktop.checkConnection(),
+          window.garyxDesktop.getState(),
+        ]),
+    );
+    if (saveGeneration !== gatewaySaveGenerationRef.current) {
+      return;
+    }
+    startTransition(() => {
+      setConnection(status);
+      setDesktopState(nextState);
+    });
+  }
+
   async function handleSaveGatewaySettings(
-    options?: { silent?: boolean },
+    options?: GatewaySettingsSaveOptions,
   ): Promise<boolean> {
     if (gatewaySettingsSavingRef.current) {
       return false;
     }
     const silent = options?.silent === true;
+    const refreshDesktopState = options?.refreshDesktopState ?? 'await';
+    const saveGeneration = gatewaySaveGenerationRef.current + 1;
+    gatewaySaveGenerationRef.current = saveGeneration;
+    if (gatewayAutoSaveTimerRef.current !== null) {
+      window.clearTimeout(gatewayAutoSaveTimerRef.current);
+      gatewayAutoSaveTimerRef.current = null;
+    }
     gatewaySettingsSavingRef.current = true;
     setGatewaySettingsSaving(true);
 
@@ -496,18 +529,18 @@ export function useSettingsController({
       // configuredBots / botMainThreads in DesktopState stay stale after a
       // bot delete until the next poll. Refresh the whole state so the
       // sidebar reflects the save immediately.
-      const [status, nextState] = await measureUiAction(
-        "bot.modify.refresh_desktop_state",
-        () =>
-          Promise.all([
-            window.garyxDesktop.checkConnection(),
-            window.garyxDesktop.getState(),
-          ]),
-      );
-      startTransition(() => {
-        setConnection(status);
-        setDesktopState(nextState);
-      });
+      if (refreshDesktopState === 'await') {
+        await refreshDesktopStateAfterGatewaySave(saveGeneration);
+      } else if (refreshDesktopState === 'background') {
+        void refreshDesktopStateAfterGatewaySave(saveGeneration).catch(
+          (refreshError) => {
+            console.warn(
+              'Failed to refresh desktop state after gateway settings save.',
+              refreshError,
+            );
+          },
+        );
+      }
       return true;
     } catch (gatewayError) {
       setGatewaySettingsStatus(

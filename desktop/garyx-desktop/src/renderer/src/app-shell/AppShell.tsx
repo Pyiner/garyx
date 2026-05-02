@@ -7079,8 +7079,8 @@ export function AppShell() {
                     onSaveLocalSettingsNow={(options) => {
                       return handleSaveLocalSettingsNow(options);
                     }}
-                    onSaveGatewaySettings={() => {
-                      return handleSaveGatewaySettings();
+                    onSaveGatewaySettings={(options) => {
+                      return handleSaveGatewaySettings(options);
                     }}
                     onOpenGatewaySetup={() => {
                       void handleOpenGatewaySetup();

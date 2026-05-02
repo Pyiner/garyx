@@ -74,6 +74,9 @@ import desktopPackage from '../../../package.json';
 const DESKTOP_APP_VERSION = desktopPackage.version.trim() || '0.0.0';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
+type GatewaySettingsSaveOptions = {
+  refreshDesktopState?: 'await' | 'background' | 'skip';
+};
 type GatewaySettingsPanelProps = {
   activeTab: SettingsTabId;
   commands?: SlashCommand[];
@@ -107,7 +110,7 @@ type GatewaySettingsPanelProps = {
     requireGatewayConnection?: boolean;
     reloadGatewaySettings?: boolean;
   }) => Promise<boolean>;
-  onSaveGatewaySettings?: () => Promise<boolean>;
+  onSaveGatewaySettings?: (options?: GatewaySettingsSaveOptions) => Promise<boolean>;
   onOpenGatewaySetup?: () => void;
   onMutateGatewayDraft?: DraftMutator;
   onRefreshAgentTargets?: () => Promise<void>;
@@ -1711,7 +1714,7 @@ export function GatewaySettingsPanel({
               delete next.channels[kind].accounts[accountId];
             }
           });
-          await onSaveGatewaySettings();
+          await onSaveGatewaySettings({ refreshDesktopState: 'background' });
         }}
         open={Boolean(editingBot)}
         saving={gatewaySaving}
