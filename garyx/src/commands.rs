@@ -2756,10 +2756,14 @@ pub(crate) async fn cmd_task_create(
     assignee: Option<&str>,
     start: bool,
     agent_id: Option<String>,
+    workspace_dir: Option<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let assignee = assignee.map(principal_payload).transpose()?;
     let agent_id = agent_id
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let workspace_dir = workspace_dir
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let gateway = gateway_endpoint(config_path)?;
@@ -2774,6 +2778,7 @@ pub(crate) async fn cmd_task_create(
             "start": start,
             "runtime": {
                 "agent_id": agent_id,
+                "workspace_dir": workspace_dir,
             },
         }),
     )

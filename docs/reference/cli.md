@@ -70,6 +70,18 @@ Common flags on `channels add`:
 | `garyx thread send task <task_ref> [message]` | Resolve a task to its backing thread, then send a message into that thread. |
 | `garyx thread send bot <selector> [message]` | Resolve a bot's bound main thread inside the gateway, then send with that channel context. |
 
+## Tasks
+
+| Command | Use it for |
+| --- | --- |
+| `garyx task list --scope <channel/account>` | List tasks in a channel/account scope. |
+| `garyx task create <scope> [--title <title>] [--body <body>] [--assignee <principal>] [--agent-id <id>] [--workspace-dir <path>] [--start]` | Create a task thread, optionally binding runtime agent/workspace and starting it. |
+| `garyx task get <task_ref>` | Fetch one task. |
+| `garyx task promote <thread_id>` | Promote an existing thread into a task. |
+| `garyx task update <task_ref> --status <status> [--note <note>]` | Move a task through its lifecycle. |
+| `garyx task claim / release / assign / unassign` | Manage task ownership. |
+| `garyx task set-title / reopen / history` | Rename, reopen, or inspect task history. |
+
 ## Agents and teams
 
 | Command | Use it for |

@@ -662,6 +662,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 assignee,
                 start,
                 agent_id,
+                workspace_dir,
                 json,
             } => {
                 cmd_task_create(
@@ -672,6 +673,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     assignee.as_deref(),
                     start,
                     agent_id,
+                    workspace_dir,
                     json,
                 )
                 .await

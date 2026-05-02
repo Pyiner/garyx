@@ -873,6 +873,8 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         agent_id: Option<String>,
         #[arg(long)]
+        workspace_dir: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     /// Promote an existing thread into a task

@@ -4,7 +4,7 @@ use clap::{CommandFactory, Parser};
 
 use crate::cli::{
     AgentAction, AutoResearchAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction,
-    DebugAction, GatewayAction, LogsAction, MigrateAction, TeamAction, ThreadAction,
+    DebugAction, GatewayAction, LogsAction, MigrateAction, TaskAction, TeamAction, ThreadAction,
 };
 use crate::commands::{
     OnboardCommandOptions, canonical_channel_id, cmd_channels_add, cmd_channels_login, cmd_onboard,
@@ -708,6 +708,53 @@ fn parse_thread_send_legacy_thread_id() {
             assert_eq!(bot, None);
         }
         _ => panic!("expected Thread::Send"),
+    }
+}
+
+#[test]
+fn parse_task_create_runtime_options() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "task",
+        "create",
+        "telegram/main",
+        "--title",
+        "Investigate",
+        "--body",
+        "Check logs",
+        "--assignee",
+        "agent:reviewer",
+        "--start",
+        "--agent-id",
+        "codex",
+        "--workspace-dir",
+        "/tmp/garyx-task",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Task {
+            action:
+                TaskAction::Create {
+                    scope,
+                    title,
+                    body,
+                    assignee,
+                    start,
+                    agent_id,
+                    workspace_dir,
+                    json,
+                },
+        }) => {
+            assert_eq!(scope, "telegram/main");
+            assert_eq!(title.as_deref(), Some("Investigate"));
+            assert_eq!(body.as_deref(), Some("Check logs"));
+            assert_eq!(assignee.as_deref(), Some("agent:reviewer"));
+            assert!(start);
+            assert_eq!(agent_id.as_deref(), Some("codex"));
+            assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx-task"));
+            assert!(json);
+        }
+        _ => panic!("expected Task::Create"),
     }
 }
 
