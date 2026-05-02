@@ -1251,6 +1251,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
                     name: Some("Wechat".to_owned()),
                     agent_id: "claude".to_owned(),
                     workspace_dir: Some("/tmp/wechat-owner".to_owned()),
+                    streaming_update: true,
                 },
             ),
         );

@@ -5046,6 +5046,7 @@ fn upsert_channel_account(
                         name,
                         agent_id: agent_id.clone(),
                         workspace_dir,
+                        streaming_update: true,
                     }),
                 );
         }

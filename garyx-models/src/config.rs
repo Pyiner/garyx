@@ -377,6 +377,10 @@ pub struct WeixinAccount {
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
+    /// Enable in-place message updates for streamed assistant text.
+    /// When false, fall back to the legacy one-FINISH-per-flush path.
+    #[serde(default = "default_true")]
+    pub streaming_update: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

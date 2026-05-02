@@ -431,6 +431,7 @@ async fn builtin_discoverer_discovers_enabled_channels() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            streaming_update: true,
         },
     );
 
@@ -515,6 +516,7 @@ async fn builtin_discoverer_sets_config_methods_per_channel() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            streaming_update: true,
         },
     );
 

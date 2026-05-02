@@ -175,7 +175,8 @@ garyx channels login feishu --reauthorize main
           "agent_id": "claude",
           "config": {
             "token": "${WEIXIN_BOT_TOKEN}",
-            "uin": "${WEIXIN_UIN}"
+            "uin": "${WEIXIN_UIN}",
+            "streaming_update": true
           }
         }
       }
@@ -183,6 +184,11 @@ garyx channels login feishu --reauthorize main
   }
 }
 ```
+
+`streaming_update` defaults to `true`. It enables Weixin in-place updates for
+streamed assistant text by reusing one `client_id` with
+`message_state=1 -> 2`. Set it to `false` to fall back to the legacy path where
+each flushed chunk is sent as an independent finished message.
 
 You can also use the interactive QR login flow:
 

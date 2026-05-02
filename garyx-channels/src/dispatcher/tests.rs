@@ -58,6 +58,7 @@ fn test_register_weixin_sender() {
             name: None,
             agent_id: "claude".to_string(),
             workspace_dir: None,
+            streaming_update: true,
         },
         http: Client::new(),
         is_running: true,
@@ -83,6 +84,7 @@ fn test_from_config_registers_weixin_account() {
                 name: None,
                 agent_id: "claude".to_string(),
                 workspace_dir: None,
+                streaming_update: true,
             },
         ),
     );

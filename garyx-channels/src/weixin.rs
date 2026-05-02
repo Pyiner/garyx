@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use aes::Aes128;
@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use tokio::fs;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tokio::time::{Instant, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
 
 use garyx_bridge::MultiProviderBridge;
@@ -46,6 +47,11 @@ const POLL_BACKOFF_DELAY: Duration = Duration::from_secs(30);
 const SESSION_PAUSE_DURATION: Duration = Duration::from_secs(3600);
 /// Maximum CDN upload retry attempts on server errors (5xx).
 const CDN_UPLOAD_MAX_RETRIES: u32 = 3;
+const STREAM_UPDATE_TICK_MS: u64 = 200;
+const STREAM_UPDATE_MIN_INTERVAL_MS: u64 = 800;
+const STREAM_UPDATE_MIN_DELTA_CHARS: usize = 12;
+const STREAM_UPDATE_INACTIVITY_FORCE_FINISH_MS: u64 = 15_000;
+const LIVE_MESSAGE_MAX_GENERATING_SENDS: u8 = 7;
 type ContextTokenStore = Arc<Mutex<HashMap<String, String>>>;
 type Aes128EcbEnc = Encryptor<Aes128>;
 type Aes128EcbDec = Decryptor<Aes128>;
@@ -156,8 +162,9 @@ async fn set_persisted_cursor(account_id: &str, cursor: &str) {
 // ---------------------------------------------------------------------------
 
 /// Maximum sends per context_token before we consider it exhausted.
-/// Community reports the hard limit is 10; we stop at 8 for safety margin.
-const TOKEN_SEND_LIMIT: u32 = 8;
+/// Empirically verified 2026-05-02: hard cap is 10; we leave 1 reserve for
+/// retry safety, so the in-process soft cap is 9.
+const TOKEN_SEND_LIMIT: u32 = 9;
 
 type TokenSendCountStore = Arc<Mutex<HashMap<String, u32>>>;
 
@@ -198,6 +205,58 @@ pub async fn token_send_count_reset(token: &str) {
 pub async fn token_send_count_prune(active_tokens: &[&str]) {
     let mut store = token_send_count_store().lock().await;
     store.retain(|k, _| active_tokens.contains(&k.as_str()));
+}
+
+// ---------------------------------------------------------------------------
+// Lightweight observability counters for Weixin streaming-update rollout.
+// ---------------------------------------------------------------------------
+
+static WEIXIN_MEDIA_DROPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+static WEIXIN_SEND_CALLS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+type FinalizeReasonCounterStore = Arc<Mutex<HashMap<&'static str, u64>>>;
+
+fn finalize_reason_counter_store() -> &'static FinalizeReasonCounterStore {
+    static STORE: OnceLock<FinalizeReasonCounterStore> = OnceLock::new();
+    STORE.get_or_init(|| Arc::new(Mutex::new(HashMap::new())))
+}
+
+async fn record_weixin_finalize_reason(reason: FinalizeReason) {
+    let label = reason.metric_label();
+    let snapshot_value = {
+        let mut counters = finalize_reason_counter_store().lock().await;
+        let counter = counters.entry(label).or_insert(0);
+        *counter += 1;
+        *counter
+    };
+    debug!(
+        metric = "weixin_finalize_reason_total",
+        reason = label,
+        value = snapshot_value,
+        "weixin streaming finalize reason"
+    );
+}
+
+fn record_weixin_media_dropped(count: usize) {
+    if count == 0 {
+        return;
+    }
+    let value =
+        WEIXIN_MEDIA_DROPPED_TOTAL.fetch_add(count as u64, Ordering::Relaxed) + count as u64;
+    warn!(
+        metric = "weixin_media_dropped_total",
+        dropped = count,
+        value,
+        "dropped weixin media refs"
+    );
+}
+
+fn record_weixin_send_calls_per_inbound(count: u32) {
+    WEIXIN_SEND_CALLS_TOTAL.fetch_add(count as u64, Ordering::Relaxed);
+    debug!(
+        metric = "weixin_send_calls_per_inbound",
+        count, "weixin send calls used for inbound"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +481,7 @@ fn markdown_image_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"!\[[^\]]*\]\(([^)]+)\)").expect("valid markdown image regex"))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum OutboundMediaRef {
     RemoteUrl(String),
     LocalPath(String),
@@ -431,6 +490,250 @@ enum OutboundMediaRef {
         bytes: Vec<u8>,
         file_name: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveMessageState {
+    Pristine,
+    Updating,
+    Finalized,
+    DeliveryDisabled { reason: PoisonReason },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PoisonReason {
+    TokenExhausted,
+    SessionPaused,
+    HttpFailure,
+}
+
+impl PoisonReason {
+    fn metric_label(self) -> &'static str {
+        match self {
+            Self::TokenExhausted => "poisoned_token_exhausted",
+            Self::SessionPaused => "poisoned_session_paused",
+            Self::HttpFailure => "poisoned_http",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FinalizeReason {
+    Done,
+    ToolBoundary,
+    #[allow(dead_code)]
+    Media,
+    BudgetMessage,
+    BudgetToken,
+    Inactivity,
+    Poisoned(PoisonReason),
+}
+
+impl FinalizeReason {
+    fn metric_label(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::ToolBoundary => "tool_boundary",
+            Self::Media => "media",
+            Self::BudgetMessage => "budget_msg",
+            Self::BudgetToken => "budget_token",
+            Self::Inactivity => "inactivity",
+            Self::Poisoned(reason) => reason.metric_label(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LiveMessage {
+    client_id: String,
+    context_token: String,
+    text_visible: String,
+    text_raw: String,
+    pending_media_refs: Vec<OutboundMediaRef>,
+    last_sent_visible: String,
+    last_sent_at: Option<Instant>,
+    last_delta_at: Option<Instant>,
+    sends_used: u8,
+    state: LiveMessageState,
+}
+
+impl LiveMessage {
+    async fn open(context_token: String) -> Self {
+        let state = if context_token.trim().is_empty()
+            || token_sends_remaining(context_token.trim()).await == 0
+        {
+            LiveMessageState::DeliveryDisabled {
+                reason: PoisonReason::TokenExhausted,
+            }
+        } else {
+            LiveMessageState::Pristine
+        };
+        Self {
+            client_id: uuid::Uuid::new_v4().to_string(),
+            context_token,
+            text_visible: String::new(),
+            text_raw: String::new(),
+            pending_media_refs: Vec::new(),
+            last_sent_visible: String::new(),
+            last_sent_at: None,
+            last_delta_at: None,
+            sends_used: 0,
+            state,
+        }
+    }
+
+    fn append_delta(&mut self, delta: &str, sent_media_refs: &HashSet<String>, now: Instant) {
+        self.text_raw = merge_stream_text(&self.text_raw, delta);
+        self.collect_markdown_media_refs(sent_media_refs);
+        self.text_visible = markdown_to_plain_text(&self.text_raw).trim().to_owned();
+        self.last_delta_at = Some(now);
+    }
+
+    fn append_soft_boundary(&mut self) {
+        if self.text_raw.trim().is_empty() {
+            return;
+        }
+        self.text_raw.push_str("\n\n");
+        self.text_visible = markdown_to_plain_text(&self.text_raw).trim().to_owned();
+    }
+
+    fn clear_text(&mut self) {
+        self.text_raw.clear();
+        self.text_visible.clear();
+        self.last_sent_visible.clear();
+        self.last_sent_at = None;
+        self.last_delta_at = None;
+    }
+
+    fn collect_markdown_media_refs(&mut self, sent_media_refs: &HashSet<String>) {
+        for media_ref in extract_markdown_media_refs(&self.text_raw) {
+            let dedupe_key = media_ref.dedupe_key();
+            if sent_media_refs.contains(&dedupe_key)
+                || self
+                    .pending_media_refs
+                    .iter()
+                    .any(|existing| existing.dedupe_key() == dedupe_key)
+            {
+                continue;
+            }
+            self.pending_media_refs.push(media_ref);
+        }
+    }
+
+    fn collect_provider_media_refs(
+        &mut self,
+        refs: Vec<OutboundMediaRef>,
+        sent_media_refs: &HashSet<String>,
+    ) {
+        for media_ref in refs {
+            let dedupe_key = media_ref.dedupe_key();
+            if sent_media_refs.contains(&dedupe_key)
+                || self
+                    .pending_media_refs
+                    .iter()
+                    .any(|existing| existing.dedupe_key() == dedupe_key)
+            {
+                continue;
+            }
+            self.pending_media_refs.push(media_ref);
+        }
+    }
+
+    fn pending_delta_chars(&self) -> usize {
+        self.text_visible
+            .chars()
+            .count()
+            .saturating_sub(self.last_sent_visible.chars().count())
+    }
+
+    fn has_buffered_visible(&self) -> bool {
+        self.text_visible != self.last_sent_visible
+    }
+
+    fn sentence_terminated_since_last_send(&self) -> bool {
+        let suffix = if self.last_sent_visible.is_empty()
+            || !self.text_visible.starts_with(&self.last_sent_visible)
+        {
+            self.text_visible.as_str()
+        } else {
+            &self.text_visible[self.last_sent_visible.len()..]
+        };
+        suffix
+            .trim_end()
+            .chars()
+            .last()
+            .is_some_and(is_stream_update_sentence_terminator)
+    }
+
+    fn has_unterminated_markdown_image_ref_tail(&self) -> bool {
+        unterminated_markdown_image_tail_regex().is_match(&self.text_raw)
+    }
+
+    async fn should_send_generating(&self, now: Instant) -> bool {
+        if !matches!(
+            self.state,
+            LiveMessageState::Pristine | LiveMessageState::Updating
+        ) {
+            return false;
+        }
+        if self.sends_used >= LIVE_MESSAGE_MAX_GENERATING_SENDS {
+            return false;
+        }
+        if token_sends_remaining(self.context_token.trim()).await <= 1 {
+            return false;
+        }
+        if !self.has_buffered_visible() || self.has_unterminated_markdown_image_ref_tail() {
+            return false;
+        }
+        let enough_text = self.pending_delta_chars() >= STREAM_UPDATE_MIN_DELTA_CHARS
+            || self.sentence_terminated_since_last_send();
+        if !enough_text {
+            return false;
+        }
+        self.last_sent_at.is_none_or(|last| {
+            now.duration_since(last) >= Duration::from_millis(STREAM_UPDATE_MIN_INTERVAL_MS)
+        })
+    }
+
+    fn should_force_inactivity_finish(&self, now: Instant) -> bool {
+        matches!(self.state, LiveMessageState::Updating)
+            && self.last_delta_at.is_some_and(|last_delta| {
+                now.duration_since(last_delta)
+                    >= Duration::from_millis(STREAM_UPDATE_INACTIVITY_FORCE_FINISH_MS)
+            })
+    }
+
+    async fn needs_budget_finalize(&self) -> Option<FinalizeReason> {
+        if !matches!(self.state, LiveMessageState::Updating) {
+            return None;
+        }
+        if self.sends_used >= LIVE_MESSAGE_MAX_GENERATING_SENDS {
+            return Some(FinalizeReason::BudgetMessage);
+        }
+        if token_sends_remaining(self.context_token.trim()).await <= 1 {
+            return Some(FinalizeReason::BudgetToken);
+        }
+        None
+    }
+
+    fn take_poisoned_text(&mut self) -> Option<String> {
+        if !matches!(self.state, LiveMessageState::DeliveryDisabled { .. }) {
+            return None;
+        }
+        let text = self.text_visible.trim().to_owned();
+        self.text_visible.clear();
+        self.text_raw.clear();
+        if text.is_empty() { None } else { Some(text) }
+    }
+}
+
+fn is_stream_update_sentence_terminator(ch: char) -> bool {
+    matches!(ch, '.' | '?' | '!' | '。' | '？' | '！' | '…' | ':' | '：')
+}
+
+fn unterminated_markdown_image_tail_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"!\[[^\]]*\]\([^)]*$").expect("valid markdown tail regex"))
 }
 
 impl OutboundMediaRef {
@@ -1016,13 +1319,45 @@ async fn extract_cdn_non_image_media_metadata(
     metadata
 }
 
-pub async fn send_text_message(
+fn build_send_text_message_body(
+    to_user_id: &str,
+    text: &str,
+    context_token: &str,
+    client_id: &str,
+    message_state: u8,
+) -> Value {
+    json!({
+        "msg": {
+            "from_user_id": "",
+            "to_user_id": to_user_id,
+            "client_id": client_id,
+            "message_type": 2,
+            "message_state": message_state,
+            "context_token": context_token,
+            "item_list": [
+                {
+                    "type": 1,
+                    "text_item": {
+                        "text": text
+                    }
+                }
+            ]
+        },
+        "base_info": {
+            "channel_version": env!("CARGO_PKG_VERSION")
+        }
+    })
+}
+
+async fn send_text_message_with_state(
     http: &Client,
     account: &WeixinAccount,
     to_user_id: &str,
     text: &str,
     context_token: Option<&str>,
-) -> Result<String, ChannelError> {
+    client_id: &str,
+    message_state: u8,
+) -> Result<(), ChannelError> {
     // SDK parity: refuse to send if session is paused (errcode=-14).
     let acct_id = account_id_from_token(&account.token);
     if !acct_id.is_empty() && is_session_paused(acct_id).await {
@@ -1058,28 +1393,7 @@ pub async fn send_text_message(
         ));
     }
 
-    let client_id = uuid::Uuid::new_v4().to_string();
-    let body = json!({
-        "msg": {
-            "from_user_id": "",
-            "to_user_id": target,
-            "client_id": client_id,
-            "message_type": 2,
-            "message_state": 2,
-            "context_token": token,
-            "item_list": [
-                {
-                    "type": 1,
-                    "text_item": {
-                        "text": text
-                    }
-                }
-            ]
-        },
-        "base_info": {
-            "channel_version": env!("CARGO_PKG_VERSION")
-        }
-    });
+    let body = build_send_text_message_body(target, text, token, client_id, message_state);
 
     let url = build_api_url(&account.base_url, "sendmessage");
     let response = auth_headers(http.post(url).json(&body), account)
@@ -1153,6 +1467,27 @@ pub async fn send_text_message(
         }
     }
 
+    Ok(())
+}
+
+pub async fn send_text_message(
+    http: &Client,
+    account: &WeixinAccount,
+    to_user_id: &str,
+    text: &str,
+    context_token: Option<&str>,
+) -> Result<String, ChannelError> {
+    let client_id = uuid::Uuid::new_v4().to_string();
+    send_text_message_with_state(
+        http,
+        account,
+        to_user_id,
+        text,
+        context_token,
+        &client_id,
+        2,
+    )
+    .await?;
     Ok(client_id)
 }
 
@@ -1232,6 +1567,57 @@ async fn send_typing_status(
         }
     }
     Ok(())
+}
+
+async fn notify_subscription(
+    http: &Client,
+    account: &WeixinAccount,
+    endpoint: &str,
+) -> Result<(), ChannelError> {
+    let body = json!({
+        "base_info": {
+            "channel_version": env!("CARGO_PKG_VERSION")
+        }
+    });
+    let url = build_api_url(&account.base_url, endpoint);
+    let response = auth_headers(
+        http.post(url).timeout(Duration::from_secs(2)).json(&body),
+        account,
+    )
+    .send()
+    .await
+    .map_err(|error| ChannelError::SendFailed(format!("Weixin {endpoint} failed: {error}")))?;
+    let status = response.status();
+    let raw = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(ChannelError::SendFailed(format!(
+            "Weixin {endpoint} HTTP {status}: {raw}"
+        )));
+    }
+    if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
+        if payload
+            .get("ret")
+            .and_then(Value::as_i64)
+            .is_some_and(|ret| ret != 0)
+        {
+            let message = payload
+                .get("errmsg")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            return Err(ChannelError::SendFailed(format!(
+                "Weixin {endpoint} ret!=0: {message}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+async fn notify_start(http: &Client, account: &WeixinAccount) -> Result<(), ChannelError> {
+    notify_subscription(http, account, "msg/notifystart").await
+}
+
+async fn notify_stop(http: &Client, account: &WeixinAccount) -> Result<(), ChannelError> {
+    notify_subscription(http, account, "msg/notifystop").await
 }
 
 fn build_get_config_body(to_user_id: &str, context_token: Option<&str>) -> Value {
@@ -1633,6 +2019,23 @@ async fn send_media_message(
                 .get("errmsg")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
+            if ret_code == -14 {
+                error!(
+                    to_user_id = target,
+                    errmsg = message,
+                    "Weixin session expired during media send (ret=-14): bot needs re-login on the phone"
+                );
+                if !acct_id.is_empty() {
+                    pause_session(acct_id).await;
+                }
+            }
+            if ret_code == -2 {
+                warn!(
+                    to_user_id = target,
+                    errmsg = message,
+                    "Weixin context_token likely expired or exhausted during media send (ret=-2)"
+                );
+            }
             tracing::warn!(
                 ret = ret_code,
                 errmsg = message,
@@ -2055,6 +2458,8 @@ struct WeixinInboundRuntime {
     account: WeixinAccount,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+    notify_started: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
 }
 
 pub struct WeixinChannel {
@@ -2064,6 +2469,583 @@ pub struct WeixinChannel {
     poll_tasks: Vec<JoinHandle<()>>,
     router: Arc<Mutex<MessageRouter>>,
     bridge: Arc<MultiProviderBridge>,
+}
+
+#[derive(Clone)]
+struct WeixinStreamConsumerContext {
+    http: Client,
+    account: WeixinAccount,
+    account_id: String,
+    user_id: String,
+    context_token: String,
+    router: Arc<Mutex<MessageRouter>>,
+    thread_id: Arc<std::sync::Mutex<String>>,
+    typing_ticket: Option<String>,
+    running: Arc<AtomicBool>,
+}
+
+enum LiveTextSendResult {
+    Sent,
+    Noop,
+    Poisoned,
+}
+
+fn current_stream_thread_id(ctx: &WeixinStreamConsumerContext) -> String {
+    match ctx.thread_id.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => String::new(),
+    }
+}
+
+async fn resolve_stream_context_token(ctx: &WeixinStreamConsumerContext) -> String {
+    let captured = ctx.context_token.trim();
+    if !captured.is_empty() {
+        return captured.to_owned();
+    }
+    let thread_id = current_stream_thread_id(ctx);
+    get_context_token_for_thread(
+        &ctx.account_id,
+        &ctx.user_id,
+        if thread_id.is_empty() {
+            None
+        } else {
+            Some(thread_id.as_str())
+        },
+    )
+    .await
+    .unwrap_or_default()
+}
+
+async fn open_live_message_for_context(ctx: &WeixinStreamConsumerContext) -> LiveMessage {
+    LiveMessage::open(resolve_stream_context_token(ctx).await).await
+}
+
+async fn record_stream_outbound(ctx: &WeixinStreamConsumerContext, client_id: &str) {
+    let thread_id = current_stream_thread_id(ctx);
+    if thread_id.trim().is_empty() {
+        return;
+    }
+    let mut router_guard = ctx.router.lock().await;
+    router_guard
+        .record_outbound_message_with_persistence(
+            &thread_id,
+            "weixin",
+            &ctx.account_id,
+            &ctx.user_id,
+            None,
+            client_id,
+        )
+        .await;
+}
+
+async fn ensure_stream_typing(
+    ctx: &WeixinStreamConsumerContext,
+    typing_keepalive_task: &mut Option<JoinHandle<()>>,
+    typing_active: &mut bool,
+) {
+    if *typing_active {
+        return;
+    }
+    let Some(ticket) = ctx.typing_ticket.clone() else {
+        return;
+    };
+    if let Err(error) = send_typing_status(&ctx.http, &ctx.account, &ctx.user_id, &ticket, 1).await
+    {
+        debug!(
+            account_id = %ctx.account_id,
+            user_id = %ctx.user_id,
+            error = %error,
+            "failed to send weixin typing start"
+        );
+    }
+    let http = ctx.http.clone();
+    let account = ctx.account.clone();
+    let user_id = ctx.user_id.clone();
+    *typing_keepalive_task = Some(tokio::spawn(async move {
+        let mut logged_failure = false;
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            if let Err(error) = send_typing_status(&http, &account, &user_id, &ticket, 1).await {
+                if !logged_failure {
+                    debug!(error = %error, "weixin typing keepalive failed (suppressing further)");
+                    logged_failure = true;
+                }
+            } else {
+                logged_failure = false;
+            }
+        }
+    }));
+    *typing_active = true;
+}
+
+async fn stop_stream_typing(
+    ctx: &WeixinStreamConsumerContext,
+    typing_keepalive_task: &mut Option<JoinHandle<()>>,
+    typing_active: &mut bool,
+) {
+    if let Some(task) = typing_keepalive_task.take() {
+        task.abort();
+    }
+    if !*typing_active {
+        return;
+    }
+    *typing_active = false;
+    if let Some(ticket) = ctx.typing_ticket.as_deref() {
+        if let Err(error) =
+            send_typing_status(&ctx.http, &ctx.account, &ctx.user_id, ticket, 2).await
+        {
+            debug!(
+                account_id = %ctx.account_id,
+                user_id = %ctx.user_id,
+                error = %error,
+                "failed to stop weixin typing"
+            );
+        }
+    }
+}
+
+fn classify_text_send_error(error: &ChannelError) -> PoisonReason {
+    let value = error.to_string();
+    if value.contains("ret=-14") || value.contains("session paused") {
+        PoisonReason::SessionPaused
+    } else if value.contains("ret=-2")
+        || value.contains("context_token exhausted")
+        || value.contains("send limit")
+        || value.contains("context_token is missing")
+    {
+        PoisonReason::TokenExhausted
+    } else {
+        PoisonReason::HttpFailure
+    }
+}
+
+async fn send_live_generating(
+    ctx: &WeixinStreamConsumerContext,
+    live: &mut LiveMessage,
+    now: Instant,
+    calls_used: &mut u32,
+) -> LiveTextSendResult {
+    if !live.should_send_generating(now).await {
+        return LiveTextSendResult::Noop;
+    }
+    match send_text_message_with_state(
+        &ctx.http,
+        &ctx.account,
+        &ctx.user_id,
+        &live.text_visible,
+        Some(live.context_token.as_str()),
+        &live.client_id,
+        1,
+    )
+    .await
+    {
+        Ok(()) => {
+            live.state = LiveMessageState::Updating;
+            live.sends_used = live.sends_used.saturating_add(1);
+            live.last_sent_visible = live.text_visible.clone();
+            live.last_sent_at = Some(now);
+            *calls_used = calls_used.saturating_add(1);
+            LiveTextSendResult::Sent
+        }
+        Err(error) => {
+            let reason = classify_text_send_error(&error);
+            warn!(
+                account_id = %ctx.account_id,
+                user_id = %ctx.user_id,
+                reason = reason.metric_label(),
+                error = %error,
+                "weixin streaming GENERATING send failed; disabling live message delivery"
+            );
+            live.state = LiveMessageState::DeliveryDisabled { reason };
+            LiveTextSendResult::Poisoned
+        }
+    }
+}
+
+async fn finalize_live_message(
+    ctx: &WeixinStreamConsumerContext,
+    live: &mut LiveMessage,
+    reason: FinalizeReason,
+    calls_used: &mut u32,
+) -> LiveTextSendResult {
+    match live.state {
+        LiveMessageState::Finalized => return LiveTextSendResult::Noop,
+        LiveMessageState::DeliveryDisabled { reason } => {
+            record_weixin_finalize_reason(FinalizeReason::Poisoned(reason)).await;
+            return LiveTextSendResult::Noop;
+        }
+        LiveMessageState::Pristine if live.text_visible.trim().is_empty() => {
+            live.state = LiveMessageState::Finalized;
+            return LiveTextSendResult::Noop;
+        }
+        LiveMessageState::Pristine | LiveMessageState::Updating => {}
+    }
+
+    if token_sends_remaining(live.context_token.trim()).await == 0 {
+        live.state = LiveMessageState::DeliveryDisabled {
+            reason: PoisonReason::TokenExhausted,
+        };
+        record_weixin_finalize_reason(FinalizeReason::Poisoned(PoisonReason::TokenExhausted)).await;
+        return LiveTextSendResult::Poisoned;
+    }
+
+    match send_text_message_with_state(
+        &ctx.http,
+        &ctx.account,
+        &ctx.user_id,
+        &live.text_visible,
+        Some(live.context_token.as_str()),
+        &live.client_id,
+        2,
+    )
+    .await
+    {
+        Ok(()) => {
+            live.state = LiveMessageState::Finalized;
+            live.sends_used = live.sends_used.saturating_add(1);
+            live.last_sent_visible = live.text_visible.clone();
+            live.last_sent_at = Some(Instant::now());
+            *calls_used = calls_used.saturating_add(1);
+            record_stream_outbound(ctx, &live.client_id).await;
+            record_weixin_finalize_reason(reason).await;
+            LiveTextSendResult::Sent
+        }
+        Err(error) => {
+            let poison = classify_text_send_error(&error);
+            warn!(
+                account_id = %ctx.account_id,
+                user_id = %ctx.user_id,
+                reason = poison.metric_label(),
+                error = %error,
+                "weixin streaming FINISH send failed; disabling live message delivery"
+            );
+            live.state = LiveMessageState::DeliveryDisabled { reason: poison };
+            record_weixin_finalize_reason(FinalizeReason::Poisoned(poison)).await;
+            LiveTextSendResult::Poisoned
+        }
+    }
+}
+
+async fn drain_live_media(
+    ctx: &WeixinStreamConsumerContext,
+    live: &mut LiveMessage,
+    sent_media_refs: &mut HashSet<String>,
+    calls_used: &mut u32,
+) {
+    let refs = std::mem::take(&mut live.pending_media_refs);
+    if refs.is_empty() {
+        return;
+    }
+    if matches!(live.state, LiveMessageState::DeliveryDisabled { .. }) {
+        record_weixin_media_dropped(refs.len());
+        warn!(
+            account_id = %ctx.account_id,
+            user_id = %ctx.user_id,
+            dropped = refs.len(),
+            "dropping weixin media refs because live text delivery is disabled"
+        );
+        return;
+    }
+
+    let mut remaining_refs = refs.len();
+    for media_ref in refs {
+        remaining_refs = remaining_refs.saturating_sub(1);
+        if token_sends_remaining(live.context_token.trim()).await == 0 {
+            record_weixin_media_dropped(remaining_refs + 1);
+            warn!(
+                account_id = %ctx.account_id,
+                user_id = %ctx.user_id,
+                "dropping weixin media refs because context_token budget is exhausted"
+            );
+            break;
+        }
+        let dedupe_key = media_ref.dedupe_key();
+        if sent_media_refs.contains(&dedupe_key) {
+            continue;
+        }
+        let media_bytes = match load_media_bytes(&ctx.http, &media_ref).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                record_weixin_media_dropped(1);
+                warn!(
+                    account_id = %ctx.account_id,
+                    user_id = %ctx.user_id,
+                    error = %error,
+                    "failed to load weixin media reference"
+                );
+                continue;
+            }
+        };
+        let uploaded = match upload_media_to_cdn(
+            &ctx.http,
+            &ctx.account,
+            &ctx.user_id,
+            &media_bytes,
+            media_ref.classify_media_type(),
+            media_ref.file_name(),
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                record_weixin_media_dropped(1);
+                warn!(
+                    account_id = %ctx.account_id,
+                    user_id = %ctx.user_id,
+                    error = %error,
+                    "failed to upload weixin media reference"
+                );
+                continue;
+            }
+        };
+        match send_media_message(
+            &ctx.http,
+            &ctx.account,
+            &ctx.user_id,
+            &uploaded,
+            "",
+            Some(live.context_token.as_str()),
+        )
+        .await
+        {
+            Ok(message_id) => {
+                sent_media_refs.insert(dedupe_key);
+                *calls_used = calls_used.saturating_add(1);
+                record_stream_outbound(ctx, &message_id).await;
+            }
+            Err(error) => {
+                let reason = classify_text_send_error(&error);
+                record_weixin_media_dropped(1);
+                warn!(
+                    account_id = %ctx.account_id,
+                    user_id = %ctx.user_id,
+                    reason = reason.metric_label(),
+                    error = %error,
+                    "failed to send weixin media message"
+                );
+                if matches!(
+                    reason,
+                    PoisonReason::TokenExhausted | PoisonReason::SessionPaused
+                ) {
+                    if remaining_refs > 0 {
+                        record_weixin_media_dropped(remaining_refs);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn collect_poisoned_text(live: &mut LiveMessage, poisoned_texts: &mut Vec<String>) {
+    if let Some(text) = live.take_poisoned_text() {
+        poisoned_texts.push(text);
+    }
+}
+
+async fn close_live_for_boundary(
+    ctx: &WeixinStreamConsumerContext,
+    live: &mut LiveMessage,
+    reason: FinalizeReason,
+    sent_media_refs: &mut HashSet<String>,
+    poisoned_texts: &mut Vec<String>,
+    typing_keepalive_task: &mut Option<JoinHandle<()>>,
+    typing_active: &mut bool,
+    calls_used: &mut u32,
+) -> bool {
+    let finalize_result = finalize_live_message(ctx, live, reason, calls_used).await;
+    if matches!(finalize_result, LiveTextSendResult::Poisoned) {
+        stop_stream_typing(ctx, typing_keepalive_task, typing_active).await;
+    }
+    let text_sent = matches!(finalize_result, LiveTextSendResult::Sent);
+    drain_live_media(ctx, live, sent_media_refs, calls_used).await;
+    collect_poisoned_text(live, poisoned_texts);
+    text_sent
+}
+
+async fn queue_poisoned_texts(ctx: &WeixinStreamConsumerContext, poisoned_texts: &[String]) {
+    let merged = poisoned_texts
+        .iter()
+        .map(|text| text.trim())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if merged.is_empty() {
+        return;
+    }
+    queue_pending_outbound(&ctx.account_id, &ctx.user_id, &merged).await;
+}
+
+async fn run_streaming_update_consumer(
+    ctx: WeixinStreamConsumerContext,
+    mut event_rx: mpsc::UnboundedReceiver<StreamEvent>,
+    stream_done_tx: oneshot::Sender<()>,
+    final_done_flush_sent: Arc<AtomicBool>,
+    seen_done_event: Arc<AtomicBool>,
+) {
+    let mut live = open_live_message_for_context(&ctx).await;
+    let mut tick = tokio::time::interval(Duration::from_millis(STREAM_UPDATE_TICK_MS));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut typing_keepalive_task: Option<JoinHandle<()>> = None;
+    let mut typing_active = false;
+    let mut sent_media_refs = HashSet::<String>::new();
+    let mut poisoned_texts = Vec::<String>::new();
+    let mut send_calls_used = 0_u32;
+    let mut any_text_output_sent = false;
+
+    loop {
+        tokio::select! {
+            maybe_event = event_rx.recv() => {
+                let Some(event) = maybe_event else {
+                    let _ = close_live_for_boundary(
+                        &ctx,
+                        &mut live,
+                        FinalizeReason::Done,
+                        &mut sent_media_refs,
+                        &mut poisoned_texts,
+                        &mut typing_keepalive_task,
+                        &mut typing_active,
+                        &mut send_calls_used,
+                    ).await;
+                    break;
+                };
+                match event {
+                    StreamEvent::Delta { text } => {
+                        ensure_stream_typing(&ctx, &mut typing_keepalive_task, &mut typing_active).await;
+                        let now = Instant::now();
+                        live.append_delta(&text, &sent_media_refs, now);
+                        if let Some(reason) = live.needs_budget_finalize().await {
+                            any_text_output_sent |= close_live_for_boundary(
+                                &ctx,
+                                &mut live,
+                                reason,
+                                &mut sent_media_refs,
+                                &mut poisoned_texts,
+                                &mut typing_keepalive_task,
+                                &mut typing_active,
+                                &mut send_calls_used,
+                            ).await;
+                            live = open_live_message_for_context(&ctx).await;
+                        } else if matches!(
+                            send_live_generating(&ctx, &mut live, now, &mut send_calls_used).await,
+                            LiveTextSendResult::Poisoned
+                        ) {
+                            stop_stream_typing(&ctx, &mut typing_keepalive_task, &mut typing_active).await;
+                        }
+                    }
+                    StreamEvent::Boundary { kind, .. } => match kind {
+                        StreamBoundaryKind::UserAck => {
+                            if !live.text_visible.trim().is_empty() {
+                                info!(
+                                    account_id = %ctx.account_id,
+                                    user_id = %ctx.user_id,
+                                    dropped_len = live.text_visible.len(),
+                                    "dropping buffered weixin stream text on user_ack boundary"
+                                );
+                            }
+                            live.clear_text();
+                        }
+                        StreamBoundaryKind::AssistantSegment => {
+                            if token_sends_remaining(live.context_token.trim()).await <= 3 {
+                                live.append_soft_boundary();
+                            } else {
+                                any_text_output_sent |= close_live_for_boundary(
+                                    &ctx,
+                                    &mut live,
+                                    FinalizeReason::ToolBoundary,
+                                    &mut sent_media_refs,
+                                    &mut poisoned_texts,
+                                    &mut typing_keepalive_task,
+                                    &mut typing_active,
+                                    &mut send_calls_used,
+                                ).await;
+                                live = open_live_message_for_context(&ctx).await;
+                            }
+                        }
+                    },
+                    StreamEvent::ToolUse { .. } => {}
+                    StreamEvent::ToolResult { message } => {
+                        live.collect_provider_media_refs(
+                            extract_media_refs_from_provider_message(&message),
+                            &sent_media_refs,
+                        );
+                    }
+                    StreamEvent::Done => {
+                        seen_done_event.store(true, Ordering::Relaxed);
+                        any_text_output_sent |= close_live_for_boundary(
+                            &ctx,
+                            &mut live,
+                            FinalizeReason::Done,
+                            &mut sent_media_refs,
+                            &mut poisoned_texts,
+                            &mut typing_keepalive_task,
+                            &mut typing_active,
+                            &mut send_calls_used,
+                        ).await;
+                        if !poisoned_texts.is_empty() {
+                            queue_poisoned_texts(&ctx, &poisoned_texts).await;
+                        }
+                        if any_text_output_sent || !poisoned_texts.is_empty() {
+                            final_done_flush_sent.store(true, Ordering::Relaxed);
+                        }
+                        stop_stream_typing(&ctx, &mut typing_keepalive_task, &mut typing_active).await;
+                        break;
+                    }
+                }
+            }
+            _ = tick.tick() => {
+                if !ctx.running.load(Ordering::Relaxed) {
+                    let _ = close_live_for_boundary(
+                        &ctx,
+                        &mut live,
+                        FinalizeReason::Done,
+                        &mut sent_media_refs,
+                        &mut poisoned_texts,
+                        &mut typing_keepalive_task,
+                        &mut typing_active,
+                        &mut send_calls_used,
+                    ).await;
+                    stop_stream_typing(&ctx, &mut typing_keepalive_task, &mut typing_active).await;
+                    break;
+                }
+                let now = Instant::now();
+                if let Some(reason) = live.needs_budget_finalize().await {
+                    any_text_output_sent |= close_live_for_boundary(
+                        &ctx,
+                        &mut live,
+                        reason,
+                        &mut sent_media_refs,
+                        &mut poisoned_texts,
+                        &mut typing_keepalive_task,
+                        &mut typing_active,
+                        &mut send_calls_used,
+                    ).await;
+                    live = open_live_message_for_context(&ctx).await;
+                } else if live.should_force_inactivity_finish(now) {
+                    any_text_output_sent |= close_live_for_boundary(
+                        &ctx,
+                        &mut live,
+                        FinalizeReason::Inactivity,
+                        &mut sent_media_refs,
+                        &mut poisoned_texts,
+                        &mut typing_keepalive_task,
+                        &mut typing_active,
+                        &mut send_calls_used,
+                    ).await;
+                    live = open_live_message_for_context(&ctx).await;
+                } else if matches!(
+                    send_live_generating(&ctx, &mut live, now, &mut send_calls_used).await,
+                    LiveTextSendResult::Poisoned
+                ) {
+                    stop_stream_typing(&ctx, &mut typing_keepalive_task, &mut typing_active).await;
+                }
+            }
+        }
+    }
+
+    stop_stream_typing(&ctx, &mut typing_keepalive_task, &mut typing_active).await;
+    record_weixin_send_calls_per_inbound(send_calls_used);
+    let _ = stream_done_tx.send(());
 }
 
 impl WeixinChannel {
@@ -2216,6 +3198,19 @@ impl WeixinChannel {
             // Successful response — reset failure counter and session pause.
             consecutive_failures = 0;
             clear_session_pause(&runtime.account_id).await;
+            if runtime
+                .notify_started
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                if let Err(error) = notify_start(&runtime.http, &runtime.account).await {
+                    warn!(
+                        account_id = %runtime.account_id,
+                        error = %error,
+                        "weixin notifystart failed"
+                    );
+                }
+            }
 
             if !payload.get_updates_buf.is_empty() {
                 cursor.clone_from(&payload.get_updates_buf);
@@ -2457,296 +3452,370 @@ impl WeixinChannel {
         let seen_done_event_cb = seen_done_event.clone();
         let (stream_done_tx, stream_done_rx) = oneshot::channel::<()>();
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamEvent>();
-        tokio::spawn(async move {
-            let mut stream_text = String::new();
-            let mut typing_keepalive_task: Option<tokio::task::JoinHandle<()>> = None;
-            let mut typing_active = false;
-            let mut stream_done_tx = Some(stream_done_tx);
-            let mut sent_media_refs = HashSet::<String>::new();
-            let mut pending_media_refs = Vec::<OutboundMediaRef>::new();
+        let (event_tx, event_rx) = mpsc::unbounded_channel::<StreamEvent>();
+        let use_streaming_update = response_account.streaming_update;
+        if use_streaming_update {
+            let ctx = WeixinStreamConsumerContext {
+                http: response_http,
+                account: response_account,
+                account_id: response_account_id,
+                user_id: response_user_id,
+                context_token: response_context_token,
+                router: response_router,
+                thread_id: thread_id_cb,
+                typing_ticket,
+                running: runtime.running.clone(),
+            };
+            tokio::spawn(run_streaming_update_consumer(
+                ctx,
+                event_rx,
+                stream_done_tx,
+                final_done_flush_sent_cb,
+                seen_done_event_cb,
+            ));
+        } else {
+            let mut event_rx = event_rx;
+            tokio::spawn(async move {
+                let mut stream_text = String::new();
+                let mut typing_keepalive_task: Option<tokio::task::JoinHandle<()>> = None;
+                let mut typing_active = false;
+                let mut stream_done_tx = Some(stream_done_tx);
+                let mut sent_media_refs = HashSet::<String>::new();
+                let mut pending_media_refs = Vec::<OutboundMediaRef>::new();
 
-            async fn flush_text(
-                text: &str,
-                extra_media_refs: &[OutboundMediaRef],
-                response_http: &Client,
-                response_account: &WeixinAccount,
-                response_account_id: &str,
-                response_user_id: &str,
-                response_context_token: &str,
-                response_router: &Arc<Mutex<MessageRouter>>,
-                thread_id_cb: &Arc<std::sync::Mutex<String>>,
-                sent_media_refs: &mut HashSet<String>,
-            ) {
-                let outbound = text.trim().to_owned();
-                let thread_id = match thread_id_cb.lock() {
-                    Ok(guard) => guard.clone(),
-                    Err(_) => String::new(),
-                };
-                let mut media_refs = extract_markdown_media_refs(&outbound);
-                media_refs.extend(extra_media_refs.iter().cloned());
-                if outbound.is_empty() && media_refs.is_empty() {
-                    return;
-                }
-
-                // Always prefer the freshest persisted token (may have been
-                // refreshed by a newer inbound message during a long-running
-                // streaming session).  Only fall back to the captured
-                // response_context_token when the store has nothing.
-                let persisted = get_context_token_for_thread(
-                    response_account_id,
-                    response_user_id,
-                    if thread_id.is_empty() {
-                        None
-                    } else {
-                        Some(thread_id.as_str())
-                    },
-                )
-                .await;
-                let token = persisted.or_else(|| {
-                    let t = response_context_token.trim();
-                    if t.is_empty() {
-                        None
-                    } else {
-                        Some(t.to_owned())
-                    }
-                });
-                // Short-circuit: if the resolved token is exhausted, queue directly
-                // without attempting the send (avoids unnecessary API call + error).
-                // Note: media refs are included as markdown links in the queued text
-                // so they can be retried when a fresh token arrives.
-                if let Some(ref t) = token {
-                    if token_sends_remaining(t).await == 0 {
-                        // Build the full message including media refs as markdown
-                        // so nothing is lost when we queue for later delivery.
-                        let mut queue_text = outbound.clone();
-                        for media_ref in &media_refs {
-                            let dedupe_key = media_ref.dedupe_key();
-                            if !sent_media_refs.contains(&dedupe_key) {
-                                // Append media source as text so it's preserved in queue
-                                let media_str = match media_ref {
-                                    OutboundMediaRef::RemoteUrl(url) => url.clone(),
-                                    OutboundMediaRef::LocalPath(path) => path.clone(),
-                                    OutboundMediaRef::InlineImage { file_name, .. } => {
-                                        format!("[generated image: {file_name}]")
-                                    }
-                                };
-                                if !queue_text.is_empty() {
-                                    queue_text.push('\n');
-                                }
-                                queue_text.push_str(&media_str);
-                            }
-                        }
-                        let plain = markdown_to_plain_text(&queue_text).trim().to_owned();
-                        if !plain.is_empty() {
-                            warn!(
-                                account_id = %response_account_id,
-                                user_id = %response_user_id,
-                                has_media = !media_refs.is_empty(),
-                                "flush_text: token exhausted, queueing directly"
-                            );
-                            queue_pending_outbound(response_account_id, response_user_id, &plain)
-                                .await;
-                        }
+                async fn flush_text(
+                    text: &str,
+                    extra_media_refs: &[OutboundMediaRef],
+                    response_http: &Client,
+                    response_account: &WeixinAccount,
+                    response_account_id: &str,
+                    response_user_id: &str,
+                    response_context_token: &str,
+                    response_router: &Arc<Mutex<MessageRouter>>,
+                    thread_id_cb: &Arc<std::sync::Mutex<String>>,
+                    sent_media_refs: &mut HashSet<String>,
+                ) {
+                    let outbound = text.trim().to_owned();
+                    let thread_id = match thread_id_cb.lock() {
+                        Ok(guard) => guard.clone(),
+                        Err(_) => String::new(),
+                    };
+                    let mut media_refs = extract_markdown_media_refs(&outbound);
+                    media_refs.extend(extra_media_refs.iter().cloned());
+                    if outbound.is_empty() && media_refs.is_empty() {
                         return;
                     }
-                }
-                let plain_text = markdown_to_plain_text(&outbound).trim().to_owned();
-                let mut maybe_message_id: Option<String> = None;
-                for media_ref in media_refs {
-                    let dedupe_key = media_ref.dedupe_key();
-                    if sent_media_refs.contains(&dedupe_key) {
-                        continue;
-                    }
-                    let media_bytes = match load_media_bytes(response_http, &media_ref).await {
-                        Ok(bytes) => bytes,
-                        Err(error) => {
-                            warn!(
-                                account_id = %response_account_id,
-                                user_id = %response_user_id,
-                                error = %error,
-                                "failed to load weixin media reference"
-                            );
-                            continue;
-                        }
-                    };
-                    let uploaded = match upload_media_to_cdn(
-                        response_http,
-                        response_account,
+
+                    // Always prefer the freshest persisted token (may have been
+                    // refreshed by a newer inbound message during a long-running
+                    // streaming session).  Only fall back to the captured
+                    // response_context_token when the store has nothing.
+                    let persisted = get_context_token_for_thread(
+                        response_account_id,
                         response_user_id,
-                        &media_bytes,
-                        media_ref.classify_media_type(),
-                        media_ref.file_name(),
+                        if thread_id.is_empty() {
+                            None
+                        } else {
+                            Some(thread_id.as_str())
+                        },
                     )
-                    .await
-                    {
-                        Ok(value) => value,
-                        Err(error) => {
-                            warn!(
-                                account_id = %response_account_id,
-                                user_id = %response_user_id,
-                                error = %error,
-                                "failed to upload weixin media reference"
-                            );
-                            continue;
+                    .await;
+                    let token = persisted.or_else(|| {
+                        let t = response_context_token.trim();
+                        if t.is_empty() {
+                            None
+                        } else {
+                            Some(t.to_owned())
                         }
-                    };
-                    match send_media_message(
-                        response_http,
-                        response_account,
-                        response_user_id,
-                        &uploaded,
-                        &plain_text,
-                        token.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(message_id) => {
-                            sent_media_refs.insert(dedupe_key);
-                            maybe_message_id = Some(message_id);
-                            break;
-                        }
-                        Err(error) => {
-                            warn!(
-                                account_id = %response_account_id,
-                                user_id = %response_user_id,
-                                error = %error,
-                                "failed to send weixin media message"
-                            );
-                        }
-                    }
-                }
-                let message_id = if let Some(message_id) = maybe_message_id {
-                    message_id
-                } else if !plain_text.is_empty() {
-                    match send_text_message(
-                        response_http,
-                        response_account,
-                        response_user_id,
-                        &plain_text,
-                        token.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(message_id) => message_id,
-                        Err(error) => {
-                            error!(
-                                account_id = %response_account_id,
-                                user_id = %response_user_id,
-                                error = %error,
-                                "failed to send weixin response"
-                            );
-                            // Queue for later delivery when a fresh token arrives
-                            let err_str = error.to_string();
-                            if err_str.contains("ret=")
-                                || err_str.contains("ret!=0")
-                                || err_str.contains("context_token")
-                                || err_str.contains("send limit")
-                            {
+                    });
+                    // Short-circuit: if the resolved token is exhausted, queue directly
+                    // without attempting the send (avoids unnecessary API call + error).
+                    // Note: media refs are included as markdown links in the queued text
+                    // so they can be retried when a fresh token arrives.
+                    if let Some(ref t) = token {
+                        if token_sends_remaining(t).await == 0 {
+                            // Build the full message including media refs as markdown
+                            // so nothing is lost when we queue for later delivery.
+                            let mut queue_text = outbound.clone();
+                            for media_ref in &media_refs {
+                                let dedupe_key = media_ref.dedupe_key();
+                                if !sent_media_refs.contains(&dedupe_key) {
+                                    // Append media source as text so it's preserved in queue
+                                    let media_str = match media_ref {
+                                        OutboundMediaRef::RemoteUrl(url) => url.clone(),
+                                        OutboundMediaRef::LocalPath(path) => path.clone(),
+                                        OutboundMediaRef::InlineImage { file_name, .. } => {
+                                            format!("[generated image: {file_name}]")
+                                        }
+                                    };
+                                    if !queue_text.is_empty() {
+                                        queue_text.push('\n');
+                                    }
+                                    queue_text.push_str(&media_str);
+                                }
+                            }
+                            let plain = markdown_to_plain_text(&queue_text).trim().to_owned();
+                            if !plain.is_empty() {
+                                warn!(
+                                    account_id = %response_account_id,
+                                    user_id = %response_user_id,
+                                    has_media = !media_refs.is_empty(),
+                                    "flush_text: token exhausted, queueing directly"
+                                );
                                 queue_pending_outbound(
                                     response_account_id,
                                     response_user_id,
-                                    &plain_text,
+                                    &plain,
                                 )
                                 .await;
                             }
                             return;
                         }
                     }
-                } else {
-                    return;
-                };
-
-                if !thread_id.trim().is_empty() {
-                    let mut router_guard = response_router.lock().await;
-                    router_guard
-                        .record_outbound_message_with_persistence(
-                            &thread_id,
-                            "weixin",
-                            response_account_id,
-                            response_user_id,
-                            None,
-                            &message_id,
-                        )
-                        .await;
-                }
-            }
-
-            while let Some(event) = event_rx.recv().await {
-                match event {
-                    StreamEvent::Delta { text } => {
-                        if !typing_active {
-                            if let Some(ticket) = typing_ticket.clone() {
-                                let http = response_http.clone();
-                                let account = response_account.clone();
-                                let user_id = response_user_id.clone();
-                                let ticket_for_task = ticket.clone();
-                                if let Err(e) = send_typing_status(
-                                    &http,
-                                    &account,
-                                    &user_id,
-                                    &ticket_for_task,
-                                    1,
-                                )
-                                .await
-                                {
-                                    debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to send weixin typing start");
-                                }
-                                typing_keepalive_task = Some(tokio::spawn(async move {
-                                    let mut logged_failure = false;
-                                    loop {
-                                        tokio::time::sleep(Duration::from_secs(5)).await;
-                                        if let Err(e) = send_typing_status(
-                                            &http, &account, &user_id, &ticket, 1,
-                                        )
-                                        .await
-                                        {
-                                            if !logged_failure {
-                                                debug!(error = %e, "weixin typing keepalive failed (suppressing further)");
-                                                logged_failure = true;
-                                            }
-                                        } else {
-                                            logged_failure = false;
-                                        }
-                                    }
-                                }));
-                                typing_active = true;
-                            }
+                    let plain_text = markdown_to_plain_text(&outbound).trim().to_owned();
+                    let mut maybe_message_id: Option<String> = None;
+                    for media_ref in media_refs {
+                        let dedupe_key = media_ref.dedupe_key();
+                        if sent_media_refs.contains(&dedupe_key) {
+                            continue;
                         }
-                        stream_text = merge_stream_text(&stream_text, &text);
-                    }
-                    StreamEvent::Boundary { kind, .. } => match kind {
-                        StreamBoundaryKind::UserAck => {
-                            // UserAck marks provider-side acceptance of a queued user input.
-                            // Do not emit buffered text here, otherwise some providers can
-                            // surface user-echo text back to Weixin as an assistant reply.
-                            if !stream_text.trim().is_empty() {
-                                info!(
+                        let media_bytes = match load_media_bytes(response_http, &media_ref).await {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                warn!(
                                     account_id = %response_account_id,
                                     user_id = %response_user_id,
-                                    dropped_len = stream_text.len(),
-                                    "dropping buffered weixin stream text on user_ack boundary"
+                                    error = %error,
+                                    "failed to load weixin media reference"
+                                );
+                                continue;
+                            }
+                        };
+                        let uploaded = match upload_media_to_cdn(
+                            response_http,
+                            response_account,
+                            response_user_id,
+                            &media_bytes,
+                            media_ref.classify_media_type(),
+                            media_ref.file_name(),
+                        )
+                        .await
+                        {
+                            Ok(value) => value,
+                            Err(error) => {
+                                warn!(
+                                    account_id = %response_account_id,
+                                    user_id = %response_user_id,
+                                    error = %error,
+                                    "failed to upload weixin media reference"
+                                );
+                                continue;
+                            }
+                        };
+                        match send_media_message(
+                            response_http,
+                            response_account,
+                            response_user_id,
+                            &uploaded,
+                            &plain_text,
+                            token.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(message_id) => {
+                                sent_media_refs.insert(dedupe_key);
+                                maybe_message_id = Some(message_id);
+                                break;
+                            }
+                            Err(error) => {
+                                warn!(
+                                    account_id = %response_account_id,
+                                    user_id = %response_user_id,
+                                    error = %error,
+                                    "failed to send weixin media message"
                                 );
                             }
-                            apply_weixin_stream_boundary(
-                                &mut stream_text,
-                                StreamBoundaryKind::UserAck,
-                            );
                         }
-                        StreamBoundaryKind::AssistantSegment => {
-                            apply_weixin_stream_boundary(
-                                &mut stream_text,
-                                StreamBoundaryKind::AssistantSegment,
-                            );
+                    }
+                    let message_id = if let Some(message_id) = maybe_message_id {
+                        message_id
+                    } else if !plain_text.is_empty() {
+                        match send_text_message(
+                            response_http,
+                            response_account,
+                            response_user_id,
+                            &plain_text,
+                            token.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(message_id) => message_id,
+                            Err(error) => {
+                                error!(
+                                    account_id = %response_account_id,
+                                    user_id = %response_user_id,
+                                    error = %error,
+                                    "failed to send weixin response"
+                                );
+                                // Queue for later delivery when a fresh token arrives
+                                let err_str = error.to_string();
+                                if err_str.contains("ret=")
+                                    || err_str.contains("ret!=0")
+                                    || err_str.contains("context_token")
+                                    || err_str.contains("send limit")
+                                {
+                                    queue_pending_outbound(
+                                        response_account_id,
+                                        response_user_id,
+                                        &plain_text,
+                                    )
+                                    .await;
+                                }
+                                return;
+                            }
                         }
-                    },
-                    StreamEvent::ToolUse { .. } => {
-                        // Weixin UX prefers fewer, coherent chunks. Flush buffered assistant text
-                        // only when a new tool phase starts — BUT conserve token sends.
-                        // Each context_token only supports ~10 sends, so if we're running low,
-                        // accumulate everything and send it all in the final Done flush.
-                        let remaining = token_sends_remaining(&response_context_token).await;
-                        if remaining > 2 && !stream_text.trim().is_empty() {
+                    } else {
+                        return;
+                    };
+
+                    if !thread_id.trim().is_empty() {
+                        let mut router_guard = response_router.lock().await;
+                        router_guard
+                            .record_outbound_message_with_persistence(
+                                &thread_id,
+                                "weixin",
+                                response_account_id,
+                                response_user_id,
+                                None,
+                                &message_id,
+                            )
+                            .await;
+                    }
+                }
+
+                while let Some(event) = event_rx.recv().await {
+                    match event {
+                        StreamEvent::Delta { text } => {
+                            if !typing_active {
+                                if let Some(ticket) = typing_ticket.clone() {
+                                    let http = response_http.clone();
+                                    let account = response_account.clone();
+                                    let user_id = response_user_id.clone();
+                                    let ticket_for_task = ticket.clone();
+                                    if let Err(e) = send_typing_status(
+                                        &http,
+                                        &account,
+                                        &user_id,
+                                        &ticket_for_task,
+                                        1,
+                                    )
+                                    .await
+                                    {
+                                        debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to send weixin typing start");
+                                    }
+                                    typing_keepalive_task = Some(tokio::spawn(async move {
+                                        let mut logged_failure = false;
+                                        loop {
+                                            tokio::time::sleep(Duration::from_secs(5)).await;
+                                            if let Err(e) = send_typing_status(
+                                                &http, &account, &user_id, &ticket, 1,
+                                            )
+                                            .await
+                                            {
+                                                if !logged_failure {
+                                                    debug!(error = %e, "weixin typing keepalive failed (suppressing further)");
+                                                    logged_failure = true;
+                                                }
+                                            } else {
+                                                logged_failure = false;
+                                            }
+                                        }
+                                    }));
+                                    typing_active = true;
+                                }
+                            }
+                            stream_text = merge_stream_text(&stream_text, &text);
+                        }
+                        StreamEvent::Boundary { kind, .. } => match kind {
+                            StreamBoundaryKind::UserAck => {
+                                // UserAck marks provider-side acceptance of a queued user input.
+                                // Do not emit buffered text here, otherwise some providers can
+                                // surface user-echo text back to Weixin as an assistant reply.
+                                if !stream_text.trim().is_empty() {
+                                    info!(
+                                        account_id = %response_account_id,
+                                        user_id = %response_user_id,
+                                        dropped_len = stream_text.len(),
+                                        "dropping buffered weixin stream text on user_ack boundary"
+                                    );
+                                }
+                                apply_weixin_stream_boundary(
+                                    &mut stream_text,
+                                    StreamBoundaryKind::UserAck,
+                                );
+                            }
+                            StreamBoundaryKind::AssistantSegment => {
+                                apply_weixin_stream_boundary(
+                                    &mut stream_text,
+                                    StreamBoundaryKind::AssistantSegment,
+                                );
+                            }
+                        },
+                        StreamEvent::ToolUse { .. } => {
+                            // Weixin UX prefers fewer, coherent chunks. Flush buffered assistant text
+                            // only when a new tool phase starts — BUT conserve token sends.
+                            // Each context_token only supports ~10 sends, so if we're running low,
+                            // accumulate everything and send it all in the final Done flush.
+                            let remaining = token_sends_remaining(&response_context_token).await;
+                            if remaining > 2 && !stream_text.trim().is_empty() {
+                                flush_text(
+                                    &stream_text,
+                                    &pending_media_refs,
+                                    &response_http,
+                                    &response_account,
+                                    &response_account_id,
+                                    &response_user_id,
+                                    &response_context_token,
+                                    &response_router,
+                                    &thread_id_cb,
+                                    &mut sent_media_refs,
+                                )
+                                .await;
+                                stream_text.clear();
+                                pending_media_refs.clear();
+                            } else if remaining <= 2 {
+                                info!(
+                                    sends_remaining = remaining,
+                                    "conserving token sends — deferring ToolUse flush to final Done"
+                                );
+                                // Don't flush; accumulate for the final Done event
+                            }
+                        }
+                        StreamEvent::ToolResult { message } => {
+                            pending_media_refs
+                                .extend(extract_media_refs_from_provider_message(&message));
+                        }
+                        StreamEvent::Done => {
+                            seen_done_event_cb.store(true, Ordering::Relaxed);
+                            if let Some(task) = typing_keepalive_task.take() {
+                                task.abort();
+                            }
+                            if typing_active {
+                                if let Some(ticket) = typing_ticket.as_deref() {
+                                    if let Err(e) = send_typing_status(
+                                        &response_http,
+                                        &response_account,
+                                        &response_user_id,
+                                        ticket,
+                                        2,
+                                    )
+                                    .await
+                                    {
+                                        debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to stop weixin typing on done");
+                                    }
+                                }
+                            }
+                            let has_final_text = !stream_text.trim().is_empty();
                             flush_text(
                                 &stream_text,
                                 &pending_media_refs,
@@ -2760,84 +3829,37 @@ impl WeixinChannel {
                                 &mut sent_media_refs,
                             )
                             .await;
-                            stream_text.clear();
                             pending_media_refs.clear();
-                        } else if remaining <= 2 {
-                            info!(
-                                sends_remaining = remaining,
-                                "conserving token sends — deferring ToolUse flush to final Done"
-                            );
-                            // Don't flush; accumulate for the final Done event
-                        }
-                    }
-                    StreamEvent::ToolResult { message } => {
-                        pending_media_refs
-                            .extend(extract_media_refs_from_provider_message(&message));
-                    }
-                    StreamEvent::Done => {
-                        seen_done_event_cb.store(true, Ordering::Relaxed);
-                        if let Some(task) = typing_keepalive_task.take() {
-                            task.abort();
-                        }
-                        if typing_active {
-                            if let Some(ticket) = typing_ticket.as_deref() {
-                                if let Err(e) = send_typing_status(
-                                    &response_http,
-                                    &response_account,
-                                    &response_user_id,
-                                    ticket,
-                                    2,
-                                )
-                                .await
-                                {
-                                    debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to stop weixin typing on done");
-                                }
+                            if has_final_text {
+                                final_done_flush_sent_cb.store(true, Ordering::Relaxed);
                             }
+                            break;
                         }
-                        let has_final_text = !stream_text.trim().is_empty();
-                        flush_text(
-                            &stream_text,
-                            &pending_media_refs,
+                    }
+                }
+                if let Some(task) = typing_keepalive_task.take() {
+                    task.abort();
+                }
+                if typing_active {
+                    if let Some(ticket) = typing_ticket.as_deref() {
+                        if let Err(e) = send_typing_status(
                             &response_http,
                             &response_account,
-                            &response_account_id,
                             &response_user_id,
-                            &response_context_token,
-                            &response_router,
-                            &thread_id_cb,
-                            &mut sent_media_refs,
+                            ticket,
+                            2,
                         )
-                        .await;
-                        pending_media_refs.clear();
-                        if has_final_text {
-                            final_done_flush_sent_cb.store(true, Ordering::Relaxed);
+                        .await
+                        {
+                            debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to stop weixin typing on cleanup");
                         }
-                        break;
                     }
                 }
-            }
-            if let Some(task) = typing_keepalive_task.take() {
-                task.abort();
-            }
-            if typing_active {
-                if let Some(ticket) = typing_ticket.as_deref() {
-                    if let Err(e) = send_typing_status(
-                        &response_http,
-                        &response_account,
-                        &response_user_id,
-                        ticket,
-                        2,
-                    )
-                    .await
-                    {
-                        debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to stop weixin typing on cleanup");
-                    }
+                if let Some(done_tx) = stream_done_tx.take() {
+                    let _ = done_tx.send(());
                 }
-            }
-            if let Some(done_tx) = stream_done_tx.take() {
-                let _ = done_tx.send(());
-            }
-        });
+            });
+        }
 
         let response_callback: Arc<dyn Fn(StreamEvent) + Send + Sync> =
             Arc::new(move |event: StreamEvent| {
@@ -3016,6 +4038,8 @@ impl Channel for WeixinChannel {
                 account: account.clone(),
                 router: self.router.clone(),
                 bridge: self.bridge.clone(),
+                notify_started: Arc::new(AtomicBool::new(false)),
+                running: self.running.clone(),
             };
             let running = self.running.clone();
             self.poll_tasks
@@ -3027,7 +4051,36 @@ impl Channel for WeixinChannel {
     }
 
     async fn stop(&mut self) -> Result<(), ChannelError> {
+        let stop_futures = self
+            .config
+            .accounts
+            .iter()
+            .filter(|(_, account)| account.enabled)
+            .map(|(account_id, account)| {
+                let http = self.http.clone();
+                let account = account.clone();
+                let account_id = account_id.clone();
+                async move {
+                    match tokio::time::timeout(Duration::from_secs(2), notify_stop(&http, &account))
+                        .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => warn!(
+                            account_id = %account_id,
+                            error = %error,
+                            "weixin notifystop failed"
+                        ),
+                        Err(_) => warn!(
+                            account_id = %account_id,
+                            "weixin notifystop timed out"
+                        ),
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        futures_util::future::join_all(stop_futures).await;
         self.running.store(false, Ordering::Relaxed);
+        tokio::time::sleep(Duration::from_millis(300)).await;
         for handle in self.poll_tasks.drain(..) {
             handle.abort();
             let _ = handle.await;

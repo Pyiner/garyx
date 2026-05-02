@@ -291,6 +291,7 @@ async fn test_status_lists_weixin_channels() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            streaming_update: true,
         },
     );
     let server = GaryMcpServer::new(crate::server::create_app_state(config));
@@ -3016,6 +3017,7 @@ async fn test_send_image_message_via_api_base_supports_weixin() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            streaming_update: true,
         },
     );
     let server = test_server_with_config(config);
@@ -3168,6 +3170,7 @@ async fn test_send_file_message_via_api_base_supports_weixin() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            streaming_update: true,
         },
     );
     let server = test_server_with_config(config);

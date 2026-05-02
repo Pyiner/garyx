@@ -3,6 +3,19 @@ use crate::streaming_core::BoundaryTextEffect;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+fn weixin_test_account(api: &MockServer, token: &str) -> WeixinAccount {
+    WeixinAccount {
+        token: token.to_owned(),
+        uin: String::new(),
+        enabled: true,
+        base_url: api.uri(),
+        name: None,
+        agent_id: "claude".to_owned(),
+        workspace_dir: None,
+        streaming_update: true,
+    }
+}
+
 #[test]
 fn test_extract_text_combines_text_and_voice_transcript() {
     let items = vec![
@@ -446,6 +459,7 @@ async fn test_upload_media_to_cdn_pipeline_with_mocks() {
         name: None,
         agent_id: "claude".to_owned(),
         workspace_dir: None,
+        streaming_update: true,
     };
 
     Mock::given(method("POST"))
@@ -521,15 +535,7 @@ async fn test_upload_media_to_cdn_pipeline_with_mocks() {
 #[tokio::test]
 async fn test_send_media_and_typing_requests_shape_with_mocks() {
     let api = MockServer::start().await;
-    let account = WeixinAccount {
-        token: "token-2".to_owned(),
-        uin: String::new(),
-        enabled: true,
-        base_url: api.uri(),
-        name: None,
-        agent_id: "claude".to_owned(),
-        workspace_dir: None,
-    };
+    let account = weixin_test_account(&api, "token-2");
 
     Mock::given(method("POST"))
         .and(path("/ilink/bot/sendmessage"))
@@ -600,6 +606,179 @@ async fn test_send_media_and_typing_requests_shape_with_mocks() {
             Some(1)
         );
     }
+}
+
+#[tokio::test]
+async fn test_send_text_message_with_state_reuses_client_id_for_updates() {
+    let api = MockServer::start().await;
+    let account = weixin_test_account(&api, "token-state");
+    let token = format!("ctx-state-{}", uuid::Uuid::new_v4());
+    token_send_count_reset(&token).await;
+
+    Mock::given(method("POST"))
+        .and(path("/ilink/bot/sendmessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ret":0})))
+        .mount(&api)
+        .await;
+
+    let client_id = format!("client-{}", uuid::Uuid::new_v4());
+    for state in [1_u8, 1, 1, 2] {
+        send_text_message_with_state(
+            &Client::new(),
+            &account,
+            "u@im.wechat",
+            &format!("state-{state}"),
+            Some(&token),
+            &client_id,
+            state,
+        )
+        .await
+        .expect("send text update");
+    }
+
+    let requests = api.received_requests().await.expect("requests");
+    let sendmessage_requests = requests
+        .iter()
+        .filter(|req| req.url.path() == "/ilink/bot/sendmessage")
+        .collect::<Vec<_>>();
+    assert_eq!(sendmessage_requests.len(), 4);
+    let states = sendmessage_requests
+        .iter()
+        .map(|req| {
+            let body: Value = serde_json::from_slice(&req.body).expect("json body");
+            assert_eq!(body["msg"]["client_id"], client_id);
+            body["msg"]["message_state"].as_u64().unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(states, vec![1, 1, 1, 2]);
+    token_send_count_reset(&token).await;
+}
+
+#[tokio::test]
+async fn test_live_message_short_answer_fast_path_stays_pristine_until_finish() {
+    let token = format!("ctx-short-{}", uuid::Uuid::new_v4());
+    token_send_count_reset(&token).await;
+    let mut live = LiveMessage::open(token.clone()).await;
+    let now = Instant::now();
+
+    live.append_delta("ok", &HashSet::new(), now);
+
+    assert_eq!(live.state, LiveMessageState::Pristine);
+    assert_eq!(live.text_visible, "ok");
+    assert!(!live.should_send_generating(now).await);
+    token_send_count_reset(&token).await;
+}
+
+#[tokio::test]
+async fn test_live_message_extracts_split_markdown_image_once() {
+    let token = format!("ctx-image-{}", uuid::Uuid::new_v4());
+    token_send_count_reset(&token).await;
+    let mut live = LiveMessage::open(token.clone()).await;
+    let sent = HashSet::new();
+    let now = Instant::now();
+
+    live.append_delta("see ![alt](file://", &sent, now);
+    assert!(live.pending_media_refs.is_empty());
+    live.append_delta("/tmp/example.png)", &sent, now);
+    live.append_delta(" again", &sent, now);
+
+    assert_eq!(live.pending_media_refs.len(), 1);
+    assert!(matches!(
+        &live.pending_media_refs[0],
+        OutboundMediaRef::LocalPath(path) if path == "/tmp/example.png"
+    ));
+    token_send_count_reset(&token).await;
+}
+
+#[tokio::test]
+async fn test_live_message_budget_reserves_final_finish() {
+    let token = format!("ctx-reserve-{}", uuid::Uuid::new_v4());
+    token_send_count_reset(&token).await;
+    for _ in 0..(TOKEN_SEND_LIMIT - 1) {
+        token_send_increment(&token).await;
+    }
+    let mut live = LiveMessage::open(token.clone()).await;
+    live.state = LiveMessageState::Updating;
+    live.text_visible = "long enough text.".to_owned();
+
+    assert_eq!(
+        live.needs_budget_finalize().await,
+        Some(FinalizeReason::BudgetToken)
+    );
+    assert!(!live.should_send_generating(Instant::now()).await);
+    token_send_count_reset(&token).await;
+}
+
+#[tokio::test]
+async fn test_live_message_per_client_id_budget_caps_generating_updates() {
+    let token = format!("ctx-live-cap-{}", uuid::Uuid::new_v4());
+    token_send_count_reset(&token).await;
+    let mut live = LiveMessage::open(token.clone()).await;
+    live.state = LiveMessageState::Updating;
+    live.sends_used = LIVE_MESSAGE_MAX_GENERATING_SENDS;
+
+    assert_eq!(
+        live.needs_budget_finalize().await,
+        Some(FinalizeReason::BudgetMessage)
+    );
+    token_send_count_reset(&token).await;
+}
+
+#[tokio::test]
+async fn test_live_message_suppresses_generating_for_unterminated_image_ref() {
+    let token = format!("ctx-tail-{}", uuid::Uuid::new_v4());
+    token_send_count_reset(&token).await;
+    let mut live = LiveMessage::open(token.clone()).await;
+    let now = Instant::now();
+
+    live.append_delta(
+        "This is long enough ![partial](file:///tmp/example",
+        &HashSet::new(),
+        now,
+    );
+
+    assert!(live.has_unterminated_markdown_image_ref_tail());
+    assert!(!live.should_send_generating(now).await);
+    token_send_count_reset(&token).await;
+}
+
+#[tokio::test]
+async fn test_send_media_message_ret_minus_14_pauses_session() {
+    let api = MockServer::start().await;
+    let account = weixin_test_account(&api, "acct-media-pause:secret");
+    let token = format!("ctx-media-pause-{}", uuid::Uuid::new_v4());
+    token_send_count_reset(&token).await;
+
+    Mock::given(method("POST"))
+        .and(path("/ilink/bot/sendmessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ret": -14,
+            "errmsg": "expired"
+        })))
+        .mount(&api)
+        .await;
+
+    let uploaded = UploadedWeixinMedia {
+        download_encrypted_query_param: "dl-p".to_owned(),
+        aes_key_raw: [3_u8; 16],
+        plaintext_size: 10,
+        ciphertext_size: 16,
+        media_type: 1,
+        file_name: None,
+    };
+    let error = send_media_message(
+        &Client::new(),
+        &account,
+        "u@im.wechat",
+        &uploaded,
+        "",
+        Some(&token),
+    )
+    .await
+    .expect_err("media send should fail");
+    assert!(error.to_string().contains("ret=-14"));
+    assert!(is_session_paused("acct-media-pause").await);
+    token_send_count_reset(&token).await;
 }
 
 #[tokio::test]
