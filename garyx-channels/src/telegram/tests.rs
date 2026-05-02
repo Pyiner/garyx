@@ -1719,6 +1719,84 @@ mod e2e_tests {
         }
     }
 
+    struct StreamingChildToolPlaceholderProvider {
+        call_count: AtomicUsize,
+    }
+
+    impl StreamingChildToolPlaceholderProvider {
+        fn new() -> Self {
+            Self {
+                call_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentLoopProvider for StreamingChildToolPlaceholderProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::ClaudeCode
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Bash"}),
+                    Some("tool-child-bash".to_owned()),
+                    Some("Bash".to_owned()),
+                )
+                .with_metadata_value("parent_tool_use_id", serde_json::json!("tool-parent")),
+            });
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Read"}),
+                    Some("tool-agent-read".to_owned()),
+                    Some("Read".to_owned()),
+                )
+                .with_metadata_value("agent_id", serde_json::json!("coder"))
+                .with_metadata_value("agent_display_name", serde_json::json!("Coder")),
+            });
+            on_chunk(StreamEvent::Delta {
+                text: "done".to_owned(),
+            });
+            on_chunk(StreamEvent::Done);
+            Ok(ProviderRunResult {
+                run_id: "stream-child-tools".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "done".to_owned(),
+                session_messages: vec![],
+                sdk_session_id: None,
+                actual_model: None,
+                success: true,
+                error: None,
+                input_tokens: 10,
+                output_tokens: 5,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
     struct StreamingToolOnlyProvider {
         call_count: AtomicUsize,
     }
@@ -2644,6 +2722,79 @@ mod e2e_tests {
         assert_eq!(
             relevant_sends, 1,
             "tool and text phases in one assistant response should reuse one Telegram message"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_e2e_streaming_child_agent_tool_placeholders_are_suppressed() {
+        let (server, capture) = setup_tg_capture_mock(false).await;
+        let api_base = unique_api_base(&server);
+        let provider = Arc::new(StreamingChildToolPlaceholderProvider::new());
+        let bridge = make_bridge_with(provider.clone()).await;
+        let router = make_router();
+        let http = reqwest::Client::new();
+
+        let account = default_account();
+        let update = TgUpdateBuilder::dm(42, "run child tools").build();
+
+        dispatch_update(
+            &http,
+            "bot1",
+            "fake-token",
+            "garyx",
+            999,
+            &account,
+            &update,
+            &router,
+            &bridge,
+            &api_base,
+        )
+        .await;
+
+        wait_for_counter_at_least(&provider.call_count, 1).await;
+
+        let final_body =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body["text"].as_str().unwrap_or_default() == "done"
+            })
+            .await;
+        assert_eq!(final_body["text"], "done");
+
+        let all_texts = capture
+            .send_bodies()
+            .into_iter()
+            .chain(capture.edit_bodies().into_iter())
+            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+        assert!(
+            all_texts.iter().all(|text| !text.contains("🔧")),
+            "child-agent tool placeholders should not be sent to Telegram: {all_texts:?}"
+        );
+        assert!(
+            all_texts
+                .iter()
+                .all(|text| !text.contains("Bash") && !text.contains("Read")),
+            "child-agent tool names should stay hidden from Telegram: {all_texts:?}"
+        );
+
+        let send_bodies = wait_for_json_capture_quiet_window(
+            &capture.send_messages,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+        )
+        .await;
+        let relevant_sends = send_bodies
+            .iter()
+            .filter(|body| {
+                body["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("done") || text.contains("🔧"))
+            })
+            .count();
+        assert_eq!(
+            relevant_sends, 1,
+            "hidden child-agent tool events should not create Telegram messages"
         );
     }
 

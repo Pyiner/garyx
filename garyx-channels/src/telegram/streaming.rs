@@ -85,6 +85,17 @@ fn telegram_tool_display_name(message: &ProviderMessage) -> String {
         .unwrap_or_else(|| "tool".to_owned())
 }
 
+fn telegram_should_hide_tool_placeholder(message: &ProviderMessage) -> bool {
+    ["agent_id", "parent_tool_use_id"].iter().any(|key| {
+        message
+            .metadata
+            .get(*key)
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    })
+}
+
 fn render_tool_placeholder(names: &[String]) -> String {
     names
         .iter()
@@ -697,6 +708,9 @@ impl StreamingCallbackShared {
                 false
             }
             StreamEvent::ToolUse { message } => {
+                if telegram_should_hide_tool_placeholder(&message) {
+                    return;
+                }
                 self.process_tool_use(thread_id, &mut state, message).await;
                 return;
             }
