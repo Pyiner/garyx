@@ -168,10 +168,6 @@ pub(crate) async fn dispatch_internal_message_to_thread(
             text_excerpt: Some(message.chars().take(200).collect()),
             metadata: Some(serde_json::json!({
                 "source": "internal_inbound",
-                "restart_resume": extra_metadata
-                    .get("restart_resume")
-                    .cloned()
-                    .unwrap_or(Value::Bool(false)),
             })),
             ..Default::default()
         },

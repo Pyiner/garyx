@@ -23,7 +23,6 @@ pub mod mcp_config;
 mod provider_models;
 mod provider_session_locator;
 pub mod restart;
-mod restart_resume;
 mod route_graph;
 pub mod routes;
 mod runtime_diagnostics;

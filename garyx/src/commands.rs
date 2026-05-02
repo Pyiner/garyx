@@ -1352,9 +1352,8 @@ fn build_service_spec(
     })
 }
 
-/// If the CLI was invoked from a garyx repo checkout, return its root so we can
-/// expose it to the managed service as `GARYX_WORKSPACE_ROOT`. This is what
-/// `build_backend` uses to run `cargo build` for restart-with-rebuild flows.
+/// If the CLI was invoked from a garyx repo checkout, return its root so the
+/// managed service can inherit local development context when needed.
 fn detect_workspace_root() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     if cwd.join("Cargo.toml").exists() && cwd.join("garyx").is_dir() {

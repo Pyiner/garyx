@@ -112,17 +112,6 @@ pub struct MessageParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct RestartParams {
-    /// Action: restart, build, or build_and_restart. `restart` only restarts the installed binary.
-    #[serde(default)]
-    pub action: Option<String>,
-    #[serde(default)]
-    pub reason: Option<String>,
-    #[serde(default)]
-    pub token: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ImageGenParams {
     /// Text prompt for image generation
     pub prompt: String,
@@ -533,17 +522,6 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "Restart the gateway service or explicitly build it first (requires authorization token when configured). `restart` only restarts the installed binary and does not require a source checkout. Use `build` to build/install from source, or `build_and_restart` for an explicit build followed by restart."
-    )]
-    async fn restart(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(params): Parameters<RestartParams>,
-    ) -> Result<String, String> {
-        tools::restart::run(self, ctx, params).await
-    }
-
-    #[tool(
         description = "Generate an image from a text prompt. Default output size is 2K unless specified otherwise."
     )]
     async fn image_gen(
@@ -728,7 +706,7 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, cron, message, restart, image_gen, search, conversation_history, conversation_search, rebind_current_channel, task_create, task_promote, task_get, task_list, task_history, task_assign, task_unassign, task_update_status, task_set_title, stop_loop."
+                "Garyx MCP server. Tools: status, cron, message, image_gen, search, conversation_history, conversation_search, rebind_current_channel, task_create, task_promote, task_get, task_list, task_history, task_assign, task_unassign, task_update_status, task_set_title, stop_loop."
                     .to_owned(),
             ),
         }

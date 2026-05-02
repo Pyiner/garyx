@@ -3450,6 +3450,7 @@ fn test_server_info() {
     assert!(info.capabilities.tools.is_some());
     let instructions = info.instructions.expect("server instructions");
     assert!(instructions.contains("rebind_current_channel"));
+    assert!(!instructions.contains("restart"));
     assert!(!instructions.contains("speak_to_agent"));
     assert!(!instructions.contains("auto_research_verdict"));
     assert!(!instructions.contains("update_team_status"));
