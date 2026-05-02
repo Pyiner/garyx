@@ -637,6 +637,7 @@ impl StreamingCallbackShared {
                     state.tool_placeholder_active = false;
                     state.active_tool_name = None;
                 }
+                state.tool_call_index = 0;
                 state.accumulated_text =
                     crate::streaming_core::merge_stream_text(&state.accumulated_text, &text);
                 state.finalized = false;

@@ -1691,6 +1691,13 @@ mod e2e_tests {
                     Some("Write".to_owned()),
                 ),
             });
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Search"}),
+                    Some("tool-search".to_owned()),
+                    Some("Search".to_owned()),
+                ),
+            });
             on_chunk(StreamEvent::Delta {
                 text: "\nnext".to_owned(),
             });
@@ -2713,10 +2720,20 @@ mod e2e_tests {
 
         let post_text_placeholder =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body_text(body) == "done\n\n🔧 #3 Write"
+                body_text(body) == "done\n\n🔧 #1 Write"
             })
             .await;
-        assert_eq!(body_text(&post_text_placeholder), "done\n\n🔧 #3 Write");
+        assert_eq!(body_text(&post_text_placeholder), "done\n\n🔧 #1 Write");
+
+        let second_post_text_placeholder =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body_text(body) == "done\n\n🔧 #2 Search"
+            })
+            .await;
+        assert_eq!(
+            body_text(&second_post_text_placeholder),
+            "done\n\n🔧 #2 Search"
+        );
 
         let final_body =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
@@ -2748,8 +2765,12 @@ mod e2e_tests {
             "pre-text tool placeholders should be overwritten by first text: {all_texts:?}"
         );
         assert!(
-            all_texts.iter().any(|text| text == "done\n\n🔧 #3 Write"),
-            "post-text tool placeholder should be appended to the existing Telegram message: {all_texts:?}"
+            all_texts.iter().any(|text| text == "done\n\n🔧 #1 Write"),
+            "post-text tool placeholder should restart numbering in a new tool block: {all_texts:?}"
+        );
+        assert!(
+            all_texts.iter().any(|text| text == "done\n\n🔧 #2 Search"),
+            "second post-text tool placeholder should increment within the new tool block: {all_texts:?}"
         );
         assert!(
             all_texts.iter().any(|text| text == "done\nnext"),
