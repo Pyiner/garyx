@@ -66,7 +66,9 @@ Common flags on `channels add`:
 | `garyx thread list` | List threads (paginated). |
 | `garyx thread get <thread_id>` | Fetch one thread record. |
 | `garyx thread create [--workspace-dir <path>] [--agent-id <id>] [--json]` | Create a new thread. |
-| `garyx thread send <thread_id> [message]` | Send a message and stream the response. Reads stdin when `message` is omitted. |
+| `garyx thread send thread <thread_id> [message]` | Send a message into a thread and stream the response. Reads stdin when `message` is omitted. |
+| `garyx thread send task <task_ref> [message]` | Resolve a task to its backing thread, then send a message into that thread. |
+| `garyx thread send bot <selector> [message]` | Resolve a bot's bound main thread inside the gateway, then send with that channel context. |
 
 ## Agents and teams
 
@@ -99,7 +101,7 @@ Common flags on `channels add`:
 
 | Command | Use it for |
 | --- | --- |
-| `garyx message --bot <selector> [text]` | Send a message via a bot (e.g. `--bot telegram:main`). |
+| `garyx message --bot <selector> [text]` | Send an outbound channel message via a bot (e.g. `--bot telegram:main`); this does not start an agent run. |
 | `garyx auto-research create / list / get / stop / patch / feedback / reverify` | Drive the auto-research loop. |
 | `garyx wiki init / list / get / status / delete` | Manage wiki knowledge bases. |
 | `garyx migrate thread-transcripts` {#migrate} | Move inline thread messages into transcript files. |

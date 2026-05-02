@@ -20,6 +20,8 @@ pub struct ChatRequest {
     pub files: Vec<FilePayload>,
     #[serde(default, alias = "threadId", alias = "thread_id")]
     pub thread_id: Option<String>,
+    #[serde(default)]
+    pub bot: Option<String>,
     #[serde(default = "default_from_id")]
     pub from_id: String,
     #[serde(default = "default_account_id")]

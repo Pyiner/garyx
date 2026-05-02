@@ -41,6 +41,7 @@ fn build_provider_run_metadata_injects_managed_mcp_servers() {
         &config,
         HashMap::new(),
         provider_metadata,
+        "api",
         "main",
         "api-user",
         "run-1",
@@ -55,6 +56,23 @@ fn build_provider_run_metadata_injects_managed_mcp_servers() {
         metadata["remote_mcp_servers"]["runtime-proof"]["args"],
         json!(["runtime.py"])
     );
+}
+
+#[test]
+fn build_provider_run_metadata_uses_supplied_channel_context() {
+    let metadata = build_provider_run_metadata(
+        &GaryxConfig::default(),
+        HashMap::new(),
+        HashMap::new(),
+        "telegram",
+        "codex_bot",
+        "8592453520",
+        "run-1",
+    );
+
+    assert_eq!(metadata["channel"], "telegram");
+    assert_eq!(metadata["account_id"], "codex_bot");
+    assert_eq!(metadata["from_id"], "8592453520");
 }
 
 #[test]
@@ -143,6 +161,7 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
             files: Vec::new(),
             from_id: "api-user".to_owned(),
             account_id: "main".to_owned(),
+            bot: None,
             wait_for_response: true,
             workspace_path: None,
             provider_type: Some(ProviderType::ClaudeCode),

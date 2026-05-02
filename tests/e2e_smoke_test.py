@@ -316,7 +316,7 @@ def test_mcp_tool_surface():
 #     cleanly (it does NOT add to FAIL_COUNT). Builtin agents include
 #     `claude`, `codex`, `gemini` if their providers are configured.
 #   - Chat dispatch is driven via the `garyx` CLI (`garyx thread send
-#     --json`), which reuses the gateway's WebSocket path internally. By
+#     thread ... --json`), which reuses the gateway's WebSocket path internally. By
 #     default we call the `garyx` binary on PATH; override with the
 #     `GARYX_BIN` env var (e.g. `GARYX_BIN=target/release/garyx`). If
 #     the binary is missing or the subprocess times out, the whole
@@ -391,7 +391,7 @@ def _delete_custom_agent(agent_id: str):
 
 def _cli_thread_send(thread_id: str, message: str, workspace_dir: str,
                      timeout_secs: int = 60) -> list:
-    """Drive `garyx thread send --json` and return the list of parsed
+    """Drive `garyx thread send thread ... --json` and return the list of parsed
     event dicts printed on stdout (one JSON object per line).
 
     Env:
@@ -423,7 +423,7 @@ def _cli_thread_send(thread_id: str, message: str, workspace_dir: str,
 
         proc = subprocess.run(
             [garyx_bin, "-c", temp_config_path, "thread", "send",
-             thread_id, message,
+             "thread", thread_id, message,
              "--workspace-dir", workspace_dir,
              "--timeout", str(timeout_secs),
              "--json"],

@@ -573,11 +573,12 @@ fn parse_thread_list_include_hidden() {
 }
 
 #[test]
-fn parse_thread_send_without_provider_flag() {
+fn parse_thread_send_thread_target() {
     let cli = Cli::parse_from([
         "garyx",
         "thread",
         "send",
+        "thread",
         "thread::abc",
         "hello world",
         "--workspace-dir",
@@ -590,18 +591,121 @@ fn parse_thread_send_without_provider_flag() {
         Some(Commands::Thread {
             action:
                 ThreadAction::Send {
-                    thread_id,
+                    kind,
+                    target,
                     message,
+                    bot,
                     workspace_dir,
                     timeout,
                     json,
                 },
         }) => {
-            assert_eq!(thread_id, "thread::abc");
-            assert_eq!(message.as_deref(), Some("hello world"));
+            assert_eq!(kind.as_deref(), Some("thread"));
+            assert_eq!(target.as_deref(), Some("thread::abc"));
+            assert_eq!(message, vec!["hello world".to_owned()]);
+            assert_eq!(bot, None);
             assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx"));
             assert_eq!(timeout, 42);
             assert!(json);
+        }
+        _ => panic!("expected Thread::Send"),
+    }
+}
+
+#[test]
+fn parse_thread_send_bot_target() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "thread",
+        "send",
+        "bot",
+        "telegram:codex_bot",
+        "hello",
+        "world",
+        "--workspace-dir",
+        "/tmp/garyx",
+        "--timeout",
+        "42",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Thread {
+            action:
+                ThreadAction::Send {
+                    kind,
+                    target,
+                    message,
+                    bot,
+                    workspace_dir,
+                    timeout,
+                    json,
+                },
+        }) => {
+            assert_eq!(kind.as_deref(), Some("bot"));
+            assert_eq!(target.as_deref(), Some("telegram:codex_bot"));
+            assert_eq!(message, vec!["hello".to_owned(), "world".to_owned()]);
+            assert_eq!(bot, None);
+            assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx"));
+            assert_eq!(timeout, 42);
+            assert!(json);
+        }
+        _ => panic!("expected Thread::Send"),
+    }
+}
+
+#[test]
+fn parse_thread_send_task_target() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "thread",
+        "send",
+        "task",
+        "#telegram/main/1",
+        "status?",
+    ]);
+    match cli.command {
+        Some(Commands::Thread {
+            action:
+                ThreadAction::Send {
+                    kind,
+                    target,
+                    message,
+                    bot,
+                    workspace_dir,
+                    timeout,
+                    json,
+                },
+        }) => {
+            assert_eq!(kind.as_deref(), Some("task"));
+            assert_eq!(target.as_deref(), Some("#telegram/main/1"));
+            assert_eq!(message, vec!["status?".to_owned()]);
+            assert_eq!(bot, None);
+            assert_eq!(workspace_dir, None);
+            assert_eq!(timeout, 300);
+            assert!(!json);
+        }
+        _ => panic!("expected Thread::Send"),
+    }
+}
+
+#[test]
+fn parse_thread_send_legacy_thread_id() {
+    let cli = Cli::parse_from(["garyx", "thread", "send", "thread::abc", "hello"]);
+    match cli.command {
+        Some(Commands::Thread {
+            action:
+                ThreadAction::Send {
+                    kind,
+                    target,
+                    message,
+                    bot,
+                    ..
+                },
+        }) => {
+            assert_eq!(kind.as_deref(), Some("thread::abc"));
+            assert_eq!(target.as_deref(), Some("hello"));
+            assert!(message.is_empty());
+            assert_eq!(bot, None);
         }
         _ => panic!("expected Thread::Send"),
     }

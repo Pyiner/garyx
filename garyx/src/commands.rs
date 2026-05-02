@@ -2495,6 +2495,80 @@ pub(crate) async fn cmd_thread_send(
     timeout_secs: u64,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    cmd_thread_send_start(
+        config_path,
+        Some(thread_id),
+        None,
+        message,
+        workspace_dir,
+        timeout_secs,
+        json_output,
+    )
+    .await
+}
+
+pub(crate) async fn cmd_thread_send_to_bot(
+    config_path: &str,
+    bot: String,
+    message: String,
+    workspace_dir: Option<String>,
+    timeout_secs: u64,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    cmd_thread_send_start(
+        config_path,
+        None,
+        Some(bot),
+        message,
+        workspace_dir,
+        timeout_secs,
+        json_output,
+    )
+    .await
+}
+
+pub(crate) async fn cmd_thread_send_to_task(
+    config_path: &str,
+    task_ref: String,
+    message: String,
+    workspace_dir: Option<String>,
+    timeout_secs: u64,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!("/api/tasks/{}", encode_task_ref(&task_ref)?),
+    )
+    .await?;
+    let thread_id = payload
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("task '{task_ref}' did not resolve to a thread"))?
+        .to_owned();
+    cmd_thread_send_start(
+        config_path,
+        Some(thread_id),
+        None,
+        message,
+        workspace_dir,
+        timeout_secs,
+        json_output,
+    )
+    .await
+}
+
+async fn cmd_thread_send_start(
+    config_path: &str,
+    thread_id: Option<String>,
+    bot: Option<String>,
+    message: String,
+    workspace_dir: Option<String>,
+    timeout_secs: u64,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{
         connect_async,
@@ -2521,16 +2595,23 @@ pub(crate) async fn cmd_thread_send(
         .map_err(|e| format!("WebSocket connect failed: {e}"))?;
     let (mut write, mut read) = ws_stream.split();
 
-    // Send start message
-    let start = serde_json::to_string(&json!({
+    let mut start_payload = json!({
         "op": "start",
-        "threadId": thread_id,
         "message": message,
         "accountId": "cli",
         "fromId": "cli",
         "waitForResponse": false,
         "workspacePath": workspace_dir,
-    }))?;
+    });
+    if let Some(thread_id) = thread_id {
+        start_payload["threadId"] = Value::String(thread_id);
+    }
+    if let Some(bot) = bot {
+        start_payload["bot"] = Value::String(bot);
+    }
+
+    // Send start message
+    let start = serde_json::to_string(&start_payload)?;
     write.send(Message::Text(start.into())).await?;
 
     let timeout = tokio::time::Duration::from_secs(timeout_secs);

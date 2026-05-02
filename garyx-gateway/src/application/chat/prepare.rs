@@ -31,6 +31,7 @@ pub(crate) enum ChatPreparationError {
 pub(crate) struct PreparedChatRequest {
     pub(crate) thread_id: String,
     pub(crate) effective_message: String,
+    pub(crate) channel: String,
     pub(crate) account_id: String,
     pub(crate) from_id: String,
     pub(crate) workspace_path: Option<String>,
@@ -38,6 +39,15 @@ pub(crate) struct PreparedChatRequest {
     pub(crate) images: Vec<ImagePayload>,
     pub(crate) metadata: HashMap<String, Value>,
     pub(crate) provider_metadata: HashMap<String, Value>,
+}
+
+#[derive(Debug)]
+struct ResolvedChatTarget {
+    thread_id: String,
+    channel: String,
+    account_id: String,
+    from_id: String,
+    metadata: HashMap<String, Value>,
 }
 
 fn thread_bound_agent_id(thread_data: &Value) -> Option<&str> {
@@ -96,7 +106,18 @@ pub(crate) async fn prepare_chat_request(
 ) -> Result<PreparedChatRequest, ChatPreparationError> {
     let config = state.config_snapshot();
     let resolved_message = resolve_chat_message(&config, &mut req);
-    let thread_id = resolve_chat_thread_id(state, &req).await?;
+    let ResolvedChatTarget {
+        thread_id,
+        channel,
+        account_id,
+        from_id,
+        metadata,
+    } = resolve_chat_target(state, &req).await?;
+    req.account_id = account_id;
+    req.from_id = from_id;
+    for (key, value) in metadata {
+        req.metadata.insert(key, value);
+    }
     let thread_data = state.threads.thread_store.get(&thread_id).await;
     let agent_profile = resolve_thread_agent_profile(
         state.ops.custom_agents.as_ref(),
@@ -162,6 +183,7 @@ pub(crate) async fn prepare_chat_request(
     Ok(PreparedChatRequest {
         thread_id,
         effective_message: resolved_message,
+        channel,
         account_id: req.account_id,
         from_id: req.from_id,
         workspace_path: req.workspace_path,
@@ -176,11 +198,12 @@ pub(crate) fn build_provider_run_metadata(
     config: &garyx_models::config::GaryxConfig,
     metadata: HashMap<String, Value>,
     provider_metadata: HashMap<String, Value>,
+    channel: &str,
     account_id: &str,
     from_id: &str,
     run_id: &str,
 ) -> HashMap<String, Value> {
-    let mut run_metadata = build_chat_metadata(metadata, account_id, from_id, run_id);
+    let mut run_metadata = build_chat_metadata(metadata, channel, account_id, from_id, run_id);
     run_metadata.extend(provider_metadata);
     let gateway_auth_token = config.gateway.auth_token.trim();
     if !gateway_auth_token.is_empty() {
@@ -314,12 +337,28 @@ async fn persist_thread_workspace_if_missing(
     Ok(())
 }
 
-async fn resolve_chat_thread_id(
+async fn resolve_chat_target(
     state: &Arc<AppState>,
     req: &ChatRequest,
-) -> Result<String, ChatPreparationError> {
+) -> Result<ResolvedChatTarget, ChatPreparationError> {
     if let Some(key) = req.thread_id.as_deref() {
         let trimmed = key.trim();
+        if req
+            .bot
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Err(ChatPreparationError::InvalidRequest(
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "runId": "",
+                    "threadId": trimmed,
+                    "response": Value::Null,
+                    "error": "threadId and bot are mutually exclusive",
+                })),
+            ));
+        }
         if trimmed.is_empty() || !is_thread_key(trimmed) {
             return Err(ChatPreparationError::InvalidRequest(
                 StatusCode::BAD_REQUEST,
@@ -331,22 +370,138 @@ async fn resolve_chat_thread_id(
                 })),
             ));
         }
-        return Ok(trimmed.to_owned());
+        return Ok(ResolvedChatTarget {
+            thread_id: trimmed.to_owned(),
+            channel: "api".to_owned(),
+            account_id: req.account_id.clone(),
+            from_id: req.from_id.clone(),
+            metadata: HashMap::new(),
+        });
+    }
+
+    if let Some(bot) = req
+        .bot
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let Some((channel, account_id)) = bot.split_once(':') else {
+            return Err(ChatPreparationError::InvalidRequest(
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "runId": "",
+                    "threadId": Value::Null,
+                    "response": Value::Null,
+                    "error": "bot must be `channel:account_id`",
+                })),
+            ));
+        };
+        let Some(endpoint) =
+            crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id).await
+        else {
+            return Err(ChatPreparationError::InvalidRequest(
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "runId": "",
+                    "threadId": Value::Null,
+                    "response": Value::Null,
+                    "error": format!("bot '{bot}' has no resolved main endpoint"),
+                })),
+            ));
+        };
+        if let Some(thread_id) = endpoint
+            .thread_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let metadata = endpoint_chat_metadata(&endpoint);
+            return Ok(ResolvedChatTarget {
+                thread_id: thread_id.to_owned(),
+                channel: endpoint.channel,
+                account_id: endpoint.account_id,
+                from_id: endpoint.binding_key,
+                metadata,
+            });
+        }
+
+        let mut metadata = req.metadata.clone();
+        let endpoint_metadata = endpoint_chat_metadata(&endpoint);
+        metadata.extend(endpoint_metadata.clone());
+        let mut router = state.threads.router.lock().await;
+        let thread_id = router
+            .resolve_or_create_inbound_thread(
+                &endpoint.channel,
+                &endpoint.account_id,
+                &endpoint.binding_key,
+                &metadata,
+            )
+            .await;
+        return Ok(ResolvedChatTarget {
+            thread_id,
+            channel: endpoint.channel,
+            account_id: endpoint.account_id,
+            from_id: endpoint.binding_key,
+            metadata: endpoint_metadata,
+        });
     }
 
     let mut router = state.threads.router.lock().await;
-    Ok(router
+    let thread_id = router
         .resolve_or_create_inbound_thread("api", &req.account_id, &req.from_id, &req.metadata)
-        .await)
+        .await;
+    Ok(ResolvedChatTarget {
+        thread_id,
+        channel: "api".to_owned(),
+        account_id: req.account_id.clone(),
+        from_id: req.from_id.clone(),
+        metadata: HashMap::new(),
+    })
+}
+
+fn endpoint_chat_metadata(
+    endpoint: &crate::routes::ResolvedMainEndpoint,
+) -> HashMap<String, Value> {
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "chat_id".to_owned(),
+        Value::String(endpoint.chat_id.clone()),
+    );
+    metadata.insert(
+        "display_label".to_owned(),
+        Value::String(endpoint.display_label.clone()),
+    );
+    metadata.insert(
+        "thread_binding_key".to_owned(),
+        Value::String(endpoint.binding_key.clone()),
+    );
+    metadata.insert(
+        "delivery_target_type".to_owned(),
+        Value::String(endpoint.delivery_target_type.clone()),
+    );
+    metadata.insert(
+        "delivery_target_id".to_owned(),
+        Value::String(endpoint.delivery_target_id.clone()),
+    );
+    metadata.insert(
+        "delivery_thread_id".to_owned(),
+        endpoint
+            .delivery_thread_id
+            .as_ref()
+            .map(|value| Value::String(value.clone()))
+            .unwrap_or(Value::Null),
+    );
+    metadata
 }
 
 fn build_chat_metadata(
     mut metadata: HashMap<String, Value>,
+    channel: &str,
     account_id: &str,
     from_id: &str,
     run_id: &str,
 ) -> HashMap<String, Value> {
-    metadata.insert("channel".to_owned(), Value::String("api".to_owned()));
+    metadata.insert("channel".to_owned(), Value::String(channel.to_owned()));
     metadata.insert(
         "account_id".to_owned(),
         Value::String(account_id.to_owned()),

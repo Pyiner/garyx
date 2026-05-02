@@ -198,6 +198,7 @@ async fn handle_chat_ws_start(
         &config,
         prepared.metadata,
         prepared.provider_metadata,
+        &prepared.channel,
         &prepared.account_id,
         &prepared.from_id,
         &run_id,
@@ -213,7 +214,7 @@ async fn handle_chat_ws_start(
                 &thread_id,
                 &prepared.effective_message,
                 &run_id,
-                "api",
+                &prepared.channel,
                 &prepared.account_id,
                 metadata,
             )
@@ -232,7 +233,7 @@ async fn handle_chat_ws_start(
                 crate::runtime_diagnostics::RuntimeDiagnosticContext {
                     thread_id: Some(thread_id.clone()),
                     run_id: Some(run_id.clone()),
-                    channel: Some("api".to_owned()),
+                    channel: Some(prepared.channel.clone()),
                     account_id: Some(prepared.account_id.clone()),
                     from_id: Some(prepared.from_id.clone()),
                     text_excerpt: Some(prepared.effective_message.chars().take(200).collect()),

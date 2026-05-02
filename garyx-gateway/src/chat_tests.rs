@@ -142,6 +142,7 @@ fn test_chat_request_defaults() {
     assert_eq!(req.account_id, "main");
     assert!(req.wait_for_response);
     assert!(req.thread_id.is_none());
+    assert!(req.bot.is_none());
     assert!(req.workspace_path.is_none());
     assert!(req.images.is_empty());
     assert!(req.provider_metadata.is_empty());
@@ -183,6 +184,17 @@ fn test_chat_request_custom_fields() {
         req.provider_metadata["desktop_claude_env"]["CLAUDE_CODE_OAUTH_TOKEN"],
         "token-123"
     );
+}
+
+#[test]
+fn test_chat_request_accepts_bot_selector() {
+    let req: ChatRequest = serde_json::from_value(json!({
+        "message": "hi",
+        "bot": "telegram:main"
+    }))
+    .unwrap();
+    assert_eq!(req.bot.as_deref(), Some("telegram:main"));
+    assert!(req.thread_id.is_none());
 }
 
 #[test]

@@ -89,7 +89,7 @@ Send a message into a fresh thread end-to-end:
 
 ```bash
 TID=$(garyx thread create --workspace-dir "$PWD" --json | jq -r .thread_id)
-garyx thread send "$TID" "What does this workspace do?"
+garyx thread send thread "$TID" "What does this workspace do?"
 ```
 
 ### 4. Add your first channel bot

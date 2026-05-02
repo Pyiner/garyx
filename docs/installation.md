@@ -87,7 +87,7 @@ Send a message into a fresh thread end-to-end:
 
 ```bash
 TID=$(garyx thread create --workspace-dir "$PWD" --json | jq -r .thread_id)
-garyx thread send "$TID" "What does this workspace do?"
+garyx thread send thread "$TID" "What does this workspace do?"
 ```
 
 If that round-trips, the gateway is healthy and at least one provider is

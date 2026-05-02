@@ -1,5 +1,6 @@
 use clap::{CommandFactory, Parser};
 use garyx_models::local_paths::migrate_legacy_homes;
+use garyx_router::is_thread_key;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod channel_plugin_host;
@@ -35,9 +36,124 @@ use commands::{
     cmd_task_claim, cmd_task_create, cmd_task_get, cmd_task_history, cmd_task_list,
     cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_unassign,
     cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_list, cmd_thread_send,
-    cmd_update, cmd_wiki_delete, cmd_wiki_get, cmd_wiki_init, cmd_wiki_list, cmd_wiki_status,
-    run_gateway,
+    cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_update, cmd_wiki_delete, cmd_wiki_get,
+    cmd_wiki_init, cmd_wiki_list, cmd_wiki_status, run_gateway,
 };
+
+struct ThreadSendDestination {
+    target: ThreadSendTarget,
+    message_parts: Vec<String>,
+}
+
+enum ThreadSendTarget {
+    Thread(String),
+    Task(String),
+    Bot(String),
+}
+
+fn resolve_thread_send_destination(
+    kind: Option<String>,
+    target: Option<String>,
+    message: Vec<String>,
+    bot_flag: Option<String>,
+) -> Result<ThreadSendDestination, Box<dyn std::error::Error>> {
+    if let Some(bot) = trim_optional(bot_flag) {
+        let mut message_parts = Vec::new();
+        if let Some(kind) = kind {
+            message_parts.push(kind);
+        }
+        if let Some(target) = target {
+            message_parts.push(target);
+        }
+        message_parts.extend(message);
+        validate_bot_selector(&bot)?;
+        return Ok(ThreadSendDestination {
+            target: ThreadSendTarget::Bot(bot),
+            message_parts,
+        });
+    }
+
+    let Some(kind) = trim_optional(kind) else {
+        return Err(
+            "destination is required: use `garyx thread send thread|task|bot <target> [message]...`"
+                .into(),
+        );
+    };
+
+    match kind.to_ascii_lowercase().as_str() {
+        "thread" | "threads" => {
+            let thread_id = required_send_target("thread", target)?;
+            validate_thread_id(&thread_id)?;
+            Ok(ThreadSendDestination {
+                target: ThreadSendTarget::Thread(thread_id),
+                message_parts: message,
+            })
+        }
+        "task" | "tasks" => {
+            let task_ref = required_send_target("task", target)?;
+            Ok(ThreadSendDestination {
+                target: ThreadSendTarget::Task(task_ref),
+                message_parts: message,
+            })
+        }
+        "bot" | "bots" => {
+            let bot = required_send_target("bot", target)?;
+            validate_bot_selector(&bot)?;
+            Ok(ThreadSendDestination {
+                target: ThreadSendTarget::Bot(bot),
+                message_parts: message,
+            })
+        }
+        _ if is_thread_key(&kind) => {
+            let mut message_parts = Vec::new();
+            if let Some(target) = target {
+                message_parts.push(target);
+            }
+            message_parts.extend(message);
+            Ok(ThreadSendDestination {
+                target: ThreadSendTarget::Thread(kind),
+                message_parts,
+            })
+        }
+        _ => Err(
+            "destination kind must be `thread`, `task`, or `bot` (or a legacy canonical thread id)"
+                .into(),
+        ),
+    }
+}
+
+fn trim_optional(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn required_send_target(
+    kind: &str,
+    target: Option<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    trim_optional(target)
+        .ok_or_else(|| format!("target is required for `garyx thread send {kind}`").into())
+}
+
+fn validate_thread_id(thread_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if is_thread_key(thread_id) {
+        Ok(())
+    } else {
+        Err("thread target must be a canonical thread id like `thread::...`".into())
+    }
+}
+
+fn validate_bot_selector(bot: &str) -> Result<(), Box<dyn std::error::Error>> {
+    match bot.split_once(':') {
+        Some((channel, account_id))
+            if !channel.trim().is_empty() && !account_id.trim().is_empty() =>
+        {
+            Ok(())
+        }
+        _ => Err("bot target must be `channel:account_id`, e.g. `telegram:main`".into()),
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -469,22 +585,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cmd_thread_get(config_path, &thread_id, json).await
             }
             ThreadAction::Send {
-                thread_id,
+                kind,
+                target,
                 message,
+                bot,
                 workspace_dir,
                 timeout,
                 json,
             } => {
-                let text = match message {
-                    Some(m) => m,
-                    None => {
-                        use std::io::Read;
-                        let mut buf = String::new();
-                        std::io::stdin().read_to_string(&mut buf)?;
-                        buf.trim().to_owned()
-                    }
+                let destination = resolve_thread_send_destination(kind, target, message, bot)?;
+                let message_parts = destination.message_parts;
+                let text = if message_parts.is_empty() {
+                    use std::io::Read;
+                    let mut buf = String::new();
+                    std::io::stdin().read_to_string(&mut buf)?;
+                    buf.trim().to_owned()
+                } else {
+                    message_parts.join(" ")
                 };
-                cmd_thread_send(config_path, thread_id, text, workspace_dir, timeout, json).await
+                match destination.target {
+                    ThreadSendTarget::Thread(thread_id) => {
+                        cmd_thread_send(config_path, thread_id, text, workspace_dir, timeout, json)
+                            .await
+                    }
+                    ThreadSendTarget::Task(task_ref) => {
+                        cmd_thread_send_to_task(
+                            config_path,
+                            task_ref,
+                            text,
+                            workspace_dir,
+                            timeout,
+                            json,
+                        )
+                        .await
+                    }
+                    ThreadSendTarget::Bot(bot) => {
+                        cmd_thread_send_to_bot(config_path, bot, text, workspace_dir, timeout, json)
+                            .await
+                    }
+                }
             }
             ThreadAction::Create {
                 title,

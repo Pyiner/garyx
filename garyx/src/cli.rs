@@ -185,7 +185,7 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: WikiAction,
     },
-    /// Send a message via a bot
+    /// Send an outbound channel message via a bot
     #[command(alias = "send", alias = "msg")]
     Message {
         /// Bot selector: `channel:account_id`, e.g. `telegram:main`
@@ -790,12 +790,22 @@ pub(crate) enum ThreadAction {
         #[arg(long)]
         json: bool,
     },
-    /// Send a message to a thread and stream the response
+    /// Send a message into an internal thread and stream the response
+    #[command(
+        override_usage = "garyx thread send <thread|task|bot> <target> [message]...",
+        long_about = "Send a message into an internal Garyx thread and stream the agent response.\n\nTargets:\n  thread <thread_id>              Send to a canonical thread id\n  task <task_ref>                 Resolve a task to its backing thread\n  bot <channel:account_id>        Resolve the bot's bound main thread inside the gateway\n\nExamples:\n  garyx thread send thread thread::abc \"hello\"\n  garyx thread send task '#telegram/main/1' \"status?\"\n  garyx thread send bot telegram:main \"continue\"\n\nFor compatibility, `garyx thread send <thread_id> [message]...` is still accepted."
+    )]
     Send {
-        /// Thread id to send to
-        thread_id: String,
+        /// Destination kind: thread, task, or bot
+        kind: Option<String>,
+        /// Thread id, task ref, or bot selector
+        target: Option<String>,
         /// Message text (reads from stdin if omitted)
-        message: Option<String>,
+        #[arg(value_name = "MESSAGE", num_args = 0..)]
+        message: Vec<String>,
+        /// Deprecated: use `garyx thread send bot <channel:account_id> ...`
+        #[arg(long, value_name = "CHANNEL:ACCOUNT_ID", hide = true)]
+        bot: Option<String>,
         /// Workspace directory for the agent
         #[arg(long)]
         workspace_dir: Option<String>,
