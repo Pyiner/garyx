@@ -6,7 +6,8 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::Serialize;
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::warn;
+use tokio::time::Instant;
+use tracing::{info, warn};
 
 use crate::channel_trait::ChannelError;
 
@@ -80,6 +81,7 @@ enum TelegramOutboxCommand {
         api_base: String,
         token: String,
         body: SendMessageBody,
+        queued_at: Instant,
         respond_to: oneshot::Sender<Result<TgMessage, TelegramApiCallError>>,
     },
     EditMessageText {
@@ -88,15 +90,19 @@ enum TelegramOutboxCommand {
         token: String,
         body: EditMessageTextBody,
         attempt: usize,
+        queued_at: Instant,
+        coalesced_count: usize,
     },
     DeleteMessage {
         http: Client,
         api_base: String,
         token: String,
         body: DeleteMessageBody,
+        queued_at: Instant,
         respond_to: oneshot::Sender<Result<(), TelegramApiCallError>>,
     },
     Permit {
+        queued_at: Instant,
         respond_to: oneshot::Sender<()>,
     },
 }
@@ -124,6 +130,7 @@ pub(super) async fn enqueue_send_message(
             api_base: api_base.to_owned(),
             token: token.to_owned(),
             body,
+            queued_at: Instant::now(),
             respond_to,
         })
         .map_err(|_| TelegramApiCallError::new("Telegram outbox stopped", None, true))?;
@@ -146,6 +153,8 @@ pub(super) async fn enqueue_edit_message_text(
             token: token.to_owned(),
             body,
             attempt: 0,
+            queued_at: Instant::now(),
+            coalesced_count: 0,
         })
         .map_err(|_| ChannelError::SendFailed("Telegram outbox stopped".to_owned()))
 }
@@ -164,6 +173,7 @@ pub(super) async fn enqueue_delete_message(
             api_base: api_base.to_owned(),
             token: token.to_owned(),
             body,
+            queued_at: Instant::now(),
             respond_to,
         })
         .map_err(|_| ChannelError::SendFailed("Telegram outbox stopped".to_owned()))?;
@@ -181,7 +191,10 @@ pub(super) async fn wait_for_outbound_slot(
     let sender = telegram_outbox_sender(api_base, token, chat_id).await;
     let (respond_to, response) = oneshot::channel();
     sender
-        .send(TelegramOutboxCommand::Permit { respond_to })
+        .send(TelegramOutboxCommand::Permit {
+            queued_at: Instant::now(),
+            respond_to,
+        })
         .map_err(|_| ChannelError::SendFailed("Telegram outbox stopped".to_owned()))?;
     response
         .await
@@ -267,15 +280,11 @@ fn insert_outbox_command(
             token,
             body,
             attempt,
+            queued_at,
+            coalesced_count,
         } => {
             let message_id = body.message_id;
-            let command = TelegramOutboxCommand::EditMessageText {
-                http,
-                api_base,
-                token,
-                body,
-                attempt,
-            };
+            let mut coalesced_count = coalesced_count;
             if let Some(index) = queue.iter().position(|queued| {
                 matches!(
                     queued,
@@ -283,38 +292,74 @@ fn insert_outbox_command(
                         if queued_body.message_id == message_id
                 )
             }) {
-                queue.remove(index);
-                queue.insert(index, command);
-                let mut kept_first_edit = false;
+                if let Some(TelegramOutboxCommand::EditMessageText {
+                    coalesced_count: queued_count,
+                    ..
+                }) = queue.remove(index)
+                {
+                    coalesced_count = coalesced_count.saturating_add(queued_count + 1);
+                }
+
+                let mut extra_coalesced = 0usize;
                 queue.retain(|queued| {
-                    let same_message = matches!(
-                        queued,
-                        TelegramOutboxCommand::EditMessageText { body: queued_body, .. }
-                            if queued_body.message_id == message_id
-                    );
-                    if !same_message {
-                        return true;
+                    if let TelegramOutboxCommand::EditMessageText {
+                        body: queued_body,
+                        coalesced_count: queued_count,
+                        ..
+                    } = queued
+                    {
+                        if queued_body.message_id == message_id {
+                            extra_coalesced = extra_coalesced.saturating_add(*queued_count + 1);
+                            return false;
+                        }
                     }
-                    if kept_first_edit {
-                        false
-                    } else {
-                        kept_first_edit = true;
-                        true
-                    }
+                    true
                 });
+                coalesced_count = coalesced_count.saturating_add(extra_coalesced);
+
+                info!(
+                    api_base = %api_base,
+                    chat_id = body.chat_id,
+                    message_id = body.message_id,
+                    coalesced_count,
+                    queue_len = queue.len(),
+                    "Telegram outbox coalesced pending edit"
+                );
+                queue.insert(
+                    index.min(queue.len()),
+                    TelegramOutboxCommand::EditMessageText {
+                        http,
+                        api_base,
+                        token,
+                        body,
+                        attempt,
+                        queued_at,
+                        coalesced_count,
+                    },
+                );
                 return;
             }
 
-            queue.push_back(command);
+            queue.push_back(TelegramOutboxCommand::EditMessageText {
+                http,
+                api_base,
+                token,
+                body,
+                attempt,
+                queued_at,
+                coalesced_count,
+            });
         }
         TelegramOutboxCommand::DeleteMessage {
             http,
             api_base,
             token,
             body,
+            queued_at,
             respond_to,
         } => {
             let message_id = body.message_id;
+            let before_len = queue.len();
             queue.retain(|queued| {
                 !matches!(
                     queued,
@@ -322,11 +367,23 @@ fn insert_outbox_command(
                         if queued_body.message_id == message_id
                 )
             });
+            let dropped_edit_count = before_len.saturating_sub(queue.len());
+            if dropped_edit_count > 0 {
+                info!(
+                    api_base = %api_base,
+                    chat_id = body.chat_id,
+                    message_id,
+                    dropped_edit_count,
+                    queue_len = queue.len(),
+                    "Telegram outbox dropped pending edit before delete"
+                );
+            }
             queue.push_back(TelegramOutboxCommand::DeleteMessage {
                 http,
                 api_base,
                 token,
                 body,
+                queued_at,
                 respond_to,
             });
         }
@@ -345,10 +402,38 @@ async fn execute_outbox_command(
             api_base,
             token,
             body,
+            queued_at,
             respond_to,
         } => {
+            let wait_ms = duration_ms(queued_at.elapsed());
             let result = send_message_once(&http, &api_base, &token, &body).await;
             let retry_after = result.as_ref().err().and_then(|error| error.retry_after);
+            match &result {
+                Ok(message) => {
+                    info!(
+                        api_base = %key.api_base,
+                        chat_id = key.chat_id,
+                        kind = "sendMessage",
+                        wait_ms,
+                        message_id = message.message_id,
+                        queue_len = queue.len(),
+                        "Telegram outbox sent request"
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        api_base = %key.api_base,
+                        chat_id = key.chat_id,
+                        kind = "sendMessage",
+                        wait_ms,
+                        retryable = error.retryable,
+                        retry_after_ms = retry_after.map(duration_ms).unwrap_or(0),
+                        queue_len = queue.len(),
+                        error = %error,
+                        "Telegram outbox request failed"
+                    );
+                }
+            }
             let _ = respond_to.send(result);
             retry_after
         }
@@ -358,8 +443,23 @@ async fn execute_outbox_command(
             token,
             body,
             attempt,
+            queued_at,
+            coalesced_count,
         } => match edit_message_text_once(&http, &api_base, &token, &body).await {
-            Ok(()) => None,
+            Ok(()) => {
+                info!(
+                    api_base = %key.api_base,
+                    chat_id = key.chat_id,
+                    kind = "editMessageText",
+                    wait_ms = duration_ms(queued_at.elapsed()),
+                    message_id = body.message_id,
+                    attempt,
+                    coalesced_count,
+                    queue_len = queue.len(),
+                    "Telegram outbox sent request"
+                );
+                None
+            }
             Err(error) => {
                 let retry_after = error.retry_after;
                 if error.retryable && attempt + 1 < OUTBOUND_MAX_RETRIES {
@@ -370,22 +470,58 @@ async fn execute_outbox_command(
                                 if queued_body.message_id == body.message_id
                         )
                     }) {
+                        info!(
+                            api_base = %key.api_base,
+                            chat_id = key.chat_id,
+                            kind = "editMessageText",
+                            wait_ms = duration_ms(queued_at.elapsed()),
+                            message_id = body.message_id,
+                            attempt,
+                            coalesced_count,
+                            retry_after_ms = retry_after.map(duration_ms).unwrap_or(0),
+                            queue_len = queue.len(),
+                            error = %error,
+                            "Telegram outbox skipped retry because a newer edit is queued"
+                        );
                         return retry_after;
                     }
                     let delay = retry_after.unwrap_or_else(|| retry_backoff_duration(attempt));
+                    info!(
+                        api_base = %key.api_base,
+                        chat_id = key.chat_id,
+                        kind = "editMessageText",
+                        wait_ms = duration_ms(queued_at.elapsed()),
+                        message_id = body.message_id,
+                        attempt,
+                        next_attempt = attempt + 1,
+                        coalesced_count,
+                        delay_ms = duration_ms(delay),
+                        retry_after_ms = retry_after.map(duration_ms).unwrap_or(0),
+                        queue_len = queue.len(),
+                        error = %error,
+                        "Telegram outbox retrying request"
+                    );
                     queue.push_front(TelegramOutboxCommand::EditMessageText {
                         http,
                         api_base,
                         token,
                         body,
                         attempt: attempt + 1,
+                        queued_at,
+                        coalesced_count,
                     });
                     Some(delay)
                 } else {
                     warn!(
                         api_base = %key.api_base,
                         chat_id = key.chat_id,
+                        kind = "editMessageText",
+                        wait_ms = duration_ms(queued_at.elapsed()),
                         message_id = body.message_id,
+                        attempt,
+                        coalesced_count,
+                        retry_after_ms = retry_after.map(duration_ms).unwrap_or(0),
+                        queue_len = queue.len(),
                         error = %error,
                         "Telegram editMessageText failed in rate-limited outbox"
                     );
@@ -398,18 +534,62 @@ async fn execute_outbox_command(
             api_base,
             token,
             body,
+            queued_at,
             respond_to,
         } => {
+            let wait_ms = duration_ms(queued_at.elapsed());
             let result = delete_message_once(&http, &api_base, &token, &body).await;
             let retry_after = result.as_ref().err().and_then(|error| error.retry_after);
+            match &result {
+                Ok(()) => {
+                    info!(
+                        api_base = %key.api_base,
+                        chat_id = key.chat_id,
+                        kind = "deleteMessage",
+                        wait_ms,
+                        message_id = body.message_id,
+                        queue_len = queue.len(),
+                        "Telegram outbox sent request"
+                    );
+                }
+                Err(error) => {
+                    warn!(
+                        api_base = %key.api_base,
+                        chat_id = key.chat_id,
+                        kind = "deleteMessage",
+                        wait_ms,
+                        message_id = body.message_id,
+                        retryable = error.retryable,
+                        retry_after_ms = retry_after.map(duration_ms).unwrap_or(0),
+                        queue_len = queue.len(),
+                        error = %error,
+                        "Telegram outbox request failed"
+                    );
+                }
+            }
             let _ = respond_to.send(result);
             retry_after
         }
-        TelegramOutboxCommand::Permit { respond_to } => {
+        TelegramOutboxCommand::Permit {
+            queued_at,
+            respond_to,
+        } => {
+            info!(
+                api_base = %key.api_base,
+                chat_id = key.chat_id,
+                kind = "permit",
+                wait_ms = duration_ms(queued_at.elapsed()),
+                queue_len = queue.len(),
+                "Telegram outbox reserved outbound slot"
+            );
             let _ = respond_to.send(());
             None
         }
     }
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 async fn send_message_once(
