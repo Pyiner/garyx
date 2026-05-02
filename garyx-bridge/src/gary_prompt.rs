@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::auto_memory::build_auto_memory_user_message;
+use crate::memory_context::build_memory_context_user_message;
 
 pub(crate) const GARY_BASE_INSTRUCTIONS: &str = concat!(
     "Garyx runtime guidance:\n",
@@ -27,7 +27,7 @@ pub(crate) fn compose_gary_instructions(
     compose_gary_instructions_with_layout(extra)
 }
 
-pub(crate) fn prepend_auto_memory_to_user_message(
+pub(crate) fn prepend_memory_context_to_user_message(
     message: &str,
     metadata: &HashMap<String, Value>,
     include_memory: bool,
@@ -35,7 +35,7 @@ pub(crate) fn prepend_auto_memory_to_user_message(
     if !include_memory {
         return message.to_owned();
     }
-    let memory = build_auto_memory_user_message(metadata);
+    let memory = build_memory_context_user_message(metadata);
     if message.trim().is_empty() {
         memory
     } else {

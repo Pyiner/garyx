@@ -971,7 +971,7 @@ fn test_build_thread_start_params_injects_gary_developer_instructions() {
     assert!(developer_instructions.contains("~/.garyx/skills/<skill-id>/SKILL.md"));
     assert!(developer_instructions.contains("garyx task create"));
     assert!(developer_instructions.contains("garyx automation create"));
-    assert!(!developer_instructions.contains("Global Auto Memory"));
+    assert!(!developer_instructions.contains("Global Memory"));
     assert!(!developer_instructions.contains("<garyx_memory_context>"));
     assert!(!developer_instructions.contains("Current runtime context:"));
     assert!(!developer_instructions.contains("thread_id: thread::test"));
@@ -1000,7 +1000,7 @@ fn test_build_thread_start_params_merges_runtime_system_prompt() {
         .unwrap_or_default();
     assert!(developer_instructions.contains("Garyx runtime guidance:"));
     assert!(developer_instructions.contains("Use concise bullets."));
-    assert!(!developer_instructions.contains("Global Auto Memory"));
+    assert!(!developer_instructions.contains("Global Memory"));
     assert!(!developer_instructions.contains("Current runtime context:"));
 }
 

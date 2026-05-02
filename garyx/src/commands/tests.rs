@@ -1164,6 +1164,27 @@ fn upsert_plugin_account_rejects_missing_required_fields() {
 }
 
 #[test]
+fn task_create_assignee_defaults_from_agent_id() {
+    let payload = task_create_assignee_payload(None, Some(" plain-claude ")).unwrap();
+
+    assert_eq!(
+        payload,
+        Some(json!({ "kind": "agent", "agent_id": "plain-claude" }))
+    );
+}
+
+#[test]
+fn task_create_explicit_assignee_wins_over_agent_id() {
+    let payload =
+        task_create_assignee_payload(Some("agent:reviewer"), Some("plain-claude")).unwrap();
+
+    assert_eq!(
+        payload,
+        Some(json!({ "kind": "agent", "agent_id": "reviewer" }))
+    );
+}
+
+#[test]
 fn format_task_progress_groups_each_user_turn_with_last_assistant_text_group() {
     let task_payload = json!({
         "task_ref": "#TASK-42",

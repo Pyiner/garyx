@@ -344,12 +344,12 @@ export interface DesktopWorkspaceFilePreview {
   dataBase64?: string | null;
 }
 
-export type DesktopMemoryDocumentScope = "global" | "automation" | "workspace";
+export type DesktopMemoryDocumentScope = "agent" | "automation";
 
 export interface DesktopMemoryDocument {
   scope: DesktopMemoryDocumentScope;
+  agentId?: string | null;
   automationId?: string | null;
-  workspacePath?: string | null;
   path: string;
   content: string;
   exists: boolean;
@@ -358,8 +358,8 @@ export interface DesktopMemoryDocument {
 
 export interface ReadMemoryDocumentInput {
   scope: DesktopMemoryDocumentScope;
+  agentId?: string;
   automationId?: string;
-  workspacePath?: string;
 }
 
 export interface SaveMemoryDocumentInput extends ReadMemoryDocumentInput {

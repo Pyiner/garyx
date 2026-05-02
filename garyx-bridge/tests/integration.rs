@@ -20,7 +20,7 @@ use garyx_bridge::codex_provider::CodexAgentProvider;
 use garyx_bridge::gemini_provider::GeminiCliProvider;
 use garyx_bridge::provider_trait::AgentLoopProvider;
 use garyx_models::local_paths::{
-    auto_memory_agent_dir_for_gary_home, auto_memory_agent_root_file_for_gary_home, gary_home_dir,
+    agent_memory_dir_for_gary_home, agent_memory_root_file_for_gary_home, gary_home_dir,
 };
 use garyx_models::provider::{
     ClaudeCodeConfig, CodexAppServerConfig, GeminiCliConfig, PromptAttachment,
@@ -91,24 +91,21 @@ fn noop_stream_callback() -> Box<dyn Fn(StreamEvent) + Send + Sync> {
     Box::new(|_| {})
 }
 
-fn write_agent_auto_memory_marker(agent_id: &str, marker: &str) -> std::io::Result<()> {
-    let memory_file = auto_memory_agent_root_file_for_gary_home(&gary_home_dir(), agent_id);
+fn write_agent_memory_marker(agent_id: &str, marker: &str) -> std::io::Result<()> {
+    let memory_file = agent_memory_root_file_for_gary_home(&gary_home_dir(), agent_id);
     if let Some(parent) = memory_file.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(
         memory_file,
         format!(
-            "# Agent Memory\n\n## Durable Notes\n- Auto Memory marker: {marker}\n- When asked for the Auto Memory marker, reply with exactly `{marker}`.\n"
+            "# Agent Memory\n\n## Durable Notes\n- Agent Memory marker: {marker}\n- When asked for the Agent Memory marker, reply with exactly `{marker}`.\n"
         ),
     )
 }
 
-fn cleanup_agent_auto_memory(agent_id: &str) {
-    let _ = fs::remove_dir_all(auto_memory_agent_dir_for_gary_home(
-        &gary_home_dir(),
-        agent_id,
-    ));
+fn cleanup_agent_memory(agent_id: &str) {
+    let _ = fs::remove_dir_all(agent_memory_dir_for_gary_home(&gary_home_dir(), agent_id));
 }
 
 // ---------------------------------------------------------------------------
@@ -545,7 +542,7 @@ async fn test_gemini_provider_mcp_status_tool_loaded() {
 
 #[tokio::test]
 #[ignore]
-async fn test_codex_provider_auto_memory_visible() {
+async fn test_codex_provider_agent_memory_visible() {
     if !binary_available("codex").await {
         eprintln!("codex not found, skipping");
         return;
@@ -553,8 +550,9 @@ async fn test_codex_provider_auto_memory_visible() {
 
     let workspace = tempdir().unwrap();
     let workspace_dir = workspace.path().to_path_buf();
-    let marker = "codex-auto-memory-marker-3a2b";
-    write_agent_auto_memory_marker("codex", marker).unwrap();
+    let test_agent_id = "codex-memory-test";
+    let marker = "codex-agent-memory-marker-3a2b";
+    write_agent_memory_marker(test_agent_id, marker).unwrap();
 
     let config = CodexAppServerConfig {
         model: "gpt-5.4".to_owned(),
@@ -569,11 +567,11 @@ async fn test_codex_provider_auto_memory_visible() {
     provider.initialize().await.expect("initialize failed");
 
     let options = ProviderRunOptions {
-        thread_id: "test::codex::auto_memory".to_owned(),
-        message: "Reply with the Auto Memory marker only.".to_owned(),
+        thread_id: "test::codex::agent_memory".to_owned(),
+        message: "Reply with the Agent Memory marker only.".to_owned(),
         workspace_dir: Some(workspace_dir.display().to_string()),
         images: None,
-        metadata: HashMap::from([("agent_id".to_owned(), serde_json::json!("codex"))]),
+        metadata: HashMap::from([("agent_id".to_owned(), serde_json::json!(test_agent_id))]),
     };
 
     let result = provider
@@ -582,7 +580,7 @@ async fn test_codex_provider_auto_memory_visible() {
         .expect("codex auto memory run failed");
 
     provider.shutdown().await.expect("shutdown failed");
-    cleanup_agent_auto_memory("codex");
+    cleanup_agent_memory(test_agent_id);
 
     assert!(result.success, "Run was not successful: {:?}", result.error);
     assert!(

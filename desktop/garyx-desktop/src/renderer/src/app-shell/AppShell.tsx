@@ -148,7 +148,6 @@ import {
   NewThreadIcon,
   SettingsIcon,
   SkillsIcon,
-  MemoryIcon,
   WorkspaceFileIcon,
   isLocalSettingsTab,
 } from "./icons";
@@ -223,12 +222,8 @@ function messagesNearBottom(node: HTMLDivElement | null): boolean {
 
 type MemoryDialogTarget =
   | {
-      scope: "global";
-      title: string;
-    }
-  | {
-      scope: "workspace";
-      workspacePath: string;
+      scope: "agent";
+      agentId: string;
       title: string;
     }
   | {
@@ -237,9 +232,9 @@ type MemoryDialogTarget =
       title: string;
     };
 
-function autoMemoryAutomationKey(automationId: string): string {
-  const trimmed = automationId.trim();
-  const base = trimmed || "automation";
+function memoryKey(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  const base = trimmed || fallback;
   let sanitized = "";
   for (const ch of base) {
     if (/^[a-z0-9]$/i.test(ch)) {
@@ -249,40 +244,7 @@ function autoMemoryAutomationKey(automationId: string): string {
     }
   }
   const normalized = sanitized.replace(/^-+|-+$/g, "");
-  return normalized || "automation";
-}
-
-function fnv1a64Hex(value: string): string {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
-  for (const byte of new TextEncoder().encode(value)) {
-    hash ^= BigInt(byte);
-    hash = (hash * prime) & mask;
-  }
-  return hash.toString(16).padStart(16, "0");
-}
-
-function sanitizeWorkspaceDisplayName(workspacePath: string): string {
-  const normalized = workspacePath.replace(/[\\/]+$/, "");
-  const segments = normalized.split(/[\\/]/).filter(Boolean);
-  const base = segments[segments.length - 1] || "workspace";
-  let sanitized = "";
-  for (const ch of base) {
-    if (/^[a-z0-9]$/i.test(ch)) {
-      sanitized += ch.toLowerCase();
-    } else if (!sanitized.endsWith("-")) {
-      sanitized += "-";
-    }
-  }
-  const trimmed = sanitized.replace(/^-+|-+$/g, "");
-  return trimmed || "workspace";
-}
-
-function workspaceMemoryPathSuffix(workspacePath: string): string {
-  const normalized = workspacePath.trim();
-  const key = `${sanitizeWorkspaceDisplayName(normalized)}-${fnv1a64Hex(normalized)}`;
-  return `/.garyx/auto-memory/workspaces/${key}/memory.md`;
+  return normalized || fallback;
 }
 
 function normalizeLocalPathForMatch(value: string): string {
@@ -292,19 +254,26 @@ function normalizeLocalPathForMatch(value: string): string {
 function resolveMemoryDialogTargetFromPath(
   absolutePath: string,
   automations: DesktopAutomationSummary[],
-  workspaces: DesktopWorkspace[],
+  agents: DesktopCustomAgent[],
 ): MemoryDialogTarget | null {
   const normalizedPath = normalizeLocalPathForMatch(absolutePath);
-  if (normalizedPath.endsWith("/.garyx/auto-memory/memory.md")) {
+
+  const matchedAgent = agents.find((agent) => {
+    return normalizedPath.endsWith(
+      `/.garyx/agents/${memoryKey(agent.agentId, "agent")}/memory.md`,
+    );
+  });
+  if (matchedAgent) {
     return {
-      scope: "global",
-      title: "Global memory.md",
+      scope: "agent",
+      agentId: matchedAgent.agentId,
+      title: `${matchedAgent.displayName || matchedAgent.agentId} memory.md`,
     };
   }
 
   const matchedAutomation = automations.find((automation) => {
     return normalizedPath.endsWith(
-      `/.garyx/auto-memory/automations/${autoMemoryAutomationKey(automation.id)}/memory.md`,
+      `/.garyx/automations/${memoryKey(automation.id, "automation")}/memory.md`,
     );
   });
   if (matchedAutomation) {
@@ -315,23 +284,7 @@ function resolveMemoryDialogTargetFromPath(
     };
   }
 
-  const matchedWorkspace = workspaces.find((workspace) => {
-    const workspacePath = workspace.path?.trim();
-    if (!workspacePath) {
-      return false;
-    }
-    return normalizedPath.endsWith(
-      workspaceMemoryPathSuffix(normalizeLocalPathForMatch(workspacePath)),
-    );
-  });
-  if (!matchedWorkspace?.path) {
-    return null;
-  }
-  return {
-    scope: "workspace",
-    workspacePath: matchedWorkspace.path,
-    title: `${matchedWorkspace.name} memory.md`,
-  };
+  return null;
 }
 
 function scrollMessagesToLatest(
@@ -2637,21 +2590,20 @@ export function AppShell() {
   }, [pushToast, remoteStateWarning]);
 
   function memoryDialogInput(target: MemoryDialogTarget) {
+    if (target.scope === "agent") {
+      return {
+        scope: "agent" as const,
+        agentId: target.agentId,
+      };
+    }
     if (target.scope === "automation") {
       return {
         scope: "automation" as const,
         automationId: target.automationId,
       };
     }
-    if (target.scope === "workspace") {
-      return {
-        scope: "workspace" as const,
-        workspacePath: target.workspacePath,
-      };
-    }
-    return {
-      scope: "global" as const,
-    };
+    const exhaustive: never = target;
+    return exhaustive;
   }
 
   function confirmDiscardMemoryChanges(): boolean {
@@ -2762,7 +2714,7 @@ export function AppShell() {
     const memoryTarget = resolveMemoryDialogTargetFromPath(
       absolutePath,
       automations,
-      desktopState?.workspaces || [],
+      desktopAgents,
     );
     if (memoryTarget) {
       void openMemoryDialog(memoryTarget);
@@ -6578,39 +6530,6 @@ export function AppShell() {
 
     const nodes: ReactNode[] = [];
 
-    if (depth === 0) {
-      const isWorkspaceMemorySelected =
-        memoryDialogTarget?.scope === "workspace" &&
-        memoryDialogTarget.workspacePath === workspacePath;
-      nodes.push(
-        <div
-          className="workspace-file-node-shell"
-          key={`${workspacePath}::__workspace_memory__`}
-        >
-          <button
-            className={`workspace-file-node ${isWorkspaceMemorySelected ? "active" : ""}`}
-            onClick={() => {
-              void openMemoryDialog({
-                scope: "workspace",
-                workspacePath,
-                title: `${compactPathLabel(workspacePath)} memory.md`,
-              });
-            }}
-            style={{ paddingLeft: `${10 + depth * 16}px` }}
-            title="workspace_memory.md"
-            type="button"
-          >
-            <MemoryIcon />
-            <span className="workspace-file-node-copy">
-              <span className="workspace-file-node-name">
-                workspace_memory.md
-              </span>
-            </span>
-          </button>
-        </div>,
-      );
-    }
-
     nodes.push(
       ...entries.map((entry) => {
         const childKey = workspaceDirectoryKey(workspacePath, entry.path);
@@ -6895,12 +6814,6 @@ export function AppShell() {
         }}
         onSidebarResizeStart={handleSidebarResizeStart}
         sidebarResizing={sidebarResizing}
-        onOpenMemory={() => {
-          void openMemoryDialog({
-            scope: "global",
-            title: "Global memory.md",
-          });
-        }}
         onOpenAutoResearch={() => {
           setContentView("auto_research");
         }}
@@ -7164,12 +7077,26 @@ export function AppShell() {
             ) : isAgentsView ? (
               <AgentsHubPanel
                 initialTab="agents"
+                onOpenMemory={(agent) => {
+                  void openMemoryDialog({
+                    scope: "agent",
+                    agentId: agent.agentId,
+                    title: `${agent.displayName || agent.agentId} memory.md`,
+                  });
+                }}
                 onStartThread={handleStartDraftForAgent}
                 onToast={pushToast}
               />
             ) : isTeamsView ? (
               <AgentsHubPanel
                 initialTab="teams"
+                onOpenMemory={(agent) => {
+                  void openMemoryDialog({
+                    scope: "agent",
+                    agentId: agent.agentId,
+                    title: `${agent.displayName || agent.agentId} memory.md`,
+                  });
+                }}
                 onStartThread={handleStartDraftForAgent}
                 onToast={pushToast}
               />
@@ -7432,7 +7359,7 @@ export function AppShell() {
         open={Boolean(memoryDialogTarget)}
         path={memoryDialogDocument?.path || null}
         saving={memoryDialogSaving}
-        scope={memoryDialogTarget?.scope || "global"}
+        scope={memoryDialogTarget?.scope || "agent"}
         status={memoryDialogStatus}
         title={memoryDialogTarget?.title || "memory.md"}
       />

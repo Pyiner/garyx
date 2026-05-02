@@ -125,47 +125,33 @@ pub fn default_skills_sync_state_path() -> PathBuf {
     skills_sync_state_path_for_gary_home(&gary_home_dir())
 }
 
-pub fn auto_memory_dir_for_gary_home(gary_home: &Path) -> PathBuf {
-    gary_home.join("auto-memory")
+pub fn agent_memory_key(agent_id: &str) -> String {
+    sanitized_memory_key(agent_id, "agent")
 }
 
-pub fn auto_memory_agents_dir_for_gary_home(gary_home: &Path) -> PathBuf {
-    auto_memory_dir_for_gary_home(gary_home).join("agents")
+pub fn agent_memory_dir_for_gary_home(gary_home: &Path, agent_id: &str) -> PathBuf {
+    gary_home.join("agents").join(agent_memory_key(agent_id))
 }
 
-pub fn auto_memory_automations_dir_for_gary_home(gary_home: &Path) -> PathBuf {
-    auto_memory_dir_for_gary_home(gary_home).join("automations")
+pub fn agent_memory_root_file_for_gary_home(gary_home: &Path, agent_id: &str) -> PathBuf {
+    agent_memory_dir_for_gary_home(gary_home, agent_id).join("memory.md")
 }
 
-pub fn auto_memory_agent_key(agent_id: &str) -> String {
-    sanitized_auto_memory_key(agent_id, "agent")
+pub fn automation_memory_key(automation_id: &str) -> String {
+    sanitized_memory_key(automation_id, "automation")
 }
 
-pub fn auto_memory_agent_dir_for_gary_home(gary_home: &Path, agent_id: &str) -> PathBuf {
-    auto_memory_agents_dir_for_gary_home(gary_home).join(auto_memory_agent_key(agent_id))
+pub fn automation_memory_dir_for_gary_home(gary_home: &Path, automation_id: &str) -> PathBuf {
+    gary_home
+        .join("automations")
+        .join(automation_memory_key(automation_id))
 }
 
-pub fn auto_memory_agent_root_file_for_gary_home(gary_home: &Path, agent_id: &str) -> PathBuf {
-    auto_memory_agent_dir_for_gary_home(gary_home, agent_id).join("memory.md")
+pub fn automation_memory_root_file_for_gary_home(gary_home: &Path, automation_id: &str) -> PathBuf {
+    automation_memory_dir_for_gary_home(gary_home, automation_id).join("memory.md")
 }
 
-pub fn auto_memory_automation_key(automation_id: &str) -> String {
-    sanitized_auto_memory_key(automation_id, "automation")
-}
-
-pub fn auto_memory_automation_dir_for_gary_home(gary_home: &Path, automation_id: &str) -> PathBuf {
-    auto_memory_automations_dir_for_gary_home(gary_home)
-        .join(auto_memory_automation_key(automation_id))
-}
-
-pub fn auto_memory_automation_root_file_for_gary_home(
-    gary_home: &Path,
-    automation_id: &str,
-) -> PathBuf {
-    auto_memory_automation_dir_for_gary_home(gary_home, automation_id).join("memory.md")
-}
-
-fn sanitized_auto_memory_key(value: &str, fallback: &str) -> String {
+fn sanitized_memory_key(value: &str, fallback: &str) -> String {
     let trimmed = value.trim();
     let base = if trimmed.is_empty() {
         fallback
@@ -213,7 +199,6 @@ fn migrate_legacy_home_dir(legacy_home: &Path, target_home: &Path) -> Result<(),
         "skills",
         "data",
         "logs",
-        "auto-memory",
         "mcp-sync-state.json",
         "skills-sync-state.json",
         "pending-restart.json",

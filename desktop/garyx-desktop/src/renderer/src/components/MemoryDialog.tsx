@@ -90,7 +90,7 @@ export function MemoryDialog({
               variant="secondary"
               className="rounded-full px-2.5 py-0.5 text-[10px] font-medium"
             >
-              {scope === 'global' ? t('Global Memory') : t('Automation Memory')}
+              {scope === 'agent' ? t('Agent Memory') : t('Automation Memory')}
             </Badge>
             <Badge
               variant={exists ? 'outline' : 'secondary'}

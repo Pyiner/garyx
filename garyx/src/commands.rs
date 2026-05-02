@@ -3265,10 +3265,11 @@ pub(crate) async fn cmd_task_create(
     workspace_dir: Option<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let assignee = assignee.map(principal_payload).transpose()?;
     let agent_id = agent_id
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
+    let assignee = task_create_assignee_payload(assignee, agent_id.as_deref())?;
+    let start = start || assignee.is_some();
     let workspace_dir = workspace_dir
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
@@ -3292,6 +3293,20 @@ pub(crate) async fn cmd_task_create(
     }
     print_task_summary(&payload);
     Ok(())
+}
+
+fn task_create_assignee_payload(
+    assignee: Option<&str>,
+    agent_id: Option<&str>,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    if let Some(assignee) = assignee {
+        return Ok(Some(principal_payload(assignee)?));
+    }
+
+    let Some(agent_id) = agent_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    Ok(Some(json!({ "kind": "agent", "agent_id": agent_id })))
 }
 
 pub(crate) async fn cmd_task_promote(

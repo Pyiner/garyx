@@ -583,7 +583,7 @@ fn test_build_sdk_options_with_system_prompt() {
     assert!(system_prompt.contains("Garyx runtime guidance:"));
     assert!(system_prompt.contains("Additional runtime instructions:"));
     assert!(system_prompt.contains("You are a helpful bot."));
-    assert!(!system_prompt.contains("Global Auto Memory"));
+    assert!(!system_prompt.contains("Global Memory"));
     assert!(!system_prompt.contains("<garyx_memory_context>"));
     assert!(!system_prompt.contains("Current runtime context:"));
     assert!(!system_prompt.contains("thread_id: test"));
@@ -607,7 +607,7 @@ fn test_build_sdk_options_injects_gary_prompt_by_default() {
     assert!(system_prompt.contains("System capabilities:"));
     assert!(system_prompt.contains("garyx task create"));
     assert!(system_prompt.contains("garyx automation create"));
-    assert!(!system_prompt.contains("Global Auto Memory"));
+    assert!(!system_prompt.contains("Global Memory"));
     assert!(!system_prompt.contains("<garyx_memory_context>"));
     assert!(!system_prompt.contains("Current runtime context:"));
 }

@@ -15,7 +15,6 @@ import {
   AutoResearchIcon,
   BackIcon,
   BrowserIcon,
-  MemoryIcon,
   NewThreadIcon,
   SettingsIcon,
   SettingsTabIcon,
@@ -56,7 +55,6 @@ type AppLeftRailProps = {
   onOpenAgents: () => void;
   onOpenSkills: () => void;
   onOpenTasks: () => void;
-  onOpenMemory: () => void;
   onOpenBot: (group: ReturnType<typeof buildBotGroups>[number]) => void;
   onOpenBotEndpoint: (endpoint: DesktopChannelEndpoint) => void;
   onAddBot: () => void;
@@ -108,7 +106,6 @@ export function AppLeftRail({
   onOpenAgents,
   onOpenSkills,
   onOpenTasks,
-  onOpenMemory,
   onOpenBot,
   onOpenBotEndpoint,
   onAddBot,
@@ -232,14 +229,6 @@ export function AppLeftRail({
             >
               <SkillsIcon />
               <span>{t('Skills')}</span>
-            </button>
-            <button
-              className="sidebar-action"
-              onClick={onOpenMemory}
-              type="button"
-            >
-              <MemoryIcon />
-              <span>{t('Memory')}</span>
             </button>
           </nav>
 

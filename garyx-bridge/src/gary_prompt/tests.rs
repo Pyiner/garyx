@@ -1,6 +1,6 @@
 use super::{
     GARY_BASE_INSTRUCTIONS, append_task_suffix_to_user_message,
-    compose_gary_instructions_with_layout, prepend_auto_memory_to_user_message, task_cli_env,
+    compose_gary_instructions_with_layout, prepend_memory_context_to_user_message, task_cli_env,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -14,8 +14,8 @@ fn compose_without_extra_returns_base_only() {
     assert!(value.contains("System capabilities:"));
     assert!(value.contains("garyx task create"));
     assert!(value.contains("garyx automation create"));
-    assert!(!value.contains("Global Auto Memory"));
-    assert!(!value.contains("Scoped Auto Memory"));
+    assert!(!value.contains("Global Memory"));
+    assert!(!value.contains("Workspace Memory"));
     assert!(!value.contains("Additional runtime instructions:"));
     assert!(!value.contains("Current runtime context:"));
 }
@@ -31,15 +31,15 @@ fn compose_with_extra_appends_section() {
 }
 
 #[test]
-fn prepend_auto_memory_to_user_message_only_when_requested() {
+fn prepend_memory_context_to_user_message_only_when_requested() {
     let metadata = HashMap::from([("agent_id".to_owned(), json!("reviewer"))]);
 
     assert_eq!(
-        prepend_auto_memory_to_user_message("hello", &metadata, false),
+        prepend_memory_context_to_user_message("hello", &metadata, false),
         "hello"
     );
 
-    let rendered = prepend_auto_memory_to_user_message("hello", &metadata, true);
+    let rendered = prepend_memory_context_to_user_message("hello", &metadata, true);
     assert!(rendered.starts_with("<garyx_memory_context>"));
     assert!(rendered.contains("<agent_memory agent_id=\"reviewer\""));
     assert!(rendered.ends_with("hello"));

@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import type {
@@ -12,13 +12,9 @@ function garyHomeDir(): string {
   return DEFAULT_GARY_HOME_DIR;
 }
 
-function autoMemoryDir(): string {
-  return join(garyHomeDir(), 'auto-memory');
-}
-
-function autoMemoryAutomationKey(automationId: string): string {
-  const trimmed = automationId.trim();
-  const base = trimmed || 'automation';
+function memoryKey(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  const base = trimmed || fallback;
   let sanitized = '';
   for (const ch of base) {
     if (/^[a-z0-9]$/i.test(ch)) {
@@ -28,53 +24,30 @@ function autoMemoryAutomationKey(automationId: string): string {
     }
   }
   const normalized = sanitized.replace(/^-+|-+$/g, '');
-  return normalized || 'automation';
-}
-
-function fnv1a64Hex(value: string): string {
-  let hash = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
-  for (const byte of Buffer.from(value, 'utf8')) {
-    hash ^= BigInt(byte);
-    hash = (hash * prime) & mask;
-  }
-  return hash.toString(16).padStart(16, '0');
-}
-
-function sanitizeWorkspaceDisplayName(workspacePath: string): string {
-  const normalized = workspacePath.replace(/[\\/]+$/, '');
-  const segments = normalized.split(/[\\/]/).filter(Boolean);
-  const base = segments[segments.length - 1] || 'workspace';
-  let sanitized = '';
-  for (const ch of base) {
-    if (/^[a-z0-9]$/i.test(ch)) {
-      sanitized += ch.toLowerCase();
-    } else if (!sanitized.endsWith('-')) {
-      sanitized += '-';
-    }
-  }
-  const trimmed = sanitized.replace(/^-+|-+$/g, '');
-  return trimmed || 'workspace';
-}
-
-async function autoMemoryWorkspaceKey(workspacePath: string): Promise<string> {
-  const normalized = workspacePath.trim();
-  if (!normalized) {
-    throw new Error('Workspace memory requires a workspacePath.');
-  }
-  const canonicalPath = await realpath(normalized).catch(() => normalized);
-  return `${sanitizeWorkspaceDisplayName(canonicalPath)}-${fnv1a64Hex(canonicalPath)}`;
+  return normalized || fallback;
 }
 
 async function resolveMemoryPath(
   input: ReadMemoryDocumentInput,
 ): Promise<{
   scope: DesktopMemoryDocument['scope'];
+  agentId: string | null;
   automationId: string | null;
-  workspacePath: string | null;
   path: string;
 }> {
+  if (input.scope === 'agent') {
+    const agentId = input.agentId?.trim() || '';
+    if (!agentId) {
+      throw new Error('Agent memory requires an agentId.');
+    }
+    return {
+      scope: 'agent',
+      agentId,
+      automationId: null,
+      path: join(garyHomeDir(), 'agents', memoryKey(agentId, 'agent'), 'memory.md'),
+    };
+  }
+
   if (input.scope === 'automation') {
     const automationId = input.automationId?.trim() || '';
     if (!automationId) {
@@ -82,38 +55,13 @@ async function resolveMemoryPath(
     }
     return {
       scope: 'automation',
+      agentId: null,
       automationId,
-      workspacePath: null,
-      path: join(
-        autoMemoryDir(),
-        'automations',
-        autoMemoryAutomationKey(automationId),
-        'memory.md',
-      ),
+      path: join(garyHomeDir(), 'automations', memoryKey(automationId, 'automation'), 'memory.md'),
     };
   }
 
-  if (input.scope === 'workspace') {
-    const workspacePath = input.workspacePath?.trim() || '';
-    return {
-      scope: 'workspace',
-      automationId: null,
-      workspacePath,
-      path: join(
-        autoMemoryDir(),
-        'workspaces',
-        await autoMemoryWorkspaceKey(workspacePath),
-        'memory.md',
-      ),
-    };
-  }
-
-  return {
-    scope: 'global',
-    automationId: null,
-    workspacePath: null,
-    path: join(autoMemoryDir(), 'memory.md'),
-  };
+  throw new Error('Unsupported memory scope.');
 }
 
 export async function readMemoryDocument(

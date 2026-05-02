@@ -1,6 +1,5 @@
 use super::{
-    auto_memory_agent_dir_for_gary_home, auto_memory_agent_key,
-    auto_memory_automation_dir_for_gary_home,
+    agent_memory_dir_for_gary_home, agent_memory_key, automation_memory_dir_for_gary_home,
 };
 use std::fs;
 use tempfile::tempdir;
@@ -48,9 +47,9 @@ fn migrate_moves_legacy_garyx_state_into_gary() {
 }
 
 #[test]
-fn auto_memory_agent_key_is_stable_and_safe() {
-    let key = auto_memory_agent_key("Spec Reviewer");
-    assert_eq!(key, auto_memory_agent_key("Spec Reviewer"));
+fn agent_memory_key_is_stable_and_safe() {
+    let key = agent_memory_key("Spec Reviewer");
+    assert_eq!(key, agent_memory_key("Spec Reviewer"));
     assert_eq!(key, "spec-reviewer");
     assert!(
         key.chars()
@@ -59,31 +58,24 @@ fn auto_memory_agent_key_is_stable_and_safe() {
 }
 
 #[test]
-fn auto_memory_agent_dir_uses_agent_key() {
+fn agent_memory_dir_uses_agent_key() {
     let temp = tempdir().unwrap();
-    let dir = auto_memory_agent_dir_for_gary_home(&temp.path().join(".gary"), "Spec Reviewer");
-    assert!(dir.starts_with(temp.path().join(".gary").join("auto-memory").join("agents")));
+    let dir = agent_memory_dir_for_gary_home(&temp.path().join(".gary"), "Spec Reviewer");
+    assert!(dir.starts_with(temp.path().join(".gary").join("agents")));
     assert_eq!(
         dir.file_name().and_then(|value| value.to_str()),
-        Some(auto_memory_agent_key("Spec Reviewer").as_str())
+        Some(agent_memory_key("Spec Reviewer").as_str())
     );
 }
 
 #[test]
-fn auto_memory_automation_dir_sanitizes_id() {
+fn automation_memory_dir_sanitizes_id() {
     let temp = tempdir().unwrap();
-    let dir = auto_memory_automation_dir_for_gary_home(
+    let dir = automation_memory_dir_for_gary_home(
         &temp.path().join(".gary"),
         "automation::Morning Digest",
     );
-    assert!(
-        dir.starts_with(
-            temp.path()
-                .join(".gary")
-                .join("auto-memory")
-                .join("automations")
-        )
-    );
+    assert!(dir.starts_with(temp.path().join(".gary").join("automations")));
     assert_eq!(
         dir.file_name().and_then(|value| value.to_str()),
         Some("automation-morning-digest")

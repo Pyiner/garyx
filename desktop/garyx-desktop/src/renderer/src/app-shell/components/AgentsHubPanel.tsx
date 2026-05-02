@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   IconBolt,
   IconCheck,
+  IconDatabase,
   IconPlus,
   IconRobot,
   IconSearch,
@@ -77,6 +78,7 @@ type TeamDraft = {
 type AgentsHubPanelProps = {
   initialTab?: HubTab;
   onStartThread?: (agentOrTeamId: string) => void;
+  onOpenMemory?: (agent: DesktopCustomAgent) => void;
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
 };
 
@@ -195,6 +197,7 @@ function stopEvent(event: React.MouseEvent<HTMLElement>) {
 export function AgentsHubPanel({
   initialTab = 'agents',
   onStartThread,
+  onOpenMemory,
   onToast,
 }: AgentsHubPanelProps) {
   const { t } = useI18n();
@@ -735,6 +738,14 @@ export function AgentsHubPanel({
                           {t('Chat')}
                         </Button>
                         <Button
+                          onClick={(e) => { stopEvent(e); onOpenMemory?.(agent); }}
+                          size="sm"
+                          variant="ghost"
+                        >
+                          <IconDatabase aria-hidden size={15} stroke={1.8} />
+                          {t('Memory')}
+                        </Button>
+                        <Button
                           onClick={(e) => { stopEvent(e); openCreateTeamDialog(agent.agentId); }}
                           size="sm"
                           variant="ghost"
@@ -1023,6 +1034,19 @@ export function AgentsHubPanel({
                     variant="outline"
                   >
                     {t('Create Team')}
+                  </Button>
+                ) : null}
+                {selectedAgent ? (
+                  <Button
+                    onClick={() => {
+                      closeAgentDialog();
+                      onOpenMemory?.(selectedAgent);
+                    }}
+                    type="button"
+                    variant="outline"
+                  >
+                    <IconDatabase aria-hidden size={15} stroke={1.8} />
+                    {t('Memory')}
                   </Button>
                 ) : null}
                 {selectedAgent && !selectedAgent.builtIn ? (

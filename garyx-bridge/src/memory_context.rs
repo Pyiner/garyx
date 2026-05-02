@@ -4,9 +4,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use garyx_models::local_paths::{
-    auto_memory_agent_dir_for_gary_home, auto_memory_agent_root_file_for_gary_home,
-    auto_memory_automation_dir_for_gary_home, auto_memory_automation_root_file_for_gary_home,
-    gary_home_dir,
+    agent_memory_dir_for_gary_home, agent_memory_root_file_for_gary_home,
+    automation_memory_dir_for_gary_home, automation_memory_root_file_for_gary_home, gary_home_dir,
 };
 use serde_json::Value;
 
@@ -22,11 +21,11 @@ const MEMORY_CONTEXT_GUIDANCE: &str = concat!(
 );
 
 #[derive(Debug, Clone)]
-pub(crate) struct AutoMemoryLayout {
+pub(crate) struct MemoryContextLayout {
     gary_home: PathBuf,
 }
 
-impl AutoMemoryLayout {
+impl MemoryContextLayout {
     pub(crate) fn current() -> Self {
         Self {
             gary_home: gary_home_dir(),
@@ -41,33 +40,33 @@ impl AutoMemoryLayout {
     }
 
     fn agent_memory_dir(&self, agent_id: &str) -> PathBuf {
-        auto_memory_agent_dir_for_gary_home(&self.gary_home, agent_id)
+        agent_memory_dir_for_gary_home(&self.gary_home, agent_id)
     }
 
     fn agent_memory_file(&self, agent_id: &str) -> PathBuf {
-        auto_memory_agent_root_file_for_gary_home(&self.gary_home, agent_id)
+        agent_memory_root_file_for_gary_home(&self.gary_home, agent_id)
     }
 
     fn automation_memory_dir(&self, automation_id: &str) -> PathBuf {
-        auto_memory_automation_dir_for_gary_home(&self.gary_home, automation_id)
+        automation_memory_dir_for_gary_home(&self.gary_home, automation_id)
     }
 
     fn automation_memory_file(&self, automation_id: &str) -> PathBuf {
-        auto_memory_automation_root_file_for_gary_home(&self.gary_home, automation_id)
+        automation_memory_root_file_for_gary_home(&self.gary_home, automation_id)
     }
 }
 
-pub(crate) fn build_auto_memory_user_message(metadata: &HashMap<String, Value>) -> String {
-    build_auto_memory_user_message_with_layout(metadata, &AutoMemoryLayout::current())
+pub(crate) fn build_memory_context_user_message(metadata: &HashMap<String, Value>) -> String {
+    build_memory_context_user_message_with_layout(metadata, &MemoryContextLayout::current())
 }
 
-fn build_auto_memory_user_message_with_layout(
+fn build_memory_context_user_message_with_layout(
     metadata: &HashMap<String, Value>,
-    layout: &AutoMemoryLayout,
+    layout: &MemoryContextLayout,
 ) -> String {
     let agent_id = current_agent_id(metadata).unwrap_or_else(|| DEFAULT_AGENT_ID.to_owned());
     let automation_id = current_automation_id(metadata);
-    let _ = ensure_auto_memory_scaffold(layout, &agent_id, automation_id.as_deref());
+    let _ = ensure_memory_scaffold(layout, &agent_id, automation_id.as_deref());
 
     let mut blocks = vec![format!(
         "<instructions>\n{}</instructions>",
@@ -94,8 +93,8 @@ fn build_auto_memory_user_message_with_layout(
     )
 }
 
-fn ensure_auto_memory_scaffold(
-    layout: &AutoMemoryLayout,
+fn ensure_memory_scaffold(
+    layout: &MemoryContextLayout,
     agent_id: &str,
     automation_id: Option<&str>,
 ) -> Result<(), io::Error> {
@@ -175,7 +174,7 @@ fn trim_for_prompt(contents: &str) -> String {
         let char_len = ch.len_utf8();
         if used + char_len > MAX_PROMPT_CHARS_PER_FILE {
             result.push_str(
-                "\n\n[Auto Memory truncated for prompt; read the file directly if you need more detail.]",
+                "\n\n[Memory truncated for prompt; read the file directly if you need more detail.]",
             );
             return result;
         }
