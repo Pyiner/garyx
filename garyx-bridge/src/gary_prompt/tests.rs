@@ -47,13 +47,53 @@ fn append_runtime_context_section_renders_expected_fields() {
         "runtime_context".to_owned(),
         json!({
             "channel": "weixin",
-            "workspace_dir": "/tmp/ws"
+            "account_id": "main",
+            "from_id": "user42",
+            "is_group": false,
+            "workspace_dir": "/tmp/ws",
+            "bot_id": "weixin:main",
+            "bot": {
+                "id": "weixin:main",
+                "thread_binding_key": "user42"
+            },
+            "thread": {
+                "id": "thread::abc",
+                "label": "Prompt context",
+                "bound_bots": ["weixin:main"],
+                "channel_bindings": [{
+                    "bot_id": "weixin:main",
+                    "binding_key": "user42",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "user42",
+                    "display_label": "User 42"
+                }]
+            },
+            "task": {
+                "task_ref": "#weixin/main/3",
+                "title": "Fix context prompt",
+                "status": "in_progress",
+                "scope": "weixin/main"
+            }
         }),
     )]);
     let rendered = append_runtime_context_section(base, "thread::abc", None, &metadata);
 
     assert!(rendered.contains("Current runtime context:"));
     assert!(rendered.contains("channel: weixin"));
+    assert!(rendered.contains("account_id: main"));
+    assert!(rendered.contains("from_id: user42"));
+    assert!(rendered.contains("bot_id: weixin:main"));
     assert!(rendered.contains("thread_id: thread::abc"));
     assert!(rendered.contains("workspace_dir: /tmp/ws"));
+    assert!(rendered.contains("- bot:"));
+    assert!(rendered.contains("thread_binding_key: user42"));
+    assert!(rendered.contains("- thread:"));
+    assert!(rendered.contains("label: Prompt context"));
+    assert!(rendered.contains("bound_bots: weixin:main"));
+    assert!(rendered.contains(
+        "weixin:main binding_key=user42 delivery_target_type=chat_id delivery_target_id=user42 label=User 42"
+    ));
+    assert!(rendered.contains("- task:"));
+    assert!(rendered.contains("task_ref: #weixin/main/3"));
+    assert!(rendered.contains("status: in_progress"));
 }

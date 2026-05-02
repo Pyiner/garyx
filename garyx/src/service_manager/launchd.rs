@@ -5,8 +5,8 @@
 //! through Directory Services (`dscl`) and re-enters it in login+interactive
 //! mode so the service inherits the same PATH / env the user gets in their
 //! Terminal session — provider CLIs like `claude` installed under
-//! `~/.npm-global/bin` become discoverable without baking PATH into the
-//! plist at install time.
+//! `~/.npm-global/bin` become discoverable while the gateway binary itself is
+//! pinned to the absolute path used when the service spec is refreshed.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -61,6 +61,7 @@ impl LaunchdManager {
         let stdout_path = spec.log_dir.join("stdout.log");
         let stderr_path = spec.log_dir.join("stderr.log");
         let contents = render_launch_agent_plist(
+            &spec.binary_path,
             &spec.host,
             spec.port,
             &stdout_path,
@@ -200,6 +201,7 @@ fn xml_escape(value: &str) -> String {
 }
 
 fn render_launch_agent_plist(
+    binary_path: &Path,
     host: &str,
     port: u16,
     stdout_path: &Path,
@@ -210,12 +212,14 @@ fn render_launch_agent_plist(
     // sees in Terminal / SSH, we look up the user's login shell via
     // Directory Services and re-enter it in login+interactive mode (`-lic`)
     // so `.zshenv` / `.zprofile` / `.zshrc` are sourced and PATH picks up
-    // `~/.npm-global/bin`, cargo, pyenv, etc. `garyx` then resolves via
-    // that PATH — no absolute path baked in, so a later binary move is
-    // picked up on restart without regenerating the plist. `exec` chains
-    // keep the parent chain clean (garyx ← launchd, no sh/zsh shims).
+    // `~/.npm-global/bin`, cargo, pyenv, etc. The gateway binary path is
+    // pinned so a freshly installed binary is what launchd restarts.
+    // `exec` chains keep the parent chain clean (garyx <- launchd, no sh/zsh
+    // shims).
+    let binary_arg = super::shell_double_quoted_arg_for_nested_command(binary_path);
     let command = format!(
-        r#"exec "$(dscl . -read /Users/$(id -un) UserShell | awk '/^UserShell:/ {{print $NF}}')" -lic "exec garyx gateway run --host {host} --port {port}""#,
+        r#"exec "$(dscl . -read /Users/$(id -un) UserShell | awk '/^UserShell:/ {{print $NF}}')" -lic "exec {binary_arg} gateway run --host {host} --port {port}""#,
+        binary_arg = binary_arg,
         host = host,
         port = port,
     );
@@ -231,6 +235,7 @@ fn render_launch_agent_plist(
     } else {
         format!("  <key>EnvironmentVariables</key>\n  <dict>\n{env_entries}  </dict>\n")
     };
+    let command = xml_escape(&command);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -270,7 +275,7 @@ fn render_launch_agent_plist(
 </plist>
 "#,
         label = LAUNCHD_SERVICE_NAME,
-        command = xml_escape(&command),
+        command = command,
         stdout_path = xml_escape(&stdout_path.display().to_string()),
         stderr_path = xml_escape(&stderr_path.display().to_string()),
     )

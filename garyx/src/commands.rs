@@ -323,6 +323,12 @@ pub(crate) async fn run_gateway(
         rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, no_channels)
             .await
             .map_err(std::io::Error::other)?;
+        {
+            let wake_state = state.clone();
+            tokio::spawn(async move {
+                garyx_gateway::restart_wake::drain_pending_restart_wakes(wake_state).await;
+            });
+        }
 
         // Runtime services are started and wired by RuntimeAssembler.
         let gateway = Gateway::new(state);
@@ -1344,7 +1350,9 @@ fn build_service_spec(
 ) -> Result<crate::service_manager::ServiceSpec, Box<dyn std::error::Error>> {
     let config = load_config_or_default(config_path, ConfigRuntimeOverrides::default())?.config;
     let log_dir = crate::service_manager::log_dir_path()?;
+    let binary_path = std::env::current_exe()?;
     Ok(crate::service_manager::ServiceSpec {
+        binary_path,
         host: config.gateway.host.clone(),
         port: config.gateway.port,
         log_dir,

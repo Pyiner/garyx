@@ -227,6 +227,13 @@ async fn test_route_and_dispatch_injects_runtime_context_and_workspace() {
     assert_eq!(metadata[0]["resolved_thread_id"], result.thread_id);
     assert_eq!(metadata[0]["workspace_dir"], "/tmp/runtime-ws");
     assert_eq!(metadata[0]["runtime_context"]["channel"], "telegram");
+    assert_eq!(metadata[0]["runtime_context"]["account_id"], "bot1");
+    assert_eq!(metadata[0]["runtime_context"]["from_id"], "user42");
+    assert_eq!(metadata[0]["runtime_context"]["bot_id"], "telegram:bot1");
+    assert_eq!(
+        metadata[0]["runtime_context"]["bot"]["thread_binding_key"],
+        "user42"
+    );
     assert_eq!(
         metadata[0]["runtime_context"]["thread_id"],
         result.thread_id

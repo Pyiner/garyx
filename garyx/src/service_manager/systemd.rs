@@ -47,6 +47,7 @@ impl SystemdUserManager {
         }
         let env_file = self.env_file_path()?;
         let contents = render_unit_file(
+            &spec.binary_path,
             &spec.host,
             spec.port,
             &spec.log_dir,
@@ -242,16 +243,15 @@ impl ServiceManager for SystemdUserManager {
 ///   service starts from the minimal systemd env and can't find provider
 ///   CLIs like `claude` installed under `~/.npm-global/bin`.
 ///   `%u` is the systemd-expanded username; `exec` chains keep the parent
-///   chain clean (no leftover sh/zsh processes). `garyx` is resolved via
-///   the login shell's PATH rather than baked as an absolute path, so a
-///   later reinstall to a different location is picked up on restart
-///   without regenerating the unit.
+///   chain clean (no leftover sh/zsh processes). The gateway binary path is
+///   pinned to the current executable when the unit is refreshed.
 /// - `EnvironmentFile=-%h/.garyx/env` is optional: users can drop API keys
 ///   (e.g. `CLAUDE_CODE_OAUTH_TOKEN=...`) in that file and systemd will pick
 ///   them up. The leading `-` means "skip if missing" — no error otherwise.
 /// - Logs go to `log_dir/stdout.log` and `log_dir/stderr.log` via
 ///   `append:` so restarts don't truncate history.
 fn render_unit_file(
+    binary_path: &Path,
     host: &str,
     port: u16,
     log_dir: &Path,
@@ -261,6 +261,7 @@ fn render_unit_file(
     let workspace_line = workspace_root
         .map(|root| format!("Environment=GARYX_WORKSPACE_ROOT={}\n", root.display()))
         .unwrap_or_default();
+    let binary_arg = super::shell_double_quoted_arg_for_nested_command(binary_path);
     format!(
         "[Unit]
 Description=Garyx AI Gateway
@@ -269,7 +270,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/bin/sh -c 'exec \"$(getent passwd %u | cut -d: -f7)\" -lic \"exec garyx gateway run --host {host} --port {port}\"'
+ExecStart=/bin/sh -c 'exec \"$(getent passwd %u | cut -d: -f7)\" -lic \"exec {binary_arg} gateway run --host {host} --port {port}\"'
 Restart=on-failure
 RestartSec=5
 {workspace_line}EnvironmentFile=-{env_file}
@@ -279,6 +280,7 @@ StandardError=append:{log_dir}/stderr.log
 [Install]
 WantedBy=default.target
 ",
+        binary_arg = binary_arg,
         host = host,
         port = port,
         workspace_line = workspace_line,

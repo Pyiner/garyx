@@ -9,7 +9,8 @@ use garyx_models::provider::{
 };
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_router::{
-    NATIVE_COMMAND_TEXT_METADATA_KEY, is_thread_key, update_thread_record, workspace_dir_from_value,
+    NATIVE_COMMAND_TEXT_METADATA_KEY, build_runtime_context_metadata, is_thread_key,
+    update_thread_record, workspace_dir_from_value,
 };
 use serde_json::{Value, json};
 
@@ -179,6 +180,29 @@ pub(crate) async fn prepare_chat_request(
     .await;
 
     persist_thread_workspace_if_missing(state, &thread_id, req.workspace_path.as_deref()).await?;
+    let runtime_thread_data = state.threads.thread_store.get(&thread_id).await;
+    let runtime_workspace_dir = req
+        .workspace_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            runtime_thread_data
+                .as_ref()
+                .and_then(workspace_dir_from_value)
+        });
+    let runtime_context = build_runtime_context_metadata(
+        &thread_id,
+        runtime_thread_data.as_ref(),
+        &req.metadata,
+        &channel,
+        &req.account_id,
+        &req.from_id,
+        runtime_workspace_dir.as_deref(),
+    );
+    req.metadata
+        .insert("runtime_context".to_owned(), runtime_context);
 
     Ok(PreparedChatRequest {
         thread_id,

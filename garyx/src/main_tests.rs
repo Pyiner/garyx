@@ -68,13 +68,34 @@ fn parse_gateway_restart() {
                 GatewayAction::Restart {
                     wake,
                     wake_message,
-                    wake_workspace_dir,
+                    no_wake,
                     wake_json,
                 },
         }) => {
             assert!(wake.is_empty());
             assert_eq!(wake_message, None);
-            assert_eq!(wake_workspace_dir, None);
+            assert!(!no_wake);
+            assert!(!wake_json);
+        }
+        _ => panic!("expected Gateway restart"),
+    }
+}
+
+#[test]
+fn parse_gateway_restart_no_wake() {
+    let cli = Cli::parse_from(["garyx", "gateway", "restart", "--no-wake"]);
+    match cli.command {
+        Some(Commands::Gateway {
+            action:
+                GatewayAction::Restart {
+                    wake,
+                    no_wake,
+                    wake_json,
+                    ..
+                },
+        }) => {
+            assert!(wake.is_empty());
+            assert!(no_wake);
             assert!(!wake_json);
         }
         _ => panic!("expected Gateway restart"),
@@ -92,8 +113,6 @@ fn parse_gateway_restart_wake_thread() {
         "thread::abc",
         "--wake-message",
         "continue",
-        "--wake-workspace-dir",
-        "/tmp/garyx",
         "--wake-json",
     ]);
     match cli.command {
@@ -102,17 +121,28 @@ fn parse_gateway_restart_wake_thread() {
                 GatewayAction::Restart {
                     wake,
                     wake_message,
-                    wake_workspace_dir,
+                    no_wake,
                     wake_json,
                 },
         }) => {
             assert_eq!(wake, vec!["thread".to_owned(), "thread::abc".to_owned()]);
             assert_eq!(wake_message.as_deref(), Some("continue"));
-            assert_eq!(wake_workspace_dir.as_deref(), Some("/tmp/garyx"));
+            assert!(!no_wake);
             assert!(wake_json);
         }
         _ => panic!("expected Gateway restart"),
     }
+}
+
+#[test]
+fn gateway_restart_requires_explicit_wake_decision() {
+    assert!(super::validate_gateway_restart_wake_decision(true, false).is_ok());
+    assert!(super::validate_gateway_restart_wake_decision(false, true).is_ok());
+    let error = super::validate_gateway_restart_wake_decision(false, false)
+        .expect_err("bare restart should be blocked")
+        .to_string();
+    assert!(error.contains("--wake thread"));
+    assert!(error.contains("--no-wake"));
 }
 
 #[test]

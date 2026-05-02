@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::auto_memory::{AutoMemoryLayout, build_auto_memory_prompt_section};
 
@@ -40,17 +40,25 @@ pub(crate) fn append_runtime_context_section(
     workspace_dir: Option<&Path>,
     metadata: &HashMap<String, Value>,
 ) -> String {
+    format!(
+        "{instructions}\n\n{}",
+        render_runtime_context_section(thread_id, workspace_dir, metadata)
+    )
+}
+
+pub(crate) fn render_runtime_context_section(
+    thread_id: &str,
+    workspace_dir: Option<&Path>,
+    metadata: &HashMap<String, Value>,
+) -> String {
     let runtime = metadata
         .get("runtime_context")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
 
-    let channel = runtime
-        .get("channel")
-        .and_then(Value::as_str)
-        .or_else(|| metadata.get("channel").and_then(Value::as_str))
-        .unwrap_or("unknown");
+    let channel =
+        runtime_string(&runtime, metadata, "channel").unwrap_or_else(|| "unknown".to_owned());
     let workspace = workspace_dir
         .map(|path| path.display().to_string())
         .or_else(|| {
@@ -66,10 +74,208 @@ pub(crate) fn append_runtime_context_section(
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_else(|| "none".to_owned());
+    let resolved_thread_id =
+        runtime_string(&runtime, metadata, "thread_id").unwrap_or_else(|| thread_id.to_owned());
 
-    format!(
-        "{instructions}\n\nCurrent runtime context:\n- channel: {channel}\n- thread_id: {thread_id}\n- workspace_dir: {workspace}"
-    )
+    let mut lines = vec![
+        "Current runtime context:".to_owned(),
+        format!("- channel: {}", one_line(&channel)),
+    ];
+    push_known_line(&mut lines, &runtime, metadata, "account_id");
+    push_known_line(&mut lines, &runtime, metadata, "from_id");
+    push_known_line(&mut lines, &runtime, metadata, "is_group");
+    lines.push(format!("- thread_id: {}", one_line(&resolved_thread_id)));
+    lines.push(format!("- workspace_dir: {}", one_line(&workspace)));
+    push_known_line(&mut lines, &runtime, metadata, "bot_id");
+    push_bot_section(&mut lines, runtime.get("bot"));
+    push_thread_section(&mut lines, runtime.get("thread"));
+    push_task_section(&mut lines, runtime.get("task"));
+
+    lines.join("\n")
+}
+
+fn push_known_line(
+    lines: &mut Vec<String>,
+    runtime: &Map<String, Value>,
+    metadata: &HashMap<String, Value>,
+    key: &str,
+) {
+    if let Some(value) = runtime_string(runtime, metadata, key) {
+        lines.push(format!("- {key}: {}", one_line(&value)));
+    }
+}
+
+fn runtime_string(
+    runtime: &Map<String, Value>,
+    metadata: &HashMap<String, Value>,
+    key: &str,
+) -> Option<String> {
+    runtime
+        .get(key)
+        .and_then(scalar_string)
+        .or_else(|| metadata.get(key).and_then(scalar_string))
+}
+
+fn push_bot_section(lines: &mut Vec<String>, value: Option<&Value>) {
+    let Some(bot) = value.and_then(Value::as_object) else {
+        return;
+    };
+    if bot.is_empty() {
+        return;
+    }
+    lines.push("- bot:".to_owned());
+    for key in [
+        "id",
+        "channel",
+        "account_id",
+        "thread_binding_key",
+        "chat_id",
+        "display_label",
+        "delivery_target_type",
+        "delivery_target_id",
+        "delivery_thread_id",
+        "is_group",
+    ] {
+        push_nested_line(lines, bot, key, 2);
+    }
+}
+
+fn push_thread_section(lines: &mut Vec<String>, value: Option<&Value>) {
+    let Some(thread) = value.and_then(Value::as_object) else {
+        return;
+    };
+    if thread.is_empty() {
+        return;
+    }
+    lines.push("- thread:".to_owned());
+    for key in [
+        "id",
+        "label",
+        "kind",
+        "agent_id",
+        "provider_type",
+        "channel",
+        "account_id",
+        "from_id",
+        "is_group",
+        "workspace_dir",
+    ] {
+        push_nested_line(lines, thread, key, 2);
+    }
+    if let Some(bound_bots) = thread.get("bound_bots").and_then(Value::as_array)
+        && !bound_bots.is_empty()
+    {
+        let bots = bound_bots
+            .iter()
+            .filter_map(scalar_string)
+            .map(|value| one_line(&value))
+            .collect::<Vec<_>>()
+            .join(", ");
+        if !bots.is_empty() {
+            lines.push(format!("  - bound_bots: {bots}"));
+        }
+    }
+    if let Some(bindings) = thread.get("channel_bindings").and_then(Value::as_array)
+        && !bindings.is_empty()
+    {
+        lines.push("  - channel_bindings:".to_owned());
+        for binding in bindings.iter().filter_map(Value::as_object).take(8) {
+            if let Some(summary) = binding_summary(binding) {
+                lines.push(format!("    - {summary}"));
+            }
+        }
+        if bindings.len() > 8 {
+            lines.push(format!("    - ... {} more", bindings.len() - 8));
+        }
+    }
+}
+
+fn push_task_section(lines: &mut Vec<String>, value: Option<&Value>) {
+    let Some(task) = value.and_then(Value::as_object) else {
+        return;
+    };
+    if task.is_empty() {
+        return;
+    }
+    lines.push("- task:".to_owned());
+    for key in [
+        "task_ref",
+        "title",
+        "status",
+        "scope",
+        "number",
+        "assignee",
+        "creator",
+        "updated_at",
+        "updated_by",
+    ] {
+        push_nested_line(lines, task, key, 2);
+    }
+}
+
+fn push_nested_line(
+    lines: &mut Vec<String>,
+    object: &Map<String, Value>,
+    key: &str,
+    indent: usize,
+) {
+    if let Some(value) = object.get(key).and_then(display_value) {
+        lines.push(format!(
+            "{}- {key}: {}",
+            " ".repeat(indent),
+            one_line(&value)
+        ));
+    }
+}
+
+fn binding_summary(binding: &Map<String, Value>) -> Option<String> {
+    let bot = binding.get("bot_id").and_then(scalar_string).or_else(|| {
+        let channel = binding.get("channel").and_then(scalar_string)?;
+        let account_id = binding.get("account_id").and_then(scalar_string)?;
+        Some(format!("{channel}:{account_id}"))
+    })?;
+    let mut parts = vec![one_line(&bot)];
+    for (label, key) in [
+        ("binding_key", "binding_key"),
+        ("chat_id", "chat_id"),
+        ("delivery_target_type", "delivery_target_type"),
+        ("delivery_target_id", "delivery_target_id"),
+        ("label", "display_label"),
+    ] {
+        if let Some(value) = binding.get(key).and_then(scalar_string) {
+            parts.push(format!("{label}={}", one_line(&value)));
+        }
+    }
+    Some(parts.join(" "))
+}
+
+fn display_value(value: &Value) -> Option<String> {
+    scalar_string(value).or_else(|| compact_json(value))
+}
+
+fn scalar_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        }
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn compact_json(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::Array(items) if items.is_empty() => None,
+        Value::Object(items) if items.is_empty() => None,
+        _ => serde_json::to_string(value).ok(),
+    }
+}
+
+fn one_line(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn compose_gary_instructions_with_layout(

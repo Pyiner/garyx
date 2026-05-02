@@ -146,7 +146,28 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
                 "account_id": "main",
                 "from_id": "api-user",
                 "messages": [],
-                "channel_bindings": []
+                "workspace_dir": "/repo",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "bot1",
+                    "binding_key": "api-user",
+                    "chat_id": "chat-1",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "chat-1",
+                    "display_label": "API User"
+                }],
+                "task": {
+                    "schema_version": 1,
+                    "scope": { "channel": "api", "account_id": "main" },
+                    "number": 4,
+                    "title": "Prompt metadata",
+                    "status": "todo",
+                    "creator": { "kind": "human", "user_id": "api-user" },
+                    "created_at": "2026-05-02T00:00:00Z",
+                    "updated_at": "2026-05-02T00:00:00Z",
+                    "updated_by": { "kind": "agent", "agent_id": "spec-review" },
+                    "events": []
+                }
             }),
         )
         .await;
@@ -195,4 +216,13 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
             .and_then(Value::as_str),
         Some("Spec Review")
     );
+    let runtime_context = prepared
+        .metadata
+        .get("runtime_context")
+        .expect("runtime context");
+    assert_eq!(runtime_context["thread_id"], "thread::agent-bound");
+    assert_eq!(runtime_context["bot_id"], "api:main");
+    assert_eq!(runtime_context["thread"]["bound_bots"][0], "telegram:bot1");
+    assert_eq!(runtime_context["task"]["task_ref"], "#api/main/4");
+    assert_eq!(runtime_context["task"]["status"], "todo");
 }

@@ -723,7 +723,13 @@ fn test_build_thread_start_params_renders_runtime_context_from_metadata() {
         &HashMap::from([(
             "runtime_context".to_owned(),
             json!({
-                "channel": "macapp"
+                "channel": "macapp",
+                "account_id": "main",
+                "bot_id": "macapp:main",
+                "task": {
+                    "task_ref": "#macapp/main/9",
+                    "status": "todo"
+                }
             }),
         )]),
     );
@@ -733,6 +739,10 @@ fn test_build_thread_start_params_renders_runtime_context_from_metadata() {
         .and_then(Value::as_str)
         .unwrap_or_default();
     assert!(developer_instructions.contains("channel: macapp"));
+    assert!(developer_instructions.contains("account_id: main"));
+    assert!(developer_instructions.contains("bot_id: macapp:main"));
+    assert!(developer_instructions.contains("task_ref: #macapp/main/9"));
+    assert!(developer_instructions.contains("status: todo"));
     assert!(developer_instructions.contains("thread_id: thread::ctx"));
     assert!(developer_instructions.contains("workspace_dir: /tmp/ws"));
 }

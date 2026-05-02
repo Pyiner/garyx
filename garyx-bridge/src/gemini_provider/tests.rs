@@ -49,16 +49,25 @@ fn build_prompt_blocks_prefixes_instructions_only_for_fresh_sessions() {
             data: "abc".to_owned(),
             media_type: "image/png".to_owned(),
         }]),
-        metadata: HashMap::from([("channel".to_owned(), json!("telegram"))]),
+        metadata: HashMap::from([(
+            "runtime_context".to_owned(),
+            json!({
+                "channel": "telegram",
+                "account_id": "bot1",
+                "bot_id": "telegram:bot1",
+                "task": {
+                    "task_ref": "#telegram/bot1/2",
+                    "status": "in_progress"
+                }
+            }),
+        )]),
     };
     let fresh = build_prompt_blocks(&options, None, true);
     let resumed = build_prompt_blocks(&options, None, false);
-    assert!(
-        fresh[0]["text"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("<system_instructions>")
-    );
+    let fresh_text = fresh[0]["text"].as_str().unwrap_or_default();
+    assert!(fresh_text.contains("<system_instructions>"));
+    assert!(fresh_text.contains("bot_id: telegram:bot1"));
+    assert!(fresh_text.contains("task_ref: #telegram/bot1/2"));
     assert_eq!(resumed[0]["text"], "hello");
     assert_eq!(fresh[1]["type"], "image");
 }

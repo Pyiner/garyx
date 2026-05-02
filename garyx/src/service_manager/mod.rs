@@ -21,6 +21,8 @@ pub(crate) mod systemd;
 /// install and supervise.
 #[derive(Debug, Clone)]
 pub(crate) struct ServiceSpec {
+    /// Absolute path to the garyx binary the service should execute.
+    pub binary_path: PathBuf,
     /// Interface the gateway should bind to (e.g. "0.0.0.0").
     pub host: String,
     /// TCP port for the gateway.
@@ -104,6 +106,22 @@ pub(crate) fn log_dir_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
 pub(crate) fn port_is_open(port: u16) -> bool {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
+}
+
+/// Quote a path so it can be embedded as one argument inside a shell command
+/// that is itself wrapped in double quotes.
+pub(crate) fn shell_double_quoted_arg_for_nested_command(path: &Path) -> String {
+    let mut escaped = String::new();
+    for ch in path.display().to_string().chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '$' => escaped.push_str("\\$"),
+            '`' => escaped.push_str("\\`"),
+            _ => escaped.push(ch),
+        }
+    }
+    format!(r#"\"{escaped}\""#)
 }
 
 /// Poll `port_is_open` until it returns true or the deadline expires.

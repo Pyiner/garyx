@@ -17,7 +17,9 @@ use serde_json::Value;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::gary_prompt::{append_runtime_context_section, compose_gary_instructions};
+use crate::gary_prompt::{
+    append_runtime_context_section, compose_gary_instructions, render_runtime_context_section,
+};
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
@@ -585,39 +587,47 @@ impl ClaudeCliProvider {
             .filter(|value| !value.is_empty())
             .unwrap_or("Garyx custom agent");
 
-        let (agent, agents, system_prompt) = if let Some(agent_id) = session_agent_id {
-            // Custom agent: use the agent's own system_prompt directly
-            // as the --agents prompt. No Garyx base instructions, no --system-prompt.
-            let agent_prompt = runtime_system_prompt.unwrap_or("").to_owned();
-            let description = format!("Garyx custom agent: {session_agent_name}");
-            (
-                Some(agent_id.to_owned()),
-                HashMap::from([(
-                    agent_id.to_owned(),
-                    ClaudeAgentDefinition {
-                        description,
-                        prompt: agent_prompt,
-                    },
-                )]),
-                None,
-            )
-        } else {
-            // Default Garyx: compose full instructions with --system-prompt
-            let merged_instructions = append_runtime_context_section(
-                compose_gary_instructions(
-                    runtime_system_prompt,
+        let (agent, agents, system_prompt, append_system_prompt) =
+            if let Some(agent_id) = session_agent_id {
+                // Custom agent: use the agent's own system_prompt directly
+                // as the --agents prompt. Runtime context is appended via
+                // --append-system-prompt so the agent keeps its persona while
+                // still seeing Garyx thread/task/bot metadata.
+                let agent_prompt = runtime_system_prompt.unwrap_or("").to_owned();
+                let description = format!("Garyx custom agent: {session_agent_name}");
+                (
+                    Some(agent_id.to_owned()),
+                    HashMap::from([(
+                        agent_id.to_owned(),
+                        ClaudeAgentDefinition {
+                            description,
+                            prompt: agent_prompt,
+                        },
+                    )]),
+                    None,
+                    Some(render_runtime_context_section(
+                        &options.thread_id,
+                        cwd.as_deref(),
+                        &options.metadata,
+                    )),
+                )
+            } else {
+                // Default Garyx: compose full instructions with --system-prompt
+                let merged_instructions = append_runtime_context_section(
+                    compose_gary_instructions(
+                        runtime_system_prompt,
+                        cwd.as_deref(),
+                        options
+                            .metadata
+                            .get("automation_id")
+                            .and_then(|v| v.as_str()),
+                    ),
+                    &options.thread_id,
                     cwd.as_deref(),
-                    options
-                        .metadata
-                        .get("automation_id")
-                        .and_then(|v| v.as_str()),
-                ),
-                &options.thread_id,
-                cwd.as_deref(),
-                &options.metadata,
-            );
-            (None, HashMap::new(), Some(merged_instructions))
-        };
+                    &options.metadata,
+                );
+                (None, HashMap::new(), Some(merged_instructions), None)
+            };
         let mut env = self.config.env.clone();
         env.extend(metadata_string_map(&options.metadata, "desktop_claude_env"));
 
@@ -640,6 +650,7 @@ impl ClaudeCliProvider {
             agent,
             agents,
             system_prompt,
+            append_system_prompt,
             mcp_servers,
             permission_mode,
             resume: session_id.map(String::from),

@@ -4,6 +4,7 @@ pub mod memory_store;
 pub mod message_ledger;
 pub mod message_routing;
 pub mod router;
+pub mod runtime_context;
 pub mod scrub;
 pub mod store;
 pub mod task_counter;
@@ -72,6 +73,7 @@ pub use router::{
     NATIVE_COMMAND_TEXT_METADATA_KEY, ThreadCreator, ThreadMessageRequest,
     command_catalog_for_config, is_native_command_text, reserved_command_names,
 };
+pub use runtime_context::build_runtime_context_metadata;
 pub use scrub::{cleanup_legacy_team_runs_dir, scrub_legacy_team_fields};
 pub use store::{ThreadStore, ThreadStoreError};
 pub use task_counter::{

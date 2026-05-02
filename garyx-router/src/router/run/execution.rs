@@ -113,11 +113,10 @@ impl MessageRouter {
             );
         }
 
-        let thread_workspace_dir = self
-            .threads
-            .get(&thread_id)
-            .await
-            .and_then(|value| crate::workspace_dir_from_value(&value));
+        let thread_record = self.threads.get(&thread_id).await;
+        let thread_workspace_dir = thread_record
+            .as_ref()
+            .and_then(crate::workspace_dir_from_value);
 
         dispatch_metadata.insert(
             "resolved_thread_id".to_owned(),
@@ -131,11 +130,15 @@ impl MessageRouter {
         }
         dispatch_metadata.insert(
             "runtime_context".to_owned(),
-            json!({
-                "channel": context.channel.clone(),
-                "thread_id": thread_id.clone(),
-                "workspace_dir": thread_workspace_dir.clone(),
-            }),
+            crate::build_runtime_context_metadata(
+                &thread_id,
+                thread_record.as_ref(),
+                &dispatch_metadata,
+                &context.channel,
+                &context.account_id,
+                &context.from_id,
+                thread_workspace_dir.as_deref(),
+            ),
         );
         let requested_provider = dispatch_metadata
             .get("requested_provider_type")

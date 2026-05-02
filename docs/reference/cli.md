@@ -22,7 +22,7 @@ command with `--help` for the full flag list and arg descriptions.
 | --- | --- |
 | `garyx gateway run` | Run the gateway in the foreground (blocks). |
 | `garyx gateway install` | Register the managed service (launchd/systemd) and start it. Safe to re-run. |
-| `garyx gateway start` / `stop` / `restart` | Control the managed service. |
+| `garyx gateway start` / `stop` / `restart` | Control the managed service. `restart` requires `--wake ...` or `--no-wake`. |
 | `garyx gateway uninstall` | Remove the managed unit / plist file. |
 | `garyx gateway reload-config` | Reload config without restart. |
 | `garyx gateway token` | Ensure a gateway auth token exists; print it. |
@@ -34,6 +34,12 @@ to take effect.
 `garyx gateway restart --wake <thread|task|bot> <target> --wake-message "..."`
 restarts the managed gateway and, after the service is healthy again, sends the
 wake message through the same target resolution used by `garyx thread send`.
+The wake target is the only routing input; workspace is resolved from the target
+thread/task/bot binding inside the gateway.
+
+Bare `garyx gateway restart` is blocked because it can interrupt an active
+streaming thread without waking it again. Use `--wake` for normal restarts, or
+`garyx gateway restart --no-wake` when you intentionally want only a restart.
 
 See [Service manager](/reference/service-manager) for what `install` actually
 writes to disk.

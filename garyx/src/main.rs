@@ -1,6 +1,7 @@
 use clap::{CommandFactory, Parser};
 use garyx_models::local_paths::migrate_legacy_homes;
 use garyx_router::is_thread_key;
+use serde_json::json;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod channel_plugin_host;
@@ -144,6 +145,20 @@ fn resolve_gateway_restart_wake_destination(
     .map(Some)
 }
 
+fn validate_gateway_restart_wake_decision(has_wake: bool, no_wake: bool) -> Result<(), String> {
+    if has_wake || no_wake {
+        return Ok(());
+    }
+    Err("gateway restart requires an explicit wake decision.\n\
+Use one of:\n\
+  garyx gateway restart --wake thread <thread_id> --wake-message \"...\"\n\
+  garyx gateway restart --wake task <task_ref> --wake-message \"...\"\n\
+  garyx gateway restart --wake bot <channel:account_id> --wake-message \"...\"\n\
+If you intentionally want only a restart, run:\n\
+  garyx gateway restart --no-wake"
+        .to_owned())
+}
+
 fn trim_optional(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_owned())
@@ -217,51 +232,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             GatewayAction::Restart {
                 wake,
                 wake_message,
-                wake_workspace_dir,
+                no_wake,
                 wake_json,
             } => {
                 let wake_destination =
                     resolve_gateway_restart_wake_destination(wake, wake_message)?;
-                cmd_gateway_restart(config_path).await?;
-                if let Some(destination) = wake_destination {
-                    match destination.target {
-                        ThreadSendTarget::Thread(thread_id) => {
-                            cmd_thread_send(
-                                config_path,
-                                thread_id,
-                                destination.message_parts.join(" "),
-                                wake_workspace_dir,
-                                300,
-                                wake_json,
-                            )
-                            .await
-                        }
-                        ThreadSendTarget::Task(task_ref) => {
-                            cmd_thread_send_to_task(
-                                config_path,
-                                task_ref,
-                                destination.message_parts.join(" "),
-                                wake_workspace_dir,
-                                300,
-                                wake_json,
-                            )
-                            .await
-                        }
-                        ThreadSendTarget::Bot(bot) => {
-                            cmd_thread_send_to_bot(
-                                config_path,
-                                bot,
-                                destination.message_parts.join(" "),
-                                wake_workspace_dir,
-                                300,
-                                wake_json,
-                            )
-                            .await
-                        }
-                    }
-                } else {
-                    Ok(())
+                if let Err(message) =
+                    validate_gateway_restart_wake_decision(wake_destination.is_some(), no_wake)
+                {
+                    eprintln!("{message}");
+                    std::process::exit(2);
                 }
+                if let Some(destination) = wake_destination.as_ref() {
+                    let (kind, target) = match &destination.target {
+                        ThreadSendTarget::Thread(thread_id) => ("thread", thread_id.as_str()),
+                        ThreadSendTarget::Task(task_ref) => ("task", task_ref.as_str()),
+                        ThreadSendTarget::Bot(bot) => ("bot", bot.as_str()),
+                    };
+                    let message = destination.message_parts.join(" ");
+                    let path = garyx_gateway::restart_wake::queue_pending_restart_wake(
+                        kind, target, &message,
+                    )?;
+                    if wake_json {
+                        println!(
+                            "{}",
+                            serde_json::to_string(&json!({
+                                "type": "restart_wake_queued",
+                                "kind": kind,
+                                "target": target,
+                                "path": path.display().to_string(),
+                            }))?
+                        );
+                    } else {
+                        println!("Queued restart wake: {}", path.display());
+                    }
+                }
+                cmd_gateway_restart(config_path).await?;
+                Ok(())
             }
             GatewayAction::Stop => cmd_gateway_stop().await,
             GatewayAction::ReloadConfig => cmd_gateway_reload_config(config_path).await,

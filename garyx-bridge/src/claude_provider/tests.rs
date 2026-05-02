@@ -320,6 +320,18 @@ fn test_build_sdk_options_uses_claude_session_agent_for_custom_agent() {
                 "system_prompt".to_owned(),
                 Value::String("Review specs carefully.".to_owned()),
             ),
+            (
+                "runtime_context".to_owned(),
+                serde_json::json!({
+                    "channel": "api",
+                    "account_id": "main",
+                    "bot_id": "api:main",
+                    "task": {
+                        "task_ref": "#api/main/12",
+                        "status": "todo"
+                    }
+                }),
+            ),
         ]),
     };
 
@@ -327,6 +339,10 @@ fn test_build_sdk_options_uses_claude_session_agent_for_custom_agent() {
 
     assert_eq!(sdk_opts.agent.as_deref(), Some("spec-review"));
     assert!(sdk_opts.system_prompt.is_none());
+    let append_system_prompt = sdk_opts.append_system_prompt.as_deref().unwrap_or_default();
+    assert!(append_system_prompt.contains("Current runtime context:"));
+    assert!(append_system_prompt.contains("bot_id: api:main"));
+    assert!(append_system_prompt.contains("task_ref: #api/main/12"));
     let definition = sdk_opts.agents.get("spec-review").expect("session agent");
     assert_eq!(definition.description, "Garyx custom agent: Spec Review");
     assert!(definition.prompt.contains("Review specs carefully."));
@@ -593,7 +609,13 @@ fn test_build_sdk_options_runtime_context_from_metadata() {
         metadata: HashMap::from([(
             "runtime_context".to_owned(),
             serde_json::json!({
-                "channel": "weixin"
+                "channel": "weixin",
+                "account_id": "main",
+                "bot_id": "weixin:main",
+                "task": {
+                    "task_ref": "#weixin/main/5",
+                    "status": "in_review"
+                }
             }),
         )]),
     };
@@ -601,6 +623,10 @@ fn test_build_sdk_options_runtime_context_from_metadata() {
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     let system_prompt = sdk_opts.system_prompt.unwrap_or_default();
     assert!(system_prompt.contains("channel: weixin"));
+    assert!(system_prompt.contains("account_id: main"));
+    assert!(system_prompt.contains("bot_id: weixin:main"));
+    assert!(system_prompt.contains("task_ref: #weixin/main/5"));
+    assert!(system_prompt.contains("status: in_review"));
     assert!(system_prompt.contains("thread_id: thread::ctx"));
     assert!(system_prompt.contains(&format!("workspace_dir: {workspace_dir}")));
 }
