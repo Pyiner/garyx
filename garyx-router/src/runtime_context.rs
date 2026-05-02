@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(context["bot"]["thread_binding_key"], "user42");
         assert_eq!(context["thread"]["label"], "Prompt work");
         assert_eq!(context["thread"]["bound_bots"][0], "telegram:bot1");
-        assert_eq!(context["task"]["task_ref"], "#telegram/bot1/7");
+        assert_eq!(context["task"]["task_ref"], "#TASK-7");
         assert_eq!(context["task"]["status"], "in_progress");
     }
 }

@@ -142,6 +142,8 @@ fn gateway_restart_requires_explicit_wake_decision() {
     let error = super::validate_gateway_restart_wake_decision(false, false)
         .expect_err("bare restart should be blocked")
         .to_string();
+    assert!(error.contains("Agent safety"));
+    assert!(error.contains("Do not run a bare restart from agent work"));
     assert!(error.contains("--wake thread"));
     assert!(error.contains("--no-wake"));
 }
@@ -154,7 +156,7 @@ fn parse_gateway_restart_wake_task() {
         "restart",
         "--wake",
         "task",
-        "#telegram/main/1",
+        "#TASK-1",
         "--wake-message",
         "status?",
     ]);
@@ -164,7 +166,7 @@ fn parse_gateway_restart_wake_task() {
                 wake, wake_message, ..
             },
         }) => {
-            assert_eq!(wake, vec!["task".to_owned(), "#telegram/main/1".to_owned()]);
+            assert_eq!(wake, vec!["task".to_owned(), "#TASK-1".to_owned()]);
             assert_eq!(wake_message.as_deref(), Some("status?"));
         }
         _ => panic!("expected Gateway restart"),
@@ -794,14 +796,7 @@ fn parse_thread_send_bot_target() {
 
 #[test]
 fn parse_thread_send_task_target() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "thread",
-        "send",
-        "task",
-        "#telegram/main/1",
-        "status?",
-    ]);
+    let cli = Cli::parse_from(["garyx", "thread", "send", "task", "#TASK-1", "status?"]);
     match cli.command {
         Some(Commands::Thread {
             action:
@@ -816,7 +811,7 @@ fn parse_thread_send_task_target() {
                 },
         }) => {
             assert_eq!(kind.as_deref(), Some("task"));
-            assert_eq!(target.as_deref(), Some("#telegram/main/1"));
+            assert_eq!(target.as_deref(), Some("#TASK-1"));
             assert_eq!(message, vec!["status?".to_owned()]);
             assert_eq!(bot, None);
             assert_eq!(workspace_dir, None);
@@ -856,6 +851,7 @@ fn parse_task_create_runtime_options() {
         "garyx",
         "task",
         "create",
+        "--scope",
         "telegram/main",
         "--title",
         "Investigate",
@@ -884,7 +880,7 @@ fn parse_task_create_runtime_options() {
                     json,
                 },
         }) => {
-            assert_eq!(scope, "telegram/main");
+            assert_eq!(scope.as_deref(), Some("telegram/main"));
             assert_eq!(title.as_deref(), Some("Investigate"));
             assert_eq!(body.as_deref(), Some("Check logs"));
             assert_eq!(assignee.as_deref(), Some("agent:reviewer"));

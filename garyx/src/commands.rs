@@ -2690,7 +2690,7 @@ async fn cmd_thread_send_start(
 
 pub(crate) async fn cmd_task_list(
     config_path: &str,
-    scope: &str,
+    scope: Option<&str>,
     status: Option<&str>,
     assignee: Option<&str>,
     include_done: bool,
@@ -2699,10 +2699,12 @@ pub(crate) async fn cmd_task_list(
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut params = vec![
-        ("scope".to_owned(), normalize_scope_query(scope)?),
         ("limit".to_owned(), limit.clamp(1, 200).to_string()),
         ("offset".to_owned(), offset.to_string()),
     ];
+    if let Some(scope) = scope {
+        params.push(("scope".to_owned(), normalize_scope_query(scope)?));
+    }
     if let Some(status) = status {
         params.push(("status".to_owned(), normalize_task_status(status)?));
     }
@@ -2757,7 +2759,7 @@ pub(crate) async fn cmd_task_get(
 
 pub(crate) async fn cmd_task_create(
     config_path: &str,
-    scope: &str,
+    scope: Option<&str>,
     title: Option<String>,
     body: Option<String>,
     assignee: Option<&str>,
@@ -2774,22 +2776,20 @@ pub(crate) async fn cmd_task_create(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let gateway = gateway_endpoint(config_path)?;
-    let payload = post_gateway_json_as_cli_actor(
-        &gateway,
-        "/api/tasks",
-        &json!({
-            "scope": scope_payload(scope)?,
-            "title": title,
-            "body": body,
-            "assignee": assignee,
-            "start": start,
-            "runtime": {
-                "agent_id": agent_id,
-                "workspace_dir": workspace_dir,
-            },
-        }),
-    )
-    .await?;
+    let mut request = json!({
+        "title": title,
+        "body": body,
+        "assignee": assignee,
+        "start": start,
+        "runtime": {
+            "agent_id": agent_id,
+            "workspace_dir": workspace_dir,
+        },
+    });
+    if let Some(scope) = scope {
+        request["scope"] = scope_payload(scope)?;
+    }
+    let payload = post_gateway_json_as_cli_actor(&gateway, "/api/tasks", &request).await?;
     if json_output {
         return print_pretty_json(&payload);
     }
@@ -2839,8 +2839,7 @@ pub(crate) async fn cmd_task_claim(
         .transpose()?
         .unwrap_or_else(cli_actor_payload);
     let assign_path = format!("/api/tasks/{encoded_ref}/assign");
-    let status_path = format!("/api/tasks/{encoded_ref}/status");
-    patch_gateway_json_as_cli_actor(
+    let payload = patch_gateway_json_as_cli_actor(
         &gateway,
         &assign_path,
         &json!({
@@ -2848,22 +2847,6 @@ pub(crate) async fn cmd_task_claim(
         }),
     )
     .await?;
-    let payload = patch_gateway_json_as_cli_actor(
-        &gateway,
-        &status_path,
-        &json!({
-            "to": "in_progress",
-            "note": Value::Null,
-            "force": false,
-        }),
-    )
-    .await
-    .map_err(|error| {
-        format!(
-            "assigned to {} but status update to in_progress failed: {error}",
-            format_principal(&assignee)
-        )
-    })?;
     if json_output {
         return print_pretty_json(&payload);
     }
@@ -3094,20 +3077,29 @@ fn principal_payload(principal: &str) -> Result<Value, Box<dyn std::error::Error
 }
 
 fn cli_actor_payload() -> Value {
+    if let Some(actor) = env_nonempty("GARYX_ACTOR") {
+        return principal_payload(&actor)
+            .unwrap_or_else(|_| json!({ "kind": "human", "user_id": cli_actor_user_id() }));
+    }
+    if let Some(agent_id) = env_nonempty("GARYX_AGENT_ID") {
+        return json!({ "kind": "agent", "agent_id": agent_id });
+    }
     json!({ "kind": "human", "user_id": cli_actor_user_id() })
 }
 
 fn cli_actor_user_id() -> String {
-    let user_id = std::env::var("GARYX_USER")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "owner".to_owned());
-    user_id
+    env_nonempty("GARYX_USER").unwrap_or_else(|| "owner".to_owned())
 }
 
 fn cli_actor_header_value() -> String {
-    format!("human:{}", cli_actor_user_id())
+    format_principal(&cli_actor_payload())
+}
+
+fn env_nonempty(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn normalize_task_status(status: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -3172,6 +3164,18 @@ fn print_task_summary(value: &Value) {
     println!("Status: {status}");
     println!("Scope: {scope_label}");
     println!("Assignee: {}", format_principal(assignee));
+    if let Some(dispatch) = value.get("dispatch").filter(|dispatch| {
+        dispatch
+            .get("queued")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }) {
+        let run_id = dispatch
+            .get("run_id")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        println!("Dispatch: queued ({run_id})");
+    }
     if thread_id != "-" {
         println!("Thread: {thread_id}");
     }

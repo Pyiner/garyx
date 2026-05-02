@@ -327,7 +327,7 @@ fn test_build_sdk_options_uses_claude_session_agent_for_custom_agent() {
                     "account_id": "main",
                     "bot_id": "api:main",
                     "task": {
-                        "task_ref": "#api/main/12",
+                        "task_ref": "#TASK-12",
                         "status": "todo"
                     }
                 }),
@@ -339,10 +339,19 @@ fn test_build_sdk_options_uses_claude_session_agent_for_custom_agent() {
 
     assert_eq!(sdk_opts.agent.as_deref(), Some("spec-review"));
     assert!(sdk_opts.system_prompt.is_none());
-    let append_system_prompt = sdk_opts.append_system_prompt.as_deref().unwrap_or_default();
-    assert!(append_system_prompt.contains("Current runtime context:"));
-    assert!(append_system_prompt.contains("bot_id: api:main"));
-    assert!(append_system_prompt.contains("task_ref: #api/main/12"));
+    assert!(sdk_opts.append_system_prompt.is_none());
+    assert_eq!(
+        sdk_opts.env.get("GARYX_AGENT_ID").map(String::as_str),
+        Some("spec-review")
+    );
+    assert_eq!(
+        sdk_opts.env.get("GARYX_ACTOR").map(String::as_str),
+        Some("agent:spec-review")
+    );
+    assert_eq!(
+        sdk_opts.env.get("GARYX_TASK_REF").map(String::as_str),
+        Some("#TASK-12")
+    );
     let definition = sdk_opts.agents.get("spec-review").expect("session agent");
     assert_eq!(definition.description, "Garyx custom agent: Spec Review");
     assert!(definition.prompt.contains("Review specs carefully."));
@@ -574,8 +583,8 @@ fn test_build_sdk_options_with_system_prompt() {
     assert!(system_prompt.contains("Garyx has a built-in Auto Memory system."));
     assert!(system_prompt.contains("Additional runtime instructions:"));
     assert!(system_prompt.contains("You are a helpful bot."));
-    assert!(system_prompt.contains("Current runtime context:"));
-    assert!(system_prompt.contains("thread_id: test"));
+    assert!(!system_prompt.contains("Current runtime context:"));
+    assert!(!system_prompt.contains("thread_id: test"));
 }
 
 #[test]
@@ -594,11 +603,12 @@ fn test_build_sdk_options_injects_gary_prompt_by_default() {
     assert!(system_prompt.starts_with(GARY_BASE_INSTRUCTIONS.trim_end()));
     assert!(system_prompt.contains("Garyx has a built-in Auto Memory system."));
     assert!(system_prompt.contains("~/.garyx/auto-memory/memory.md"));
-    assert!(system_prompt.contains("Current runtime context:"));
+    assert!(system_prompt.contains("Task workflow:"));
+    assert!(!system_prompt.contains("Current runtime context:"));
 }
 
 #[test]
-fn test_build_sdk_options_runtime_context_from_metadata() {
+fn test_build_sdk_options_exports_task_cli_env_from_metadata() {
     let provider = make_provider();
     let workspace_dir = std::env::temp_dir().to_string_lossy().to_string();
     let opts = ProviderRunOptions {
@@ -612,9 +622,14 @@ fn test_build_sdk_options_runtime_context_from_metadata() {
                 "channel": "weixin",
                 "account_id": "main",
                 "bot_id": "weixin:main",
+                "thread_id": "thread::ctx",
+                "thread": {
+                    "agent_id": "codex"
+                },
                 "task": {
-                    "task_ref": "#weixin/main/5",
-                    "status": "in_review"
+                    "task_ref": "#TASK-5",
+                    "status": "in_review",
+                    "scope": "weixin/main"
                 }
             }),
         )]),
@@ -622,13 +637,26 @@ fn test_build_sdk_options_runtime_context_from_metadata() {
 
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     let system_prompt = sdk_opts.system_prompt.unwrap_or_default();
-    assert!(system_prompt.contains("channel: weixin"));
-    assert!(system_prompt.contains("account_id: main"));
-    assert!(system_prompt.contains("bot_id: weixin:main"));
-    assert!(system_prompt.contains("task_ref: #weixin/main/5"));
-    assert!(system_prompt.contains("status: in_review"));
-    assert!(system_prompt.contains("thread_id: thread::ctx"));
-    assert!(system_prompt.contains(&format!("workspace_dir: {workspace_dir}")));
+    assert!(system_prompt.contains("Task workflow:"));
+    assert!(!system_prompt.contains("channel: weixin"));
+    assert!(!system_prompt.contains("task_ref: #TASK-5"));
+    assert_eq!(
+        sdk_opts.env.get("GARYX_THREAD_ID").map(String::as_str),
+        Some("thread::ctx")
+    );
+    assert_eq!(
+        sdk_opts.env.get("GARYX_AGENT_ID").map(String::as_str),
+        Some("codex")
+    );
+    assert_eq!(
+        sdk_opts.env.get("GARYX_TASK_REF").map(String::as_str),
+        Some("#TASK-5")
+    );
+    assert_eq!(
+        sdk_opts.env.get("GARYX_TASK_SCOPE").map(String::as_str),
+        Some("weixin/main")
+    );
+    assert_eq!(opts.workspace_dir.as_deref(), Some(workspace_dir.as_str()));
 }
 
 #[test]
@@ -689,6 +717,33 @@ fn test_build_user_message_input_uses_native_skill_invocation() {
 
     match build_user_message_input(&options) {
         UserInput::Text(text) => assert_eq!(text, "/proof-skill\n\nUse the skill."),
+        UserInput::Blocks(_) => panic!("expected text input"),
+    }
+}
+
+#[test]
+fn test_build_user_message_input_appends_task_suffix() {
+    let options = ProviderRunOptions {
+        thread_id: "test".to_owned(),
+        message: "继续".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([(
+            "runtime_context".to_owned(),
+            serde_json::json!({
+                "task": {
+                    "task_ref": "#TASK-8",
+                    "status": "todo",
+                    "assignee": { "kind": "agent", "agent_id": "codex" }
+                }
+            }),
+        )]),
+    };
+
+    match build_user_message_input(&options) {
+        UserInput::Text(text) => {
+            assert_eq!(text, "继续 [task #TASK-8 status=todo assignee=agent:codex]")
+        }
         UserInput::Blocks(_) => panic!("expected text input"),
     }
 }

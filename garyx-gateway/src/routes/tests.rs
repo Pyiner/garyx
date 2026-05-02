@@ -51,6 +51,31 @@ impl SlowDeleteProvider {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RecordedProviderRun {
+    thread_id: String,
+    message: String,
+    metadata: HashMap<String, Value>,
+}
+
+struct RecordingTaskProvider {
+    ready: AtomicBool,
+    runs: std::sync::Mutex<Vec<RecordedProviderRun>>,
+}
+
+impl RecordingTaskProvider {
+    fn new() -> Self {
+        Self {
+            ready: AtomicBool::new(true),
+            runs: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn runs(&self) -> Vec<RecordedProviderRun> {
+        self.runs.lock().unwrap().clone()
+    }
+}
+
 #[test]
 fn endpoint_conversation_details_marks_feishu_group_with_group_name() {
     let endpoint = garyx_router::KnownChannelEndpoint {
@@ -203,6 +228,61 @@ impl AgentLoopProvider for SlowDeleteProvider {
             .unwrap()
             .push(session_key.to_owned());
         self.clear_succeeds
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentLoopProvider for RecordingTaskProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::CodexAppServer
+    }
+
+    fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::Relaxed)
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        self.ready.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        self.ready.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        self.runs.lock().unwrap().push(RecordedProviderRun {
+            thread_id: options.thread_id.clone(),
+            message: options.message.clone(),
+            metadata: options.metadata.clone(),
+        });
+        on_chunk(StreamEvent::Delta {
+            text: "task recorded".to_owned(),
+        });
+        on_chunk(StreamEvent::Done);
+        Ok(ProviderRunResult {
+            run_id: "recording-task-run".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: "task recorded".to_owned(),
+            session_messages: vec![],
+            sdk_session_id: None,
+            actual_model: None,
+            success: true,
+            error: None,
+            input_tokens: 1,
+            output_tokens: 1,
+            cost: 0.0,
+            duration_ms: 1,
+        })
+    }
+
+    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{session_key}"))
     }
 }
 
@@ -1716,7 +1796,7 @@ async fn thread_summary_omits_team_block_for_standalone_agent_thread() {
 }
 
 #[tokio::test]
-async fn task_routes_resolve_percent_encoded_qualified_refs() {
+async fn task_routes_resolve_percent_encoded_refs() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
     config.tasks.enabled = true;
@@ -1743,7 +1823,7 @@ async fn task_routes_resolve_percent_encoded_qualified_refs() {
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
     let task_ref = payload["task_ref"].as_str().unwrap();
-    assert_eq!(task_ref, "#telegram/main/1");
+    assert!(task_ref.starts_with("#TASK-"));
 
     let request = authed_request()
         .method("GET")
@@ -1756,6 +1836,75 @@ async fn task_routes_resolve_percent_encoded_qualified_refs() {
         .await
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["task_ref"], "#telegram/main/1");
+    assert_eq!(payload["task_ref"], task_ref);
     assert_eq!(payload["task"]["title"], "Check task routing");
+}
+
+#[tokio::test]
+async fn task_create_with_agent_assignee_queues_agent_dispatch() {
+    let dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.tasks.enabled = true;
+    config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
+
+    let provider = Arc::new(RecordingTaskProvider::new());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("task-recording-provider", provider.clone())
+        .await;
+    bridge
+        .set_route("garyx", "tasks", "task-recording-provider")
+        .await;
+    bridge
+        .set_route("api", "main", "task-recording-provider")
+        .await;
+    bridge
+        .set_default_provider_key("task-recording-provider")
+        .await;
+
+    let state = AppStateBuilder::new(config)
+        .with_bridge(bridge.clone())
+        .build();
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    let router = build_router(state);
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/tasks")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "title": "Auto dispatch task",
+                "body": "Move this task to review and then done.",
+                "assignee": {"kind": "agent", "agent_id": "codex"}
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let task_ref = payload["task_ref"].as_str().unwrap();
+    assert!(task_ref.starts_with("#TASK-"));
+    assert_eq!(payload["status"], "in_progress");
+    assert_eq!(payload["dispatch"]["queued"], true);
+
+    for _ in 0..250 {
+        if !provider.runs().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let runs = provider.runs();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].thread_id, payload["thread_id"].as_str().unwrap());
+    assert!(runs[0].message.contains(task_ref));
+    assert!(runs[0].message.contains("Move this task to review"));
+    assert_eq!(runs[0].metadata["task_auto_start"], true);
 }

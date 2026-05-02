@@ -6,6 +6,7 @@ use axum::{
     routing::{post, put},
 };
 use garyx_router::file_store::thread_storage_file_name;
+use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::sync::{Arc as StdArc, Mutex};
 use tempfile::tempdir;
@@ -27,9 +28,25 @@ struct ScopedEnvVar {
 
 impl ScopedEnvVar {
     fn set_path(key: &'static str, value: &Path) -> Self {
+        Self::set_value(key, value.as_os_str())
+    }
+
+    fn set_string(key: &'static str, value: &str) -> Self {
+        Self::set_value(key, OsStr::new(value))
+    }
+
+    fn remove(key: &'static str) -> Self {
         let previous = std::env::var_os(key);
         unsafe {
-            std::env::set_var(key, value.as_os_str());
+            std::env::remove_var(key);
+        }
+        Self { key, previous }
+    }
+
+    fn set_value(key: &'static str, value: &OsStr) -> Self {
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
         }
         Self { key, previous }
     }
@@ -319,6 +336,34 @@ fn build_provider_metadata_omits_empty_values() {
         std::env::remove_var(CODEX_API_KEY_ENV);
     }
     assert!(build_provider_metadata_for_local_gateway("http://127.0.0.1:31337").is_none());
+}
+
+#[test]
+fn cli_actor_header_uses_agent_identity_from_env() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let _actor = ScopedEnvVar::remove("GARYX_ACTOR");
+    let _agent = ScopedEnvVar::set_string("GARYX_AGENT_ID", "codex");
+    let _user = ScopedEnvVar::set_string("GARYX_USER", "owner");
+
+    assert_eq!(cli_actor_header_value(), "agent:codex");
+    assert_eq!(
+        cli_actor_payload(),
+        json!({ "kind": "agent", "agent_id": "codex" })
+    );
+}
+
+#[test]
+fn cli_actor_header_prefers_explicit_actor_env() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let _actor = ScopedEnvVar::set_string("GARYX_ACTOR", "human:alice");
+    let _agent = ScopedEnvVar::set_string("GARYX_AGENT_ID", "codex");
+    let _user = ScopedEnvVar::set_string("GARYX_USER", "owner");
+
+    assert_eq!(cli_actor_header_value(), "human:alice");
+    assert_eq!(
+        cli_actor_payload(),
+        json!({ "kind": "human", "user_id": "alice" })
+    );
 }
 
 #[test]

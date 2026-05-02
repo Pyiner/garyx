@@ -18,7 +18,9 @@ use uuid::Uuid;
 #[cfg(test)]
 use garyx_models::provider::ImagePayload;
 
-use crate::gary_prompt::{append_runtime_context_section, compose_gary_instructions};
+use crate::gary_prompt::{
+    append_task_suffix_to_user_message, compose_gary_instructions, task_cli_env,
+};
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
@@ -56,6 +58,7 @@ fn resolve_runtime_gemini_env(
     metadata: &HashMap<String, Value>,
 ) -> HashMap<String, String> {
     let mut env = config.env.clone();
+    env.extend(task_cli_env(metadata));
     env.extend(metadata_string_map(metadata, "desktop_gemini_env"));
     env
 }
@@ -317,11 +320,10 @@ fn build_prompt_text_from_parts(
     include_instructions: bool,
     attachments: &[PromptAttachment],
 ) -> String {
-    let user_message = build_prompt_message_with_attachments(
-        &build_native_skill_prompt(&options.message, &options.metadata)
-            .unwrap_or_else(|| options.message.clone()),
-        attachments,
-    );
+    let message = build_native_skill_prompt(&options.message, &options.metadata)
+        .unwrap_or_else(|| options.message.clone());
+    let message = append_task_suffix_to_user_message(&message, &options.metadata);
+    let user_message = build_prompt_message_with_attachments(&message, attachments);
     if !include_instructions {
         return user_message;
     }
@@ -334,12 +336,8 @@ fn build_prompt_text_from_parts(
         .metadata
         .get("automation_id")
         .and_then(Value::as_str);
-    let instructions = append_runtime_context_section(
-        compose_gary_instructions(runtime_system_prompt, workspace_dir, automation_id),
-        &options.thread_id,
-        workspace_dir,
-        &options.metadata,
-    );
+    let instructions =
+        compose_gary_instructions(runtime_system_prompt, workspace_dir, automation_id);
 
     if user_message.trim().is_empty() {
         format!("<system_instructions>\n{instructions}\n</system_instructions>")

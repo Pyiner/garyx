@@ -2,12 +2,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use chrono::Utc;
 use garyx_models::config::{GaryxConfig, TelegramAccount, telegram_account_to_plugin_entry};
 use garyx_models::provider::{
     AgentRunRequest, ImagePayload, ProviderMessage, ProviderRunOptions, ProviderRunResult,
     ProviderType, QueuedUserInput, StreamBoundaryKind, StreamEvent,
 };
-use garyx_models::{AgentTeamProfile, CustomAgentProfile, builtin_provider_agent_profiles};
+use garyx_models::{
+    AgentTeamProfile, CustomAgentProfile, Principal, TaskScope, TaskStatus, ThreadTask,
+    builtin_provider_agent_profiles,
+};
 use garyx_router::{
     InMemoryThreadStore, ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
 };
@@ -1802,6 +1806,130 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
         final_data["provider_sdk_session_ids"]["p1"],
         "sdk-sess::tg::queued-input"
     );
+}
+
+#[tokio::test]
+async fn test_streaming_input_appends_task_suffix_for_provider_only() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(QueuedInputProvider::new());
+    let delta_sent = provider.delta_sent();
+    let follow_up_received = provider.follow_up_received();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let now = Utc::now();
+    let task = ThreadTask {
+        schema_version: 1,
+        scope: TaskScope::new("telegram", "codex_bot"),
+        number: 7,
+        title: "Verify queued task metadata".to_owned(),
+        status: TaskStatus::InProgress,
+        creator: Principal::Human {
+            user_id: "user42".to_owned(),
+        },
+        assignee: Some(Principal::Agent {
+            agent_id: "codex".to_owned(),
+        }),
+        created_at: now,
+        updated_at: now,
+        updated_by: Principal::Agent {
+            agent_id: "codex".to_owned(),
+        },
+        events: Vec::new(),
+    };
+    store
+        .set(
+            "sess::tg::queued-task",
+            json!({
+                "thread_id": "sess::tg::queued-task",
+                "channel": "telegram",
+                "account_id": "codex_bot",
+                "from_id": "user42",
+                "agent_id": "codex",
+                "task": task,
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "sess::tg::queued-task",
+                "start run",
+                "run-queued-task",
+                "telegram",
+                "codex_bot",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .expect("provider should emit the initial streamed delta");
+
+    let queued = bridge
+        .add_streaming_input("sess::tg::queued-task", "继续", None, None, None)
+        .await;
+    assert!(
+        queued.is_some(),
+        "follow-up should queue into the active task run"
+    );
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        follow_up_received.notified(),
+    )
+    .await
+    .expect("provider should receive the queued task follow-up");
+
+    provider.release_ack();
+
+    let acked_checkpoint = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let Some(data) = store.get("sess::tg::queued-task").await else {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                continue;
+            };
+            let messages = active_or_committed_messages(&data);
+            let has_raw_user = messages
+                .iter()
+                .any(|message| message["role"] == "user" && message["content"] == "继续");
+            let has_provider_suffix = messages.iter().any(|message| {
+                message["role"] == "assistant"
+                    && message["content"]
+                        == "follow-up reply: 继续 [task #TASK-7 status=in_progress assignee=agent:codex]"
+            });
+            if has_raw_user && has_provider_suffix {
+                break data;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("provider-facing queued input should include task suffix after ack");
+
+    let messages = active_or_committed_messages(&acked_checkpoint);
+    assert!(
+        !messages.iter().any(|message| message["role"] == "user"
+            && message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("[task "))),
+        "persisted user turn should keep the raw user text"
+    );
+
+    provider.release_run();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-queued-task").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("queued task run should fully complete after the provider finishes");
 }
 
 #[tokio::test]

@@ -56,7 +56,7 @@ fn build_prompt_blocks_prefixes_instructions_only_for_fresh_sessions() {
                 "account_id": "bot1",
                 "bot_id": "telegram:bot1",
                 "task": {
-                    "task_ref": "#telegram/bot1/2",
+                    "task_ref": "#TASK-2",
                     "status": "in_progress"
                 }
             }),
@@ -66,10 +66,48 @@ fn build_prompt_blocks_prefixes_instructions_only_for_fresh_sessions() {
     let resumed = build_prompt_blocks(&options, None, false);
     let fresh_text = fresh[0]["text"].as_str().unwrap_or_default();
     assert!(fresh_text.contains("<system_instructions>"));
-    assert!(fresh_text.contains("bot_id: telegram:bot1"));
-    assert!(fresh_text.contains("task_ref: #telegram/bot1/2"));
-    assert_eq!(resumed[0]["text"], "hello");
+    assert!(fresh_text.contains("Task workflow:"));
+    assert!(!fresh_text.contains("bot_id: telegram:bot1"));
+    assert!(fresh_text.contains("hello [task #TASK-2 status=in_progress]"));
+    assert_eq!(
+        resumed[0]["text"],
+        "hello [task #TASK-2 status=in_progress]"
+    );
     assert_eq!(fresh[1]["type"], "image");
+}
+
+#[test]
+fn resolve_runtime_gemini_env_exports_task_cli_env() {
+    let config = GeminiCliConfig::default();
+    let metadata = HashMap::from([
+        ("agent_id".to_owned(), json!("gemini")),
+        (
+            "runtime_context".to_owned(),
+            json!({
+                "thread_id": "thread::gemini-task",
+                "task": {
+                    "task_ref": "#TASK-5",
+                    "status": "in_review",
+                    "scope": "telegram/gemini_bot"
+                }
+            }),
+        ),
+    ]);
+
+    let env = resolve_runtime_gemini_env(&config, &metadata);
+
+    assert_eq!(
+        env.get("GARYX_THREAD_ID").map(String::as_str),
+        Some("thread::gemini-task")
+    );
+    assert_eq!(
+        env.get("GARYX_ACTOR").map(String::as_str),
+        Some("agent:gemini")
+    );
+    assert_eq!(
+        env.get("GARYX_TASK_REF").map(String::as_str),
+        Some("#TASK-5")
+    );
 }
 
 #[test]

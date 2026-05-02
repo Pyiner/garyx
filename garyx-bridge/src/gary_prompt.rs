@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::auto_memory::{AutoMemoryLayout, build_auto_memory_prompt_section};
 
@@ -19,6 +19,14 @@ pub(crate) const GARY_BASE_INSTRUCTIONS: &str = concat!(
     "- When changing MCP servers, edit the Garyx source config instead of only editing downstream synced copies.\n",
     "- If the `gary-self-evolution` skill is available, use it for adding or updating your own Skills and MCP servers.\n",
     "- When asked to extend your own capabilities, update the relevant files directly, keep changes durable, and validate the result with a focused real test.\n",
+    "\n",
+    "Task workflow:\n",
+    "- Garyx has one human user plus multiple agent principals. Agent principals are written as `agent:<agent_id>`; the human user is written as `human:<user_id>`.\n",
+    "- In task threads, user messages may end with a live task snapshot like `[task #TASK-12 status=in_progress assignee=agent:reviewer]`. Treat that suffix as the current task state for this turn.\n",
+    "- Assigned tasks are already started; do not manually move a task to in_progress just because it has been assigned to you.\n",
+    "- Use the `garyx task` CLI for task state changes: `garyx task update <task_ref> --status in_review`, `garyx task update <task_ref> --status done`, `garyx task claim <task_ref>` for unassigned work, or `garyx task release <task_ref>`.\n",
+    "- Do not use Garyx MCP task tools for normal task state changes; the CLI is the task control path for agents.\n",
+    "- If you restart the managed gateway while working as an agent, you must queue a wake before restarting so this thread can resume: `garyx gateway restart --wake thread <thread_id> --wake-message \"continue\"`. Use `--no-wake` only when the user explicitly wants a restart with no agent continuation.\n",
 );
 
 pub(crate) fn compose_gary_instructions(
@@ -34,223 +42,95 @@ pub(crate) fn compose_gary_instructions(
     )
 }
 
-pub(crate) fn append_runtime_context_section(
-    instructions: String,
-    thread_id: &str,
-    workspace_dir: Option<&Path>,
+pub(crate) fn append_task_suffix_to_user_message(
+    message: &str,
     metadata: &HashMap<String, Value>,
 ) -> String {
-    format!(
-        "{instructions}\n\n{}",
-        render_runtime_context_section(thread_id, workspace_dir, metadata)
-    )
+    let Some(suffix) = task_suffix(metadata) else {
+        return message.to_owned();
+    };
+    let message = message.trim_end();
+    if message.is_empty() {
+        suffix
+    } else {
+        format!("{message} {suffix}")
+    }
 }
 
-pub(crate) fn render_runtime_context_section(
-    thread_id: &str,
-    workspace_dir: Option<&Path>,
-    metadata: &HashMap<String, Value>,
-) -> String {
-    let runtime = metadata
-        .get("runtime_context")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-
-    let channel =
-        runtime_string(&runtime, metadata, "channel").unwrap_or_else(|| "unknown".to_owned());
-    let workspace = workspace_dir
-        .map(|path| path.display().to_string())
+pub(crate) fn task_cli_env(metadata: &HashMap<String, Value>) -> HashMap<String, String> {
+    let Some(runtime) = metadata.get("runtime_context").and_then(Value::as_object) else {
+        return HashMap::new();
+    };
+    let mut env = HashMap::new();
+    if let Some(thread_id) = runtime.get("thread_id").and_then(scalar_string) {
+        env.insert("GARYX_THREAD_ID".to_owned(), thread_id);
+    }
+    let agent_id = metadata
+        .get("agent_id")
+        .and_then(scalar_string)
         .or_else(|| {
             runtime
-                .get("workspace_dir")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .or_else(|| {
-            metadata
-                .get("workspace_dir")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| "none".to_owned());
-    let resolved_thread_id =
-        runtime_string(&runtime, metadata, "thread_id").unwrap_or_else(|| thread_id.to_owned());
-
-    let mut lines = vec![
-        "Current runtime context:".to_owned(),
-        format!("- channel: {}", one_line(&channel)),
-    ];
-    push_known_line(&mut lines, &runtime, metadata, "account_id");
-    push_known_line(&mut lines, &runtime, metadata, "from_id");
-    push_known_line(&mut lines, &runtime, metadata, "is_group");
-    lines.push(format!("- thread_id: {}", one_line(&resolved_thread_id)));
-    lines.push(format!("- workspace_dir: {}", one_line(&workspace)));
-    push_known_line(&mut lines, &runtime, metadata, "bot_id");
-    push_bot_section(&mut lines, runtime.get("bot"));
-    push_thread_section(&mut lines, runtime.get("thread"));
-    push_task_section(&mut lines, runtime.get("task"));
-
-    lines.join("\n")
-}
-
-fn push_known_line(
-    lines: &mut Vec<String>,
-    runtime: &Map<String, Value>,
-    metadata: &HashMap<String, Value>,
-    key: &str,
-) {
-    if let Some(value) = runtime_string(runtime, metadata, key) {
-        lines.push(format!("- {key}: {}", one_line(&value)));
+                .get("thread")
+                .and_then(Value::as_object)
+                .and_then(|thread| thread.get("agent_id"))
+                .and_then(scalar_string)
+        });
+    if let Some(agent_id) = agent_id {
+        env.insert("GARYX_AGENT_ID".to_owned(), agent_id.clone());
+        env.insert("GARYX_ACTOR".to_owned(), format!("agent:{agent_id}"));
     }
-}
-
-fn runtime_string(
-    runtime: &Map<String, Value>,
-    metadata: &HashMap<String, Value>,
-    key: &str,
-) -> Option<String> {
-    runtime
-        .get(key)
-        .and_then(scalar_string)
-        .or_else(|| metadata.get(key).and_then(scalar_string))
-}
-
-fn push_bot_section(lines: &mut Vec<String>, value: Option<&Value>) {
-    let Some(bot) = value.and_then(Value::as_object) else {
-        return;
-    };
-    if bot.is_empty() {
-        return;
-    }
-    lines.push("- bot:".to_owned());
-    for key in [
-        "id",
-        "channel",
-        "account_id",
-        "thread_binding_key",
-        "chat_id",
-        "display_label",
-        "delivery_target_type",
-        "delivery_target_id",
-        "delivery_thread_id",
-        "is_group",
-    ] {
-        push_nested_line(lines, bot, key, 2);
-    }
-}
-
-fn push_thread_section(lines: &mut Vec<String>, value: Option<&Value>) {
-    let Some(thread) = value.and_then(Value::as_object) else {
-        return;
-    };
-    if thread.is_empty() {
-        return;
-    }
-    lines.push("- thread:".to_owned());
-    for key in [
-        "id",
-        "label",
-        "kind",
-        "agent_id",
-        "provider_type",
-        "channel",
-        "account_id",
-        "from_id",
-        "is_group",
-        "workspace_dir",
-    ] {
-        push_nested_line(lines, thread, key, 2);
-    }
-    if let Some(bound_bots) = thread.get("bound_bots").and_then(Value::as_array)
-        && !bound_bots.is_empty()
-    {
-        let bots = bound_bots
-            .iter()
-            .filter_map(scalar_string)
-            .map(|value| one_line(&value))
-            .collect::<Vec<_>>()
-            .join(", ");
-        if !bots.is_empty() {
-            lines.push(format!("  - bound_bots: {bots}"));
+    if let Some(task) = runtime.get("task").and_then(Value::as_object) {
+        if let Some(task_ref) = task.get("task_ref").and_then(scalar_string) {
+            env.insert("GARYX_TASK_REF".to_owned(), task_ref);
+        }
+        if let Some(scope) = task.get("scope").and_then(scalar_string) {
+            env.insert("GARYX_TASK_SCOPE".to_owned(), scope);
+        }
+        if let Some(status) = task.get("status").and_then(scalar_string) {
+            env.insert("GARYX_TASK_STATUS".to_owned(), status);
         }
     }
-    if let Some(bindings) = thread.get("channel_bindings").and_then(Value::as_array)
-        && !bindings.is_empty()
-    {
-        lines.push("  - channel_bindings:".to_owned());
-        for binding in bindings.iter().filter_map(Value::as_object).take(8) {
-            if let Some(summary) = binding_summary(binding) {
-                lines.push(format!("    - {summary}"));
-            }
-        }
-        if bindings.len() > 8 {
-            lines.push(format!("    - ... {} more", bindings.len() - 8));
-        }
-    }
+    env
 }
 
-fn push_task_section(lines: &mut Vec<String>, value: Option<&Value>) {
-    let Some(task) = value.and_then(Value::as_object) else {
-        return;
-    };
-    if task.is_empty() {
-        return;
-    }
-    lines.push("- task:".to_owned());
-    for key in [
-        "task_ref",
-        "title",
-        "status",
-        "scope",
-        "number",
-        "assignee",
-        "creator",
-        "updated_at",
-        "updated_by",
-    ] {
-        push_nested_line(lines, task, key, 2);
-    }
-}
-
-fn push_nested_line(
-    lines: &mut Vec<String>,
-    object: &Map<String, Value>,
-    key: &str,
-    indent: usize,
-) {
-    if let Some(value) = object.get(key).and_then(display_value) {
-        lines.push(format!(
-            "{}- {key}: {}",
-            " ".repeat(indent),
-            one_line(&value)
-        ));
-    }
-}
-
-fn binding_summary(binding: &Map<String, Value>) -> Option<String> {
-    let bot = binding.get("bot_id").and_then(scalar_string).or_else(|| {
-        let channel = binding.get("channel").and_then(scalar_string)?;
-        let account_id = binding.get("account_id").and_then(scalar_string)?;
-        Some(format!("{channel}:{account_id}"))
+fn task_suffix(metadata: &HashMap<String, Value>) -> Option<String> {
+    let runtime = metadata.get("runtime_context").and_then(Value::as_object)?;
+    let task = runtime.get("task").and_then(Value::as_object)?;
+    let task_ref = task.get("task_ref").and_then(scalar_string).or_else(|| {
+        task.get("number")
+            .and_then(scalar_string)
+            .map(|number| format!("#{number}"))
     })?;
-    let mut parts = vec![one_line(&bot)];
-    for (label, key) in [
-        ("binding_key", "binding_key"),
-        ("chat_id", "chat_id"),
-        ("delivery_target_type", "delivery_target_type"),
-        ("delivery_target_id", "delivery_target_id"),
-        ("label", "display_label"),
-    ] {
-        if let Some(value) = binding.get(key).and_then(scalar_string) {
-            parts.push(format!("{label}={}", one_line(&value)));
-        }
+    let status = task.get("status").and_then(scalar_string)?;
+
+    let mut suffix = format!("[task {} status={}", one_line(&task_ref), one_line(&status));
+    if let Some(assignee) = task.get("assignee").and_then(principal_label) {
+        suffix.push_str(&format!(" assignee={}", one_line(&assignee)));
     }
-    Some(parts.join(" "))
+    suffix.push(']');
+    Some(suffix)
 }
 
-fn display_value(value: &Value) -> Option<String> {
-    scalar_string(value).or_else(|| compact_json(value))
+fn principal_label(value: &Value) -> Option<String> {
+    if let Some(label) = scalar_string(value) {
+        return Some(label);
+    }
+    let principal = value.as_object()?;
+    match principal
+        .get("kind")
+        .or_else(|| principal.get("type"))
+        .and_then(Value::as_str)?
+    {
+        "human" => principal
+            .get("user_id")
+            .and_then(scalar_string)
+            .map(|value| format!("human:{value}")),
+        "agent" => principal
+            .get("agent_id")
+            .and_then(scalar_string)
+            .map(|value| format!("agent:{value}")),
+        other => Some(other.to_owned()),
+    }
 }
 
 fn scalar_string(value: &Value) -> Option<String> {
@@ -262,15 +142,6 @@ fn scalar_string(value: &Value) -> Option<String> {
         Value::Number(value) => Some(value.to_string()),
         Value::Bool(value) => Some(value.to_string()),
         _ => None,
-    }
-}
-
-fn compact_json(value: &Value) -> Option<String> {
-    match value {
-        Value::Null => None,
-        Value::Array(items) if items.is_empty() => None,
-        Value::Object(items) if items.is_empty() => None,
-        _ => serde_json::to_string(value).ok(),
     }
 }
 

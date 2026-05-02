@@ -150,11 +150,12 @@ fn validate_gateway_restart_wake_decision(has_wake: bool, no_wake: bool) -> Resu
         return Ok(());
     }
     Err("gateway restart requires an explicit wake decision.\n\
+Agent safety: when you restart the gateway from an agent thread, queue a wake so the new gateway resumes the same thread after restart. Do not run a bare restart from agent work.\n\
 Use one of:\n\
   garyx gateway restart --wake thread <thread_id> --wake-message \"...\"\n\
   garyx gateway restart --wake task <task_ref> --wake-message \"...\"\n\
   garyx gateway restart --wake bot <channel:account_id> --wake-message \"...\"\n\
-If you intentionally want only a restart, run:\n\
+If you intentionally want no continuation, run:\n\
   garyx gateway restart --no-wake"
         .to_owned())
 }
@@ -719,7 +720,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 cmd_task_list(
                     config_path,
-                    &scope,
+                    scope.as_deref(),
                     status.as_deref(),
                     assignee.as_deref(),
                     include_done,
@@ -742,7 +743,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 cmd_task_create(
                     config_path,
-                    &scope,
+                    scope.as_deref(),
                     title,
                     body,
                     assignee.as_deref(),

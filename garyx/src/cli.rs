@@ -224,6 +224,9 @@ pub(crate) enum GatewayAction {
     /// Start the already-installed managed gateway service
     Start,
     /// Restart the managed gateway service (refreshes the unit / plist file first)
+    #[command(
+        long_about = "Restart the managed gateway service and refresh its unit/plist first.\n\nAgent safety: if you are running inside an agent thread, do not use a bare restart. Queue a wake so the new gateway can resume this same thread after the service comes back:\n  garyx gateway restart --wake thread <thread_id> --wake-message \"continue\"\n\nUse --no-wake only when you intentionally want the gateway to restart without resuming any agent thread."
+    )]
     Restart {
         /// Wake a target after restart: `thread <thread_id>`, `task <task_ref>`, or `bot <channel:account_id>`
         #[arg(
@@ -237,7 +240,7 @@ pub(crate) enum GatewayAction {
         /// Message to send to the wake target after the gateway is healthy
         #[arg(long, value_name = "MESSAGE")]
         wake_message: Option<String>,
-        /// Confirm an intentional restart without waking any target
+        /// Intentionally restart without resuming any thread; agents should only use this when no continuation is needed
         #[arg(long = "no-wake")]
         no_wake: bool,
         /// Output raw JSON events for the wake run
@@ -819,7 +822,7 @@ pub(crate) enum ThreadAction {
     /// Send a message into an internal thread and stream the response
     #[command(
         override_usage = "garyx thread send <thread|task|bot> <target> [message]...",
-        long_about = "Send a message into an internal Garyx thread and stream the agent response.\n\nTargets:\n  thread <thread_id>              Send to a canonical thread id\n  task <task_ref>                 Resolve a task to its backing thread\n  bot <channel:account_id>        Resolve the bot's bound main thread inside the gateway\n\nExamples:\n  garyx thread send thread thread::abc \"hello\"\n  garyx thread send task '#telegram/main/1' \"status?\"\n  garyx thread send bot telegram:main \"continue\"\n\nFor compatibility, `garyx thread send <thread_id> [message]...` is still accepted."
+        long_about = "Send a message into an internal Garyx thread and stream the agent response.\n\nTargets:\n  thread <thread_id>              Send to a canonical thread id\n  task <task_ref>                 Resolve a task to its backing thread\n  bot <channel:account_id>        Resolve the bot's bound main thread inside the gateway\n\nExamples:\n  garyx thread send thread thread::abc \"hello\"\n  garyx thread send task '#TASK-1' \"status?\"\n  garyx thread send bot telegram:main \"continue\"\n\nFor compatibility, `garyx thread send <thread_id> [message]...` is still accepted."
     )]
     Send {
         /// Destination kind: thread, task, or bot
@@ -862,10 +865,10 @@ pub(crate) enum ThreadAction {
 
 #[derive(Subcommand)]
 pub(crate) enum TaskAction {
-    /// List tasks in a channel/account scope
+    /// List tasks
     List {
         #[arg(long)]
-        scope: String,
+        scope: Option<String>,
         #[arg(long)]
         status: Option<String>,
         #[arg(long)]
@@ -887,7 +890,8 @@ pub(crate) enum TaskAction {
     },
     /// Create a new task thread
     Create {
-        scope: String,
+        #[arg(long)]
+        scope: Option<String>,
         #[arg(long)]
         title: Option<String>,
         #[arg(long)]

@@ -24,7 +24,9 @@ use garyx_models::provider::{
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::gary_prompt::{append_runtime_context_section, compose_gary_instructions};
+use crate::gary_prompt::{
+    append_task_suffix_to_user_message, compose_gary_instructions, task_cli_env,
+};
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
@@ -292,6 +294,7 @@ fn resolve_runtime_codex_env(
     metadata: &HashMap<String, Value>,
 ) -> HashMap<String, String> {
     let mut env = config.env.clone();
+    env.extend(task_cli_env(metadata));
     env.extend(metadata_string_map(metadata, "desktop_codex_env"));
     env
 }
@@ -365,12 +368,7 @@ fn build_codex_thread_config(
         compose_gary_instructions(runtime_instructions, workspace_dir, automation_id);
     thread_config.insert(
         "developer_instructions".to_owned(),
-        Value::String(append_runtime_context_section(
-            instructions,
-            thread_id,
-            workspace_dir,
-            metadata,
-        )),
+        Value::String(instructions),
     );
 
     let mut mcp_servers = match normalize_codex_mcp_servers(metadata) {
@@ -391,6 +389,7 @@ fn build_codex_thread_config(
 fn build_input_items(options: &ProviderRunOptions) -> Vec<InputItem> {
     let message = build_native_skill_prompt(&options.message, &options.metadata)
         .unwrap_or_else(|| options.message.clone());
+    let message = append_task_suffix_to_user_message(&message, &options.metadata);
     let attachments = attachments_from_metadata(&options.metadata);
     build_input_items_from_parts(
         &message,

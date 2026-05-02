@@ -18,7 +18,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::gary_prompt::{
-    append_runtime_context_section, compose_gary_instructions, render_runtime_context_section,
+    append_task_suffix_to_user_message, compose_gary_instructions, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
@@ -437,6 +437,7 @@ fn build_user_message_input(options: &ProviderRunOptions) -> UserInput {
     let attachments = attachments_from_metadata(&options.metadata);
     let message = build_native_skill_prompt(&options.message, &options.metadata)
         .unwrap_or_else(|| options.message.clone());
+    let message = append_task_suffix_to_user_message(&message, &options.metadata);
     build_user_message_input_from_parts(&message, images, &attachments)
 }
 
@@ -590,9 +591,8 @@ impl ClaudeCliProvider {
         let (agent, agents, system_prompt, append_system_prompt) =
             if let Some(agent_id) = session_agent_id {
                 // Custom agent: use the agent's own system_prompt directly
-                // as the --agents prompt. Runtime context is appended via
-                // --append-system-prompt so the agent keeps its persona while
-                // still seeing Garyx thread/task/bot metadata.
+                // as the --agents prompt. Task state is rendered into user
+                // messages so system prompts stay stable for cache reuse.
                 let agent_prompt = runtime_system_prompt.unwrap_or("").to_owned();
                 let description = format!("Garyx custom agent: {session_agent_name}");
                 (
@@ -605,30 +605,22 @@ impl ClaudeCliProvider {
                         },
                     )]),
                     None,
-                    Some(render_runtime_context_section(
-                        &options.thread_id,
-                        cwd.as_deref(),
-                        &options.metadata,
-                    )),
+                    None,
                 )
             } else {
                 // Default Garyx: compose full instructions with --system-prompt
-                let merged_instructions = append_runtime_context_section(
-                    compose_gary_instructions(
-                        runtime_system_prompt,
-                        cwd.as_deref(),
-                        options
-                            .metadata
-                            .get("automation_id")
-                            .and_then(|v| v.as_str()),
-                    ),
-                    &options.thread_id,
+                let merged_instructions = compose_gary_instructions(
+                    runtime_system_prompt,
                     cwd.as_deref(),
-                    &options.metadata,
+                    options
+                        .metadata
+                        .get("automation_id")
+                        .and_then(|v| v.as_str()),
                 );
                 (None, HashMap::new(), Some(merged_instructions), None)
             };
         let mut env = self.config.env.clone();
+        env.extend(task_cli_env(&options.metadata));
         env.extend(metadata_string_map(&options.metadata, "desktop_claude_env"));
 
         // Permission mode

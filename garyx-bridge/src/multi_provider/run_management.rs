@@ -10,13 +10,15 @@ use garyx_models::provider::{
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_router::{
-    ThreadHistoryRepository, ThreadStore, loop_enabled_from_value, loop_iteration_count_from_value,
+    ThreadHistoryRepository, ThreadStore, build_runtime_context_metadata, loop_enabled_from_value,
+    loop_iteration_count_from_value,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep};
 
+use crate::gary_prompt::append_task_suffix_to_user_message;
 use crate::provider_trait::{AgentLoopProvider, BridgeError};
 use crate::run_graph::{RunGraphState, execute_agent_run};
 
@@ -667,6 +669,47 @@ async fn queue_streaming_input_with_retry(
         "timed out waiting for active provider run to accept queued input"
     );
     false
+}
+
+async fn render_streaming_user_message_for_provider(
+    inner: &super::state::Inner,
+    thread_id: &str,
+    message: &str,
+) -> String {
+    let Some(store) = inner.thread_store.read().await.clone() else {
+        return message.to_owned();
+    };
+    let Some(record) = store.get(thread_id).await else {
+        return message.to_owned();
+    };
+    if record.get("task").is_none() {
+        return message.to_owned();
+    }
+
+    let channel = record
+        .get("channel")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let account_id = record
+        .get("account_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let from_id = record
+        .get("from_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let workspace_dir = record.get("workspace_dir").and_then(Value::as_str);
+    let runtime_context = build_runtime_context_metadata(
+        thread_id,
+        Some(&record),
+        &HashMap::new(),
+        channel,
+        account_id,
+        from_id,
+        workspace_dir,
+    );
+    let metadata = HashMap::from([("runtime_context".to_owned(), runtime_context)]);
+    append_task_suffix_to_user_message(message, &metadata)
 }
 
 async fn wait_for_thread_to_become_idle(
@@ -2137,6 +2180,9 @@ impl MultiProviderBridge {
                     "garyx-bridge",
                     &file_payloads,
                 ));
+                let provider_message =
+                    render_streaming_user_message_for_provider(&self.inner, thread_id, message)
+                        .await;
                 let pending_input = PendingUserInput {
                     id: format!("queued_input:{}", uuid::Uuid::new_v4()),
                     bridge_run_id: run_id.clone(),
@@ -2157,7 +2203,7 @@ impl MultiProviderBridge {
 
                 let provider_input = QueuedUserInput {
                     pending_input_id: Some(pending_input.id.clone()),
-                    message: message.to_owned(),
+                    message: provider_message,
                     images: if staged_attachments.is_empty() {
                         image_payloads
                     } else {

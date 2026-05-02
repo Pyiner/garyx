@@ -143,6 +143,40 @@ fn test_resolve_runtime_codex_env_keeps_blank_desktop_api_key_override() {
 }
 
 #[test]
+fn test_resolve_runtime_codex_env_exports_task_cli_env() {
+    let config = CodexAppServerConfig::default();
+    let metadata = HashMap::from([
+        ("agent_id".to_owned(), json!("codex")),
+        (
+            "runtime_context".to_owned(),
+            json!({
+                "thread_id": "thread::task",
+                "task": {
+                    "task_ref": "#TASK-4",
+                    "status": "todo",
+                    "scope": "telegram/codex_bot"
+                }
+            }),
+        ),
+    ]);
+
+    let env = resolve_runtime_codex_env(&config, &metadata);
+
+    assert_eq!(
+        env.get("GARYX_THREAD_ID").map(String::as_str),
+        Some("thread::task")
+    );
+    assert_eq!(
+        env.get("GARYX_ACTOR").map(String::as_str),
+        Some("agent:codex")
+    );
+    assert_eq!(
+        env.get("GARYX_TASK_REF").map(String::as_str),
+        Some("#TASK-4")
+    );
+}
+
+#[test]
 fn test_build_input_items_text_only() {
     let options = ProviderRunOptions {
         thread_id: "s1".to_owned(),
@@ -154,6 +188,32 @@ fn test_build_input_items_text_only() {
     let items = build_input_items(&options);
     assert_eq!(items.len(), 1);
     assert!(matches!(&items[0], InputItem::Text { text } if text == "hello world"));
+}
+
+#[test]
+fn test_build_input_items_appends_task_suffix() {
+    let options = ProviderRunOptions {
+        thread_id: "s1".to_owned(),
+        message: "继续".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([(
+            "runtime_context".to_owned(),
+            json!({
+                "task": {
+                    "task_ref": "#TASK-4",
+                    "status": "in_progress",
+                    "assignee": { "kind": "agent", "agent_id": "codex" }
+                }
+            }),
+        )]),
+    };
+    let items = build_input_items(&options);
+
+    assert_eq!(items.len(), 1);
+    assert!(
+        matches!(&items[0], InputItem::Text { text } if text == "继续 [task #TASK-4 status=in_progress assignee=agent:codex]")
+    );
 }
 
 #[test]
@@ -868,8 +928,9 @@ fn test_build_thread_start_params_injects_gary_developer_instructions() {
     assert!(developer_instructions.contains("~/.garyx/auto-memory/memory.md"));
     assert!(developer_instructions.contains("~/.garyx/skills/<skill-id>/"));
     assert!(developer_instructions.contains("~/.garyx/garyx.json"));
-    assert!(developer_instructions.contains("Current runtime context:"));
-    assert!(developer_instructions.contains("thread_id: thread::test"));
+    assert!(developer_instructions.contains("Task workflow:"));
+    assert!(!developer_instructions.contains("Current runtime context:"));
+    assert!(!developer_instructions.contains("thread_id: thread::test"));
 }
 
 #[test]
@@ -896,11 +957,11 @@ fn test_build_thread_start_params_merges_runtime_system_prompt() {
     assert!(developer_instructions.contains("You are Garyx"));
     assert!(developer_instructions.contains("Garyx has a built-in Auto Memory system."));
     assert!(developer_instructions.contains("Use concise bullets."));
-    assert!(developer_instructions.contains("Current runtime context:"));
+    assert!(!developer_instructions.contains("Current runtime context:"));
 }
 
 #[test]
-fn test_build_thread_start_params_renders_runtime_context_from_metadata() {
+fn test_build_thread_start_params_keeps_runtime_context_out_of_developer_instructions() {
     let config = CodexAppServerConfig {
         mcp_base_url: String::new(),
         ..Default::default()
@@ -917,7 +978,7 @@ fn test_build_thread_start_params_renders_runtime_context_from_metadata() {
                 "account_id": "main",
                 "bot_id": "macapp:main",
                 "task": {
-                    "task_ref": "#macapp/main/9",
+                    "task_ref": "#TASK-9",
                     "status": "todo"
                 }
             }),
@@ -928,13 +989,11 @@ fn test_build_thread_start_params_renders_runtime_context_from_metadata() {
         .get("developer_instructions")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    assert!(developer_instructions.contains("channel: macapp"));
-    assert!(developer_instructions.contains("account_id: main"));
-    assert!(developer_instructions.contains("bot_id: macapp:main"));
-    assert!(developer_instructions.contains("task_ref: #macapp/main/9"));
-    assert!(developer_instructions.contains("status: todo"));
-    assert!(developer_instructions.contains("thread_id: thread::ctx"));
-    assert!(developer_instructions.contains("workspace_dir: /tmp/ws"));
+    assert!(developer_instructions.contains("Task workflow:"));
+    assert!(!developer_instructions.contains("channel: macapp"));
+    assert!(!developer_instructions.contains("task_ref: #TASK-9"));
+    assert!(!developer_instructions.contains("thread_id: thread::ctx"));
+    assert!(!developer_instructions.contains("workspace_dir: /tmp/ws"));
 }
 
 #[test]
