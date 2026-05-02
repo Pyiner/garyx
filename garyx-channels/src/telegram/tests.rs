@@ -1440,28 +1440,25 @@ mod e2e_tests {
         }
     }
 
-    fn strip_loading_suffix(text: &str) -> &str {
-        for suffix in ["\n\n...", "\n\n..", "\n\n."] {
-            if let Some(stripped) = text.strip_suffix(suffix) {
-                return stripped;
-            }
-        }
-        if matches!(text, "." | ".." | "...") {
-            ""
-        } else {
-            text
-        }
+    fn body_text(body: &Value) -> String {
+        body["text"].as_str().unwrap_or_default().to_owned()
     }
 
-    fn text_without_loading(body: &Value) -> String {
-        body["text"]
-            .as_str()
-            .map(strip_loading_suffix)
-            .unwrap_or_default()
-            .to_owned()
+    fn looks_like_loading_indicator(text: &str) -> bool {
+        matches!(text, "." | ".." | "...")
+            || text.ends_with("\n\n...")
+            || text.ends_with("\n\n..")
+            || text.ends_with("\n\n.")
     }
 
-    fn has_loading_suffix(text: &str) -> bool {
+    fn assert_no_loading_indicator(texts: &[String]) {
+        assert!(
+            texts.iter().all(|text| !looks_like_loading_indicator(text)),
+            "Telegram streaming should not render legacy loading indicators: {texts:?}"
+        );
+    }
+
+    fn has_legacy_loading_suffix(text: &str) -> bool {
         text.ends_with("\n\n.") || text.ends_with("\n\n..") || text.ends_with("\n\n...")
     }
 
@@ -2098,11 +2095,11 @@ mod e2e_tests {
         }
     }
 
-    struct StreamingSlowLoadingProvider {
+    struct StreamingSlowProvider {
         call_count: AtomicUsize,
     }
 
-    impl StreamingSlowLoadingProvider {
+    impl StreamingSlowProvider {
         fn new() -> Self {
             Self {
                 call_count: AtomicUsize::new(0),
@@ -2251,7 +2248,7 @@ mod e2e_tests {
     }
 
     #[async_trait]
-    impl AgentLoopProvider for StreamingSlowLoadingProvider {
+    impl AgentLoopProvider for StreamingSlowProvider {
         fn provider_type(&self) -> ProviderType {
             ProviderType::ClaudeCode
         }
@@ -2280,7 +2277,7 @@ mod e2e_tests {
             tokio::time::sleep(std::time::Duration::from_millis(1600)).await;
             on_chunk(StreamEvent::Done);
             Ok(ProviderRunResult {
-                run_id: "slow-loading-run".to_owned(),
+                run_id: "slow-run".to_owned(),
                 thread_id: options.thread_id.clone(),
                 response: "thinking".to_owned(),
                 session_messages: vec![],
@@ -2624,10 +2621,10 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_streaming_loading_indicator_cycles_until_done() {
+    async fn test_e2e_streaming_does_not_append_loading_indicator() {
         let (server, capture) = setup_tg_capture_mock(false).await;
         let api_base = unique_api_base(&server);
-        let provider = Arc::new(StreamingSlowLoadingProvider::new());
+        let provider = Arc::new(StreamingSlowProvider::new());
         let bridge = make_bridge_with(provider.clone()).await;
         let router = make_router();
         let http = reqwest::Client::new();
@@ -2653,31 +2650,23 @@ mod e2e_tests {
 
         let first =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body["text"].as_str().unwrap_or_default() == "thinking\n\n."
-            })
-            .await;
-        assert_eq!(first["text"], "thinking\n\n.");
-
-        let second =
-            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body["text"].as_str().unwrap_or_default() == "thinking\n\n.."
-            })
-            .await;
-        assert_eq!(second["text"], "thinking\n\n..");
-
-        let third =
-            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body["text"].as_str().unwrap_or_default() == "thinking\n\n..."
-            })
-            .await;
-        assert_eq!(third["text"], "thinking\n\n...");
-
-        let final_body =
-            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
                 body["text"].as_str().unwrap_or_default() == "thinking"
             })
             .await;
-        assert_eq!(final_body["text"], "thinking");
+        assert_eq!(first["text"], "thinking");
+
+        tokio::time::sleep(std::time::Duration::from_millis(1800)).await;
+        let all_texts = capture
+            .send_bodies()
+            .into_iter()
+            .chain(capture.edit_bodies().into_iter())
+            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+        assert_no_loading_indicator(&all_texts);
+        assert!(
+            all_texts.iter().all(|text| text == "thinking"),
+            "slow streaming should render only real text, not loading frames: {all_texts:?}"
+        );
     }
 
     #[tokio::test]
@@ -2710,33 +2699,24 @@ mod e2e_tests {
 
         let first_placeholder =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                text_without_loading(body) == "🔧 Bash"
+                body_text(body) == "🔧 #1 Bash"
             })
             .await;
-        assert_eq!(text_without_loading(&first_placeholder), "🔧 Bash");
-        assert!(has_loading_suffix(
-            first_placeholder["text"].as_str().unwrap_or_default()
-        ));
-
-        let combined_placeholder =
-            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                text_without_loading(body) == "🔧 Bash\n🔧 Read"
-            })
-            .await;
-        assert_eq!(
-            text_without_loading(&combined_placeholder),
-            "🔧 Bash\n🔧 Read"
-        );
+        assert_eq!(body_text(&first_placeholder), "🔧 #1 Bash");
 
         let second_placeholder =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                text_without_loading(body) == "done\n\n🔧 Write"
+                body_text(body) == "🔧 #2 Read"
             })
             .await;
-        assert_eq!(
-            text_without_loading(&second_placeholder),
-            "done\n\n🔧 Write"
-        );
+        assert_eq!(body_text(&second_placeholder), "🔧 #2 Read");
+
+        let post_text_placeholder =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body_text(body) == "done\n\n🔧 #3 Write"
+            })
+            .await;
+        assert_eq!(body_text(&post_text_placeholder), "done\n\n🔧 #3 Write");
 
         let final_body =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
@@ -2752,29 +2732,30 @@ mod e2e_tests {
             .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
             .collect::<Vec<_>>();
         assert!(
-            all_texts
-                .iter()
-                .any(|text| strip_loading_suffix(text) == "🔧 Bash\n🔧 Read"),
-            "all pre-text tool placeholders should be rendered together: {all_texts:?}"
+            all_texts.iter().any(|text| text == "🔧 #1 Bash"),
+            "first tool placeholder should show sequence number: {all_texts:?}"
+        );
+        assert!(
+            all_texts.iter().any(|text| text == "🔧 #2 Read"),
+            "second tool placeholder should replace the prior tool in one line: {all_texts:?}"
         );
         assert!(
             all_texts.iter().any(|text| {
-                strip_loading_suffix(text).contains("done")
-                    && !text.contains("🔧 Bash")
-                    && !text.contains("🔧 Read")
+                text.contains("done")
+                    && !text.contains("🔧 #1 Bash")
+                    && !text.contains("🔧 #2 Read")
             }),
             "pre-text tool placeholders should be overwritten by first text: {all_texts:?}"
         );
         assert!(
-            all_texts
-                .iter()
-                .any(|text| strip_loading_suffix(text) == "done\n\n🔧 Write"),
+            all_texts.iter().any(|text| text == "done\n\n🔧 #3 Write"),
             "post-text tool placeholder should be appended to the existing Telegram message: {all_texts:?}"
         );
         assert!(
             all_texts.iter().any(|text| text == "done\nnext"),
             "post-text tool placeholder should be overwritten by later text in the same message: {all_texts:?}"
         );
+        assert_no_loading_indicator(&all_texts);
 
         let send_bodies = wait_for_json_capture_quiet_window(
             &capture.send_messages,
@@ -2900,16 +2881,34 @@ mod e2e_tests {
 
         let all_tools =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                text_without_loading(body) == "🔧 Read\n🔧 Read\n🔧 Bash"
+                body_text(body) == "🔧 #3 Bash"
             })
             .await;
-        assert_eq!(
-            text_without_loading(&all_tools),
-            "🔧 Read\n🔧 Read\n🔧 Bash"
+        assert_eq!(body_text(&all_tools), "🔧 #3 Bash");
+
+        let all_texts = capture
+            .send_bodies()
+            .into_iter()
+            .chain(capture.edit_bodies().into_iter())
+            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+        assert!(
+            all_texts.iter().any(|text| text == "🔧 #1 Read"),
+            "first tool should render as a numbered single-line placeholder: {all_texts:?}"
         );
-        assert!(has_loading_suffix(
-            all_tools["text"].as_str().unwrap_or_default()
-        ));
+        assert!(
+            all_texts.iter().any(|text| text == "🔧 #2 Read"),
+            "second tool should replace the placeholder with #2: {all_texts:?}"
+        );
+        assert!(
+            all_texts.iter().any(|text| text == "🔧 #3 Bash"),
+            "third tool should replace the placeholder with #3: {all_texts:?}"
+        );
+        assert!(
+            all_texts.iter().all(|text| text.lines().count() == 1),
+            "tool-only placeholders should not accumulate multiple lines: {all_texts:?}"
+        );
+        assert_no_loading_indicator(&all_texts);
 
         wait_for_json_capture_len(
             &capture.delete_messages,
@@ -2952,10 +2951,10 @@ mod e2e_tests {
 
         let placeholder =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                text_without_loading(body) == "🔧 Bash"
+                body_text(body) == "🔧 #1 Bash"
             })
             .await;
-        assert_eq!(text_without_loading(&placeholder), "🔧 Bash");
+        assert_eq!(body_text(&placeholder), "🔧 #1 Bash");
 
         wait_for_json_capture_len(
             &capture.delete_messages,
@@ -2984,7 +2983,7 @@ mod e2e_tests {
         let runtime_or_after_sends = send_bodies
             .iter()
             .filter_map(|body| body["text"].as_str())
-            .filter(|text| text.contains("🔧") || strip_loading_suffix(text) == "after")
+            .filter(|text| text.contains("🔧") || *text == "after")
             .collect::<Vec<_>>();
         assert_eq!(
             runtime_or_after_sends.len(),
@@ -3143,7 +3142,7 @@ mod e2e_tests {
             1,
             "assistant segment boundaries must not create extra Telegram messages"
         );
-        assert_eq!(text_without_loading(relevant_send_bodies[0]), "第一段");
+        assert_eq!(body_text(relevant_send_bodies[0]), "第一段");
         let final_text = final_body["text"].as_str().unwrap_or_default();
         assert!(final_text.contains("第一段\n\n第二段"));
     }
@@ -3225,11 +3224,10 @@ mod e2e_tests {
             std::time::Duration::from_secs(5),
             |body| {
                 body["text"].as_str().is_some_and(|text| {
-                    let stripped = strip_loading_suffix(text);
-                    !stripped.is_empty()
-                        && stripped.len() < 1000
-                        && !stripped.starts_with('a')
-                        && stripped.chars().all(|ch| matches!(ch, 'a' | 'b' | 'c'))
+                    !text.is_empty()
+                        && text.len() < 1000
+                        && !text.starts_with('a')
+                        && text.chars().all(|ch| matches!(ch, 'a' | 'b' | 'c'))
                 })
             },
         )
@@ -3237,9 +3235,7 @@ mod e2e_tests {
         let first_segment =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
                 body["text"].as_str().is_some_and(|text| {
-                    let stripped = strip_loading_suffix(text);
-                    stripped.len() == 4000
-                        && stripped.chars().all(|ch| matches!(ch, 'a' | 'b' | 'c'))
+                    text.len() == 4000 && text.chars().all(|ch| matches!(ch, 'a' | 'b' | 'c'))
                 })
             })
             .await;
@@ -3266,8 +3262,7 @@ mod e2e_tests {
             .iter()
             .filter(|body| {
                 body["text"].as_str().is_some_and(|text| {
-                    let stripped = strip_loading_suffix(text);
-                    !stripped.is_empty() && stripped.chars().all(|ch| matches!(ch, 'a' | 'b' | 'c'))
+                    !text.is_empty() && text.chars().all(|ch| matches!(ch, 'a' | 'b' | 'c'))
                 })
             })
             .collect();
@@ -3280,14 +3275,14 @@ mod e2e_tests {
         assert!(
             first_segment["text"]
                 .as_str()
-                .is_some_and(|text| strip_loading_suffix(text).len() == 4000),
+                .is_some_and(|text| text.len() == 4000),
             "rollover path should preserve a 4000-char first segment; rendered lengths={rendered_lengths:?}"
         );
         assert!(
             edit_bodies.iter().any(|body| {
                 body["text"].as_str().is_some_and(|text| {
                     text.len() == MAX_MESSAGE_LENGTH
-                        && !has_loading_suffix(text)
+                        && !has_legacy_loading_suffix(text)
                         && !text.contains("🔧")
                 })
             }),
@@ -3295,7 +3290,6 @@ mod e2e_tests {
         );
         let continuation_len = continuation_chunk["text"]
             .as_str()
-            .map(strip_loading_suffix)
             .unwrap_or_default()
             .len();
         assert!(

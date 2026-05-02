@@ -20,11 +20,10 @@ struct StreamState {
     last_rendered_text: String,
     last_edit_time: Instant,
     flush_scheduled: bool,
-    loading_tick_scheduled: bool,
-    loading_frame: usize,
     finalized: bool,
     tool_placeholder_active: bool,
-    pending_tool_names: Vec<String>,
+    active_tool_name: Option<String>,
+    tool_call_index: usize,
 }
 
 impl Default for StreamState {
@@ -35,11 +34,10 @@ impl Default for StreamState {
             last_rendered_text: String::new(),
             last_edit_time: Instant::now(),
             flush_scheduled: false,
-            loading_tick_scheduled: false,
-            loading_frame: 0,
             finalized: false,
             tool_placeholder_active: false,
-            pending_tool_names: Vec::new(),
+            active_tool_name: None,
+            tool_call_index: 0,
         }
     }
 }
@@ -61,8 +59,6 @@ struct StreamingCallbackShared {
     cfg: StreamingCallbackConfig,
     state: Mutex<StreamState>,
 }
-
-const LOADING_TICK_INTERVAL: Duration = Duration::from_millis(700);
 
 fn telegram_tool_display_name(message: &ProviderMessage) -> String {
     message
@@ -96,12 +92,8 @@ fn telegram_should_hide_tool_placeholder(message: &ProviderMessage) -> bool {
     })
 }
 
-fn render_tool_placeholder(names: &[String]) -> String {
-    names
-        .iter()
-        .map(|name| format!("🔧 {name}"))
-        .collect::<Vec<_>>()
-        .join("\n")
+fn render_tool_placeholder(index: usize, name: &str) -> String {
+    format!("🔧 #{index} {name}")
 }
 
 fn render_stream_content_text(state: &StreamState) -> String {
@@ -109,7 +101,10 @@ fn render_stream_content_text(state: &StreamState) -> String {
         return state.accumulated_text.clone();
     }
 
-    let placeholder = render_tool_placeholder(&state.pending_tool_names);
+    let Some(name) = state.active_tool_name.as_deref() else {
+        return state.accumulated_text.clone();
+    };
+    let placeholder = render_tool_placeholder(state.tool_call_index, name);
     if placeholder.trim().is_empty() {
         return state.accumulated_text.clone();
     }
@@ -125,37 +120,8 @@ fn render_stream_content_text(state: &StreamState) -> String {
     }
 }
 
-fn loading_indicator(frame: usize) -> &'static str {
-    match frame % 3 {
-        0 => ".",
-        1 => "..",
-        _ => "...",
-    }
-}
-
-fn append_loading_indicator(text: &str, frame: usize) -> String {
-    let indicator = loading_indicator(frame);
-    if text.trim().is_empty() {
-        return indicator.to_owned();
-    }
-    if text.ends_with("\n\n") {
-        format!("{text}{indicator}")
-    } else if text.ends_with('\n') {
-        format!("{text}\n{indicator}")
-    } else {
-        format!("{text}\n\n{indicator}")
-    }
-}
-
-fn render_stream_display_text(state: &StreamState, show_loading: bool) -> String {
-    let content = render_stream_content_text(state);
-    if show_loading {
-        let loading_text = append_loading_indicator(&content, state.loading_frame);
-        if loading_text.len() <= MAX_MESSAGE_LENGTH {
-            return loading_text;
-        }
-    }
-    content
+fn render_stream_display_text(state: &StreamState) -> String {
+    render_stream_content_text(state)
 }
 
 impl StreamingCallbackShared {
@@ -165,75 +131,10 @@ impl StreamingCallbackShared {
         state.last_rendered_text.clear();
         state.last_edit_time = Instant::now();
         state.flush_scheduled = false;
-        state.loading_tick_scheduled = false;
-        state.loading_frame = 0;
         state.finalized = false;
         state.tool_placeholder_active = false;
-        state.pending_tool_names.clear();
-    }
-
-    fn schedule_loading_tick(self: &Arc<Self>, state: &mut StreamState) {
-        if state.finalized || state.loading_tick_scheduled || state.message_id.is_none() {
-            return;
-        }
-        if render_stream_content_text(state).trim().is_empty() {
-            return;
-        }
-
-        state.loading_tick_scheduled = true;
-        let shared = self.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(LOADING_TICK_INTERVAL).await;
-            shared.tick_loading_indicator().await;
-        });
-    }
-
-    async fn tick_loading_indicator(self: Arc<Self>) {
-        let mut state = self.state.lock().await;
-        state.loading_tick_scheduled = false;
-
-        if state.finalized || state.message_id.is_none() {
-            return;
-        }
-        if render_stream_content_text(&state).trim().is_empty() {
-            return;
-        }
-
-        state.loading_frame = (state.loading_frame + 1) % 3;
-        let display_text = render_stream_display_text(&state, true);
-        if display_text.trim() == state.last_rendered_text.trim() {
-            self.schedule_loading_tick(&mut state);
-            return;
-        }
-
-        let Some(msg_id) = state.message_id else {
-            return;
-        };
-        match edit_message_text(
-            &self.cfg.http,
-            &self.cfg.token,
-            self.cfg.chat_id,
-            msg_id,
-            &display_text,
-            None,
-            &self.cfg.api_base,
-        )
-        .await
-        {
-            Ok(()) => {
-                state.last_rendered_text = display_text;
-                state.last_edit_time = Instant::now();
-            }
-            Err(error) => {
-                warn!(
-                    account_id = %self.cfg.account_id,
-                    error = %error,
-                    "Telegram loading indicator edit failed"
-                );
-            }
-        }
-
-        self.schedule_loading_tick(&mut state);
+        state.active_tool_name = None;
+        state.tool_call_index = 0;
     }
 
     async fn flush_pending_stream_text(self: &Arc<Self>, thread_id: &str) {
@@ -248,7 +149,7 @@ impl StreamingCallbackShared {
         if content_text.trim().is_empty() {
             return;
         }
-        let display_text = render_stream_display_text(&state, true);
+        let display_text = render_stream_display_text(&state);
         if display_text.trim() == state.last_rendered_text.trim() {
             return;
         }
@@ -257,7 +158,6 @@ impl StreamingCallbackShared {
             .roll_stream_segment_if_needed(thread_id, &mut state, &content_text)
             .await
         {
-            self.schedule_loading_tick(&mut state);
             return;
         }
 
@@ -276,7 +176,6 @@ impl StreamingCallbackShared {
                 Ok(()) => {
                     state.last_rendered_text = display_text;
                     state.last_edit_time = Instant::now();
-                    self.schedule_loading_tick(&mut state);
                 }
                 Err(e) => {
                     warn!(
@@ -448,14 +347,15 @@ impl StreamingCallbackShared {
                 .await
             {
                 state.tool_placeholder_active = false;
-                state.pending_tool_names.clear();
+                state.active_tool_name = None;
             }
         }
 
         let name = telegram_tool_display_name(&message);
-        state.pending_tool_names.push(name);
+        state.tool_call_index = state.tool_call_index.saturating_add(1);
+        state.active_tool_name = Some(name);
         state.tool_placeholder_active = true;
-        let display_text = render_stream_display_text(state, true);
+        let display_text = render_stream_display_text(state);
         if display_text.trim().is_empty() {
             return;
         }
@@ -466,7 +366,7 @@ impl StreamingCallbackShared {
                 "Telegram tool placeholder skipped because it would exceed message length"
             );
             state.tool_placeholder_active = false;
-            state.pending_tool_names.clear();
+            state.active_tool_name = None;
             return;
         }
 
@@ -487,7 +387,6 @@ impl StreamingCallbackShared {
                     state.last_edit_time = Instant::now();
                     state.flush_scheduled = false;
                     state.finalized = false;
-                    self.schedule_loading_tick(state);
                     return;
                 }
                 Err(error) => {
@@ -521,7 +420,6 @@ impl StreamingCallbackShared {
                     state.last_edit_time = Instant::now();
                     state.flush_scheduled = false;
                     state.finalized = false;
-                    self.schedule_loading_tick(state);
                 }
             }
             Err(error) => {
@@ -541,7 +439,7 @@ impl StreamingCallbackShared {
         }
 
         state.tool_placeholder_active = false;
-        state.pending_tool_names.clear();
+        state.active_tool_name = None;
         state.flush_scheduled = false;
 
         let display_text = state.accumulated_text.clone();
@@ -564,8 +462,6 @@ impl StreamingCallbackShared {
                     state.message_id = None;
                     state.last_rendered_text.clear();
                     state.last_edit_time = Instant::now();
-                    state.loading_tick_scheduled = false;
-                    state.loading_frame = 0;
                 }
                 Err(error) => {
                     warn!(
@@ -596,8 +492,6 @@ impl StreamingCallbackShared {
             Ok(()) => {
                 state.last_rendered_text = display_text;
                 state.last_edit_time = Instant::now();
-                state.loading_tick_scheduled = false;
-                state.loading_frame = 0;
             }
             Err(error) => {
                 warn!(
@@ -741,7 +635,7 @@ impl StreamingCallbackShared {
                 }
                 if state.tool_placeholder_active {
                     state.tool_placeholder_active = false;
-                    state.pending_tool_names.clear();
+                    state.active_tool_name = None;
                 }
                 state.accumulated_text =
                     crate::streaming_core::merge_stream_text(&state.accumulated_text, &text);
@@ -821,10 +715,6 @@ impl StreamingCallbackShared {
             if is_final {
                 state.finalized = true;
                 state.flush_scheduled = false;
-                state.loading_tick_scheduled = false;
-                state.loading_frame = 0;
-            } else {
-                self.schedule_loading_tick(&mut state);
             }
             if is_final {
                 if let Some(msg_id) = state.message_id {
@@ -834,7 +724,7 @@ impl StreamingCallbackShared {
             return;
         }
 
-        let display_text = render_stream_display_text(&state, !is_final);
+        let display_text = render_stream_display_text(&state);
         if let Some(msg_id) = state.message_id {
             if !is_final {
                 let now = Instant::now();
@@ -858,8 +748,6 @@ impl StreamingCallbackShared {
                 if is_final {
                     state.finalized = true;
                     state.flush_scheduled = false;
-                    state.loading_tick_scheduled = false;
-                    state.loading_frame = 0;
                     if let Some(msg_id) = state.message_id {
                         self.record_outbound_messages(thread_id, &[msg_id]).await;
                     }
@@ -882,9 +770,6 @@ impl StreamingCallbackShared {
                     state.last_rendered_text = display_text.clone();
                     state.last_edit_time = Instant::now();
                     state.flush_scheduled = false;
-                    if !is_final {
-                        self.schedule_loading_tick(&mut state);
-                    }
                 }
                 Err(e) => {
                     warn!(
@@ -915,9 +800,6 @@ impl StreamingCallbackShared {
                         state.last_rendered_text = display_text.clone();
                         state.last_edit_time = Instant::now();
                         state.flush_scheduled = false;
-                        if !is_final {
-                            self.schedule_loading_tick(&mut state);
-                        }
                     }
                 }
                 Err(e) => {
@@ -934,8 +816,6 @@ impl StreamingCallbackShared {
         if is_final {
             state.finalized = true;
             state.flush_scheduled = false;
-            state.loading_tick_scheduled = false;
-            state.loading_frame = 0;
         }
 
         if is_final {
