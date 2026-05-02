@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::{Engine as _, engine::general_purpose};
 use reqwest::Client;
 use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{error, warn};
@@ -9,7 +10,9 @@ use garyx_models::config::ReplyToMode;
 use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
 use garyx_router::MessageRouter;
 
-use super::api::{TelegramSendTarget, delete_message, edit_message_text, send_message_chunks};
+use super::api::{
+    TelegramSendTarget, delete_message, edit_message_text, send_message_chunks, send_photo,
+};
 use super::text::split_message;
 use super::{MAX_MESSAGE_LENGTH, resolve_reply_to, send_response};
 
@@ -81,19 +84,137 @@ fn telegram_tool_display_name(message: &ProviderMessage) -> String {
         .unwrap_or_else(|| "tool".to_owned())
 }
 
+fn telegram_tool_item_type(message: &ProviderMessage) -> Option<&str> {
+    message
+        .metadata
+        .get("item_type")
+        .and_then(|value| value.as_str())
+        .or_else(|| message.content.get("type").and_then(|value| value.as_str()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
 fn telegram_should_hide_tool_placeholder(message: &ProviderMessage) -> bool {
-    ["agent_id", "parent_tool_use_id"].iter().any(|key| {
+    if ["agent_id", "parent_tool_use_id"].iter().any(|key| {
         message
             .metadata
             .get(*key)
             .and_then(|value| value.as_str())
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
-    })
+    }) {
+        return true;
+    }
+
+    matches!(
+        telegram_tool_item_type(message),
+        Some(
+            "hookPrompt"
+                | "reasoning"
+                | "plan"
+                | "enteredReviewMode"
+                | "exitedReviewMode"
+                | "contextCompaction"
+        )
+    )
 }
 
 fn render_tool_placeholder(index: usize, name: &str) -> String {
     format!("🔧 #{index} {name}")
+}
+
+struct GeneratedTelegramImage {
+    bytes: Vec<u8>,
+    extension: &'static str,
+    id: String,
+}
+
+fn generated_image_extension(result: &str, content_type: Option<&str>) -> &'static str {
+    if let Some(content_type) = content_type {
+        let lower = content_type.trim().to_ascii_lowercase();
+        if lower.contains("jpeg") || lower.contains("jpg") {
+            return "jpg";
+        }
+        if lower.contains("webp") {
+            return "webp";
+        }
+        if lower.contains("gif") {
+            return "gif";
+        }
+    }
+
+    if let Some(prefix) = result
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(';').map(|(prefix, _)| prefix))
+    {
+        let lower = prefix.trim().to_ascii_lowercase();
+        if lower.contains("jpeg") || lower.contains("jpg") {
+            return "jpg";
+        }
+        if lower.contains("webp") {
+            return "webp";
+        }
+        if lower.contains("gif") {
+            return "gif";
+        }
+    }
+
+    "png"
+}
+
+fn extract_image_generation_result(message: &ProviderMessage) -> Option<GeneratedTelegramImage> {
+    if telegram_tool_item_type(message) != Some("imageGeneration") {
+        return None;
+    }
+
+    let result = message
+        .content
+        .get("result")
+        .and_then(|value| value.as_str())?;
+    let result = result.trim();
+    if result.is_empty() {
+        return None;
+    }
+
+    let encoded = result
+        .split_once(',')
+        .filter(|(prefix, _)| prefix.trim_start().starts_with("data:"))
+        .map(|(_, payload)| payload)
+        .unwrap_or(result)
+        .trim();
+    let bytes = general_purpose::STANDARD.decode(encoded).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let content_type = message
+        .content
+        .get("media_type")
+        .or_else(|| message.content.get("mime_type"))
+        .or_else(|| message.content.get("contentType"))
+        .and_then(|value| value.as_str());
+    let extension = generated_image_extension(result, content_type);
+    let id = message
+        .content
+        .get("id")
+        .and_then(|value| value.as_str())
+        .or(message.tool_use_id.as_deref())
+        .unwrap_or("image-generation")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+
+    Some(GeneratedTelegramImage {
+        bytes,
+        extension,
+        id,
+    })
 }
 
 fn render_stream_content_text(state: &StreamState) -> String {
@@ -503,6 +624,86 @@ impl StreamingCallbackShared {
         }
     }
 
+    async fn process_image_generation_result(
+        &self,
+        thread_id: &str,
+        state: &mut StreamState,
+        message: ProviderMessage,
+    ) {
+        let Some(image) = extract_image_generation_result(&message) else {
+            return;
+        };
+
+        if state.tool_placeholder_active {
+            self.clear_tool_placeholder(state).await;
+        }
+        let prior_text_msg_id = state.message_id;
+
+        let image_dir = std::env::temp_dir()
+            .join("garyx-telegram")
+            .join("generated-images");
+        if let Err(error) = tokio::fs::create_dir_all(&image_dir).await {
+            warn!(
+                account_id = %self.cfg.account_id,
+                error = %error,
+                "failed to create Telegram generated image temp dir"
+            );
+            return;
+        }
+
+        let image_path = image_dir.join(format!(
+            "{}-{}.{}",
+            image.id,
+            uuid::Uuid::new_v4(),
+            image.extension
+        ));
+        if let Err(error) = tokio::fs::write(&image_path, &image.bytes).await {
+            warn!(
+                account_id = %self.cfg.account_id,
+                path = %image_path.display(),
+                error = %error,
+                "failed to write Telegram generated image temp file"
+            );
+            return;
+        }
+
+        let send_result = send_photo(
+            TelegramSendTarget::new(
+                &self.cfg.http,
+                &self.cfg.token,
+                self.cfg.chat_id,
+                self.cfg.outbound_thread_id,
+                &self.cfg.api_base,
+            ),
+            &image_path,
+            None,
+            self.effective_reply_to(),
+        )
+        .await;
+        let _ = tokio::fs::remove_file(&image_path).await;
+
+        match send_result {
+            Ok(photo_msg_id) => {
+                let mut delivered_msg_ids = Vec::new();
+                if let Some(msg_id) = prior_text_msg_id {
+                    delivered_msg_ids.push(msg_id);
+                }
+                delivered_msg_ids.push(photo_msg_id);
+                self.record_outbound_messages(thread_id, &delivered_msg_ids)
+                    .await;
+                Self::reset_for_fresh_message(state);
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %self.cfg.account_id,
+                    chat_id = self.cfg.chat_id,
+                    error = %error,
+                    "failed to send Telegram generated image"
+                );
+            }
+        }
+    }
+
     async fn roll_stream_segment_if_needed(
         &self,
         thread_id: &str,
@@ -650,7 +851,9 @@ impl StreamingCallbackShared {
                 self.process_tool_use(thread_id, &mut state, message).await;
                 return;
             }
-            StreamEvent::ToolResult { .. } => {
+            StreamEvent::ToolResult { message } => {
+                self.process_image_generation_result(thread_id, &mut state, message)
+                    .await;
                 return;
             }
             StreamEvent::Done => true,

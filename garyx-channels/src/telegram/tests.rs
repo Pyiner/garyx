@@ -1520,6 +1520,25 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("POST"))
+            .and(path_regex(&format!(r"{api_prefix}/bot.+/sendPhoto")))
+            .respond_with({
+                let next_message_id = next_message_id.clone();
+                move |_req: &Request| {
+                    let message_id = next_message_id.fetch_add(1, Ordering::Relaxed) as i64;
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "ok": true,
+                        "result": {
+                            "message_id": message_id,
+                            "chat": {"id": 42, "type": "private"},
+                            "date": 1700000000
+                        }
+                    }))
+                }
+            })
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
             .and(path_regex(&format!(r"{api_prefix}/bot.+/editMessageText")))
             .respond_with({
                 let capture = capture.clone();
@@ -1798,6 +1817,162 @@ mod e2e_tests {
                 run_id: "stream-child-tools".to_owned(),
                 thread_id: options.thread_id.clone(),
                 response: "done".to_owned(),
+                session_messages: vec![],
+                sdk_session_id: None,
+                actual_model: None,
+                success: true,
+                error: None,
+                input_tokens: 10,
+                output_tokens: 5,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
+    struct StreamingSuppressedStructuredProvider {
+        call_count: AtomicUsize,
+    }
+
+    impl StreamingSuppressedStructuredProvider {
+        fn new() -> Self {
+            Self {
+                call_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentLoopProvider for StreamingSuppressedStructuredProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::ClaudeCode
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            for item_type in ["reasoning", "plan", "contextCompaction"] {
+                let message = garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"type": item_type, "id": item_type}),
+                    Some(format!("{item_type}-1")),
+                    Some(item_type.to_owned()),
+                )
+                .with_metadata_value("item_type", serde_json::json!(item_type));
+                on_chunk(StreamEvent::ToolUse { message });
+            }
+            on_chunk(StreamEvent::Delta {
+                text: "done".to_owned(),
+            });
+            on_chunk(StreamEvent::Done);
+            Ok(ProviderRunResult {
+                run_id: "stream-suppressed-structured".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "done".to_owned(),
+                session_messages: vec![],
+                sdk_session_id: None,
+                actual_model: None,
+                success: true,
+                error: None,
+                input_tokens: 10,
+                output_tokens: 5,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
+    struct StreamingImageGenerationProvider {
+        call_count: AtomicUsize,
+    }
+
+    impl StreamingImageGenerationProvider {
+        fn new() -> Self {
+            Self {
+                call_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentLoopProvider for StreamingImageGenerationProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::ClaudeCode
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            let tool_use = garyx_models::ProviderMessage::tool_use(
+                serde_json::json!({
+                    "type": "imageGeneration",
+                    "id": "ig-test",
+                    "status": "in_progress",
+                    "result": "",
+                }),
+                Some("ig-test".to_owned()),
+                Some("imageGeneration".to_owned()),
+            )
+            .with_metadata_value("item_type", serde_json::json!("imageGeneration"));
+            on_chunk(StreamEvent::ToolUse { message: tool_use });
+
+            let tool_result = garyx_models::ProviderMessage::tool_result(
+                serde_json::json!({
+                    "type": "imageGeneration",
+                    "id": "ig-test",
+                    "status": "completed",
+                    "result": "iVBORw0KGgo=",
+                }),
+                Some("ig-test".to_owned()),
+                Some("imageGeneration".to_owned()),
+                Some(false),
+            )
+            .with_metadata_value("item_type", serde_json::json!("imageGeneration"));
+            on_chunk(StreamEvent::ToolResult {
+                message: tool_result,
+            });
+            on_chunk(StreamEvent::Done);
+            Ok(ProviderRunResult {
+                run_id: "stream-image-generation".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: String::new(),
                 session_messages: vec![],
                 sdk_session_id: None,
                 actual_model: None,
@@ -2855,6 +3030,133 @@ mod e2e_tests {
         assert_eq!(
             relevant_sends, 1,
             "hidden child-agent tool events should not create Telegram messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_e2e_streaming_non_action_structured_items_are_suppressed() {
+        let (server, capture) = setup_tg_capture_mock(false).await;
+        let api_base = unique_api_base(&server);
+        let provider = Arc::new(StreamingSuppressedStructuredProvider::new());
+        let bridge = make_bridge_with(provider.clone()).await;
+        let router = make_router();
+        let http = reqwest::Client::new();
+
+        let account = default_account();
+        let update = TgUpdateBuilder::dm(42, "think").build();
+
+        dispatch_update(
+            &http,
+            "bot1",
+            "fake-token",
+            "garyx",
+            999,
+            &account,
+            &update,
+            &router,
+            &bridge,
+            &api_base,
+        )
+        .await;
+
+        wait_for_counter_at_least(&provider.call_count, 1).await;
+
+        let final_body =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body["text"].as_str().unwrap_or_default() == "done"
+            })
+            .await;
+        assert_eq!(final_body["text"], "done");
+
+        let all_texts = capture
+            .send_bodies()
+            .into_iter()
+            .chain(capture.edit_bodies().into_iter())
+            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+        assert!(
+            all_texts.iter().all(|text| {
+                !text.contains("🔧")
+                    && !text.contains("reasoning")
+                    && !text.contains("plan")
+                    && !text.contains("contextCompaction")
+            }),
+            "non-action structured items should stay out of Telegram placeholders: {all_texts:?}"
+        );
+
+        let relevant_sends = capture
+            .send_bodies()
+            .iter()
+            .filter(|body| body["text"].as_str().is_some_and(|text| text == "done"))
+            .count();
+        assert_eq!(
+            relevant_sends, 1,
+            "suppressed structured items should not create extra Telegram messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_e2e_streaming_image_generation_result_sends_photo() {
+        let (server, capture) = setup_tg_capture_mock(false).await;
+        let api_base = unique_api_base(&server);
+        let provider = Arc::new(StreamingImageGenerationProvider::new());
+        let bridge = make_bridge_with(provider.clone()).await;
+        let router = make_router();
+        let http = reqwest::Client::new();
+
+        let account = default_account();
+        let update = TgUpdateBuilder::dm(42, "make image").build();
+
+        dispatch_update(
+            &http,
+            "bot1",
+            "fake-token",
+            "garyx",
+            999,
+            &account,
+            &update,
+            &router,
+            &bridge,
+            &api_base,
+        )
+        .await;
+
+        wait_for_counter_at_least(&provider.call_count, 1).await;
+
+        let first_placeholder =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body_text(body) == "🔧 #1 imageGeneration"
+            })
+            .await;
+        assert_eq!(body_text(&first_placeholder), "🔧 #1 imageGeneration");
+
+        wait_for_matching_requests(&server, std::time::Duration::from_secs(5), 1, |req| {
+            req.url.path().contains("/sendPhoto")
+        })
+        .await;
+        wait_for_json_capture_len(
+            &capture.delete_messages,
+            1,
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+
+        let all_texts = capture
+            .send_bodies()
+            .into_iter()
+            .chain(capture.edit_bodies().into_iter())
+            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .collect::<Vec<_>>();
+        assert!(
+            all_texts.iter().any(|text| text == "🔧 #1 imageGeneration"),
+            "image generation should still show a runtime placeholder before the image is ready: {all_texts:?}"
+        );
+        assert!(
+            all_texts
+                .iter()
+                .filter(|text| text.contains("imageGeneration"))
+                .all(|text| text == "🔧 #1 imageGeneration"),
+            "image generation placeholder should not become a final text message: {all_texts:?}"
         );
     }
 
