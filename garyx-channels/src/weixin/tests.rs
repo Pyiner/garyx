@@ -743,6 +743,126 @@ async fn test_live_message_suppresses_generating_for_unterminated_image_ref() {
 }
 
 #[tokio::test]
+async fn test_streaming_update_consumer_user_ack_finalizes_visible_and_uses_fresh_token() {
+    let api = MockServer::start().await;
+    let account = weixin_test_account(&api, "token-stream-ack");
+    let account_id = format!("acct-{}", uuid::Uuid::new_v4());
+    let user_id = "u@im.wechat".to_owned();
+    let original_token = format!("ctx-original-{}", uuid::Uuid::new_v4());
+    let fresh_token = format!("ctx-fresh-{}", uuid::Uuid::new_v4());
+    token_send_count_reset(&original_token).await;
+    token_send_count_reset(&fresh_token).await;
+
+    Mock::given(method("POST"))
+        .and(path("/ilink/bot/sendmessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ret":0})))
+        .mount(&api)
+        .await;
+
+    // Simulate the follow-up inbound message refreshing the stored token before
+    // the active provider stream emits its UserAck boundary.
+    set_context_token(&account_id, &user_id, &fresh_token).await;
+
+    let router = Arc::new(Mutex::new(MessageRouter::new(
+        Arc::new(garyx_router::InMemoryThreadStore::new()),
+        garyx_models::config::GaryxConfig::default(),
+    )));
+    let ctx = WeixinStreamConsumerContext {
+        http: Client::new(),
+        account,
+        account_id: account_id.clone(),
+        user_id: user_id.clone(),
+        context_token: original_token.clone(),
+        router,
+        thread_id: Arc::new(std::sync::Mutex::new(String::new())),
+        typing_ticket: None,
+        running: Arc::new(AtomicBool::new(true)),
+    };
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (stream_done_tx, stream_done_rx) = oneshot::channel();
+    let final_done_flush_sent = Arc::new(AtomicBool::new(false));
+    let seen_done_event = Arc::new(AtomicBool::new(false));
+
+    tokio::spawn(run_streaming_update_consumer(
+        ctx,
+        event_rx,
+        stream_done_tx,
+        final_done_flush_sent.clone(),
+        seen_done_event.clone(),
+    ));
+
+    event_tx
+        .send(StreamEvent::Delta {
+            text: "initial reply is visible.".to_owned(),
+        })
+        .expect("send initial delta");
+    event_tx
+        .send(StreamEvent::Boundary {
+            kind: StreamBoundaryKind::UserAck,
+            pending_input_id: Some("pending-1".to_owned()),
+        })
+        .expect("send user ack");
+    event_tx
+        .send(StreamEvent::Delta {
+            text: "follow-up reply is visible.".to_owned(),
+        })
+        .expect("send follow-up delta");
+    event_tx.send(StreamEvent::Done).expect("send done");
+
+    tokio::time::timeout(Duration::from_secs(5), stream_done_rx)
+        .await
+        .expect("stream consumer timed out")
+        .expect("stream consumer dropped done sender");
+
+    assert!(seen_done_event.load(Ordering::Relaxed));
+    assert!(final_done_flush_sent.load(Ordering::Relaxed));
+
+    let requests = api.received_requests().await.expect("requests");
+    let sendmessage_requests = requests
+        .iter()
+        .filter(|req| req.url.path() == "/ilink/bot/sendmessage")
+        .collect::<Vec<_>>();
+    assert_eq!(sendmessage_requests.len(), 4);
+
+    let sent = sendmessage_requests
+        .iter()
+        .map(|req| {
+            let body: Value = serde_json::from_slice(&req.body).expect("sendmessage json body");
+            (
+                body["msg"]["client_id"].as_str().unwrap().to_owned(),
+                body["msg"]["message_state"].as_u64().unwrap(),
+                body["msg"]["context_token"].as_str().unwrap().to_owned(),
+                body["msg"]["item_list"][0]["text_item"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        sent.iter()
+            .map(|(_, state, _, _)| *state)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 1, 2]
+    );
+    assert_eq!(sent[0].0, sent[1].0);
+    assert_eq!(sent[2].0, sent[3].0);
+    assert_ne!(sent[0].0, sent[2].0);
+    assert_eq!(sent[0].2, original_token);
+    assert_eq!(sent[1].2, original_token);
+    assert_eq!(sent[2].2, fresh_token);
+    assert_eq!(sent[3].2, fresh_token);
+    assert_eq!(sent[0].3, "initial reply is visible.");
+    assert_eq!(sent[1].3, "initial reply is visible.");
+    assert_eq!(sent[2].3, "follow-up reply is visible.");
+    assert_eq!(sent[3].3, "follow-up reply is visible.");
+
+    token_send_count_reset(&original_token).await;
+    token_send_count_reset(&fresh_token).await;
+}
+
+#[tokio::test]
 async fn test_send_media_message_ret_minus_14_pauses_session() {
     let api = MockServer::start().await;
     let account = weixin_test_account(&api, "acct-media-pause:secret");

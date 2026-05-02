@@ -210,6 +210,11 @@ pub fn weixin_schema() -> Value {
                 "type": "string",
                 "default": "https://ilinkai.weixin.qq.com",
                 "description": "Weixin API base URL."
+            },
+            "streaming_update": {
+                "type": "boolean",
+                "default": true,
+                "description": "Enable in-place message updates for streamed assistant replies."
             }
         }
     })

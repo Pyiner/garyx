@@ -148,6 +148,7 @@ fn weixin_catalog(channels: &ChannelsConfig) -> SubprocessPluginCatalogEntry {
                 "token": account.token,
                 "uin": account.uin,
                 "base_url": account.base_url,
+                "streaming_update": account.streaming_update,
             }),
         })
         .collect();

@@ -1,5 +1,5 @@
 use super::*;
-use garyx_models::config::{FeishuAccount, GaryxConfig, TelegramAccount};
+use garyx_models::config::{FeishuAccount, GaryxConfig, TelegramAccount, WeixinAccount};
 
 #[test]
 fn builtin_catalog_has_one_entry_per_channel() {
@@ -162,6 +162,41 @@ fn weixin_schema_declares_required_token_uin() {
     let required = &weixin.schema["required"];
     assert_eq!(required[0], "token");
     assert_eq!(required[1], "uin");
+    assert_eq!(
+        weixin.schema["properties"]["streaming_update"]["type"],
+        "boolean"
+    );
+    assert_eq!(
+        weixin.schema["properties"]["streaming_update"]["default"],
+        true
+    );
+}
+
+#[test]
+fn weixin_account_catalog_preserves_streaming_update_flag() {
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("weixin")
+        .accounts
+        .insert(
+            "wx_main".into(),
+            garyx_models::config::weixin_account_to_plugin_entry(&WeixinAccount {
+                token: "secret".into(),
+                uin: "uin-1".into(),
+                enabled: true,
+                base_url: "https://ilinkai.weixin.qq.com".into(),
+                name: None,
+                agent_id: "claude".into(),
+                workspace_dir: None,
+                streaming_update: false,
+            }),
+        );
+
+    let catalog = builtin_channel_catalog(&config.channels);
+    let weixin = catalog.iter().find(|e| e.id == "weixin").unwrap();
+    assert_eq!(weixin.accounts.len(), 1);
+    assert_eq!(weixin.accounts[0].config["streaming_update"], false);
 }
 
 #[test]

@@ -521,6 +521,7 @@ impl PoisonReason {
 enum FinalizeReason {
     Done,
     ToolBoundary,
+    UserAck,
     #[allow(dead_code)]
     Media,
     BudgetMessage,
@@ -534,6 +535,7 @@ impl FinalizeReason {
         match self {
             Self::Done => "done",
             Self::ToolBoundary => "tool_boundary",
+            Self::UserAck => "user_ack",
             Self::Media => "media",
             Self::BudgetMessage => "budget_msg",
             Self::BudgetToken => "budget_token",
@@ -602,6 +604,14 @@ impl LiveMessage {
         self.text_visible.clear();
         self.last_sent_visible.clear();
         self.last_sent_at = None;
+        self.last_delta_at = None;
+        self.pending_media_refs.clear();
+    }
+
+    fn keep_only_sent_text_for_finish(&mut self) {
+        self.text_raw = self.last_sent_visible.clone();
+        self.text_visible = self.last_sent_visible.clone();
+        self.pending_media_refs.clear();
         self.last_delta_at = None;
     }
 
@@ -2497,13 +2507,12 @@ fn current_stream_thread_id(ctx: &WeixinStreamConsumerContext) -> String {
     }
 }
 
-async fn resolve_stream_context_token(ctx: &WeixinStreamConsumerContext) -> String {
-    let captured = ctx.context_token.trim();
-    if !captured.is_empty() {
-        return captured.to_owned();
-    }
+async fn resolve_stream_context_token(
+    ctx: &WeixinStreamConsumerContext,
+    prefer_latest: bool,
+) -> String {
     let thread_id = current_stream_thread_id(ctx);
-    get_context_token_for_thread(
+    let persisted = get_context_token_for_thread(
         &ctx.account_id,
         &ctx.user_id,
         if thread_id.is_empty() {
@@ -2513,11 +2522,30 @@ async fn resolve_stream_context_token(ctx: &WeixinStreamConsumerContext) -> Stri
         },
     )
     .await
+    .and_then(|value| {
+        let token = value.trim();
+        if token.is_empty() {
+            None
+        } else {
+            Some(token.to_owned())
+        }
+    });
+    let captured = ctx.context_token.trim();
+    if prefer_latest {
+        persisted.or_else(|| (!captured.is_empty()).then(|| captured.to_owned()))
+    } else if captured.is_empty() {
+        persisted
+    } else {
+        Some(captured.to_owned())
+    }
     .unwrap_or_default()
 }
 
-async fn open_live_message_for_context(ctx: &WeixinStreamConsumerContext) -> LiveMessage {
-    LiveMessage::open(resolve_stream_context_token(ctx).await).await
+async fn open_live_message_for_context(
+    ctx: &WeixinStreamConsumerContext,
+    prefer_latest_token: bool,
+) -> LiveMessage {
+    LiveMessage::open(resolve_stream_context_token(ctx, prefer_latest_token).await).await
 }
 
 async fn record_stream_outbound(ctx: &WeixinStreamConsumerContext, client_id: &str) {
@@ -2883,7 +2911,7 @@ async fn run_streaming_update_consumer(
     final_done_flush_sent: Arc<AtomicBool>,
     seen_done_event: Arc<AtomicBool>,
 ) {
-    let mut live = open_live_message_for_context(&ctx).await;
+    let mut live = open_live_message_for_context(&ctx, false).await;
     let mut tick = tokio::time::interval(Duration::from_millis(STREAM_UPDATE_TICK_MS));
     tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut typing_keepalive_task: Option<JoinHandle<()>> = None;
@@ -2925,7 +2953,7 @@ async fn run_streaming_update_consumer(
                                 &mut typing_active,
                                 &mut send_calls_used,
                             ).await;
-                            live = open_live_message_for_context(&ctx).await;
+                            live = open_live_message_for_context(&ctx, false).await;
                         } else if matches!(
                             send_live_generating(&ctx, &mut live, now, &mut send_calls_used).await,
                             LiveTextSendResult::Poisoned
@@ -2935,15 +2963,36 @@ async fn run_streaming_update_consumer(
                     }
                     StreamEvent::Boundary { kind, .. } => match kind {
                         StreamBoundaryKind::UserAck => {
-                            if !live.text_visible.trim().is_empty() {
-                                info!(
-                                    account_id = %ctx.account_id,
-                                    user_id = %ctx.user_id,
-                                    dropped_len = live.text_visible.len(),
-                                    "dropping buffered weixin stream text on user_ack boundary"
-                                );
+                            if matches!(live.state, LiveMessageState::Updating)
+                                && !live.last_sent_visible.trim().is_empty()
+                            {
+                                live.keep_only_sent_text_for_finish();
+                                any_text_output_sent |= close_live_for_boundary(
+                                    &ctx,
+                                    &mut live,
+                                    FinalizeReason::UserAck,
+                                    &mut sent_media_refs,
+                                    &mut poisoned_texts,
+                                    &mut typing_keepalive_task,
+                                    &mut typing_active,
+                                    &mut send_calls_used,
+                                ).await;
+                                live = open_live_message_for_context(&ctx, true).await;
+                            } else {
+                                if !live.text_visible.trim().is_empty()
+                                    || !live.pending_media_refs.is_empty()
+                                {
+                                    info!(
+                                        account_id = %ctx.account_id,
+                                        user_id = %ctx.user_id,
+                                        dropped_len = live.text_visible.len(),
+                                        dropped_media_refs = live.pending_media_refs.len(),
+                                        "dropping buffered weixin stream output on user_ack boundary"
+                                    );
+                                }
+                                live.clear_text();
+                                live = open_live_message_for_context(&ctx, true).await;
                             }
-                            live.clear_text();
                         }
                         StreamBoundaryKind::AssistantSegment => {
                             if token_sends_remaining(live.context_token.trim()).await <= 3 {
@@ -2959,7 +3008,7 @@ async fn run_streaming_update_consumer(
                                     &mut typing_active,
                                     &mut send_calls_used,
                                 ).await;
-                                live = open_live_message_for_context(&ctx).await;
+                                live = open_live_message_for_context(&ctx, false).await;
                             }
                         }
                     },
@@ -3020,7 +3069,7 @@ async fn run_streaming_update_consumer(
                         &mut typing_active,
                         &mut send_calls_used,
                     ).await;
-                    live = open_live_message_for_context(&ctx).await;
+                    live = open_live_message_for_context(&ctx, false).await;
                 } else if live.should_force_inactivity_finish(now) {
                     any_text_output_sent |= close_live_for_boundary(
                         &ctx,
@@ -3032,7 +3081,7 @@ async fn run_streaming_update_consumer(
                         &mut typing_active,
                         &mut send_calls_used,
                     ).await;
-                    live = open_live_message_for_context(&ctx).await;
+                    live = open_live_message_for_context(&ctx, false).await;
                 } else if matches!(
                     send_live_generating(&ctx, &mut live, now, &mut send_calls_used).await,
                     LiveTextSendResult::Poisoned
