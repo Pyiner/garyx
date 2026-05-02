@@ -1583,6 +1583,15 @@ async fn test_restart_ok() {
     assert_eq!(json["ok"], true);
 }
 
+#[test]
+fn test_api_restart_does_not_build_before_restart() {
+    let options = super::api_restart_options();
+    assert_eq!(options.reason, "api");
+    assert!(!options.build_before_restart);
+    assert!(options.continue_thread_id.is_none());
+    assert!(options.continue_run_id.is_none());
+}
+
 #[tokio::test]
 async fn test_restart_cooldown() {
     let state = test_state();

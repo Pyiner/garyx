@@ -375,6 +375,10 @@ garyx update --version 0.1.7
 
 ## Useful Commands
 
+Gateway restart commands restart the installed binary only; they do not build
+from a source checkout. When testing a local code change, install or copy the
+new `garyx` binary into the service's PATH first, then restart.
+
 ```bash
 garyx config show
 garyx config validate

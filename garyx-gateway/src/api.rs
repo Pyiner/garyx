@@ -2206,14 +2206,7 @@ pub async fn restart(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
     tracker.mark_restart_now();
     drop(tracker);
 
-    if let Err(e) = crate::restart::request_restart_with_options(crate::restart::RestartOptions {
-        reason: "api".to_owned(),
-        build_before_restart: true,
-        continue_thread_id: None,
-        continue_run_id: None,
-    })
-    .await
-    {
+    if let Err(e) = crate::restart::request_restart_with_options(api_restart_options()).await {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
@@ -2231,6 +2224,15 @@ pub async fn restart(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
             "message": "restart initiated",
         })),
     )
+}
+
+fn api_restart_options() -> crate::restart::RestartOptions {
+    crate::restart::RestartOptions {
+        reason: "api".to_owned(),
+        build_before_restart: false,
+        continue_thread_id: None,
+        continue_run_id: None,
+    }
 }
 
 // ---------------------------------------------------------------------------

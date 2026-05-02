@@ -113,7 +113,7 @@ pub struct MessageParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RestartParams {
-    /// Action: build, or restart (restart always builds before restarting; build_and_restart is kept as alias)
+    /// Action: restart, build, or build_and_restart. `restart` only restarts the installed binary.
     #[serde(default)]
     pub action: Option<String>,
     #[serde(default)]
@@ -533,7 +533,7 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "Build and/or restart the gateway service (requires authorization token). `restart` always does build+restart; `build_and_restart` is accepted as a backward-compatible alias."
+        description = "Restart the gateway service or explicitly build it first (requires authorization token when configured). `restart` only restarts the installed binary and does not require a source checkout. Use `build` to build/install from source, or `build_and_restart` for an explicit build followed by restart."
     )]
     async fn restart(
         &self,

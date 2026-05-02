@@ -27,6 +27,10 @@ command with `--help` for the full flag list and arg descriptions.
 | `garyx gateway reload-config` | Reload config without restart. |
 | `garyx gateway token` | Ensure a gateway auth token exists; print it. |
 
+`gateway restart`, `/api/restart`, and the MCP restart tool restart the
+installed binary. They do not build from source; install or copy a new binary
+first when you need code changes to take effect.
+
 See [Service manager](/reference/service-manager) for what `install` actually
 writes to disk.
 

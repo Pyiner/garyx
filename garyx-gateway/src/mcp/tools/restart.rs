@@ -3,6 +3,52 @@ use garyx_models::{MessageLifecycleStatus, MessageTerminalReason};
 
 const RESTART_COOLDOWN_SECS: u64 = 30;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestartAction {
+    Build,
+    Restart,
+    BuildAndRestart,
+}
+
+impl RestartAction {
+    fn parse(action: Option<&str>) -> Result<Self, String> {
+        match action
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("restart")
+        {
+            "build" => Ok(Self::Build),
+            "restart" => Ok(Self::Restart),
+            "build_and_restart" => Ok(Self::BuildAndRestart),
+            _ => Err("action must be one of: build, restart, build_and_restart".to_owned()),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Build => "build",
+            Self::Restart => "restart",
+            Self::BuildAndRestart => "build_and_restart",
+        }
+    }
+
+    fn builds(self) -> bool {
+        matches!(self, Self::Build | Self::BuildAndRestart)
+    }
+
+    fn restarts(self) -> bool {
+        matches!(self, Self::Restart | Self::BuildAndRestart)
+    }
+
+    fn success_message(self) -> &'static str {
+        match self {
+            Self::Build => "build completed",
+            Self::Restart => "restart initiated",
+            Self::BuildAndRestart => "build completed and restart initiated",
+        }
+    }
+}
+
 pub(crate) async fn run(
     server: &GaryMcpServer,
     ctx: RequestContext<RoleServer>,
@@ -14,30 +60,14 @@ pub(crate) async fn run(
         let run_ctx = RunContext::from_request_context(&ctx);
         GaryMcpServer::require_auth(state, &run_ctx, params.token.as_deref())?;
 
-        let action = params
-            .action
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("restart");
-        let normalized_action =
-            match action {
-                "build" => "build",
-                "restart" => "restart",
-                // Backward-compatible alias. Semantics are the same as `restart`.
-                "build_and_restart" => "restart",
-                _ => return Err(
-                    "action must be one of: build, restart (build_and_restart accepted as alias)"
-                        .to_owned(),
-                ),
-            };
-
+        let action = RestartAction::parse(params.action.as_deref())?;
         let reason = params.reason.as_deref().unwrap_or("no reason provided");
-        if normalized_action == "build" {
+        if action.builds() {
             crate::restart::build_backend()
                 .await
                 .map_err(|e| format!("build failed: {e}"))?;
-        } else {
+        }
+        if action.restarts() {
             let mut tracker = state.ops.restart_tracker.lock().await;
             if let Some(remaining) = tracker.cooldown_remaining_secs(RESTART_COOLDOWN_SECS) {
                 return Err(format!(
@@ -76,7 +106,7 @@ pub(crate) async fn run(
 
             crate::restart::request_restart_with_options(crate::restart::RestartOptions {
                 reason: reason.to_owned(),
-                build_before_restart: true,
+                build_before_restart: false,
                 continue_thread_id,
                 continue_run_id: run_ctx.run_id.clone(),
             })
@@ -86,14 +116,10 @@ pub(crate) async fn run(
 
         Ok(serde_json::to_string(&json!({
             "tool": "restart",
-            "action": normalized_action,
+            "action": action.as_str(),
             "reason": reason,
             "status": "ok",
-            "message": if normalized_action == "build" {
-                "build completed"
-            } else {
-                "build completed and restart initiated"
-            },
+            "message": action.success_message(),
             "run_id": run_ctx.run_id,
             "thread_id": run_ctx.thread_id,
         }))
@@ -107,4 +133,31 @@ pub(crate) async fn run(
         started.elapsed(),
     );
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RestartAction;
+
+    #[test]
+    fn restart_action_restart_does_not_build() {
+        let action = RestartAction::parse(Some("restart")).expect("valid restart action");
+        assert_eq!(action, RestartAction::Restart);
+        assert!(!action.builds());
+        assert!(action.restarts());
+        assert_eq!(action.success_message(), "restart initiated");
+    }
+
+    #[test]
+    fn restart_action_build_and_restart_is_explicit() {
+        let action = RestartAction::parse(Some("build_and_restart"))
+            .expect("valid build_and_restart action");
+        assert_eq!(action, RestartAction::BuildAndRestart);
+        assert!(action.builds());
+        assert!(action.restarts());
+        assert_eq!(
+            action.success_message(),
+            "build completed and restart initiated"
+        );
+    }
 }
