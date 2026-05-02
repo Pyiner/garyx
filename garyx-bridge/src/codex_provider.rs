@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -29,6 +30,8 @@ use crate::gary_prompt::{
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
+
+const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
 
 // ---------------------------------------------------------------------------
 // Helper functions (provider-level domain mapping)
@@ -773,12 +776,11 @@ where
 /// Agent provider backed by `codex app-server` via `codex_sdk::CodexClient`.
 pub struct CodexAgentProvider {
     config: CodexAppServerConfig,
-    client: Mutex<Option<CodexClient>>,
-    client_env: Mutex<HashMap<String, String>>,
+    clients: CodexClientMap,
     /// Maps Garyx thread IDs to codex thread IDs.
     session_map: Mutex<HashMap<String, String>>,
-    /// run_id -> (thread_id, turn_id)
-    active_runs: Mutex<HashMap<String, (String, String)>>,
+    /// run_id -> active Codex thread/turn record.
+    active_runs: Mutex<HashMap<String, ActiveCodexRun>>,
     /// thread_id -> (codex_thread_id, turn_id, run_id)
     active_session_turns: Mutex<HashMap<String, (String, String, String)>>,
     /// thread_id -> (run_id, live callback)
@@ -788,8 +790,23 @@ pub struct CodexAgentProvider {
     ready: Mutex<bool>,
 }
 
+type CodexClientMap = Arc<Mutex<HashMap<String, Arc<CodexClientSlot>>>>;
 type ActiveSessionCallback = (String, Arc<dyn Fn(StreamEvent) + Send + Sync>);
 type PendingCodexAcks = (String, VecDeque<PendingCodexAckMarker>);
+
+struct CodexClientSlot {
+    client: Mutex<CodexClient>,
+    env: HashMap<String, String>,
+    active_runs: AtomicUsize,
+    last_used: Mutex<Instant>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveCodexRun {
+    garyx_thread_id: String,
+    codex_thread_id: String,
+    turn_id: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingCodexAckMarker {
@@ -797,13 +814,106 @@ enum PendingCodexAckMarker {
     QueuedInput(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexClientReuseDecision {
+    Reuse,
+    ReplaceIdle,
+}
+
+fn decide_codex_client_reuse(
+    existing_env: &HashMap<String, String>,
+    desired_env: &HashMap<String, String>,
+    active_run_count: usize,
+) -> CodexClientReuseDecision {
+    if existing_env == desired_env || active_run_count > 0 {
+        CodexClientReuseDecision::Reuse
+    } else {
+        CodexClientReuseDecision::ReplaceIdle
+    }
+}
+
+impl CodexClientSlot {
+    fn new(client: CodexClient, env: HashMap<String, String>) -> Self {
+        Self {
+            client: Mutex::new(client),
+            env,
+            active_runs: AtomicUsize::new(0),
+            last_used: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn active_run_count(&self) -> usize {
+        self.active_runs.load(Ordering::SeqCst)
+    }
+
+    fn begin_run(&self) {
+        self.active_runs.fetch_add(1, Ordering::SeqCst);
+    }
+
+    async fn finish_run(&self) {
+        let _ = self
+            .active_runs
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                Some(count.saturating_sub(1))
+            });
+        self.mark_used().await;
+    }
+
+    async fn mark_used(&self) {
+        *self.last_used.lock().await = Instant::now();
+    }
+
+    async fn shutdown(&self) {
+        self.client.lock().await.shutdown().await;
+    }
+}
+
+fn schedule_idle_client_cleanup(
+    clients: CodexClientMap,
+    garyx_thread_id: String,
+    slot: Arc<CodexClientSlot>,
+    ttl: Duration,
+) {
+    tokio::spawn(async move {
+        tokio::time::sleep(ttl).await;
+
+        if slot.active_run_count() > 0 {
+            return;
+        }
+
+        let last_used = *slot.last_used.lock().await;
+        if last_used.elapsed() < ttl {
+            return;
+        }
+
+        let removed = {
+            let mut clients = clients.lock().await;
+            if clients.get(&garyx_thread_id).is_some_and(|current| {
+                Arc::ptr_eq(current, &slot) && current.active_run_count() == 0
+            }) {
+                clients.remove(&garyx_thread_id)
+            } else {
+                None
+            }
+        };
+
+        if let Some(slot) = removed {
+            tracing::info!(
+                garyx_thread_id = %garyx_thread_id,
+                idle_ttl_secs = ttl.as_secs(),
+                "shutting down idle codex app-server"
+            );
+            slot.shutdown().await;
+        }
+    });
+}
+
 impl CodexAgentProvider {
     /// Create a new Codex provider with the given config.
     pub fn new(config: CodexAppServerConfig) -> Self {
         Self {
             config,
-            client: Mutex::new(None),
-            client_env: Mutex::new(HashMap::new()),
+            clients: Arc::new(Mutex::new(HashMap::new())),
             session_map: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
             active_session_turns: Mutex::new(HashMap::new()),
@@ -842,54 +952,88 @@ impl CodexAgentProvider {
         }
     }
 
-    async fn restart_client_with_env(
+    async fn create_client_slot(
         &self,
-        client_guard: &mut Option<CodexClient>,
         env: HashMap<String, String>,
-    ) -> Result<(), BridgeError> {
-        if let Some(client) = client_guard.as_mut() {
-            client.shutdown().await;
-        }
-
+    ) -> Result<Arc<CodexClientSlot>, BridgeError> {
         let mut client = CodexClient::new(self.build_client_config(env.clone()));
         client
             .initialize()
             .await
             .map_err(|e| BridgeError::Internal(format!("codex client init failed: {e}")))?;
 
-        *client_guard = Some(client);
-        *self.client_env.lock().await = env;
-        *self.ready.lock().await = true;
-        Ok(())
+        Ok(Arc::new(CodexClientSlot::new(client, env)))
     }
 
-    async fn ensure_client_matches_options(
+    async fn client_for_options(
         &self,
         options: &ProviderRunOptions,
-    ) -> Result<(), BridgeError> {
+    ) -> Result<Arc<CodexClientSlot>, BridgeError> {
         let desired_env = resolve_runtime_codex_env(&self.config, &options.metadata);
-        let mut client_guard = self.client.lock().await;
-        let current_env = self.client_env.lock().await.clone();
+        let garyx_thread_id = options.thread_id.clone();
 
-        if client_guard.is_some() && current_env == desired_env {
-            return Ok(());
-        }
-
-        if client_guard.is_some() && current_env != desired_env {
-            let active_run_present = self
-                .active_runs
-                .try_lock()
-                .map(|runs| !runs.is_empty())
-                .unwrap_or(true);
-            if active_run_present {
-                return Err(BridgeError::RunFailed(
-                    "codex auth settings changed while another Codex run is active".to_owned(),
-                ));
+        loop {
+            let existing = self.clients.lock().await.get(&garyx_thread_id).cloned();
+            if let Some(slot) = existing {
+                match decide_codex_client_reuse(&slot.env, &desired_env, slot.active_run_count()) {
+                    CodexClientReuseDecision::Reuse => {
+                        slot.mark_used().await;
+                        return Ok(slot);
+                    }
+                    CodexClientReuseDecision::ReplaceIdle => {
+                        let removed = {
+                            let mut clients = self.clients.lock().await;
+                            if clients.get(&garyx_thread_id).is_some_and(|current| {
+                                Arc::ptr_eq(current, &slot) && current.active_run_count() == 0
+                            }) {
+                                clients.remove(&garyx_thread_id)
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some(old_slot) = removed {
+                            tracing::info!(
+                                garyx_thread_id = %garyx_thread_id,
+                                "restarting idle codex app-server because startup env changed"
+                            );
+                            old_slot.shutdown().await;
+                        }
+                        continue;
+                    }
+                }
             }
-        }
 
-        self.restart_client_with_env(&mut client_guard, desired_env)
-            .await
+            let new_slot = self.create_client_slot(desired_env.clone()).await?;
+            let mut clients = self.clients.lock().await;
+            if clients.contains_key(&garyx_thread_id) {
+                drop(clients);
+                new_slot.shutdown().await;
+                continue;
+            }
+            clients.insert(garyx_thread_id.clone(), new_slot.clone());
+            return Ok(new_slot);
+        }
+    }
+
+    async fn client_for_thread(&self, garyx_thread_id: &str) -> Option<Arc<CodexClientSlot>> {
+        self.clients.lock().await.get(garyx_thread_id).cloned()
+    }
+
+    async fn finish_client_run(&self, garyx_thread_id: &str, slot: Arc<CodexClientSlot>) {
+        slot.finish_run().await;
+        schedule_idle_client_cleanup(
+            self.clients.clone(),
+            garyx_thread_id.to_owned(),
+            slot,
+            CODEX_CLIENT_IDLE_TTL,
+        );
+    }
+
+    async fn shutdown_thread_client(&self, garyx_thread_id: &str) {
+        let slot = self.clients.lock().await.remove(garyx_thread_id);
+        if let Some(slot) = slot {
+            slot.shutdown().await;
+        }
     }
 
     async fn cleanup_active_run_state(&self, run_id: &str) {
@@ -1053,9 +1197,10 @@ impl CodexAgentProvider {
         &self,
         options: &ProviderRunOptions,
         on_chunk: StreamCallback,
+        client_slot: Arc<CodexClientSlot>,
     ) -> Result<ProviderRunResult, BridgeError> {
-        let client_guard = self.client.lock().await;
-        let client = client_guard.as_ref().ok_or(BridgeError::ProviderNotReady)?;
+        let client_guard = client_slot.client.lock().await;
+        let client = &*client_guard;
         let live_callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(on_chunk);
 
         let run_id = options
@@ -1125,10 +1270,14 @@ impl CodexAgentProvider {
 
         // Track active run
         {
-            self.active_runs
-                .lock()
-                .await
-                .insert(run_id.clone(), (thread_id.clone(), turn_id.clone()));
+            self.active_runs.lock().await.insert(
+                run_id.clone(),
+                ActiveCodexRun {
+                    garyx_thread_id: options.thread_id.clone(),
+                    codex_thread_id: thread_id.clone(),
+                    turn_id: turn_id.clone(),
+                },
+            );
             self.active_session_turns.lock().await.insert(
                 options.thread_id.clone(),
                 (thread_id.clone(), turn_id.clone(), run_id.clone()),
@@ -1365,30 +1514,21 @@ impl AgentLoopProvider for CodexAgentProvider {
             return Ok(());
         }
 
-        let initial_env = self.config.env.clone();
-        let mut client = CodexClient::new(self.build_client_config(initial_env.clone()));
-        client
-            .initialize()
-            .await
-            .map_err(|e| BridgeError::Internal(format!("codex client init failed: {e}")))?;
-
-        *self.client.lock().await = Some(client);
-        *self.client_env.lock().await = initial_env;
         *self.ready.lock().await = true;
-        tracing::info!("codex provider initialized");
+        tracing::info!("codex provider initialized; app-server clients are started per thread");
         Ok(())
     }
 
     async fn shutdown(&mut self) -> Result<(), BridgeError> {
         tracing::info!("shutting down codex provider");
 
-        let mut client_opt = self.client.lock().await;
-        if let Some(ref mut client) = *client_opt {
+        let clients: Vec<Arc<CodexClientSlot>> = {
+            let mut clients = self.clients.lock().await;
+            clients.drain().map(|(_, slot)| slot).collect()
+        };
+        for client in clients {
             client.shutdown().await;
         }
-        *client_opt = None;
-        drop(client_opt);
-        *self.client_env.lock().await = HashMap::new();
 
         self.active_runs.lock().await.clear();
         self.active_session_turns.lock().await.clear();
@@ -1407,28 +1547,33 @@ impl AgentLoopProvider for CodexAgentProvider {
         if !*self.ready.lock().await {
             return Err(BridgeError::ProviderNotReady);
         }
-        self.ensure_client_matches_options(options).await?;
-        self.run_streaming_impl(options, on_chunk).await
+        let client_slot = self.client_for_options(options).await?;
+        client_slot.begin_run();
+        let result = self
+            .run_streaming_impl(options, on_chunk, client_slot.clone())
+            .await;
+        self.finish_client_run(&options.thread_id, client_slot)
+            .await;
+        result
     }
 
     async fn abort(&self, run_id: &str) -> bool {
         let active = self.active_runs.lock().await.get(run_id).cloned();
-        let Some((thread_id, turn_id)) = active else {
+        let Some(active) = active else {
             self.cleanup_active_run_state(run_id).await;
             return false;
         };
 
-        let client_guard = self.client.lock().await;
-        let Some(client) = client_guard.as_ref() else {
-            drop(client_guard);
+        let Some(client_slot) = self.client_for_thread(&active.garyx_thread_id).await else {
             self.cleanup_active_run_state(run_id).await;
             return false;
         };
 
+        let client_guard = client_slot.client.lock().await;
         // Try interrupt with timeout; force-cleanup on failure
         let result = tokio::time::timeout(
             Duration::from_secs(10),
-            client.interrupt_turn(&thread_id, &turn_id),
+            client_guard.interrupt_turn(&active.codex_thread_id, &active.turn_id),
         )
         .await;
 
@@ -1468,8 +1613,7 @@ impl AgentLoopProvider for CodexAgentProvider {
             return false;
         };
 
-        let client_guard = self.client.lock().await;
-        let Some(client) = client_guard.as_ref() else {
+        let Some(client_slot) = self.client_for_thread(&garyx_thread_id).await else {
             return false;
         };
 
@@ -1478,7 +1622,11 @@ impl AgentLoopProvider for CodexAgentProvider {
             .await;
         let input = build_input_items_from_parts(&input.message, &input.images, &input.attachments);
 
-        match client.steer_turn(&codex_thread_id, &turn_id, input).await {
+        let client_guard = client_slot.client.lock().await;
+        match client_guard
+            .steer_turn(&codex_thread_id, &turn_id, input)
+            .await
+        {
             Ok(()) => {
                 tracing::debug!(
                     garyx_thread_id = %garyx_thread_id,
@@ -1541,6 +1689,7 @@ impl AgentLoopProvider for CodexAgentProvider {
             .lock()
             .await
             .remove(thread_id);
+        self.shutdown_thread_client(thread_id).await;
         true
     }
 }

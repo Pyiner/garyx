@@ -177,6 +177,33 @@ fn test_resolve_runtime_codex_env_exports_task_cli_env() {
 }
 
 #[test]
+fn test_codex_client_reuse_keeps_active_client_when_env_changes() {
+    let existing = HashMap::from([("GARYX_THREAD_ID".to_owned(), "thread::old".to_owned())]);
+    let desired = HashMap::from([("GARYX_THREAD_ID".to_owned(), "thread::new".to_owned())]);
+
+    assert_eq!(
+        decide_codex_client_reuse(&existing, &desired, 1),
+        CodexClientReuseDecision::Reuse
+    );
+}
+
+#[test]
+fn test_codex_client_reuse_replaces_idle_client_when_env_changes() {
+    let existing = HashMap::from([("GARYX_THREAD_ID".to_owned(), "thread::old".to_owned())]);
+    let desired = HashMap::from([("GARYX_THREAD_ID".to_owned(), "thread::new".to_owned())]);
+
+    assert_eq!(
+        decide_codex_client_reuse(&existing, &desired, 0),
+        CodexClientReuseDecision::ReplaceIdle
+    );
+}
+
+#[test]
+fn test_codex_client_idle_ttl_is_three_minutes() {
+    assert_eq!(CODEX_CLIENT_IDLE_TTL, Duration::from_secs(180));
+}
+
+#[test]
 fn test_build_input_items_text_only() {
     let options = ProviderRunOptions {
         thread_id: "s1".to_owned(),
@@ -1148,7 +1175,11 @@ async fn test_abort_cleans_session_tracking_when_client_missing() {
     let provider = CodexAgentProvider::new(CodexAppServerConfig::default());
     provider.active_runs.lock().await.insert(
         "run_1".to_owned(),
-        ("thread_1".to_owned(), "turn_1".to_owned()),
+        ActiveCodexRun {
+            garyx_thread_id: "sess::1".to_owned(),
+            codex_thread_id: "thread_1".to_owned(),
+            turn_id: "turn_1".to_owned(),
+        },
     );
     provider.active_session_turns.lock().await.insert(
         "sess::1".to_owned(),
