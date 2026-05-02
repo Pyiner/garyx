@@ -1484,19 +1484,10 @@ async fn post_gateway_json(
     path: &str,
     payload: &Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    post_gateway_json_with_timeout(gateway, path, payload, Duration::from_secs(10)).await
-}
-
-async fn post_gateway_json_with_timeout(
-    gateway: &GatewayEndpoint,
-    path: &str,
-    payload: &Value,
-    timeout: Duration,
-) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
     let response = gateway_request(reqwest::Client::new().post(&url), gateway)
         .json(payload)
-        .timeout(timeout)
+        .timeout(std::time::Duration::from_secs(10))
         .send()
         .await?;
     let status = response.status();
@@ -2407,14 +2398,13 @@ pub(crate) async fn cmd_automation_run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let automation_id = trim_required_cli(automation_id, "automation_id")?;
     let gateway = gateway_endpoint(config_path)?;
-    let payload = post_gateway_json_with_timeout(
+    let payload = post_gateway_json(
         &gateway,
         &format!(
             "/api/automations/{}/run-now",
             urlencoding::encode(&automation_id)
         ),
         &json!({}),
-        Duration::from_secs(300),
     )
     .await?;
     if json {
