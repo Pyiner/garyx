@@ -155,6 +155,11 @@ export type MessageMachineAction =
       threadId: string;
     }
   | {
+      type: 'thread/replace-id';
+      fromThreadId: string;
+      toThreadId: string;
+    }
+  | {
       type: 'thread/delete';
       threadId: string;
     };
@@ -537,6 +542,56 @@ export function messageMachineReducer(
       return {
         ...state,
         threadRuntimeByThread: next,
+      };
+    }
+
+    case 'thread/replace-id': {
+      if (action.fromThreadId === action.toThreadId) {
+        return state;
+      }
+
+      const now = new Date().toISOString();
+      const intentsById = Object.fromEntries(
+        Object.entries(state.intentsById).map(([intentId, intent]) => [
+          intentId,
+          intent.threadId === action.fromThreadId
+            ? {
+                ...intent,
+                threadId: action.toThreadId,
+                updatedAt: now,
+              }
+            : intent,
+        ]),
+      );
+
+      const fromQueue = state.queueByThread[action.fromThreadId] || [];
+      const toQueue = state.queueByThread[action.toThreadId] || [];
+      const queueByThread = { ...state.queueByThread };
+      delete queueByThread[action.fromThreadId];
+      if (fromQueue.length > 0 || toQueue.length > 0) {
+        queueByThread[action.toThreadId] = [
+          ...toQueue,
+          ...fromQueue.filter((intentId) => !toQueue.includes(intentId)),
+        ];
+      }
+
+      const threadRuntimeByThread = { ...state.threadRuntimeByThread };
+      const draftRuntime = threadRuntimeByThread[action.fromThreadId];
+      delete threadRuntimeByThread[action.fromThreadId];
+      if (draftRuntime) {
+        threadRuntimeByThread[action.toThreadId] = {
+          ...draftRuntime,
+          ...threadRuntimeByThread[action.toThreadId],
+          threadId: action.toThreadId,
+          updatedAt: now,
+        };
+      }
+
+      return {
+        ...state,
+        intentsById,
+        queueByThread,
+        threadRuntimeByThread,
       };
     }
 

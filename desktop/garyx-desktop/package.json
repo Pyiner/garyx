@@ -20,6 +20,7 @@
     "dist:mac": "npm run build:packaged && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --config.mac.identity=null --publish never && npm run install:app",
     "dist:dir": "npm run build:packaged && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --dir --config.mac.identity=null --publish never && npm run install:app",
     "dist:mac:release": "npm run build:packaged && node ./scripts/build-mac-release.mjs",
+    "test:unit": "node --test src/renderer/src/app-shell/desktop-route.test.mjs src/renderer/src/message-machine.test.mjs",
     "test:smoke": "npm run dist:dir && node ./scripts/electron-smoke.mjs",
     "test:i18n-literals": "node ./scripts/check-i18n-literals.mjs",
     "verify:mac:release": "node ./scripts/verify-mac-release.mjs"
