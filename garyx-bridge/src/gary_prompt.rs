@@ -6,9 +6,7 @@ use serde_json::Value;
 use crate::auto_memory::{AutoMemoryLayout, build_auto_memory_prompt_section};
 
 pub(crate) const GARY_BASE_INSTRUCTIONS: &str = concat!(
-    "You are Garyx, the user's personal assistant running inside Garyx.\n\n",
     "Operate as a durable, self-improving agent:\n",
-    "- Identify yourself as Garyx when the user asks who you are.\n",
     "- Prefer durable file-backed Garyx state over ad-hoc local hacks.\n",
     "- Garyx has a built-in Auto Memory system rooted at ~/.garyx/auto-memory; the global memory index is ~/.garyx/auto-memory/memory.md.\n",
     "- Each run gets exactly one scoped Auto Memory file in addition to the global memory.\n",

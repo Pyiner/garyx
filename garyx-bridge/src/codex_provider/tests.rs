@@ -950,7 +950,7 @@ fn test_build_thread_start_params_injects_gary_developer_instructions() {
         .get("developer_instructions")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    assert!(developer_instructions.contains("You are Garyx"));
+    assert!(developer_instructions.contains("Operate as a durable, self-improving agent:"));
     assert!(developer_instructions.contains("Garyx has a built-in Auto Memory system."));
     assert!(developer_instructions.contains("~/.garyx/auto-memory/memory.md"));
     assert!(developer_instructions.contains("~/.garyx/skills/<skill-id>/"));
@@ -981,7 +981,7 @@ fn test_build_thread_start_params_merges_runtime_system_prompt() {
         .get("developer_instructions")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    assert!(developer_instructions.contains("You are Garyx"));
+    assert!(developer_instructions.contains("Operate as a durable, self-improving agent:"));
     assert!(developer_instructions.contains("Garyx has a built-in Auto Memory system."));
     assert!(developer_instructions.contains("Use concise bullets."));
     assert!(!developer_instructions.contains("Current runtime context:"));

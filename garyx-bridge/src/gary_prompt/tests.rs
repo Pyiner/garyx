@@ -37,7 +37,7 @@ fn compose_with_extra_appends_section() {
         &layout,
     );
 
-    assert!(value.contains("You are Garyx"));
+    assert!(value.contains("Operate as a durable, self-improving agent:"));
     assert!(value.contains("Scoped Auto Memory (Workspace)"));
     assert!(value.contains("Additional runtime instructions:"));
     assert!(value.contains("Use concise bullets."));
