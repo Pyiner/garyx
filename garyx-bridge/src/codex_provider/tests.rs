@@ -212,9 +212,25 @@ fn test_build_input_items_text_only() {
         images: None,
         metadata: HashMap::new(),
     };
-    let items = build_input_items(&options);
+    let items = build_input_items(&options, false);
     assert_eq!(items.len(), 1);
     assert!(matches!(&items[0], InputItem::Text { text } if text == "hello world"));
+}
+
+#[test]
+fn test_build_input_items_prepends_memory_on_first_turn() {
+    let options = ProviderRunOptions {
+        thread_id: "s1".to_owned(),
+        message: "hello world".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([("agent_id".to_owned(), json!("codex"))]),
+    };
+    let items = build_input_items(&options, true);
+    assert_eq!(items.len(), 1);
+    assert!(
+        matches!(&items[0], InputItem::Text { text } if text.starts_with("<garyx_memory_context>") && text.contains("<agent_memory agent_id=\"codex\"") && text.ends_with("hello world"))
+    );
 }
 
 #[test]
@@ -235,7 +251,7 @@ fn test_build_input_items_appends_task_suffix() {
             }),
         )]),
     };
-    let items = build_input_items(&options);
+    let items = build_input_items(&options, false);
 
     assert_eq!(items.len(), 1);
     assert!(
@@ -258,7 +274,7 @@ fn test_build_input_items_with_images() {
         images: Some(vec![img]),
         metadata: HashMap::new(),
     };
-    let items = build_input_items(&options);
+    let items = build_input_items(&options, false);
     assert_eq!(items.len(), 2);
     assert!(
         matches!(&items[1], InputItem::Image { url } if url == "data:image/png;base64,abc123==")
@@ -280,7 +296,7 @@ fn test_build_input_items_empty_image_data_skipped() {
         images: Some(vec![img]),
         metadata: HashMap::new(),
     };
-    let items = build_input_items(&options);
+    let items = build_input_items(&options, false);
     assert_eq!(items.len(), 1); // image skipped
 }
 
@@ -950,12 +966,13 @@ fn test_build_thread_start_params_injects_gary_developer_instructions() {
         .get("developer_instructions")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    assert!(developer_instructions.contains("Operate as a durable, self-improving agent:"));
-    assert!(developer_instructions.contains("Garyx has a built-in Auto Memory system."));
-    assert!(developer_instructions.contains("~/.garyx/auto-memory/memory.md"));
-    assert!(developer_instructions.contains("~/.garyx/skills/<skill-id>/"));
-    assert!(developer_instructions.contains("~/.garyx/garyx.json"));
-    assert!(developer_instructions.contains("Task workflow:"));
+    assert!(developer_instructions.contains("Garyx runtime guidance:"));
+    assert!(developer_instructions.contains("Self-evolution:"));
+    assert!(developer_instructions.contains("~/.garyx/skills/<skill-id>/SKILL.md"));
+    assert!(developer_instructions.contains("garyx task create"));
+    assert!(developer_instructions.contains("garyx automation create"));
+    assert!(!developer_instructions.contains("Global Auto Memory"));
+    assert!(!developer_instructions.contains("<garyx_memory_context>"));
     assert!(!developer_instructions.contains("Current runtime context:"));
     assert!(!developer_instructions.contains("thread_id: thread::test"));
 }
@@ -981,9 +998,9 @@ fn test_build_thread_start_params_merges_runtime_system_prompt() {
         .get("developer_instructions")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    assert!(developer_instructions.contains("Operate as a durable, self-improving agent:"));
-    assert!(developer_instructions.contains("Garyx has a built-in Auto Memory system."));
+    assert!(developer_instructions.contains("Garyx runtime guidance:"));
     assert!(developer_instructions.contains("Use concise bullets."));
+    assert!(!developer_instructions.contains("Global Auto Memory"));
     assert!(!developer_instructions.contains("Current runtime context:"));
 }
 
@@ -1016,7 +1033,7 @@ fn test_build_thread_start_params_keeps_runtime_context_out_of_developer_instruc
         .get("developer_instructions")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    assert!(developer_instructions.contains("Task workflow:"));
+    assert!(developer_instructions.contains("System capabilities:"));
     assert!(!developer_instructions.contains("channel: macapp"));
     assert!(!developer_instructions.contains("task_ref: #TASK-9"));
     assert!(!developer_instructions.contains("thread_id: thread::ctx"));
@@ -1129,7 +1146,7 @@ fn test_build_input_items_uses_native_skill_invocation() {
         )]),
     };
 
-    let items = build_input_items(&options);
+    let items = build_input_items(&options, false);
     assert_eq!(items.len(), 1);
     match &items[0] {
         InputItem::Text { text } => assert_eq!(text, "/proof-skill\n\nUse the skill."),

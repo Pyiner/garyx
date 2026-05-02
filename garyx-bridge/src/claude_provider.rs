@@ -18,7 +18,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::gary_prompt::{
-    append_task_suffix_to_user_message, compose_gary_instructions, task_cli_env,
+    append_task_suffix_to_user_message, compose_gary_instructions,
+    prepend_auto_memory_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
@@ -432,12 +433,13 @@ fn build_user_message_input_from_parts(
     }
 }
 
-fn build_user_message_input(options: &ProviderRunOptions) -> UserInput {
+fn build_user_message_input(options: &ProviderRunOptions, include_memory: bool) -> UserInput {
     let images = options.images.as_deref().unwrap_or_default();
     let attachments = attachments_from_metadata(&options.metadata);
     let message = build_native_skill_prompt(&options.message, &options.metadata)
         .unwrap_or_else(|| options.message.clone());
     let message = append_task_suffix_to_user_message(&message, &options.metadata);
+    let message = prepend_auto_memory_to_user_message(&message, &options.metadata, include_memory);
     build_user_message_input_from_parts(&message, images, &attachments)
 }
 
@@ -907,7 +909,7 @@ impl ClaudeCliProvider {
 
         if let Err(e) = control
             .send_user_message(OutboundUserMessage {
-                content: build_user_message_input(options),
+                content: build_user_message_input(options, session_id.is_none()),
                 session_id: String::new(),
                 parent_tool_use_id: None,
             })

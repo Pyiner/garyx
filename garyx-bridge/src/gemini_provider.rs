@@ -19,7 +19,8 @@ use uuid::Uuid;
 use garyx_models::provider::ImagePayload;
 
 use crate::gary_prompt::{
-    append_task_suffix_to_user_message, compose_gary_instructions, task_cli_env,
+    append_task_suffix_to_user_message, compose_gary_instructions,
+    prepend_auto_memory_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
@@ -323,6 +324,8 @@ fn build_prompt_text_from_parts(
     let message = build_native_skill_prompt(&options.message, &options.metadata)
         .unwrap_or_else(|| options.message.clone());
     let message = append_task_suffix_to_user_message(&message, &options.metadata);
+    let message =
+        prepend_auto_memory_to_user_message(&message, &options.metadata, include_instructions);
     let user_message = build_prompt_message_with_attachments(&message, attachments);
     if !include_instructions {
         return user_message;

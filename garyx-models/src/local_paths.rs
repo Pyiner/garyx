@@ -129,68 +129,46 @@ pub fn auto_memory_dir_for_gary_home(gary_home: &Path) -> PathBuf {
     gary_home.join("auto-memory")
 }
 
-pub fn auto_memory_root_file_for_gary_home(gary_home: &Path) -> PathBuf {
-    auto_memory_dir_for_gary_home(gary_home).join("memory.md")
-}
-
-pub fn auto_memory_workspaces_dir_for_gary_home(gary_home: &Path) -> PathBuf {
-    auto_memory_dir_for_gary_home(gary_home).join("workspaces")
+pub fn auto_memory_agents_dir_for_gary_home(gary_home: &Path) -> PathBuf {
+    auto_memory_dir_for_gary_home(gary_home).join("agents")
 }
 
 pub fn auto_memory_automations_dir_for_gary_home(gary_home: &Path) -> PathBuf {
     auto_memory_dir_for_gary_home(gary_home).join("automations")
 }
 
-pub fn auto_memory_workspace_key(workspace_dir: &Path) -> String {
-    let normalized_workspace =
-        fs::canonicalize(workspace_dir).unwrap_or_else(|_| workspace_dir.to_path_buf());
-    let display_name = normalized_workspace
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or("workspace");
-    let mut sanitized = String::new();
-    for ch in display_name.chars() {
-        if ch.is_ascii_alphanumeric() {
-            sanitized.push(ch.to_ascii_lowercase());
-        } else if !sanitized.ends_with('-') {
-            sanitized.push('-');
-        }
-    }
-    let sanitized = sanitized.trim_matches('-');
-    let sanitized = if sanitized.is_empty() {
-        "workspace"
-    } else {
-        sanitized
-    };
-    let hash = fnv1a64_hex(normalized_workspace.to_string_lossy().as_bytes());
-    format!("{sanitized}-{hash}")
+pub fn auto_memory_agent_key(agent_id: &str) -> String {
+    sanitized_auto_memory_key(agent_id, "agent")
 }
 
-pub fn auto_memory_workspace_dir_for_gary_home(gary_home: &Path, workspace_dir: &Path) -> PathBuf {
-    auto_memory_workspaces_dir_for_gary_home(gary_home)
-        .join(auto_memory_workspace_key(workspace_dir))
+pub fn auto_memory_agent_dir_for_gary_home(gary_home: &Path, agent_id: &str) -> PathBuf {
+    auto_memory_agents_dir_for_gary_home(gary_home).join(auto_memory_agent_key(agent_id))
 }
 
-pub fn default_auto_memory_workspace_dir(workspace_dir: &Path) -> PathBuf {
-    auto_memory_workspace_dir_for_gary_home(&gary_home_dir(), workspace_dir)
-}
-
-pub fn auto_memory_workspace_root_file_for_gary_home(
-    gary_home: &Path,
-    workspace_dir: &Path,
-) -> PathBuf {
-    auto_memory_workspace_dir_for_gary_home(gary_home, workspace_dir).join("memory.md")
-}
-
-pub fn default_auto_memory_workspace_root_file(workspace_dir: &Path) -> PathBuf {
-    auto_memory_workspace_root_file_for_gary_home(&gary_home_dir(), workspace_dir)
+pub fn auto_memory_agent_root_file_for_gary_home(gary_home: &Path, agent_id: &str) -> PathBuf {
+    auto_memory_agent_dir_for_gary_home(gary_home, agent_id).join("memory.md")
 }
 
 pub fn auto_memory_automation_key(automation_id: &str) -> String {
-    let trimmed = automation_id.trim();
+    sanitized_auto_memory_key(automation_id, "automation")
+}
+
+pub fn auto_memory_automation_dir_for_gary_home(gary_home: &Path, automation_id: &str) -> PathBuf {
+    auto_memory_automations_dir_for_gary_home(gary_home)
+        .join(auto_memory_automation_key(automation_id))
+}
+
+pub fn auto_memory_automation_root_file_for_gary_home(
+    gary_home: &Path,
+    automation_id: &str,
+) -> PathBuf {
+    auto_memory_automation_dir_for_gary_home(gary_home, automation_id).join("memory.md")
+}
+
+fn sanitized_auto_memory_key(value: &str, fallback: &str) -> String {
+    let trimmed = value.trim();
     let base = if trimmed.is_empty() {
-        "automation"
+        fallback
     } else {
         trimmed
     };
@@ -204,22 +182,10 @@ pub fn auto_memory_automation_key(automation_id: &str) -> String {
     }
     let sanitized = sanitized.trim_matches('-');
     if sanitized.is_empty() {
-        "automation".to_owned()
+        fallback.to_owned()
     } else {
         sanitized.to_owned()
     }
-}
-
-pub fn auto_memory_automation_dir_for_gary_home(gary_home: &Path, automation_id: &str) -> PathBuf {
-    auto_memory_automations_dir_for_gary_home(gary_home)
-        .join(auto_memory_automation_key(automation_id))
-}
-
-pub fn auto_memory_automation_root_file_for_gary_home(
-    gary_home: &Path,
-    automation_id: &str,
-) -> PathBuf {
-    auto_memory_automation_dir_for_gary_home(gary_home, automation_id).join("memory.md")
 }
 
 pub fn default_pending_restart_path() -> PathBuf {
@@ -292,19 +258,6 @@ fn migrate_path(source: &Path, target: &Path) -> Result<(), io::Error> {
     }
 
     Ok(())
-}
-
-fn fnv1a64_hex(bytes: &[u8]) -> String {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-
-    let mut hash = OFFSET_BASIS;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
-    }
-
-    format!("{hash:016x}")
 }
 
 #[cfg(test)]

@@ -1,48 +1,48 @@
 use super::{
-    AutoMemoryLayout, GARY_BASE_INSTRUCTIONS, append_task_suffix_to_user_message,
-    compose_gary_instructions_with_layout, task_cli_env,
+    GARY_BASE_INSTRUCTIONS, append_task_suffix_to_user_message,
+    compose_gary_instructions_with_layout, prepend_auto_memory_to_user_message, task_cli_env,
 };
 use serde_json::json;
 use std::collections::HashMap;
-use std::fs;
-use tempfile::tempdir;
 
 #[test]
-fn compose_without_extra_returns_base_and_auto_memory() {
-    let temp = tempdir().unwrap();
-    let layout = AutoMemoryLayout::from_gary_home(temp.path().join(".gary"));
-
-    let value = compose_gary_instructions_with_layout(None, None, None, &layout);
+fn compose_without_extra_returns_base_only() {
+    let value = compose_gary_instructions_with_layout(None);
 
     assert!(value.starts_with(GARY_BASE_INSTRUCTIONS.trim_end()));
-    assert!(value.contains("Garyx has a built-in Auto Memory system."));
-    assert!(value.contains("Task workflow:"));
-    assert!(value.contains("Use the `garyx task` CLI"));
-    assert!(value.contains("`garyx automation` CLI"));
-    assert!(value.contains("Global Auto Memory"));
+    assert!(value.contains("Self-evolution:"));
+    assert!(value.contains("System capabilities:"));
+    assert!(value.contains("garyx task create"));
+    assert!(value.contains("garyx automation create"));
+    assert!(!value.contains("Global Auto Memory"));
+    assert!(!value.contains("Scoped Auto Memory"));
     assert!(!value.contains("Additional runtime instructions:"));
     assert!(!value.contains("Current runtime context:"));
 }
 
 #[test]
 fn compose_with_extra_appends_section() {
-    let temp = tempdir().unwrap();
-    let layout = AutoMemoryLayout::from_gary_home(temp.path().join(".gary"));
-    let workspace = temp.path().join("repo");
-    fs::create_dir_all(&workspace).unwrap();
+    let value = compose_gary_instructions_with_layout(Some("Use concise bullets."));
 
-    let value = compose_gary_instructions_with_layout(
-        Some("Use concise bullets."),
-        Some(&workspace),
-        None,
-        &layout,
-    );
-
-    assert!(value.contains("Operate as a durable, self-improving agent:"));
-    assert!(value.contains("Scoped Auto Memory (Workspace)"));
+    assert!(value.contains("Garyx runtime guidance:"));
     assert!(value.contains("Additional runtime instructions:"));
     assert!(value.contains("Use concise bullets."));
     assert!(!value.contains("Current runtime context:"));
+}
+
+#[test]
+fn prepend_auto_memory_to_user_message_only_when_requested() {
+    let metadata = HashMap::from([("agent_id".to_owned(), json!("reviewer"))]);
+
+    assert_eq!(
+        prepend_auto_memory_to_user_message("hello", &metadata, false),
+        "hello"
+    );
+
+    let rendered = prepend_auto_memory_to_user_message("hello", &metadata, true);
+    assert!(rendered.starts_with("<garyx_memory_context>"));
+    assert!(rendered.contains("<agent_memory agent_id=\"reviewer\""));
+    assert!(rendered.ends_with("hello"));
 }
 
 #[test]

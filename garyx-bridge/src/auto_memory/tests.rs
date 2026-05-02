@@ -1,92 +1,77 @@
-use super::{AutoMemoryLayout, build_auto_memory_prompt_section};
+use super::{AutoMemoryLayout, build_auto_memory_user_message_with_layout};
 use garyx_models::local_paths::{
-    auto_memory_automation_root_file_for_gary_home, auto_memory_root_file_for_gary_home,
-    auto_memory_workspace_root_file_for_gary_home,
+    auto_memory_agent_root_file_for_gary_home, auto_memory_automation_root_file_for_gary_home,
 };
+use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
 use tempfile::tempdir;
 
 #[test]
-fn prompt_section_creates_global_memory_md() {
+fn user_message_creates_and_includes_agent_memory() {
     let temp = tempdir().unwrap();
     let layout = AutoMemoryLayout::from_gary_home(temp.path().join(".gary"));
+    let metadata = HashMap::from([("agent_id".to_owned(), json!("reviewer"))]);
 
-    let prompt = build_auto_memory_prompt_section(&layout, None, None);
+    let message = build_auto_memory_user_message_with_layout(&metadata, &layout);
 
-    let root_file = auto_memory_root_file_for_gary_home(&temp.path().join(".gary"));
-    assert!(root_file.is_file());
-    assert!(prompt.contains("~/.garyx/auto-memory/memory.md"));
-    assert!(prompt.contains("# Auto Memory"));
+    let agent_memory =
+        auto_memory_agent_root_file_for_gary_home(&temp.path().join(".gary"), "reviewer");
+    assert!(agent_memory.is_file());
+    assert!(message.starts_with("<garyx_memory_context>"));
+    assert!(message.contains("<agent_memory agent_id=\"reviewer\""));
+    assert!(message.contains("Agent ID: `reviewer`"));
+    assert!(!message.contains("Global Auto Memory"));
+    assert!(!message.contains("Workspace"));
 }
 
 #[test]
-fn prompt_section_includes_workspace_memory_contents() {
+fn user_message_uses_runtime_thread_agent_id() {
     let temp = tempdir().unwrap();
     let layout = AutoMemoryLayout::from_gary_home(temp.path().join(".gary"));
-    let workspace = temp.path().join("repo");
-    fs::create_dir_all(&workspace).unwrap();
+    let metadata = HashMap::from([(
+        "runtime_context".to_owned(),
+        json!({
+            "thread": {
+                "agent_id": "codex"
+            }
+        }),
+    )]);
 
-    let workspace_memory =
-        auto_memory_workspace_root_file_for_gary_home(&temp.path().join(".gary"), &workspace);
-    fs::create_dir_all(workspace_memory.parent().unwrap()).unwrap();
-    fs::write(
-        &workspace_memory,
-        "# Auto Memory\n\n## Durable Notes\n- Marker: workspace-memory-visible\n",
-    )
-    .unwrap();
+    let message = build_auto_memory_user_message_with_layout(&metadata, &layout);
 
-    let prompt = build_auto_memory_prompt_section(&layout, Some(&workspace), None);
-
-    assert!(prompt.contains("Scoped Auto Memory (Workspace)"));
-    assert!(prompt.contains("workspace-memory-visible"));
+    assert!(message.contains("<agent_memory agent_id=\"codex\""));
 }
 
 #[test]
-fn prompt_section_prefers_automation_memory_over_workspace() {
+fn user_message_includes_agent_and_automation_memory() {
     let temp = tempdir().unwrap();
     let layout = AutoMemoryLayout::from_gary_home(temp.path().join(".gary"));
-    let workspace = temp.path().join("repo");
-    fs::create_dir_all(&workspace).unwrap();
-
-    let automation_memory = auto_memory_automation_root_file_for_gary_home(
-        &temp.path().join(".gary"),
-        "automation::demo",
-    );
+    let gary_home = temp.path().join(".gary");
+    let agent_memory = auto_memory_agent_root_file_for_gary_home(&gary_home, "codex");
+    let automation_memory =
+        auto_memory_automation_root_file_for_gary_home(&gary_home, "automation::demo");
+    fs::create_dir_all(agent_memory.parent().unwrap()).unwrap();
     fs::create_dir_all(automation_memory.parent().unwrap()).unwrap();
     fs::write(
-        &automation_memory,
-        "# Auto Memory\n\n## Durable Notes\n- Marker: automation-memory-visible\n",
+        &agent_memory,
+        "# Agent Memory\n\n## Durable Notes\n- Marker: agent-memory-visible\n",
     )
     .unwrap();
+    fs::write(
+        &automation_memory,
+        "# Automation Memory\n\n## Durable Notes\n- Marker: automation-memory-visible\n",
+    )
+    .unwrap();
+    let metadata = HashMap::from([
+        ("agent_id".to_owned(), json!("codex")),
+        ("automation_id".to_owned(), json!("automation::demo")),
+    ]);
 
-    let prompt =
-        build_auto_memory_prompt_section(&layout, Some(&workspace), Some("automation::demo"));
+    let message = build_auto_memory_user_message_with_layout(&metadata, &layout);
 
-    assert!(prompt.contains("Scoped Auto Memory (Automation)"));
-    assert!(prompt.contains("automation-memory-visible"));
-    assert!(!prompt.contains("Scoped Auto Memory (Workspace)"));
-}
-
-#[test]
-fn automation_prompt_includes_memory_protocol() {
-    let temp = tempdir().unwrap();
-    let layout = AutoMemoryLayout::from_gary_home(temp.path().join(".gary"));
-
-    let prompt = build_auto_memory_prompt_section(&layout, None, Some("automation::test"));
-
-    assert!(prompt.contains("Automation Memory Protocol"));
-    assert!(prompt.contains("BEFORE starting the task"));
-    assert!(prompt.contains("AFTER completing the task"));
-}
-
-#[test]
-fn workspace_prompt_does_not_include_automation_protocol() {
-    let temp = tempdir().unwrap();
-    let layout = AutoMemoryLayout::from_gary_home(temp.path().join(".gary"));
-    let workspace = temp.path().join("repo");
-    fs::create_dir_all(&workspace).unwrap();
-
-    let prompt = build_auto_memory_prompt_section(&layout, Some(&workspace), None);
-
-    assert!(!prompt.contains("Automation Memory Protocol"));
+    assert!(message.contains("<agent_memory agent_id=\"codex\""));
+    assert!(message.contains("agent-memory-visible"));
+    assert!(message.contains("<automation_memory automation_id=\"automation::demo\""));
+    assert!(message.contains("automation-memory-visible"));
 }

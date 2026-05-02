@@ -26,7 +26,8 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::gary_prompt::{
-    append_task_suffix_to_user_message, compose_gary_instructions, task_cli_env,
+    append_task_suffix_to_user_message, compose_gary_instructions,
+    prepend_auto_memory_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
@@ -389,10 +390,11 @@ fn build_codex_thread_config(
     (!thread_config.is_empty()).then_some(Value::Object(thread_config))
 }
 
-fn build_input_items(options: &ProviderRunOptions) -> Vec<InputItem> {
+fn build_input_items(options: &ProviderRunOptions, include_memory: bool) -> Vec<InputItem> {
     let message = build_native_skill_prompt(&options.message, &options.metadata)
         .unwrap_or_else(|| options.message.clone());
     let message = append_task_suffix_to_user_message(&message, &options.metadata);
+    let message = prepend_auto_memory_to_user_message(&message, &options.metadata, include_memory);
     let attachments = attachments_from_metadata(&options.metadata);
     build_input_items_from_parts(
         &message,
@@ -1242,6 +1244,7 @@ impl CodexAgentProvider {
             let session_map = self.session_map.lock().await;
             resolve_existing_thread_id(&session_map, &options.thread_id, sdk_session_id.as_deref())
         };
+        let include_memory = existing_thread_id.is_none();
         let thread_params = build_thread_start_params(
             &self.config,
             options.workspace_dir.as_deref(),
@@ -1262,7 +1265,7 @@ impl CodexAgentProvider {
             .insert(options.thread_id.clone(), thread_id.clone());
 
         // Start turn
-        let input_items = build_input_items(options);
+        let input_items = build_input_items(options, include_memory);
         let turn_id = client
             .start_turn(&thread_id, input_items)
             .await

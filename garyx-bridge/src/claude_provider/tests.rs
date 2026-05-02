@@ -580,9 +580,11 @@ fn test_build_sdk_options_with_system_prompt() {
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     let system_prompt = sdk_opts.system_prompt.unwrap_or_default();
     assert!(system_prompt.starts_with(GARY_BASE_INSTRUCTIONS.trim_end()));
-    assert!(system_prompt.contains("Garyx has a built-in Auto Memory system."));
+    assert!(system_prompt.contains("Garyx runtime guidance:"));
     assert!(system_prompt.contains("Additional runtime instructions:"));
     assert!(system_prompt.contains("You are a helpful bot."));
+    assert!(!system_prompt.contains("Global Auto Memory"));
+    assert!(!system_prompt.contains("<garyx_memory_context>"));
     assert!(!system_prompt.contains("Current runtime context:"));
     assert!(!system_prompt.contains("thread_id: test"));
 }
@@ -601,9 +603,12 @@ fn test_build_sdk_options_injects_gary_prompt_by_default() {
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     let system_prompt = sdk_opts.system_prompt.unwrap_or_default();
     assert!(system_prompt.starts_with(GARY_BASE_INSTRUCTIONS.trim_end()));
-    assert!(system_prompt.contains("Garyx has a built-in Auto Memory system."));
-    assert!(system_prompt.contains("~/.garyx/auto-memory/memory.md"));
-    assert!(system_prompt.contains("Task workflow:"));
+    assert!(system_prompt.contains("Self-evolution:"));
+    assert!(system_prompt.contains("System capabilities:"));
+    assert!(system_prompt.contains("garyx task create"));
+    assert!(system_prompt.contains("garyx automation create"));
+    assert!(!system_prompt.contains("Global Auto Memory"));
+    assert!(!system_prompt.contains("<garyx_memory_context>"));
     assert!(!system_prompt.contains("Current runtime context:"));
 }
 
@@ -637,7 +642,7 @@ fn test_build_sdk_options_exports_task_cli_env_from_metadata() {
 
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     let system_prompt = sdk_opts.system_prompt.unwrap_or_default();
-    assert!(system_prompt.contains("Task workflow:"));
+    assert!(system_prompt.contains("System capabilities:"));
     assert!(!system_prompt.contains("channel: weixin"));
     assert!(!system_prompt.contains("task_ref: #TASK-5"));
     assert_eq!(
@@ -694,7 +699,8 @@ fn test_build_sdk_options_does_not_inject_skill_instruction_into_system_prompt()
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     let system_prompt = sdk_opts.system_prompt.unwrap_or_default();
     assert!(system_prompt.starts_with(GARY_BASE_INSTRUCTIONS.trim_end()));
-    assert!(system_prompt.contains("Garyx has a built-in Auto Memory system."));
+    assert!(system_prompt.contains("Garyx runtime guidance:"));
+    assert!(!system_prompt.contains("/proof-skill"));
 }
 
 #[test]
@@ -715,7 +721,7 @@ fn test_build_user_message_input_uses_native_skill_invocation() {
         Some("/proof-skill\n\nUse the skill.")
     );
 
-    match build_user_message_input(&options) {
+    match build_user_message_input(&options, false) {
         UserInput::Text(text) => assert_eq!(text, "/proof-skill\n\nUse the skill."),
         UserInput::Blocks(_) => panic!("expected text input"),
     }
@@ -740,7 +746,7 @@ fn test_build_user_message_input_appends_task_suffix() {
         )]),
     };
 
-    match build_user_message_input(&options) {
+    match build_user_message_input(&options, false) {
         UserInput::Text(text) => {
             assert_eq!(text, "继续 [task #TASK-8 status=todo assignee=agent:codex]")
         }
@@ -1618,8 +1624,29 @@ fn test_build_user_message_input_plain_text_without_images() {
         metadata: HashMap::new(),
     };
 
-    let content = build_user_message_input(&options);
+    let content = build_user_message_input(&options, false);
     assert_eq!(content, UserInput::Text("describe this".to_owned()));
+}
+
+#[test]
+fn test_build_user_message_input_prepends_memory_on_first_turn() {
+    let options = ProviderRunOptions {
+        thread_id: "sess".to_owned(),
+        message: "describe this".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([("agent_id".to_owned(), Value::String("claude".to_owned()))]),
+    };
+
+    let content = build_user_message_input(&options, true);
+    match content {
+        UserInput::Text(text) => {
+            assert!(text.starts_with("<garyx_memory_context>"));
+            assert!(text.contains("<agent_memory agent_id=\"claude\""));
+            assert!(text.ends_with("describe this"));
+        }
+        UserInput::Blocks(_) => panic!("expected text input"),
+    }
 }
 
 #[test]
@@ -1650,7 +1677,7 @@ fn test_build_user_message_input_with_valid_and_invalid_images() {
         metadata: HashMap::new(),
     };
 
-    let content = build_user_message_input(&options);
+    let content = build_user_message_input(&options, false);
     let arr = match content {
         UserInput::Blocks(arr) => arr,
         other => panic!("expected blocks input, got {other:?}"),

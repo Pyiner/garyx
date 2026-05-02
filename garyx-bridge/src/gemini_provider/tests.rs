@@ -39,7 +39,7 @@ fn build_mcp_servers_injects_builtin_and_preserves_remote_shapes() {
 }
 
 #[test]
-fn build_prompt_blocks_prefixes_instructions_only_for_fresh_sessions() {
+fn build_prompt_blocks_prefixes_instructions_and_memory_for_fresh_sessions() {
     let options = ProviderRunOptions {
         thread_id: "thread::1".to_owned(),
         message: "hello".to_owned(),
@@ -66,7 +66,9 @@ fn build_prompt_blocks_prefixes_instructions_only_for_fresh_sessions() {
     let resumed = build_prompt_blocks(&options, None, false);
     let fresh_text = fresh[0]["text"].as_str().unwrap_or_default();
     assert!(fresh_text.contains("<system_instructions>"));
-    assert!(fresh_text.contains("Task workflow:"));
+    assert!(fresh_text.contains("System capabilities:"));
+    assert!(fresh_text.contains("<garyx_memory_context>"));
+    assert!(fresh_text.contains("<agent_memory agent_id=\"garyx\""));
     assert!(!fresh_text.contains("bot_id: telegram:bot1"));
     assert!(fresh_text.contains("hello [task #TASK-2 status=in_progress]"));
     assert_eq!(
