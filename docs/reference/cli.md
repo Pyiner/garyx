@@ -75,6 +75,7 @@ Common flags on `channels add`:
 | --- | --- |
 | `garyx thread list` | List threads (paginated). |
 | `garyx thread get <thread_id>` | Fetch one thread record. |
+| `garyx thread history <thread_id>` | Show thread history, tool calls, and runtime records. |
 | `garyx thread create [--workspace-dir <path>] [--agent-id <id>] [--json]` | Create a new thread. |
 | `garyx thread send thread <thread_id> [message]` | Send a message into a thread and stream the response. Reads stdin when `message` is omitted. |
 | `garyx thread send task <task_ref> [message]` | Resolve a task to its backing thread, then send a message into that thread. |
@@ -110,7 +111,6 @@ Common flags on `channels add`:
 | `garyx logs path` | Print the log file path. |
 | `garyx logs tail [--lines N]` | Tail the gateway log. |
 | `garyx logs clear` | Truncate the log file. |
-| `garyx debug thread <thread_id>` | Per-thread runtime diagnostics. |
 | `garyx bot status <bot_selector>` | Current bot main endpoint and bound thread status. |
 
 ## Updates

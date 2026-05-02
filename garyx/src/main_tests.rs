@@ -4,8 +4,7 @@ use clap::{CommandFactory, Parser};
 
 use crate::cli::{
     AgentAction, AutoResearchAction, BotAction, ChannelsAction, Cli, CommandAction, Commands,
-    ConfigAction, DebugAction, GatewayAction, LogsAction, MigrateAction, TaskAction, TeamAction,
-    ThreadAction,
+    ConfigAction, GatewayAction, LogsAction, MigrateAction, TaskAction, TeamAction, ThreadAction,
 };
 use crate::commands::{
     OnboardCommandOptions, canonical_channel_id, cmd_channels_add, cmd_channels_login, cmd_onboard,
@@ -439,20 +438,20 @@ fn parse_logs_tail_follow() {
 }
 
 #[test]
-fn parse_debug_thread() {
+fn parse_thread_history() {
     let cli = Cli::parse_from([
         "garyx",
-        "debug",
         "thread",
+        "history",
         "thread::abc",
         "--limit",
         "5",
         "--json",
     ]);
     match cli.command {
-        Some(Commands::Debug {
+        Some(Commands::Thread {
             action:
-                DebugAction::Thread {
+                ThreadAction::History {
                     thread_id,
                     limit,
                     json,
@@ -462,8 +461,13 @@ fn parse_debug_thread() {
             assert_eq!(limit, 5);
             assert!(json);
         }
-        _ => panic!("expected Debug::Thread"),
+        _ => panic!("expected Thread::History"),
     }
+}
+
+#[test]
+fn parse_debug_thread_is_not_a_cli_entrypoint() {
+    assert!(Cli::try_parse_from(["garyx", "debug", "thread", "thread::abc"]).is_err());
 }
 
 #[test]

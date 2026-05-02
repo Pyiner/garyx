@@ -883,7 +883,7 @@ fn format_task_progress_groups_each_user_turn_with_last_assistant_text_group() {
     assert!(rendered.contains("[3] User 2026-05-03T00:00:05Z"));
     assert!(rendered.contains("(internal dispatch)"));
     assert!(rendered.contains(
-        "Full thread with tool calls: garyx debug thread thread::task-42 --limit 200 --json"
+        "Full thread with tool calls: garyx thread history thread::task-42 --limit 200 --json"
     ));
 }
 

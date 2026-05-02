@@ -3298,7 +3298,7 @@ fn format_task_progress(task_payload: &Value, history_payload: Option<&Value>) -
     if thread_id != "-" {
         let _ = writeln!(
             &mut output,
-            "\nFull thread with tool calls: garyx debug thread {thread_id} --limit 200 --json"
+            "\nFull thread with tool calls: garyx thread history {thread_id} --limit 200 --json"
         );
     }
     output
@@ -3593,7 +3593,7 @@ fn format_principal(value: &Value) -> String {
     }
 }
 
-pub(crate) async fn cmd_debug_thread(
+pub(crate) async fn cmd_thread_history(
     config_path: &str,
     thread_id: &str,
     limit: usize,

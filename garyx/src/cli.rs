@@ -139,11 +139,6 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: LogsAction,
     },
-    /// Runtime diagnostics for bot and thread investigations
-    Debug {
-        #[command(subcommand)]
-        action: DebugAction,
-    },
     /// Bot status and current binding utilities
     #[command(name = "bot")]
     Bot {
@@ -507,21 +502,6 @@ pub(crate) enum LogsAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum DebugAction {
-    /// Inspect a single thread's runtime diagnostics
-    Thread {
-        /// Canonical thread id
-        thread_id: String,
-        /// Maximum number of records/history items to fetch
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
 pub(crate) enum BotAction {
     /// Show the bot's current main endpoint and bound thread
     Status {
@@ -815,6 +795,17 @@ pub(crate) enum ThreadAction {
     /// Get one thread
     Get {
         thread_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a thread's message history, tool calls, and runtime records
+    History {
+        /// Canonical thread id
+        thread_id: String,
+        /// Maximum number of records/history items to fetch
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
         /// Output as JSON
         #[arg(long)]
         json: bool,

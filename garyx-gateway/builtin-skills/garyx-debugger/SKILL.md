@@ -10,7 +10,7 @@ Use this skill to inspect Garyx runtime diagnostics from the terminal.
 ## Primary Entry Points
 
 - By thread:
-  `garyx debug thread <thread_id>`
+  `garyx thread history <thread_id>`
 - By bot:
   `garyx bot status <bot_id>`
 - Repo-local helper script:
@@ -18,7 +18,7 @@ Use this skill to inspect Garyx runtime diagnostics from the terminal.
 
 Examples:
 
-- `garyx debug thread thread::0afde5d5-e577-458b-9d49-ceae16ea97a1`
+- `garyx thread history thread::0afde5d5-e577-458b-9d49-ceae16ea97a1`
 - `garyx bot status telegram:main`
 - `garyx bot status telegram:main --json`
 
