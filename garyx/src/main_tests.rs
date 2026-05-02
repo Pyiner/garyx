@@ -3,8 +3,9 @@ use std::sync::Arc;
 use clap::{CommandFactory, Parser};
 
 use crate::cli::{
-    AgentAction, AutoResearchAction, BotAction, ChannelsAction, Cli, CommandAction, Commands,
-    ConfigAction, GatewayAction, LogsAction, MigrateAction, TaskAction, TeamAction, ThreadAction,
+    AgentAction, AutoResearchAction, AutomationAction, BotAction, ChannelsAction, Cli,
+    CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, MigrateAction, TaskAction,
+    TeamAction, ThreadAction,
 };
 use crate::commands::{
     OnboardCommandOptions, canonical_channel_id, cmd_channels_add, cmd_channels_login, cmd_onboard,
@@ -532,6 +533,59 @@ fn parse_auto_research_get() {
             assert!(json);
         }
         _ => panic!("expected AutoResearch::Get"),
+    }
+}
+
+#[test]
+fn parse_automation_create_interval() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "automation",
+        "create",
+        "--label",
+        "Daily triage",
+        "--prompt",
+        "Summarize repo state",
+        "--workspace-dir",
+        "/tmp/repo",
+        "--every-hours",
+        "6",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Automation {
+            action:
+                AutomationAction::Create {
+                    label,
+                    prompt,
+                    workspace_dir,
+                    schedule,
+                    json,
+                    ..
+                },
+        }) => {
+            assert_eq!(label, "Daily triage");
+            assert_eq!(prompt.as_deref(), Some("Summarize repo state"));
+            assert_eq!(workspace_dir.as_deref(), Some("/tmp/repo"));
+            assert_eq!(schedule.every_hours, Some(6));
+            assert!(json);
+        }
+        _ => panic!("expected Automation::Create"),
+    }
+}
+
+#[test]
+fn parse_automation_has_no_legacy_aliases() {
+    for args in [
+        ["garyx", "cron", "list"],
+        ["garyx", "schedule", "list"],
+        ["garyx", "automations", "list"],
+    ] {
+        let error = match Cli::try_parse_from(args) {
+            Ok(_) => panic!("legacy automation alias should not parse"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 }
 

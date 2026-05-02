@@ -3,7 +3,7 @@ use axum::{
     Json, Router,
     extract::Path as AxumPath,
     http::StatusCode,
-    routing::{post, put},
+    routing::{get, post, put},
 };
 use garyx_router::file_store::thread_storage_file_name;
 use std::ffi::OsStr;
@@ -213,6 +213,212 @@ async fn spawn_agent_http_test_server(
                     }
                 },
             ),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test router");
+    });
+    (format!("http://{addr}"), handle)
+}
+
+async fn spawn_automation_http_test_server(
+    requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+) -> (String, JoinHandle<()>) {
+    let list_requests = requests.clone();
+    let create_requests = requests.clone();
+    let get_requests = requests.clone();
+    let update_requests = requests.clone();
+    let delete_requests = requests.clone();
+    let run_requests = requests.clone();
+    let activity_requests = requests.clone();
+
+    let app = Router::new()
+        .route(
+            "/api/automations",
+            get(move || {
+                let requests = list_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "GET".to_owned(),
+                            path: "/api/automations".to_owned(),
+                            body: Value::Null,
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "automations": []
+                        })),
+                    )
+                }
+            })
+            .post(move |Json(payload): Json<Value>| {
+                let requests = create_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "POST".to_owned(),
+                            path: "/api/automations".to_owned(),
+                            body: payload.clone(),
+                        });
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "id": "automation::created",
+                            "label": payload["label"],
+                            "prompt": payload["prompt"],
+                            "agentId": payload.get("agentId").cloned().unwrap_or_else(|| json!("claude")),
+                            "enabled": payload.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                            "workspaceDir": payload["workspaceDir"],
+                            "nextRun": "2030-05-01T08:30:00Z",
+                            "lastStatus": "skipped",
+                            "schedule": payload["schedule"],
+                        })),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/api/automations/{automation_id}",
+            get(move |AxumPath(automation_id): AxumPath<String>| {
+                let requests = get_requests.clone();
+                async move {
+                    let path = format!("/api/automations/{automation_id}");
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "GET".to_owned(),
+                            path,
+                            body: Value::Null,
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "id": automation_id,
+                            "label": "Daily triage",
+                            "prompt": "Summarize repo state",
+                            "agentId": "claude",
+                            "enabled": true,
+                            "workspaceDir": "/tmp/repo",
+                            "nextRun": "2030-05-01T08:30:00Z",
+                            "lastStatus": "skipped",
+                            "schedule": {"kind": "interval", "hours": 6},
+                        })),
+                    )
+                }
+            })
+            .patch(
+                move |AxumPath(automation_id): AxumPath<String>, Json(payload): Json<Value>| {
+                    let requests = update_requests.clone();
+                    async move {
+                        let path = format!("/api/automations/{automation_id}");
+                        requests
+                            .lock()
+                            .expect("request lock")
+                            .push(RecordedRequest {
+                                method: "PATCH".to_owned(),
+                                path,
+                                body: payload.clone(),
+                            });
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "id": automation_id,
+                                "label": payload.get("label").cloned().unwrap_or_else(|| json!("Daily triage")),
+                                "prompt": payload.get("prompt").cloned().unwrap_or_else(|| json!("Summarize repo state")),
+                                "agentId": payload.get("agentId").cloned().unwrap_or_else(|| json!("claude")),
+                                "enabled": payload.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                                "workspaceDir": payload.get("workspaceDir").cloned().unwrap_or_else(|| json!("/tmp/repo")),
+                                "nextRun": "2030-05-01T08:30:00Z",
+                                "lastStatus": "skipped",
+                                "schedule": payload.get("schedule").cloned().unwrap_or_else(|| json!({"kind": "interval", "hours": 6})),
+                            })),
+                        )
+                    }
+                },
+            )
+            .delete(move |AxumPath(automation_id): AxumPath<String>| {
+                let requests = delete_requests.clone();
+                async move {
+                    let path = format!("/api/automations/{automation_id}");
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "DELETE".to_owned(),
+                            path,
+                            body: Value::Null,
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "deleted": true,
+                            "id": automation_id,
+                        })),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/api/automations/{automation_id}/run-now",
+            post(move |AxumPath(automation_id): AxumPath<String>| {
+                let requests = run_requests.clone();
+                async move {
+                    let path = format!("/api/automations/{automation_id}/run-now");
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "POST".to_owned(),
+                            path,
+                            body: Value::Null,
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "runId": "run-1",
+                            "status": "success",
+                            "startedAt": "2030-05-01T08:30:00Z",
+                            "finishedAt": "2030-05-01T08:30:01Z",
+                            "durationMs": 1000,
+                            "threadId": "thread::automation-test",
+                        })),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/api/automations/{automation_id}/activity",
+            get(move |AxumPath(automation_id): AxumPath<String>| {
+                let requests = activity_requests.clone();
+                async move {
+                    let path = format!("/api/automations/{automation_id}/activity");
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "GET".to_owned(),
+                            path,
+                            body: Value::Null,
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "items": [],
+                            "threadId": null,
+                            "count": 0,
+                        })),
+                    )
+                }
+            }),
         );
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -552,6 +758,145 @@ async fn cmd_agent_upsert_falls_back_to_post_after_put_failure() {
     assert_eq!(records[1].method, "POST");
     assert_eq!(records[1].path, "/api/custom-agents");
     assert_eq!(records[1].body["model"], "gemini-3.1-pro-preview");
+}
+
+#[test]
+fn automation_schedule_args_build_interval_schedule() {
+    let args = crate::cli::AutomationScheduleArgs {
+        every_hours: Some(6),
+        ..Default::default()
+    };
+
+    let schedule = automation_schedule_from_cli_args(&args, true)
+        .expect("schedule parse")
+        .expect("schedule");
+
+    assert_eq!(schedule, AutomationScheduleView::Interval { hours: 6 });
+}
+
+#[test]
+fn automation_schedule_args_build_daily_schedule() {
+    let args = crate::cli::AutomationScheduleArgs {
+        daily_time: Some("08:30".to_owned()),
+        weekdays: vec!["mon".to_owned(), "fri".to_owned()],
+        timezone: Some("Asia/Shanghai".to_owned()),
+        ..Default::default()
+    };
+
+    let schedule = automation_schedule_from_cli_args(&args, true)
+        .expect("schedule parse")
+        .expect("schedule");
+
+    assert_eq!(
+        schedule,
+        AutomationScheduleView::Daily {
+            time: "08:30".to_owned(),
+            weekdays: vec!["mon".to_owned(), "fri".to_owned()],
+            timezone: "Asia/Shanghai".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn automation_schedule_args_reject_ambiguous_schedule_shape() {
+    let args = crate::cli::AutomationScheduleArgs {
+        every_hours: Some(6),
+        once_at: Some("2030-05-01T08:30".to_owned()),
+        ..Default::default()
+    };
+
+    let error = automation_schedule_from_cli_args(&args, true)
+        .expect_err("ambiguous schedule should fail")
+        .to_string();
+
+    assert!(error.contains("choose exactly one schedule shape"));
+}
+
+#[tokio::test]
+async fn cmd_automation_create_posts_disabled_interval_payload() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_automation_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_automation_create(
+        config_path.to_str().expect("config path"),
+        "Daily triage".to_owned(),
+        Some("Summarize repo state".to_owned()),
+        Some("codex".to_owned()),
+        Some(dir.path().to_string_lossy().to_string()),
+        crate::cli::AutomationScheduleArgs {
+            every_hours: Some(6),
+            ..Default::default()
+        },
+        true,
+        false,
+    )
+    .await
+    .expect("automation create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "POST");
+    assert_eq!(records[0].path, "/api/automations");
+    assert_eq!(records[0].body["label"], "Daily triage");
+    assert_eq!(records[0].body["prompt"], "Summarize repo state");
+    assert_eq!(records[0].body["agentId"], "codex");
+    assert_eq!(
+        records[0].body["workspaceDir"].as_str(),
+        Some(
+            dir.path()
+                .canonicalize()
+                .expect("canonical tempdir")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(records[0].body["enabled"], false);
+    assert_eq!(records[0].body["schedule"]["kind"], "interval");
+    assert_eq!(records[0].body["schedule"]["hours"], 6);
+}
+
+#[tokio::test]
+async fn cmd_automation_update_patches_requested_fields() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_automation_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_automation_update(
+        config_path.to_str().expect("config path"),
+        "automation::created",
+        Some("Weekly triage".to_owned()),
+        None,
+        None,
+        None,
+        crate::cli::AutomationScheduleArgs {
+            daily_time: Some("09:45".to_owned()),
+            timezone: Some("Asia/Shanghai".to_owned()),
+            ..Default::default()
+        },
+        false,
+        true,
+        false,
+    )
+    .await
+    .expect("automation update should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "PATCH");
+    assert_eq!(records[0].path, "/api/automations/automation::created");
+    assert_eq!(records[0].body["label"], "Weekly triage");
+    assert_eq!(records[0].body["enabled"], false);
+    assert!(records[0].body.get("prompt").is_none());
+    assert_eq!(records[0].body["schedule"]["kind"], "daily");
+    assert_eq!(records[0].body["schedule"]["time"], "09:45");
+    assert_eq!(records[0].body["schedule"]["timezone"], "Asia/Shanghai");
 }
 
 // Regression guard for the Weixin onboarding: `qrcode_img_content` from

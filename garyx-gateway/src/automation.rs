@@ -43,6 +43,8 @@ pub struct CreateAutomationBody {
     pub agent_id: Option<String>,
     pub workspace_dir: String,
     pub schedule: AutomationScheduleView,
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -684,7 +686,7 @@ pub async fn create_automation(
         &agent_id,
         &workspace_dir,
         body.schedule.clone(),
-        true,
+        body.enabled.unwrap_or(true),
     ) {
         Ok(cfg) => cfg,
         Err(error) => return invalid(error),

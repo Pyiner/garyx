@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use crate::config_support::default_config_path_string;
 
@@ -150,6 +150,12 @@ pub(crate) enum Commands {
     AutoResearch {
         #[command(subcommand)]
         action: AutoResearchAction,
+    },
+    /// Scheduled automation management
+    #[command(name = "automation")]
+    Automation {
+        #[command(subcommand)]
+        action: AutomationAction,
     },
     /// Custom agent management
     #[command(name = "agent", alias = "agents", visible_alias = "custom-agent")]
@@ -617,6 +623,139 @@ pub(crate) enum AutoResearchAction {
         run_id: String,
         /// Candidate id to select (e.g. c_3)
         candidate_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Clone, Default, Args)]
+pub(crate) struct AutomationScheduleArgs {
+    /// Run every N hours
+    #[arg(long)]
+    pub(crate) every_hours: Option<u64>,
+    /// Run daily at HH:MM
+    #[arg(long)]
+    pub(crate) daily_time: Option<String>,
+    /// Weekday for daily schedules: mon, tue, wed, thu, fri, sat, sun. Repeat to select multiple days. Omit for every day.
+    #[arg(long = "weekday")]
+    pub(crate) weekdays: Vec<String>,
+    /// Timezone for daily schedules. Defaults to Asia/Shanghai when --daily-time is used.
+    #[arg(long)]
+    pub(crate) timezone: Option<String>,
+    /// Run once at YYYY-MM-DDTHH:MM, RFC3339, or ONCE:YYYY-MM-DD HH:MM
+    #[arg(long)]
+    pub(crate) once_at: Option<String>,
+    /// Raw AutomationScheduleView JSON, e.g. '{"kind":"interval","hours":6}'
+    #[arg(long)]
+    pub(crate) schedule_json: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AutomationAction {
+    /// List scheduled automations
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get one scheduled automation
+    Get {
+        automation_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a scheduled automation
+    #[command(visible_alias = "add")]
+    Create {
+        /// Human-readable automation name
+        #[arg(long, alias = "name")]
+        label: String,
+        /// Prompt text. If omitted, reads from stdin.
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Agent or team id to run
+        #[arg(long)]
+        agent_id: Option<String>,
+        /// Workspace directory for the automation thread; defaults to the current directory
+        #[arg(long)]
+        workspace_dir: Option<String>,
+        #[command(flatten)]
+        schedule: AutomationScheduleArgs,
+        /// Create disabled, then enable later with `garyx automation resume`
+        #[arg(long)]
+        disabled: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update a scheduled automation
+    Update {
+        automation_id: String,
+        /// Human-readable automation name
+        #[arg(long, alias = "name")]
+        label: Option<String>,
+        /// Prompt text
+        #[arg(long)]
+        prompt: Option<String>,
+        /// Agent or team id to run
+        #[arg(long)]
+        agent_id: Option<String>,
+        /// Workspace directory for the automation thread
+        #[arg(long)]
+        workspace_dir: Option<String>,
+        #[command(flatten)]
+        schedule: AutomationScheduleArgs,
+        /// Enable the automation
+        #[arg(long, conflicts_with = "disable")]
+        enable: bool,
+        /// Disable the automation
+        #[arg(long, conflicts_with = "enable")]
+        disable: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a scheduled automation
+    #[command(visible_alias = "remove", visible_alias = "rm")]
+    Delete {
+        automation_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run a scheduled automation immediately
+    #[command(visible_alias = "run-now")]
+    Run {
+        automation_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Disable a scheduled automation
+    Pause {
+        automation_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Enable a scheduled automation
+    Resume {
+        automation_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show recent automation runs
+    Activity {
+        automation_id: String,
+        /// Number of runs to fetch
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Offset for pagination
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
         /// Output as JSON
         #[arg(long)]
         json: bool,

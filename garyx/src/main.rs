@@ -16,9 +16,9 @@ mod service_manager;
 mod main_tests;
 
 use cli::{
-    AgentAction, AutoResearchAction, BotAction, ChannelsAction, Cli, CommandAction, Commands,
-    ConfigAction, GatewayAction, LogsAction, MigrateAction, PluginsAction, TaskAction, TeamAction,
-    ThreadAction, WikiAction,
+    AgentAction, AutoResearchAction, AutomationAction, BotAction, ChannelsAction, Cli,
+    CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, MigrateAction, PluginsAction,
+    TaskAction, TeamAction, ThreadAction, WikiAction,
 };
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
@@ -26,19 +26,21 @@ use commands::{
     cmd_agent_update, cmd_agent_upsert, cmd_audit, cmd_auto_research_candidates,
     cmd_auto_research_create, cmd_auto_research_feedback, cmd_auto_research_get,
     cmd_auto_research_iterations, cmd_auto_research_list, cmd_auto_research_patch,
-    cmd_auto_research_reverify, cmd_auto_research_select, cmd_auto_research_stop, cmd_bot_status,
-    cmd_channels_add, cmd_channels_enable, cmd_channels_list, cmd_channels_login,
-    cmd_channels_remove, cmd_command_delete, cmd_command_get, cmd_command_list, cmd_command_set,
-    cmd_config_get, cmd_config_init, cmd_config_path, cmd_config_set, cmd_config_show,
-    cmd_config_unset, cmd_config_validate, cmd_doctor, cmd_gateway_install,
-    cmd_gateway_reload_config, cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop,
-    cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail,
-    cmd_migrate_thread_transcripts, cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign,
-    cmd_task_claim, cmd_task_create, cmd_task_get, cmd_task_history, cmd_task_list,
-    cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_unassign,
-    cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history, cmd_thread_list,
-    cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_update, cmd_wiki_delete,
-    cmd_wiki_get, cmd_wiki_init, cmd_wiki_list, cmd_wiki_status, run_gateway,
+    cmd_auto_research_reverify, cmd_auto_research_select, cmd_auto_research_stop,
+    cmd_automation_activity, cmd_automation_create, cmd_automation_delete, cmd_automation_get,
+    cmd_automation_list, cmd_automation_pause, cmd_automation_resume, cmd_automation_run,
+    cmd_automation_update, cmd_bot_status, cmd_channels_add, cmd_channels_enable,
+    cmd_channels_list, cmd_channels_login, cmd_channels_remove, cmd_command_delete,
+    cmd_command_get, cmd_command_list, cmd_command_set, cmd_config_get, cmd_config_init,
+    cmd_config_path, cmd_config_set, cmd_config_show, cmd_config_unset, cmd_config_validate,
+    cmd_doctor, cmd_gateway_install, cmd_gateway_reload_config, cmd_gateway_restart,
+    cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear,
+    cmd_logs_path, cmd_logs_tail, cmd_migrate_thread_transcripts, cmd_onboard, cmd_send_message,
+    cmd_status, cmd_task_assign, cmd_task_claim, cmd_task_create, cmd_task_get, cmd_task_history,
+    cmd_task_list, cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title,
+    cmd_task_unassign, cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history,
+    cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_update,
+    cmd_wiki_delete, cmd_wiki_get, cmd_wiki_init, cmd_wiki_list, cmd_wiki_status, run_gateway,
 };
 
 struct ThreadSendDestination {
@@ -524,6 +526,81 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 candidate_id,
                 json,
             } => cmd_auto_research_select(config_path, &run_id, &candidate_id, json).await,
+        },
+        Some(Commands::Automation { action }) => match action {
+            AutomationAction::List { json } => cmd_automation_list(config_path, json).await,
+            AutomationAction::Get {
+                automation_id,
+                json,
+            } => cmd_automation_get(config_path, &automation_id, json).await,
+            AutomationAction::Create {
+                label,
+                prompt,
+                agent_id,
+                workspace_dir,
+                schedule,
+                disabled,
+                json,
+            } => {
+                cmd_automation_create(
+                    config_path,
+                    label,
+                    prompt,
+                    agent_id,
+                    workspace_dir,
+                    schedule,
+                    disabled,
+                    json,
+                )
+                .await
+            }
+            AutomationAction::Update {
+                automation_id,
+                label,
+                prompt,
+                agent_id,
+                workspace_dir,
+                schedule,
+                enable,
+                disable,
+                json,
+            } => {
+                cmd_automation_update(
+                    config_path,
+                    &automation_id,
+                    label,
+                    prompt,
+                    agent_id,
+                    workspace_dir,
+                    schedule,
+                    enable,
+                    disable,
+                    json,
+                )
+                .await
+            }
+            AutomationAction::Delete {
+                automation_id,
+                json,
+            } => cmd_automation_delete(config_path, &automation_id, json).await,
+            AutomationAction::Run {
+                automation_id,
+                json,
+            } => cmd_automation_run(config_path, &automation_id, json).await,
+            AutomationAction::Pause {
+                automation_id,
+                json,
+            } => cmd_automation_pause(config_path, &automation_id, json).await,
+            AutomationAction::Resume {
+                automation_id,
+                json,
+            } => cmd_automation_resume(config_path, &automation_id, json).await,
+            AutomationAction::Activity {
+                automation_id,
+                limit,
+                offset,
+                json,
+            } => cmd_automation_activity(config_path, &automation_id, limit, offset, json).await,
         },
         Some(Commands::Agent { action }) => match action {
             AgentAction::List {

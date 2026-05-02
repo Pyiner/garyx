@@ -28,10 +28,11 @@ use garyx_models::command_catalog::{
     normalize_shortcut_command_name,
 };
 use garyx_models::config::{
-    ApiAccount, BUILTIN_CHANNEL_PLUGIN_FEISHU, BUILTIN_CHANNEL_PLUGIN_TELEGRAM,
-    BUILTIN_CHANNEL_PLUGIN_WEIXIN, FeishuAccount, FeishuDomain, GaryxConfig, PluginAccountEntry,
-    SlashCommand, TelegramAccount, WeixinAccount, feishu_account_to_plugin_entry,
-    telegram_account_to_plugin_entry, weixin_account_to_plugin_entry,
+    ApiAccount, AutomationScheduleView, BUILTIN_CHANNEL_PLUGIN_FEISHU,
+    BUILTIN_CHANNEL_PLUGIN_TELEGRAM, BUILTIN_CHANNEL_PLUGIN_WEIXIN, FeishuAccount, FeishuDomain,
+    GaryxConfig, PluginAccountEntry, SlashCommand, TelegramAccount, WeixinAccount,
+    feishu_account_to_plugin_entry, telegram_account_to_plugin_entry,
+    weixin_account_to_plugin_entry,
 };
 use garyx_models::config_loader::{
     ConfigHotReloadOptions, ConfigHotReloader, ConfigLoadOptions, ConfigRuntimeOverrides,
@@ -55,6 +56,7 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 use uuid::Uuid;
 
+use crate::cli::AutomationScheduleArgs;
 use crate::config_support::{
     default_config_path_buf, load_config_or_default, prepare_config_path_for_io_buf,
     print_diagnostics, print_errors,
@@ -1482,10 +1484,19 @@ async fn post_gateway_json(
     path: &str,
     payload: &Value,
 ) -> Result<Value, Box<dyn std::error::Error>> {
+    post_gateway_json_with_timeout(gateway, path, payload, Duration::from_secs(10)).await
+}
+
+async fn post_gateway_json_with_timeout(
+    gateway: &GatewayEndpoint,
+    path: &str,
+    payload: &Value,
+    timeout: Duration,
+) -> Result<Value, Box<dyn std::error::Error>> {
     let url = format!("{}{}", gateway.base_url, path);
     let response = gateway_request(reqwest::Client::new().post(&url), gateway)
         .json(payload)
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(timeout)
         .send()
         .await?;
     let status = response.status();
@@ -2022,6 +2033,477 @@ pub(crate) async fn cmd_auto_research_select(
     }
     println!("✓ Candidate {candidate_id} selected for run {run_id}");
     print_auto_research_run_summary(&payload, None);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled automation commands
+// ---------------------------------------------------------------------------
+
+fn trim_required_cli(value: &str, field: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{field} cannot be empty").into());
+    }
+    Ok(trimmed.to_owned())
+}
+
+fn trim_optional_cli(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn resolve_automation_workspace_dir(
+    value: Option<String>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let path = trim_optional_cli(value)
+        .map(PathBuf::from)
+        .unwrap_or(std::env::current_dir()?);
+    let resolved = path.canonicalize().unwrap_or(path);
+    Ok(resolved.display().to_string())
+}
+
+fn automation_schedule_from_cli_args(
+    args: &AutomationScheduleArgs,
+    required: bool,
+) -> Result<Option<AutomationScheduleView>, Box<dyn std::error::Error>> {
+    let selected_count = [
+        args.schedule_json.is_some(),
+        args.every_hours.is_some(),
+        args.daily_time.is_some(),
+        args.once_at.is_some(),
+    ]
+    .into_iter()
+    .filter(|selected| *selected)
+    .count();
+
+    if selected_count > 1 {
+        return Err(
+            "choose exactly one schedule shape: --every-hours, --daily-time, --once-at, or --schedule-json"
+                .into(),
+        );
+    }
+
+    if selected_count == 0 {
+        if !args.weekdays.is_empty() || args.timezone.is_some() {
+            return Err("--weekday and --timezone require --daily-time".into());
+        }
+        if required {
+            return Err(
+                "schedule is required: use --every-hours, --daily-time, --once-at, or --schedule-json"
+                    .into(),
+            );
+        }
+        return Ok(None);
+    }
+
+    if let Some(raw) = args.schedule_json.as_deref() {
+        let schedule = serde_json::from_str::<AutomationScheduleView>(raw)
+            .map_err(|error| format!("invalid --schedule-json: {error}"))?;
+        return Ok(Some(schedule));
+    }
+
+    if let Some(hours) = args.every_hours {
+        if hours == 0 {
+            return Err("--every-hours must be greater than 0".into());
+        }
+        return Ok(Some(AutomationScheduleView::Interval { hours }));
+    }
+
+    if let Some(time) = args.daily_time.as_deref() {
+        let time = trim_required_cli(time, "--daily-time")?;
+        let timezone =
+            trim_optional_cli(args.timezone.clone()).unwrap_or_else(|| "Asia/Shanghai".to_owned());
+        let weekdays = args
+            .weekdays
+            .iter()
+            .filter_map(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_owned())
+            })
+            .collect::<Vec<_>>();
+        return Ok(Some(AutomationScheduleView::Daily {
+            time,
+            weekdays,
+            timezone,
+        }));
+    }
+
+    if let Some(at) = args.once_at.as_deref() {
+        let at = trim_required_cli(at, "--once-at")?;
+        if !args.weekdays.is_empty() || args.timezone.is_some() {
+            return Err("--weekday and --timezone are only valid with --daily-time".into());
+        }
+        return Ok(Some(AutomationScheduleView::Once { at }));
+    }
+
+    unreachable!("selected_count guarded all schedule variants")
+}
+
+fn format_automation_schedule(schedule: &Value) -> String {
+    match schedule["kind"].as_str().unwrap_or_default() {
+        "interval" => format!(
+            "every {}h",
+            schedule["hours"]
+                .as_u64()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "?".to_owned())
+        ),
+        "daily" => {
+            let time = schedule["time"].as_str().unwrap_or("?");
+            let timezone = schedule["timezone"].as_str().unwrap_or("");
+            let weekdays = schedule["weekdays"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "daily".to_owned());
+            if timezone.is_empty() {
+                format!("{weekdays} {time}")
+            } else {
+                format!("{weekdays} {time} {timezone}")
+            }
+        }
+        "once" => format!("once {}", schedule["at"].as_str().unwrap_or("?")),
+        _ => "-".to_owned(),
+    }
+}
+
+fn print_automation_summary(value: &Value) {
+    println!("Automation: {}", value["id"].as_str().unwrap_or("-"));
+    println!("Name: {}", value["label"].as_str().unwrap_or("-"));
+    println!(
+        "Enabled: {}",
+        value["enabled"]
+            .as_bool()
+            .map(|enabled| enabled.to_string())
+            .unwrap_or_else(|| "-".to_owned())
+    );
+    println!("Agent: {}", value["agentId"].as_str().unwrap_or("-"));
+    println!(
+        "Workspace: {}",
+        value["workspaceDir"].as_str().unwrap_or("-")
+    );
+    println!(
+        "Schedule: {}",
+        format_automation_schedule(&value["schedule"])
+    );
+    println!("Next run: {}", value["nextRun"].as_str().unwrap_or("-"));
+    if let Some(thread_id) = value["threadId"].as_str() {
+        println!("Thread: {thread_id}");
+    }
+    if let Some(last_run_at) = value["lastRunAt"].as_str() {
+        println!("Last run: {last_run_at}");
+    }
+    let prompt = value["prompt"].as_str().unwrap_or_default();
+    if !prompt.trim().is_empty() {
+        println!("Prompt: {}", command_prompt_preview(prompt, 160));
+    }
+}
+
+fn print_automation_activity_entry(value: &Value) {
+    let run_id = value["runId"].as_str().unwrap_or("-");
+    let status = value["status"].as_str().unwrap_or("-");
+    let started_at = value["startedAt"].as_str().unwrap_or("-");
+    let thread_id = value["threadId"].as_str().unwrap_or("-");
+    println!("Run: {run_id}");
+    println!("Status: {status}");
+    println!("Started: {started_at}");
+    if let Some(finished_at) = value["finishedAt"].as_str() {
+        println!("Finished: {finished_at}");
+    }
+    if let Some(duration_ms) = value["durationMs"].as_u64() {
+        println!("Duration: {duration_ms}ms");
+    }
+    println!("Thread: {thread_id}");
+    if let Some(excerpt) = value["excerpt"].as_str() {
+        println!("Excerpt: {}", command_prompt_preview(excerpt, 160));
+    }
+}
+
+pub(crate) async fn cmd_automation_list(
+    config_path: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(&gateway, "/api/automations").await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    let items = payload["automations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if items.is_empty() {
+        println!("Automations: (none)");
+        return Ok(());
+    }
+    println!(
+        "{:<42}  {:<7}  {:<28}  {:<25}  {}",
+        "ID", "ENABLED", "SCHEDULE", "NEXT RUN", "NAME"
+    );
+    println!("{}", "-".repeat(120));
+    for item in &items {
+        let id = item["id"].as_str().unwrap_or("-");
+        let enabled = if item["enabled"].as_bool().unwrap_or(false) {
+            "yes"
+        } else {
+            "no"
+        };
+        let schedule = format_automation_schedule(&item["schedule"]);
+        let next_run = item["nextRun"].as_str().unwrap_or("-");
+        let label = item["label"].as_str().unwrap_or("-");
+        println!("{id:<42}  {enabled:<7}  {schedule:<28}  {next_run:<25}  {label}");
+    }
+    Ok(())
+}
+
+pub(crate) async fn cmd_automation_get(
+    config_path: &str,
+    automation_id: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let automation_id = trim_required_cli(automation_id, "automation_id")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!("/api/automations/{}", urlencoding::encode(&automation_id)),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    print_automation_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_automation_create(
+    config_path: &str,
+    label: String,
+    prompt: Option<String>,
+    agent_id: Option<String>,
+    workspace_dir: Option<String>,
+    schedule: AutomationScheduleArgs,
+    disabled: bool,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let label = trim_required_cli(&label, "label")?;
+    let prompt = read_shortcut_prompt(prompt)?;
+    let workspace_dir = resolve_automation_workspace_dir(workspace_dir)?;
+    let schedule = automation_schedule_from_cli_args(&schedule, true)?
+        .expect("required automation schedule should be present");
+    let gateway = gateway_endpoint(config_path)?;
+
+    let mut body = json!({
+        "label": label,
+        "prompt": prompt,
+        "workspaceDir": workspace_dir,
+        "schedule": schedule,
+        "enabled": !disabled,
+    });
+    if let Some(agent_id) = trim_optional_cli(agent_id) {
+        body["agentId"] = json!(agent_id);
+    }
+
+    let payload = post_gateway_json(&gateway, "/api/automations", &body).await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    print_automation_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_automation_update(
+    config_path: &str,
+    automation_id: &str,
+    label: Option<String>,
+    prompt: Option<String>,
+    agent_id: Option<String>,
+    workspace_dir: Option<String>,
+    schedule: AutomationScheduleArgs,
+    enable: bool,
+    disable: bool,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let automation_id = trim_required_cli(automation_id, "automation_id")?;
+    let mut body = Map::new();
+
+    if let Some(label) = label {
+        body.insert(
+            "label".to_owned(),
+            json!(trim_required_cli(&label, "label")?),
+        );
+    }
+    if let Some(prompt) = prompt {
+        body.insert(
+            "prompt".to_owned(),
+            json!(trim_required_cli(&prompt, "prompt")?),
+        );
+    }
+    if let Some(agent_id) = trim_optional_cli(agent_id) {
+        body.insert("agentId".to_owned(), json!(agent_id));
+    }
+    if let Some(workspace_dir) = workspace_dir {
+        body.insert(
+            "workspaceDir".to_owned(),
+            json!(resolve_automation_workspace_dir(Some(workspace_dir))?),
+        );
+    }
+    if let Some(schedule) = automation_schedule_from_cli_args(&schedule, false)? {
+        body.insert("schedule".to_owned(), json!(schedule));
+    }
+    if enable {
+        body.insert("enabled".to_owned(), json!(true));
+    } else if disable {
+        body.insert("enabled".to_owned(), json!(false));
+    }
+    if body.is_empty() {
+        return Err("provide at least one automation field to update".into());
+    }
+
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = patch_gateway_json(
+        &gateway,
+        &format!("/api/automations/{}", urlencoding::encode(&automation_id)),
+        &Value::Object(body),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    print_automation_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_automation_delete(
+    config_path: &str,
+    automation_id: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let automation_id = trim_required_cli(automation_id, "automation_id")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = delete_gateway_json(
+        &gateway,
+        &format!("/api/automations/{}", urlencoding::encode(&automation_id)),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    println!("Deleted automation: {automation_id}");
+    Ok(())
+}
+
+pub(crate) async fn cmd_automation_run(
+    config_path: &str,
+    automation_id: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let automation_id = trim_required_cli(automation_id, "automation_id")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = post_gateway_json_with_timeout(
+        &gateway,
+        &format!(
+            "/api/automations/{}/run-now",
+            urlencoding::encode(&automation_id)
+        ),
+        &json!({}),
+        Duration::from_secs(300),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    print_automation_activity_entry(&payload);
+    Ok(())
+}
+
+async fn patch_automation_enabled(
+    config_path: &str,
+    automation_id: &str,
+    enabled: bool,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let automation_id = trim_required_cli(automation_id, "automation_id")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = patch_gateway_json(
+        &gateway,
+        &format!("/api/automations/{}", urlencoding::encode(&automation_id)),
+        &json!({ "enabled": enabled }),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    print_automation_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_automation_pause(
+    config_path: &str,
+    automation_id: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    patch_automation_enabled(config_path, automation_id, false, json).await
+}
+
+pub(crate) async fn cmd_automation_resume(
+    config_path: &str,
+    automation_id: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    patch_automation_enabled(config_path, automation_id, true, json).await
+}
+
+pub(crate) async fn cmd_automation_activity(
+    config_path: &str,
+    automation_id: &str,
+    limit: usize,
+    offset: usize,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let automation_id = trim_required_cli(automation_id, "automation_id")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!(
+            "/api/automations/{}/activity?limit={}&offset={}",
+            urlencoding::encode(&automation_id),
+            limit,
+            offset
+        ),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    let items = payload["items"].as_array().cloned().unwrap_or_default();
+    if items.is_empty() {
+        println!("Automation activity: (none)");
+        return Ok(());
+    }
+    println!(
+        "{:<38}  {:<8}  {:<25}  {:<38}  EXCERPT",
+        "RUN ID", "STATUS", "STARTED", "THREAD"
+    );
+    println!("{}", "-".repeat(130));
+    for item in &items {
+        let run_id = item["runId"].as_str().unwrap_or("-");
+        let status = item["status"].as_str().unwrap_or("-");
+        let started = item["startedAt"].as_str().unwrap_or("-");
+        let thread_id = item["threadId"].as_str().unwrap_or("-");
+        let excerpt = item["excerpt"]
+            .as_str()
+            .map(|text| command_prompt_preview(text, 48))
+            .unwrap_or_else(|| "-".to_owned());
+        println!("{run_id:<38}  {status:<8}  {started:<25}  {thread_id:<38}  {excerpt}");
+    }
     Ok(())
 }
 

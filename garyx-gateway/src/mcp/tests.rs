@@ -3,13 +3,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use axum::body::to_bytes;
-use axum::extract::State;
-use axum::response::IntoResponse;
 use garyx_channels::{
     ChannelDispatcher, ChannelDispatcherImpl, ChannelInfo, FeishuSender, OutboundMessage,
 };
-use garyx_models::config::{ApiAccount, AutomationScheduleView, CronJobConfig, GaryxConfig};
+use garyx_models::config::{ApiAccount, GaryxConfig};
 use garyx_models::provider::ProviderMessage;
 use garyx_models::routing::DeliveryContext;
 use garyx_router::{
@@ -20,8 +17,6 @@ use tempfile::tempdir;
 use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
-
-use crate::cron::CronService;
 
 #[derive(Default)]
 struct RecordingDispatcher {
@@ -146,80 +141,6 @@ fn insert_weixin_plugin_account(
             account_id.to_owned(),
             garyx_models::config::weixin_account_to_plugin_entry(&account),
         );
-}
-
-async fn test_server_with_cron_service() -> GaryMcpServer {
-    let state = crate::server::create_app_state(GaryxConfig::default());
-    let data_dir = std::env::temp_dir().join(format!("garyx-mcp-cron-{}", Uuid::new_v4()));
-    tokio::fs::create_dir_all(data_dir.join("cron").join("jobs"))
-        .await
-        .unwrap();
-
-    let svc = Arc::new(CronService::new(data_dir));
-    let mut state = (*state).clone_for_test();
-    state.ops.cron_service = Some(svc);
-    let state = Arc::new(state);
-    GaryMcpServer::new(state)
-}
-
-async fn test_server_with_cron_job() -> GaryMcpServer {
-    let server = test_server_with_cron_service().await;
-    let svc = server
-        .app_state
-        .ops
-        .cron_service
-        .as_ref()
-        .expect("cron service")
-        .clone();
-    svc.add(CronJobConfig {
-        id: "job1".to_owned(),
-        kind: Default::default(),
-        label: None,
-        schedule: CronSchedule::Interval { interval_secs: 60 },
-        ui_schedule: None,
-        action: CronAction::Log,
-        target: None,
-        message: None,
-        workspace_dir: None,
-        agent_id: None,
-        thread_id: None,
-        delete_after_run: false,
-        enabled: true,
-    })
-    .await
-    .unwrap();
-    server
-}
-
-async fn test_server_with_automation_job() -> GaryMcpServer {
-    let server = test_server_with_cron_service().await;
-    let svc = server
-        .app_state
-        .ops
-        .cron_service
-        .as_ref()
-        .expect("cron service")
-        .clone();
-    let cfg = crate::automation::build_automation_job(
-        "job1",
-        "Daily repo summary",
-        "Summarize the latest repo activity.",
-        "codex",
-        "/tmp/gary-repo",
-        AutomationScheduleView::Interval { hours: 6 },
-        true,
-    )
-    .expect("automation job config");
-    svc.add(cfg).await.unwrap();
-    server
-}
-
-async fn automation_list_payload(state: Arc<crate::server::AppState>) -> Value {
-    let response = crate::automation::list_automations(State(state))
-        .await
-        .into_response();
-    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    serde_json::from_slice(&body).unwrap()
 }
 
 // -- status --
@@ -533,28 +454,7 @@ async fn test_mcp_tool_metrics_record_success_and_error() {
         .await
         .expect("status should succeed");
     server.record_tool_metric("status", "ok", std::time::Duration::from_millis(1));
-    let bad_cron = CronParams {
-        action: "invalid".to_owned(),
-        job_id: None,
-        schedule: None,
-        schedule_view: None,
-        interval_secs: None,
-        at: None,
-        job_action: None,
-        cron_action: None,
-        enabled: None,
-        target: None,
-        message: None,
-        prompt: None,
-        agent_id: None,
-        label: None,
-        workspace_dir: None,
-        delete_after_run: None,
-    };
-    let _ = server
-        .cron(Parameters(bad_cron))
-        .await
-        .expect_err("cron should fail");
+    server.record_tool_metric("message", "error", std::time::Duration::from_millis(2));
 
     let metrics = server.app_state.ops.mcp_tool_metrics.snapshot();
     let status_ok = metrics
@@ -563,14 +463,14 @@ async fn test_mcp_tool_metrics_record_success_and_error() {
         .find(|m| m.tool == "status" && m.status == "ok")
         .map(|m| m.value)
         .unwrap_or(0);
-    let cron_error = metrics
+    let message_error = metrics
         .mcp_tool_calls_total
         .iter()
-        .find(|m| m.tool == "cron" && m.status == "error")
+        .find(|m| m.tool == "message" && m.status == "error")
         .map(|m| m.value)
         .unwrap_or(0);
     assert!(status_ok >= 1, "expected status ok call metric");
-    assert!(cron_error >= 1, "expected cron error call metric");
+    assert!(message_error >= 1, "expected message error call metric");
 
     let status_duration = metrics
         .mcp_tool_duration_ms
@@ -578,128 +478,32 @@ async fn test_mcp_tool_metrics_record_success_and_error() {
         .find(|m| m.tool == "status")
         .map(|m| m.count)
         .unwrap_or(0);
-    let cron_duration = metrics
+    let message_duration = metrics
         .mcp_tool_duration_ms
         .iter()
-        .find(|m| m.tool == "cron")
+        .find(|m| m.tool == "message")
         .map(|m| m.count)
         .unwrap_or(0);
     assert!(status_duration >= 1, "expected status duration metric");
-    assert!(cron_duration >= 1, "expected cron duration metric");
-}
-
-// -- cron --
-
-#[tokio::test]
-async fn test_cron_list_ok() {
-    let server = test_server();
-    let params = CronParams {
-        action: "list".to_owned(),
-        job_id: None,
-        schedule: None,
-        schedule_view: None,
-        interval_secs: None,
-        at: None,
-        job_action: None,
-        cron_action: None,
-        enabled: None,
-        target: None,
-        message: None,
-        prompt: None,
-        agent_id: None,
-        label: None,
-        workspace_dir: None,
-        delete_after_run: None,
-    };
-    let result = server.cron(Parameters(params)).await;
-    assert!(result.is_ok());
-    let v: Value = serde_json::from_str(&result.unwrap()).unwrap();
-    assert_eq!(v["tool"], "cron");
-    assert_eq!(v["action"], "list");
-}
-
-#[tokio::test]
-async fn test_cron_invalid_action() {
-    let server = test_server();
-    let params = CronParams {
-        action: "invalid".to_owned(),
-        job_id: None,
-        schedule: None,
-        schedule_view: None,
-        interval_secs: None,
-        at: None,
-        job_action: None,
-        cron_action: None,
-        enabled: None,
-        target: None,
-        message: None,
-        prompt: None,
-        agent_id: None,
-        label: None,
-        workspace_dir: None,
-        delete_after_run: None,
-    };
-    let result = server.cron(Parameters(params)).await;
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("invalid cron action"));
+    assert!(message_duration >= 1, "expected message duration metric");
 }
 
 #[test]
-fn test_parse_cron_action_aliases() {
-    fn params_with_action(action: &str) -> CronParams {
-        CronParams {
-            action: "add".to_owned(),
-            job_id: Some("j1".to_owned()),
-            schedule: Some(json!("interval:60")),
-            schedule_view: None,
-            interval_secs: None,
-            at: None,
-            job_action: Some(action.to_owned()),
-            cron_action: None,
-            enabled: None,
-            target: None,
-            message: None,
-            prompt: None,
-            agent_id: None,
-            label: None,
-            workspace_dir: None,
-            delete_after_run: None,
-        }
-    }
+fn test_mcp_tool_router_excludes_cron_management() {
+    let server = test_server();
+    let names = server
+        .tool_router
+        .list_all()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect::<Vec<_>>();
 
-    assert_eq!(
-        GaryMcpServer::parse_cron_action(&params_with_action("system_event")).unwrap(),
-        CronAction::SystemEvent
+    assert!(names.iter().any(|name| name == "status"));
+    assert!(names.iter().any(|name| name == "message"));
+    assert!(
+        !names.iter().any(|name| name == "cron"),
+        "scheduled automation management must stay out of MCP tools: {names:?}"
     );
-    assert_eq!(
-        GaryMcpServer::parse_cron_action(&params_with_action("systemEvent")).unwrap(),
-        CronAction::SystemEvent
-    );
-    assert_eq!(
-        GaryMcpServer::parse_cron_action(&params_with_action("agent_turn")).unwrap(),
-        CronAction::AgentTurn
-    );
-    assert_eq!(
-        GaryMcpServer::parse_cron_action(&params_with_action("agentTurn")).unwrap(),
-        CronAction::AgentTurn
-    );
-}
-
-#[test]
-fn test_cron_params_camel_case_aliases() {
-    let parsed: CronParams = serde_json::from_value(json!({
-        "action": "add",
-        "jobId": "j1",
-        "intervalSecs": 30,
-        "jobAction": "agent_turn",
-        "deleteAfterRun": true
-    }))
-    .unwrap();
-
-    assert_eq!(parsed.job_id.as_deref(), Some("j1"));
-    assert_eq!(parsed.interval_secs, Some(30));
-    assert_eq!(parsed.job_action.as_deref(), Some("agent_turn"));
-    assert_eq!(parsed.delete_after_run, Some(true));
 }
 
 #[test]
@@ -1459,287 +1263,6 @@ async fn test_conversation_search_uses_vector_index_backend_and_returns_metadata
             .unwrap()
             .contains("assistant: Use ONCE:1992-10-03 11:11.")
     );
-}
-
-#[tokio::test]
-async fn test_cron_status_update_and_run_alias() {
-    let server = test_server_with_automation_job().await;
-
-    let status = server
-        .cron(Parameters(CronParams {
-            action: "status".to_owned(),
-            job_id: Some("job1".to_owned()),
-            schedule: None,
-            schedule_view: None,
-            interval_secs: None,
-            at: None,
-            job_action: None,
-            cron_action: None,
-            enabled: None,
-            target: None,
-            message: None,
-            prompt: None,
-            agent_id: None,
-            label: None,
-            workspace_dir: None,
-            delete_after_run: None,
-        }))
-        .await
-        .unwrap();
-    let status_v: Value = serde_json::from_str(&status).unwrap();
-    assert_eq!(status_v["job"]["kind"], "automation_prompt");
-    assert_eq!(status_v["job"]["job_action"], "agent_turn");
-    assert_eq!(status_v["job"]["schedule_view"]["kind"], "interval");
-    assert_eq!(status_v["job"]["schedule_view"]["hours"], 6);
-    assert_eq!(
-        status_v["job"]["workspace_dir"],
-        Value::String("/tmp/gary-repo".to_owned())
-    );
-
-    let update = server
-        .cron(Parameters(CronParams {
-            action: "update".to_owned(),
-            job_id: Some("job1".to_owned()),
-            schedule: Some(json!({
-                "kind": "interval",
-                "hours": 12
-            })),
-            schedule_view: None,
-            interval_secs: None,
-            at: None,
-            job_action: None,
-            cron_action: None,
-            enabled: Some(false),
-            target: None,
-            message: Some("Ping the repo and summarize any changes.".to_owned()),
-            prompt: None,
-            agent_id: None,
-            label: Some("Repo sweep".to_owned()),
-            workspace_dir: Some("/tmp/gary-repo-next".to_owned()),
-            delete_after_run: None,
-        }))
-        .await
-        .unwrap();
-    let update_v: Value = serde_json::from_str(&update).unwrap();
-    assert_eq!(update_v["action"], "update");
-    assert_eq!(update_v["job"]["kind"], "automation_prompt");
-    assert_eq!(update_v["job"]["job_action"], "agent_turn");
-    assert_eq!(update_v["job"]["enabled"], false);
-    assert_eq!(update_v["job"]["label"], "Repo sweep");
-    assert_eq!(
-        update_v["job"]["message"],
-        "Ping the repo and summarize any changes."
-    );
-    assert_eq!(update_v["job"]["workspace_dir"], "/tmp/gary-repo-next");
-    assert_eq!(update_v["job"]["schedule_view"]["kind"], "interval");
-    assert_eq!(update_v["job"]["schedule_view"]["hours"], 12);
-
-    let run = server
-        .cron(Parameters(CronParams {
-            action: "run".to_owned(),
-            job_id: Some("job1".to_owned()),
-            schedule: None,
-            schedule_view: None,
-            interval_secs: None,
-            at: None,
-            job_action: None,
-            cron_action: None,
-            enabled: None,
-            target: None,
-            message: None,
-            prompt: None,
-            agent_id: None,
-            label: None,
-            workspace_dir: None,
-            delete_after_run: None,
-        }))
-        .await;
-    assert!(run.is_err(), "disabled job should not run");
-    assert!(
-        run.unwrap_err().contains("Cron job not found: job1"),
-        "disabled run should mirror python not-found style response"
-    );
-}
-
-#[tokio::test]
-async fn test_cron_add_creates_automation_visible_in_automation_list() {
-    let server = test_server_with_cron_service().await;
-    let result = server
-        .cron(Parameters(CronParams {
-            action: "add".to_owned(),
-            job_id: Some("daily-triage".to_owned()),
-            schedule: Some(json!({
-                "kind": "interval",
-                "hours": 24
-            })),
-            schedule_view: None,
-            interval_secs: None,
-            at: None,
-            job_action: None,
-            cron_action: None,
-            enabled: Some(true),
-            target: None,
-            message: Some("Review the repo and summarize open work.".to_owned()),
-            prompt: None,
-            agent_id: None,
-            label: Some("Daily triage".to_owned()),
-            workspace_dir: Some("/tmp/gary-repo".to_owned()),
-            delete_after_run: None,
-        }))
-        .await
-        .unwrap();
-    let value: Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(value["job"]["kind"], "automation_prompt");
-    assert_eq!(value["job"]["label"], "Daily triage");
-    assert_eq!(value["job"]["workspace_dir"], "/tmp/gary-repo");
-    assert_eq!(value["job"]["schedule_view"]["kind"], "interval");
-    assert_eq!(value["job"]["schedule_view"]["hours"], 24);
-
-    let payload = automation_list_payload(server.app_state.clone()).await;
-    let automations = payload["automations"].as_array().unwrap();
-    assert_eq!(automations.len(), 1);
-    assert_eq!(automations[0]["id"], "daily-triage");
-    assert_eq!(automations[0]["label"], "Daily triage");
-    assert_eq!(automations[0]["agentId"], "claude");
-    assert_eq!(
-        automations[0]["prompt"],
-        "Review the repo and summarize open work."
-    );
-    assert_eq!(automations[0]["workspaceDir"], "/tmp/gary-repo");
-    assert_eq!(automations[0]["schedule"]["kind"], "interval");
-    assert_eq!(automations[0]["schedule"]["hours"], 24);
-}
-
-#[tokio::test]
-async fn test_cron_add_infers_automation_schedule_from_interval_secs() {
-    let server = test_server_with_cron_service().await;
-    let result = server
-        .cron(Parameters(CronParams {
-            action: "add".to_owned(),
-            job_id: Some("every-six-hours".to_owned()),
-            schedule: None,
-            schedule_view: None,
-            interval_secs: Some(6 * 3600),
-            at: None,
-            job_action: Some("agent_turn".to_owned()),
-            cron_action: None,
-            enabled: Some(true),
-            target: None,
-            message: None,
-            prompt: Some("Check the queue and summarize new failures.".to_owned()),
-            agent_id: None,
-            label: None,
-            workspace_dir: Some("/tmp/queue".to_owned()),
-            delete_after_run: None,
-        }))
-        .await
-        .unwrap();
-    let value: Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(value["job"]["schedule_view"]["kind"], "interval");
-    assert_eq!(value["job"]["schedule_view"]["hours"], 6);
-}
-
-#[tokio::test]
-async fn test_cron_add_accepts_one_time_schedule_text() {
-    let server = test_server_with_cron_service().await;
-    let result = server
-        .cron(Parameters(CronParams {
-            action: "add".to_owned(),
-            job_id: Some("once-triage".to_owned()),
-            schedule: Some(json!("ONCE:2030-05-01 08:30")),
-            schedule_view: None,
-            interval_secs: None,
-            at: None,
-            job_action: Some("agent_turn".to_owned()),
-            cron_action: None,
-            enabled: Some(true),
-            target: None,
-            message: None,
-            prompt: Some("Check the release checklist once.".to_owned()),
-            agent_id: None,
-            label: Some("One-time triage".to_owned()),
-            workspace_dir: Some("/tmp/once-repo".to_owned()),
-            delete_after_run: None,
-        }))
-        .await
-        .unwrap();
-    let value: Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(value["job"]["schedule_view"]["kind"], "once");
-    assert_eq!(value["job"]["schedule_view"]["at"], "2030-05-01T08:30");
-
-    let payload = automation_list_payload(server.app_state.clone()).await;
-    let automations = payload["automations"].as_array().unwrap();
-    assert_eq!(automations.len(), 1);
-    assert_eq!(automations[0]["schedule"]["kind"], "once");
-    assert_eq!(automations[0]["schedule"]["at"], "2030-05-01T08:30");
-}
-
-#[tokio::test]
-async fn test_cron_update_rewrites_non_automation_scheduler_job_as_automation() {
-    let server = test_server_with_cron_job().await;
-    let result = server
-        .cron(Parameters(CronParams {
-            action: "update".to_owned(),
-            job_id: Some("job1".to_owned()),
-            schedule: Some(json!({
-                "kind": "interval",
-                "hours": 12
-            })),
-            schedule_view: None,
-            interval_secs: None,
-            at: None,
-            job_action: None,
-            cron_action: None,
-            enabled: Some(true),
-            target: None,
-            message: None,
-            prompt: Some("Summarize the latest support issues.".to_owned()),
-            agent_id: None,
-            label: Some("Support triage".to_owned()),
-            workspace_dir: Some("/tmp/support".to_owned()),
-            delete_after_run: None,
-        }))
-        .await
-        .unwrap();
-    let value: Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(value["job"]["kind"], "automation_prompt");
-    assert_eq!(value["job"]["label"], "Support triage");
-    assert_eq!(value["job"]["workspace_dir"], "/tmp/support");
-    assert_eq!(value["job"]["schedule_view"]["hours"], 12);
-
-    let payload = automation_list_payload(server.app_state.clone()).await;
-    let automations = payload["automations"].as_array().unwrap();
-    assert_eq!(automations.len(), 1);
-    assert_eq!(automations[0]["id"], "job1");
-    assert_eq!(automations[0]["label"], "Support triage");
-    assert_eq!(automations[0]["workspaceDir"], "/tmp/support");
-}
-
-#[tokio::test]
-async fn test_cron_add_rejects_legacy_non_automation_job_action() {
-    let server = test_server_with_cron_service().await;
-    let result = server
-        .cron(Parameters(CronParams {
-            action: "add".to_owned(),
-            job_id: Some("log".to_owned()),
-            schedule: None,
-            schedule_view: None,
-            interval_secs: Some(3600),
-            at: None,
-            job_action: Some("log".to_owned()),
-            cron_action: None,
-            enabled: Some(true),
-            target: None,
-            message: None,
-            prompt: Some("ignored".to_owned()),
-            agent_id: None,
-            label: None,
-            workspace_dir: Some("/tmp/repo".to_owned()),
-            delete_after_run: None,
-        }))
-        .await;
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("unsupported job_action: log"),);
 }
 
 // -- image_gen --
@@ -3453,6 +2976,8 @@ fn test_server_info() {
     assert!(info.capabilities.tools.is_some());
     let instructions = info.instructions.expect("server instructions");
     assert!(instructions.contains("rebind_current_channel"));
+    assert!(!instructions.contains("cron"));
+    assert!(!instructions.contains("garyx automation"));
     assert!(!instructions.contains("restart"));
     assert!(!instructions.contains("speak_to_agent"));
     assert!(!instructions.contains("auto_research_verdict"));

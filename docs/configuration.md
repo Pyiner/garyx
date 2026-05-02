@@ -285,6 +285,22 @@ Telegram owns its BotCommands publishing and refreshes the projected menu on
 startup and every 10 minutes; the gateway no longer exposes a manual Telegram
 command-sync endpoint.
 
+## Automations
+
+Scheduled automations are managed from the CLI:
+
+```bash
+garyx automation list
+garyx automation create --label "Daily triage" --prompt "Summarize repo state" --workspace-dir /path/to/repo --every-hours 24
+garyx automation update <automation-id> --daily-time 09:30 --weekday mon --weekday fri --timezone Asia/Shanghai
+garyx automation pause <automation-id>
+garyx automation resume <automation-id>
+garyx automation run <automation-id>
+garyx automation delete <automation-id>
+```
+
+The MCP surface intentionally does not expose automation management tools.
+
 ## Agents and Teams
 
 Each channel account can set `agent_id`.

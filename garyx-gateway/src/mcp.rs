@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use garyx_channels::OutboundMessage;
 use garyx_models::Verdict;
-use garyx_models::config::{CronAction, CronSchedule};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{ServerCapabilities, ServerInfo};
@@ -36,42 +35,6 @@ mod tools;
 // ---------------------------------------------------------------------------
 // Parameter types (JsonSchema enables auto tool discovery)
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct CronParams {
-    /// Action: list, status, add, update, remove, or run_now
-    pub action: String,
-    #[serde(default, alias = "jobId")]
-    pub job_id: Option<String>,
-    #[serde(default)]
-    pub schedule: Option<Value>,
-    #[serde(default, alias = "scheduleView")]
-    pub schedule_view: Option<Value>,
-    #[serde(default, alias = "intervalSecs")]
-    pub interval_secs: Option<u64>,
-    #[serde(default)]
-    pub at: Option<String>,
-    #[serde(default, alias = "jobAction")]
-    pub job_action: Option<String>,
-    #[serde(default, alias = "cronAction")]
-    pub cron_action: Option<String>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub target: Option<String>,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub prompt: Option<String>,
-    #[serde(default, alias = "agentId")]
-    pub agent_id: Option<String>,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default, alias = "workspaceDir")]
-    pub workspace_dir: Option<String>,
-    #[serde(default, alias = "deleteAfterRun")]
-    pub delete_after_run: Option<bool>,
-}
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct MessageParams {
@@ -356,13 +319,6 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "Manage scheduled automation jobs. `add` and `update` create or edit Automation prompts (require workspace_dir + prompt, support optional agent_id, and accept a supported daily/hourly/one-time schedule); list/status/remove/run operate on scheduler jobs."
-    )]
-    async fn cron(&self, Parameters(params): Parameters<CronParams>) -> Result<String, String> {
-        tools::cron::run(self, params).await
-    }
-
-    #[tool(
         description = "Send a message to another channel/target, or send a local image/file reply to the current user. Do not use this tool for ordinary text replies to the current user; reply directly in the assistant response by default. Use this tool when you need to reply to the current user with an image/file, or when messaging another bot/channel/target. Provide `bot` (e.g. `telegram:main`) to send to that bot's main endpoint; omit `bot` to reply in the current thread."
     )]
     async fn message(
@@ -462,7 +418,7 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, cron, message, image_gen, search, conversation_history, conversation_search, rebind_current_channel, stop_loop. Use the `garyx task` CLI for task state changes."
+                "Garyx MCP server. Tools: status, message, image_gen, search, conversation_history, conversation_search, rebind_current_channel, stop_loop."
                     .to_owned(),
             ),
         }

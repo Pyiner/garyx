@@ -18,6 +18,7 @@ fn compose_without_extra_returns_base_and_auto_memory() {
     assert!(value.contains("Garyx has a built-in Auto Memory system."));
     assert!(value.contains("Task workflow:"));
     assert!(value.contains("Use the `garyx task` CLI"));
+    assert!(value.contains("`garyx automation` CLI"));
     assert!(value.contains("Global Auto Memory"));
     assert!(!value.contains("Additional runtime instructions:"));
     assert!(!value.contains("Current runtime context:"));

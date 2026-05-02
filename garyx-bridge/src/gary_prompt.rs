@@ -17,6 +17,7 @@ pub(crate) const GARY_BASE_INSTRUCTIONS: &str = concat!(
     "- When changing MCP servers, edit the Garyx source config instead of only editing downstream synced copies.\n",
     "- If the `gary-self-evolution` skill is available, use it for adding or updating your own Skills and MCP servers.\n",
     "- When asked to extend your own capabilities, update the relevant files directly, keep changes durable, and validate the result with a focused real test.\n",
+    "- Scheduled automations are managed with the `garyx automation` CLI. Do not use MCP tools for automation scheduling or management.\n",
     "\n",
     "Task workflow:\n",
     "- Garyx has one human user plus multiple agent principals. Agent principals are written as `agent:<agent_id>`; the human user is written as `human:<user_id>`.\n",
