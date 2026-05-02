@@ -16,9 +16,9 @@ mod service_manager;
 mod main_tests;
 
 use cli::{
-    AgentAction, AutoResearchAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction,
-    DebugAction, GatewayAction, LogsAction, MigrateAction, PluginsAction, TaskAction, TeamAction,
-    ThreadAction, WikiAction,
+    AgentAction, AutoResearchAction, BotAction, ChannelsAction, Cli, CommandAction, Commands,
+    ConfigAction, DebugAction, GatewayAction, LogsAction, MigrateAction, PluginsAction, TaskAction,
+    TeamAction, ThreadAction, WikiAction,
 };
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
@@ -26,11 +26,11 @@ use commands::{
     cmd_agent_update, cmd_agent_upsert, cmd_audit, cmd_auto_research_candidates,
     cmd_auto_research_create, cmd_auto_research_feedback, cmd_auto_research_get,
     cmd_auto_research_iterations, cmd_auto_research_list, cmd_auto_research_patch,
-    cmd_auto_research_reverify, cmd_auto_research_select, cmd_auto_research_stop, cmd_channels_add,
-    cmd_channels_enable, cmd_channels_list, cmd_channels_login, cmd_channels_remove,
-    cmd_command_delete, cmd_command_get, cmd_command_list, cmd_command_set, cmd_config_get,
-    cmd_config_init, cmd_config_path, cmd_config_set, cmd_config_show, cmd_config_unset,
-    cmd_config_validate, cmd_debug_bot, cmd_debug_thread, cmd_doctor, cmd_gateway_install,
+    cmd_auto_research_reverify, cmd_auto_research_select, cmd_auto_research_stop, cmd_bot_status,
+    cmd_channels_add, cmd_channels_enable, cmd_channels_list, cmd_channels_login,
+    cmd_channels_remove, cmd_command_delete, cmd_command_get, cmd_command_list, cmd_command_set,
+    cmd_config_get, cmd_config_init, cmd_config_path, cmd_config_set, cmd_config_show,
+    cmd_config_unset, cmd_config_validate, cmd_debug_thread, cmd_doctor, cmd_gateway_install,
     cmd_gateway_reload_config, cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop,
     cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail,
     cmd_migrate_thread_transcripts, cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign,
@@ -459,11 +459,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 limit,
                 json,
             } => cmd_debug_thread(config_path, &thread_id, limit, json).await,
-            DebugAction::Bot {
-                bot_id,
-                limit,
-                json,
-            } => cmd_debug_bot(config_path, &bot_id, limit, json).await,
+        },
+        Some(Commands::Bot { action }) => match action {
+            BotAction::Status { bot_id, json } => cmd_bot_status(config_path, &bot_id, json).await,
         },
         Some(Commands::AutoResearch { action }) => match action {
             AutoResearchAction::Create {

@@ -111,7 +111,7 @@ Common flags on `channels add`:
 | `garyx logs tail [--lines N]` | Tail the gateway log. |
 | `garyx logs clear` | Truncate the log file. |
 | `garyx debug thread <thread_id>` | Per-thread runtime diagnostics. |
-| `garyx debug bot <bot_selector>` | Recent diagnostics + problem threads for a bot. |
+| `garyx bot status <bot_selector>` | Current bot main endpoint and bound thread status. |
 
 ## Updates
 

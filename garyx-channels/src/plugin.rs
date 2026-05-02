@@ -924,6 +924,43 @@ fn synthetic_main_endpoint(
     }
 }
 
+fn attach_known_endpoint_metadata(
+    mut endpoint: PluginMainEndpoint,
+    endpoints: &[KnownChannelEndpoint],
+) -> PluginMainEndpoint {
+    let Some(known) = endpoints.iter().find(|candidate| {
+        candidate.endpoint_key == endpoint.endpoint_key
+            && candidate.channel == endpoint.channel
+            && candidate.account_id == endpoint.account_id
+    }) else {
+        return endpoint;
+    };
+
+    if !known.chat_id.trim().is_empty() {
+        endpoint.chat_id = known.chat_id.clone();
+    }
+    if !known.delivery_target_type.trim().is_empty() {
+        endpoint.delivery_target_type = known.delivery_target_type.clone();
+    }
+    if !known.delivery_target_id.trim().is_empty() {
+        endpoint.delivery_target_id = known.delivery_target_id.clone();
+    }
+    if !known.display_label.trim().is_empty() {
+        endpoint.display_label = known.display_label.clone();
+    }
+    endpoint.delivery_thread_id =
+        binding_delivery_thread_id(&endpoint.binding_key, &endpoint.chat_id);
+    endpoint.thread_id = known.thread_id.clone();
+    endpoint.thread_label = known.thread_label.clone();
+    if known.workspace_dir.is_some() {
+        endpoint.workspace_dir = known.workspace_dir.clone();
+    }
+    endpoint.thread_updated_at = known.thread_updated_at.clone();
+    endpoint.last_inbound_at = known.last_inbound_at.clone();
+    endpoint.last_delivery_at = known.last_delivery_at.clone();
+    endpoint
+}
+
 fn best_private_endpoint(
     endpoints: &[KnownChannelEndpoint],
     channel: &str,
@@ -1004,15 +1041,18 @@ async fn resolve_telegram_main_endpoint(
     if let Some((delivery_target_type, delivery_target_id)) =
         normalized_owner_target("telegram", account.owner_target.as_ref())
     {
-        return Some(synthetic_main_endpoint(
-            "telegram",
-            account_id,
-            &delivery_target_id,
-            &delivery_target_id,
-            &delivery_target_type,
-            &delivery_target_id,
-            account.workspace_dir.as_deref(),
-            "owner_target",
+        return Some(attach_known_endpoint_metadata(
+            synthetic_main_endpoint(
+                "telegram",
+                account_id,
+                &delivery_target_id,
+                &delivery_target_id,
+                &delivery_target_type,
+                &delivery_target_id,
+                account.workspace_dir.as_deref(),
+                "owner_target",
+            ),
+            endpoints,
         ));
     }
 
@@ -1031,15 +1071,18 @@ async fn resolve_feishu_main_endpoint(
     if let Some((delivery_target_type, delivery_target_id)) =
         normalized_owner_target("feishu", account.owner_target.as_ref())
     {
-        return Some(synthetic_main_endpoint(
-            "feishu",
-            account_id,
-            &delivery_target_id,
-            &delivery_target_id,
-            &delivery_target_type,
-            &delivery_target_id,
-            account.workspace_dir.as_deref(),
-            "owner_target",
+        return Some(attach_known_endpoint_metadata(
+            synthetic_main_endpoint(
+                "feishu",
+                account_id,
+                &delivery_target_id,
+                &delivery_target_id,
+                &delivery_target_type,
+                &delivery_target_id,
+                account.workspace_dir.as_deref(),
+                "owner_target",
+            ),
+            endpoints,
         ));
     }
 
@@ -1048,15 +1091,18 @@ async fn resolve_feishu_main_endpoint(
     }
 
     let owner_open_id = resolve_feishu_owner_open_id(account_id, account).await?;
-    Some(synthetic_main_endpoint(
-        "feishu",
-        account_id,
-        &owner_open_id,
-        &owner_open_id,
-        DELIVERY_TARGET_TYPE_OPEN_ID,
-        &owner_open_id,
-        account.workspace_dir.as_deref(),
-        "app_owner",
+    Some(attach_known_endpoint_metadata(
+        synthetic_main_endpoint(
+            "feishu",
+            account_id,
+            &owner_open_id,
+            &owner_open_id,
+            DELIVERY_TARGET_TYPE_OPEN_ID,
+            &owner_open_id,
+            account.workspace_dir.as_deref(),
+            "app_owner",
+        ),
+        endpoints,
     ))
 }
 

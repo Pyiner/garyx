@@ -361,10 +361,8 @@ pub struct DebugThreadParams {
 }
 
 #[derive(Deserialize)]
-pub struct DebugBotParams {
+pub struct BotStatusParams {
     pub bot_id: String,
-    #[serde(default = "default_limit")]
-    pub limit: usize,
 }
 
 #[derive(Deserialize)]
@@ -825,9 +823,9 @@ pub async fn debug_thread(
     }))
 }
 
-pub async fn debug_bot(
+pub async fn bot_status(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<DebugBotParams>,
+    Query(params): Query<BotStatusParams>,
 ) -> impl IntoResponse {
     let bot_id = params.bot_id.trim();
     if bot_id.is_empty() {
@@ -837,82 +835,64 @@ pub async fn debug_bot(
         }));
     }
 
-    let limit = params.limit.clamp(1, MAX_THREAD_HISTORY_LIMIT);
-    let recent_records = match state
-        .threads
-        .message_ledger
-        .records_for_bot(bot_id, limit)
-        .await
-    {
-        Ok(records) => records,
-        Err(error) => {
-            return Json(json!({
-                "ok": false,
-                "bot_id": bot_id,
-                "reason": format!("message-ledger-error:{error}"),
-            }));
-        }
-    };
-    let problem_threads = match state
-        .threads
-        .message_ledger
-        .problem_threads_for_bot(bot_id, limit)
-        .await
-    {
-        Ok(threads) => threads,
-        Err(error) => {
-            return Json(json!({
-                "ok": false,
-                "bot_id": bot_id,
-                "reason": format!("message-ledger-error:{error}"),
-            }));
-        }
-    };
-
-    let active_threads = distinct_thread_count(&recent_records);
-    Json(json!({
-        "ok": true,
-        "bot_id": bot_id,
-        "recent_records": recent_records,
-        "problem_threads": problem_threads,
-        "stats": {
-            "recent_messages": recent_records.len(),
-            "problem_threads": problem_threads.len(),
-            "active_threads": active_threads,
-        }
-    }))
+    Json(build_bot_status_payload(&state, bot_id).await)
 }
 
-pub async fn debug_bot_threads(
-    State(state): State<Arc<AppState>>,
-    Query(params): Query<DebugBotParams>,
-) -> impl IntoResponse {
-    let bot_id = params.bot_id.trim();
-    if bot_id.is_empty() {
-        return Json(json!({
+async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value {
+    let Some((channel, account_id)) = bot_id.split_once(':') else {
+        return json!({
             "ok": false,
-            "reason": "missing-bot-id",
-        }));
-    }
+            "bot_id": bot_id,
+            "reason": "invalid-bot-id",
+            "error": "bot_id must be `channel:account_id`",
+        });
+    };
 
-    let limit = params.limit.clamp(1, MAX_THREAD_HISTORY_LIMIT);
-    match state
-        .threads
-        .message_ledger
-        .problem_threads_for_bot(bot_id, limit)
-        .await
-    {
-        Ok(problem_threads) => Json(json!({
+    let Some(endpoint) =
+        crate::routes::resolve_main_endpoint_by_bot(state, channel, account_id).await
+    else {
+        return json!({
             "ok": true,
             "bot_id": bot_id,
-            "threads": problem_threads,
-        })),
-        Err(error) => Json(json!({
-            "ok": false,
-            "bot_id": bot_id,
-            "reason": format!("message-ledger-error:{error}"),
-        })),
+            "channel": channel,
+            "account_id": account_id,
+            "main_endpoint_status": "unresolved",
+            "main_endpoint": Value::Null,
+            "current_thread_status": "unresolved",
+            "current_thread_id": Value::Null,
+            "current_thread": Value::Null,
+            "thread_runtime": build_debug_thread_runtime(None),
+        });
+    };
+
+    let current_thread_id = endpoint.thread_id.clone();
+    let mut current_thread = match current_thread_id.as_deref() {
+        Some(thread_id) => state.threads.thread_store.get(thread_id).await,
+        None => None,
+    };
+    if let (Some(thread_id), Some(thread_value_ref)) =
+        (current_thread_id.as_deref(), current_thread.as_mut())
+    {
+        let _ = repair_inactive_active_run_snapshot(state, thread_id, thread_value_ref).await;
     }
+    let current_thread_status = if current_thread_id.is_some() {
+        "bound"
+    } else {
+        "unbound"
+    };
+
+    json!({
+        "ok": true,
+        "bot_id": bot_id,
+        "channel": channel,
+        "account_id": account_id,
+        "main_endpoint_status": "resolved",
+        "main_endpoint": endpoint.to_value(),
+        "current_thread_status": current_thread_status,
+        "current_thread_id": current_thread_id,
+        "current_thread": current_thread,
+        "thread_runtime": build_debug_thread_runtime(current_thread.as_ref()),
+    })
 }
 
 pub(crate) async fn thread_history_for_key(
@@ -1188,16 +1168,6 @@ pub(crate) async fn thread_history_for_key(
         "outbound_total": outbound_total,
         "include_tool_messages": include_tool_messages,
     })
-}
-
-fn distinct_thread_count(records: &[garyx_models::MessageLedgerRecord]) -> usize {
-    let mut seen = std::collections::BTreeSet::new();
-    for record in records {
-        if let Some(thread_id) = record.thread_id.as_deref() {
-            seen.insert(thread_id.to_owned());
-        }
-    }
-    seen.len()
 }
 
 fn summarize_thread(thread_id: &str, data: &Value, messages: &[Value]) -> Value {

@@ -3276,10 +3276,9 @@ pub(crate) async fn cmd_debug_thread(
     Ok(())
 }
 
-pub(crate) async fn cmd_debug_bot(
+pub(crate) async fn cmd_bot_status(
     config_path: &str,
     bot_id: &str,
-    limit: usize,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bot_id = bot_id.trim();
@@ -3290,48 +3289,64 @@ pub(crate) async fn cmd_debug_bot(
     let gateway = gateway_endpoint(config_path)?;
     let payload = fetch_gateway_json(
         &gateway,
-        &format!(
-            "/api/debug/bot?bot_id={}&limit={}",
-            urlencoding::encode(bot_id),
-            limit.clamp(1, 500)
-        ),
+        &format!("/api/bot/status?bot_id={}", urlencoding::encode(bot_id)),
     )
     .await?;
 
     if json {
         return print_pretty_json(&payload);
     }
+    if !payload["ok"].as_bool().unwrap_or(false) {
+        let message = payload["error"]
+            .as_str()
+            .or_else(|| payload["reason"].as_str())
+            .unwrap_or("bot status failed");
+        return Err(message.into());
+    }
 
     println!("Bot: {bot_id}");
     println!(
-        "Recent messages: {}",
-        payload["stats"]["recent_messages"].as_u64().unwrap_or(0)
+        "Main endpoint: {}",
+        payload["main_endpoint_status"]
+            .as_str()
+            .unwrap_or("unknown")
     );
     println!(
-        "Active threads: {}",
-        payload["stats"]["active_threads"].as_u64().unwrap_or(0)
+        "Current thread status: {}",
+        payload["current_thread_status"]
+            .as_str()
+            .unwrap_or("unknown")
     );
     println!(
-        "Problem threads: {}",
-        payload["stats"]["problem_threads"].as_u64().unwrap_or(0)
+        "Current thread: {}",
+        payload["current_thread_id"].as_str().unwrap_or("-")
     );
-
-    let problem_threads = payload["problem_threads"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    println!("Problem thread summary:");
-    if problem_threads.is_empty() {
-        println!("  (none)");
-    } else {
-        for thread in problem_threads.iter().take(10) {
-            let thread_id = thread["thread_id"].as_str().unwrap_or("-");
-            let reason = thread["terminal_reason"].as_str().unwrap_or("-");
-            let status = thread["last_status"].as_str().unwrap_or("-");
-            let excerpt = thread["last_text_excerpt"].as_str().unwrap_or("");
-            println!("  - {thread_id}  {status}  reason={reason}  {excerpt}");
+    if let Some(workspace_dir) = payload["main_endpoint"]["workspace_dir"].as_str() {
+        if !workspace_dir.trim().is_empty() {
+            println!("Workspace: {workspace_dir}");
         }
     }
+    if let Some(binding_key) = payload["main_endpoint"]["binding_key"].as_str() {
+        if !binding_key.trim().is_empty() {
+            println!("Binding key: {binding_key}");
+        }
+    }
+    println!(
+        "Provider: {}",
+        payload["thread_runtime"]["provider_label"]
+            .as_str()
+            .unwrap_or("-")
+    );
+    let active_run = &payload["thread_runtime"]["active_run"];
+    if active_run.is_null() {
+        println!("Active run: -");
+    } else {
+        println!(
+            "Active run: {}",
+            active_run["run_id"].as_str().unwrap_or("-")
+        );
+    }
+    println!("Send command: garyx thread send bot {bot_id} <message>");
 
     Ok(())
 }

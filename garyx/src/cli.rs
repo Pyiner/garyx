@@ -144,6 +144,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: DebugAction,
     },
+    /// Bot status and current binding utilities
+    #[command(name = "bot")]
+    Bot {
+        #[command(subcommand)]
+        action: BotAction,
+    },
     /// Auto Research run management
     #[command(name = "auto-research", visible_alias = "autoresearch", alias = "ar")]
     AutoResearch {
@@ -510,13 +516,14 @@ pub(crate) enum DebugAction {
         #[arg(long)]
         json: bool,
     },
-    /// Inspect a bot's recent diagnostics and problem threads
-    Bot {
+}
+
+#[derive(Subcommand)]
+pub(crate) enum BotAction {
+    /// Show the bot's current main endpoint and bound thread
+    Status {
         /// Bot id like telegram:main
         bot_id: String,
-        /// Maximum number of records/problem threads to fetch
-        #[arg(long, default_value_t = 20)]
-        limit: usize,
         /// Output as JSON
         #[arg(long)]
         json: bool,

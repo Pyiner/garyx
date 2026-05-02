@@ -3,8 +3,9 @@ use std::sync::Arc;
 use clap::{CommandFactory, Parser};
 
 use crate::cli::{
-    AgentAction, AutoResearchAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction,
-    DebugAction, GatewayAction, LogsAction, MigrateAction, TaskAction, TeamAction, ThreadAction,
+    AgentAction, AutoResearchAction, BotAction, ChannelsAction, Cli, CommandAction, Commands,
+    ConfigAction, DebugAction, GatewayAction, LogsAction, MigrateAction, TaskAction, TeamAction,
+    ThreadAction,
 };
 use crate::commands::{
     OnboardCommandOptions, canonical_channel_id, cmd_channels_add, cmd_channels_login, cmd_onboard,
@@ -464,22 +465,32 @@ fn parse_debug_thread() {
 }
 
 #[test]
-fn parse_debug_bot() {
-    let cli = Cli::parse_from(["garyx", "debug", "bot", "telegram:main"]);
+fn parse_bot_status() {
+    let cli = Cli::parse_from(["garyx", "bot", "status", "telegram:main"]);
     match cli.command {
-        Some(Commands::Debug {
-            action:
-                DebugAction::Bot {
-                    bot_id,
-                    limit,
-                    json,
-                },
+        Some(Commands::Bot {
+            action: BotAction::Status { bot_id, json },
         }) => {
             assert_eq!(bot_id, "telegram:main");
-            assert_eq!(limit, 20);
             assert!(!json);
         }
-        _ => panic!("expected Debug::Bot"),
+        _ => panic!("expected Bot::Status"),
+    }
+}
+
+#[test]
+fn parse_bot_status_keeps_old_bot_entrypoints_removed() {
+    for args in [
+        ["garyx", "debug", "bot", "telegram:main"],
+        ["garyx", "bot", "current", "telegram:main"],
+        ["garyx", "bot", "resolve", "telegram:main"],
+        ["garyx", "bots", "status", "telegram:main"],
+    ] {
+        let error = match Cli::try_parse_from(args) {
+            Ok(_) => panic!("old bot entrypoint should not parse"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
     }
 }
 

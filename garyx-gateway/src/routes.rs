@@ -66,7 +66,7 @@ impl ResolvedMainEndpoint {
         }
     }
 
-    fn to_value(&self) -> Value {
+    pub(crate) fn to_value(&self) -> Value {
         let conversation = resolved_main_endpoint_conversation_details(self);
         json!({
             "endpoint_key": self.endpoint_key,

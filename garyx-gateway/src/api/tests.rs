@@ -7,9 +7,13 @@ use tempfile::tempdir;
 use tower::ServiceExt;
 
 fn test_state() -> Arc<AppState> {
+    test_state_with_config(GaryxConfig::default())
+}
+
+fn test_state_with_config(config: GaryxConfig) -> Arc<AppState> {
     use crate::composition::app_bootstrap::AppStateBuilder;
     // Use in-memory stores to avoid filesystem races between concurrent tests.
-    AppStateBuilder::new(GaryxConfig::default())
+    AppStateBuilder::new(config)
         .with_auto_research_store(Arc::new(crate::auto_research::AutoResearchStore::new()))
         .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
         .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
@@ -51,11 +55,7 @@ fn api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/threads/history", axum::routing::get(thread_history))
         .route("/api/debug/thread", axum::routing::get(debug_thread))
-        .route("/api/debug/bot", axum::routing::get(debug_bot))
-        .route(
-            "/api/debug/bot/threads",
-            axum::routing::get(debug_bot_threads),
-        )
+        .route("/api/bot/status", axum::routing::get(bot_status))
         .route(
             "/api/auto-research/runs",
             axum::routing::post(create_auto_research_run),
@@ -298,8 +298,70 @@ async fn test_debug_thread_returns_ledger_records() {
 }
 
 #[tokio::test]
-async fn test_debug_bot_threads_returns_problem_threads() {
-    let state = test_state();
+async fn test_bot_status_returns_current_bound_thread_only() {
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(
+                &garyx_models::config::TelegramAccount {
+                    token: "token".to_owned(),
+                    enabled: true,
+                    name: Some("Telegram Main".to_owned()),
+                    agent_id: "codex".to_owned(),
+                    workspace_dir: Some("/tmp/current-workspace".to_owned()),
+                    owner_target: Some(garyx_models::config::OwnerTargetConfig {
+                        target_type: "chat_id".to_owned(),
+                        target_id: "42".to_owned(),
+                    }),
+                    groups: std::collections::HashMap::new(),
+                },
+            ),
+        );
+    let state = test_state_with_config(config);
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::old-history",
+            json!({
+                "thread_id": "thread::old-history",
+                "workspace_dir": "/tmp/old-workspace",
+                "channel": "telegram",
+                "account_id": "main",
+                "from_id": "42",
+                "channel_bindings": [],
+            }),
+        )
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::current",
+            json!({
+                "thread_id": "thread::current",
+                "workspace_dir": "/tmp/current-workspace",
+                "provider_type": "codex_app_server",
+                "channel": "telegram",
+                "account_id": "main",
+                "from_id": "42",
+                "updated_at": "2026-05-02T12:00:00Z",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "42",
+                    "chat_id": "42",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "42",
+                    "display_label": "Telegram Main"
+                }],
+            }),
+        )
+        .await;
     state
         .threads
         .message_ledger
@@ -308,11 +370,11 @@ async fn test_debug_bot_threads_returns_problem_threads() {
             bot_id: "telegram:main".to_owned(),
             status: garyx_models::MessageLifecycleStatus::RunInterrupted,
             created_at: "2026-03-22T10:00:01Z".to_owned(),
-            thread_id: Some("thread::debug-alpha".to_owned()),
+            thread_id: Some("thread::old-history".to_owned()),
             run_id: Some("run-1".to_owned()),
             channel: Some("telegram".to_owned()),
             account_id: Some("main".to_owned()),
-            chat_id: Some("-100".to_owned()),
+            chat_id: Some("42".to_owned()),
             from_id: Some("42".to_owned()),
             native_message_id: Some("tg-1".to_owned()),
             text_excerpt: Some("hello".to_owned()),
@@ -325,7 +387,7 @@ async fn test_debug_bot_threads_returns_problem_threads() {
 
     let router = api_router(state);
     let req = Request::builder()
-        .uri("/api/debug/bot/threads?bot_id=telegram:main")
+        .uri("/api/bot/status?bot_id=telegram:main")
         .body(Body::empty())
         .unwrap();
 
@@ -336,8 +398,14 @@ async fn test_debug_bot_threads_returns_problem_threads() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["ok"], true);
-    assert_eq!(json["threads"][0]["thread_id"], "thread::debug-alpha");
-    assert_eq!(json["threads"][0]["terminal_reason"], "self_restart");
+    assert_eq!(json["current_thread_id"], "thread::current");
+    assert_eq!(json["current_thread_status"], "bound");
+    assert_eq!(
+        json["main_endpoint"]["workspace_dir"],
+        "/tmp/current-workspace"
+    );
+    assert!(json.get("recent_records").is_none());
+    assert!(json.get("problem_threads").is_none());
 }
 
 #[tokio::test]
