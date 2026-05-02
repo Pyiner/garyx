@@ -333,6 +333,20 @@ fn test_tg_response_error() {
     assert_eq!(resp.description.as_deref(), Some("Unauthorized"));
 }
 
+#[test]
+fn test_tg_response_retry_after_parameters() {
+    let json =
+        r#"{"ok": false, "description": "Too Many Requests", "parameters": {"retry_after": 3}}"#;
+    let resp: TgResponse<TgUser> = serde_json::from_str(json).unwrap();
+    assert!(!resp.ok);
+    assert_eq!(
+        resp.parameters
+            .as_ref()
+            .and_then(|parameters| parameters.retry_after),
+        Some(3)
+    );
+}
+
 #[cfg(test)]
 mod proptest_tests {
     use super::*;
@@ -2711,30 +2725,6 @@ mod e2e_tests {
             .await;
         assert_eq!(body_text(&first_placeholder), "🔧 #1 Bash");
 
-        let second_placeholder =
-            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body_text(body) == "🔧 #2 Read"
-            })
-            .await;
-        assert_eq!(body_text(&second_placeholder), "🔧 #2 Read");
-
-        let post_text_placeholder =
-            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body_text(body) == "done\n\n🔧 #1 Write"
-            })
-            .await;
-        assert_eq!(body_text(&post_text_placeholder), "done\n\n🔧 #1 Write");
-
-        let second_post_text_placeholder =
-            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body_text(body) == "done\n\n🔧 #2 Search"
-            })
-            .await;
-        assert_eq!(
-            body_text(&second_post_text_placeholder),
-            "done\n\n🔧 #2 Search"
-        );
-
         let final_body =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
                 body["text"].as_str().unwrap_or_default() == "done\nnext"
@@ -2753,10 +2743,6 @@ mod e2e_tests {
             "first tool placeholder should show sequence number: {all_texts:?}"
         );
         assert!(
-            all_texts.iter().any(|text| text == "🔧 #2 Read"),
-            "second tool placeholder should replace the prior tool in one line: {all_texts:?}"
-        );
-        assert!(
             all_texts.iter().any(|text| {
                 text.contains("done")
                     && !text.contains("🔧 #1 Bash")
@@ -2765,16 +2751,16 @@ mod e2e_tests {
             "pre-text tool placeholders should be overwritten by first text: {all_texts:?}"
         );
         assert!(
-            all_texts.iter().any(|text| text == "done\n\n🔧 #1 Write"),
-            "post-text tool placeholder should restart numbering in a new tool block: {all_texts:?}"
-        );
-        assert!(
-            all_texts.iter().any(|text| text == "done\n\n🔧 #2 Search"),
-            "second post-text tool placeholder should increment within the new tool block: {all_texts:?}"
-        );
-        assert!(
             all_texts.iter().any(|text| text == "done\nnext"),
             "post-text tool placeholder should be overwritten by later text in the same message: {all_texts:?}"
+        );
+        assert_eq!(
+            all_texts
+                .iter()
+                .filter(|text| text.contains("🔧") || text.contains("done"))
+                .count(),
+            2,
+            "pending Telegram edits should coalesce to the latest visible state: {all_texts:?}"
         );
         assert_no_loading_indicator(&all_texts);
 
@@ -2900,12 +2886,12 @@ mod e2e_tests {
 
         wait_for_counter_at_least(&provider.call_count, 1).await;
 
-        let all_tools =
+        let first_tool =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
-                body_text(body) == "🔧 #3 Bash"
+                body_text(body) == "🔧 #1 Read"
             })
             .await;
-        assert_eq!(body_text(&all_tools), "🔧 #3 Bash");
+        assert_eq!(body_text(&first_tool), "🔧 #1 Read");
 
         let all_texts = capture
             .send_bodies()
@@ -2918,12 +2904,11 @@ mod e2e_tests {
             "first tool should render as a numbered single-line placeholder: {all_texts:?}"
         );
         assert!(
-            all_texts.iter().any(|text| text == "🔧 #2 Read"),
-            "second tool should replace the placeholder with #2: {all_texts:?}"
-        );
-        assert!(
-            all_texts.iter().any(|text| text == "🔧 #3 Bash"),
-            "third tool should replace the placeholder with #3: {all_texts:?}"
+            all_texts
+                .iter()
+                .filter(|text| text.contains("🔧"))
+                .all(|text| text == "🔧 #1 Read"),
+            "pending tool-only edits should be dropped when Done deletes the runtime placeholder: {all_texts:?}"
         );
         assert!(
             all_texts.iter().all(|text| text.lines().count() == 1),

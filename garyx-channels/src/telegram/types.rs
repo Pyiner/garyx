@@ -160,6 +160,16 @@ pub struct TgResponse<T> {
     pub result: Option<T>,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<TgResponseParameters>,
+}
+
+/// Extra response parameters returned by Telegram Bot API for recoverable
+/// transport conditions such as flood limits.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TgResponseParameters {
+    #[serde(default)]
+    pub retry_after: Option<u64>,
 }
 
 /// Telegram file metadata from getFile.

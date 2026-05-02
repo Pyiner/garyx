@@ -28,6 +28,7 @@ mod dedup;
 mod handlers;
 mod helpers;
 mod media;
+mod outbox;
 mod streaming;
 mod text;
 mod types;

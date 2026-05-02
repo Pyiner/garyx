@@ -5,38 +5,13 @@ use serde::Serialize;
 
 use crate::channel_trait::ChannelError;
 
+use super::outbox::{
+    DeleteMessageBody, EditMessageTextBody, SendMessageBody, enqueue_delete_message,
+    enqueue_edit_message_text, enqueue_send_message, retry_backoff_duration,
+    wait_for_outbound_slot,
+};
 use super::text::split_message;
 use super::{MAX_MESSAGE_LENGTH, OUTBOUND_MAX_RETRIES, TgMessage, TgResponse};
-
-/// Body for sendMessage.
-#[derive(Debug, Serialize)]
-struct SendMessageBody {
-    chat_id: i64,
-    text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reply_to_message_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message_thread_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parse_mode: Option<String>,
-}
-
-/// Body for editMessageText.
-#[derive(Debug, Serialize)]
-struct EditMessageTextBody {
-    chat_id: i64,
-    message_id: i64,
-    text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parse_mode: Option<String>,
-}
-
-/// Body for deleteMessage.
-#[derive(Debug, Serialize)]
-struct DeleteMessageBody {
-    chat_id: i64,
-    message_id: i64,
-}
 
 /// Body for sendChatAction.
 #[derive(Debug, Serialize)]
@@ -74,21 +49,6 @@ impl<'a> TelegramSendTarget<'a> {
     }
 }
 
-fn retry_backoff_duration(attempt: usize) -> std::time::Duration {
-    // 200ms, 400ms, 800ms...
-    let millis = 200_u64.saturating_mul(1_u64 << attempt.min(5));
-    std::time::Duration::from_millis(millis)
-}
-
-fn is_transient_send_error(description: &str) -> bool {
-    let lowered = description.to_lowercase();
-    lowered.contains("too many requests")
-        || lowered.contains("internal server error")
-        || lowered.contains("bad gateway")
-        || lowered.contains("gateway timeout")
-        || lowered.contains("timeout")
-}
-
 fn is_invalid_reply_target_error(description: &str) -> bool {
     let lowered = description.to_lowercase();
     lowered.contains("message to be replied not found")
@@ -124,59 +84,38 @@ pub(super) async fn send_message_chunks(
             parse_mode: None,
         };
 
-        let url = format!(
-            "{api_base}/bot{token}/sendMessage",
-            api_base = target.api_base,
-            token = target.token
-        );
         let mut last_error: Option<String> = None;
 
         for attempt in 0..OUTBOUND_MAX_RETRIES {
-            let resp = target.http.post(&url).json(&body).send().await;
-            let resp = match resp {
-                Ok(r) => r,
-                Err(e) => {
-                    last_error = Some(format!("sendMessage failed: {e}"));
-                    if attempt + 1 < OUTBOUND_MAX_RETRIES {
-                        tokio::time::sleep(retry_backoff_duration(attempt)).await;
-                        continue;
-                    }
-                    break;
-                }
-            };
-
-            let result: TgResponse<TgMessage> = match resp.json().await {
-                Ok(parsed) => parsed,
-                Err(e) => {
-                    last_error = Some(format!("sendMessage parse failed: {e}"));
-                    if attempt + 1 < OUTBOUND_MAX_RETRIES {
-                        tokio::time::sleep(retry_backoff_duration(attempt)).await;
-                        continue;
-                    }
-                    break;
-                }
-            };
-
-            if !result.ok {
-                let desc = result.description.unwrap_or_default();
-                if body.reply_to_message_id.is_some() && is_invalid_reply_target_error(&desc) {
-                    body.reply_to_message_id = None;
+            match enqueue_send_message(target.http, target.api_base, target.token, body.clone())
+                .await
+            {
+                Ok(msg) => {
+                    message_ids.push(msg.message_id);
                     last_error = None;
-                    continue;
+                    break;
                 }
-                last_error = Some(format!("sendMessage error: {desc}"));
-                if is_transient_send_error(&desc) && attempt + 1 < OUTBOUND_MAX_RETRIES {
-                    tokio::time::sleep(retry_backoff_duration(attempt)).await;
-                    continue;
+                Err(error) => {
+                    if body.reply_to_message_id.is_some()
+                        && is_invalid_reply_target_error(&error.message)
+                    {
+                        body.reply_to_message_id = None;
+                        last_error = None;
+                        continue;
+                    }
+                    last_error = Some(error.message.clone());
+                    if error.retryable && attempt + 1 < OUTBOUND_MAX_RETRIES {
+                        tokio::time::sleep(
+                            error
+                                .retry_after
+                                .unwrap_or_else(|| retry_backoff_duration(attempt)),
+                        )
+                        .await;
+                        continue;
+                    }
+                    break;
                 }
-                break;
             }
-
-            if let Some(msg) = result.result {
-                message_ids.push(msg.message_id);
-            }
-            last_error = None;
-            break;
         }
 
         if let Some(err) = last_error {
@@ -227,6 +166,7 @@ pub async fn send_photo(
         api_base = target.api_base,
         token = target.token
     );
+    wait_for_outbound_slot(target.api_base, target.token, target.chat_id).await?;
     let resp = target
         .http
         .post(&url)
@@ -293,6 +233,7 @@ pub async fn send_document(
         api_base = target.api_base,
         token = target.token
     );
+    wait_for_outbound_slot(target.api_base, target.token, target.chat_id).await?;
     let resp = target
         .http
         .post(&url)
@@ -336,30 +277,7 @@ pub(super) async fn edit_message_text(
         parse_mode: parse_mode.map(String::from),
     };
 
-    let url = format!("{api_base}/bot{token}/editMessageText");
-    let resp = http
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| ChannelError::SendFailed(format!("editMessageText failed: {e}")))?;
-
-    let result: TgResponse<TgMessage> = resp
-        .json()
-        .await
-        .map_err(|e| ChannelError::SendFailed(format!("editMessageText parse failed: {e}")))?;
-
-    if !result.ok {
-        let desc = result.description.unwrap_or_default();
-        // Ignore "message is not modified" errors
-        if !desc.contains("message is not modified") {
-            return Err(ChannelError::SendFailed(format!(
-                "editMessageText error: {desc}"
-            )));
-        }
-    }
-
-    Ok(())
+    enqueue_edit_message_text(http, api_base, token, body).await
 }
 
 /// Delete an existing message.
@@ -375,27 +293,7 @@ pub(super) async fn delete_message(
         message_id,
     };
 
-    let url = format!("{api_base}/bot{token}/deleteMessage");
-    let resp = http
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| ChannelError::SendFailed(format!("deleteMessage failed: {e}")))?;
-
-    let result: TgResponse<bool> = resp
-        .json()
-        .await
-        .map_err(|e| ChannelError::SendFailed(format!("deleteMessage parse failed: {e}")))?;
-
-    if !result.ok {
-        let desc = result.description.unwrap_or_default();
-        return Err(ChannelError::SendFailed(format!(
-            "deleteMessage error: {desc}"
-        )));
-    }
-
-    Ok(())
+    enqueue_delete_message(http, api_base, token, body).await
 }
 
 /// Send a chat action (e.g., "typing").
