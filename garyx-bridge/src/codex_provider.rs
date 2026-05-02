@@ -446,12 +446,8 @@ fn append_codex_assistant_session_message(
 
 /// Build a tool session message from an item notification.
 fn build_tool_session_message(item: &Value, is_completed: bool) -> Option<ProviderMessage> {
-    let item_type = item
-        .get("type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim();
-    if !["commandExecution", "fileChange", "mcpToolCall"].contains(&item_type) {
+    let item_type = codex_thread_item_type(item)?;
+    if !is_codex_structured_activity_item_type(item_type) {
         return None;
     }
 
@@ -461,29 +457,17 @@ fn build_tool_session_message(item: &Value, is_completed: bool) -> Option<Provid
         .unwrap_or("")
         .to_owned();
 
-    let tool_name = if item_type == "mcpToolCall" {
-        let server = item.get("server").and_then(|v| v.as_str()).unwrap_or("");
-        let tool = item.get("tool").and_then(|v| v.as_str()).unwrap_or("");
-        if !tool.is_empty() {
-            format!("mcp:{server}:{tool}")
-        } else {
-            "mcpToolCall".to_owned()
-        }
-    } else {
-        item_type.to_owned()
-    };
+    let tool_name = codex_structured_activity_name(item_type, item);
 
+    // Garyx's existing stream protocol represents provider-side structured
+    // activity as ToolUse/ToolResult frames. Preserve Codex's original item
+    // type in metadata so each channel can decide how to render it.
     let mut msg = if is_completed {
-        let status = item
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_lowercase();
         ProviderMessage::tool_result(
             item.clone(),
             (!tool_use_id.is_empty()).then_some(tool_use_id),
             Some(tool_name),
-            Some(status == "failed" || status == "declined"),
+            Some(codex_structured_activity_is_error(item)),
         )
     } else {
         ProviderMessage::tool_use(
@@ -499,6 +483,100 @@ fn build_tool_session_message(item: &Value, is_completed: bool) -> Option<Provid
         .with_metadata_value("item_type", serde_json::json!(item_type));
 
     Some(msg)
+}
+
+fn codex_thread_item_type(item: &Value) -> Option<&str> {
+    item.get("type")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+}
+
+fn is_codex_structured_activity_item_type(item_type: &str) -> bool {
+    [
+        "hookPrompt",
+        "plan",
+        "reasoning",
+        "commandExecution",
+        "fileChange",
+        "mcpToolCall",
+        "dynamicToolCall",
+        "collabAgentToolCall",
+        "webSearch",
+        "imageView",
+        "imageGeneration",
+        "enteredReviewMode",
+        "exitedReviewMode",
+        "contextCompaction",
+    ]
+    .iter()
+    .any(|candidate| item_type.eq_ignore_ascii_case(candidate))
+}
+
+fn codex_structured_activity_name(item_type: &str, item: &Value) -> String {
+    if item_type.eq_ignore_ascii_case("mcpToolCall") {
+        let server = item.get("server").and_then(|v| v.as_str()).unwrap_or("");
+        let tool = item.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+        if !tool.is_empty() {
+            return format!("mcp:{server}:{tool}");
+        }
+    }
+
+    if item_type.eq_ignore_ascii_case("dynamicToolCall") {
+        let namespace = item
+            .get("namespace")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let tool = item
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        return match (namespace, tool) {
+            (Some(namespace), Some(tool)) => format!("{namespace}:{tool}"),
+            (_, Some(tool)) => tool.to_owned(),
+            _ => item_type.to_owned(),
+        };
+    }
+
+    if item_type.eq_ignore_ascii_case("collabAgentToolCall") {
+        if let Some(tool) = item
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return tool.to_owned();
+        }
+    }
+
+    item_type.to_owned()
+}
+
+fn codex_structured_activity_is_error(item: &Value) -> bool {
+    let failed_status = item
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(|status| {
+            let status = status.trim();
+            status.eq_ignore_ascii_case("failed")
+                || status.eq_ignore_ascii_case("declined")
+                || status.eq_ignore_ascii_case("error")
+                || status.eq_ignore_ascii_case("canceled")
+                || status.eq_ignore_ascii_case("cancelled")
+        })
+        .unwrap_or(false);
+    if failed_status {
+        return true;
+    }
+
+    let explicit_failure = item
+        .get("success")
+        .and_then(Value::as_bool)
+        .map(|success| !success)
+        .unwrap_or(false);
+    explicit_failure || item.get("error").is_some_and(|error| !error.is_null())
 }
 
 fn is_agent_message_item(item: &Value) -> bool {
@@ -517,9 +595,8 @@ fn is_user_message_item(item: &Value) -> bool {
 
 #[cfg(test)]
 fn is_tool_activity_item(item: &Value) -> bool {
-    item.get("type")
-        .and_then(|v| v.as_str())
-        .map(|kind| matches!(kind, "commandExecution" | "fileChange" | "mcpToolCall"))
+    codex_thread_item_type(item)
+        .map(is_codex_structured_activity_item_type)
         .unwrap_or(false)
 }
 

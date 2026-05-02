@@ -238,6 +238,144 @@ fn test_build_tool_session_message_mcp() {
 }
 
 #[test]
+fn test_build_tool_session_message_codex_schema_tool_types() {
+    let cases = [
+        (
+            json!({
+                "type": "hookPrompt",
+                "id": "hook_1",
+                "fragments": [],
+            }),
+            "hookPrompt",
+        ),
+        (
+            json!({
+                "type": "plan",
+                "id": "plan_1",
+                "text": "1. inspect\n2. patch",
+            }),
+            "plan",
+        ),
+        (
+            json!({
+                "type": "reasoning",
+                "id": "reason_1",
+                "summary": ["checking state"],
+                "content": [],
+            }),
+            "reasoning",
+        ),
+        (
+            json!({
+                "type": "dynamicToolCall",
+                "id": "dyn_1",
+                "namespace": "image_gen",
+                "tool": "generate",
+                "status": "inProgress",
+            }),
+            "image_gen:generate",
+        ),
+        (
+            json!({
+                "type": "collabAgentToolCall",
+                "id": "agent_1",
+                "tool": "spawnAgent",
+                "status": "inProgress",
+            }),
+            "spawnAgent",
+        ),
+        (
+            json!({
+                "type": "webSearch",
+                "id": "web_1",
+                "query": "codex app server schema",
+            }),
+            "webSearch",
+        ),
+        (
+            json!({
+                "type": "imageView",
+                "id": "view_1",
+                "path": "/tmp/probe.png",
+            }),
+            "imageView",
+        ),
+        (
+            json!({
+                "type": "imageGeneration",
+                "id": "img_1",
+                "status": "in_progress",
+                "revisedPrompt": null,
+                "result": "",
+            }),
+            "imageGeneration",
+        ),
+        (
+            json!({
+                "type": "enteredReviewMode",
+                "id": "review_1",
+                "review": "code review",
+            }),
+            "enteredReviewMode",
+        ),
+        (
+            json!({
+                "type": "exitedReviewMode",
+                "id": "review_2",
+                "review": "code review",
+            }),
+            "exitedReviewMode",
+        ),
+        (
+            json!({
+                "type": "contextCompaction",
+                "id": "compact_1",
+            }),
+            "contextCompaction",
+        ),
+    ];
+
+    for (item, expected_name) in cases {
+        let msg = build_tool_session_message(&item, false).unwrap();
+        assert_eq!(msg.role_str(), "tool_use");
+        assert_eq!(msg.tool_name.as_deref(), Some(expected_name));
+        assert_eq!(
+            msg.metadata.get("source").and_then(Value::as_str),
+            Some("codex_app_server")
+        );
+        assert_eq!(
+            msg.metadata.get("item_type").and_then(Value::as_str),
+            item.get("type").and_then(Value::as_str)
+        );
+    }
+}
+
+#[test]
+fn test_build_tool_session_message_error_statuses() {
+    for status in ["failed", "declined", "error", "canceled", "cancelled"] {
+        let item = json!({
+            "type": "dynamicToolCall",
+            "id": format!("dyn_{status}"),
+            "tool": "run",
+            "status": status,
+        });
+        let msg = build_tool_session_message(&item, true).unwrap();
+        assert_eq!(msg.role_str(), "tool_result");
+        assert_eq!(msg.is_error, Some(true), "status {status} should be error");
+    }
+
+    let item = json!({
+        "type": "dynamicToolCall",
+        "id": "dyn_success_false",
+        "tool": "run",
+        "status": "completed",
+        "success": false,
+    });
+    let msg = build_tool_session_message(&item, true).unwrap();
+    assert_eq!(msg.is_error, Some(true));
+}
+
+#[test]
 fn test_build_tool_session_message_irrelevant_type() {
     let item = json!({"type": "text", "text": "hello"});
     assert!(build_tool_session_message(&item, false).is_none());
@@ -282,6 +420,18 @@ fn test_is_user_message_item_matches_v2_shape() {
 #[test]
 fn test_is_tool_activity_item_matches_supported_types() {
     assert!(is_tool_activity_item(&json!({
+        "type": "hookPrompt",
+        "id": "hook-1"
+    })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "plan",
+        "id": "plan-1"
+    })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "reasoning",
+        "id": "reasoning-1"
+    })));
+    assert!(is_tool_activity_item(&json!({
         "type": "commandExecution",
         "id": "cmd-1"
     })));
@@ -293,9 +443,49 @@ fn test_is_tool_activity_item_matches_supported_types() {
         "type": "mcpToolCall",
         "id": "mcp-1"
     })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "dynamicToolCall",
+        "id": "dyn-1"
+    })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "collabAgentToolCall",
+        "id": "agent-1"
+    })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "webSearch",
+        "id": "web-1"
+    })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "imageView",
+        "id": "view-1"
+    })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "imageGeneration",
+        "id": "img-1"
+    })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "enteredReviewMode",
+        "id": "review-1"
+    })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "exitedReviewMode",
+        "id": "review-2"
+    })));
+    assert!(is_tool_activity_item(&json!({
+        "type": "contextCompaction",
+        "id": "compact-1"
+    })));
     assert!(!is_tool_activity_item(&json!({
         "type": "agentMessage",
         "id": "msg-1"
+    })));
+    assert!(!is_tool_activity_item(&json!({
+        "type": "userMessage",
+        "id": "user-1"
+    })));
+    assert!(!is_tool_activity_item(&json!({
+        "type": "text",
+        "text": "hello"
     })));
 }
 
