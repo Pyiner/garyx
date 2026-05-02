@@ -1069,18 +1069,26 @@ function mapStreamToolMessage(value: unknown): ChatStreamToolMessage {
   const record = parseRecord(value);
   const role = record.role === "tool_result" ? "tool_result" : "tool_use";
   const metadataValue = record.metadata;
+  const metadataRecord =
+    metadataValue && typeof metadataValue === "object"
+      ? (metadataValue as Record<string, unknown>)
+      : null;
+  const contentRecord = parseRecord(record.content);
   return {
     role,
     content: record.content,
     timestamp: typeof record.timestamp === "string" ? record.timestamp : null,
     toolUseId:
       asString(record.tool_use_id) || asString(record.toolUseId) || null,
-    toolName: asString(record.tool_name) || asString(record.toolName) || null,
+    toolName:
+      asString(record.tool_name) ||
+      asString(record.toolName) ||
+      asString(metadataRecord?.item_type) ||
+      asString(metadataRecord?.itemType) ||
+      asString(contentRecord.type) ||
+      null,
     isError: asBoolean(record.is_error) ?? asBoolean(record.isError),
-    metadata:
-      metadataValue && typeof metadataValue === "object"
-        ? (metadataValue as Record<string, unknown>)
-        : null,
+    metadata: metadataRecord,
   };
 }
 
@@ -1119,6 +1127,11 @@ function mapHistoryMessage(
             : "system";
   const content = "content" in normalized ? normalized.content : value.content;
   const metadataValue = normalized.metadata;
+  const metadataRecord =
+    metadataValue && typeof metadataValue === "object"
+      ? (metadataValue as Record<string, unknown>)
+      : null;
+  const contentRecord = parseRecord(content);
   const fallbackText =
     isLoopContinuation && value.role === "user"
       ? "System triggered an automatic continuation."
@@ -1155,12 +1168,14 @@ function mapHistoryMessage(
       asString(normalized.toolUseId) ||
       null,
     toolName:
-      asString(normalized.tool_name) || asString(normalized.toolName) || null,
+      asString(normalized.tool_name) ||
+      asString(normalized.toolName) ||
+      asString(metadataRecord?.item_type) ||
+      asString(metadataRecord?.itemType) ||
+      asString(contentRecord.type) ||
+      null,
     isError: asBoolean(normalized.is_error) ?? asBoolean(normalized.isError),
-    metadata:
-      metadataValue && typeof metadataValue === "object"
-        ? (metadataValue as Record<string, unknown>)
-        : null,
+    metadata: metadataRecord,
     timestamp: value.timestamp,
     kind: value.kind,
     internal: Boolean((value as { internal?: boolean }).internal),

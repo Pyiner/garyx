@@ -928,6 +928,101 @@ function extractMessageToolImageBlocks(
   }
 }
 
+type GeneratedImageToolMessage = Pick<
+  TranscriptMessage,
+  "content" | "metadata" | "toolName" | "toolUseId"
+>;
+
+const GENERATED_IMAGE_TOOL_USE_METADATA_KEY = "generated_image_tool_use_id";
+
+function recordString(
+  record: Record<string, unknown> | null | undefined,
+  ...keys: string[]
+): string {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function codexItemTypeFromToolMessage(
+  message: GeneratedImageToolMessage,
+): string {
+  const content = asRecord(message.content);
+  const metadata = asRecord(message.metadata);
+  return (
+    recordString(metadata, "item_type", "itemType") ||
+    recordString(content, "type") ||
+    message.toolName?.trim() ||
+    ""
+  );
+}
+
+function isImageGenerationToolMessage(
+  message: GeneratedImageToolMessage,
+): boolean {
+  return codexItemTypeFromToolMessage(message).toLowerCase() === "imagegeneration";
+}
+
+function mediaTypeFromGeneratedImageResult(
+  result: string,
+  content: Record<string, unknown> | null,
+): string {
+  const explicit =
+    recordString(content, "media_type", "mediaType", "mime_type", "mimeType", "contentType") ||
+    "";
+  if (explicit) {
+    return explicit;
+  }
+  const match = result.match(/^data:([^;,]+)(?:;[^,]*)?,/i);
+  return match?.[1]?.trim() || "image/png";
+}
+
+function base64FromGeneratedImageResult(result: string): string {
+  const match = result.match(/^data:[^,]*,(.*)$/is);
+  return (match?.[1] || result).trim();
+}
+
+function generatedImageName(message: GeneratedImageToolMessage): string {
+  const content = asRecord(message.content);
+  const id =
+    recordString(content, "id") ||
+    message.toolUseId?.trim() ||
+    "generated-image";
+  return `${id}.png`;
+}
+
+function extractImageGenerationImageContent(
+  message: GeneratedImageToolMessage,
+): unknown[] | null {
+  if (!isImageGenerationToolMessage(message)) {
+    return null;
+  }
+  const content = asRecord(message.content);
+  const result = recordString(content, "result");
+  if (!result) {
+    return null;
+  }
+  const data = base64FromGeneratedImageResult(result);
+  if (!data) {
+    return null;
+  }
+  return [
+    {
+      type: "image",
+      name: generatedImageName(message),
+      source: {
+        type: "base64",
+        media_type: mediaTypeFromGeneratedImageResult(result, content),
+        data,
+      },
+    },
+  ];
+}
+
 function extractStreamingMessageToolImageContent(
   event: Extract<DesktopChatStreamEvent, { type: "tool_result" }>,
 ): unknown[] | null {
@@ -1002,12 +1097,15 @@ function materializeRemoteTranscript(
 ): UiTranscriptMessage[] {
   const usedExistingIndexes = new Set<number>();
 
-  const materializedRemote = transcript.map((message) => {
+  const materializeMessage = (
+    message: TranscriptMessage,
+    matchSemantic: boolean,
+  ): UiTranscriptMessage => {
     let matchedIndex = existing.findIndex((entry, index) => {
       return !usedExistingIndexes.has(index) && entry.id === message.id;
     });
 
-    if (matchedIndex < 0) {
+    if (matchedIndex < 0 && matchSemantic) {
       matchedIndex = existing.findIndex((entry, index) => {
         return (
           !usedExistingIndexes.has(index) &&
@@ -1030,7 +1128,79 @@ function materializeRemoteTranscript(
       pending: false,
       error: message.error,
     };
-  });
+  };
+
+  const materializeGeneratedImageMessage = (
+    sourceMessage: TranscriptMessage,
+    content: unknown[],
+  ): UiTranscriptMessage => {
+    const toolUseId = sourceMessage.toolUseId?.trim() || "";
+    const synthetic: TranscriptMessage = {
+      id: `generated-image:${sourceMessage.id}`,
+      role: "assistant",
+      text: "",
+      content,
+      timestamp: sourceMessage.timestamp,
+      metadata: {
+        source: "codex_app_server",
+        item_type: "imageGeneration",
+        [GENERATED_IMAGE_TOOL_USE_METADATA_KEY]: toolUseId,
+      },
+      kind: "assistant_reply",
+    };
+    let matchedIndex = existing.findIndex((entry, index) => {
+      return !usedExistingIndexes.has(index) && entry.id === synthetic.id;
+    });
+    if (matchedIndex < 0 && toolUseId) {
+      matchedIndex = existing.findIndex((entry, index) => {
+        const metadata = asRecord(entry.metadata);
+        return (
+          !usedExistingIndexes.has(index) &&
+          entry.role === "assistant" &&
+          metadata?.[GENERATED_IMAGE_TOOL_USE_METADATA_KEY] === toolUseId
+        );
+      });
+    }
+    if (matchedIndex < 0) {
+      const contentSignature = JSON.stringify(content);
+      matchedIndex = existing.findIndex((entry, index) => {
+        return (
+          !usedExistingIndexes.has(index) &&
+          entry.role === "assistant" &&
+          !entry.text.trim() &&
+          JSON.stringify(entry.content) === contentSignature
+        );
+      });
+    }
+
+    const matchedEntry = matchedIndex >= 0 ? existing[matchedIndex] : null;
+    if (matchedIndex >= 0) {
+      usedExistingIndexes.add(matchedIndex);
+    }
+
+    return {
+      ...synthetic,
+      id: matchedEntry?.id || synthetic.id,
+      intentId: matchedEntry?.intentId,
+      remoteRunId: matchedEntry?.remoteRunId,
+      localState: "remote_final" as const,
+      pending: false,
+      error: false,
+    };
+  };
+
+  const materializedRemote: UiTranscriptMessage[] = [];
+  for (const message of transcript) {
+    materializedRemote.push(materializeMessage(message, true));
+    if (message.role === "tool_result") {
+      const imageContent = extractImageGenerationImageContent(message);
+      if (imageContent) {
+        materializedRemote.push(
+          materializeGeneratedImageMessage(message, imageContent),
+        );
+      }
+    }
+  }
   return materializedRemote;
 }
 
@@ -4304,6 +4474,65 @@ export function AppShell() {
       case "tool_use":
       case "tool_result":
         if (event.type === "tool_result") {
+          const generatedImageContent = extractImageGenerationImageContent(
+            event.message,
+          );
+          if (generatedImageContent) {
+            appendStreamingToolEvent(
+              { ...event, threadId: threadId },
+              {
+                intentId: activeIntentId,
+                assistantEntryId: currentStream?.assistantEntryId ?? null,
+              },
+            );
+            updateMessagesByThread((current) => {
+              const existing = current[threadId] || [];
+              return {
+                ...current,
+                [threadId]: [
+                  ...existing.filter((entry) => {
+                    return !(
+                      entry.role === "assistant" &&
+                      entry.pending &&
+                      (entry.intentId === activeIntentId ||
+                        entry.id === (currentStream?.assistantEntryId ?? null))
+                    );
+                  }),
+                  {
+                    id: `assistant-generated-image:${event.message.toolUseId || activeIntentId || threadId}:${crypto.randomUUID()}`,
+                    role: "assistant",
+                    text: "",
+                    content: generatedImageContent,
+                    metadata: {
+                      source: "codex_app_server",
+                      item_type: "imageGeneration",
+                      [GENERATED_IMAGE_TOOL_USE_METADATA_KEY]:
+                        event.message.toolUseId || "",
+                    },
+                    timestamp: event.message.timestamp || new Date().toISOString(),
+                    intentId: activeIntentId,
+                    remoteRunId: event.runId,
+                    localState: "remote_partial",
+                    pending: false,
+                    error: false,
+                  },
+                ],
+              };
+            });
+            updateLiveStreamState(threadId, (current) => ({
+              threadId: threadId,
+              runId: event.runId,
+              activeIntentId: current?.activeIntentId,
+              assistantEntryId: null,
+              pendingAckIntentIds: current?.pendingAckIntentIds || [],
+              streamStatus: "streaming",
+            }));
+            setThreadRuntimeState(threadId, "running_remote", {
+              activeIntentId: activeIntentId || undefined,
+              remoteRunId: event.runId,
+            });
+            break;
+          }
           const mediaContent = extractStreamingMessageToolImageContent(event);
           if (mediaContent) {
             updateMessagesByThread((current) => {

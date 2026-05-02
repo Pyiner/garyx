@@ -79,7 +79,22 @@ type ToolTraceAdapter = {
   present: (trace: ParsedToolTrace) => ToolTraceSide;
 };
 
-const CODEX_ITEM_TYPES = new Set(['commandExecution', 'fileChange', 'mcpToolCall']);
+const CODEX_ITEM_TYPES = [
+  'hookPrompt',
+  'plan',
+  'reasoning',
+  'commandExecution',
+  'fileChange',
+  'mcpToolCall',
+  'dynamicToolCall',
+  'collabAgentToolCall',
+  'webSearch',
+  'imageView',
+  'imageGeneration',
+  'enteredReviewMode',
+  'exitedReviewMode',
+  'contextCompaction',
+];
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -101,6 +116,14 @@ function asNumber(value: unknown): number | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined;
+}
+
+function canonicalCodexItemType(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return CODEX_ITEM_TYPES.find((entry) => entry.toLowerCase() === normalized.toLowerCase());
 }
 
 function parseMaybeJson(value: unknown): unknown {
@@ -352,12 +375,16 @@ function summarizeTextPayload(value: unknown, maxLength = 160): string | undefin
 function toolStatusFromState(status: string | undefined): ToolTraceStatus | undefined {
   switch (status?.trim().toLowerCase()) {
     case 'in_progress':
+    case 'inprogress':
     case 'running':
     case 'started':
       return { label: 'running', tone: 'progress' };
     case 'failed':
     case 'declined':
     case 'errored':
+    case 'error':
+    case 'canceled':
+    case 'cancelled':
       return { label: status.toLowerCase(), tone: 'error' };
     case 'completed':
     case 'done':
@@ -707,8 +734,14 @@ function parseCodexTrace(envelope: ToolTraceEnvelope): ParsedToolTrace | null {
     return null;
   }
 
-  const itemType = asString(record.type);
-  if (!itemType || !CODEX_ITEM_TYPES.has(itemType)) {
+  const itemType = canonicalCodexItemType(
+    asString(record.type) ||
+      asString(envelope.metadata?.item_type) ||
+      asString(envelope.metadata?.itemType) ||
+      envelope.toolName ||
+      undefined,
+  );
+  if (!itemType) {
     return null;
   }
 
@@ -719,14 +752,18 @@ function parseCodexTrace(envelope: ToolTraceEnvelope): ParsedToolTrace | null {
       ? record.output ?? envelope.payload
       : itemType === 'mcpToolCall'
         ? record.result ?? envelope.payload
-        : envelope.payload;
+        : itemType === 'dynamicToolCall' || itemType === 'collabAgentToolCall'
+          ? record.result ?? record.output ?? envelope.payload
+          : itemType === 'imageGeneration'
+            ? record.result ? '[generated image]' : envelope.payload
+            : envelope.payload;
 
   return {
     role: envelope.role,
     provider: asString(envelope.metadata?.source) || 'codex_app_server',
     toolUseId: envelope.toolUseId,
     toolKey: itemType,
-    toolName: itemType,
+    toolName: envelope.toolName || itemType,
     payload: record,
     input: envelope.role === 'tool_use' ? record : undefined,
     result: envelope.role === 'tool_result' ? resultValue : undefined,
@@ -1084,6 +1121,136 @@ function presentCodexMcp(trace: ParsedToolTrace): ToolTraceSide {
   };
 }
 
+function presentCodexDynamicTool(trace: ParsedToolTrace): ToolTraceSide {
+  const payload = asRecord(trace.payload);
+  const namespace = asString(payload?.namespace);
+  const tool = asString(payload?.tool) || trace.toolName;
+  const input = payload?.arguments ?? payload?.input ?? payload?.params ?? payload;
+  const result = trace.result ?? payload?.result ?? payload?.output ?? payload;
+  return {
+    title: humanizeToolLabel(tool),
+    summary: truncateSingleLine(
+      summarizeTextPayload(input, 128) || asString(payload?.description) || tool,
+      128,
+    ),
+    badges: dedupeBadges([namespace]),
+    status: toolStatusFromState(asString(payload?.status)),
+    detail: stringifyUnknown(trace.role === 'tool_use' ? input : result),
+    detailLabel: trace.role === 'tool_use' ? 'Call' : 'Response',
+    icon: '⊚',
+  };
+}
+
+function presentCodexPlan(trace: ParsedToolTrace): ToolTraceSide {
+  const payload = asRecord(trace.payload);
+  const text = asString(payload?.text) || asString(payload?.plan);
+  return {
+    title: 'Plan',
+    summary: truncateSingleLine(firstMeaningfulLine(text), 132),
+    detail: text || stringifyUnknown(payload ?? trace.payload),
+    detailLabel: 'Plan',
+    icon: '▤',
+  };
+}
+
+function presentCodexReasoning(trace: ParsedToolTrace): ToolTraceSide {
+  const payload = asRecord(trace.payload);
+  const summaryValue = payload?.summary;
+  const summary = Array.isArray(summaryValue)
+    ? summaryValue
+        .map((entry) => (typeof entry === 'string' ? entry : summarizeTextPayload(entry, 80)))
+        .filter(Boolean)
+        .join(' · ')
+    : summarizeTextPayload(summaryValue, 132);
+  const detail =
+    Array.isArray(summaryValue)
+      ? summaryValue.map((entry) => stringifyUnknown(entry)).join('\n')
+      : stringifyUnknown(payload?.content ?? summaryValue ?? payload ?? trace.payload);
+  return {
+    title: 'Reasoning',
+    summary: truncateSingleLine(summary, 132),
+    detail: truncateDetail(detail),
+    detailLabel: 'Summary',
+    icon: '·',
+  };
+}
+
+function presentCodexImageGeneration(trace: ParsedToolTrace): ToolTraceSide {
+  const payload = asRecord(trace.payload);
+  const prompt =
+    asString(payload?.prompt) ||
+    asString(payload?.revisedPrompt) ||
+    asString(payload?.revised_prompt);
+  const status = toolStatusFromState(asString(payload?.status));
+  const resultReady =
+    trace.role === 'tool_result' &&
+    typeof payload?.result === 'string' &&
+    payload.result.trim().length > 0;
+  return {
+    title: 'Image generation',
+    summary: resultReady ? 'Image ready' : truncateSingleLine(prompt, 132),
+    status,
+    detail:
+      trace.role === 'tool_use'
+        ? prettyPrintRecord(payload || {}, ['prompt', 'size', 'aspect_ratio', 'image_size'])
+        : resultReady
+          ? 'Image result is shown below.'
+          : truncateDetail(stringifyUnknown(payload ?? trace.payload)),
+    detailLabel: trace.role === 'tool_use' ? 'Prompt' : 'Result',
+    icon: '◌',
+  };
+}
+
+function presentCodexImageView(trace: ParsedToolTrace): ToolTraceSide {
+  const payload = asRecord(trace.payload);
+  const path = extractPath(payload);
+  return {
+    title: 'Image view',
+    summary: truncateMiddleSingleLine(pathTail(path) || path, 124),
+    badges: dedupeBadges([asString(payload?.media_type) || asString(payload?.mediaType)]),
+    detail: stringifyUnknown(payload ?? trace.payload),
+    detailLabel: 'Image',
+    icon: '◌',
+  };
+}
+
+function presentCodexSearch(trace: ParsedToolTrace): ToolTraceSide {
+  const payload = asRecord(trace.payload);
+  const query = asString(payload?.query) || asString(payload?.search);
+  return {
+    title: 'Search',
+    summary: truncateSingleLine(query, 132),
+    status: toolStatusFromState(asString(payload?.status)),
+    detail: stringifyUnknown(trace.role === 'tool_result' ? trace.result ?? payload : payload),
+    detailLabel: trace.role === 'tool_use' ? 'Query' : 'Result',
+    icon: '⌕',
+  };
+}
+
+function presentCodexMode(trace: ParsedToolTrace): ToolTraceSide {
+  return {
+    title:
+      trace.toolKey === 'enteredReviewMode'
+        ? 'Entered review mode'
+        : 'Exited review mode',
+    detail: stringifyUnknown(trace.payload),
+    detailLabel: 'Event',
+    icon: '▤',
+  };
+}
+
+function presentCodexActivity(trace: ParsedToolTrace): ToolTraceSide {
+  const payload = asRecord(trace.payload);
+  return {
+    title: humanizeToolLabel(trace.toolKey),
+    summary: summarizeTextPayload(trace.role === 'tool_use' ? payload ?? trace.payload : trace.result ?? trace.payload),
+    status: toolStatusFromState(asString(payload?.status)),
+    detail: truncateDetail(stringifyUnknown(trace.role === 'tool_use' ? payload ?? trace.payload : trace.result ?? trace.payload)),
+    detailLabel: trace.role === 'tool_use' ? 'Event' : 'Result',
+    icon: '·',
+  };
+}
+
 function presentFallback(trace: ParsedToolTrace): ToolTraceSide {
   const payload = asRecord(trace.payload);
   const path = extractPath(trace.input || payload);
@@ -1114,6 +1281,14 @@ const TOOL_TRACE_ADAPTERS: ToolTraceAdapter[] = [
   exactToolAdapter(['commandExecution'], presentCodexCommand),
   exactToolAdapter(['fileChange'], presentCodexFileChange),
   exactToolAdapter(['mcpToolCall'], presentCodexMcp),
+  exactToolAdapter(['dynamicToolCall', 'collabAgentToolCall'], presentCodexDynamicTool),
+  exactToolAdapter(['plan'], presentCodexPlan),
+  exactToolAdapter(['reasoning'], presentCodexReasoning),
+  exactToolAdapter(['imageGeneration'], presentCodexImageGeneration),
+  exactToolAdapter(['imageView'], presentCodexImageView),
+  exactToolAdapter(['webSearch'], presentCodexSearch),
+  exactToolAdapter(['enteredReviewMode', 'exitedReviewMode'], presentCodexMode),
+  exactToolAdapter(['hookPrompt', 'contextCompaction'], presentCodexActivity),
 ];
 
 function resolveToolTraceSide(trace: ParsedToolTrace): ToolTraceSide {
