@@ -817,3 +817,107 @@ fn upsert_plugin_account_rejects_missing_required_fields() {
         "unexpected error: {err}"
     );
 }
+
+#[test]
+fn format_task_progress_groups_each_user_turn_with_last_assistant_text_group() {
+    let task_payload = json!({
+        "task_ref": "#TASK-42",
+        "thread_id": "thread::task-42",
+        "task": {
+            "title": "Ship task progress",
+            "status": "done",
+            "assignee": {"kind": "agent", "agent_id": "claude"},
+            "updated_by": {"kind": "agent", "agent_id": "claude"}
+        },
+        "thread": {
+            "messages": [
+                {"role": "user", "content": "original request", "timestamp": "2026-05-03T00:00:00Z"}
+            ]
+        }
+    });
+    let history_payload = json!({
+        "messages": [
+            {
+                "role": "user",
+                "text": "please do it",
+                "timestamp": "2026-05-03T00:00:01Z",
+                "internal": false
+            },
+            {
+                "role": "assistant",
+                "text": "first text before tools",
+                "timestamp": "2026-05-03T00:00:02Z"
+            },
+            {
+                "role": "tool_use",
+                "text": "Bash",
+                "timestamp": "2026-05-03T00:00:03Z",
+                "tool_related": true
+            },
+            {
+                "role": "assistant",
+                "text": "final answer after tools",
+                "timestamp": "2026-05-03T00:00:04Z"
+            },
+            {
+                "role": "user",
+                "text": "follow up",
+                "timestamp": "2026-05-03T00:00:05Z",
+                "internal": true
+            }
+        ]
+    });
+
+    let rendered = format_task_progress(&task_payload, Some(&history_payload));
+
+    assert!(rendered.contains("Task: #TASK-42"));
+    assert!(rendered.contains("[1] User 2026-05-03T00:00:00Z"));
+    assert!(rendered.contains("original request"));
+    assert!(rendered.contains("[2] User 2026-05-03T00:00:01Z"));
+    assert!(rendered.contains("please do it"));
+    assert!(rendered.contains("final answer after tools"));
+    assert!(
+        !rendered.contains("first text before tools"),
+        "only the last assistant text group after a user turn should render: {rendered}"
+    );
+    assert!(rendered.contains("[3] User 2026-05-03T00:00:05Z"));
+    assert!(rendered.contains("(internal dispatch)"));
+    assert!(rendered.contains(
+        "Full thread with tool calls: garyx debug thread thread::task-42 --limit 200 --json"
+    ));
+}
+
+#[test]
+fn task_progress_turns_keeps_last_consecutive_assistant_group() {
+    let messages = vec![
+        TaskProgressMessage {
+            role: "user".to_owned(),
+            text: "u1".to_owned(),
+            timestamp: None,
+            sort_time: None,
+            source_order: 0,
+            internal: false,
+        },
+        TaskProgressMessage {
+            role: "assistant".to_owned(),
+            text: "a1".to_owned(),
+            timestamp: None,
+            sort_time: None,
+            source_order: 1,
+            internal: false,
+        },
+        TaskProgressMessage {
+            role: "assistant".to_owned(),
+            text: "a2".to_owned(),
+            timestamp: None,
+            sort_time: None,
+            source_order: 2,
+            internal: false,
+        },
+    ];
+
+    let turns = task_progress_turns(&messages);
+
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].assistant_text.as_deref(), Some("a1\n\na2"));
+}

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::SocketAddr;
@@ -6,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, FixedOffset, Local};
 use flate2::read::GzDecoder;
 use garyx_bridge::MultiProviderBridge;
 use garyx_channels::auth_flow::{AuthDisplayItem, AuthFlowExecutor, AuthPollResult};
@@ -2753,7 +2755,30 @@ pub(crate) async fn cmd_task_get(
     if json_output {
         return print_pretty_json(&payload);
     }
-    print_task_summary(&payload);
+    let history_payload = payload
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|thread_id| async move {
+            fetch_gateway_json(
+                &gateway,
+                &format!(
+                    "/api/threads/history?thread_id={}&limit=500&include_tool_messages=true",
+                    urlencoding::encode(thread_id)
+                ),
+            )
+            .await
+            .ok()
+        });
+    let history_payload = match history_payload {
+        Some(fetch) => fetch.await,
+        None => None,
+    };
+    print!(
+        "{}",
+        format_task_progress(&payload, history_payload.as_ref())
+    );
     Ok(())
 }
 
@@ -3179,6 +3204,371 @@ fn print_task_summary(value: &Value) {
     if thread_id != "-" {
         println!("Thread: {thread_id}");
     }
+}
+
+#[derive(Debug, Clone)]
+struct TaskProgressMessage {
+    role: String,
+    text: String,
+    timestamp: Option<String>,
+    sort_time: Option<DateTime<FixedOffset>>,
+    source_order: usize,
+    internal: bool,
+}
+
+#[derive(Debug, Clone)]
+struct TaskProgressTurn {
+    user_text: String,
+    user_timestamp: Option<String>,
+    internal: bool,
+    assistant_text: Option<String>,
+}
+
+fn format_task_progress(task_payload: &Value, history_payload: Option<&Value>) -> String {
+    let task = task_payload.get("task").unwrap_or(task_payload);
+    let task_ref = task_payload
+        .get("task_ref")
+        .and_then(Value::as_str)
+        .or_else(|| task.get("task_ref").and_then(Value::as_str))
+        .unwrap_or("-");
+    let thread_id = task_payload
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .or_else(|| task.get("thread_id").and_then(Value::as_str))
+        .unwrap_or("-");
+    let title = task
+        .get("title")
+        .and_then(Value::as_str)
+        .or_else(|| task_payload.get("title").and_then(Value::as_str))
+        .unwrap_or("-");
+    let status = task
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| task_payload.get("status").and_then(Value::as_str))
+        .unwrap_or("-");
+    let unassigned = Value::Null;
+    let assignee = task
+        .get("assignee")
+        .or_else(|| task_payload.get("assignee"))
+        .unwrap_or(&unassigned);
+    let updated_by = task
+        .get("updated_by")
+        .or_else(|| task_payload.get("updated_by"))
+        .unwrap_or(&Value::Null);
+
+    let mut output = String::new();
+    let _ = writeln!(&mut output, "Task: {task_ref}");
+    let _ = writeln!(&mut output, "Title: {title}");
+    let _ = writeln!(&mut output, "Status: {status}");
+    let _ = writeln!(&mut output, "Assignee: {}", format_principal(assignee));
+    let _ = writeln!(&mut output, "Updated by: {}", format_principal(updated_by));
+    if thread_id != "-" {
+        let _ = writeln!(&mut output, "Thread: {thread_id}");
+    }
+    output.push('\n');
+    output.push_str("Progress:\n");
+
+    let messages = task_progress_messages(task_payload, history_payload);
+    let turns = task_progress_turns(&messages);
+    if turns.is_empty() {
+        output.push_str("(no user messages recorded)\n");
+    } else {
+        for (idx, turn) in turns.iter().enumerate() {
+            let _ = writeln!(
+                &mut output,
+                "\n[{}] User{}",
+                idx + 1,
+                turn_timestamp_label(turn)
+            );
+            if turn.internal {
+                output.push_str("(internal dispatch)\n");
+            }
+            output.push_str(&indent_block(&turn.user_text, "  "));
+            output.push('\n');
+            output.push_str("Agent:\n");
+            if let Some(text) = turn.assistant_text.as_deref() {
+                output.push_str(&indent_block(text, "  "));
+                output.push('\n');
+            } else {
+                output.push_str("  (no text reply yet)\n");
+            }
+        }
+    }
+
+    if thread_id != "-" {
+        let _ = writeln!(
+            &mut output,
+            "\nFull thread with tool calls: garyx debug thread {thread_id} --limit 200 --json"
+        );
+    }
+    output
+}
+
+fn turn_timestamp_label(turn: &TaskProgressTurn) -> String {
+    turn.user_timestamp
+        .as_deref()
+        .map(|timestamp| format!(" {timestamp}"))
+        .unwrap_or_default()
+}
+
+fn task_progress_messages(
+    task_payload: &Value,
+    history_payload: Option<&Value>,
+) -> Vec<TaskProgressMessage> {
+    let mut messages = Vec::new();
+    let mut seen = HashSet::new();
+    let mut source_order = 0_usize;
+
+    if let Some(history_messages) = history_payload
+        .and_then(|payload| payload.get("messages"))
+        .and_then(Value::as_array)
+    {
+        for message in history_messages {
+            if let Some(entry) = task_progress_message_from_history(message, source_order) {
+                push_unique_task_progress_message(&mut messages, &mut seen, entry);
+                source_order += 1;
+            }
+        }
+    }
+
+    if let Some(thread_messages) = task_payload
+        .get("thread")
+        .and_then(|thread| thread.get("messages"))
+        .and_then(Value::as_array)
+    {
+        for message in thread_messages {
+            if let Some(entry) = task_progress_message_from_thread(message, source_order) {
+                push_unique_task_progress_message(&mut messages, &mut seen, entry);
+                source_order += 1;
+            }
+        }
+    }
+
+    messages.sort_by(|left, right| {
+        left.sort_time
+            .cmp(&right.sort_time)
+            .then_with(|| left.source_order.cmp(&right.source_order))
+    });
+    messages
+}
+
+fn push_unique_task_progress_message(
+    messages: &mut Vec<TaskProgressMessage>,
+    seen: &mut HashSet<String>,
+    entry: TaskProgressMessage,
+) {
+    let key = format!(
+        "{}\n{}\n{}",
+        entry.role,
+        entry.timestamp.as_deref().unwrap_or(""),
+        entry.text
+    );
+    if seen.insert(key) {
+        messages.push(entry);
+    }
+}
+
+fn task_progress_message_from_history(
+    value: &Value,
+    source_order: usize,
+) -> Option<TaskProgressMessage> {
+    let role = value
+        .get("role")
+        .and_then(Value::as_str)
+        .or_else(|| value.pointer("/message/role").and_then(Value::as_str))?
+        .trim()
+        .to_ascii_lowercase();
+    let text = value
+        .get("text")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| value.get("message").and_then(message_text_from_value))
+        .unwrap_or_default();
+    let timestamp = value
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .or_else(|| value.pointer("/message/timestamp").and_then(Value::as_str))
+        .map(ToOwned::to_owned);
+    Some(TaskProgressMessage {
+        role,
+        text,
+        sort_time: timestamp.as_deref().and_then(parse_rfc3339_timestamp),
+        timestamp,
+        source_order,
+        internal: value
+            .get("internal")
+            .and_then(Value::as_bool)
+            .or_else(|| value.pointer("/message/internal").and_then(Value::as_bool))
+            .unwrap_or(false),
+    })
+}
+
+fn task_progress_message_from_thread(
+    value: &Value,
+    source_order: usize,
+) -> Option<TaskProgressMessage> {
+    let role = value
+        .get("role")
+        .and_then(Value::as_str)?
+        .trim()
+        .to_ascii_lowercase();
+    let text = message_text_from_value(value).unwrap_or_default();
+    let timestamp = value
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    Some(TaskProgressMessage {
+        role,
+        text,
+        sort_time: timestamp.as_deref().and_then(parse_rfc3339_timestamp),
+        timestamp,
+        source_order,
+        internal: value
+            .get("internal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn task_progress_turns(messages: &[TaskProgressMessage]) -> Vec<TaskProgressTurn> {
+    let mut turns = Vec::new();
+    let mut current: Option<TaskProgressTurn> = None;
+    let mut current_assistant_group = Vec::new();
+    let mut last_assistant_group: Option<String> = None;
+
+    for message in messages {
+        match message.role.as_str() {
+            "user" => {
+                flush_assistant_group(&mut current_assistant_group, &mut last_assistant_group);
+                if let Some(mut turn) = current.take() {
+                    turn.assistant_text = last_assistant_group.take();
+                    turns.push(turn);
+                }
+                current = Some(TaskProgressTurn {
+                    user_text: message.text.clone(),
+                    user_timestamp: message.timestamp.clone(),
+                    internal: message.internal,
+                    assistant_text: None,
+                });
+            }
+            "assistant" => {
+                if current.is_some() && !message.text.trim().is_empty() {
+                    current_assistant_group.push(message.text.clone());
+                }
+            }
+            _ => {
+                flush_assistant_group(&mut current_assistant_group, &mut last_assistant_group);
+            }
+        }
+    }
+    flush_assistant_group(&mut current_assistant_group, &mut last_assistant_group);
+    if let Some(mut turn) = current {
+        turn.assistant_text = last_assistant_group;
+        turns.push(turn);
+    }
+    turns
+}
+
+fn flush_assistant_group(group: &mut Vec<String>, last_group: &mut Option<String>) {
+    if group.is_empty() {
+        return;
+    }
+    *last_group = Some(group.join("\n\n"));
+    group.clear();
+}
+
+fn parse_rfc3339_timestamp(value: &str) -> Option<DateTime<FixedOffset>> {
+    DateTime::parse_from_rfc3339(value).ok()
+}
+
+fn message_text_from_value(value: &Value) -> Option<String> {
+    value
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            let mut parts = Vec::new();
+            collect_message_text(value.get("content").unwrap_or(&Value::Null), &mut parts, 0);
+            (!parts.is_empty()).then(|| parts.join("\n"))
+        })
+}
+
+fn collect_message_text(value: &Value, parts: &mut Vec<String>, depth: usize) {
+    if depth > 32 {
+        return;
+    }
+    match value {
+        Value::String(text) => push_message_text_part(parts, text),
+        Value::Array(items) => {
+            for item in items {
+                collect_message_text(item, parts, depth + 1);
+            }
+        }
+        Value::Object(map) => {
+            if let Some(text) = map.get("text").and_then(Value::as_str) {
+                push_message_text_part(parts, text);
+            }
+            if let Some(content) = map.get("content") {
+                collect_message_text(content, parts, depth + 1);
+            }
+            if let Some(parts_value) = map.get("parts") {
+                collect_message_text(parts_value, parts, depth + 1);
+            }
+            if let Some(items_value) = map.get("items") {
+                collect_message_text(items_value, parts, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_message_text_part(parts: &mut Vec<String>, text: &str) {
+    let trimmed = text.trim();
+    if !trimmed.is_empty() {
+        parts.push(trimmed.to_owned());
+    }
+}
+
+fn indent_block(text: &str, prefix: &str) -> String {
+    text.lines()
+        .flat_map(|line| {
+            if line.is_empty() {
+                vec![prefix.trim_end().to_owned()]
+            } else {
+                wrap_text_line(line, 100, prefix)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn wrap_text_line(line: &str, width: usize, prefix: &str) -> Vec<String> {
+    if line.chars().count() <= width {
+        return vec![format!("{prefix}{line}")];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in line.split_whitespace() {
+        let next_len =
+            current.chars().count() + usize::from(!current.is_empty()) + word.chars().count();
+        if next_len > width && !current.is_empty() {
+            lines.push(format!("{prefix}{current}"));
+            current.clear();
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(format!("{prefix}{current}"));
+    }
+    if lines.is_empty() {
+        lines.push(format!("{prefix}{line}"));
+    }
+    lines
 }
 
 fn format_principal(value: &Value) -> String {
