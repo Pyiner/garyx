@@ -915,10 +915,16 @@ pub struct DesktopConfig {
     pub labs: DesktopLabsConfig,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TasksConfig {
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+impl Default for TasksConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Root configuration for Garyx.

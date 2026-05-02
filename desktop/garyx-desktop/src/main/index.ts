@@ -37,6 +37,7 @@ import type {
   CreateTeamInput,
   CreateSkillEntryInput,
   CreateSkillInput,
+  CreateTaskInput,
   CreateAutomationInput,
   CreateThreadInput,
   DesktopDeepLinkEvent,
@@ -53,10 +54,12 @@ import type {
   GatewayConfigDocument,
   ListAutoResearchRunsInput,
   ListCandidatesInput,
+  ListTasksInput,
   ListWorkspaceFilesInput,
   MarkAutomationSeenInput,
   ReadMemoryDocumentInput,
   PreviewWorkspaceFileInput,
+  PromoteTaskInput,
   RevealWorkspaceFileInput,
   ReadSkillFileInput,
   RenameWorkspaceInput,
@@ -82,9 +85,13 @@ import type {
   UpdateMcpServerInput,
   UpdateSkillInput,
   UpdateSlashCommandInput,
+  UpdateTaskStatusInput,
+  UpdateTaskTitleInput,
   UpsertMcpServerInput,
   UpsertSlashCommandInput,
   ShowBrowserConnectionMenuInput,
+  AssignTaskInput,
+  UnassignTaskInput,
 } from "@shared/contracts";
 
 import {
@@ -92,6 +99,7 @@ import {
   createTeam,
   createSkill,
   createSkillEntry,
+  createTask,
   createAutoResearchRun,
   createMcpServer,
   createSlashCommand,
@@ -115,6 +123,7 @@ import {
   fetchThreadLogs,
   getAutoResearchRun,
   interruptThread,
+  listTasks,
   listAutoResearchCandidates,
   listAutoResearchRuns,
   listAutoResearchIterations,
@@ -145,6 +154,11 @@ import {
   updateMcpServer,
   updateSkill,
   updateSlashCommand,
+  promoteThreadToTask,
+  updateTaskStatus,
+  assignTask,
+  unassignTask,
+  updateTaskTitle,
 } from "./gary-client";
 import {
   addChannelAccount,
@@ -632,6 +646,56 @@ function registerIpcHandlers(): void {
     "garyx:delete-automation",
     async (_event, input: DeleteAutomationInput) => {
       return deleteDesktopAutomation(input.automationId);
+    },
+  );
+
+  ipcMain.handle("garyx:list-tasks", async (_event, input?: ListTasksInput) => {
+    const settings = await resolveSettings();
+    return listTasks(settings, input || {});
+  });
+
+  ipcMain.handle(
+    "garyx:create-task",
+    async (_event, input: CreateTaskInput) => {
+      const settings = await resolveSettings();
+      return createTask(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:promote-thread-to-task",
+    async (_event, input: PromoteTaskInput) => {
+      const settings = await resolveSettings();
+      return promoteThreadToTask(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:update-task-status",
+    async (_event, input: UpdateTaskStatusInput) => {
+      const settings = await resolveSettings();
+      return updateTaskStatus(settings, input);
+    },
+  );
+
+  ipcMain.handle("garyx:assign-task", async (_event, input: AssignTaskInput) => {
+    const settings = await resolveSettings();
+    return assignTask(settings, input);
+  });
+
+  ipcMain.handle(
+    "garyx:unassign-task",
+    async (_event, input: UnassignTaskInput) => {
+      const settings = await resolveSettings();
+      return unassignTask(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:update-task-title",
+    async (_event, input: UpdateTaskTitleInput) => {
+      const settings = await resolveSettings();
+      return updateTaskTitle(settings, input);
     },
   );
 

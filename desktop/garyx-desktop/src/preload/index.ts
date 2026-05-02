@@ -61,6 +61,16 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:update-automation", input),
   deleteAutomation: (input) =>
     ipcRenderer.invoke("garyx:delete-automation", input),
+  listTasks: (input) => ipcRenderer.invoke("garyx:list-tasks", input),
+  createTask: (input) => ipcRenderer.invoke("garyx:create-task", input),
+  promoteThreadToTask: (input) =>
+    ipcRenderer.invoke("garyx:promote-thread-to-task", input),
+  updateTaskStatus: (input) =>
+    ipcRenderer.invoke("garyx:update-task-status", input),
+  assignTask: (input) => ipcRenderer.invoke("garyx:assign-task", input),
+  unassignTask: (input) => ipcRenderer.invoke("garyx:unassign-task", input),
+  updateTaskTitle: (input) =>
+    ipcRenderer.invoke("garyx:update-task-title", input),
   listSkills: () => ipcRenderer.invoke("garyx:list-skills"),
   listCustomAgents: () => ipcRenderer.invoke("garyx:list-custom-agents"),
   listProviderModels: (providerType) =>

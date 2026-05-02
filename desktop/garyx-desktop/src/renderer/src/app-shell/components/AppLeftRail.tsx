@@ -20,6 +20,7 @@ import {
   SettingsIcon,
   SettingsTabIcon,
   SkillsIcon,
+  TasksIcon,
 } from '../icons';
 import { useI18n } from '../../i18n';
 
@@ -30,6 +31,7 @@ type AppLeftRailProps = {
   isAgentsView: boolean;
   isTeamsView: boolean;
   isSkillsView: boolean;
+  isTasksView: boolean;
   isBrowserView: boolean;
   showAutoResearch: boolean;
   settingsActiveTab: SettingsTabId;
@@ -53,6 +55,7 @@ type AppLeftRailProps = {
   onOpenBrowser: () => void;
   onOpenAgents: () => void;
   onOpenSkills: () => void;
+  onOpenTasks: () => void;
   onOpenMemory: () => void;
   onOpenBot: (group: ReturnType<typeof buildBotGroups>[number]) => void;
   onOpenBotEndpoint: (endpoint: DesktopChannelEndpoint) => void;
@@ -80,6 +83,7 @@ export function AppLeftRail({
   isAgentsView,
   isTeamsView,
   isSkillsView,
+  isTasksView,
   isBrowserView,
   showAutoResearch,
   settingsActiveTab,
@@ -103,6 +107,7 @@ export function AppLeftRail({
   onOpenBrowser,
   onOpenAgents,
   onOpenSkills,
+  onOpenTasks,
   onOpenMemory,
   onOpenBot,
   onOpenBotEndpoint,
@@ -123,7 +128,7 @@ export function AppLeftRail({
   sidebarResizing,
 }: AppLeftRailProps) {
   const { t } = useI18n();
-  const isThreadView = !isSettingsView && !isAutomationView && !isAutoResearchView && !isAgentsView && !isTeamsView && !isSkillsView && !isBrowserView;
+  const isThreadView = !isSettingsView && !isAutomationView && !isAutoResearchView && !isAgentsView && !isTeamsView && !isSkillsView && !isTasksView && !isBrowserView;
   const visibleSelectedThreadId = isThreadView ? selectedThreadId : null;
   return (
     <aside className={`left-rail ${isSettingsView ? 'settings-rail-shell' : ''}`}>
@@ -185,6 +190,14 @@ export function AppLeftRail({
             >
               <AutomationIcon />
               <span>{t('Automation')}</span>
+            </button>
+            <button
+              className={`sidebar-action ${isTasksView ? 'active' : ''}`}
+              onClick={onOpenTasks}
+              type="button"
+            >
+              <TasksIcon />
+              <span>{t('Tasks')}</span>
             </button>
             <button
               className={`sidebar-action ${isBrowserView ? 'active' : ''}`}

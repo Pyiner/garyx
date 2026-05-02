@@ -132,6 +132,90 @@ export interface DesktopAutomationActivityFeed {
   items: DesktopAutomationActivityEntry[];
 }
 
+export type DesktopTaskStatus = "todo" | "in_progress" | "in_review" | "done";
+
+export interface DesktopTaskScope {
+  channel: string;
+  accountId: string;
+}
+
+export type DesktopTaskPrincipal =
+  | {
+      kind: "human";
+      userId: string;
+    }
+  | {
+      kind: "agent";
+      agentId: string;
+    };
+
+export interface DesktopTaskSummary {
+  threadId: string;
+  taskRef: string;
+  number: number;
+  title: string;
+  status: DesktopTaskStatus;
+  scope: DesktopTaskScope;
+  creator: DesktopTaskPrincipal;
+  assignee?: DesktopTaskPrincipal | null;
+  updatedAt: string;
+  updatedBy: DesktopTaskPrincipal;
+  runtimeAgentId: string;
+  replyCount: number;
+}
+
+export interface DesktopTasksPage {
+  tasks: DesktopTaskSummary[];
+  total: number;
+  hasMore: boolean;
+}
+
+export interface ListTasksInput {
+  scope?: string | null;
+  status?: DesktopTaskStatus | null;
+  assignee?: string | null;
+  includeDone?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface CreateTaskInput {
+  scope: string;
+  title?: string | null;
+  body?: string | null;
+  assignee?: string | null;
+  start?: boolean;
+  agentId?: string | null;
+  workspaceDir?: string | null;
+}
+
+export interface PromoteTaskInput {
+  threadId: string;
+  title?: string | null;
+  assignee?: string | null;
+}
+
+export interface UpdateTaskStatusInput {
+  taskRef: string;
+  status: DesktopTaskStatus;
+  note?: string | null;
+  force?: boolean;
+}
+
+export interface AssignTaskInput {
+  taskRef: string;
+  principal: string;
+}
+
+export interface UnassignTaskInput {
+  taskRef: string;
+}
+
+export interface UpdateTaskTitleInput {
+  taskRef: string;
+  title: string;
+}
+
 export interface DesktopSkillInfo {
   id: string;
   name: string;
@@ -1319,6 +1403,13 @@ export interface GaryxDesktopApi {
     input: UpdateAutomationInput,
   ) => Promise<{ state: DesktopState; automation: DesktopAutomationSummary }>;
   deleteAutomation: (input: DeleteAutomationInput) => Promise<DesktopState>;
+  listTasks: (input?: ListTasksInput) => Promise<DesktopTasksPage>;
+  createTask: (input: CreateTaskInput) => Promise<DesktopTaskSummary>;
+  promoteThreadToTask: (input: PromoteTaskInput) => Promise<DesktopTaskSummary>;
+  updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
+  assignTask: (input: AssignTaskInput) => Promise<void>;
+  unassignTask: (input: UnassignTaskInput) => Promise<void>;
+  updateTaskTitle: (input: UpdateTaskTitleInput) => Promise<void>;
   listSkills: () => Promise<DesktopSkillInfo[]>;
   listCustomAgents: () => Promise<DesktopCustomAgent[]>;
   listProviderModels: (

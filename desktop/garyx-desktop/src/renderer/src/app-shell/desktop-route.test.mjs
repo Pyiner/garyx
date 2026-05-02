@@ -63,6 +63,10 @@ test('parses utility views', () => {
     kind: 'automation',
     automationId: 'job-1',
   });
+  assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/tasks'), {
+    kind: 'view',
+    view: 'tasks',
+  });
   assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/settings/connection'), {
     kind: 'settings',
     tabId: 'gateway',

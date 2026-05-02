@@ -2,6 +2,7 @@ import {
   Bot,
   Command,
   Cpu,
+  ListTodo,
   Router,
   Settings2,
   SlidersHorizontal,
@@ -189,6 +190,10 @@ export function SkillsIcon() {
       </g>
     </svg>
   );
+}
+
+export function TasksIcon() {
+  return <SettingsRailIcon glyph={ListTodo} />;
 }
 
 export function MemoryIcon() {

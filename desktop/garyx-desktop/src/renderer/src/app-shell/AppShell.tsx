@@ -176,6 +176,7 @@ import { AppLeftRail } from "./components/AppLeftRail";
 import { AgentsHubPanel } from "./components/AgentsHubPanel";
 import { AutoResearchPanel } from "./components/auto-research";
 import { ThreadPage } from "./components/ThreadPage";
+import { TasksPanel } from "./components/TasksPanel";
 import { useAutomationController } from "./useAutomationController";
 import { useAutoResearchController } from "./useAutoResearchController";
 import {
@@ -1101,6 +1102,7 @@ function savedContentView(): ContentView {
     "agents",
     "teams",
     "skills",
+    "tasks",
     "settings",
   ];
   return saved && valid.includes(saved as ContentView)
@@ -2384,11 +2386,13 @@ export function AppShell() {
   const isAgentsView = contentView === "agents";
   const isTeamsView = contentView === "teams";
   const isSkillsView = contentView === "skills";
+  const isTasksView = contentView === "tasks";
   const canEditThreadTitle = Boolean(
     activeThread &&
     !activeAutomationThread &&
     !isAutomationView &&
     !isSkillsView &&
+    !isTasksView &&
     !isBotsView &&
     !isAgentsView &&
     !isTeamsView,
@@ -2423,6 +2427,8 @@ export function AppShell() {
     ? `${desktopState?.automations.length || 0} scheduled runs`
     : isSkillsView
       ? "Local and project skill registry"
+      : isTasksView
+        ? `${desktopState?.configuredBots.length || 0} task scopes`
       : isAgentsView || isTeamsView
         ? "Agents and reusable teams"
         : isBotsView
@@ -6343,6 +6349,7 @@ export function AppShell() {
         isTeamsView={isTeamsView}
         isSettingsView={isSettingsView}
         isSkillsView={isSkillsView}
+        isTasksView={isTasksView}
         isThreadRuntimeBusy={(threadId) => {
           return isRuntimeBusy(
             selectThreadRuntime(messageState, threadId)?.state,
@@ -6396,6 +6403,9 @@ export function AppShell() {
         }}
         onOpenSkills={() => {
           setContentView("skills");
+        }}
+        onOpenTasks={() => {
+          setContentView("tasks");
         }}
         onRequestRemoveWorkspace={(workspace) => {
           void handleRequestRemoveWorkspace(workspace);
@@ -6452,7 +6462,8 @@ export function AppShell() {
           isAutoResearchView ||
           isAgentsView ||
           isTeamsView ||
-          isSkillsView ? (
+          isSkillsView ||
+          isTasksView ? (
             <div aria-hidden="true" className="settings-window-toolbar" />
           ) : (
             <header className="conversation-header">
@@ -6655,6 +6666,15 @@ export function AppShell() {
               />
             ) : isSkillsView ? (
               <SkillsPanel onToast={pushToast} />
+            ) : isTasksView ? (
+              <TasksPanel
+                agents={desktopAgents}
+                desktopState={desktopState}
+                onOpenThread={(threadId) => {
+                  void openExistingThread(threadId);
+                }}
+                onToast={pushToast}
+              />
             ) : isBotsView ? (
               <BotConsolePage
                 busyBotId={

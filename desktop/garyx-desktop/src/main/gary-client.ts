@@ -3,6 +3,7 @@ import type {
   CreateTeamInput,
   CreateAutoResearchRunInput,
   CreateSkillInput,
+  CreateTaskInput,
   DeleteCustomAgentInput,
   DeleteTeamInput,
   DeleteMcpServerInput,
@@ -24,6 +25,11 @@ import type {
   DesktopBotConsoleSummary,
   DesktopBotConversationNode,
   DesktopTeam,
+  DesktopTaskPrincipal,
+  DesktopTaskScope,
+  DesktopTaskStatus,
+  DesktopTaskSummary,
+  DesktopTasksPage,
   DeleteSlashCommandInput,
   DesktopChatStreamEvent,
   DesktopChannelEndpoint,
@@ -48,12 +54,14 @@ import type {
   CandidateVerdict,
   ListAutoResearchRunsInput,
   ListCandidatesInput,
+  ListTasksInput,
   ListWorkspaceFilesInput,
   MessageFileAttachment,
   MessageImageAttachment,
   OpenChatStreamResult,
   PendingThreadInput,
   PreviewWorkspaceFileInput,
+  PromoteTaskInput,
   SendMessageInput,
   SendStreamingInputResult,
   SlashCommand,
@@ -76,8 +84,12 @@ import type {
   UpdateMcpServerInput,
   UpdateSkillInput,
   UpdateSlashCommandInput,
+  UpdateTaskStatusInput,
+  UpdateTaskTitleInput,
   UpsertMcpServerInput,
   UpsertSlashCommandInput,
+  AssignTaskInput,
+  UnassignTaskInput,
 } from "@shared/contracts";
 
 interface StreamInputWaiter {
@@ -375,6 +387,49 @@ interface AutomationSummaryPayload {
 
 interface AutomationsPayload {
   automations?: AutomationSummaryPayload[];
+}
+
+interface TaskPrincipalPayload {
+  kind?: string;
+  user_id?: string;
+  userId?: string;
+  agent_id?: string;
+  agentId?: string;
+}
+
+interface TaskScopePayload {
+  channel?: string;
+  account_id?: string;
+  accountId?: string;
+}
+
+interface TaskSummaryPayload {
+  thread_id?: string;
+  threadId?: string;
+  task_ref?: string;
+  taskRef?: string;
+  number?: number;
+  title?: string | null;
+  status?: string | null;
+  scope?: TaskScopePayload | null;
+  creator?: TaskPrincipalPayload | null;
+  assignee?: TaskPrincipalPayload | null;
+  updated_at?: string | null;
+  updatedAt?: string | null;
+  updated_by?: TaskPrincipalPayload | null;
+  updatedBy?: TaskPrincipalPayload | null;
+  runtime_agent_id?: string | null;
+  runtimeAgentId?: string | null;
+  reply_count?: number;
+  replyCount?: number;
+  task?: TaskSummaryPayload | null;
+}
+
+interface TasksPayload {
+  tasks?: TaskSummaryPayload[];
+  total?: number;
+  has_more?: boolean;
+  hasMore?: boolean;
 }
 
 interface AutomationActivityPayload {
@@ -973,6 +1028,12 @@ function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
 function buildProviderMetadata(
   settings: DesktopSettings,
 ): Record<string, unknown> | undefined {
@@ -1445,6 +1506,135 @@ function mapBotConsoleSummary(
     conversationNodes,
     endpoints,
   };
+}
+
+function normalizeTaskStatus(value: unknown): DesktopTaskStatus {
+  switch (value) {
+    case "in_progress":
+    case "in_review":
+    case "done":
+      return value;
+    default:
+      return "todo";
+  }
+}
+
+function mapTaskScope(value: unknown): DesktopTaskScope {
+  const record = parseRecord(value);
+  return {
+    channel: asString(record.channel)?.toLowerCase() || "",
+    accountId:
+      (asString(record.account_id) || asString(record.accountId))?.toLowerCase() ||
+      "",
+  };
+}
+
+function mapTaskPrincipal(value: unknown): DesktopTaskPrincipal {
+  const record = parseRecord(value);
+  if (record.kind === "human") {
+    return {
+      kind: "human",
+      userId: asString(record.user_id) || asString(record.userId) || "owner",
+    };
+  }
+  return {
+    kind: "agent",
+    agentId: asString(record.agent_id) || asString(record.agentId) || "claude",
+  };
+}
+
+function taskRefFromScope(scope: DesktopTaskScope, number: number): string {
+  return scope.channel && scope.accountId && number > 0
+    ? `#${scope.channel}/${scope.accountId}/${number}`
+    : "";
+}
+
+function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
+  const task: TaskSummaryPayload =
+    value.task && typeof value.task === "object" ? value.task : {};
+  const scope = mapTaskScope(value.scope ?? task.scope);
+  const number = asFiniteNumber(value.number) ?? asFiniteNumber(task.number) ?? 0;
+  const title =
+    asString(value.title) ||
+    asString(task.title) ||
+    taskRefFromScope(scope, number) ||
+    "Untitled task";
+  return {
+    threadId: asString(value.thread_id) || asString(value.threadId) || "",
+    taskRef:
+      asString(value.task_ref) ||
+      asString(value.taskRef) ||
+      taskRefFromScope(scope, number),
+    number,
+    title,
+    status: normalizeTaskStatus(value.status ?? task.status),
+    scope,
+    creator: mapTaskPrincipal(value.creator ?? task.creator),
+    assignee:
+      value.assignee || task.assignee
+        ? mapTaskPrincipal(value.assignee ?? task.assignee)
+        : null,
+    updatedAt:
+      asString(value.updated_at) ||
+      asString(value.updatedAt) ||
+      asString(task.updated_at) ||
+      asString(task.updatedAt) ||
+      new Date(0).toISOString(),
+    updatedBy: mapTaskPrincipal(
+      value.updated_by ?? value.updatedBy ?? task.updated_by ?? task.updatedBy,
+    ),
+    runtimeAgentId:
+      asString(value.runtime_agent_id) ||
+      asString(value.runtimeAgentId) ||
+      asString(task.runtime_agent_id) ||
+      asString(task.runtimeAgentId) ||
+      "",
+    replyCount:
+      asFiniteNumber(value.reply_count) ??
+      asFiniteNumber(value.replyCount) ??
+      asFiniteNumber(task.reply_count) ??
+      asFiniteNumber(task.replyCount) ??
+      0,
+  };
+}
+
+function taskScopePayload(scope: string): TaskScopePayload {
+  const parts = scope
+    .trim()
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length !== 2) {
+    throw new Error("scope must be <channel>/<account_id>");
+  }
+  return {
+    channel: parts[0].toLowerCase(),
+    account_id: parts[1].toLowerCase(),
+  };
+}
+
+function principalPayload(principal: string): TaskPrincipalPayload {
+  const trimmed = principal.trim();
+  if (!trimmed) {
+    throw new Error("principal cannot be empty");
+  }
+  const human = trimmed.match(/^human:(.+)$/);
+  if (human) {
+    const userId = human[1].trim();
+    if (!userId) {
+      throw new Error("human principal cannot be empty");
+    }
+    return { kind: "human", user_id: userId };
+  }
+  const agent = trimmed.match(/^agent:(.+)$/);
+  if (agent) {
+    const agentId = agent[1].trim();
+    if (!agentId) {
+      throw new Error("agent principal cannot be empty");
+    }
+    return { kind: "agent", agent_id: agentId };
+  }
+  return { kind: "agent", agent_id: trimmed };
 }
 
 function normalizeAutomationStatus(value: unknown): DesktopAutomationStatus {
@@ -3199,6 +3389,166 @@ export async function fetchAutomations(
   return Array.isArray(payload.automations)
     ? payload.automations.map(mapAutomationSummary)
     : [];
+}
+
+export async function listTasks(
+  settings: DesktopSettings,
+  input: ListTasksInput = {},
+): Promise<DesktopTasksPage> {
+  const query = new URLSearchParams();
+  const scope = input.scope?.trim() || "";
+  if (scope) {
+    query.set("scope", scope.toLowerCase());
+  }
+  if (input.status) {
+    query.set("status", input.status);
+  }
+  const assignee = input.assignee?.trim() || "";
+  if (assignee) {
+    query.set("assignee", assignee);
+  }
+  if (input.includeDone) {
+    query.set("include_done", "true");
+  }
+  query.set("limit", String(Math.max(1, Math.min(200, input.limit || 100))));
+  query.set("offset", String(Math.max(0, input.offset || 0)));
+
+  const payload = await requestJson<TasksPayload>(
+    settings,
+    `/api/tasks?${query.toString()}`,
+    {
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+
+  const tasks = Array.isArray(payload.tasks)
+    ? payload.tasks.map(mapTaskSummary)
+    : [];
+  return {
+    tasks,
+    total: asFiniteNumber(payload.total) ?? tasks.length,
+    hasMore: payload.has_more ?? payload.hasMore ?? false,
+  };
+}
+
+export async function createTask(
+  settings: DesktopSettings,
+  input: CreateTaskInput,
+): Promise<DesktopTaskSummary> {
+  const assignee = input.assignee?.trim()
+    ? principalPayload(input.assignee)
+    : null;
+  const runtimeAgentId = input.agentId?.trim() || "";
+  const runtimeWorkspaceDir = input.workspaceDir?.trim() || "";
+  const payload = await requestJson<TaskSummaryPayload>(settings, "/api/tasks", {
+    method: "POST",
+    signal: AbortSignal.timeout(8000),
+    body: JSON.stringify({
+      scope: taskScopePayload(input.scope),
+      title: input.title?.trim() || null,
+      body: input.body?.trim() || null,
+      assignee,
+      start: input.start === true,
+      runtime: {
+        agent_id: runtimeAgentId || null,
+        workspace_dir: runtimeWorkspaceDir || null,
+      },
+    }),
+  });
+  return mapTaskSummary(payload);
+}
+
+export async function promoteThreadToTask(
+  settings: DesktopSettings,
+  input: PromoteTaskInput,
+): Promise<DesktopTaskSummary> {
+  const assignee = input.assignee?.trim()
+    ? principalPayload(input.assignee)
+    : null;
+  const payload = await requestJson<TaskSummaryPayload>(
+    settings,
+    "/api/tasks/promote",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({
+        thread_id: input.threadId,
+        title: input.title?.trim() || null,
+        assignee,
+      }),
+    },
+  );
+  return {
+    ...mapTaskSummary(payload),
+    threadId: input.threadId,
+  };
+}
+
+export async function updateTaskStatus(
+  settings: DesktopSettings,
+  input: UpdateTaskStatusInput,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/tasks/${encodeURIComponent(input.taskRef)}/status`,
+    {
+      method: "PATCH",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({
+        to: input.status,
+        note: input.note?.trim() || null,
+        force: input.force === true,
+      }),
+    },
+  );
+}
+
+export async function assignTask(
+  settings: DesktopSettings,
+  input: AssignTaskInput,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/tasks/${encodeURIComponent(input.taskRef)}/assign`,
+    {
+      method: "PATCH",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({
+        to: principalPayload(input.principal),
+      }),
+    },
+  );
+}
+
+export async function unassignTask(
+  settings: DesktopSettings,
+  input: UnassignTaskInput,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/tasks/${encodeURIComponent(input.taskRef)}/assign`,
+    {
+      method: "DELETE",
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+}
+
+export async function updateTaskTitle(
+  settings: DesktopSettings,
+  input: UpdateTaskTitleInput,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/tasks/${encodeURIComponent(input.taskRef)}/title`,
+    {
+      method: "PATCH",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({
+        title: input.title.trim(),
+      }),
+    },
+  );
 }
 
 export async function createRemoteAutomation(
