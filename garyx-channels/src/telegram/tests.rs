@@ -1876,6 +1876,78 @@ mod e2e_tests {
         }
     }
 
+    struct StreamingToolBoundaryProvider {
+        call_count: AtomicUsize,
+    }
+
+    impl StreamingToolBoundaryProvider {
+        fn new() -> Self {
+            Self {
+                call_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AgentLoopProvider for StreamingToolBoundaryProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::ClaudeCode
+        }
+
+        fn is_ready(&self) -> bool {
+            true
+        }
+
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            self.call_count.fetch_add(1, Ordering::Relaxed);
+            on_chunk(StreamEvent::ToolUse {
+                message: garyx_models::ProviderMessage::tool_use(
+                    serde_json::json!({"name": "Bash"}),
+                    Some("tool-bash".to_owned()),
+                    Some("Bash".to_owned()),
+                ),
+            });
+            on_chunk(StreamEvent::Boundary {
+                kind: StreamBoundaryKind::UserAck,
+                pending_input_id: None,
+            });
+            on_chunk(StreamEvent::Delta {
+                text: "after".to_owned(),
+            });
+            on_chunk(StreamEvent::Done);
+            Ok(ProviderRunResult {
+                run_id: "stream-tool-boundary".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "after".to_owned(),
+                session_messages: vec![],
+                sdk_session_id: None,
+                actual_model: None,
+                success: true,
+                error: None,
+                input_tokens: 10,
+                output_tokens: 5,
+                cost: 0.0,
+                duration_ms: 1,
+            })
+        }
+
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(format!("sdk-{session_key}"))
+        }
+    }
+
     struct StreamingSegmentBoundaryProvider {
         call_count: AtomicUsize,
     }
@@ -2851,6 +2923,77 @@ mod e2e_tests {
     }
 
     #[tokio::test]
+    async fn test_e2e_streaming_user_ack_deletes_runtime_only_tool_placeholder() {
+        let (server, capture) = setup_tg_capture_mock(false).await;
+        let api_base = unique_api_base(&server);
+        let provider = Arc::new(StreamingToolBoundaryProvider::new());
+        let bridge = make_bridge_with(provider.clone()).await;
+        let router = make_router();
+        let http = reqwest::Client::new();
+
+        let account = default_account();
+        let update = TgUpdateBuilder::dm(42, "interrupt tools").build();
+
+        dispatch_update(
+            &http,
+            "bot1",
+            "fake-token",
+            "garyx",
+            999,
+            &account,
+            &update,
+            &router,
+            &bridge,
+            &api_base,
+        )
+        .await;
+
+        wait_for_counter_at_least(&provider.call_count, 1).await;
+
+        let placeholder =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                text_without_loading(body) == "🔧 Bash"
+            })
+            .await;
+        assert_eq!(text_without_loading(&placeholder), "🔧 Bash");
+
+        wait_for_json_capture_len(
+            &capture.delete_messages,
+            1,
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        let deletes = capture.delete_bodies();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0]["message_id"], 1000);
+
+        let final_body =
+            wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
+                body["text"].as_str().unwrap_or_default() == "after"
+            })
+            .await;
+        assert_eq!(final_body["text"], "after");
+
+        let send_bodies = wait_for_json_capture_quiet_window(
+            &capture.send_messages,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            2,
+        )
+        .await;
+        let runtime_or_after_sends = send_bodies
+            .iter()
+            .filter_map(|body| body["text"].as_str())
+            .filter(|text| text.contains("🔧") || strip_loading_suffix(text) == "after")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            runtime_or_after_sends.len(),
+            2,
+            "new user input should clear runtime-only placeholder and start a fresh Telegram message"
+        );
+    }
+
+    #[tokio::test]
     async fn test_e2e_streaming_user_ack_boundary_splits_telegram_messages() {
         let (server, capture) = setup_tg_capture_mock(false).await;
         let api_base = unique_api_base(&server);
@@ -3139,6 +3282,16 @@ mod e2e_tests {
                 .as_str()
                 .is_some_and(|text| strip_loading_suffix(text).len() == 4000),
             "rollover path should preserve a 4000-char first segment; rendered lengths={rendered_lengths:?}"
+        );
+        assert!(
+            edit_bodies.iter().any(|body| {
+                body["text"].as_str().is_some_and(|text| {
+                    text.len() == MAX_MESSAGE_LENGTH
+                        && !has_loading_suffix(text)
+                        && !text.contains("🔧")
+                })
+            }),
+            "rollover should clean runtime state before finalizing the previous Telegram message; edits={edit_bodies:?}"
         );
         let continuation_len = continuation_chunk["text"]
             .as_str()

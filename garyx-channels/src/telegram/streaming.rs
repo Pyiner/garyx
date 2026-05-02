@@ -159,6 +159,19 @@ fn render_stream_display_text(state: &StreamState, show_loading: bool) -> String
 }
 
 impl StreamingCallbackShared {
+    fn reset_for_fresh_message(state: &mut StreamState) {
+        state.message_id = None;
+        state.accumulated_text.clear();
+        state.last_rendered_text.clear();
+        state.last_edit_time = Instant::now();
+        state.flush_scheduled = false;
+        state.loading_tick_scheduled = false;
+        state.loading_frame = 0;
+        state.finalized = false;
+        state.tool_placeholder_active = false;
+        state.pending_tool_names.clear();
+    }
+
     fn schedule_loading_tick(self: &Arc<Self>, state: &mut StreamState) {
         if state.finalized || state.loading_tick_scheduled || state.message_id.is_none() {
             return;
@@ -276,6 +289,37 @@ impl StreamingCallbackShared {
         }
     }
 
+    async fn delete_runtime_only_message(&self, state: &mut StreamState) {
+        let Some(msg_id) = state.message_id else {
+            return;
+        };
+
+        match delete_message(
+            &self.cfg.http,
+            &self.cfg.token,
+            self.cfg.chat_id,
+            msg_id,
+            &self.cfg.api_base,
+        )
+        .await
+        {
+            Ok(()) => {
+                state.message_id = None;
+                state.last_rendered_text.clear();
+                state.last_edit_time = Instant::now();
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %self.cfg.account_id,
+                    error = %error,
+                    "failed to delete Telegram runtime-only stream message"
+                );
+                state.message_id = None;
+                state.last_rendered_text.clear();
+            }
+        }
+    }
+
     fn effective_reply_to(&self) -> Option<i64> {
         resolve_reply_to(
             &self.cfg.reply_to_mode,
@@ -312,6 +356,12 @@ impl StreamingCallbackShared {
             .roll_stream_segment_if_needed(thread_id, state, &pending_boundary_text)
             .await;
         let boundary_text = state.accumulated_text.trim().to_owned();
+
+        if boundary_text.is_empty() {
+            self.delete_runtime_only_message(state).await;
+            Self::reset_for_fresh_message(state);
+            return;
+        }
 
         if !boundary_text.is_empty() {
             if let Some(msg_id) = state.message_id {
@@ -382,16 +432,7 @@ impl StreamingCallbackShared {
         self.record_outbound_messages(thread_id, &delivered_msg_ids)
             .await;
 
-        state.message_id = None;
-        state.accumulated_text.clear();
-        state.last_rendered_text.clear();
-        state.last_edit_time = Instant::now();
-        state.flush_scheduled = false;
-        state.loading_tick_scheduled = false;
-        state.loading_frame = 0;
-        state.finalized = false;
-        state.tool_placeholder_active = false;
-        state.pending_tool_names.clear();
+        Self::reset_for_fresh_message(state);
     }
 
     async fn process_tool_use(
