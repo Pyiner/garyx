@@ -16,7 +16,6 @@ path = "src/main.rs"
 
 [dependencies]
 garyx-models = { workspace = true }
-garyx-core = { workspace = true }
 garyx-router = { workspace = true }
 garyx-bridge = { workspace = true }
 garyx-channels = { workspace = true }

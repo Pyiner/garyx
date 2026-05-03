@@ -22,7 +22,6 @@ reqwest = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
-proptest = { workspace = true }
 tempfile = { workspace = true }
 filetime = { workspace = true }
 wiremock = "0.6"

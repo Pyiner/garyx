@@ -11,7 +11,6 @@ description = "Rust SDK for interacting with Claude Code CLI via bidirectional J
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }

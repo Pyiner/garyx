@@ -9,7 +9,6 @@ description = "Provider adapters (Claude Code, Codex, Gemini) for the garyx AI c
 
 [dependencies]
 garyx-models = { workspace = true }
-garyx-core = { workspace = true }
 garyx-router = { workspace = true }
 claude-agent-sdk = { workspace = true }
 codex-sdk = { workspace = true }
@@ -26,5 +25,4 @@ chrono = { workspace = true }
 toml = "0.8"
 
 [dev-dependencies]
-proptest = { workspace = true }
 tempfile = { workspace = true }

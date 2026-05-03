@@ -9,12 +9,8 @@ description = "Shared business logic and domain primitives for the garyx AI chat
 
 [dependencies]
 garyx-models = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 once_cell = { workspace = true }
-
-[dev-dependencies]
-proptest = { workspace = true }
