@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type FormEvent,
+} from 'react';
 import {
   ArrowRight,
   CheckCircle2,
@@ -55,6 +63,15 @@ const STATUS_LABELS: Record<DesktopTaskStatus, string> = {
   in_progress: 'In Progress',
   in_review: 'In Review',
   done: 'Done',
+};
+
+const TASK_DRAG_MIME = 'application/x-garyx-task-ref';
+
+const LOCAL_TASK_SCOPE: TaskScopeOption = {
+  value: 'garyx/tasks',
+  label: 'Garyx',
+  meta: 'garyx/tasks',
+  workspaceDir: null,
 };
 
 function formatScope(channel: string, accountId: string): string {
@@ -119,15 +136,7 @@ function buildScopeOptions(state: DesktopState | null): TaskScopeOption[] {
     byValue.set(option.value, option);
   };
 
-  for (const bot of state?.botConsoles || []) {
-    const value = formatScope(bot.channel, bot.accountId);
-    add({
-      value,
-      label: bot.title || value,
-      meta: bot.subtitle || value,
-      workspaceDir: bot.workspaceDir,
-    });
-  }
+  add(LOCAL_TASK_SCOPE);
 
   for (const bot of state?.configuredBots || []) {
     const value = formatScope(bot.channel, bot.accountId);
@@ -136,16 +145,6 @@ function buildScopeOptions(state: DesktopState | null): TaskScopeOption[] {
       label: bot.displayName || value,
       meta: value,
       workspaceDir: bot.workspaceDir,
-    });
-  }
-
-  for (const endpoint of state?.endpoints || []) {
-    const value = formatScope(endpoint.channel, endpoint.accountId);
-    add({
-      value,
-      label: endpoint.displayLabel || value,
-      meta: value,
-      workspaceDir: endpoint.workspacePath,
     });
   }
 
@@ -169,9 +168,7 @@ export function TasksPanel({
     () => buildScopeOptions(desktopState),
     [desktopState],
   );
-  const [selectedScope, setSelectedScope] = useState<string>(() =>
-    scopeOptions[0]?.value || ALL_SCOPES,
-  );
+  const [selectedScope, setSelectedScope] = useState<string>(ALL_SCOPES);
   const [viewMode, setViewMode] = useState<TaskViewMode>('board');
   const [tasks, setTasks] = useState<DesktopTaskSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -185,6 +182,9 @@ export function TasksPanel({
   const [draftAssignee, setDraftAssignee] = useState('');
   const [draftScope, setDraftScope] = useState('');
   const [creating, setCreating] = useState(false);
+  const [draggingTaskRef, setDraggingTaskRef] = useState<string | null>(null);
+  const [dropStatus, setDropStatus] = useState<DesktopTaskStatus | null>(null);
+  const draggingTaskRefValue = useRef<string | null>(null);
 
   const selectedScopeOption = scopeOptions.find(
     (option) => option.value === selectedScope,
@@ -264,6 +264,9 @@ export function TasksPanel({
   }, [tasks]);
 
   async function moveTask(task: DesktopTaskSummary, to: DesktopTaskStatus) {
+    if (task.status === to) {
+      return;
+    }
     setMutatingTaskRef(task.taskRef);
     try {
       await getDesktopApi().updateTaskStatus({
@@ -280,6 +283,47 @@ export function TasksPanel({
     } finally {
       setMutatingTaskRef(null);
     }
+  }
+
+  function draggedTask(event: DragEvent<HTMLElement>): DesktopTaskSummary | null {
+    const taskRef =
+      event.dataTransfer.getData(TASK_DRAG_MIME) ||
+      event.dataTransfer.getData('text/plain') ||
+      draggingTaskRefValue.current ||
+      draggingTaskRef;
+    return tasks.find((task) => task.taskRef === taskRef) || null;
+  }
+
+  function handleColumnDragOver(event: DragEvent<HTMLElement>, status: DesktopTaskStatus) {
+    const task = draggedTask(event);
+    if (!task || task.status === status || mutatingTaskRef === task.taskRef) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    if (dropStatus !== status) {
+      setDropStatus(status);
+    }
+  }
+
+  function handleColumnDragLeave(event: DragEvent<HTMLElement>, status: DesktopTaskStatus) {
+    const relatedTarget = event.relatedTarget;
+    if (relatedTarget instanceof Node && event.currentTarget.contains(relatedTarget)) {
+      return;
+    }
+    setDropStatus((current) => (current === status ? null : current));
+  }
+
+  function handleColumnDrop(event: DragEvent<HTMLElement>, status: DesktopTaskStatus) {
+    event.preventDefault();
+    const task = draggedTask(event);
+    setDropStatus(null);
+    setDraggingTaskRef(null);
+    draggingTaskRefValue.current = null;
+    if (!task || task.status === status || mutatingTaskRef === task.taskRef) {
+      return;
+    }
+    void moveTask(task, status);
   }
 
   async function submitTask(event: FormEvent<HTMLFormElement>) {
@@ -328,8 +372,25 @@ export function TasksPanel({
   const renderTaskCard = (task: DesktopTaskSummary) => {
     const next = nextStatus(task.status);
     const busy = mutatingTaskRef === task.taskRef;
+    const dragging = draggingTaskRef === task.taskRef;
     return (
-      <article className="tasks-card" key={task.taskRef}>
+      <article
+        className={`tasks-card ${dragging ? 'is-dragging' : ''}`}
+        draggable={!busy}
+        key={task.taskRef}
+        onDragEnd={() => {
+          draggingTaskRefValue.current = null;
+          setDraggingTaskRef(null);
+          setDropStatus(null);
+        }}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData(TASK_DRAG_MIME, task.taskRef);
+          event.dataTransfer.setData('text/plain', task.taskRef);
+          draggingTaskRefValue.current = task.taskRef;
+          setDraggingTaskRef(task.taskRef);
+        }}
+      >
         <div className="tasks-card-topline">
           <span className="tasks-card-ref">{task.taskRef || `#${task.number}`}</span>
           <span className="tasks-card-scope">{taskScope(task)}</span>
@@ -555,7 +616,13 @@ export function TasksPanel({
           {TASK_COLUMNS.map((column) => {
             const columnTasks = tasksByStatus[column.status];
             return (
-              <section className="tasks-column" key={column.status}>
+              <section
+                className={`tasks-column ${dropStatus === column.status ? 'is-drop-target' : ''}`}
+                key={column.status}
+                onDragLeave={(event) => handleColumnDragLeave(event, column.status)}
+                onDragOver={(event) => handleColumnDragOver(event, column.status)}
+                onDrop={(event) => handleColumnDrop(event, column.status)}
+              >
                 <div className="tasks-column-header">
                   <span className={`tasks-status-chip tone-${column.tone}`}>
                     {t(column.label)}

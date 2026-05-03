@@ -13600,6 +13600,11 @@ button.codex-list-row {
   background: var(--color-token-bg-secondary);
 }
 
+.tasks-column.is-drop-target {
+  border-color: color-mix(in oklab, var(--color-accent-green) 45%, var(--color-token-border));
+  background: color-mix(in oklab, var(--color-accent-green) 7%, var(--color-token-bg-secondary));
+}
+
 .tasks-column-header {
   display: flex;
   align-items: center;
@@ -13698,6 +13703,19 @@ button.codex-list-row {
   border-radius: 8px;
   background: var(--color-token-bg-primary);
   box-shadow: 0 1px 2px rgba(13, 13, 13, 0.035);
+}
+
+.tasks-card[draggable="true"] {
+  cursor: grab;
+}
+
+.tasks-card[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.tasks-card.is-dragging {
+  opacity: 0.58;
+  outline: 1px solid color-mix(in oklab, var(--color-accent-green) 42%, transparent);
 }
 
 .tasks-card-topline,
