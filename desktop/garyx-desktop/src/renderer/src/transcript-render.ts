@@ -1,6 +1,10 @@
 import type { TranscriptMessage } from '@shared/contracts';
 
-import { canMergeToolTraceMessages, type ToolTraceMessage } from './tool-trace';
+import {
+  canMergeToolTraceMessages,
+  shouldRenderToolTraceMessage,
+  type ToolTraceMessage,
+} from './tool-trace';
 
 export type RenderTranscriptEntry =
   | {
@@ -128,6 +132,10 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
         key: message.id,
         message,
       });
+      continue;
+    }
+
+    if (!shouldRenderToolTraceMessage(message as ToolTraceMessage)) {
       continue;
     }
 

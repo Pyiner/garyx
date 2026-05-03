@@ -817,6 +817,16 @@ function parseToolTraceMessage(message: ToolTraceMessage): ParsedToolTrace {
   };
 }
 
+function isCodexProvider(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === 'codex' || normalized === 'codex_app_server';
+}
+
+export function shouldRenderToolTraceMessage(message: ToolTraceMessage): boolean {
+  const parsed = parseToolTraceMessage(message);
+  return !(isCodexProvider(parsed.provider) && parsed.toolKey === 'reasoning');
+}
+
 function exactToolAdapter(toolKeys: string[], presenter: (trace: ParsedToolTrace) => ToolTraceSide): ToolTraceAdapter {
   return {
     id: toolKeys.join(','),

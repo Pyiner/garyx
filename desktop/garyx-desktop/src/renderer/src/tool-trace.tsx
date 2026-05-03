@@ -19,12 +19,17 @@ import {
 import {
   canMergeToolTraceMessages,
   resolveMergedToolTrace,
+  shouldRenderToolTraceMessage,
   type MergedToolTrace,
   type ToolTraceMessage,
 } from './tool-trace-registry';
 import { useI18n } from './i18n';
 
-export { canMergeToolTraceMessages, type ToolTraceMessage } from './tool-trace-registry';
+export {
+  canMergeToolTraceMessages,
+  shouldRenderToolTraceMessage,
+  type ToolTraceMessage,
+} from './tool-trace-registry';
 
 type ToolTraceEntry = {
   key: string;
