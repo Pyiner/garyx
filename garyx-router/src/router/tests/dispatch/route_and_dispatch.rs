@@ -428,14 +428,14 @@ async fn test_route_and_dispatch_loop_command_sets_last_delivery() {
         NATIVE_COMMAND_TEXT_METADATA_KEY.to_owned(),
         Value::String("/loop".to_owned()),
     );
-    extra_metadata.insert("chat_id".to_owned(), Value::String("8592453520".to_owned()));
+    extra_metadata.insert("chat_id".to_owned(), Value::String("1000000001".to_owned()));
 
     let request = InboundRequest {
         channel: "telegram".to_owned(),
         account_id: "bot1".to_owned(),
-        from_id: "8592453520".to_owned(),
+        from_id: "1000000001".to_owned(),
         is_group: false,
-        thread_binding_key: "8592453520".to_owned(),
+        thread_binding_key: "1000000001".to_owned(),
         message: "/loop".to_owned(),
         run_id: "run-cmd-loop".to_owned(),
         reply_to_message_id: None,
@@ -456,8 +456,8 @@ async fn test_route_and_dispatch_loop_command_sets_last_delivery() {
         .expect("loop command should keep delivery target for continuation");
     assert_eq!(delivery.channel, "telegram");
     assert_eq!(delivery.account_id, "bot1");
-    assert_eq!(delivery.chat_id, "8592453520");
-    assert_eq!(delivery.delivery_target_id, "8592453520");
+    assert_eq!(delivery.chat_id, "1000000001");
+    assert_eq!(delivery.delivery_target_id, "1000000001");
     assert!(result.local_reply.is_some());
     let dispatched = dispatcher.dispatched.lock().await;
     assert!(dispatched.is_empty());

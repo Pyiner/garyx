@@ -1288,7 +1288,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
                     workspace_dir: Some("/tmp/telegram-owner".to_owned()),
                     owner_target: Some(garyx_models::config::OwnerTargetConfig {
                         target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
-                        target_id: "8592453520".to_owned(),
+                        target_id: "1000000001".to_owned(),
                     }),
                     groups: std::collections::HashMap::new(),
                 },
@@ -1384,7 +1384,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
     assert_eq!(telegram_bot["main_endpoint"]["source"], "owner_target");
     assert_eq!(
         telegram_bot["default_open_endpoint"]["delivery_target_id"],
-        "8592453520"
+        "1000000001"
     );
     assert_eq!(
         telegram_bot["main_endpoint"]["delivery_target_type"],
@@ -1392,7 +1392,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
     );
     assert_eq!(
         telegram_bot["main_endpoint"]["delivery_target_id"],
-        "8592453520"
+        "1000000001"
     );
     assert_eq!(
         telegram_bot["main_endpoint"]["workspace_dir"],

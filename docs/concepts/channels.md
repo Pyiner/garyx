@@ -31,9 +31,9 @@ and have a fixed envelope plus a channel-specific `config` blob:
       "accounts": {
         "main": {
           "enabled": true,
-          "name": "Pyiner Gary",
+          "name": "My Telegram Bot",
           "agent_id": "claude",
-          "workspace_dir": "/Users/pyiner/garyx-work",
+          "workspace_dir": "/path/to/garyx-work",
           "config": {
             "token": "${TELEGRAM_BOT_TOKEN}",
             "groups": { "-100123456789": { "enabled": true } }

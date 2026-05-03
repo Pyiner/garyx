@@ -947,7 +947,7 @@ fn reauthorize_weixin_can_inherit_metadata_and_disable_previous_account() {
         BUILTIN_CHANNEL_PLUGIN_WEIXIN,
         "old-wx",
         Some("Wiki".to_owned()),
-        Some("/Users/pyiner".to_owned()),
+        Some("/Users/test".to_owned()),
         Some("wiki-curator".to_owned()),
         Some("old-token".to_owned()),
         Some("old-uin".to_owned()),
@@ -963,7 +963,7 @@ fn reauthorize_weixin_can_inherit_metadata_and_disable_previous_account() {
         .unwrap()
         .expect("previous account should exist");
     assert_eq!(inherited.name.as_deref(), Some("Wiki"));
-    assert_eq!(inherited.workspace_dir.as_deref(), Some("/Users/pyiner"));
+    assert_eq!(inherited.workspace_dir.as_deref(), Some("/Users/test"));
     assert_eq!(inherited.agent_id.as_deref(), Some("wiki-curator"));
     assert_eq!(config_string(&inherited, "uin").as_deref(), Some("old-uin"));
 
@@ -1004,7 +1004,7 @@ fn reauthorize_weixin_can_inherit_metadata_and_disable_previous_account() {
     assert_eq!(accounts["new-wx"].name.as_deref(), Some("Wiki"));
     assert_eq!(
         accounts["new-wx"].workspace_dir.as_deref(),
-        Some("/Users/pyiner")
+        Some("/Users/test")
     );
     assert_eq!(accounts["new-wx"].agent_id.as_deref(), Some("wiki-curator"));
     assert_eq!(accounts["new-wx"].config["uin"], "old-uin");

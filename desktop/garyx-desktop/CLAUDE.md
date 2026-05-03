@@ -1,5 +1,16 @@
 # Garyx — Design Decisions
 
+## IMPORTANT: No real personal data in tests or commits
+
+This is a public repository. NEVER use real personal data in test fixtures,
+mocks, screenshots, or commit messages — no real names, no real Telegram /
+WeChat / Feishu chat IDs or user IDs, no real bot IDs, no real email addresses,
+no real `/Users/<username>` paths, no real tokens. Use clearly synthetic
+placeholders instead, e.g. `Test User`, `1000000001`, `/Users/test`,
+`bot@example.com`, `${TOKEN}`.
+
+Before staging a change, scan the diff for personal data and remove it.
+
 ## Global focus outline: none
 
 `*:focus { outline: none }` is an intentional design choice. Do NOT "fix" it to `:focus-visible` or add focus ring styles. This is by design.

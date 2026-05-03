@@ -2,6 +2,19 @@
 
 This file is the short repo-level guide for coding agents.
 
+## IMPORTANT: No real personal data in tests or commits
+
+This is a public repository. NEVER use real personal data in test fixtures,
+docs, code samples, or commit messages. That includes — but is not limited to —
+real names, real Telegram/WeChat/Feishu chat IDs and user IDs, real bot IDs,
+real email addresses, real phone numbers, real `/Users/<username>` paths, and
+real tokens or secrets. Use clearly synthetic placeholders instead, e.g.
+`Test User`, `1000000001`, `/Users/test`, `bot@example.com`, `${TOKEN}`.
+
+Before staging a change, scan the diff for personal data and remove it. If a
+test needs to reference an account, build it from a placeholder fixture, not
+from a real chat captured during local debugging.
+
 ## Repository Shape
 
 - `garyx`: CLI entrypoint and runtime assembly.

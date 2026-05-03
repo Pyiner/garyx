@@ -12,7 +12,7 @@ function makeEndpoint(overrides = {}) {
     chatId: 'chat-1',
     deliveryTargetType: 'chat_id',
     deliveryTargetId: 'chat-1',
-    displayLabel: '真实派活 smoke test',
+    displayLabel: 'Smoke test endpoint',
     threadId: 'thread::smoke',
     ...overrides,
   };
@@ -24,7 +24,7 @@ function makeBotGroup(overrides = {}) {
     id: 'weixin::zhao',
     channel: 'weixin',
     accountId: 'zhao',
-    title: '赵婉潇',
+    title: 'Test User',
     subtitle: 'Weixin Bot · zhao',
     rootBehavior: 'open_default',
     status: 'connected',

@@ -66,13 +66,13 @@ fn build_provider_run_metadata_uses_supplied_channel_context() {
         HashMap::new(),
         "telegram",
         "codex_bot",
-        "8592453520",
+        "1000000001",
         "run-1",
     );
 
     assert_eq!(metadata["channel"], "telegram");
     assert_eq!(metadata["account_id"], "codex_bot");
-    assert_eq!(metadata["from_id"], "8592453520");
+    assert_eq!(metadata["from_id"], "1000000001");
 }
 
 #[test]
