@@ -20,6 +20,10 @@ use crate::server::AppState;
 pub(crate) const LOOP_BOUND_DELIVERY_FLUSH_DELAY: Duration = Duration::from_millis(20);
 #[cfg(not(test))]
 pub(crate) const LOOP_BOUND_DELIVERY_FLUSH_DELAY: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY: Duration = Duration::from_millis(1);
+#[cfg(not(test))]
+const STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY: Duration = Duration::from_millis(500);
 
 fn is_message_tool_name(tool_name: &str) -> bool {
     let trimmed = tool_name.trim();
@@ -135,6 +139,19 @@ impl BoundThreadDeliveryBuffer {
         }
     }
 
+    pub(crate) fn push_image_scan_delta(&self, text: &str, warn_context: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if let Ok(mut image_scan) = self.image_scan.lock() {
+            image_scan.push_str(text);
+        } else {
+            tracing::warn!(
+                "{warn_context}: image scan lock poisoned while collecting streaming assistant delta"
+            );
+        }
+    }
+
     pub(crate) fn suppress(&self) {
         let should_suppress = match self.pending.lock() {
             Ok(pending) => pending.trim().is_empty(),
@@ -152,34 +169,34 @@ impl BoundThreadDeliveryBuffer {
 
     pub(crate) fn push_separator(&self, warn_context: &str) {
         if let Ok(mut pending) = self.pending.lock() {
-            if pending.trim().is_empty() {
-                return;
-            }
-            if pending.ends_with("\n\n") {
-                return;
-            }
-            if pending.ends_with('\n') {
-                pending.push('\n');
-            } else {
-                pending.push_str("\n\n");
-            }
-            if let Ok(mut image_scan) = self.image_scan.lock() {
-                if image_scan.ends_with("\n\n") {
-                    return;
-                }
-                if image_scan.ends_with('\n') {
-                    image_scan.push('\n');
+            if !pending.trim().is_empty() && !pending.ends_with("\n\n") {
+                if pending.ends_with('\n') {
+                    pending.push('\n');
                 } else {
-                    image_scan.push_str("\n\n");
+                    pending.push_str("\n\n");
                 }
-            } else {
-                tracing::warn!(
-                    "{warn_context}: image scan lock poisoned while collecting assistant boundary"
-                );
             }
         } else {
             tracing::warn!(
                 "{warn_context}: buffer lock poisoned while collecting assistant boundary"
+            );
+        }
+        self.push_image_scan_separator(warn_context);
+    }
+
+    pub(crate) fn push_image_scan_separator(&self, warn_context: &str) {
+        if let Ok(mut image_scan) = self.image_scan.lock() {
+            if image_scan.trim().is_empty() || image_scan.ends_with("\n\n") {
+                return;
+            }
+            if image_scan.ends_with('\n') {
+                image_scan.push('\n');
+            } else {
+                image_scan.push_str("\n\n");
+            }
+        } else {
+            tracing::warn!(
+                "{warn_context}: image scan lock poisoned while collecting assistant boundary"
             );
         }
     }
@@ -304,6 +321,35 @@ impl BoundThreadDeliveryBuffer {
             if let Some(text) = image_scan_text {
                 deliver_markdown_images_to_bound_channels(state, thread_id, run_id, &text).await;
             }
+            if inflight.fetch_sub(1, Ordering::Relaxed) == 1 {
+                idle_notify.notify_waiters();
+            }
+        });
+    }
+
+    pub(crate) fn finish_markdown_images_after(
+        &self,
+        state: Arc<AppState>,
+        thread_id: String,
+        run_id: String,
+        warn_context: &'static str,
+        delay: Duration,
+    ) {
+        let image_scan_text = self.take_image_scan_text(warn_context);
+        let Some(text) = image_scan_text else {
+            return;
+        };
+
+        let delivery_gate = self.delivery_gate.clone();
+        let inflight = self.inflight.clone();
+        let idle_notify = self.idle_notify.clone();
+        inflight.fetch_add(1, Ordering::Relaxed);
+        tokio::spawn(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            let _guard = delivery_gate.lock().await;
+            deliver_markdown_images_to_bound_channels(state, thread_id, run_id, &text).await;
             if inflight.fetch_sub(1, Ordering::Relaxed) == 1 {
                 idle_notify.notify_waiters();
             }
@@ -859,7 +905,48 @@ pub async fn build_bound_response_callback(
             .channel_dispatcher()
             .build_streaming_callback(target, state.threads.router.clone())
         {
-            return Some(callback);
+            let image_scan = BoundThreadDeliveryBuffer::default();
+            let image_scan_state = state.clone();
+            let image_scan_thread_id = thread_id.to_owned();
+            let image_scan_run_id = run_id.to_owned();
+
+            return Some(Arc::new(move |event| {
+                match &event {
+                    StreamEvent::Delta { text } => {
+                        image_scan.push_image_scan_delta(text, "streaming markdown image delivery");
+                    }
+                    StreamEvent::Boundary { kind, .. } => match kind {
+                        StreamBoundaryKind::AssistantSegment => {
+                            image_scan
+                                .push_image_scan_separator("streaming markdown image delivery");
+                        }
+                        StreamBoundaryKind::UserAck => {
+                            callback(event.clone());
+                            image_scan.finish_markdown_images_after(
+                                image_scan_state.clone(),
+                                image_scan_thread_id.clone(),
+                                image_scan_run_id.clone(),
+                                "streaming markdown image delivery",
+                                STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY,
+                            );
+                            return;
+                        }
+                    },
+                    StreamEvent::Done => {
+                        callback(event.clone());
+                        image_scan.finish_markdown_images_after(
+                            image_scan_state.clone(),
+                            image_scan_thread_id.clone(),
+                            image_scan_run_id.clone(),
+                            "streaming markdown image delivery",
+                            STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY,
+                        );
+                        return;
+                    }
+                    StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {}
+                }
+                callback(event);
+            }));
         }
     }
 
@@ -982,5 +1069,32 @@ mod tests {
         );
 
         assert!(extract_markdown_image_refs(&text).is_empty());
+    }
+
+    #[test]
+    fn streaming_image_scan_collects_without_text_delivery_pending() {
+        let buffer = BoundThreadDeliveryBuffer::default();
+
+        buffer.push_image_scan_delta("![shot](/tmp/shot.png)", "test");
+
+        assert!(buffer.take_pending_text("test").is_none());
+        assert_eq!(
+            buffer.take_image_scan_text("test").as_deref(),
+            Some("![shot](/tmp/shot.png)")
+        );
+    }
+
+    #[test]
+    fn streaming_image_scan_preserves_assistant_segment_boundary() {
+        let buffer = BoundThreadDeliveryBuffer::default();
+
+        buffer.push_image_scan_delta("first", "test");
+        buffer.push_image_scan_separator("test");
+        buffer.push_image_scan_delta("second", "test");
+
+        assert_eq!(
+            buffer.take_image_scan_text("test").as_deref(),
+            Some("first\n\nsecond")
+        );
     }
 }
