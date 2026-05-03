@@ -8,7 +8,6 @@ pub const TASK_SCHEMA_VERSION_V1: u32 = 1;
 pub struct ThreadTask {
     #[serde(default = "default_task_schema_version")]
     pub schema_version: u32,
-    pub scope: TaskScope,
     pub number: u64,
     pub title: String,
     pub status: TaskStatus,
@@ -24,25 +23,6 @@ pub struct ThreadTask {
 
 fn default_task_schema_version() -> u32 {
     TASK_SCHEMA_VERSION_V1
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TaskScope {
-    pub channel: String,
-    pub account_id: String,
-}
-
-impl TaskScope {
-    pub fn new(channel: impl Into<String>, account_id: impl Into<String>) -> Self {
-        Self {
-            channel: normalize_scope_part(channel.into()),
-            account_id: normalize_scope_part(account_id.into()),
-        }
-    }
-
-    pub fn canonical(&self) -> String {
-        format!("{}/{}", self.channel, self.account_id)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -233,10 +213,6 @@ impl<'de> Deserialize<'de> for TaskEventKind {
             TaskEventKindWire::TitleChanged { from, to } => Ok(Self::TitleChanged { from, to }),
         }
     }
-}
-
-pub fn normalize_scope_part(value: String) -> String {
-    value.trim().to_ascii_lowercase()
 }
 
 fn promote_legacy_type_tag(value: &mut Value) {

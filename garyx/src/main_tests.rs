@@ -909,8 +909,6 @@ fn parse_task_create_runtime_options() {
         "garyx",
         "task",
         "create",
-        "--scope",
-        "telegram/main",
         "--title",
         "Investigate",
         "--body",
@@ -926,7 +924,6 @@ fn parse_task_create_runtime_options() {
         Some(Commands::Task {
             action:
                 TaskAction::Create {
-                    scope,
                     title,
                     body,
                     assignee,
@@ -935,7 +932,6 @@ fn parse_task_create_runtime_options() {
                     json,
                 },
         }) => {
-            assert_eq!(scope.as_deref(), Some("telegram/main"));
             assert_eq!(title.as_deref(), Some("Investigate"));
             assert_eq!(body.as_deref(), Some("Check logs"));
             assert_eq!(assignee.as_deref(), Some("agent:reviewer"));

@@ -2578,8 +2578,8 @@ export function AppShell() {
     ? `${desktopState?.automations.length || 0} scheduled runs`
     : isSkillsView
       ? "Local and project skill registry"
-      : isTasksView
-        ? `${desktopState?.configuredBots.length || 0} task scopes`
+    : isTasksView
+        ? "Global task board"
       : isAgentsView || isTeamsView
         ? "Agents and reusable teams"
         : isBotsView
@@ -7111,7 +7111,6 @@ export function AppShell() {
             ) : isTasksView ? (
               <TasksPanel
                 agents={desktopAgents}
-                desktopState={desktopState}
                 onOpenThread={(threadId) => {
                   void openExistingThread(threadId);
                 }}

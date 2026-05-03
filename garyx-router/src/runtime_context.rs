@@ -168,15 +168,6 @@ fn build_task_context(task: &ThreadTask) -> Value {
         "status".to_owned(),
         Value::String(task.status.as_str().to_owned()),
     );
-    value.insert("scope".to_owned(), Value::String(task.scope.canonical()));
-    value.insert(
-        "scope_channel".to_owned(),
-        Value::String(task.scope.channel.clone()),
-    );
-    value.insert(
-        "scope_account_id".to_owned(),
-        Value::String(task.scope.account_id.clone()),
-    );
     value.insert("creator".to_owned(), principal_value(&task.creator));
     if let Some(assignee) = task.assignee.as_ref() {
         value.insert("assignee".to_owned(), principal_value(assignee));
@@ -244,7 +235,7 @@ fn value_to_string(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
-    use garyx_models::{Principal, TaskScope, TaskStatus};
+    use garyx_models::{Principal, TaskStatus};
     use serde_json::json;
 
     use super::*;
@@ -254,7 +245,6 @@ mod tests {
         let now = Utc::now();
         let task = ThreadTask {
             schema_version: 1,
-            scope: TaskScope::new("telegram", "bot1"),
             number: 7,
             title: "Fix prompt context".to_owned(),
             status: TaskStatus::InProgress,

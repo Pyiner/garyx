@@ -13481,29 +13481,6 @@ button.codex-list-row {
   cursor: not-allowed;
 }
 
-.tasks-filter-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 0 2px;
-  flex-wrap: wrap;
-}
-
-.tasks-filter-label {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: var(--color-token-bg-tertiary);
-  color: var(--color-token-text-secondary);
-  font-size: var(--text-sm);
-  font-weight: 700;
-}
-
-.tasks-scope-select,
 .tasks-field input,
 .tasks-field select,
 .tasks-field textarea {
@@ -13516,32 +13493,39 @@ button.codex-list-row {
   font-size: var(--text-sm);
 }
 
-.tasks-scope-select {
-  min-width: min(280px, 100%);
-  padding: 0 28px 0 10px;
-}
-
-.tasks-scope-meta {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--color-token-description-foreground);
-  font-size: var(--text-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.tasks-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(13, 13, 13, 0.2);
 }
 
 .tasks-create-panel {
   display: grid;
   gap: 12px;
-  padding: 12px;
+  width: min(680px, 100%);
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: auto;
+  padding: 16px;
   border: 0.5px solid var(--color-token-border);
   border-radius: 8px;
-  background: var(--color-token-bg-secondary);
+  background: var(--color-token-bg-primary);
+  box-shadow: 0 18px 48px rgba(13, 13, 13, 0.18);
+}
+
+.tasks-create-header h2 {
+  margin: 0;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-lg);
+  font-weight: 680;
 }
 
 .tasks-create-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 0.85fr) minmax(240px, 1.3fr) minmax(160px, 0.75fr);
+  grid-template-columns: minmax(240px, 1fr) minmax(180px, 0.7fr);
   gap: 10px;
   min-width: 0;
 }
@@ -13560,8 +13544,7 @@ button.codex-list-row {
   grid-column: 1 / -1;
 }
 
-.tasks-field span,
-.tasks-checkbox {
+.tasks-field span {
   color: var(--color-token-text-secondary);
   font-size: var(--text-xs-plus);
   font-weight: 560;
@@ -13577,13 +13560,6 @@ button.codex-list-row {
 .tasks-field textarea {
   min-height: 54px;
   resize: vertical;
-}
-
-.tasks-checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: auto;
 }
 
 .tasks-board {
@@ -13761,7 +13737,6 @@ button.codex-list-row {
 }
 
 .tasks-card-ref,
-.tasks-card-scope,
 .tasks-card-meta,
 .tasks-card-updated,
 .tasks-list-muted {

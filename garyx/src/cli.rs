@@ -1007,8 +1007,6 @@ pub(crate) enum TaskAction {
     /// List tasks
     List {
         #[arg(long)]
-        scope: Option<String>,
-        #[arg(long)]
         status: Option<String>,
         #[arg(long)]
         assignee: Option<String>,
@@ -1029,8 +1027,6 @@ pub(crate) enum TaskAction {
     },
     /// Create a new task thread
     Create {
-        #[arg(long)]
-        scope: Option<String>,
         #[arg(long)]
         title: Option<String>,
         #[arg(long)]

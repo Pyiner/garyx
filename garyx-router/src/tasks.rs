@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use chrono::Utc;
 use garyx_models::{
-    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskScope, TaskStatus, ThreadTask,
+    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskStatus, ThreadTask,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -18,9 +18,6 @@ use crate::{
 const DEFAULT_TASK_LIST_LIMIT: usize = 50;
 const MAX_TASK_LIST_LIMIT: usize = 200;
 const DEFAULT_TASK_AGENT_ID: &str = "claude";
-const GLOBAL_TASK_COUNTER_CHANNEL: &str = "garyx";
-const GLOBAL_TASK_COUNTER_ACCOUNT: &str = "tasks";
-
 type TaskThreadLock = Arc<tokio::sync::Mutex<()>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -48,8 +45,6 @@ pub enum TaskServiceError {
     AlreadyATask(String),
     #[error("InvalidTransition: {from:?} -> {to:?}")]
     InvalidTransition { from: TaskStatus, to: TaskStatus },
-    #[error("InvalidScope: {0}")]
-    InvalidScope(String),
     #[error("BadRequest: {0}")]
     BadRequest(String),
     #[error("UnknownPrincipal: {0}")]
@@ -66,7 +61,6 @@ pub enum TaskServiceError {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateTaskInput {
-    pub scope: TaskScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,7 +112,6 @@ pub struct UpdateTaskStatusInput {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskListFilter {
-    pub scope: Option<TaskScope>,
     pub status: Option<TaskStatus>,
     pub assignee: Option<Principal>,
     pub creator: Option<Principal>,
@@ -134,7 +127,6 @@ pub struct TaskSummary {
     pub number: u64,
     pub title: String,
     pub status: TaskStatus,
-    pub scope: TaskScope,
     pub creator: Principal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<Principal>,
@@ -208,7 +200,6 @@ impl TaskService {
         &self,
         input: CreateTaskInput,
     ) -> Result<(String, ThreadTask), TaskServiceError> {
-        validate_scope(&input.scope)?;
         let actor = input.actor.unwrap_or_else(default_actor);
         validate_principal(&actor)?;
         if let Some(assignee) = &input.assignee {
@@ -238,8 +229,6 @@ impl TaskService {
                 label: input.title.clone(),
                 workspace_dir,
                 agent_id: thread_agent_id,
-                origin_channel: Some(input.scope.channel.clone()),
-                origin_account_id: Some(input.scope.account_id.clone()),
                 ..Default::default()
             },
         )
@@ -267,7 +256,6 @@ impl TaskService {
         let auto_start = input.start || input.assignee.is_some();
         let task = self
             .build_task(
-                input.scope,
                 title,
                 if auto_start {
                     TaskStatus::InProgress
@@ -308,7 +296,7 @@ impl TaskService {
         }
         let lock = task_thread_lock(&input.thread_id);
         let _guard = lock.lock().await;
-        let (mut record, scope) = self.load_record_and_scope(&input.thread_id).await?;
+        let mut record = self.load_record(&input.thread_id).await?;
         if task_from_record(&record)?.is_some() {
             return Err(TaskServiceError::AlreadyATask(input.thread_id));
         }
@@ -316,7 +304,6 @@ impl TaskService {
         let auto_start = input.assignee.is_some();
         let task = self
             .build_task(
-                scope,
                 title,
                 if auto_start {
                     TaskStatus::InProgress
@@ -348,9 +335,8 @@ impl TaskService {
     pub async fn get_task(
         &self,
         task_ref: &str,
-        context_scope: Option<&TaskScope>,
     ) -> Result<(String, Value, ThreadTask), TaskServiceError> {
-        let (thread_id, record) = self.resolve_task_record(task_ref, context_scope).await?;
+        let (thread_id, record) = self.resolve_task_record(task_ref).await?;
         let task = task_from_record(&record)?
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
         Ok((thread_id, record, task))
@@ -360,9 +346,6 @@ impl TaskService {
         &self,
         filter: TaskListFilter,
     ) -> Result<(Vec<TaskSummary>, usize, bool), TaskServiceError> {
-        if let Some(scope) = &filter.scope {
-            validate_scope(scope)?;
-        }
         let limit = filter
             .limit
             .unwrap_or(DEFAULT_TASK_LIST_LIMIT)
@@ -386,13 +369,6 @@ impl TaskService {
                 continue;
             };
             if !filter.include_done && task.status == TaskStatus::Done {
-                continue;
-            }
-            if filter
-                .scope
-                .as_ref()
-                .is_some_and(|scope| &task.scope != scope)
-            {
                 continue;
             }
             if filter.status.is_some_and(|status| task.status != status) {
@@ -436,11 +412,10 @@ impl TaskService {
     pub async fn task_history(
         &self,
         task_ref: &str,
-        context_scope: Option<&TaskScope>,
         limit: Option<usize>,
         before: Option<&str>,
     ) -> Result<TaskHistoryPage, TaskServiceError> {
-        let (_, _, task) = self.get_task(task_ref, context_scope).await?;
+        let (_, _, task) = self.get_task(task_ref).await?;
         let limit = limit
             .unwrap_or(DEFAULT_TASK_LIST_LIMIT)
             .clamp(1, MAX_TASK_LIST_LIMIT);
@@ -463,12 +438,11 @@ impl TaskService {
         task_ref: &str,
         to: Principal,
         actor: Option<Principal>,
-        context_scope: Option<&TaskScope>,
     ) -> Result<ThreadTask, TaskServiceError> {
         validate_principal(&to)?;
         let actor = actor.unwrap_or_else(default_actor);
         validate_principal(&actor)?;
-        self.mutate_task(task_ref, context_scope, move |task| {
+        self.mutate_task(task_ref, move |task| {
             let previous = task.assignee.clone();
             task.assignee = Some(to.clone());
             let previous_status = task.status;
@@ -500,11 +474,10 @@ impl TaskService {
         &self,
         task_ref: &str,
         actor: Option<Principal>,
-        context_scope: Option<&TaskScope>,
     ) -> Result<ThreadTask, TaskServiceError> {
         let actor = actor.unwrap_or_else(default_actor);
         validate_principal(&actor)?;
-        self.mutate_task(task_ref, context_scope, move |task| {
+        self.mutate_task(task_ref, move |task| {
             let previous = task.assignee.clone().ok_or_else(|| {
                 TaskServiceError::BadRequest("task is already unassigned".to_owned())
             })?;
@@ -523,11 +496,10 @@ impl TaskService {
     pub async fn update_status(
         &self,
         input: UpdateTaskStatusInput,
-        context_scope: Option<&TaskScope>,
     ) -> Result<ThreadTask, TaskServiceError> {
         let actor = input.actor.unwrap_or_else(default_actor);
         validate_principal(&actor)?;
-        self.mutate_task(&input.task_ref, context_scope, move |task| {
+        self.mutate_task(&input.task_ref, move |task| {
             let from = task.status;
             if from == input.to {
                 return Ok(());
@@ -567,13 +539,12 @@ impl TaskService {
         task_ref: &str,
         title: String,
         actor: Option<Principal>,
-        context_scope: Option<&TaskScope>,
     ) -> Result<ThreadTask, TaskServiceError> {
         let actor = actor.unwrap_or_else(default_actor);
         validate_principal(&actor)?;
         let next_title = normalized_limited(Some(title), 200)?
             .ok_or_else(|| TaskServiceError::BadRequest("title cannot be empty".to_owned()))?;
-        self.mutate_task(task_ref, context_scope, move |task| {
+        self.mutate_task(task_ref, move |task| {
             let previous = task.title.clone();
             if previous == next_title {
                 return Ok(());
@@ -593,16 +564,11 @@ impl TaskService {
         .await
     }
 
-    async fn mutate_task<F>(
-        &self,
-        task_ref: &str,
-        context_scope: Option<&TaskScope>,
-        f: F,
-    ) -> Result<ThreadTask, TaskServiceError>
+    async fn mutate_task<F>(&self, task_ref: &str, f: F) -> Result<ThreadTask, TaskServiceError>
     where
         F: FnOnce(&mut ThreadTask) -> Result<(), TaskServiceError>,
     {
-        let (thread_id, _) = self.resolve_task_record(task_ref, context_scope).await?;
+        let (thread_id, _) = self.resolve_task_record(task_ref).await?;
         let lock = task_thread_lock(&thread_id);
         let _guard = lock.lock().await;
         let mut record = self
@@ -644,7 +610,6 @@ impl TaskService {
 
     async fn build_task(
         &self,
-        scope: TaskScope,
         title: String,
         status: TaskStatus,
         actor: Principal,
@@ -652,18 +617,16 @@ impl TaskService {
         event_kind: TaskEventKind,
     ) -> Result<ThreadTask, TaskServiceError> {
         self.ensure_task_index().await?;
-        let counter_scope = global_task_counter_scope();
         let store_id = self.index_store_id();
-        let mut number = self.counter_store.allocate(&counter_scope).await?;
+        let mut number = self.counter_store.allocate().await?;
         while task_index_lookup(&TaskIndexKey { store_id, number }).is_some()
             || number <= task_index_max_number(store_id)
         {
-            number = self.counter_store.allocate(&counter_scope).await?;
+            number = self.counter_store.allocate().await?;
         }
         let now = Utc::now();
         let mut task = ThreadTask {
             schema_version: TASK_SCHEMA_VERSION_V1,
-            scope,
             number,
             title,
             status,
@@ -678,10 +641,7 @@ impl TaskService {
         Ok(task)
     }
 
-    async fn load_record_and_scope(
-        &self,
-        thread_id: &str,
-    ) -> Result<(Value, TaskScope), TaskServiceError> {
+    async fn load_record(&self, thread_id: &str) -> Result<Value, TaskServiceError> {
         if !is_thread_key(thread_id) {
             return Err(TaskServiceError::BadRequest(format!(
                 "invalid thread id: {thread_id}"
@@ -692,18 +652,12 @@ impl TaskService {
             .get(thread_id)
             .await
             .ok_or_else(|| TaskServiceError::NotFound(thread_id.to_owned()))?;
-        let scope = scope_from_thread_record(&record).ok_or_else(|| {
-            TaskServiceError::InvalidScope(format!(
-                "thread {thread_id} does not carry channel/account scope"
-            ))
-        })?;
-        Ok((record, scope))
+        Ok(record)
     }
 
     async fn resolve_task_record(
         &self,
         task_ref: &str,
-        context_scope: Option<&TaskScope>,
     ) -> Result<(String, Value), TaskServiceError> {
         match TaskRef::parse(task_ref)? {
             TaskRef::ThreadId(thread_id) => {
@@ -714,15 +668,11 @@ impl TaskService {
                     .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
                 Ok((thread_id, record))
             }
-            TaskRef::Number(number) => self.find_task_by_number(number, context_scope).await,
+            TaskRef::Number(number) => self.find_task_by_number(number).await,
         }
     }
 
-    async fn find_task_by_number(
-        &self,
-        number: u64,
-        context_scope: Option<&TaskScope>,
-    ) -> Result<(String, Value), TaskServiceError> {
+    async fn find_task_by_number(&self, number: u64) -> Result<(String, Value), TaskServiceError> {
         self.ensure_task_index().await?;
         let index_key = TaskIndexKey {
             store_id: self.index_store_id(),
@@ -731,9 +681,7 @@ impl TaskService {
         if let Some(thread_id) = task_index_lookup(&index_key) {
             if let Some(record) = self.thread_store.get(&thread_id).await {
                 if let Some(task) = task_from_record(&record)? {
-                    if task.number == number
-                        && context_scope.map_or(true, |scope| &task.scope == scope)
-                    {
+                    if task.number == number {
                         return Ok((thread_id, record));
                     }
                 }
@@ -752,7 +700,6 @@ impl TaskSummary {
             number: task.number,
             title: task.title.clone(),
             status: task.status,
-            scope: task.scope.clone(),
             creator: task.creator.clone(),
             assignee: task.assignee.clone(),
             updated_at: task.updated_at,
@@ -772,22 +719,6 @@ pub fn task_from_record(record: &Value) -> Result<Option<ThreadTask>, TaskServic
         Some(Value::Null) | None => Ok(None),
         Some(value) => Ok(Some(serde_json::from_value(value.clone())?)),
     }
-}
-
-pub fn scope_from_thread_record(record: &Value) -> Option<TaskScope> {
-    let channel = record
-        .get("channel")
-        .or_else(|| record.pointer("/origin/channel"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let account_id = record
-        .get("account_id")
-        .or_else(|| record.pointer("/origin/account_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    Some(TaskScope::new(channel, account_id))
 }
 
 fn set_task_on_record(record: &mut Value, task: &ThreadTask) -> Result<(), TaskServiceError> {
@@ -900,10 +831,6 @@ fn task_index_remove(index_key: &TaskIndexKey) {
     state.by_number.remove(index_key);
 }
 
-fn global_task_counter_scope() -> TaskScope {
-    TaskScope::new(GLOBAL_TASK_COUNTER_CHANNEL, GLOBAL_TASK_COUNTER_ACCOUNT)
-}
-
 fn push_event(
     task: &mut ThreadTask,
     actor: Principal,
@@ -1002,23 +929,6 @@ fn normalized_nonempty_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn validate_scope(scope: &TaskScope) -> Result<(), TaskServiceError> {
-    validate_scope_part(&scope.channel)?;
-    validate_scope_part(&scope.account_id)?;
-    Ok(())
-}
-
-fn validate_scope_part(value: &str) -> Result<(), TaskServiceError> {
-    if value.is_empty()
-        || !value
-            .chars()
-            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_' || ch == '-')
-    {
-        return Err(TaskServiceError::InvalidScope(value.to_owned()));
-    }
-    Ok(())
-}
-
 fn validate_principal(principal: &Principal) -> Result<(), TaskServiceError> {
     let id = principal.id().trim();
     if id.is_empty()
@@ -1066,7 +976,6 @@ mod tests {
         let service = service();
         let (thread_id, task) = service
             .create_task(CreateTaskInput {
-                scope: TaskScope::new("telegram", "main"),
                 title: Some("Audit daemons".to_owned()),
                 body: Some("Look at launchctl".to_owned()),
                 assignee: None,
@@ -1093,7 +1002,6 @@ mod tests {
         let service = service();
         let (_thread_id, task) = service
             .create_task(CreateTaskInput {
-                scope: TaskScope::new("telegram", "main"),
                 title: Some("Review".to_owned()),
                 body: None,
                 assignee: None,
@@ -1106,16 +1014,13 @@ mod tests {
             .await
             .unwrap();
         let error = service
-            .update_status(
-                UpdateTaskStatusInput {
-                    task_ref: canonical_task_ref(&task),
-                    to: TaskStatus::Done,
-                    note: None,
-                    force: false,
-                    actor: None,
-                },
-                None,
-            )
+            .update_status(UpdateTaskStatusInput {
+                task_ref: canonical_task_ref(&task),
+                to: TaskStatus::Done,
+                note: None,
+                force: false,
+                actor: None,
+            })
             .await
             .unwrap_err();
         assert!(matches!(error, TaskServiceError::InvalidTransition { .. }));
@@ -1126,7 +1031,6 @@ mod tests {
         let service = service();
         let (_thread_id, task) = service
             .create_task(CreateTaskInput {
-                scope: TaskScope::new("telegram", "main"),
                 title: Some("Claim me".to_owned()),
                 body: None,
                 assignee: None,
@@ -1139,18 +1043,15 @@ mod tests {
             .await
             .unwrap();
         let updated = service
-            .update_status(
-                UpdateTaskStatusInput {
-                    task_ref: canonical_task_ref(&task),
-                    to: TaskStatus::InProgress,
-                    note: None,
-                    force: false,
-                    actor: Some(Principal::Agent {
-                        agent_id: "cindy".to_owned(),
-                    }),
-                },
-                None,
-            )
+            .update_status(UpdateTaskStatusInput {
+                task_ref: canonical_task_ref(&task),
+                to: TaskStatus::InProgress,
+                note: None,
+                force: false,
+                actor: Some(Principal::Agent {
+                    agent_id: "cindy".to_owned(),
+                }),
+            })
             .await
             .unwrap();
         assert_eq!(updated.status, TaskStatus::InProgress);
@@ -1165,7 +1066,6 @@ mod tests {
         };
         let (_thread_id, task) = service
             .create_task(CreateTaskInput {
-                scope: TaskScope::new("garyx", "tasks"),
                 title: Some("Review gate".to_owned()),
                 body: None,
                 assignee: Some(assignee.clone()),
@@ -1182,30 +1082,24 @@ mod tests {
         let task_ref = canonical_task_ref(&task);
 
         service
-            .update_status(
-                UpdateTaskStatusInput {
-                    task_ref: task_ref.clone(),
-                    to: TaskStatus::InReview,
-                    note: None,
-                    force: false,
-                    actor: Some(assignee.clone()),
-                },
-                None,
-            )
+            .update_status(UpdateTaskStatusInput {
+                task_ref: task_ref.clone(),
+                to: TaskStatus::InReview,
+                note: None,
+                force: false,
+                actor: Some(assignee.clone()),
+            })
             .await
             .unwrap();
 
         let updated = service
-            .update_status(
-                UpdateTaskStatusInput {
-                    task_ref,
-                    to: TaskStatus::Done,
-                    note: Some("review approved by owner".to_owned()),
-                    force: false,
-                    actor: Some(assignee),
-                },
-                None,
-            )
+            .update_status(UpdateTaskStatusInput {
+                task_ref,
+                to: TaskStatus::Done,
+                note: Some("review approved by owner".to_owned()),
+                force: false,
+                actor: Some(assignee),
+            })
             .await
             .unwrap();
 
@@ -1220,7 +1114,6 @@ mod tests {
         };
         let (_thread_id, task) = service
             .create_task(CreateTaskInput {
-                scope: TaskScope::new("garyx", "tasks"),
                 title: Some("Review pass".to_owned()),
                 body: None,
                 assignee: Some(assignee.clone()),
@@ -1237,32 +1130,26 @@ mod tests {
         let task_ref = canonical_task_ref(&task);
 
         service
-            .update_status(
-                UpdateTaskStatusInput {
-                    task_ref: task_ref.clone(),
-                    to: TaskStatus::InReview,
-                    note: None,
-                    force: false,
-                    actor: Some(assignee),
-                },
-                None,
-            )
+            .update_status(UpdateTaskStatusInput {
+                task_ref: task_ref.clone(),
+                to: TaskStatus::InReview,
+                note: None,
+                force: false,
+                actor: Some(assignee),
+            })
             .await
             .unwrap();
 
         let updated = service
-            .update_status(
-                UpdateTaskStatusInput {
-                    task_ref,
-                    to: TaskStatus::Done,
-                    note: None,
-                    force: false,
-                    actor: Some(Principal::Human {
-                        user_id: "owner".to_owned(),
-                    }),
-                },
-                None,
-            )
+            .update_status(UpdateTaskStatusInput {
+                task_ref,
+                to: TaskStatus::Done,
+                note: None,
+                force: false,
+                actor: Some(Principal::Human {
+                    user_id: "owner".to_owned(),
+                }),
+            })
             .await
             .unwrap();
 
@@ -1274,7 +1161,6 @@ mod tests {
         let service = service();
         let (_thread_id, task) = service
             .create_task(CreateTaskInput {
-                scope: TaskScope::new("telegram", "main"),
                 title: Some("Assign me".to_owned()),
                 body: None,
                 assignee: None,
@@ -1290,12 +1176,7 @@ mod tests {
             agent_id: "cindy".to_owned(),
         };
         let updated = service
-            .assign_task(
-                &canonical_task_ref(&task),
-                assignee.clone(),
-                Some(assignee),
-                None,
-            )
+            .assign_task(&canonical_task_ref(&task), assignee.clone(), Some(assignee))
             .await
             .unwrap();
         assert_eq!(updated.status, TaskStatus::InProgress);
@@ -1313,7 +1194,6 @@ mod tests {
         let service = Arc::new(service());
         let (_thread_id, task) = service
             .create_task(CreateTaskInput {
-                scope: TaskScope::new("telegram", "main"),
                 title: Some("Concurrent".to_owned()),
                 body: None,
                 assignee: None,
@@ -1337,7 +1217,6 @@ mod tests {
                         agent_id: "cindy".to_owned(),
                     },
                     None,
-                    None,
                 )
                 .await
                 .unwrap();
@@ -1345,17 +1224,14 @@ mod tests {
         let right_service = service.clone();
         let right = tokio::spawn(async move {
             right_service
-                .set_title(&task_ref, "Retitled".to_owned(), None, None)
+                .set_title(&task_ref, "Retitled".to_owned(), None)
                 .await
                 .unwrap();
         });
         left.await.unwrap();
         right.await.unwrap();
 
-        let (_, _, task) = service
-            .get_task(&canonical_task_ref(&task), None)
-            .await
-            .unwrap();
+        let (_, _, task) = service.get_task(&canonical_task_ref(&task)).await.unwrap();
         assert_eq!(task.events.len(), 4);
         assert_eq!(task.title, "Retitled");
         assert_eq!(
@@ -1371,7 +1247,6 @@ mod tests {
         let service = service();
         let (_thread_id, task) = service
             .create_task(CreateTaskInput {
-                scope: TaskScope::new("telegram", "main"),
                 title: Some("History".to_owned()),
                 body: None,
                 assignee: None,
@@ -1391,28 +1266,22 @@ mod tests {
                     agent_id: "cindy".to_owned(),
                 },
                 None,
-                None,
             )
             .await
             .unwrap();
         service
-            .set_title(&task_ref, "History updated".to_owned(), None, None)
+            .set_title(&task_ref, "History updated".to_owned(), None)
             .await
             .unwrap();
 
         let first_page = service
-            .task_history(&task_ref, None, Some(1), None)
+            .task_history(&task_ref, Some(1), None)
             .await
             .unwrap();
         assert_eq!(first_page.events.len(), 1);
         assert!(first_page.has_more);
         let second_page = service
-            .task_history(
-                &task_ref,
-                None,
-                Some(10),
-                Some(&first_page.events[0].event_id),
-            )
+            .task_history(&task_ref, Some(10), Some(&first_page.events[0].event_id))
             .await
             .unwrap();
         assert_eq!(second_page.events.len(), 3);
@@ -1424,7 +1293,6 @@ mod tests {
         let service = service();
         let (thread_id, _task) = service
             .create_task(CreateTaskInput {
-                scope: TaskScope::new("telegram", "main"),
                 title: Some("Runtime".to_owned()),
                 body: None,
                 assignee: None,

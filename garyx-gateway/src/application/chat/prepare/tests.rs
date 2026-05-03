@@ -159,7 +159,6 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
                 }],
                 "task": {
                     "schema_version": 1,
-                    "scope": { "channel": "api", "account_id": "main" },
                     "number": 4,
                     "title": "Prompt metadata",
                     "status": "todo",

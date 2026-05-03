@@ -3186,7 +3186,6 @@ async fn cmd_thread_send_start(
 
 pub(crate) async fn cmd_task_list(
     config_path: &str,
-    scope: Option<&str>,
     status: Option<&str>,
     assignee: Option<&str>,
     include_done: bool,
@@ -3198,9 +3197,6 @@ pub(crate) async fn cmd_task_list(
         ("limit".to_owned(), limit.clamp(1, 200).to_string()),
         ("offset".to_owned(), offset.to_string()),
     ];
-    if let Some(scope) = scope {
-        params.push(("scope".to_owned(), normalize_scope_query(scope)?));
-    }
     if let Some(status) = status {
         params.push(("status".to_owned(), normalize_task_status(status)?));
     }
@@ -3278,7 +3274,6 @@ pub(crate) async fn cmd_task_get(
 
 pub(crate) async fn cmd_task_create(
     config_path: &str,
-    scope: Option<&str>,
     title: Option<String>,
     body: Option<String>,
     assignee: Option<&str>,
@@ -3293,7 +3288,7 @@ pub(crate) async fn cmd_task_create(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let gateway = gateway_endpoint(config_path)?;
-    let mut request = json!({
+    let request = json!({
         "title": title,
         "body": body,
         "assignee": assignee,
@@ -3303,9 +3298,6 @@ pub(crate) async fn cmd_task_create(
             "workspace_dir": workspace_dir,
         },
     });
-    if let Some(scope) = scope {
-        request["scope"] = scope_payload(scope)?;
-    }
     let payload = post_gateway_json_as_cli_actor(&gateway, "/api/tasks", &request).await?;
     if json_output {
         return print_pretty_json(&payload);
@@ -3563,30 +3555,6 @@ async fn patch_task_status(
     Ok(())
 }
 
-fn normalize_scope_query(scope: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let scope = scope.trim().to_ascii_lowercase();
-    if scope_payload(&scope).is_err() {
-        return Err("scope must be <channel>/<account_id>".into());
-    }
-    Ok(scope)
-}
-
-fn scope_payload(scope: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let parts = scope
-        .trim()
-        .split('/')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    if parts.len() != 2 {
-        return Err("scope must be <channel>/<account_id>".into());
-    }
-    Ok(json!({
-        "channel": parts[0].to_ascii_lowercase(),
-        "account_id": parts[1].to_ascii_lowercase(),
-    }))
-}
-
 fn principal_payload(principal: &str) -> Result<Value, Box<dyn std::error::Error>> {
     let principal = principal.trim();
     if principal.is_empty() {
@@ -3676,17 +3644,6 @@ fn print_task_summary(value: &Value) {
         .and_then(Value::as_str)
         .or_else(|| value.get("status").and_then(Value::as_str))
         .unwrap_or("-");
-    let scope_label = task
-        .get("scope")
-        .or_else(|| value.get("scope"))
-        .and_then(|scope| {
-            Some(format!(
-                "{}/{}",
-                scope.get("channel")?.as_str()?,
-                scope.get("account_id")?.as_str()?
-            ))
-        })
-        .unwrap_or_else(|| "-".to_owned());
     let unassigned = Value::Null;
     let assignee = task
         .get("assignee")
@@ -3695,7 +3652,6 @@ fn print_task_summary(value: &Value) {
     println!("Task: {task_ref}");
     println!("Title: {title}");
     println!("Status: {status}");
-    println!("Scope: {scope_label}");
     println!("Assignee: {}", format_principal(assignee));
     if let Some(dispatch) = value.get("dispatch").filter(|dispatch| {
         dispatch

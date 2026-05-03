@@ -134,11 +134,6 @@ export interface DesktopAutomationActivityFeed {
 
 export type DesktopTaskStatus = "todo" | "in_progress" | "in_review" | "done";
 
-export interface DesktopTaskScope {
-  channel: string;
-  accountId: string;
-}
-
 export type DesktopTaskPrincipal =
   | {
       kind: "human";
@@ -155,7 +150,6 @@ export interface DesktopTaskSummary {
   number: number;
   title: string;
   status: DesktopTaskStatus;
-  scope: DesktopTaskScope;
   creator: DesktopTaskPrincipal;
   assignee?: DesktopTaskPrincipal | null;
   updatedAt: string;
@@ -171,7 +165,6 @@ export interface DesktopTasksPage {
 }
 
 export interface ListTasksInput {
-  scope?: string | null;
   status?: DesktopTaskStatus | null;
   assignee?: string | null;
   includeDone?: boolean;
@@ -180,7 +173,6 @@ export interface ListTasksInput {
 }
 
 export interface CreateTaskInput {
-  scope: string;
   title?: string | null;
   body?: string | null;
   assignee?: string | null;

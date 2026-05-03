@@ -1812,7 +1812,6 @@ async fn task_routes_resolve_percent_encoded_refs() {
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "scope": {"channel": "telegram", "account_id": "main"},
                 "title": "Check task routing"
             }))
             .unwrap(),

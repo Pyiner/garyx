@@ -9,7 +9,7 @@ use garyx_models::provider::{
     ProviderType, QueuedUserInput, StreamBoundaryKind, StreamEvent,
 };
 use garyx_models::{
-    AgentTeamProfile, CustomAgentProfile, Principal, TaskScope, TaskStatus, ThreadTask,
+    AgentTeamProfile, CustomAgentProfile, Principal, TaskStatus, ThreadTask,
     builtin_provider_agent_profiles,
 };
 use garyx_router::{
@@ -1822,7 +1822,6 @@ async fn test_streaming_input_appends_task_suffix_for_provider_only() {
     let now = Utc::now();
     let task = ThreadTask {
         schema_version: 1,
-        scope: TaskScope::new("telegram", "codex_bot"),
         number: 7,
         title: "Verify queued task metadata".to_owned(),
         status: TaskStatus::InProgress,

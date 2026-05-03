@@ -85,8 +85,8 @@ Common flags on `channels add`:
 
 | Command | Use it for |
 | --- | --- |
-| `garyx task list --scope <channel/account>` | List tasks in a channel/account scope. |
-| `garyx task create [--scope <channel/account>] [--title <title>] [--body <body>] [--assignee <principal>] [--workspace-dir <path>] [--start]` | Create a task thread. A bare assignee value is treated as an agent id, assigned tasks start automatically, and `--workspace-dir` overrides the assignee Agent's default workspace. |
+| `garyx task list` | List tasks. |
+| `garyx task create [--title <title>] [--body <body>] [--assignee <principal>] [--workspace-dir <path>] [--start]` | Create a task thread. A bare assignee value is treated as an agent id, assigned tasks start automatically, and `--workspace-dir` overrides the assignee Agent's default workspace. |
 | `garyx task get <task_ref>` | Fetch one task. |
 | `garyx task promote <thread_id>` | Promote an existing thread into a task. |
 | `garyx task update <task_ref> --status <status> [--note <note>]` | Move a task through its lifecycle. Assignees should move finished work to `in_review` first, and only mark `done` after explicit approval. |

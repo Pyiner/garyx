@@ -26,7 +26,6 @@ import type {
   DesktopBotConversationNode,
   DesktopTeam,
   DesktopTaskPrincipal,
-  DesktopTaskScope,
   DesktopTaskStatus,
   DesktopTaskSummary,
   DesktopTasksPage,
@@ -397,12 +396,6 @@ interface TaskPrincipalPayload {
   agentId?: string;
 }
 
-interface TaskScopePayload {
-  channel?: string;
-  account_id?: string;
-  accountId?: string;
-}
-
 interface TaskSummaryPayload {
   thread_id?: string;
   threadId?: string;
@@ -411,7 +404,6 @@ interface TaskSummaryPayload {
   number?: number;
   title?: string | null;
   status?: string | null;
-  scope?: TaskScopePayload | null;
   creator?: TaskPrincipalPayload | null;
   assignee?: TaskPrincipalPayload | null;
   updated_at?: string | null;
@@ -1538,16 +1530,6 @@ function normalizeTaskStatus(value: unknown): DesktopTaskStatus {
   }
 }
 
-function mapTaskScope(value: unknown): DesktopTaskScope {
-  const record = parseRecord(value);
-  return {
-    channel: asString(record.channel)?.toLowerCase() || "",
-    accountId:
-      (asString(record.account_id) || asString(record.accountId))?.toLowerCase() ||
-      "",
-  };
-}
-
 function mapTaskPrincipal(value: unknown): DesktopTaskPrincipal {
   const record = parseRecord(value);
   if (record.kind === "human") {
@@ -1562,32 +1544,24 @@ function mapTaskPrincipal(value: unknown): DesktopTaskPrincipal {
   };
 }
 
-function taskRefFromScope(scope: DesktopTaskScope, number: number): string {
-  return scope.channel && scope.accountId && number > 0
-    ? `#${scope.channel}/${scope.accountId}/${number}`
-    : "";
-}
-
 function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
   const task: TaskSummaryPayload =
     value.task && typeof value.task === "object" ? value.task : {};
-  const scope = mapTaskScope(value.scope ?? task.scope);
   const number = asFiniteNumber(value.number) ?? asFiniteNumber(task.number) ?? 0;
   const title =
     asString(value.title) ||
     asString(task.title) ||
-    taskRefFromScope(scope, number) ||
+    (number > 0 ? `#TASK-${number}` : "") ||
     "Untitled task";
   return {
     threadId: asString(value.thread_id) || asString(value.threadId) || "",
     taskRef:
       asString(value.task_ref) ||
       asString(value.taskRef) ||
-      taskRefFromScope(scope, number),
+      (number > 0 ? `#TASK-${number}` : ""),
     number,
     title,
     status: normalizeTaskStatus(value.status ?? task.status),
-    scope,
     creator: mapTaskPrincipal(value.creator ?? task.creator),
     assignee:
       value.assignee || task.assignee
@@ -1614,21 +1588,6 @@ function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
       asFiniteNumber(task.reply_count) ??
       asFiniteNumber(task.replyCount) ??
       0,
-  };
-}
-
-function taskScopePayload(scope: string): TaskScopePayload {
-  const parts = scope
-    .trim()
-    .split("/")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length !== 2) {
-    throw new Error("scope must be <channel>/<account_id>");
-  }
-  return {
-    channel: parts[0].toLowerCase(),
-    account_id: parts[1].toLowerCase(),
   };
 }
 
@@ -3423,10 +3382,6 @@ export async function listTasks(
   input: ListTasksInput = {},
 ): Promise<DesktopTasksPage> {
   const query = new URLSearchParams();
-  const scope = input.scope?.trim() || "";
-  if (scope) {
-    query.set("scope", scope.toLowerCase());
-  }
   if (input.status) {
     query.set("status", input.status);
   }
@@ -3471,7 +3426,6 @@ export async function createTask(
     method: "POST",
     signal: AbortSignal.timeout(8000),
     body: JSON.stringify({
-      scope: taskScopePayload(input.scope),
       title: input.title?.trim() || null,
       body: input.body?.trim() || null,
       assignee,

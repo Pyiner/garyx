@@ -8,7 +8,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use garyx_models::local_paths::default_session_data_dir;
-use garyx_models::{Principal, TaskScope, TaskStatus, ThreadTask};
+use garyx_models::{Principal, TaskStatus, ThreadTask};
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
     TaskService, TaskServiceError, UpdateTaskStatusInput, update_thread_record,
@@ -25,13 +25,9 @@ use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message
 use crate::server::AppState;
 
 const ACTOR_HEADER: &str = "x-garyx-actor";
-const DEFAULT_TASK_SCOPE_CHANNEL: &str = "garyx";
-const DEFAULT_TASK_SCOPE_ACCOUNT: &str = "tasks";
 
 #[derive(Debug, Deserialize)]
 pub struct CreateTaskBody {
-    #[serde(default)]
-    pub scope: Option<TaskScope>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -52,8 +48,6 @@ pub struct CreateTaskBody {
 
 #[derive(Debug, Deserialize)]
 pub struct BatchCreateTaskBody {
-    #[serde(default)]
-    pub scope: Option<TaskScope>,
     pub tasks: Vec<BatchTaskItem>,
     #[serde(default)]
     pub actor: Option<Principal>,
@@ -126,8 +120,6 @@ pub struct SetTaskTitleBody {
 #[derive(Debug, Deserialize)]
 pub struct TaskListQuery {
     #[serde(default)]
-    pub scope: Option<String>,
-    #[serde(default)]
     pub status: Option<TaskStatus>,
     #[serde(default)]
     pub assignee: Option<String>,
@@ -173,12 +165,10 @@ pub async fn create_task(
             Ok(runtime) => runtime,
             Err(error) => return task_error_response(error),
         };
-    let scope = body.scope.unwrap_or_else(default_task_scope);
     let title_for_dispatch = body.title.clone();
     let body_for_dispatch = body.body.clone();
     match service
         .create_task(CreateTaskInput {
-            scope,
             title: body.title,
             body: body.body,
             assignee: body.assignee,
@@ -238,7 +228,6 @@ pub async fn create_tasks_batch(
     if let Err(error) = validate_runtime_agent(&state, &top_runtime).await {
         return task_error_response(error);
     }
-    let scope = body.scope.unwrap_or_else(default_task_scope);
     let mut created = Vec::new();
     for item in body.tasks {
         let title_for_dispatch = item.title.clone();
@@ -265,7 +254,6 @@ pub async fn create_tasks_batch(
         };
         match service
             .create_task(CreateTaskInput {
-                scope: scope.clone(),
                 title: item.title,
                 body: item.body,
                 assignee: item.assignee,
@@ -372,7 +360,7 @@ pub async fn get_task(
     let Some(service) = task_service(&state) else {
         return tasks_disabled();
     };
-    match service.get_task(&task_ref, None).await {
+    match service.get_task(&task_ref).await {
         Ok((thread_id, thread, task)) => (
             StatusCode::OK,
             Json(json!({
@@ -419,7 +407,7 @@ pub async fn task_history(
         return tasks_disabled();
     };
     match service
-        .task_history(&task_ref, None, query.limit, query.before.as_deref())
+        .task_history(&task_ref, query.limit, query.before.as_deref())
         .await
     {
         Ok(page) => (
@@ -448,11 +436,11 @@ pub async fn assign_task(
     }
     let assignee = body.to;
     let self_claim = actor.as_ref() == Some(&assignee);
-    match service.assign_task(&task_ref, assignee, actor, None).await {
+    match service.assign_task(&task_ref, assignee, actor).await {
         Ok(task) => {
             let assignee_for_workspace = task.assignee.clone();
             let mut payload = json!({ "task": task });
-            if let Ok((thread_id, _, _)) = service.get_task(&task_ref, None).await {
+            if let Ok((thread_id, _, _)) = service.get_task(&task_ref).await {
                 if let Err(error) = ensure_thread_workspace_from_assignee_default(
                     &state,
                     &thread_id,
@@ -493,7 +481,7 @@ pub async fn unassign_task(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
-    match service.unassign_task(&task_ref, actor, None).await {
+    match service.unassign_task(&task_ref, actor).await {
         Ok(task) => (StatusCode::OK, Json(json!({ "task": task }))),
         Err(error) => task_error_response(error),
     }
@@ -513,16 +501,13 @@ pub async fn update_task_status(
         Err(error) => return task_error_response(error),
     };
     match service
-        .update_status(
-            UpdateTaskStatusInput {
-                task_ref,
-                to: body.to,
-                note: body.note,
-                force: body.force,
-                actor,
-            },
-            None,
-        )
+        .update_status(UpdateTaskStatusInput {
+            task_ref,
+            to: body.to,
+            note: body.note,
+            force: body.force,
+            actor,
+        })
         .await
     {
         Ok(task) => (StatusCode::OK, Json(json!({ "task": task }))),
@@ -543,7 +528,7 @@ pub async fn set_task_title(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
-    match service.set_title(&task_ref, body.title, actor, None).await {
+    match service.set_title(&task_ref, body.title, actor).await {
         Ok(task) => (StatusCode::OK, Json(json!({ "task": task }))),
         Err(error) => task_error_response(error),
     }
@@ -568,7 +553,6 @@ fn task_service(state: &Arc<AppState>) -> Option<TaskService> {
 
 fn task_list_filter(query: TaskListQuery) -> Result<TaskListFilter, TaskServiceError> {
     Ok(TaskListFilter {
-        scope: query.scope.as_deref().map(parse_scope).transpose()?,
         status: query.status,
         assignee: query.assignee.as_deref().map(parse_principal).transpose()?,
         creator: query.creator.as_deref().map(parse_principal).transpose()?,
@@ -576,20 +560,6 @@ fn task_list_filter(query: TaskListQuery) -> Result<TaskListFilter, TaskServiceE
         limit: query.limit,
         offset: query.offset,
     })
-}
-
-fn parse_scope(value: &str) -> Result<TaskScope, TaskServiceError> {
-    let parts: Vec<&str> = value.trim().split('/').collect();
-    if parts.len() != 2 {
-        return Err(TaskServiceError::BadRequest(
-            "scope must be <channel>/<account_id>".to_owned(),
-        ));
-    }
-    Ok(TaskScope::new(parts[0], parts[1]))
-}
-
-fn default_task_scope() -> TaskScope {
-    TaskScope::new(DEFAULT_TASK_SCOPE_CHANNEL, DEFAULT_TASK_SCOPE_ACCOUNT)
 }
 
 fn parse_principal(value: &str) -> Result<Principal, TaskServiceError> {
@@ -902,7 +872,6 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
         TaskServiceError::NotATask(_) => "NotATask",
         TaskServiceError::AlreadyATask(_) => "AlreadyATask",
         TaskServiceError::InvalidTransition { .. } => "InvalidTransition",
-        TaskServiceError::InvalidScope(_) => "InvalidScope",
         TaskServiceError::BadRequest(_) => "BadRequest",
         TaskServiceError::UnknownPrincipal(_) => "UnknownPrincipal",
         TaskServiceError::UnknownAgent(_) => "UnknownAgent",
@@ -912,8 +881,8 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
     };
     let status = match code {
         "NotFound" => StatusCode::NOT_FOUND,
-        "NotATask" | "AlreadyATask" | "InvalidTransition" | "InvalidScope" | "BadRequest"
-        | "UnknownPrincipal" | "UnknownAgent" => StatusCode::BAD_REQUEST,
+        "NotATask" | "AlreadyATask" | "InvalidTransition" | "BadRequest" | "UnknownPrincipal"
+        | "UnknownAgent" => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (

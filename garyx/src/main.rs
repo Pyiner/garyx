@@ -791,7 +791,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Some(Commands::Task { action }) => match action {
             TaskAction::List {
-                scope,
                 status,
                 assignee,
                 include_done,
@@ -801,7 +800,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 cmd_task_list(
                     config_path,
-                    scope.as_deref(),
                     status.as_deref(),
                     assignee.as_deref(),
                     include_done,
@@ -813,7 +811,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             TaskAction::Get { task_ref, json } => cmd_task_get(config_path, &task_ref, json).await,
             TaskAction::Create {
-                scope,
                 title,
                 body,
                 assignee,
@@ -823,7 +820,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } => {
                 cmd_task_create(
                     config_path,
-                    scope.as_deref(),
                     title,
                     body,
                     assignee.as_deref(),

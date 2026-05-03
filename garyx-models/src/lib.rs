@@ -62,7 +62,7 @@ pub use provider::{
 pub use routing::DeliveryContext;
 pub use session::{ChatType, SessionEntry, SessionOrigin, SessionTokenUsage};
 pub use task::{
-    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskScope, TaskStatus, ThreadTask,
+    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskStatus, ThreadTask,
 };
 pub use thread_logs::{
     CANONICAL_THREAD_PREFIX, NoopThreadLogSink, ThreadLogChunk, ThreadLogEvent, ThreadLogLevel,
