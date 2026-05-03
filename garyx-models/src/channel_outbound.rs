@@ -9,14 +9,32 @@ use crate::provider::{ProviderMessage, StreamEvent};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChannelOutboundContent {
-    Text { text: String },
-    ToolUse { message: ProviderMessage },
-    ToolResult { message: ProviderMessage },
+    Text {
+        text: String,
+    },
+    Image {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alt: Option<String>,
+    },
+    ToolUse {
+        message: ProviderMessage,
+    },
+    ToolResult {
+        message: ProviderMessage,
+    },
 }
 
 impl ChannelOutboundContent {
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
+    }
+
+    pub fn image(path: impl Into<String>, alt: Option<String>) -> Self {
+        Self::Image {
+            path: path.into(),
+            alt,
+        }
     }
 
     pub fn from_stream_event(event: StreamEvent) -> Option<Self> {
@@ -34,9 +52,17 @@ impl ChannelOutboundContent {
         }
     }
 
+    pub fn as_image(&self) -> Option<(&str, Option<&str>)> {
+        match self {
+            Self::Image { path, alt } => Some((path, alt.as_deref())),
+            _ => None,
+        }
+    }
+
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Text { .. } => "text",
+            Self::Image { .. } => "image",
             Self::ToolUse { .. } => "tool_use",
             Self::ToolResult { .. } => "tool_result",
         }

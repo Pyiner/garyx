@@ -260,6 +260,63 @@ async fn test_send_invalid_telegram_thread_id() {
     );
 }
 
+#[tokio::test]
+async fn test_send_telegram_image_content_uses_send_photo() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendPhoto"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {
+                "message_id": 42,
+                "chat": { "id": 123, "type": "private" },
+                "date": 1
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let image_path = temp.path().join("preview.png");
+    std::fs::write(&image_path, b"png").expect("image");
+
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_telegram(TelegramSender {
+        account_id: "main".to_string(),
+        token: "test-token".to_string(),
+        http: Client::new(),
+        api_base: server.uri(),
+        is_running: true,
+    });
+
+    let result = dispatcher
+        .send_message(OutboundMessage {
+            channel: "telegram".to_string(),
+            account_id: "main".to_string(),
+            chat_id: "123".to_string(),
+            delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
+            delivery_target_id: "123".to_string(),
+            content: ChannelOutboundContent::image(
+                image_path.to_string_lossy().to_string(),
+                Some("preview".to_string()),
+            ),
+            reply_to: None,
+            thread_id: None,
+        })
+        .await
+        .expect("send image");
+
+    assert_eq!(result.message_ids, vec!["42".to_string()]);
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/bottest-token/sendPhoto")
+            .count(),
+        1
+    );
+}
+
 #[test]
 fn test_normalize_telegram_thread_id_ignores_private_chat_binding_key() {
     assert_eq!(normalize_telegram_thread_id(42, Some("42")), None);
@@ -516,6 +573,79 @@ async fn test_send_feishu_open_id_target_uses_open_id_receive_type() {
     assert_eq!(message_request.url.query(), Some("receive_id_type=open_id"));
     let body: Value = serde_json::from_slice(&message_request.body).expect("message request json");
     assert_eq!(body["receive_id"], "ou_owner_123");
+}
+
+#[tokio::test]
+async fn test_send_feishu_image_content_uploads_and_sends_image() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/auth/v3/tenant_access_token/internal"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "code": 0,
+            "tenant_access_token": "tenant-token",
+            "expire": 7200
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/im/v1/images"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "code": 0,
+            "data": { "image_key": "img_v2_123" }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/im/v1/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "code": 0,
+            "data": { "message_id": "om_image_001" }
+        })))
+        .mount(&server)
+        .await;
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let image_path = temp.path().join("preview.png");
+    std::fs::write(&image_path, b"png").expect("image");
+
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_feishu(FeishuSender::new(
+        "bot1".to_string(),
+        "app123".to_string(),
+        "secret".to_string(),
+        server.uri(),
+        true,
+    ));
+
+    let result = dispatcher
+        .send_message(OutboundMessage {
+            channel: "feishu".to_string(),
+            account_id: "bot1".to_string(),
+            chat_id: "oc_group_123".to_string(),
+            delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
+            delivery_target_id: "oc_group_123".to_string(),
+            content: ChannelOutboundContent::image(image_path.to_string_lossy().to_string(), None),
+            reply_to: None,
+            thread_id: None,
+        })
+        .await
+        .expect("send image");
+
+    assert_eq!(result.message_ids, vec!["om_image_001".to_string()]);
+    let requests = server.received_requests().await.expect("received requests");
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == "/im/v1/images"),
+        "image upload request missing"
+    );
+    let message_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/im/v1/messages")
+        .expect("image message request should be sent");
+    let body: Value = serde_json::from_slice(&message_request.body).expect("message request json");
+    assert_eq!(body["msg_type"], "image");
+    assert_eq!(body["receive_id"], "oc_group_123");
 }
 
 // -----------------------------------------------------------------

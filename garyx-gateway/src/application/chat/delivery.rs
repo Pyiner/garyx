@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -104,6 +105,7 @@ struct BoundThreadDeliveryTarget {
 #[derive(Clone, Default)]
 pub(crate) struct BoundThreadDeliveryBuffer {
     pending: Arc<std::sync::Mutex<String>>,
+    image_scan: Arc<std::sync::Mutex<String>>,
     suppressed: Arc<AtomicBool>,
     delivery_gate: Arc<tokio::sync::Mutex<()>>,
     inflight: Arc<std::sync::atomic::AtomicUsize>,
@@ -119,6 +121,13 @@ impl BoundThreadDeliveryBuffer {
         if let Ok(mut pending) = self.pending.lock() {
             let was_empty = pending.is_empty();
             pending.push_str(text);
+            if let Ok(mut image_scan) = self.image_scan.lock() {
+                image_scan.push_str(text);
+            } else {
+                tracing::warn!(
+                    "{warn_context}: image scan lock poisoned while collecting assistant delta"
+                );
+            }
             was_empty
         } else {
             tracing::warn!("{warn_context}: buffer lock poisoned while collecting assistant delta");
@@ -154,6 +163,20 @@ impl BoundThreadDeliveryBuffer {
             } else {
                 pending.push_str("\n\n");
             }
+            if let Ok(mut image_scan) = self.image_scan.lock() {
+                if image_scan.ends_with("\n\n") {
+                    return;
+                }
+                if image_scan.ends_with('\n') {
+                    image_scan.push('\n');
+                } else {
+                    image_scan.push_str("\n\n");
+                }
+            } else {
+                tracing::warn!(
+                    "{warn_context}: image scan lock poisoned while collecting assistant boundary"
+                );
+            }
         } else {
             tracing::warn!(
                 "{warn_context}: buffer lock poisoned while collecting assistant boundary"
@@ -171,6 +194,23 @@ impl BoundThreadDeliveryBuffer {
             Err(_) => {
                 tracing::warn!(
                     "{warn_context}: buffer lock poisoned while finalizing assistant delivery"
+                );
+                return None;
+            }
+        };
+        (!merged.trim().is_empty()).then_some(merged)
+    }
+
+    fn take_image_scan_text(&self, warn_context: &'static str) -> Option<String> {
+        if self.suppressed.load(Ordering::Relaxed) {
+            return None;
+        }
+
+        let merged = match self.image_scan.lock() {
+            Ok(mut pending) => std::mem::take(&mut *pending),
+            Err(_) => {
+                tracing::warn!(
+                    "{warn_context}: image scan lock poisoned while finalizing assistant delivery"
                 );
                 return None;
             }
@@ -240,7 +280,34 @@ impl BoundThreadDeliveryBuffer {
         run_id: String,
         warn_context: &'static str,
     ) {
-        self.flush(state, thread_id, run_id, warn_context);
+        let pending_text = self.take_pending_text(warn_context);
+        let image_scan_text = self.take_image_scan_text(warn_context);
+        if pending_text.is_none() && image_scan_text.is_none() {
+            return;
+        }
+
+        let delivery_gate = self.delivery_gate.clone();
+        let inflight = self.inflight.clone();
+        let idle_notify = self.idle_notify.clone();
+        inflight.fetch_add(1, Ordering::Relaxed);
+        tokio::spawn(async move {
+            let _guard = delivery_gate.lock().await;
+            if let Some(text) = pending_text {
+                deliver_assistant_reply_to_bound_channels(
+                    state.clone(),
+                    thread_id.clone(),
+                    run_id.clone(),
+                    text,
+                )
+                .await;
+            }
+            if let Some(text) = image_scan_text {
+                deliver_markdown_images_to_bound_channels(state, thread_id, run_id, &text).await;
+            }
+            if inflight.fetch_sub(1, Ordering::Relaxed) == 1 {
+                idle_notify.notify_waiters();
+            }
+        });
     }
 }
 
@@ -295,6 +362,93 @@ fn should_prune_bound_delivery_target(channel: &str, error: &ChannelError) -> bo
 
     let error_text = error.to_string().to_ascii_lowercase();
     error_text.contains("bot was blocked by the user")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MarkdownImageRef {
+    path: PathBuf,
+    alt: Option<String>,
+}
+
+fn supported_markdown_image_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
+    )
+}
+
+fn markdown_image_target_path(raw_target: &str) -> Option<PathBuf> {
+    let mut target = raw_target.trim();
+    if target.is_empty() {
+        return None;
+    }
+
+    if let Some(stripped) = target
+        .strip_prefix('<')
+        .and_then(|value| value.strip_suffix('>'))
+    {
+        target = stripped.trim();
+    } else if let Some(index) = target.find(char::is_whitespace) {
+        target = target[..index].trim();
+    }
+
+    let target = target.trim_matches(|value| value == '"' || value == '\'');
+    if target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with("data:")
+    {
+        return None;
+    }
+
+    let path = target
+        .strip_prefix("file://")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(target));
+    path.is_absolute()
+        .then_some(path)
+        .filter(|path| supported_markdown_image_extension(path))
+        .filter(|path| path.is_file())
+}
+
+fn extract_markdown_image_refs(text: &str) -> Vec<MarkdownImageRef> {
+    let mut refs = Vec::new();
+    let mut seen = HashSet::new();
+    let mut offset = 0;
+
+    while let Some(relative_start) = text[offset..].find("![") {
+        let start = offset + relative_start;
+        let alt_start = start + 2;
+        let Some(alt_end_relative) = text[alt_start..].find("](") else {
+            offset = alt_start;
+            continue;
+        };
+        let alt_end = alt_start + alt_end_relative;
+        let target_start = alt_end + 2;
+        let Some(target_end_relative) = text[target_start..].find(')') else {
+            offset = target_start;
+            continue;
+        };
+        let target_end = target_start + target_end_relative;
+        let alt = text[alt_start..alt_end].trim();
+        let target = &text[target_start..target_end];
+
+        if let Some(path) = markdown_image_target_path(target) {
+            let key = path.to_string_lossy().to_string();
+            if seen.insert(key) {
+                refs.push(MarkdownImageRef {
+                    path,
+                    alt: (!alt.is_empty()).then(|| alt.to_owned()),
+                });
+            }
+        }
+
+        offset = target_end + 1;
+    }
+
+    refs
 }
 
 async fn prune_failed_bound_delivery_target(
@@ -479,6 +633,142 @@ async fn deliver_assistant_reply_to_bound_channels(
     }
 }
 
+async fn deliver_markdown_images_to_bound_channels(
+    state: Arc<AppState>,
+    thread_id: String,
+    run_id: String,
+    text: &str,
+) {
+    let images = extract_markdown_image_refs(text);
+    if images.is_empty() {
+        return;
+    }
+
+    let Some(session_data) = state.threads.thread_store.get(&thread_id).await else {
+        return;
+    };
+    let targets = bound_thread_delivery_targets(&session_data);
+    if targets.is_empty() {
+        return;
+    }
+
+    record_api_thread_log(
+        &state,
+        ThreadLogEvent::info(
+            &thread_id,
+            "delivery",
+            "markdown image forwarding to bound endpoints",
+        )
+        .with_run_id(run_id.clone())
+        .with_field("target_count", json!(targets.len()))
+        .with_field("image_count", json!(images.len())),
+    )
+    .await;
+
+    let dispatcher = state.channel_dispatcher();
+    for target in targets {
+        for image in &images {
+            let image_path = image.path.to_string_lossy().to_string();
+            let request = OutboundMessage {
+                channel: target.channel.clone(),
+                account_id: target.account_id.clone(),
+                chat_id: target.chat_id.clone(),
+                delivery_target_type: target.delivery_target_type.clone(),
+                delivery_target_id: target.delivery_target_id.clone(),
+                content: ChannelOutboundContent::image(image_path.clone(), image.alt.clone()),
+                reply_to: None,
+                thread_id: target.thread_id.clone(),
+            };
+
+            match dispatcher.send_message(request).await {
+                Ok(SendMessageResult { message_ids }) => {
+                    let first_message_id = message_ids.first().cloned();
+                    crate::runtime_diagnostics::record_message_ledger_event(
+                        &state,
+                        MessageLifecycleStatus::ReplySent,
+                        crate::runtime_diagnostics::RuntimeDiagnosticContext {
+                            thread_id: Some(thread_id.clone()),
+                            run_id: Some(run_id.clone()),
+                            channel: Some(target.channel.clone()),
+                            account_id: Some(target.account_id.clone()),
+                            chat_id: Some(target.chat_id.clone()),
+                            reply_message_id: first_message_id,
+                            text_excerpt: Some(image_path.chars().take(200).collect()),
+                            metadata: Some(json!({
+                                "source": "bound_delivery_markdown_image",
+                                "message_id_count": message_ids.len(),
+                                "content_kind": "image",
+                            })),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                    if message_ids.is_empty() {
+                        continue;
+                    }
+                    let mut router = state.threads.router.lock().await;
+                    for message_id in message_ids {
+                        router
+                            .record_outbound_message_with_thread_log(
+                                &thread_id,
+                                &target.channel,
+                                &target.account_id,
+                                &target.chat_id,
+                                target.thread_id.as_deref(),
+                                &message_id,
+                                None,
+                            )
+                            .await;
+                    }
+                }
+                Err(error) => {
+                    crate::runtime_diagnostics::record_message_ledger_event(
+                        &state,
+                        MessageLifecycleStatus::ReplyFailed,
+                        crate::runtime_diagnostics::RuntimeDiagnosticContext {
+                            thread_id: Some(thread_id.clone()),
+                            run_id: Some(run_id.clone()),
+                            channel: Some(target.channel.clone()),
+                            account_id: Some(target.account_id.clone()),
+                            chat_id: Some(target.chat_id.clone()),
+                            text_excerpt: Some(image_path.chars().take(200).collect()),
+                            terminal_reason: Some(MessageTerminalReason::ReplyDispatchFailed),
+                            metadata: Some(json!({
+                                "source": "bound_delivery_markdown_image",
+                                "content_kind": "image",
+                                "error": error.to_string(),
+                            })),
+                            ..Default::default()
+                        },
+                    )
+                    .await;
+                    record_api_thread_log(
+                        &state,
+                        ThreadLogEvent::warn(
+                            &thread_id,
+                            "delivery",
+                            "markdown image forwarding failed",
+                        )
+                        .with_run_id(run_id.clone())
+                        .with_field("endpoint_key", json!(target.endpoint_key))
+                        .with_field("channel", json!(target.channel))
+                        .with_field("account_id", json!(target.account_id))
+                        .with_field("chat_id", json!(target.chat_id))
+                        .with_field("image_path", json!(image_path))
+                        .with_field("error", json!(error.to_string())),
+                    )
+                    .await;
+
+                    prune_failed_bound_delivery_target(
+                        &state, &thread_id, &run_id, &target, &error,
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+}
+
 async fn deliver_structured_content_to_bound_channels(
     state: Arc<AppState>,
     thread_id: String,
@@ -642,4 +932,52 @@ pub async fn build_bound_response_callback(
             );
         }
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_only_existing_local_markdown_images_with_supported_extensions() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let png = temp.path().join("shot.png");
+        let webp = temp.path().join("preview.webp");
+        let pdf = temp.path().join("brief.pdf");
+        std::fs::write(&png, b"png").expect("png");
+        std::fs::write(&webp, b"webp").expect("webp");
+        std::fs::write(&pdf, b"pdf").expect("pdf");
+
+        let text = format!(
+            "Inline stays markdown ![shot]({}) and ![same]({}) and \
+             ![doc]({}) and ![remote](https://example.com/a.png) and ![webp](<{}>).",
+            png.display(),
+            png.display(),
+            pdf.display(),
+            webp.display(),
+        );
+
+        let refs = extract_markdown_image_refs(&text);
+
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].path, png);
+        assert_eq!(refs[0].alt.as_deref(), Some("shot"));
+        assert_eq!(refs[1].path, webp);
+        assert_eq!(refs[1].alt.as_deref(), Some("webp"));
+    }
+
+    #[test]
+    fn skips_missing_relative_and_non_image_markdown_targets() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let txt = temp.path().join("notes.txt");
+        std::fs::write(&txt, b"text").expect("text");
+        let missing = temp.path().join("missing.jpg");
+        let text = format!(
+            "![relative](relative.png) ![txt]({}) ![missing]({})",
+            txt.display(),
+            missing.display(),
+        );
+
+        assert!(extract_markdown_image_refs(&text).is_empty());
+    }
 }

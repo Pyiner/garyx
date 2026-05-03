@@ -155,16 +155,20 @@ impl OutboundSender for TelegramSender {
         &self,
         request: OutboundMessage,
     ) -> Result<SendMessageResult, ChannelError> {
-        let Some(text) = request.text_content() else {
-            return Ok(SendMessageResult::default());
-        };
         let chat_id = parse_telegram_id("chat_id", &request.chat_id)?;
         let reply_to = parse_optional_telegram_id("reply_to", request.reply_to.as_deref())?;
         // `thread_id` may carry a Garyx-internal thread key or a
         // legacy private-chat binding. Only a real numeric topic id
         // distinct from `chat_id` is a valid Telegram thread.
         let thread_id = normalize_telegram_thread_id(chat_id, request.thread_id.as_deref());
-        let message_ids = self.send_text(chat_id, text, reply_to, thread_id).await?;
+        let message_ids = if let Some(text) = request.text_content() {
+            self.send_text(chat_id, text, reply_to, thread_id).await?
+        } else if let Some((image_path, _alt)) = request.image_content() {
+            self.send_image(chat_id, Path::new(image_path), None, reply_to, thread_id)
+                .await?
+        } else {
+            return Ok(SendMessageResult::default());
+        };
         Ok(SendMessageResult {
             message_ids: message_ids.into_iter().map(|id| id.to_string()).collect(),
         })
@@ -193,6 +197,30 @@ impl TelegramSender {
         )
         .await
     }
+
+    pub async fn send_image(
+        &self,
+        chat_id: i64,
+        image_path: &Path,
+        caption: Option<&str>,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+    ) -> Result<Vec<i64>, ChannelError> {
+        let message_id = crate::telegram::send_photo(
+            crate::telegram::TelegramSendTarget::new(
+                &self.http,
+                &self.token,
+                chat_id,
+                message_thread_id,
+                &self.api_base,
+            ),
+            image_path,
+            caption,
+            reply_to_message_id,
+        )
+        .await?;
+        Ok(vec![message_id])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -219,21 +247,29 @@ impl OutboundSender for FeishuSender {
         &self,
         request: OutboundMessage,
     ) -> Result<SendMessageResult, ChannelError> {
-        let Some(text) = request.text_content() else {
-            return Ok(SendMessageResult::default());
-        };
         let reply_target =
             resolve_feishu_reply_target(request.reply_to.as_deref(), request.thread_id.as_deref());
         let delivery_target_type = request.resolved_delivery_target_type();
         let delivery_target_id = request.resolved_delivery_target_id();
-        let message_ids = self
-            .send_text(
+        let message_ids = if let Some(text) = request.text_content() {
+            self.send_text(
                 &delivery_target_type,
                 &delivery_target_id,
                 text,
                 reply_target.as_deref(),
             )
-            .await?;
+            .await?
+        } else if let Some((image_path, _alt)) = request.image_content() {
+            self.send_image(
+                &delivery_target_type,
+                &delivery_target_id,
+                Path::new(image_path),
+                reply_target.as_deref(),
+            )
+            .await?
+        } else {
+            return Ok(SendMessageResult::default());
+        };
         Ok(SendMessageResult { message_ids })
     }
 }
@@ -769,6 +805,10 @@ impl OutboundMessage {
         self.content.as_text()
     }
 
+    pub fn image_content(&self) -> Option<(&str, Option<&str>)> {
+        self.content.as_image()
+    }
+
     pub fn resolved_delivery_target_type(&self) -> String {
         infer_delivery_target_type(
             &self.channel,
@@ -1069,9 +1109,6 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
 
         match request.channel.as_str() {
             "telegram" => {
-                let Some(text) = request.text_content() else {
-                    return Ok(SendMessageResult::default());
-                };
                 let sender = self
                     .telegram_senders
                     .get(&request.account_id)
@@ -1081,23 +1118,9 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                             request.account_id
                         ))
                     })?;
-
-                let chat_id = parse_telegram_id("chat_id", &request.chat_id)?;
-                let reply_to = parse_optional_telegram_id("reply_to", request.reply_to.as_deref())?;
-                // delivery thread_id may contain a Garyx internal thread key
-                // or a legacy private-chat binding key. Only real numeric topic
-                // ids that differ from chat_id are valid Telegram thread ids.
-                let thread_id = normalize_telegram_thread_id(chat_id, request.thread_id.as_deref());
-
-                let message_ids = sender.send_text(chat_id, text, reply_to, thread_id).await?;
-                Ok(SendMessageResult {
-                    message_ids: message_ids.into_iter().map(|id| id.to_string()).collect(),
-                })
+                sender.send_outbound(request).await
             }
             "feishu" | "lark" => {
-                let Some(text) = request.text_content() else {
-                    return Ok(SendMessageResult::default());
-                };
                 let sender = self
                     .feishu_senders
                     .get(&request.account_id)
@@ -1107,27 +1130,9 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                             request.account_id
                         ))
                     })?;
-
-                let reply_target = resolve_feishu_reply_target(
-                    request.reply_to.as_deref(),
-                    request.thread_id.as_deref(),
-                );
-                let delivery_target_type = request.resolved_delivery_target_type();
-                let delivery_target_id = request.resolved_delivery_target_id();
-                let message_ids = sender
-                    .send_text(
-                        &delivery_target_type,
-                        &delivery_target_id,
-                        text,
-                        reply_target.as_deref(),
-                    )
-                    .await?;
-                Ok(SendMessageResult { message_ids })
+                sender.send_outbound(request).await
             }
             "weixin" | "wechat" => {
-                let Some(text) = request.text_content() else {
-                    return Ok(SendMessageResult::default());
-                };
                 let sender = self
                     .weixin_senders
                     .get(&request.account_id)
@@ -1137,38 +1142,7 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                             request.account_id
                         ))
                     })?;
-
-                let delivery_target_id = request.resolved_delivery_target_id();
-                let context_token = weixin::get_context_token_for_thread(
-                    &request.account_id,
-                    &delivery_target_id,
-                    request.thread_id.as_deref(),
-                )
-                .await;
-                match sender
-                    .send_text(&delivery_target_id, text, context_token.as_deref())
-                    .await
-                {
-                    Ok(message_ids) => Ok(SendMessageResult { message_ids }),
-                    Err(error) => {
-                        // Queue the failed message for later delivery when a fresh
-                        // context_token arrives via an inbound message.
-                        let error_str = error.to_string();
-                        let is_token_error = error_str.contains("ret=")
-                            || error_str.contains("ret!=0")
-                            || error_str.contains("context_token")
-                            || error_str.contains("send limit");
-                        if is_token_error {
-                            weixin::queue_pending_outbound(
-                                &request.account_id,
-                                &delivery_target_id,
-                                text,
-                            )
-                            .await;
-                        }
-                        Err(error)
-                    }
-                }
+                sender.send_outbound(request).await
             }
             other => {
                 // §9.4 routing order: built-in match exhausted; fall
@@ -1383,6 +1357,25 @@ impl WeixinSender {
         .await?;
         Ok(vec![message_id])
     }
+
+    pub async fn send_image(
+        &self,
+        to_user_id: &str,
+        image_path: &Path,
+        caption: Option<&str>,
+        context_token: Option<&str>,
+    ) -> Result<Vec<String>, ChannelError> {
+        let message_id = crate::weixin::send_image_message_from_path(
+            &self.http,
+            &self.account,
+            to_user_id,
+            image_path,
+            caption,
+            context_token,
+        )
+        .await?;
+        Ok(vec![message_id])
+    }
 }
 
 #[async_trait]
@@ -1391,9 +1384,6 @@ impl OutboundSender for WeixinSender {
         &self,
         request: OutboundMessage,
     ) -> Result<SendMessageResult, ChannelError> {
-        let Some(text) = request.text_content() else {
-            return Ok(SendMessageResult::default());
-        };
         let delivery_target_id = request.resolved_delivery_target_id();
         let context_token = weixin::get_context_token_for_thread(
             &request.account_id,
@@ -1401,28 +1391,45 @@ impl OutboundSender for WeixinSender {
             request.thread_id.as_deref(),
         )
         .await;
-        match self
-            .send_text(&delivery_target_id, text, context_token.as_deref())
-            .await
-        {
-            Ok(message_ids) => Ok(SendMessageResult { message_ids }),
-            Err(error) => {
-                // Queue the failed message for later delivery when a
-                // fresh context_token arrives via an inbound message.
-                // Heuristic: only retry-queue on token-shaped errors;
-                // other failures propagate so the caller's retry
-                // policy can make its own decision.
-                let error_str = error.to_string();
-                let is_token_error = error_str.contains("ret=")
-                    || error_str.contains("ret!=0")
-                    || error_str.contains("context_token")
-                    || error_str.contains("send limit");
-                if is_token_error {
-                    weixin::queue_pending_outbound(&request.account_id, &delivery_target_id, text)
+        if let Some(text) = request.text_content() {
+            match self
+                .send_text(&delivery_target_id, text, context_token.as_deref())
+                .await
+            {
+                Ok(message_ids) => Ok(SendMessageResult { message_ids }),
+                Err(error) => {
+                    // Queue the failed message for later delivery when a
+                    // fresh context_token arrives via an inbound message.
+                    // Heuristic: only retry-queue on token-shaped errors;
+                    // other failures propagate so the caller's retry
+                    // policy can make its own decision.
+                    let error_str = error.to_string();
+                    let is_token_error = error_str.contains("ret=")
+                        || error_str.contains("ret!=0")
+                        || error_str.contains("context_token")
+                        || error_str.contains("send limit");
+                    if is_token_error {
+                        weixin::queue_pending_outbound(
+                            &request.account_id,
+                            &delivery_target_id,
+                            text,
+                        )
                         .await;
+                    }
+                    Err(error)
                 }
-                Err(error)
             }
+        } else if let Some((image_path, _alt)) = request.image_content() {
+            self.send_image(
+                &delivery_target_id,
+                Path::new(image_path),
+                None,
+                context_token.as_deref(),
+            )
+            .await
+            .map(|message_ids| SendMessageResult { message_ids })
+        } else {
+            Ok(SendMessageResult::default())
         }
     }
 }
