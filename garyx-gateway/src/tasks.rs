@@ -821,10 +821,10 @@ fn task_auto_dispatch_message(
         .filter(|value| !value.is_empty());
     match body {
         Some(body) => format!(
-            "Task {task_ref} has been assigned to you and is already in progress.\n\n{body}\n\nWhen ready for review, run `garyx task update {task_ref} --status in_review`; when finished, run `garyx task update {task_ref} --status done`."
+            "Task {task_ref} has been assigned to you and is already in progress.\n\n{body}\n\nWhen your work is ready, stop at review by running `garyx task update {task_ref} --status in_review`. Do not mark it done just because you finished; after a user, reviewer, or task creator explicitly approves it, you may record that approval with `garyx task update {task_ref} --status done --note \"approved by <name>\"`."
         ),
         None => format!(
-            "Task {task_ref} has been assigned to you and is already in progress.\n\nTitle: {title}\n\nWhen ready for review, run `garyx task update {task_ref} --status in_review`; when finished, run `garyx task update {task_ref} --status done`."
+            "Task {task_ref} has been assigned to you and is already in progress.\n\nTitle: {title}\n\nWhen your work is ready, stop at review by running `garyx task update {task_ref} --status in_review`. Do not mark it done just because you finished; after a user, reviewer, or task creator explicitly approves it, you may record that approval with `garyx task update {task_ref} --status done --note \"approved by <name>\"`."
         ),
     }
 }

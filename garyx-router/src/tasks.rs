@@ -1158,6 +1158,118 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assignee_can_mark_done_after_explicit_review_confirmation() {
+        let service = service();
+        let assignee = Principal::Agent {
+            agent_id: "codex".to_owned(),
+        };
+        let (_thread_id, task) = service
+            .create_task(CreateTaskInput {
+                scope: TaskScope::new("garyx", "tasks"),
+                title: Some("Review gate".to_owned()),
+                body: None,
+                assignee: Some(assignee.clone()),
+                start: true,
+                actor: Some(Principal::Human {
+                    user_id: "owner".to_owned(),
+                }),
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let task_ref = canonical_task_ref(&task);
+
+        service
+            .update_status(
+                UpdateTaskStatusInput {
+                    task_ref: task_ref.clone(),
+                    to: TaskStatus::InReview,
+                    note: None,
+                    force: false,
+                    actor: Some(assignee.clone()),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let updated = service
+            .update_status(
+                UpdateTaskStatusInput {
+                    task_ref,
+                    to: TaskStatus::Done,
+                    note: Some("review approved by owner".to_owned()),
+                    force: false,
+                    actor: Some(assignee),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.status, TaskStatus::Done);
+    }
+
+    #[tokio::test]
+    async fn reviewer_can_mark_reviewed_task_done() {
+        let service = service();
+        let assignee = Principal::Agent {
+            agent_id: "codex".to_owned(),
+        };
+        let (_thread_id, task) = service
+            .create_task(CreateTaskInput {
+                scope: TaskScope::new("garyx", "tasks"),
+                title: Some("Review pass".to_owned()),
+                body: None,
+                assignee: Some(assignee.clone()),
+                start: true,
+                actor: Some(Principal::Human {
+                    user_id: "owner".to_owned(),
+                }),
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let task_ref = canonical_task_ref(&task);
+
+        service
+            .update_status(
+                UpdateTaskStatusInput {
+                    task_ref: task_ref.clone(),
+                    to: TaskStatus::InReview,
+                    note: None,
+                    force: false,
+                    actor: Some(assignee),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let updated = service
+            .update_status(
+                UpdateTaskStatusInput {
+                    task_ref,
+                    to: TaskStatus::Done,
+                    note: None,
+                    force: false,
+                    actor: Some(Principal::Human {
+                        user_id: "owner".to_owned(),
+                    }),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.status, TaskStatus::Done);
+    }
+
+    #[tokio::test]
     async fn assign_starts_todo_task() {
         let service = service();
         let (_thread_id, task) = service
