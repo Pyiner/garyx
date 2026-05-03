@@ -376,7 +376,7 @@ fn supported_markdown_image_extension(path: &Path) -> bool {
             .and_then(|value| value.to_str())
             .map(|value| value.to_ascii_lowercase())
             .as_deref(),
-        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp")
     )
 }
 
@@ -970,11 +970,14 @@ mod tests {
     fn skips_missing_relative_and_non_image_markdown_targets() {
         let temp = tempfile::tempdir().expect("temp dir");
         let txt = temp.path().join("notes.txt");
+        let bmp = temp.path().join("legacy.bmp");
         std::fs::write(&txt, b"text").expect("text");
+        std::fs::write(&bmp, b"bmp").expect("bmp");
         let missing = temp.path().join("missing.jpg");
         let text = format!(
-            "![relative](relative.png) ![txt]({}) ![missing]({})",
+            "![relative](relative.png) ![txt]({}) ![bmp]({}) ![missing]({})",
             txt.display(),
+            bmp.display(),
             missing.display(),
         );
 
