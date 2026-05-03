@@ -2524,6 +2524,20 @@ export function AppShell() {
   const isTeamsView = contentView === "teams";
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
+  const conversationClassName = [
+    "conversation",
+    isSettingsView ? "settings-view" : null,
+    isTasksView ? "tasks-view" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const showStaticWindowToolbar =
+    isSettingsView ||
+    isAutomationView ||
+    isAutoResearchView ||
+    isAgentsView ||
+    isTeamsView ||
+    isSkillsView;
   const canEditThreadTitle = Boolean(
     activeThread &&
     !activeAutomationThread &&
@@ -6876,16 +6890,8 @@ export function AppShell() {
           <BrowserPage />
         </main>
       ) : (
-        <main
-          className={`conversation ${isSettingsView ? "settings-view" : ""}`}
-        >
-          {isSettingsView ||
-          isAutomationView ||
-          isAutoResearchView ||
-          isAgentsView ||
-          isTeamsView ||
-          isSkillsView ||
-          isTasksView ? (
+        <main className={conversationClassName}>
+          {isTasksView ? null : showStaticWindowToolbar ? (
             <div aria-hidden="true" className="settings-window-toolbar" />
           ) : (
             <header className="conversation-header">

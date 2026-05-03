@@ -2001,6 +2001,14 @@ code {
   grid-template-rows: minmax(0, 1fr);
 }
 
+.conversation.tasks-view {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.conversation.tasks-view .conversation-body {
+  padding: 0;
+}
+
 .settings-window-toolbar {
   height: var(--inset-toolbar);
   border-bottom: none;
