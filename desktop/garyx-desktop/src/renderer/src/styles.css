@@ -13596,6 +13596,19 @@ button.codex-list-row {
   padding-bottom: 18px;
 }
 
+.tasks-board,
+.tasks-column-stack {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.tasks-board::-webkit-scrollbar,
+.tasks-column-stack::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 .tasks-column {
   display: flex;
   flex-direction: column;
