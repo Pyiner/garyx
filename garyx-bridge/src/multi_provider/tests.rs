@@ -65,6 +65,7 @@ fn custom_agent(
         display_name: display_name.to_owned(),
         provider_type,
         model: model.to_owned(),
+        default_workspace_dir: None,
         system_prompt: system_prompt.to_owned(),
         built_in: false,
         standalone: true,

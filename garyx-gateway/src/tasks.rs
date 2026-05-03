@@ -11,13 +11,16 @@ use garyx_models::local_paths::default_session_data_dir;
 use garyx_models::{Principal, TaskScope, TaskStatus, ThreadTask};
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
-    TaskService, TaskServiceError, UpdateTaskStatusInput,
+    TaskService, TaskServiceError, UpdateTaskStatusInput, update_thread_record,
+    workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::agent_identity::resolve_agent_reference_from_stores;
+use crate::agent_identity::{
+    default_workspace_dir_from_agent_reference, resolve_agent_reference_from_stores,
+};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
 
@@ -165,6 +168,11 @@ pub async fn create_task(
     if let Err(error) = validate_task_assignee_agent(&state, body.assignee.as_ref()).await {
         return task_error_response(error);
     }
+    let runtime =
+        match task_runtime_with_default_workspace(&state, runtime, body.assignee.as_ref()).await {
+            Ok(runtime) => runtime,
+            Err(error) => return task_error_response(error),
+        };
     let scope = body.scope.unwrap_or_else(default_task_scope);
     let title_for_dispatch = body.title.clone();
     let body_for_dispatch = body.body.clone();
@@ -245,6 +253,16 @@ pub async fn create_tasks_batch(
         if let Err(error) = validate_task_assignee_agent(&state, item.assignee.as_ref()).await {
             return task_error_response(error);
         }
+        let runtime = match task_runtime_with_default_workspace(
+            &state,
+            runtime,
+            item.assignee.as_ref(),
+        )
+        .await
+        {
+            Ok(runtime) => runtime,
+            Err(error) => return task_error_response(error),
+        };
         match service
             .create_task(CreateTaskInput {
                 scope: scope.clone(),
@@ -314,6 +332,15 @@ pub async fn promote_task(
         .await
     {
         Ok(task) => {
+            if let Err(error) = ensure_thread_workspace_from_assignee_default(
+                &state,
+                &thread_id,
+                task.assignee.as_ref(),
+            )
+            .await
+            {
+                return task_error_response(error);
+            }
             let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
             let mut payload = json!({
                 "task_ref": garyx_router::tasks::canonical_task_ref(&task),
@@ -423,9 +450,19 @@ pub async fn assign_task(
     let self_claim = actor.as_ref() == Some(&assignee);
     match service.assign_task(&task_ref, assignee, actor, None).await {
         Ok(task) => {
+            let assignee_for_workspace = task.assignee.clone();
             let mut payload = json!({ "task": task });
-            if !self_claim {
-                if let Ok((thread_id, _, _)) = service.get_task(&task_ref, None).await {
+            if let Ok((thread_id, _, _)) = service.get_task(&task_ref, None).await {
+                if let Err(error) = ensure_thread_workspace_from_assignee_default(
+                    &state,
+                    &thread_id,
+                    assignee_for_workspace.as_ref(),
+                )
+                .await
+                {
+                    return task_error_response(error);
+                }
+                if !self_claim {
                     if let Some(dispatch) = spawn_task_auto_dispatch(
                         state.clone(),
                         thread_id,
@@ -617,6 +654,100 @@ fn task_runtime_input(
     (input.agent_id.is_some() || input.workspace_dir.is_some()).then_some(input)
 }
 
+fn task_runtime_has_workspace(runtime: &Option<TaskRuntimeInput>) -> bool {
+    runtime
+        .as_ref()
+        .and_then(|runtime| runtime.workspace_dir.as_deref())
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn task_agent_id_for_default_workspace(
+    runtime: &Option<TaskRuntimeInput>,
+    assignee: Option<&Principal>,
+) -> Option<String> {
+    match assignee {
+        Some(Principal::Agent { agent_id }) => normalized_nonempty(Some(agent_id.clone())),
+        _ => None,
+    }
+    .or_else(|| {
+        runtime
+            .as_ref()
+            .and_then(|runtime| normalized_nonempty(runtime.agent_id.clone()))
+    })
+}
+
+async fn default_workspace_dir_for_agent(
+    state: &Arc<AppState>,
+    agent_id: &str,
+) -> Result<Option<String>, TaskServiceError> {
+    resolve_agent_reference_from_stores(
+        state.ops.custom_agents.as_ref(),
+        state.ops.agent_teams.as_ref(),
+        agent_id,
+    )
+    .await
+    .map(|reference| default_workspace_dir_from_agent_reference(&reference))
+    .map_err(TaskServiceError::UnknownAgent)
+}
+
+async fn task_runtime_with_default_workspace(
+    state: &Arc<AppState>,
+    runtime: Option<TaskRuntimeInput>,
+    assignee: Option<&Principal>,
+) -> Result<Option<TaskRuntimeInput>, TaskServiceError> {
+    if task_runtime_has_workspace(&runtime) {
+        return Ok(runtime);
+    }
+    let Some(agent_id) = task_agent_id_for_default_workspace(&runtime, assignee) else {
+        return Ok(runtime);
+    };
+    let Some(default_workspace_dir) = default_workspace_dir_for_agent(state, &agent_id).await?
+    else {
+        return Ok(runtime);
+    };
+    let mut input = runtime.unwrap_or(TaskRuntimeInput {
+        agent_id: None,
+        workspace_dir: None,
+    });
+    input.workspace_dir = Some(default_workspace_dir);
+    Ok(Some(input))
+}
+
+async fn ensure_thread_workspace_from_assignee_default(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    assignee: Option<&Principal>,
+) -> Result<(), TaskServiceError> {
+    let Some(Principal::Agent { agent_id }) = assignee else {
+        return Ok(());
+    };
+    let Some(existing) = state.threads.thread_store.get(thread_id).await else {
+        return Ok(());
+    };
+    if workspace_dir_from_value(&existing).is_some() {
+        return Ok(());
+    }
+    let Some(default_workspace_dir) = default_workspace_dir_for_agent(state, agent_id).await?
+    else {
+        return Ok(());
+    };
+    let updated = update_thread_record(
+        &state.threads.thread_store,
+        thread_id,
+        None,
+        Some(default_workspace_dir),
+    )
+    .await
+    .map_err(TaskServiceError::Store)?;
+    state
+        .integration
+        .bridge
+        .set_thread_workspace_binding(thread_id, workspace_dir_from_value(&updated))
+        .await;
+    Ok(())
+}
+
 fn spawn_task_auto_dispatch(
     state: Arc<AppState>,
     thread_id: String,
@@ -789,4 +920,93 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
         status,
         Json(json!({ "error": error.to_string(), "code": code })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_teams::AgentTeamStore;
+    use crate::custom_agents::CustomAgentStore;
+    use crate::server::AppStateBuilder;
+    use garyx_models::ProviderType;
+    use garyx_models::config::GaryxConfig;
+
+    async fn state_with_agent_default_workspace() -> Arc<AppState> {
+        let custom_agents = Arc::new(CustomAgentStore::new());
+        custom_agents
+            .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+                agent_id: "reviewer".to_owned(),
+                display_name: "Reviewer".to_owned(),
+                provider_type: ProviderType::CodexAppServer,
+                model: "gpt-5".to_owned(),
+                default_workspace_dir: Some("/tmp/agent-task-default".to_owned()),
+                system_prompt: "Review carefully.".to_owned(),
+            })
+            .await
+            .expect("custom agent");
+        AppStateBuilder::new(GaryxConfig::default())
+            .with_custom_agent_store(custom_agents)
+            .with_agent_team_store(Arc::new(AgentTeamStore::new()))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn task_runtime_uses_assignee_default_workspace_when_unset() {
+        let state = state_with_agent_default_workspace().await;
+        let runtime = task_runtime_with_default_workspace(
+            &state,
+            None,
+            Some(&Principal::Agent {
+                agent_id: "reviewer".to_owned(),
+            }),
+        )
+        .await
+        .expect("runtime");
+
+        assert_eq!(
+            runtime.and_then(|runtime| runtime.workspace_dir).as_deref(),
+            Some("/tmp/agent-task-default")
+        );
+    }
+
+    #[tokio::test]
+    async fn task_runtime_explicit_workspace_overrides_agent_default() {
+        let state = state_with_agent_default_workspace().await;
+        let runtime = task_runtime_with_default_workspace(
+            &state,
+            Some(TaskRuntimeInput {
+                agent_id: Some("reviewer".to_owned()),
+                workspace_dir: Some("/tmp/task-explicit".to_owned()),
+            }),
+            Some(&Principal::Agent {
+                agent_id: "reviewer".to_owned(),
+            }),
+        )
+        .await
+        .expect("runtime");
+
+        assert_eq!(
+            runtime.and_then(|runtime| runtime.workspace_dir).as_deref(),
+            Some("/tmp/task-explicit")
+        );
+    }
+
+    #[tokio::test]
+    async fn task_runtime_without_agent_default_keeps_workspace_unset() {
+        let state = AppStateBuilder::new(GaryxConfig::default())
+            .with_custom_agent_store(Arc::new(CustomAgentStore::new()))
+            .with_agent_team_store(Arc::new(AgentTeamStore::new()))
+            .build();
+        let runtime = task_runtime_with_default_workspace(
+            &state,
+            None,
+            Some(&Principal::Agent {
+                agent_id: "claude".to_owned(),
+            }),
+        )
+        .await
+        .expect("runtime");
+
+        assert!(runtime.is_none());
+    }
 }

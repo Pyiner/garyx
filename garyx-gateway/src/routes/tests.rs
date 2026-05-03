@@ -56,6 +56,7 @@ struct RecordedProviderRun {
     thread_id: String,
     message: String,
     metadata: HashMap<String, Value>,
+    workspace_dir: Option<String>,
 }
 
 struct RecordingTaskProvider {
@@ -260,6 +261,7 @@ impl AgentLoopProvider for RecordingTaskProvider {
             thread_id: options.thread_id.clone(),
             message: options.message.clone(),
             metadata: options.metadata.clone(),
+            workspace_dir: options.workspace_dir.clone(),
         });
         on_chunk(StreamEvent::Delta {
             text: "task recorded".to_owned(),
@@ -1846,6 +1848,18 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
     let mut config = test_config();
     config.tasks.enabled = true;
     config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+            agent_id: "workspace-reviewer".to_owned(),
+            display_name: "Workspace Reviewer".to_owned(),
+            provider_type: ProviderType::CodexAppServer,
+            model: "gpt-5".to_owned(),
+            default_workspace_dir: Some("/tmp/agent-route-default".to_owned()),
+            system_prompt: "Review the assigned task.".to_owned(),
+        })
+        .await
+        .expect("custom agent");
 
     let provider = Arc::new(RecordingTaskProvider::new());
     let bridge = Arc::new(MultiProviderBridge::new());
@@ -1863,8 +1877,12 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
         .await;
 
     let state = AppStateBuilder::new(config)
+        .with_custom_agent_store(custom_agents.clone())
         .with_bridge(bridge.clone())
         .build();
+    bridge
+        .replace_agent_profiles(custom_agents.list_agents().await)
+        .await;
     bridge.set_event_tx(state.ops.events.sender()).await;
     bridge
         .set_thread_store(state.threads.thread_store.clone())
@@ -1879,7 +1897,7 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
             serde_json::to_vec(&json!({
                 "title": "Auto dispatch task",
                 "body": "Move this task to review and then done.",
-                "assignee": {"kind": "agent", "agent_id": "codex"}
+                "assignee": {"kind": "agent", "agent_id": "workspace-reviewer"}
             }))
             .unwrap(),
         ))
@@ -1907,4 +1925,8 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
     assert!(runs[0].message.contains(task_ref));
     assert!(runs[0].message.contains("Move this task to review"));
     assert_eq!(runs[0].metadata["task_auto_start"], true);
+    assert_eq!(
+        runs[0].workspace_dir.as_deref(),
+        Some("/tmp/agent-route-default")
+    );
 }

@@ -31,6 +31,7 @@ type AgentDraft = {
   displayName: string;
   providerType: ProviderType;
   model: string;
+  defaultWorkspaceDir: string;
   systemPrompt: string;
 };
 
@@ -42,6 +43,7 @@ function emptyDraft(): AgentDraft {
     displayName: '',
     providerType: 'claude_code',
     model: '',
+    defaultWorkspaceDir: '',
     systemPrompt: '',
   };
 }
@@ -197,6 +199,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
       displayName: agent.displayName,
       providerType: agent.providerType,
       model: agent.model,
+      defaultWorkspaceDir: agent.defaultWorkspaceDir,
       systemPrompt: agent.systemPrompt,
     });
     setDraftIdTouched(true);
@@ -228,6 +231,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
         displayName: draft.displayName.trim(),
         providerType: draft.providerType,
         model: supportsModelSelection ? draft.model.trim() : '',
+        defaultWorkspaceDir: draft.defaultWorkspaceDir.trim(),
         systemPrompt: draft.systemPrompt.trim(),
       };
       let saved: DesktopCustomAgent;
@@ -400,6 +404,22 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 </div>
               ) : null}
               <div className="codex-form-field">
+                <Label className="codex-form-label" htmlFor="agent-default-workspace">
+                  {t('Default workspace directory')}
+                </Label>
+                <Input
+                  id="agent-default-workspace"
+                  onChange={(event) => {
+                    setDraft((current) => ({ ...current, defaultWorkspaceDir: event.target.value }));
+                  }}
+                  placeholder={t('/path/to/project')}
+                  value={draft.defaultWorkspaceDir}
+                />
+                <span className="codex-form-hint">
+                  {t('Used when a new bot or task thread has no explicit workspace.')}
+                </span>
+              </div>
+              <div className="codex-form-field">
                 <Label className="codex-form-label" htmlFor="agent-system-prompt">{t('System Prompt')}</Label>
                 <Textarea
                   className="min-h-[260px]"
@@ -475,6 +495,12 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                   <span className="codex-command-row-desc">{selectedAgent.model || t('(provider default)')}</span>
                 </div>
               ) : null}
+              <div className="codex-list-row">
+                <span className="codex-list-row-name">{t('Default workspace directory')}</span>
+                <span className="codex-command-row-desc">
+                  {selectedAgent.defaultWorkspaceDir.trim() || t('(not set)')}
+                </span>
+              </div>
               <div style={{ padding: '12px 16px' }}>
                 <div className="codex-list-row-name" style={{ marginBottom: 8 }}>{t('System Prompt')}</div>
                 <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.6, color: 'var(--color-token-text-secondary)', fontFamily: 'var(--font-mono)' }}>

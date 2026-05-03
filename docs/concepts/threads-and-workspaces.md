@@ -30,7 +30,9 @@ When a message arrives on a channel, Garyx looks up the right thread by:
    chat id. If a thread is already bound to that endpoint, the message is
    routed there.
 2. **Account default** — otherwise a fresh thread is created and bound,
-   inheriting `agent_id` and `workspace_dir` from the channel account.
+   inheriting `agent_id` from the channel account and resolving
+   `workspace_dir` from the channel account first, then the selected Agent's
+   `default_workspace_dir`, then the provider's normal home/root fallback.
 
 The same thread can be bound to multiple endpoints. The Garyx desktop app
 reuses one thread across DMs and group mentions when you want continuity;
@@ -53,7 +55,10 @@ Create a new thread when you want to work from a different directory.
 A few ways `workspace_dir` gets set:
 
 - on the channel **account** (every new thread for that account inherits it)
+- on the **Agent** as `default_workspace_dir` (used only when the new
+  bot/task thread has no explicit or account workspace)
 - explicitly when calling [`garyx thread create`](/reference/cli#thread)
+- explicitly when calling [`garyx task create --workspace-dir <path>`](/reference/cli#tasks)
 - via the desktop app when you pick a folder in the thread sidebar
 
 ::: info

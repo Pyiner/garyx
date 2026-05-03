@@ -379,6 +379,13 @@ pub struct CustomAgentUpsertPayload {
     pub provider_type: garyx_models::ProviderType,
     #[serde(default)]
     pub model: String,
+    #[serde(
+        default,
+        alias = "defaultWorkspaceDir",
+        alias = "workspace_dir",
+        alias = "workspaceDir"
+    )]
+    pub default_workspace_dir: Option<String>,
     pub system_prompt: String,
 }
 
@@ -2373,6 +2380,7 @@ pub async fn create_custom_agent(
             display_name: payload.display_name,
             provider_type: payload.provider_type,
             model: payload.model,
+            default_workspace_dir: payload.default_workspace_dir,
             system_prompt: payload.system_prompt,
         })
         .await
@@ -2416,6 +2424,7 @@ pub async fn update_custom_agent(
             display_name: payload.display_name,
             provider_type: payload.provider_type,
             model: payload.model,
+            default_workspace_dir: payload.default_workspace_dir,
             system_prompt: payload.system_prompt,
         })
         .await

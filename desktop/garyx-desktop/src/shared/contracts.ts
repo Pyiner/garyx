@@ -229,6 +229,7 @@ export interface DesktopCustomAgent {
   displayName: string;
   providerType: DesktopApiProviderType;
   model: string;
+  defaultWorkspaceDir: string;
   systemPrompt: string;
   builtIn: boolean;
   standalone: boolean;
@@ -251,6 +252,7 @@ export interface CreateCustomAgentInput {
   displayName: string;
   providerType: DesktopApiProviderType;
   model: string;
+  defaultWorkspaceDir: string;
   systemPrompt: string;
 }
 

@@ -796,6 +796,9 @@ pub(crate) enum AgentAction {
         /// Optional model override. Omit to use the provider default.
         #[arg(long)]
         model: Option<String>,
+        /// Optional default workspace directory for new task/bot threads using this agent.
+        #[arg(long)]
+        default_workspace_dir: Option<String>,
         /// System prompt
         #[arg(long)]
         system_prompt: String,
@@ -817,6 +820,9 @@ pub(crate) enum AgentAction {
         /// Optional model override. Omit to use the provider default.
         #[arg(long)]
         model: Option<String>,
+        /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
+        #[arg(long)]
+        default_workspace_dir: Option<String>,
         /// System prompt
         #[arg(long)]
         system_prompt: String,
@@ -838,6 +844,9 @@ pub(crate) enum AgentAction {
         /// Optional model override. Omit to use the provider default.
         #[arg(long)]
         model: Option<String>,
+        /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
+        #[arg(long)]
+        default_workspace_dir: Option<String>,
         /// System prompt
         #[arg(long)]
         system_prompt: String,

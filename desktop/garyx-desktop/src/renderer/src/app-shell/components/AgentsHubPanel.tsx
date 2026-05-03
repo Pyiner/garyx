@@ -62,6 +62,7 @@ type AgentDraft = {
   displayName: string;
   providerType: ProviderType;
   model: string;
+  defaultWorkspaceDir: string;
   systemPrompt: string;
 };
 
@@ -88,6 +89,7 @@ function emptyAgentDraft(): AgentDraft {
     displayName: '',
     providerType: 'claude_code',
     model: '',
+    defaultWorkspaceDir: '',
     systemPrompt: '',
   };
 }
@@ -410,6 +412,7 @@ export function AgentsHubPanel({
       displayName: agent.displayName,
       providerType: agent.providerType,
       model: agent.model,
+      defaultWorkspaceDir: agent.defaultWorkspaceDir,
       systemPrompt: agent.systemPrompt,
     });
     setAgentIdTouched(true);
@@ -427,6 +430,7 @@ export function AgentsHubPanel({
       displayName: agent.displayName,
       providerType: agent.providerType,
       model: agent.model,
+      defaultWorkspaceDir: agent.defaultWorkspaceDir,
       systemPrompt: agent.systemPrompt,
     });
     setAgentIdTouched(true);
@@ -521,6 +525,7 @@ export function AgentsHubPanel({
         displayName: agentDraft.displayName.trim(),
         providerType: agentDraft.providerType,
         model: agentSupportsModelSelection ? agentDraft.model.trim() : '',
+        defaultWorkspaceDir: agentDraft.defaultWorkspaceDir.trim(),
         systemPrompt: agentDraft.systemPrompt.trim(),
       };
 
@@ -957,6 +962,23 @@ export function AgentsHubPanel({
               ) : null}
 
               <div className="codex-form-field">
+                <Label className="codex-form-label" htmlFor="agent-dialog-default-workspace">
+                  {t('Default workspace directory')}
+                </Label>
+                <Input
+                  id="agent-dialog-default-workspace"
+                  onChange={(event) => {
+                    setAgentDraft((current) => ({ ...current, defaultWorkspaceDir: event.target.value }));
+                  }}
+                  placeholder={t('/path/to/project')}
+                  value={agentDraft.defaultWorkspaceDir}
+                />
+                <span className="codex-form-hint">
+                  {t('Used when a new bot or task thread has no explicit workspace.')}
+                </span>
+              </div>
+
+              <div className="codex-form-field">
                 <Label className="codex-form-label" htmlFor="agent-dialog-prompt">{t('System Prompt')}</Label>
                 <Textarea
                   className="agents-hub-system-prompt"
@@ -1001,7 +1023,17 @@ export function AgentsHubPanel({
                 {selectedAgent && (selectedAgent.providerType === 'gemini_cli' || selectedAgent.model.trim()) ? (
                   <p>{selectedAgent.model || t('(provider default)')}</p>
                 ) : null}
+                {selectedAgent?.defaultWorkspaceDir.trim() ? (
+                  <p>{selectedAgent.defaultWorkspaceDir.trim()}</p>
+                ) : null}
               </div>
+              </div>
+
+              <div className="agents-hub-detail-block">
+                <div className="agents-hub-detail-label">{t('Default workspace directory')}</div>
+                <div className="agents-hub-detail-body mono">
+                  {selectedAgent?.defaultWorkspaceDir.trim() || t('(not set)')}
+                </div>
               </div>
 
               <div className="agents-hub-detail-block">

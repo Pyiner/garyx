@@ -86,7 +86,7 @@ Common flags on `channels add`:
 | Command | Use it for |
 | --- | --- |
 | `garyx task list --scope <channel/account>` | List tasks in a channel/account scope. |
-| `garyx task create [--scope <channel/account>] [--title <title>] [--body <body>] [--assignee <principal>] [--workspace-dir <path>] [--start]` | Create a task thread. A bare assignee value is treated as an agent id, and assigned tasks start automatically. |
+| `garyx task create [--scope <channel/account>] [--title <title>] [--body <body>] [--assignee <principal>] [--workspace-dir <path>] [--start]` | Create a task thread. A bare assignee value is treated as an agent id, assigned tasks start automatically, and `--workspace-dir` overrides the assignee Agent's default workspace. |
 | `garyx task get <task_ref>` | Fetch one task. |
 | `garyx task promote <thread_id>` | Promote an existing thread into a task. |
 | `garyx task update <task_ref> --status <status> [--note <note>]` | Move a task through its lifecycle. |
@@ -97,7 +97,7 @@ Common flags on `channels add`:
 
 | Command | Use it for |
 | --- | --- |
-| `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. |
+| `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. `create/update/upsert` accept `--default-workspace-dir <path>` for the Agent fallback used by new bot/task threads. |
 | `garyx team list / get / create / update / delete` | CRUD on agent teams. |
 | `garyx shortcuts list / get / set / delete` | Manage prompt shortcuts (a.k.a. commands). |
 

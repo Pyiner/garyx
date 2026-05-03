@@ -631,6 +631,10 @@ interface CustomAgentPayload {
   provider_type?: string;
   providerType?: string;
   model?: string | null;
+  default_workspace_dir?: string | null;
+  defaultWorkspaceDir?: string | null;
+  workspace_dir?: string | null;
+  workspaceDir?: string | null;
   system_prompt?: string | null;
   systemPrompt?: string | null;
   built_in?: boolean;
@@ -2065,6 +2069,12 @@ function mapCustomAgent(value: CustomAgentPayload): DesktopCustomAgent {
     displayName: value.display_name || value.displayName || "",
     providerType: provider,
     model: value.model || "",
+    defaultWorkspaceDir:
+      value.default_workspace_dir ??
+      value.defaultWorkspaceDir ??
+      value.workspace_dir ??
+      value.workspaceDir ??
+      "",
     systemPrompt: value.system_prompt || value.systemPrompt || "",
     builtIn: value.built_in === true || value.builtIn === true,
     standalone: value.standalone !== false,
@@ -3160,6 +3170,7 @@ export async function createCustomAgent(
         display_name: input.displayName,
         provider_type: input.providerType,
         model: input.model,
+        default_workspace_dir: input.defaultWorkspaceDir,
         system_prompt: input.systemPrompt,
       }),
     },
@@ -3183,6 +3194,7 @@ export async function updateCustomAgent(
         display_name: input.displayName,
         provider_type: input.providerType,
         model: input.model,
+        default_workspace_dir: input.defaultWorkspaceDir,
         system_prompt: input.systemPrompt,
       }),
     },

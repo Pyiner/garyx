@@ -6,6 +6,7 @@ fn standalone_agent(agent_id: &str, provider_type: ProviderType) -> CustomAgentP
         display_name: agent_id.to_owned(),
         provider_type,
         model: String::new(),
+        default_workspace_dir: None,
         system_prompt: String::new(),
         built_in: false,
         standalone: true,

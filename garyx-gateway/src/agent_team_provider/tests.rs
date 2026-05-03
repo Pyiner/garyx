@@ -22,6 +22,7 @@ async fn test_dispatcher() -> GatewaySubAgentDispatcher {
             display_name: "Planner".to_owned(),
             provider_type: ProviderType::ClaudeCode,
             model: String::new(),
+            default_workspace_dir: None,
             system_prompt: "Plan work.".to_owned(),
         })
         .await
@@ -32,6 +33,7 @@ async fn test_dispatcher() -> GatewaySubAgentDispatcher {
             display_name: "Reviewer".to_owned(),
             provider_type: ProviderType::ClaudeCode,
             model: String::new(),
+            default_workspace_dir: None,
             system_prompt: "Review work.".to_owned(),
         })
         .await

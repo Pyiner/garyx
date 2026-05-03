@@ -129,6 +129,7 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
             display_name: "Spec Review".to_owned(),
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5-codex".to_owned(),
+            default_workspace_dir: None,
             system_prompt: "Review specs carefully.".to_owned(),
         })
         .await

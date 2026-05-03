@@ -2550,19 +2550,24 @@ fn build_agent_mutation_body(
     display_name: String,
     provider: String,
     model: Option<String>,
+    default_workspace_dir: Option<String>,
     system_prompt: String,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let agent_id = agent_id.trim().to_owned();
     if agent_id.is_empty() {
         return Err("agent_id cannot be empty".into());
     }
-    Ok(json!({
+    let mut body = json!({
         "agent_id": agent_id,
         "display_name": display_name.trim(),
         "provider_type": provider.trim(),
         "model": model.as_deref().map(str::trim).unwrap_or(""),
         "system_prompt": system_prompt,
-    }))
+    });
+    if let Some(default_workspace_dir) = default_workspace_dir {
+        body["default_workspace_dir"] = Value::String(default_workspace_dir.trim().to_owned());
+    }
+    Ok(body)
 }
 
 pub(crate) async fn cmd_agent_create(
@@ -2571,11 +2576,19 @@ pub(crate) async fn cmd_agent_create(
     display_name: String,
     provider: String,
     model: Option<String>,
+    default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
-    let body = build_agent_mutation_body(agent_id, display_name, provider, model, system_prompt)?;
+    let body = build_agent_mutation_body(
+        agent_id,
+        display_name,
+        provider,
+        model,
+        default_workspace_dir,
+        system_prompt,
+    )?;
     let payload = post_gateway_json(&gateway, "/api/custom-agents", &body).await?;
     if json {
         return print_pretty_json(&payload);
@@ -2590,6 +2603,7 @@ pub(crate) async fn cmd_agent_update(
     display_name: String,
     provider: String,
     model: Option<String>,
+    default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -2599,6 +2613,7 @@ pub(crate) async fn cmd_agent_update(
         display_name,
         provider,
         model,
+        default_workspace_dir,
         system_prompt,
     )?;
     let url = format!(
@@ -2619,6 +2634,7 @@ pub(crate) async fn cmd_agent_upsert(
     display_name: String,
     provider: String,
     model: Option<String>,
+    default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -2628,6 +2644,7 @@ pub(crate) async fn cmd_agent_upsert(
         display_name,
         provider,
         model,
+        default_workspace_dir,
         system_prompt,
     )?;
     let url = format!(
@@ -2681,6 +2698,11 @@ fn print_agent_summary(a: &Value) {
     println!("Provider: {provider}");
     if !model.is_empty() {
         println!("Model: {model}");
+    }
+    if let Some(default_workspace_dir) = a["default_workspace_dir"].as_str() {
+        if !default_workspace_dir.trim().is_empty() {
+            println!("Default workspace: {}", default_workspace_dir.trim());
+        }
     }
     if let Some(prompt) = a["system_prompt"].as_str() {
         let preview: String = prompt.chars().take(120).collect();

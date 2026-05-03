@@ -15,12 +15,14 @@ fn custom_agent_profile_defaults_standalone_to_true() {
     let profile: CustomAgentProfile = serde_json::from_value(legacy).expect("legacy profile");
     assert!(profile.standalone);
     assert_eq!(profile.model, "claude-opus-4-1");
+    assert!(profile.default_workspace_dir.is_none());
 
     let explicit = serde_json::json!({
         "agent_id": "team-member",
         "display_name": "Team Member",
         "provider_type": "claude_code",
         "model": "",
+        "default_workspace_dir": "/tmp/team-member",
         "system_prompt": "",
         "built_in": true,
         "standalone": false,
@@ -30,4 +32,8 @@ fn custom_agent_profile_defaults_standalone_to_true() {
     let profile: CustomAgentProfile =
         serde_json::from_value(explicit).expect("explicit standalone profile");
     assert!(!profile.standalone);
+    assert_eq!(
+        profile.default_workspace_dir.as_deref(),
+        Some("/tmp/team-member")
+    );
 }

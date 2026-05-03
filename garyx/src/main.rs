@@ -615,6 +615,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 display_name,
                 provider,
                 model,
+                default_workspace_dir,
                 system_prompt,
                 json,
             } => {
@@ -624,6 +625,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     display_name,
                     provider,
                     model,
+                    default_workspace_dir,
                     system_prompt,
                     json,
                 )
@@ -634,6 +636,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 display_name,
                 provider,
                 model,
+                default_workspace_dir,
                 system_prompt,
                 json,
             } => {
@@ -643,6 +646,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     display_name,
                     provider,
                     model,
+                    default_workspace_dir,
                     system_prompt,
                     json,
                 )
@@ -653,6 +657,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 display_name,
                 provider,
                 model,
+                default_workspace_dir,
                 system_prompt,
                 json,
             } => {
@@ -662,6 +667,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     display_name,
                     provider,
                     model,
+                    default_workspace_dir,
                     system_prompt,
                     json,
                 )

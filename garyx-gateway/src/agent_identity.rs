@@ -35,6 +35,20 @@ pub(crate) async fn resolve_agent_reference_from_stores(
     resolve_agent_reference(requested_id, &agents, &teams)
 }
 
+pub(crate) fn default_workspace_dir_from_agent_reference(
+    reference: &AgentReference,
+) -> Option<String> {
+    match reference {
+        AgentReference::Standalone { profile, .. } => profile
+            .default_workspace_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        AgentReference::Team { .. } => None,
+    }
+}
+
 fn set_thread_metadata_fields(value: &mut Value, entries: &[(&str, Value)]) {
     let Some(object) = value.as_object_mut() else {
         return;
@@ -62,6 +76,15 @@ pub(crate) async fn create_thread_for_agent_reference(
     let mut canonical_options = options;
     canonical_options.agent_id = Some(resolved.bound_agent_id().to_owned());
     canonical_options.provider_type = Some(resolved.provider_type());
+    if canonical_options
+        .workspace_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        canonical_options.workspace_dir = default_workspace_dir_from_agent_reference(&resolved);
+    }
 
     let (thread_id, mut data) = create_thread_record(&thread_store, canonical_options).await?;
     set_thread_metadata_fields(
@@ -117,5 +140,79 @@ impl ThreadCreator for GatewayThreadCreator {
         )
         .await?;
         Ok((thread_id, data))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use garyx_bridge::MultiProviderBridge;
+    use garyx_models::ProviderType;
+    use garyx_router::{InMemoryThreadStore, ThreadEnsureOptions, ThreadStore};
+
+    async fn custom_agent_store_with_default_workspace() -> Arc<CustomAgentStore> {
+        let store = Arc::new(CustomAgentStore::new());
+        store
+            .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+                agent_id: "reviewer".to_owned(),
+                display_name: "Reviewer".to_owned(),
+                provider_type: ProviderType::CodexAppServer,
+                model: "gpt-5".to_owned(),
+                default_workspace_dir: Some("/tmp/agent-default".to_owned()),
+                system_prompt: "Review carefully.".to_owned(),
+            })
+            .await
+            .expect("custom agent");
+        store
+    }
+
+    #[tokio::test]
+    async fn create_thread_uses_agent_default_workspace_when_unset() {
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let custom_agents = custom_agent_store_with_default_workspace().await;
+        let agent_teams = Arc::new(AgentTeamStore::new());
+        let (thread_id, data, _) = create_thread_for_agent_reference(
+            thread_store,
+            Arc::new(MultiProviderBridge::new()),
+            custom_agents,
+            agent_teams,
+            ThreadEnsureOptions {
+                agent_id: Some("reviewer".to_owned()),
+                ..ThreadEnsureOptions::default()
+            },
+        )
+        .await
+        .expect("thread created");
+
+        assert!(thread_id.starts_with("thread::"));
+        assert_eq!(
+            workspace_dir_from_value(&data).as_deref(),
+            Some("/tmp/agent-default")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_thread_explicit_workspace_overrides_agent_default() {
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let custom_agents = custom_agent_store_with_default_workspace().await;
+        let agent_teams = Arc::new(AgentTeamStore::new());
+        let (_, data, _) = create_thread_for_agent_reference(
+            thread_store,
+            Arc::new(MultiProviderBridge::new()),
+            custom_agents,
+            agent_teams,
+            ThreadEnsureOptions {
+                agent_id: Some("reviewer".to_owned()),
+                workspace_dir: Some("/tmp/bot-workspace".to_owned()),
+                ..ThreadEnsureOptions::default()
+            },
+        )
+        .await
+        .expect("thread created");
+
+        assert_eq!(
+            workspace_dir_from_value(&data).as_deref(),
+            Some("/tmp/bot-workspace")
+        );
     }
 }

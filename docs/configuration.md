@@ -91,7 +91,7 @@ Common account fields:
 | `enabled` | Whether the account should run. |
 | `name` | Optional display name in the desktop app. |
 | `agent_id` | Agent or team used for new inbound threads. |
-| `workspace_dir` | Default execution directory path for new threads from this account. |
+| `workspace_dir` | Default execution directory path for new threads from this account. Takes priority over the selected Agent's `default_workspace_dir`. |
 | `config` | Channel-specific fields declared by the built-in channel or plugin. |
 
 The desktop Add Bot flow validates account connectivity through the gateway
@@ -314,6 +314,13 @@ Use a built-in provider agent:
 Use a custom agent or an agent team by setting the same `agent_id` used in your
 Garyx agent/team configuration. The CLI account setup flow can also prompt for
 an agent when `--agent-id` is omitted.
+
+Custom agents can also store an optional `default_workspace_dir`. It is a path
+string, not a Workspace entity. New bot/channel threads use
+`account.workspace_dir` first, then the Agent default, then the provider's
+home/root fallback. Direct task creation uses explicit
+`garyx task create --workspace-dir` first, then the assignee Agent default,
+then the same fallback.
 
 Custom agent model selection is provider-specific. Claude and Codex use their
 provider defaults in the desktop app. Gemini only shows a model picker when the

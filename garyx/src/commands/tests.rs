@@ -685,6 +685,7 @@ async fn cmd_agent_create_posts_model_payload() {
         "Spec Review".to_owned(),
         "codex_app_server".to_owned(),
         Some("gpt-5".to_owned()),
+        Some("/tmp/spec-review".to_owned()),
         "Review specs carefully.".to_owned(),
         false,
     )
@@ -699,6 +700,7 @@ async fn cmd_agent_create_posts_model_payload() {
     assert_eq!(records[0].path, "/api/custom-agents");
     assert_eq!(records[0].body["agent_id"], "spec-review");
     assert_eq!(records[0].body["model"], "gpt-5");
+    assert_eq!(records[0].body["default_workspace_dir"], "/tmp/spec-review");
 }
 
 #[tokio::test]
@@ -713,6 +715,7 @@ async fn cmd_agent_update_puts_empty_model_when_omitted() {
         "spec-review".to_owned(),
         "Spec Review".to_owned(),
         "codex_app_server".to_owned(),
+        None,
         None,
         "Review specs carefully.".to_owned(),
         false,
@@ -743,6 +746,7 @@ async fn cmd_agent_upsert_falls_back_to_post_after_put_failure() {
         "Spec Review".to_owned(),
         "gemini_cli".to_owned(),
         Some("gemini-3.1-pro-preview".to_owned()),
+        None,
         "Review specs carefully.".to_owned(),
         false,
     )
