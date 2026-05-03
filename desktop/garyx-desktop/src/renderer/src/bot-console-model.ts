@@ -203,6 +203,12 @@ export function primaryBotEndpoint(
     || null;
 }
 
+export function botRootBoundThreadId(
+  group: DesktopBotConsoleSummary,
+): string | null {
+  return group.mainThreadId || group.mainEndpoint?.threadId || null;
+}
+
 export function buildBotGroups(
   endpoints: DesktopChannelEndpoint[],
   configuredBots: ConfiguredBot[] = [],

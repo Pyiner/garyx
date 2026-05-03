@@ -1,6 +1,6 @@
 import type { DesktopBotConsoleSummary } from '@shared/contracts';
 
-import { channelDisplayName, primaryBotEndpoint } from './bot-console-model';
+import { botRootBoundThreadId, channelDisplayName } from './bot-console-model';
 import { useI18n, type Translate } from './i18n';
 import {
   UIButton,
@@ -102,8 +102,7 @@ export function BotConsoleView({
       {groups.length ? (
         <div className="bot-console-grid">
           {groups.map((group) => {
-            const primaryEndpoint = primaryBotEndpoint(group);
-            const openThreadId = group.defaultOpenThreadId || group.mainThreadId || primaryEndpoint?.threadId || null;
+            const openThreadId = botRootBoundThreadId(group);
             const createBusy = busyBotId === group.id;
             const isFocusedBot = Boolean(focusedBotId && group.id === focusedBotId);
             return (

@@ -608,11 +608,8 @@ function withSortedEntities(
   };
 }
 
-function reconcileBotMainThreads(
-  current: Record<string, string>,
-  configuredBots: ConfiguredBot[],
-): Record<string, string> {
-  const next = { ...current };
+function reconcileBotMainThreads(configuredBots: ConfiguredBot[]): Record<string, string> {
+  const next: Record<string, string> = {};
   for (const bot of configuredBots) {
     const botId = `${bot.channel}::${bot.accountId}`;
     const mainThreadId = bot.mainEndpointThreadId?.trim();
@@ -797,7 +794,7 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
     configuredBots,
     botConsoles,
     automations,
-    botMainThreads: reconcileBotMainThreads(localState.botMainThreads || {}, configuredBots),
+    botMainThreads: reconcileBotMainThreads(configuredBots),
     remoteErrors,
   });
 

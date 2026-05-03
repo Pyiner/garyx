@@ -6,7 +6,7 @@ import type {
   WorkspaceMutationResult,
 } from '@shared/contracts';
 
-import { buildBotGroups, primaryBotEndpoint } from './bot-console-model';
+import { botRootBoundThreadId, buildBotGroups } from './bot-console-model';
 
 export interface BotConsolePlatform {
   getState: () => Promise<DesktopState>;
@@ -98,11 +98,9 @@ function resolveMainThreadId(group: DesktopBotConsoleSummary): {
   mainThreadId: string | null;
   primaryEndpoint: DesktopChannelEndpoint | null;
 } {
-  const primaryEndpoint = primaryBotEndpoint(group);
-  const mainThreadId = group.rootBehavior === 'expand_only'
-    ? (group.mainThreadId || primaryEndpoint?.threadId || null)
-    : (group.defaultOpenThreadId || group.mainThreadId || primaryEndpoint?.threadId || null);
-  return { mainThreadId, primaryEndpoint: primaryEndpoint ?? null };
+  const mainThreadId = botRootBoundThreadId(group);
+  const mainEndpoint = group.mainEndpoint?.threadId ? group.mainEndpoint : null;
+  return { mainThreadId, primaryEndpoint: mainEndpoint };
 }
 
 function openNewBotDraft(

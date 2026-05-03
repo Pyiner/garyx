@@ -2,6 +2,7 @@ import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from
 
 import type { DesktopBotConsoleSummary, DesktopChannelEndpoint } from '@shared/contracts';
 
+import { botRootBoundThreadId } from './bot-console-model';
 import { ChevronDownIcon } from './app-shell/icons';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { ChannelLogo } from './channel-logo';
@@ -19,27 +20,17 @@ function setsEqual(left: Set<string>, right: Set<string>): boolean {
   return true;
 }
 
-function botRootThreadIds(
-  group: DesktopBotConsoleSummary,
-  includeDefaultOpenThread: boolean,
-): Set<string> {
+function botRootThreadIds(group: DesktopBotConsoleSummary): Set<string> {
   const ids = [
+    botRootBoundThreadId(group),
     group.mainThreadId,
     group.mainEndpoint?.threadId,
   ].filter((value): value is string => Boolean(value));
-  if (includeDefaultOpenThread) {
-    if (group.defaultOpenThreadId) {
-      ids.push(group.defaultOpenThreadId);
-    }
-    if (group.defaultOpenEndpoint?.threadId) {
-      ids.push(group.defaultOpenEndpoint.threadId);
-    }
-  }
   return new Set(ids);
 }
 
 function botRootCanOpen(group: DesktopBotConsoleSummary): boolean {
-  return group.rootBehavior !== 'expand_only' || botRootThreadIds(group, true).size > 0;
+  return group.rootBehavior !== 'expand_only' || botRootThreadIds(group).size > 0;
 }
 
 function toggleGroupExpanded(
@@ -132,7 +123,7 @@ export function BotSidebar({
           {groups.map((group) => {
             const childEntries = group.conversationNodes || [];
             const isExpanded = expandedGroupIds.has(group.id);
-            const rootThreadIds = botRootThreadIds(group, childEntries.length === 0);
+            const rootThreadIds = botRootThreadIds(group);
             const rootCanOpen = botRootCanOpen(group);
             const rootIsSelected = selectedThreadId ? rootThreadIds.has(selectedThreadId) : false;
 
