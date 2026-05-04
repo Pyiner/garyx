@@ -82,6 +82,7 @@ pub use task_counter::{
 pub use tasks::{
     CreateTaskInput, PromoteTaskInput, TaskHistoryPage, TaskListFilter, TaskRef, TaskRuntimeInput,
     TaskService, TaskServiceError, TaskSummary, UpdateTaskStatusInput,
+    mark_thread_task_in_review_if_in_progress,
 };
 pub use thread_history::{
     DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, RECENT_COMMITTED_RUN_IDS_LIMIT, ThreadHistoryError,

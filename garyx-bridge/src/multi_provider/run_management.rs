@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use garyx_models::Principal;
 use garyx_models::provider::{
     AgentRunRequest, FilePayload, ImagePayload, PromptAttachment, PromptAttachmentKind,
     ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput, StreamEvent,
@@ -11,7 +12,7 @@ use garyx_models::provider::{
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_router::{
     ThreadHistoryRepository, ThreadStore, build_runtime_context_metadata, loop_enabled_from_value,
-    loop_iteration_count_from_value,
+    loop_iteration_count_from_value, mark_thread_task_in_review_if_in_progress,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -710,6 +711,57 @@ async fn render_streaming_user_message_for_provider(
     );
     let metadata = HashMap::from([("runtime_context".to_owned(), runtime_context)]);
     append_task_suffix_to_user_message(message, &metadata)
+}
+
+async fn mark_task_ready_for_review_after_stopped_run(
+    inner: &super::state::Inner,
+    thread_id: &str,
+    run_id: &str,
+    thread_logs: Option<Arc<dyn ThreadLogSink>>,
+    thread_log_id: Option<&str>,
+) {
+    let Some(store) = inner.thread_store.read().await.clone() else {
+        return;
+    };
+    match mark_thread_task_in_review_if_in_progress(
+        &store,
+        thread_id,
+        Principal::Agent {
+            agent_id: "garyx".to_owned(),
+        },
+        Some("agent run stopped".to_owned()),
+    )
+    .await
+    {
+        Ok(Some(task)) => {
+            let task_ref = garyx_router::tasks::canonical_task_ref(&task);
+            record_thread_log(
+                thread_logs,
+                thread_log_id,
+                ThreadLogEvent::info("", "task", "task moved to review after run stopped")
+                    .with_run_id(run_id.to_owned())
+                    .with_field("task_ref", json!(task_ref)),
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                thread_id = %thread_id,
+                run_id = %run_id,
+                error = %error,
+                "failed to move stopped task to review"
+            );
+            record_thread_log(
+                thread_logs,
+                thread_log_id,
+                ThreadLogEvent::warn("", "task", "failed to move stopped task to review")
+                    .with_run_id(run_id.to_owned())
+                    .with_field("error", json!(error.to_string())),
+            )
+            .await;
+        }
+    }
 }
 
 async fn wait_for_thread_to_become_idle(
@@ -1536,6 +1588,8 @@ impl MultiProviderBridge {
                     )
                     .await;
 
+                    let mut scheduled_loop_continue = false;
+
                     // Emit run_complete event.
                     if let Some(tx) = &*inner.event_tx.read().await {
                         let event = serde_json::json!({
@@ -1621,6 +1675,7 @@ impl MultiProviderBridge {
                                             });
                                             let _ = tx.send(event.to_string());
                                         }
+                                        scheduled_loop_continue = true;
 
                                         record_thread_log(
                                             thread_logs_for_task.clone(),
@@ -1638,6 +1693,17 @@ impl MultiProviderBridge {
                                 }
                             }
                         }
+                    }
+
+                    if !scheduled_loop_continue {
+                        mark_task_ready_for_review_after_stopped_run(
+                            &inner,
+                            &thread_id_owned,
+                            &run_id_owned,
+                            thread_logs_for_task.clone(),
+                            thread_log_id_owned.as_deref(),
+                        )
+                        .await;
                     }
                 }
                 Err(e) => {
@@ -1741,6 +1807,15 @@ impl MultiProviderBridge {
                             }
                         }
                     }
+
+                    mark_task_ready_for_review_after_stopped_run(
+                        &inner,
+                        &thread_id_owned,
+                        &run_id_owned,
+                        thread_logs_for_task.clone(),
+                        thread_log_id_owned.as_deref(),
+                    )
+                    .await;
                 }
             }
 

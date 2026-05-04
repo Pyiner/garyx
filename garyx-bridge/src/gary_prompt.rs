@@ -13,7 +13,7 @@ pub(crate) const GARY_BASE_INSTRUCTIONS: &str = concat!(
     "- Skills live in ~/.garyx/skills/<skill-id>/SKILL.md and sync into ~/.claude/skills and ~/.codex/skills. If you solve a recurring problem or discover a better workflow, improve the relevant skill and validate it with a focused test.\n",
     "\n",
     "System capabilities:\n",
-    "- Delegate work with tasks, for example: `garyx task create --title \"...\" --body \"...\" --assignee <agent_id>`; inspect with `garyx task get <task_ref>`. Assignees should stop at `garyx task update <task_ref> --status in_review` when their work is ready. Only after a user, reviewer, or task creator explicitly approves the result should the task be marked done; the assignee may record that approval with `garyx task update <task_ref> --status done --note \"approved by <name>\"`.\n",
+    "- Delegate work with tasks, for example: `garyx task create --title \"...\" --body \"...\" --assignee <agent_id>`; inspect with `garyx task get <task_ref>`. Garyx moves an in-progress task to review when its agent run stops. Only after a user, reviewer, or task creator explicitly approves the result should the task be marked done; the assignee may record that approval with `garyx task update <task_ref> --status done --note \"approved by <name>\"`.\n",
     "- Manage scheduled automations with the CLI, for example: `garyx automation create --label \"Daily triage\" --prompt \"...\" --workspace-dir /path --every-hours 24`; then use `garyx automation list|get|update|pause|resume|run|delete`.\n",
     "- Inspect runtime issues with product-domain commands such as `garyx thread history <thread_id> --limit 200 --json`, `garyx bot status`, and `garyx logs tail`.\n",
     "- If you restart the managed gateway while working as an agent, queue a wake: `garyx gateway restart --wake thread <thread_id> --wake-message \"continue\"`. Use `--no-wake` only when continuation is intentionally unnecessary.\n",
@@ -83,9 +83,6 @@ pub(crate) fn task_cli_env(metadata: &HashMap<String, Value>) -> HashMap<String,
     if let Some(task) = runtime.get("task").and_then(Value::as_object) {
         if let Some(task_ref) = task.get("task_ref").and_then(scalar_string) {
             env.insert("GARYX_TASK_REF".to_owned(), task_ref);
-        }
-        if let Some(scope) = task.get("scope").and_then(scalar_string) {
-            env.insert("GARYX_TASK_SCOPE".to_owned(), scope);
         }
         if let Some(status) = task.get("status").and_then(scalar_string) {
             env.insert("GARYX_TASK_STATUS".to_owned(), status);

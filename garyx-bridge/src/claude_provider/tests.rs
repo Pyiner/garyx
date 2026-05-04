@@ -633,8 +633,7 @@ fn test_build_sdk_options_exports_task_cli_env_from_metadata() {
                 },
                 "task": {
                     "task_ref": "#TASK-5",
-                    "status": "in_review",
-                    "scope": "weixin/main"
+                    "status": "in_review"
                 }
             }),
         )]),
@@ -657,10 +656,7 @@ fn test_build_sdk_options_exports_task_cli_env_from_metadata() {
         sdk_opts.env.get("GARYX_TASK_REF").map(String::as_str),
         Some("#TASK-5")
     );
-    assert_eq!(
-        sdk_opts.env.get("GARYX_TASK_SCOPE").map(String::as_str),
-        Some("weixin/main")
-    );
+    assert!(!sdk_opts.env.contains_key("GARYX_TASK_SCOPE"));
     assert_eq!(opts.workspace_dir.as_deref(), Some(workspace_dir.as_str()));
 }
 

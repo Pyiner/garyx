@@ -54,7 +54,6 @@ fn append_task_suffix_to_user_message_renders_live_task_snapshot() {
                 "task_ref": "#TASK-3",
                 "title": "Fix context prompt",
                 "status": "in_progress",
-                "scope": "weixin/main",
                 "assignee": { "kind": "agent", "agent_id": "codex" }
             }
         }),
@@ -87,8 +86,7 @@ fn task_cli_env_exports_current_agent_and_task_identity() {
                 "thread_id": "thread::abc",
                 "task": {
                     "task_ref": "#TASK-3",
-                    "status": "in_progress",
-                    "scope": "weixin/main"
+                    "status": "in_progress"
                 }
             }),
         ),

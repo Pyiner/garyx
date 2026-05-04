@@ -1603,6 +1603,25 @@ async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages()
     bridge.set_default_provider_key("p1").await;
 
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let now = Utc::now();
+    let task = ThreadTask {
+        schema_version: 1,
+        number: 8,
+        title: "Review failed checkpoint".to_owned(),
+        status: TaskStatus::InProgress,
+        creator: Principal::Human {
+            user_id: "user42".to_owned(),
+        },
+        assignee: Some(Principal::Agent {
+            agent_id: "codex".to_owned(),
+        }),
+        created_at: now,
+        updated_at: now,
+        updated_by: Principal::Agent {
+            agent_id: "codex".to_owned(),
+        },
+        events: Vec::new(),
+    };
     store
         .set(
             "sess::tg::failed-checkpoint",
@@ -1610,7 +1629,8 @@ async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages()
                 "sdk_session_id": "sdk-existing",
                 "provider_sdk_session_ids": {
                     "p1": "sdk-existing"
-                }
+                },
+                "task": task
             }),
         )
         .await;
@@ -1653,6 +1673,7 @@ async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages()
     );
     assert_eq!(final_data["sdk_session_id"], "sdk-existing");
     assert_eq!(final_data["provider_sdk_session_ids"]["p1"], "sdk-existing");
+    assert_eq!(final_data["task"]["status"], "in_review");
 
     let final_messages = final_data["messages"]
         .as_array()
@@ -1930,6 +1951,12 @@ async fn test_streaming_input_appends_task_suffix_for_provider_only() {
     })
     .await
     .expect("queued task run should fully complete after the provider finishes");
+
+    let final_data = store
+        .get("sess::tg::queued-task")
+        .await
+        .expect("final task thread data should exist");
+    assert_eq!(final_data["task"]["status"], "in_review");
 }
 
 #[tokio::test]

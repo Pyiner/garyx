@@ -193,7 +193,7 @@ impl TaskService {
     }
 
     fn index_store_id(&self) -> usize {
-        Arc::as_ptr(&self.thread_store) as *const () as usize
+        thread_store_id(&self.thread_store)
     }
 
     pub async fn create_task(
@@ -692,6 +692,42 @@ impl TaskService {
     }
 }
 
+pub async fn mark_thread_task_in_review_if_in_progress(
+    thread_store: &Arc<dyn ThreadStore>,
+    thread_id: &str,
+    actor: Principal,
+    note: Option<String>,
+) -> Result<Option<ThreadTask>, TaskServiceError> {
+    validate_principal(&actor)?;
+    let lock = task_thread_lock(thread_id);
+    let _guard = lock.lock().await;
+    let Some(mut record) = thread_store.get(thread_id).await else {
+        return Ok(None);
+    };
+    let Some(mut task) = task_from_record(&record)? else {
+        return Ok(None);
+    };
+    if task.status != TaskStatus::InProgress {
+        return Ok(None);
+    }
+    let from = task.status;
+    task.status = TaskStatus::InReview;
+    push_event(
+        &mut task,
+        actor,
+        TaskEventKind::StatusChanged {
+            from,
+            to: TaskStatus::InReview,
+            note: normalized_limited(note, 500)?,
+        },
+        None,
+    );
+    set_task_on_record(&mut record, &task)?;
+    thread_store.set(thread_id, record).await;
+    task_index_upsert(thread_store_id(thread_store), thread_id, &task);
+    Ok(Some(task))
+}
+
 impl TaskSummary {
     fn from_task(thread_id: String, record: &Value, task: &ThreadTask) -> Self {
         Self {
@@ -746,6 +782,10 @@ fn task_thread_lock(thread_id: &str) -> TaskThreadLock {
 
 fn task_index_state() -> &'static StdMutex<TaskIndexState> {
     TASK_INDEX.get_or_init(|| StdMutex::new(TaskIndexState::default()))
+}
+
+fn thread_store_id(thread_store: &Arc<dyn ThreadStore>) -> usize {
+    Arc::as_ptr(thread_store) as *const () as usize
 }
 
 fn task_index_key(store_id: usize, task: &ThreadTask) -> TaskIndexKey {
@@ -1056,6 +1096,95 @@ mod tests {
             .unwrap();
         assert_eq!(updated.status, TaskStatus::InProgress);
         assert_eq!(updated.assignee, None);
+    }
+
+    #[tokio::test]
+    async fn run_completion_marks_in_progress_task_in_review() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Review when idle".to_owned()),
+                body: None,
+                assignee: Some(Principal::Agent {
+                    agent_id: "codex".to_owned(),
+                }),
+                start: true,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+
+        let updated = mark_thread_task_in_review_if_in_progress(
+            &service.thread_store,
+            &thread_id,
+            Principal::Agent {
+                agent_id: "garyx".to_owned(),
+            },
+            Some("agent run completed".to_owned()),
+        )
+        .await
+        .unwrap()
+        .expect("in-progress task should move to review");
+
+        assert_eq!(updated.status, TaskStatus::InReview);
+        let (_, _, persisted) = service.get_task(&canonical_task_ref(&task)).await.unwrap();
+        assert_eq!(persisted.status, TaskStatus::InReview);
+        assert!(matches!(
+            persisted.events.last().map(|event| &event.kind),
+            Some(TaskEventKind::StatusChanged {
+                from: TaskStatus::InProgress,
+                to: TaskStatus::InReview,
+                note: Some(note),
+            }) if note == "agent run completed"
+        ));
+    }
+
+    #[tokio::test]
+    async fn run_completion_leaves_non_progress_task_status_unchanged() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Already reviewed".to_owned()),
+                body: None,
+                assignee: Some(Principal::Agent {
+                    agent_id: "codex".to_owned(),
+                }),
+                start: true,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        service
+            .update_status(UpdateTaskStatusInput {
+                task_ref: canonical_task_ref(&task),
+                to: TaskStatus::InReview,
+                note: None,
+                force: false,
+                actor: None,
+            })
+            .await
+            .unwrap();
+
+        let updated = mark_thread_task_in_review_if_in_progress(
+            &service.thread_store,
+            &thread_id,
+            Principal::Agent {
+                agent_id: "garyx".to_owned(),
+            },
+            Some("agent run completed".to_owned()),
+        )
+        .await
+        .unwrap();
+
+        assert!(updated.is_none());
+        let (_, _, persisted) = service.get_task(&canonical_task_ref(&task)).await.unwrap();
+        assert_eq!(persisted.status, TaskStatus::InReview);
     }
 
     #[tokio::test]
