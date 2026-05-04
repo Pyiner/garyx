@@ -254,7 +254,7 @@ export const SETTINGS_TABS: Array<{
     id: 'gateway',
     label: 'Gateway',
     eyebrow: 'Gateway',
-    description: 'Gateway URL, runtime, storage, and image generation.',
+    description: 'Gateway URL, runtime, and storage.',
   },
   {
     id: 'provider',
