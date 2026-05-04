@@ -1724,7 +1724,7 @@ impl MultiProviderBridge {
                         }
                     }
 
-                    if !scheduled_loop_continue {
+                    if res.success && !scheduled_loop_continue {
                         mark_task_ready_for_review_after_stopped_run(
                             &inner,
                             &thread_id_owned,
@@ -1732,6 +1732,20 @@ impl MultiProviderBridge {
                             Some(&res.response),
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
+                        )
+                        .await;
+                    } else if !res.success {
+                        record_thread_log(
+                            thread_logs_for_task.clone(),
+                            thread_log_id_owned.as_deref(),
+                            ThreadLogEvent::info(
+                                "",
+                                "task",
+                                "unsuccessful task run left in progress for retry",
+                            )
+                            .with_run_id(run_id_owned.clone())
+                            .with_field("thread_id", json!(thread_id_owned.clone()))
+                            .with_field("response", json!(summarize_text(&res.response, 160))),
                         )
                         .await;
                     }
