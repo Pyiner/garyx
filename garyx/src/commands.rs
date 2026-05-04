@@ -3517,10 +3517,31 @@ interactive = false
 "#
 }
 
-async fn write_gemini_search_policy(workspace_dir: &Path) -> io::Result<PathBuf> {
-    let path = workspace_dir.join("search-only-policy.toml");
+#[derive(Debug)]
+struct TemporaryGeminiSearchPolicy {
+    path: PathBuf,
+    dir: PathBuf,
+}
+
+impl TemporaryGeminiSearchPolicy {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryGeminiSearchPolicy {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_dir(&self.dir);
+    }
+}
+
+async fn write_gemini_search_policy() -> io::Result<TemporaryGeminiSearchPolicy> {
+    let dir = std::env::temp_dir().join(format!("garyx-gemini-search-policy-{}", Uuid::new_v4()));
+    tokio::fs::create_dir_all(&dir).await?;
+    let path = dir.join("search-tool-only-policy.toml");
     tokio::fs::write(&path, gemini_search_policy_text()).await?;
-    Ok(path)
+    Ok(TemporaryGeminiSearchPolicy { path, dir })
 }
 
 fn strip_source_url_punctuation(url: &str) -> &str {
@@ -3809,7 +3830,7 @@ async fn run_gemini_cli_search(
     timeout_secs: u64,
 ) -> Result<SearchCommandOutput, Box<dyn std::error::Error>> {
     let workspace_dir = tool_workspace_dir("search")?;
-    let policy_path = write_gemini_search_policy(&workspace_dir).await?;
+    let policy = write_gemini_search_policy().await?;
     let run_id = format!("tool-run-{}", Uuid::new_v4());
     let mut command = Command::new("gemini");
     command
@@ -3821,7 +3842,7 @@ async fn run_gemini_cli_search(
         .arg("--model")
         .arg(TOOL_SEARCH_GEMINI_MODEL)
         .arg("--policy")
-        .arg(&policy_path)
+        .arg(policy.path())
         .arg("--output-format")
         .arg("stream-json")
         .arg("-p")

@@ -1134,6 +1134,30 @@ fn gemini_search_policy_allows_only_google_web_search() {
     assert!(policy.contains("decision = \"allow\""));
 }
 
+#[tokio::test]
+async fn gemini_search_policy_is_temporary_and_removed_on_drop() {
+    let policy = write_gemini_search_policy()
+        .await
+        .expect("temporary policy");
+    let path = policy.path().to_owned();
+    let dir = path.parent().expect("policy dir").to_owned();
+
+    assert!(path.starts_with(std::env::temp_dir()));
+    assert!(path.ends_with("search-tool-only-policy.toml"));
+    assert_eq!(
+        tokio::fs::read_to_string(&path).await.expect("policy text"),
+        gemini_search_policy_text()
+    );
+
+    drop(policy);
+
+    assert!(!path.exists(), "temporary policy file should be removed");
+    assert!(
+        !dir.exists(),
+        "temporary policy directory should be removed"
+    );
+}
+
 #[test]
 fn gemini_cli_search_event_parser_requires_tool_use_not_direct_answer() {
     let mut state = SearchStreamState::default();
