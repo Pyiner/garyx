@@ -26,6 +26,8 @@ use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
 const ACP_PROTOCOL_VERSION: i64 = 1;
+const GEMINI_ACP_ARG: &str = "--acp";
+const GEMINI_SKIP_TRUST_ARG: &str = "--skip-trust";
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
 const ACTIVE_TOOL_IDLE_TIMEOUT_SECS: u64 = 900;
 
@@ -559,6 +561,16 @@ fn jsonrpc_error_message(message: &Value) -> Option<String> {
     })
 }
 
+fn append_stderr(message: impl Into<String>, stderr_output: &str) -> String {
+    let message = message.into();
+    let stderr_output = stderr_output.trim();
+    if stderr_output.is_empty() {
+        message
+    } else {
+        format!("{message} | stderr: {stderr_output}")
+    }
+}
+
 fn extract_prompt_result_usage(message: &Value) -> (i64, i64) {
     let result = message.get("result");
     let usage = result.and_then(|value| value.get("usage"));
@@ -708,7 +720,8 @@ impl GeminiCliProvider {
         let timeout = request_timeout(&self.config);
         let active_tool_timeout = active_tool_idle_timeout(timeout);
         let mut command = Command::new(gemini_bin(&self.config));
-        command.arg("--acp");
+        command.arg(GEMINI_ACP_ARG);
+        command.arg(GEMINI_SKIP_TRUST_ARG);
         command.current_dir(cwd);
         command.stdin(std::process::Stdio::piped());
         command.stdout(std::process::Stdio::piped());
@@ -754,19 +767,28 @@ impl GeminiCliProvider {
             }),
         )
         .await?;
-        let initialize = read_until_response(&mut lines, next_request_id, timeout).await?;
+        let initialize = match read_until_response(&mut lines, next_request_id, timeout).await {
+            Ok(response) => response,
+            Err(error) => {
+                drop(stdin);
+                let (child, _) = self.unregister_run(run_id).await;
+                let stderr_output = self.cleanup_run_io(run_id, child, stderr_task).await;
+                return Err(match error {
+                    BridgeError::RunFailed(message) => {
+                        BridgeError::RunFailed(append_stderr(message, &stderr_output))
+                    }
+                    other => other,
+                });
+            }
+        };
         next_request_id += 1;
         if let Some(error) = jsonrpc_error_message(&initialize) {
             drop(stdin);
             let (child, _) = self.unregister_run(run_id).await;
             let stderr_output = self.cleanup_run_io(run_id, child, stderr_task).await;
             return Err(BridgeError::RunFailed(format!(
-                "gemini initialize failed: {error}{}",
-                if stderr_output.is_empty() {
-                    String::new()
-                } else {
-                    format!(" | stderr: {stderr_output}")
-                }
+                "gemini initialize failed: {}",
+                append_stderr(error, &stderr_output)
             )));
         }
 

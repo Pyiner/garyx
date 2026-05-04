@@ -93,7 +93,7 @@ fn unsupported(
 async fn fetch_gemini_acp_models(config: &GaryxConfig) -> Result<GeminiModelDiscovery, String> {
     let gemini_bin = configured_gemini_bin(config);
     let mut child = Command::new(&gemini_bin)
-        .arg("--experimental-acp")
+        .arg("--acp")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

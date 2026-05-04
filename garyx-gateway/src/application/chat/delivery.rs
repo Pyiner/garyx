@@ -367,6 +367,9 @@ fn bound_thread_delivery_targets(value: &Value) -> Vec<BoundThreadDeliveryTarget
         if channel.is_empty() || account_id.is_empty() {
             continue;
         }
+        if channel.eq_ignore_ascii_case("api") {
+            continue;
+        }
 
         let chat_id = binding.chat_id.trim().to_owned();
         let binding_key = binding.binding_key.trim().to_owned();
@@ -1024,6 +1027,35 @@ pub async fn build_bound_response_callback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bound_delivery_targets_skip_internal_api_bindings() {
+        let thread = json!({
+            "channel_bindings": [
+                {
+                    "channel": "api",
+                    "account_id": "main",
+                    "binding_key": "loop",
+                    "chat_id": "loop",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "loop"
+                },
+                {
+                    "channel": "telegram",
+                    "account_id": "codex_bot",
+                    "binding_key": "chat-1",
+                    "chat_id": "chat-1",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "chat-1"
+                }
+            ]
+        });
+
+        let targets = bound_thread_delivery_targets(&thread);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].channel, "telegram");
+    }
 
     #[test]
     fn extracts_only_existing_local_markdown_images_with_supported_extensions() {

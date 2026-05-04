@@ -212,6 +212,143 @@ fn strip_gemini_thought_output_keeps_only_visible_tail_after_markers() {
     assert_eq!(strip_gemini_thought_output(raw), "好的，现在开始执行。");
 }
 
+#[test]
+fn gemini_provider_uses_current_acp_flag() {
+    assert_eq!(GEMINI_ACP_ARG, "--acp");
+    assert_eq!(GEMINI_SKIP_TRUST_ARG, "--skip-trust");
+}
+
+#[tokio::test]
+async fn run_streaming_invokes_gemini_with_current_acp_flag() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_dir = temp.path().join("workspace");
+    fs::create_dir_all(&workspace_dir).expect("create workspace");
+    let script_path = temp.path().join("fake-gemini-arg-check.py");
+    let script = r#"#!/usr/bin/env python3
+import json
+import sys
+
+if "--version" in sys.argv:
+    print("0.0-test")
+    sys.exit(0)
+
+if "--acp" not in sys.argv or "--skip-trust" not in sys.argv or "--experimental-acp" in sys.argv:
+    print("unexpected args: " + " ".join(sys.argv[1:]), file=sys.stderr)
+    sys.exit(2)
+
+for line in sys.stdin:
+    req = json.loads(line)
+    rid = req["id"]
+    method = req["method"]
+    params = req.get("params", {})
+
+    if method == "initialize":
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": 1}}), flush=True)
+    elif method == "session/new":
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {"sessionId": "arg-session"}}), flush=True)
+    elif method == "session/set_mode":
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {}}), flush=True)
+    elif method == "session/set_model":
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {}}), flush=True)
+    elif method == "session/prompt":
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": params.get("sessionId"),
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"text": "OK"}
+                }
+            }
+        }), flush=True)
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "result": {}}), flush=True)
+        break
+    else:
+        print(json.dumps({"jsonrpc": "2.0", "id": rid, "error": {"message": "unsupported"}}), flush=True)
+        break
+"#;
+    fs::write(&script_path, script).expect("write script");
+    let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions).expect("chmod script");
+
+    let mut provider = GeminiCliProvider::new(GeminiCliConfig {
+        gemini_bin: script_path.to_string_lossy().to_string(),
+        workspace_dir: Some(workspace_dir.to_string_lossy().to_string()),
+        timeout_seconds: 5.0,
+        model: String::new(),
+        ..Default::default()
+    });
+    provider.ready = true;
+
+    let callback: Box<dyn Fn(StreamEvent) + Send + Sync> = Box::new(|_| {});
+    let result = provider
+        .run_streaming(
+            &ProviderRunOptions {
+                thread_id: "thread::gemini::arg-check".to_owned(),
+                message: "hello".to_owned(),
+                workspace_dir: Some(workspace_dir.to_string_lossy().to_string()),
+                images: None,
+                metadata: HashMap::new(),
+            },
+            callback,
+        )
+        .await
+        .expect("run should succeed");
+    assert!(result.success, "run failed: {:?}", result.error);
+    assert_eq!(result.response, "OK");
+}
+
+#[tokio::test]
+async fn run_streaming_startup_close_reports_stderr() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workspace_dir = temp.path().join("workspace");
+    fs::create_dir_all(&workspace_dir).expect("create workspace");
+    let script_path = temp.path().join("fake-gemini-startup-fail.py");
+    let script = r#"#!/usr/bin/env python3
+import sys
+
+if "--version" in sys.argv:
+    print("0.0-test")
+    sys.exit(0)
+
+print("Unknown argument: acp", file=sys.stderr)
+sys.exit(1)
+"#;
+    fs::write(&script_path, script).expect("write script");
+    let mut permissions = fs::metadata(&script_path).expect("metadata").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions).expect("chmod script");
+
+    let mut provider = GeminiCliProvider::new(GeminiCliConfig {
+        gemini_bin: script_path.to_string_lossy().to_string(),
+        workspace_dir: Some(workspace_dir.to_string_lossy().to_string()),
+        timeout_seconds: 5.0,
+        model: String::new(),
+        ..Default::default()
+    });
+    provider.ready = true;
+
+    let callback: Box<dyn Fn(StreamEvent) + Send + Sync> = Box::new(|_| {});
+    let error = provider
+        .run_streaming(
+            &ProviderRunOptions {
+                thread_id: "thread::gemini::startup-fail".to_owned(),
+                message: "hello".to_owned(),
+                workspace_dir: Some(workspace_dir.to_string_lossy().to_string()),
+                images: None,
+                metadata: HashMap::new(),
+            },
+            callback,
+        )
+        .await
+        .expect_err("startup failure should be surfaced");
+    let message = error.to_string();
+    assert!(message.contains("gemini ACP closed before responding"));
+    assert!(message.contains("Unknown argument: acp"));
+}
+
 #[tokio::test]
 async fn run_streaming_reuses_loaded_session_when_load_response_omits_session_id() {
     let temp = tempfile::tempdir().expect("tempdir");
