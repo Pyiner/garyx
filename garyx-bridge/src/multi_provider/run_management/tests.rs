@@ -1,5 +1,6 @@
 use super::*;
 use garyx_models::provider::{ProviderMessage, ProviderRunResult};
+use garyx_router::InMemoryThreadStore;
 fn run_result(response: &str, session_messages: Vec<ProviderMessage>) -> ProviderRunResult {
     ProviderRunResult {
         run_id: "run-1".to_owned(),
@@ -8,6 +9,7 @@ fn run_result(response: &str, session_messages: Vec<ProviderMessage>) -> Provide
         session_messages,
         sdk_session_id: None,
         actual_model: None,
+        thread_title: None,
         success: true,
         error: None,
         input_tokens: 0,
@@ -15,6 +17,92 @@ fn run_result(response: &str, session_messages: Vec<ProviderMessage>) -> Provide
         cost: 0.0,
         duration_ms: 0,
     }
+}
+
+#[tokio::test]
+async fn provider_thread_title_replaces_prompt_fallback_label() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::title",
+            json!({
+                "thread_id": "thread::title",
+                "label": "Please investigate why Codex events do not show titles",
+                "thread_title_source": "garyx_prompt"
+            }),
+        )
+        .await;
+
+    let applied = persist_provider_thread_title_if_missing(
+        &store,
+        "thread::title",
+        Some("Provider Generated Title"),
+    )
+    .await;
+
+    assert_eq!(applied.as_deref(), Some("Provider Generated Title"));
+    let updated = store.get("thread::title").await.expect("thread exists");
+    assert_eq!(updated["label"], "Provider Generated Title");
+    assert_eq!(updated["thread_title_source"], "provider");
+    assert_eq!(updated["provider_thread_title"], "Provider Generated Title");
+}
+
+#[tokio::test]
+async fn provider_thread_title_does_not_replace_explicit_label() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::explicit",
+            json!({
+                "thread_id": "thread::explicit",
+                "label": "Human Label"
+            }),
+        )
+        .await;
+
+    let applied = persist_provider_thread_title_if_missing(
+        &store,
+        "thread::explicit",
+        Some("Provider Generated Title"),
+    )
+    .await;
+
+    assert!(applied.is_none());
+    let updated = store.get("thread::explicit").await.expect("thread exists");
+    assert_eq!(updated["label"], "Human Label");
+    assert!(updated.get("provider_thread_title").is_none());
+}
+
+#[tokio::test]
+async fn provider_thread_title_does_not_replace_task_label() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::task",
+            json!({
+                "thread_id": "thread::task",
+                "label": "Polish roguelike copy in English after FOV",
+                "metadata": {
+                    "task_id": "#TASK-33"
+                }
+            }),
+        )
+        .await;
+
+    let applied = persist_provider_thread_title_if_missing(
+        &store,
+        "thread::task",
+        Some("Provider Generated Title"),
+    )
+    .await;
+
+    assert!(applied.is_none());
+    let updated = store.get("thread::task").await.expect("thread exists");
+    assert_eq!(
+        updated["label"],
+        "Polish roguelike copy in English after FOV"
+    );
+    assert!(updated.get("provider_thread_title").is_none());
 }
 
 #[test]

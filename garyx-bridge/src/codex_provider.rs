@@ -37,6 +37,35 @@ const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
 // Helper functions (provider-level domain mapping)
 // ---------------------------------------------------------------------------
 
+fn normalize_thread_title(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = normalized.trim();
+    if trimmed.chars().count() <= 80 {
+        return trimmed.to_owned();
+    }
+    let mut clipped = trimmed.chars().take(79).collect::<String>();
+    clipped.push('…');
+    clipped
+}
+
+fn extract_codex_thread_title(params: &Value) -> Option<String> {
+    params
+        .get("threadName")
+        .or_else(|| params.get("thread_name"))
+        .and_then(Value::as_str)
+        .map(normalize_thread_title)
+        .filter(|value| !value.is_empty())
+}
+
+fn extract_codex_thread_started_title(params: &Value) -> Option<String> {
+    params
+        .get("thread")
+        .and_then(|thread| thread.get("name"))
+        .and_then(Value::as_str)
+        .map(normalize_thread_title)
+        .filter(|value| !value.is_empty())
+}
+
 /// Check whether a notification's params match our expected thread/turn.
 fn matches_turn(params: &Value, thread_id: &str, turn_id: &str) -> bool {
     if let Some(event_thread) = params.get("threadId").and_then(|v| v.as_str())
@@ -1303,6 +1332,7 @@ impl CodexAgentProvider {
         let mut streamed_error_message: Option<String> = None;
         let mut current_agent_message_item_id: Option<String> = None;
         let mut current_agent_message_has_text = false;
+        let mut thread_title: Option<String> = None;
 
         let timeout = Duration::from_secs_f64(self.config.request_timeout_seconds);
 
@@ -1334,6 +1364,18 @@ impl CodexAgentProvider {
                 }
 
                 match method.as_str() {
+                    "thread/name/updated" => {
+                        if let Some(title) = extract_codex_thread_title(params) {
+                            thread_title = Some(title);
+                        }
+                    }
+                    "thread/started" => {
+                        if thread_title.is_none()
+                            && let Some(title) = extract_codex_thread_started_title(params)
+                        {
+                            thread_title = Some(title);
+                        }
+                    }
                     "item/agentMessage/delta" => {
                         maybe_emit_agent_message_separator(
                             params.get("itemId").and_then(|v| v.as_str()),
@@ -1433,6 +1475,7 @@ impl CodexAgentProvider {
                 session_messages,
                 sdk_session_id: Some(thread_id),
                 actual_model,
+                thread_title: None,
                 success: false,
                 error: Some(e.to_string()),
                 input_tokens: 0,
@@ -1488,6 +1531,7 @@ impl CodexAgentProvider {
             session_messages,
             sdk_session_id: Some(thread_id),
             actual_model,
+            thread_title,
             success,
             error,
             input_tokens,

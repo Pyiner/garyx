@@ -61,7 +61,8 @@ pub async fn chat_health(State(state): State<Arc<AppState>>) -> impl IntoRespons
 ///
 /// Server responds with JSON events:
 /// - `accepted`, `assistant_delta`, `assistant_boundary`, `tool_use`, `tool_result`,
-///   `user_ack`, `done`, `stream_input`, `interrupt`, `snapshot`, `error`.
+///   `user_ack`, `thread_title_updated`, `done`, `stream_input`, `interrupt`,
+///   `snapshot`, `error`.
 pub async fn chat_ws(
     State(state): State<Arc<AppState>>,
     ws: WebSocketUpgrade,
@@ -568,6 +569,14 @@ fn build_chat_ws_stream_callback(
                 "type": "done",
                 "runId": callback_run_id,
                 "threadId": callback_thread_id
+            }));
+        }
+        StreamEvent::ThreadTitleUpdated { title } => {
+            let _ = out_tx.send(json!({
+                "type": "thread_title_updated",
+                "runId": callback_run_id,
+                "threadId": callback_thread_id,
+                "title": title
             }));
         }
     })

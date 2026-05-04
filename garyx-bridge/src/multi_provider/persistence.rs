@@ -260,6 +260,7 @@ pub(super) enum ThreadPersistenceCommand {
     Stream(StreamEvent),
     QueuePendingInput(PendingUserInput),
     DropPendingInput { pending_input_id: String },
+    Finish,
 }
 
 fn pending_inputs_from_value(value: &Value) -> Vec<PendingUserInput> {
@@ -349,6 +350,7 @@ impl StreamingRunSnapshot {
                 self.current_assistant_metadata = None;
                 false
             }
+            StreamEvent::ThreadTitleUpdated { .. } => false,
             StreamEvent::Done => false,
         }
     }

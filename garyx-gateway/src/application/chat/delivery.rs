@@ -945,7 +945,9 @@ pub async fn build_bound_response_callback(
                     );
                     return;
                 }
-                StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {}
+                StreamEvent::ToolUse { .. }
+                | StreamEvent::ToolResult { .. }
+                | StreamEvent::ThreadTitleUpdated { .. } => {}
             }
             callback(event);
         }));
@@ -1006,6 +1008,7 @@ pub async fn build_bound_response_callback(
                 "bound delivery",
             );
         }
+        StreamEvent::ThreadTitleUpdated { .. } => {}
         StreamEvent::ToolUse { message } => {
             // Flush any accumulated assistant text before a tool call so that
             // channels without native streaming (e.g. WeChat) deliver messages

@@ -742,6 +742,7 @@ impl StreamingCallbackShared {
                     .await;
                 return;
             }
+            StreamEvent::ThreadTitleUpdated { .. } => return,
             StreamEvent::Done => true,
         };
 

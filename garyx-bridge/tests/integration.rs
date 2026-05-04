@@ -245,7 +245,7 @@ async fn test_claude_provider_full() {
         StreamEvent::Done => {
             *got_final_clone.lock().unwrap() = true;
         }
-        StreamEvent::Boundary { .. } => {}
+        StreamEvent::Boundary { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
     });
 
     let result = tokio::time::timeout(
@@ -410,7 +410,7 @@ async fn test_codex_provider_full() {
         StreamEvent::Done => {
             *got_final_clone.lock().unwrap() = true;
         }
-        StreamEvent::Boundary { .. } => {}
+        StreamEvent::Boundary { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
     });
 
     let result = provider

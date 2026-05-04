@@ -34,6 +34,9 @@ const STREAMING_INPUT_QUEUE_RETRY_INTERVAL: Duration = Duration::from_millis(50)
 const STREAMING_INPUT_QUEUE_RETRY_TIMEOUT: Duration = Duration::from_secs(15);
 const FOLLOW_UP_INTERRUPT_WAIT_INTERVAL: Duration = Duration::from_millis(25);
 const FOLLOW_UP_INTERRUPT_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+const LEGACY_DEFAULT_THREAD_LABEL: &str = "Fresh Thread";
+const PROMPT_THREAD_TITLE_SOURCE: &str = "garyx_prompt";
+const PROVIDER_THREAD_TITLE_SOURCE: &str = "provider";
 
 fn normalize_workspace_dir(workspace_dir: Option<String>) -> Option<String> {
     workspace_dir.and_then(|value| {
@@ -86,6 +89,68 @@ fn summarize_text(value: &str, limit: usize) -> String {
         .collect::<String>();
     clipped.push('…');
     clipped
+}
+
+fn normalize_provider_thread_title(value: &str) -> Option<String> {
+    let title = summarize_text(value, 80);
+    (!title.is_empty()).then_some(title)
+}
+
+fn api_route_placeholder_label(existing: &Value) -> Option<String> {
+    let channel = existing.get("channel").and_then(Value::as_str)?.trim();
+    let account_id = existing.get("account_id").and_then(Value::as_str)?.trim();
+    let from_id = existing.get("from_id").and_then(Value::as_str)?.trim();
+    if channel != "api" || account_id.is_empty() || from_id.is_empty() {
+        return None;
+    }
+    Some(format!("{channel}/{account_id}/{from_id}"))
+}
+
+fn should_apply_provider_thread_title(existing: &Value) -> bool {
+    if existing
+        .get("thread_title_source")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        == Some(PROMPT_THREAD_TITLE_SOURCE)
+    {
+        return true;
+    }
+
+    let Some(label) = existing.get("label").and_then(Value::as_str) else {
+        return true;
+    };
+    let trimmed = label.trim();
+    trimmed.is_empty()
+        || trimmed == LEGACY_DEFAULT_THREAD_LABEL
+        || api_route_placeholder_label(existing).as_deref() == Some(trimmed)
+}
+
+async fn persist_provider_thread_title_if_missing(
+    store: &Arc<dyn ThreadStore>,
+    thread_id: &str,
+    title: Option<&str>,
+) -> Option<String> {
+    let title = title.and_then(normalize_provider_thread_title)?;
+    let mut value = store.get(thread_id).await?;
+    if !should_apply_provider_thread_title(&value) {
+        return None;
+    }
+    let obj = value.as_object_mut()?;
+    obj.insert("label".to_owned(), Value::String(title.clone()));
+    obj.insert(
+        "provider_thread_title".to_owned(),
+        Value::String(title.clone()),
+    );
+    obj.insert(
+        "thread_title_source".to_owned(),
+        Value::String(PROVIDER_THREAD_TITLE_SOURCE.to_owned()),
+    );
+    obj.insert(
+        "updated_at".to_owned(),
+        Value::String(chrono::Utc::now().to_rfc3339()),
+    );
+    store.set(thread_id, value).await;
+    Some(title)
 }
 
 fn summarize_value(value: &Value, limit: usize) -> String {
@@ -226,11 +291,52 @@ fn build_stream_event_payload(thread_id: &str, run_id: &str, event: &StreamEvent
             "run_id": run_id,
             "pending_input_id": pending_input_id,
         })),
+        StreamEvent::ThreadTitleUpdated { title } => Some(json!({
+            "type": "thread_title_updated",
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "title": title,
+        })),
         StreamEvent::Done => Some(json!({
             "type": "done",
             "thread_id": thread_id,
             "run_id": run_id,
         })),
+    }
+}
+
+fn forward_stream_event(
+    event_tx: &Option<tokio::sync::broadcast::Sender<String>>,
+    external_callback: Option<&Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    thread_id: &str,
+    run_id: &str,
+    event: StreamEvent,
+) {
+    if let Some(payload) = build_stream_event_payload(thread_id, run_id, &event) {
+        emit_gateway_event(event_tx, payload);
+    }
+    if let Some(callback) = external_callback {
+        callback(event);
+    }
+}
+
+fn forward_applied_thread_title_update(
+    event_tx: &Option<tokio::sync::broadcast::Sender<String>>,
+    external_callback: Option<&Arc<dyn Fn(StreamEvent) + Send + Sync>>,
+    thread_id: &str,
+    run_id: &str,
+    applied_thread_title: Option<&str>,
+) {
+    if let Some(title) = applied_thread_title {
+        forward_stream_event(
+            event_tx,
+            external_callback,
+            thread_id,
+            run_id,
+            StreamEvent::ThreadTitleUpdated {
+                title: title.to_owned(),
+            },
+        );
     }
 }
 
@@ -305,6 +411,7 @@ fn spawn_partial_thread_persistence_worker(
 
         while let Some(command) = event_rx.recv().await {
             let mut dirty = false;
+            let mut finish = false;
             match command {
                 ThreadPersistenceCommand::Stream(event) => match event {
                     StreamEvent::Boundary {
@@ -331,6 +438,9 @@ fn spawn_partial_thread_persistence_worker(
                     let before = pending_user_inputs.len();
                     pending_user_inputs.retain(|input| input.id != pending_input_id);
                     dirty = pending_user_inputs.len() != before;
+                }
+                ThreadPersistenceCommand::Finish => {
+                    finish = true;
                 }
             }
             while let Ok(pending) = event_rx.try_recv() {
@@ -361,29 +471,33 @@ fn spawn_partial_thread_persistence_worker(
                         pending_user_inputs.retain(|input| input.id != pending_input_id);
                         dirty |= pending_user_inputs.len() != before;
                     }
+                    ThreadPersistenceCommand::Finish => {
+                        finish = true;
+                    }
                 }
             }
-            if !dirty {
-                continue;
+            if dirty {
+                save_partial_thread_messages(
+                    &store,
+                    &history,
+                    PersistedRun {
+                        thread_id: &thread_id,
+                        user_message: &user_message,
+                        user_images: &user_images,
+                        assistant_response: &snapshot.assistant_response,
+                        sdk_session_id: None,
+                        provider_key: &provider_key,
+                        provider_type: provider_type.clone(),
+                        session_messages: &snapshot.session_messages,
+                        metadata: &metadata,
+                    },
+                    &pending_user_inputs,
+                )
+                .await;
             }
-
-            save_partial_thread_messages(
-                &store,
-                &history,
-                PersistedRun {
-                    thread_id: &thread_id,
-                    user_message: &user_message,
-                    user_images: &user_images,
-                    assistant_response: &snapshot.assistant_response,
-                    sdk_session_id: None,
-                    provider_key: &provider_key,
-                    provider_type: provider_type.clone(),
-                    session_messages: &snapshot.session_messages,
-                    metadata: &metadata,
-                },
-                &pending_user_inputs,
-            )
-            .await;
+            if finish {
+                break;
+            }
         }
 
         let mut final_dirty = false;
@@ -1307,6 +1421,8 @@ impl MultiProviderBridge {
         let user_message = message.to_owned();
         let thread_log_id_owned = thread_log_id.clone();
         let thread_logs_for_task = thread_logs.clone();
+        let final_external_callback = response_callback.clone();
+        let final_gateway_event_tx = gateway_event_tx.clone();
         let response_callback = {
             let external_callback = response_callback.clone();
             let sink = thread_logs.clone();
@@ -1374,9 +1490,16 @@ impl MultiProviderBridge {
                             )
                             .await;
                         }
-                        StreamEvent::Boundary { .. } | StreamEvent::Done => {}
+                        StreamEvent::Boundary { .. }
+                        | StreamEvent::ThreadTitleUpdated { .. }
+                        | StreamEvent::Done => {}
                     }
                 });
+
+                if matches!(event_for_emit, StreamEvent::ThreadTitleUpdated { .. }) {
+                    return;
+                }
+
                 if let Some(payload) =
                     build_stream_event_payload(&thread_id, &event_run_id, &event_for_emit)
                 {
@@ -1434,6 +1557,9 @@ impl MultiProviderBridge {
                 }
             };
             drop(removed_persistence);
+            let _ = partial_persistence_tx
+                .as_ref()
+                .map(|tx| tx.send(ThreadPersistenceCommand::Finish));
             drop(partial_persistence_tx);
             let persistence_result = if let Some(task) = partial_persistence_task {
                 match task.await {
@@ -1507,6 +1633,7 @@ impl MultiProviderBridge {
                     }
 
                     // Persist user + assistant + tool messages to thread store.
+                    let mut applied_thread_title: Option<String> = None;
                     if let (Some(store), Some(history)) = (
                         &*inner.thread_store.read().await,
                         &*inner.thread_history.read().await,
@@ -1527,6 +1654,12 @@ impl MultiProviderBridge {
                             &graph_state.run_options.metadata,
                             res.sdk_session_id.as_deref(),
                         );
+                        applied_thread_title = persist_provider_thread_title_if_missing(
+                            store,
+                            &thread_id_owned,
+                            res.thread_title.as_deref(),
+                        )
+                        .await;
                         save_thread_messages(
                             store,
                             history,
@@ -1553,6 +1686,13 @@ impl MultiProviderBridge {
                         )
                         .await;
                     }
+                    forward_applied_thread_title_update(
+                        &final_gateway_event_tx,
+                        final_external_callback.as_ref(),
+                        &thread_id_owned,
+                        &run_id_owned,
+                        applied_thread_title.as_deref(),
+                    );
                     let mut completed_event =
                         ThreadLogEvent::info("", "run", "agent run completed")
                             .with_run_id(run_id_owned.clone())
@@ -1985,6 +2125,7 @@ impl MultiProviderBridge {
         drop(thread_dispatch_guard);
 
         let external_callback = response_callback.clone();
+        let final_external_callback = external_callback.clone();
         let first_token_logged = Arc::new(AtomicBool::new(false));
         let response_callback = {
             let sink = thread_logs.clone();
@@ -2050,9 +2191,14 @@ impl MultiProviderBridge {
                             )
                             .await;
                         }
-                        StreamEvent::Boundary { .. } | StreamEvent::Done => {}
+                        StreamEvent::Boundary { .. }
+                        | StreamEvent::ThreadTitleUpdated { .. }
+                        | StreamEvent::Done => {}
                     }
                 });
+                if matches!(event, StreamEvent::ThreadTitleUpdated { .. }) {
+                    return;
+                }
                 if let Some(callback) = external_callback.as_ref() {
                     callback(event);
                 }
@@ -2081,6 +2227,9 @@ impl MultiProviderBridge {
             }
         };
         drop(removed_persistence);
+        let _ = partial_persistence_tx
+            .as_ref()
+            .map(|tx| tx.send(ThreadPersistenceCommand::Finish));
         drop(partial_persistence_tx);
         let persistence_result = if let Some(task) = partial_persistence_task {
             match task.await {
@@ -2126,6 +2275,7 @@ impl MultiProviderBridge {
                     .await;
                 }
 
+                let mut applied_thread_title: Option<String> = None;
                 if let (Some(store), Some(history)) = (
                     &*self.inner.thread_store.read().await,
                     &*self.inner.thread_history.read().await,
@@ -2145,6 +2295,12 @@ impl MultiProviderBridge {
                         &graph_state.run_options.metadata,
                         res.sdk_session_id.as_deref(),
                     );
+                    applied_thread_title = persist_provider_thread_title_if_missing(
+                        store,
+                        thread_id,
+                        res.thread_title.as_deref(),
+                    )
+                    .await;
                     save_thread_messages(
                         store,
                         history,
@@ -2162,6 +2318,13 @@ impl MultiProviderBridge {
                     )
                     .await;
                 }
+                forward_applied_thread_title_update(
+                    &None,
+                    final_external_callback.as_ref(),
+                    thread_id,
+                    &run_id,
+                    applied_thread_title.as_deref(),
+                );
                 Ok(res.clone())
             }
             Err(error) => {

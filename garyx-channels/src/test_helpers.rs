@@ -148,6 +148,7 @@ impl AgentLoopProvider for ConfigurableTestProvider {
             session_messages: Vec::new(),
             sdk_session_id: None,
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 10,

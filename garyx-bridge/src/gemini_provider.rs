@@ -426,6 +426,54 @@ fn strip_gemini_thought_output(raw: &str) -> String {
         .to_owned()
 }
 
+fn normalize_thread_title(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = normalized.trim();
+    if trimmed.chars().count() <= 80 {
+        return trimmed.to_owned();
+    }
+    let mut clipped = trimmed.chars().take(79).collect::<String>();
+    clipped.push('…');
+    clipped
+}
+
+fn extract_quoted_topic_title(title: &str) -> Option<String> {
+    let trimmed = title.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("update topic to:") {
+        return None;
+    }
+    let after_prefix = trimmed.split_once(':')?.1.trim();
+    let unquoted = after_prefix
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(after_prefix);
+    Some(normalize_thread_title(unquoted)).filter(|value| !value.is_empty())
+}
+
+fn extract_gemini_thread_title(update: &Value) -> Option<String> {
+    for path in [
+        &["rawInput", "title"][..],
+        &["args", "title"][..],
+        &["input", "title"][..],
+    ] {
+        if let Some(title) = path
+            .iter()
+            .try_fold(update, |value, key| value.get(*key))
+            .and_then(Value::as_str)
+            .map(normalize_thread_title)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(title);
+        }
+    }
+
+    update
+        .get("title")
+        .and_then(Value::as_str)
+        .and_then(extract_quoted_topic_title)
+}
+
 fn tool_message(update: &Value, completed: bool) -> ProviderMessage {
     let tool_use_id = update
         .get("toolCallId")
@@ -919,6 +967,7 @@ impl GeminiCliProvider {
         let mut error = None;
         let mut active_tool_calls = HashSet::<String>::new();
         let mut has_unkeyed_tool_call = false;
+        let mut thread_title: Option<String> = None;
 
         loop {
             let idle_timeout = if has_unkeyed_tool_call || !active_tool_calls.is_empty() {
@@ -974,6 +1023,9 @@ impl GeminiCliProvider {
                     }
                 }
                 Some("tool_call") => {
+                    if let Some(title) = extract_gemini_thread_title(update) {
+                        thread_title = Some(title);
+                    }
                     if let Some(tool_call_id) = tool_call_id(update) {
                         active_tool_calls.insert(tool_call_id.to_owned());
                     } else {
@@ -986,6 +1038,9 @@ impl GeminiCliProvider {
                     session_messages.push(message);
                 }
                 Some("tool_call_update") => {
+                    if let Some(title) = extract_gemini_thread_title(update) {
+                        thread_title = Some(title);
+                    }
                     let status = update
                         .get("status")
                         .and_then(Value::as_str)
@@ -1049,6 +1104,7 @@ impl GeminiCliProvider {
             session_messages,
             sdk_session_id: Some(resolved_session_id),
             actual_model,
+            thread_title,
             success,
             error,
             input_tokens,

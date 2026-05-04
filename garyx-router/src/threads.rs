@@ -14,6 +14,7 @@ use crate::{DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, ThreadStore};
 
 pub const THREAD_KEY_PREFIX: &str = "thread::";
 const KNOWN_CHANNEL_ENDPOINTS_KEY: &str = "meta::known_channel_endpoints";
+const EXPLICIT_THREAD_TITLE_SOURCE: &str = "explicit";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ChannelBinding {
@@ -519,6 +520,11 @@ pub async fn update_thread_record(
         .filter(|label| !label.is_empty())
     {
         obj.insert("label".to_owned(), Value::String(label.to_owned()));
+        obj.insert(
+            "thread_title_source".to_owned(),
+            Value::String(EXPLICIT_THREAD_TITLE_SOURCE.to_owned()),
+        );
+        obj.remove("provider_thread_title");
     }
     if let Some(workspace_dir_input) = workspace_dir {
         let requested_workspace_dir = normalize_workspace_dir(Some(workspace_dir_input.as_str()));

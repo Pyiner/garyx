@@ -553,6 +553,7 @@ mod dispatch_tests {
                 session_messages: Vec::new(),
                 sdk_session_id: None,
                 actual_model: None,
+                thread_title: None,
                 success: true,
                 error: None,
                 input_tokens: 10,
@@ -670,7 +671,7 @@ mod dispatch_tests {
             match event {
                 StreamEvent::Delta { text } => assert!(text.contains("echo:")),
                 StreamEvent::Done => {}
-                StreamEvent::Boundary { .. } => {}
+                StreamEvent::Boundary { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
                 StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {}
             }
         });
@@ -717,7 +718,7 @@ mod dispatch_tests {
                 let full = parts_cb.lock().unwrap().join("");
                 *final_cb.lock().unwrap() = Some(full);
             }
-            StreamEvent::Boundary { .. } => {}
+            StreamEvent::Boundary { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
             StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {}
         });
 
@@ -1227,6 +1228,7 @@ mod e2e_tests {
                 session_messages: Vec::new(),
                 sdk_session_id: None,
                 actual_model: None,
+                thread_title: None,
                 success: true,
                 error: None,
                 input_tokens: 1,
@@ -1285,6 +1287,7 @@ mod e2e_tests {
                 session_messages: Vec::new(),
                 sdk_session_id: None,
                 actual_model: None,
+                thread_title: None,
                 success: true,
                 error: None,
                 input_tokens: 1,
@@ -1365,6 +1368,7 @@ mod e2e_tests {
                 session_messages: Vec::new(),
                 sdk_session_id: None,
                 actual_model: None,
+                thread_title: None,
                 success: true,
                 error: None,
                 input_tokens: 1,
@@ -1441,6 +1445,7 @@ mod e2e_tests {
                 session_messages: Vec::new(),
                 sdk_session_id: None,
                 actual_model: None,
+                thread_title: None,
                 success: true,
                 error: None,
                 input_tokens: 1,

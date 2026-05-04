@@ -1756,7 +1756,8 @@ async fn execute_provider_prompt(
         }
         StreamEvent::ToolUse { .. }
         | StreamEvent::ToolResult { .. }
-        | StreamEvent::Boundary { .. } => {
+        | StreamEvent::Boundary { .. }
+        | StreamEvent::ThreadTitleUpdated { .. } => {
             callback_saw_progress.store(true, Ordering::Relaxed);
             callback_progress.notify_waiters();
         }

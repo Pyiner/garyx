@@ -4013,6 +4013,36 @@ export function AppShell() {
     return next;
   }
 
+  function applyThreadTitleUpdate(threadId: string, title: string) {
+    const nextTitle = title.trim();
+    if (!threadId || !nextTitle) {
+      return;
+    }
+
+    setDesktopState((current) => {
+      if (!current) {
+        return current;
+      }
+      let changed = false;
+      const updateThread = (
+        thread: (typeof current.threads)[number],
+      ): (typeof current.threads)[number] => {
+        if (thread.id !== threadId || thread.title === nextTitle) {
+          return thread;
+        }
+        changed = true;
+        return { ...thread, title: nextTitle };
+      };
+      const threads = current.threads.map(updateThread);
+      const sessions = current.sessions.map(updateThread);
+      return changed ? { ...current, threads, sessions } : current;
+    });
+
+    if (selectedThreadIdRef.current === threadId && !editingThreadTitle) {
+      setTitleDraft(nextTitle);
+    }
+  }
+
   function appendSeededTurn(
     threadId: string,
     intent: MessageIntent,
@@ -4820,6 +4850,9 @@ export function AppShell() {
         }
         break;
       }
+      case "thread_title_updated":
+        applyThreadTitleUpdate(threadId, event.title);
+        break;
       case "done":
         if (activeIntentId) {
           dispatchMessageState({

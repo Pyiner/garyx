@@ -180,10 +180,40 @@ async fn update_thread_record_preserves_workspace_when_not_provided() {
         .unwrap();
 
     assert_eq!(label_from_value(&updated).as_deref(), Some("After"));
+    assert_eq!(updated["thread_title_source"], "explicit");
     assert_eq!(
         workspace_dir_from_value(&updated).as_deref(),
         Some("/tmp/workspace-a")
     );
+}
+
+#[tokio::test]
+async fn update_thread_record_explicit_label_clears_provider_title() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::title",
+            json!({
+                "thread_id": "thread::title",
+                "label": "Provider Title",
+                "thread_title_source": "provider",
+                "provider_thread_title": "Provider Title"
+            }),
+        )
+        .await;
+
+    let updated = update_thread_record(
+        &store,
+        "thread::title",
+        Some("Human Title".to_owned()),
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(label_from_value(&updated).as_deref(), Some("Human Title"));
+    assert_eq!(updated["thread_title_source"], "explicit");
+    assert!(updated.get("provider_thread_title").is_none());
 }
 
 #[tokio::test]

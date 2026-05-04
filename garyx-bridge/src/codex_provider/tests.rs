@@ -30,6 +30,34 @@ fn test_matches_turn_no_ids_matches() {
 }
 
 #[test]
+fn test_extract_codex_thread_title_from_name_update() {
+    let params = json!({
+        "threadId": "thread-1",
+        "threadName": "  Investigate   Codex app-server title events  "
+    });
+
+    assert_eq!(
+        extract_codex_thread_title(&params).as_deref(),
+        Some("Investigate Codex app-server title events")
+    );
+}
+
+#[test]
+fn test_extract_codex_thread_title_from_started_thread() {
+    let params = json!({
+        "thread": {
+            "id": "thread-1",
+            "name": "  Existing   Codex app-server title  "
+        }
+    });
+
+    assert_eq!(
+        extract_codex_thread_started_title(&params).as_deref(),
+        Some("Existing Codex app-server title")
+    );
+}
+
+#[test]
 fn test_matches_turn_via_turn_object() {
     let params = json!({"turn": {"id": "u1"}});
     assert!(matches_turn(&params, "t1", "u1"));

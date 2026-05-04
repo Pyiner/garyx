@@ -86,6 +86,7 @@ impl AgentLoopProvider for MockProvider {
             session_messages: Vec::new(),
             sdk_session_id: Some("sdk-123".into()),
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 100,

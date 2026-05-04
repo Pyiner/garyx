@@ -3017,6 +3017,7 @@ async fn run_streaming_update_consumer(
                             &sent_media_refs,
                         );
                     }
+                    StreamEvent::ThreadTitleUpdated { .. } => {}
                     StreamEvent::Done => {
                         seen_done_event.store(true, Ordering::Relaxed);
                         any_text_output_sent |= close_live_for_boundary(
@@ -3836,6 +3837,7 @@ impl WeixinChannel {
                             pending_media_refs
                                 .extend(extract_media_refs_from_provider_message(&message));
                         }
+                        StreamEvent::ThreadTitleUpdated { .. } => {}
                         StreamEvent::Done => {
                             seen_done_event_cb.store(true, Ordering::Relaxed);
                             if let Some(task) = typing_keepalive_task.take() {

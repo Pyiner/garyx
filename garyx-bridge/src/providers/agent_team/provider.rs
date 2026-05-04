@@ -472,6 +472,10 @@ impl AgentLoopProvider for AgentTeamProvider {
                     // Suppress per-child Done; the provider emits one at the
                     // end of the whole group turn.
                 }
+                StreamEvent::ThreadTitleUpdated { .. } => {
+                    // Child thread titles are managed on child threads; do
+                    // not surface them as group-thread title updates.
+                }
             });
 
             let mut child_options = options.clone();
@@ -535,6 +539,7 @@ impl AgentLoopProvider for AgentTeamProvider {
             session_messages,
             sdk_session_id: None,
             actual_model: Some("agent_team".to_owned()),
+            thread_title: None,
             success: any_failure.is_none(),
             error: any_failure,
             input_tokens: aggregate_tokens_in,

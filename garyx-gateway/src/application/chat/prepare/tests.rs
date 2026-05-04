@@ -119,6 +119,36 @@ fn should_autoname_thread_accepts_missing_or_legacy_label() {
 }
 
 #[tokio::test]
+async fn persist_thread_label_marks_prompt_fallback_source() {
+    let state = test_state();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::prompt-title",
+            json!({ "thread_id": "thread::prompt-title" }),
+        )
+        .await;
+
+    persist_thread_label_if_missing(
+        &state,
+        "thread::prompt-title",
+        "Please investigate provider title events",
+    )
+    .await
+    .expect("label persists");
+
+    let updated = state
+        .threads
+        .thread_store
+        .get("thread::prompt-title")
+        .await
+        .expect("thread exists");
+    assert_eq!(updated["label"], "Please investigate provider title events");
+    assert_eq!(updated["thread_title_source"], "garyx_prompt");
+}
+
+#[tokio::test]
 async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_agent() {
     let state = test_state();
     state

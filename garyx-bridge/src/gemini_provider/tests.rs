@@ -126,6 +126,37 @@ fn tool_message_marks_failed_updates_as_errors() {
 }
 
 #[test]
+fn extract_gemini_thread_title_prefers_update_topic_raw_input() {
+    let update = json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "update_topic-1",
+        "title": "Update topic to: \"Fallback\"",
+        "rawInput": {
+            "title": "  Researching   Strings  "
+        }
+    });
+
+    assert_eq!(
+        extract_gemini_thread_title(&update).as_deref(),
+        Some("Researching Strings")
+    );
+}
+
+#[test]
+fn extract_gemini_thread_title_parses_update_topic_display_title() {
+    let update = json!({
+        "sessionUpdate": "tool_call",
+        "toolCallId": "update_topic-1",
+        "title": "Update topic to: \"Researching Strings\""
+    });
+
+    assert_eq!(
+        extract_gemini_thread_title(&update).as_deref(),
+        Some("Researching Strings")
+    );
+}
+
+#[test]
 fn approval_mode_normalizes_cli_spellings() {
     let config = GeminiCliConfig::default();
     assert_eq!(approval_mode(&config, &HashMap::new()), "yolo");

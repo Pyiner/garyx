@@ -1009,6 +1009,13 @@ export type DesktopChatStreamEvent =
       pendingInputId?: string;
     }
   | {
+      type: "thread_title_updated";
+      runId: string;
+      threadId: string;
+      sessionId?: string;
+      title: string;
+    }
+  | {
       type: "done";
       runId: string;
       threadId: string;

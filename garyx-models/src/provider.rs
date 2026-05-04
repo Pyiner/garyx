@@ -284,6 +284,8 @@ pub enum StreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pending_input_id: Option<String>,
     },
+    /// Garyx accepted and persisted a thread title update.
+    ThreadTitleUpdated { title: String },
     /// Stream completion marker.
     Done,
 }
@@ -866,6 +868,8 @@ pub struct ProviderRunResult {
     pub sdk_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actual_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_title: Option<String>,
 
     #[serde(default = "crate::config::default_true")]
     pub success: bool,

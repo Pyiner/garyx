@@ -38,7 +38,7 @@ impl WsAckBeforeInputResponseProvider {
     }
 
     fn release_run(&self) {
-        self.release_run.notify_waiters();
+        self.release_run.notify_one();
     }
 }
 
@@ -76,6 +76,7 @@ impl AgentLoopProvider for WsTestProvider {
             session_messages: vec![],
             sdk_session_id: None,
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 1,
@@ -128,6 +129,7 @@ impl AgentLoopProvider for WsAckBeforeInputResponseProvider {
             session_messages: vec![],
             sdk_session_id: None,
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 1,

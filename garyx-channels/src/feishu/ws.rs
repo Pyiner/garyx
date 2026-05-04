@@ -966,7 +966,7 @@ pub(super) async fn handle_im_message_event(
                     }
                     continue;
                 }
-                StreamEvent::Done => {}
+                StreamEvent::ThreadTitleUpdated { .. } | StreamEvent::Done => {}
             }
 
             let mut final_text = state.stream_text.clone();

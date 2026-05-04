@@ -6,8 +6,10 @@ use claude_agent_sdk::{
     UserMessage,
 };
 use garyx_models::provider::{ClaudeCodeConfig, QueuedUserInput};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::VecDeque;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 fn make_provider() -> ClaudeCliProvider {
@@ -91,6 +93,72 @@ fn test_resolve_run_id_uses_metadata_override() {
     );
 
     assert_eq!(resolve_run_id(&metadata), "run_from_client");
+}
+
+#[test]
+fn test_extract_claude_thread_title_from_session_name() {
+    let data = json!({
+        "type": "system",
+        "subtype": "init",
+        "session_id": "session-1",
+        "session_name": "  Review   provider title plumbing  "
+    });
+
+    assert_eq!(
+        extract_claude_thread_title(&data).as_deref(),
+        Some("Review provider title plumbing")
+    );
+}
+
+#[test]
+fn test_extract_claude_ai_title_from_transcript_line() {
+    let line =
+        r#"{"type":"ai-title","aiTitle":"  Reply  with exactly ok  ","sessionId":"session-1"}"#;
+
+    assert_eq!(
+        extract_claude_ai_title_line(line, "session-1").as_deref(),
+        Some("Reply with exactly ok")
+    );
+    assert!(extract_claude_ai_title_line(line, "other-session").is_none());
+}
+
+#[tokio::test]
+async fn test_read_claude_ai_title_from_transcript_path_uses_latest_title() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session-1.jsonl");
+    fs::write(
+        &transcript,
+        concat!(
+            r#"{"type":"ai-title","aiTitle":"Old title","sessionId":"session-1"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[]}}"#,
+            "\n",
+            r#"{"type":"ai-title","aiTitle":"New title","sessionId":"session-1"}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        read_claude_ai_title_from_transcript_path(&transcript, "session-1")
+            .await
+            .as_deref(),
+        Some("New title")
+    );
+}
+
+#[test]
+fn test_claude_transcript_path_matches_observed_project_dir_shape() {
+    let path = claude_transcript_path(
+        Path::new("/Users/example/.claude"),
+        Path::new("/Users/example/repos/Garyx"),
+        "session-1",
+    );
+
+    assert_eq!(
+        path,
+        PathBuf::from("/Users/example/.claude/projects/-Users-example-repos-Garyx/session-1.jsonl")
+    );
 }
 
 #[test]
@@ -1773,6 +1841,7 @@ async fn test_run_streaming_retries_with_fresh_session_after_connect_failure() {
             output_tokens: 1,
             cost_usd: 0.0,
             actual_model: Some("claude-3-7-sonnet".to_owned()),
+            thread_title: None,
         })))
         .await;
 
@@ -1829,6 +1898,7 @@ async fn test_run_streaming_keeps_stable_session_id_when_sdk_reports_different_i
             output_tokens: 1,
             cost_usd: 0.0,
             actual_model: Some("claude-3-7-sonnet".to_owned()),
+            thread_title: None,
         })))
         .await;
 
@@ -1885,6 +1955,7 @@ async fn test_run_streaming_reports_incomplete_stream_as_unsuccessful() {
             output_tokens: 0,
             cost_usd: 0.0,
             actual_model: Some("claude-opus-4-7".to_owned()),
+            thread_title: None,
         })))
         .await;
 

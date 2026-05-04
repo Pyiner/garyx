@@ -3946,6 +3946,21 @@ export async function openChatStream(
                   undefined,
               });
               return;
+            case "thread_title_updated": {
+              const title = (asString(payload.title) || "").trim();
+              if (!title) {
+                return;
+              }
+              sawRemoteStreamEvent = true;
+              onEvent({
+                type: "thread_title_updated",
+                runId: payloadRunId,
+                threadId: payloadThreadId,
+                sessionId: payloadThreadId,
+                title,
+              });
+              return;
+            }
             case "done":
               sawRemoteStreamEvent = true;
               active.sawTerminal = true;

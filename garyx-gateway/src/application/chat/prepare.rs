@@ -21,6 +21,7 @@ use crate::managed_mcp_metadata::inject_managed_mcp_servers;
 use crate::server::AppState;
 
 const LEGACY_DEFAULT_THREAD_LABEL: &str = "Fresh Thread";
+const PROMPT_THREAD_TITLE_SOURCE: &str = "garyx_prompt";
 
 #[derive(Debug)]
 pub(crate) enum ChatPreparationError {
@@ -306,17 +307,25 @@ async fn persist_thread_label_if_missing(
         return Ok(());
     }
 
-    update_thread_record(
-        &state.threads.thread_store,
-        thread_id,
-        Some(next_label),
-        None,
-    )
-    .await
-    .map_err(|error| ChatPreparationError::ThreadUpdateConflict {
-        thread_id: thread_id.to_owned(),
-        error,
-    })?;
+    let Some(obj) = existing.as_object() else {
+        return Err(ChatPreparationError::ThreadUpdateConflict {
+            thread_id: thread_id.to_owned(),
+            error: "thread payload is not an object".to_owned(),
+        });
+    };
+    let mut next = Value::Object(obj.clone());
+    if let Some(next_obj) = next.as_object_mut() {
+        next_obj.insert("label".to_owned(), Value::String(next_label));
+        next_obj.insert(
+            "thread_title_source".to_owned(),
+            Value::String(PROMPT_THREAD_TITLE_SOURCE.to_owned()),
+        );
+        next_obj.insert(
+            "updated_at".to_owned(),
+            Value::String(chrono::Utc::now().to_rfc3339()),
+        );
+    }
+    state.threads.thread_store.set(thread_id, next).await;
     Ok(())
 }
 

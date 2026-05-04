@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -122,6 +122,107 @@ fn resolve_requested_model(
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .or_else(|| (!config.default_model.trim().is_empty()).then(|| config.default_model.clone()))
+}
+
+fn normalize_thread_title(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = normalized.trim();
+    if trimmed.chars().count() <= 80 {
+        return trimmed.to_owned();
+    }
+    let mut clipped = trimmed.chars().take(79).collect::<String>();
+    clipped.push('…');
+    clipped
+}
+
+fn extract_claude_thread_title(data: &Value) -> Option<String> {
+    [
+        "session_name",
+        "sessionName",
+        "thread_title",
+        "threadTitle",
+        "title",
+    ]
+    .iter()
+    .find_map(|key| data.get(*key).and_then(Value::as_str))
+    .map(normalize_thread_title)
+    .filter(|value| !value.is_empty())
+}
+
+fn extract_claude_ai_title_line(line: &str, session_id: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("ai-title") {
+        return None;
+    }
+    if value
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .is_some_and(|observed| observed != session_id)
+    {
+        return None;
+    }
+    value
+        .get("aiTitle")
+        .and_then(Value::as_str)
+        .map(normalize_thread_title)
+        .filter(|value| !value.is_empty())
+}
+
+fn claude_config_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
+}
+
+fn claude_project_dir_name(cwd: &Path) -> String {
+    let text = cwd.to_string_lossy();
+    let mapped = text
+        .chars()
+        .map(|ch| if ch == '/' { '-' } else { ch })
+        .collect::<String>();
+    if mapped.is_empty() {
+        "-".to_owned()
+    } else {
+        mapped
+    }
+}
+
+fn claude_transcript_path(config_dir: &Path, cwd: &Path, session_id: &str) -> PathBuf {
+    config_dir
+        .join("projects")
+        .join(claude_project_dir_name(cwd))
+        .join(format!("{session_id}.jsonl"))
+}
+
+fn resolve_claude_cwd(config: &ClaudeCodeConfig, options: &ProviderRunOptions) -> Option<PathBuf> {
+    options
+        .workspace_dir
+        .as_ref()
+        .or(config.workspace_dir.as_ref())
+        .map(|ws| PathBuf::from(shellexpand::tilde(ws).as_ref()))
+        .filter(|path| path.exists())
+        .or_else(|| std::env::current_dir().ok())
+}
+
+async fn read_claude_ai_title_from_transcript_path(
+    transcript_path: &Path,
+    session_id: &str,
+) -> Option<String> {
+    let content = tokio::fs::read_to_string(transcript_path).await.ok()?;
+    content
+        .lines()
+        .rev()
+        .find_map(|line| extract_claude_ai_title_line(line, session_id))
+}
+
+async fn read_claude_ai_title_from_transcript(cwd: &Path, session_id: &str) -> Option<String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+    let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let transcript_path = claude_transcript_path(&claude_config_dir()?, &cwd, session_id);
+    read_claude_ai_title_from_transcript_path(&transcript_path, session_id).await
 }
 
 fn push_assistant_text_message(
@@ -559,13 +660,7 @@ impl ClaudeCliProvider {
         }
 
         // Workspace directory
-        let cwd = options
-            .workspace_dir
-            .as_ref()
-            .or(self.config.workspace_dir.as_ref())
-            .map(|ws| PathBuf::from(shellexpand::tilde(ws).as_ref()))
-            .filter(|p| p.exists())
-            .or_else(|| std::env::current_dir().ok());
+        let cwd = resolve_claude_cwd(&self.config, options);
 
         // Model: metadata override > config default
         let model = resolve_requested_model(&self.config, &options.metadata);
@@ -929,6 +1024,16 @@ impl ClaudeCliProvider {
         self.unregister_run(run_id).await;
 
         if let Some(result) = result_data {
+            let transcript_thread_title = if result.thread_title.is_none() {
+                match resolve_claude_cwd(&self.config, options) {
+                    Some(cwd) => {
+                        read_claude_ai_title_from_transcript(&cwd, &result.session_id).await
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
             Ok(Some(SdkRunOutcome {
                 session_id: result.session_id,
                 response_text,
@@ -939,6 +1044,7 @@ impl ClaudeCliProvider {
                 output_tokens: result.output_tokens,
                 cost_usd: result.cost_usd,
                 actual_model: result.actual_model,
+                thread_title: result.thread_title.or(transcript_thread_title),
             }))
         } else if response_text.is_empty() {
             // No result and no text — treat as failure so retry can kick in
@@ -960,6 +1066,7 @@ impl ClaudeCliProvider {
                 output_tokens: 0,
                 cost_usd: 0.0,
                 actual_model: None,
+                thread_title: None,
             }))
         }
     }
@@ -977,6 +1084,7 @@ impl ClaudeCliProvider {
         let mut session_messages: Vec<ProviderMessage> = Vec::new();
         let mut assistant_or_tool_activity_seen = false;
         let mut actual_model: Option<String> = None;
+        let mut thread_title: Option<String> = None;
 
         let idle_timeout = Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS);
 
@@ -1061,6 +1169,7 @@ impl ClaudeCliProvider {
                                 .unwrap_or(0),
                             is_error: result_msg.is_error,
                             actual_model: actual_model.clone(),
+                            thread_title: thread_title.clone(),
                             session_messages: session_messages.clone(),
                         });
                         // Atomically check-and-close: if no queued inputs remain,
@@ -1086,6 +1195,9 @@ impl ClaudeCliProvider {
                         {
                             let _ = self.stabilize_session_id(thread_id, sid).await;
                         }
+                        if thread_title.is_none() {
+                            thread_title = extract_claude_thread_title(&sys_msg.data);
+                        }
                     }
                     Ok(Message::StreamEvent(_)) => {}
                     Err(e) => {
@@ -1108,6 +1220,7 @@ struct ProcessedResult {
     output_tokens: i64,
     is_error: bool,
     actual_model: Option<String>,
+    thread_title: Option<String>,
     session_messages: Vec<ProviderMessage>,
 }
 
@@ -1122,6 +1235,7 @@ struct SdkRunOutcome {
     output_tokens: i64,
     cost_usd: f64,
     actual_model: Option<String>,
+    thread_title: Option<String>,
 }
 
 #[async_trait]
@@ -1314,6 +1428,7 @@ impl AgentLoopProvider for ClaudeCliProvider {
                 actual_model: result
                     .actual_model
                     .or_else(|| resolve_requested_model(&self.config, &options.metadata)),
+                thread_title: result.thread_title,
                 success: !result.is_error,
                 error: if result.is_error {
                     result

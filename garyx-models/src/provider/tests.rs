@@ -64,6 +64,9 @@ fn test_stream_event_serde() {
         kind: StreamBoundaryKind::UserAck,
         pending_input_id: Some("queued-input-1".to_owned()),
     };
+    let title = StreamEvent::ThreadTitleUpdated {
+        title: "Provider Title".to_owned(),
+    };
     let done = StreamEvent::Done;
 
     let delta_json = serde_json::to_string(&delta).unwrap();
@@ -88,6 +91,11 @@ fn test_stream_event_serde() {
         boundary_with_input_json,
         "{\"type\":\"boundary\",\"kind\":\"user_ack\",\"pending_input_id\":\"queued-input-1\"}"
     );
+    let title_json = serde_json::to_string(&title).unwrap();
+    assert_eq!(
+        title_json,
+        "{\"type\":\"thread_title_updated\",\"title\":\"Provider Title\"}"
+    );
     let done_json = serde_json::to_string(&done).unwrap();
     assert_eq!(done_json, "{\"type\":\"done\"}");
 
@@ -97,12 +105,14 @@ fn test_stream_event_serde() {
     let boundary_back: StreamEvent = serde_json::from_str(&boundary_json).unwrap();
     let boundary_with_input_back: StreamEvent =
         serde_json::from_str(&boundary_with_input_json).unwrap();
+    let title_back: StreamEvent = serde_json::from_str(&title_json).unwrap();
     let done_back: StreamEvent = serde_json::from_str(&done_json).unwrap();
     assert_eq!(delta_back, delta);
     assert_eq!(tool_use_back, tool_use);
     assert_eq!(tool_result_back, tool_result);
     assert_eq!(boundary_back, boundary);
     assert_eq!(boundary_with_input_back, boundary_with_input);
+    assert_eq!(title_back, title);
     assert_eq!(done_back, done);
 }
 

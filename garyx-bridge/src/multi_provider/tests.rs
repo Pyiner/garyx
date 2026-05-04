@@ -141,6 +141,10 @@ struct EmptyResponseProvider;
 
 struct FailedResultProvider;
 
+struct TitleProvider {
+    title: String,
+}
+
 struct QueuedInputProvider {
     delta_sent: Arc<Notify>,
     follow_up_received: Arc<Notify>,
@@ -210,6 +214,14 @@ impl FailingCheckpointProvider {
 
     fn delta_sent(&self) -> Arc<Notify> {
         self.delta_sent.clone()
+    }
+}
+
+impl TitleProvider {
+    fn new(title: impl Into<String>) -> Self {
+        Self {
+            title: title.into(),
+        }
     }
 }
 
@@ -394,12 +406,62 @@ impl AgentLoopProvider for MockProvider {
             session_messages: Vec::new(),
             sdk_session_id: None,
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 10,
             output_tokens: 5,
             cost: 0.001,
             duration_ms: 42,
+        })
+    }
+
+    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{session_key}"))
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentLoopProvider for TitleProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        on_chunk(StreamEvent::Delta {
+            text: "titled response".to_owned(),
+        });
+        on_chunk(StreamEvent::Done);
+        Ok(ProviderRunResult {
+            run_id: "title-run".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: "titled response".to_owned(),
+            session_messages: vec![ProviderMessage::assistant_text("titled response")],
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: Some(self.title.clone()),
+            success: true,
+            error: None,
+            input_tokens: 1,
+            output_tokens: 1,
+            cost: 0.0,
+            duration_ms: 1,
         })
     }
 
@@ -516,6 +578,7 @@ impl AgentLoopProvider for EventfulProvider {
             session_messages: Vec::new(),
             sdk_session_id: None,
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 10,
@@ -567,6 +630,7 @@ impl AgentLoopProvider for CheckpointingProvider {
             session_messages: vec![ProviderMessage::assistant_text("partial reply")],
             sdk_session_id: Some(sdk_session_id),
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 10,
@@ -646,6 +710,7 @@ impl AgentLoopProvider for QueuedInputProvider {
             ],
             sdk_session_id: Some(sdk_session_id),
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 10,
@@ -739,6 +804,7 @@ impl AgentLoopProvider for EmptyResponseProvider {
             session_messages: Vec::new(),
             sdk_session_id: Some(format!("sdk-{}", options.thread_id)),
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 1,
@@ -789,6 +855,7 @@ impl AgentLoopProvider for FailedResultProvider {
             )],
             sdk_session_id: Some(format!("sdk-{}", options.thread_id)),
             actual_model: None,
+            thread_title: None,
             success: false,
             error: Some("process interrupted".to_owned()),
             input_tokens: 1,
@@ -849,6 +916,7 @@ impl AgentLoopProvider for DelayedQueuedInputProvider {
                 ))],
                 sdk_session_id: Some(sdk_session_id.clone()),
                 actual_model: None,
+                thread_title: None,
                 success: true,
                 error: None,
                 input_tokens: 10,
@@ -896,6 +964,7 @@ impl AgentLoopProvider for DelayedQueuedInputProvider {
             ],
             sdk_session_id: Some(sdk_session_id),
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 10,
@@ -959,6 +1028,7 @@ impl AgentLoopProvider for InterruptingFollowUpProvider {
             ))],
             sdk_session_id: Some(format!("sdk-{}", options.thread_id)),
             actual_model: None,
+            thread_title: None,
             success: true,
             error: None,
             input_tokens: 10,
@@ -1402,6 +1472,167 @@ async fn test_start_and_complete_run() {
 
     // Run should have been cleaned up.
     assert!(!bridge.is_run_active("run-1").await);
+}
+
+#[tokio::test]
+async fn provider_title_update_is_forwarded_after_persistence_without_delaying_done() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+    bridge
+        .register_provider(
+            "title-provider",
+            Arc::new(TitleProvider::new("Provider Generated Title")),
+        )
+        .await;
+    bridge.set_default_provider_key("title-provider").await;
+    store
+        .set(
+            "thread::title-event",
+            json!({
+                "thread_id": "thread::title-event",
+                "label": "Please summarize this request",
+                "thread_title_source": "garyx_prompt"
+            }),
+        )
+        .await;
+
+    let events = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let done = Arc::new(Notify::new());
+    let title_seen = Arc::new(Notify::new());
+    let events_for_callback = events.clone();
+    let done_for_callback = done.clone();
+    let title_for_callback = title_seen.clone();
+    let callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
+        if matches!(event, StreamEvent::Done) {
+            done_for_callback.notify_one();
+        }
+        if matches!(event, StreamEvent::ThreadTitleUpdated { .. }) {
+            title_for_callback.notify_one();
+        }
+        events_for_callback.lock().unwrap().push(event);
+    });
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "thread::title-event",
+                "hello",
+                "run-title-event",
+                "api",
+                "main",
+            ),
+            Some(callback),
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), done.notified())
+        .await
+        .expect("done should be forwarded");
+    tokio::time::timeout(std::time::Duration::from_secs(2), title_seen.notified())
+        .await
+        .expect("title update should be forwarded after persistence");
+
+    let updated = store
+        .get("thread::title-event")
+        .await
+        .expect("thread exists");
+    assert_eq!(updated["label"], "Provider Generated Title");
+    assert_eq!(updated["thread_title_source"], "provider");
+
+    let events = events.lock().unwrap().clone();
+    let title_index = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                StreamEvent::ThreadTitleUpdated { title } if title == "Provider Generated Title"
+            )
+        })
+        .expect("title update event should be forwarded");
+    let done_index = events
+        .iter()
+        .position(|event| matches!(event, StreamEvent::Done))
+        .expect("done event should be forwarded");
+    assert!(
+        done_index < title_index,
+        "done reflects provider stream completion and should not wait for title persistence"
+    );
+}
+
+#[tokio::test]
+async fn provider_title_update_is_not_forwarded_when_explicit_label_wins() {
+    let bridge = MultiProviderBridge::new();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+    bridge
+        .register_provider(
+            "title-provider",
+            Arc::new(TitleProvider::new("Provider Generated Title")),
+        )
+        .await;
+    bridge.set_default_provider_key("title-provider").await;
+    store
+        .set(
+            "thread::explicit-title-event",
+            json!({
+                "thread_id": "thread::explicit-title-event",
+                "label": "Human Title",
+                "thread_title_source": "explicit"
+            }),
+        )
+        .await;
+
+    let events = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let done = Arc::new(Notify::new());
+    let events_for_callback = events.clone();
+    let done_for_callback = done.clone();
+    let callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
+        if matches!(event, StreamEvent::Done) {
+            done_for_callback.notify_one();
+        }
+        events_for_callback.lock().unwrap().push(event);
+    });
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "thread::explicit-title-event",
+                "hello",
+                "run-explicit-title-event",
+                "api",
+                "main",
+            ),
+            Some(callback),
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), done.notified())
+        .await
+        .expect("done should be forwarded");
+
+    let updated = store
+        .get("thread::explicit-title-event")
+        .await
+        .expect("thread exists");
+    assert_eq!(updated["label"], "Human Title");
+    assert!(updated.get("provider_thread_title").is_none());
+
+    let events = events.lock().unwrap().clone();
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, StreamEvent::ThreadTitleUpdated { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Done))
+    );
 }
 
 #[tokio::test]
