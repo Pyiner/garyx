@@ -1931,6 +1931,8 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
     assert_eq!(runs[0].thread_id, payload["thread_id"].as_str().unwrap());
     assert!(runs[0].message.contains(task_id));
     assert!(runs[0].message.contains("Move this task to review"));
+    assert!(!runs[0].message.contains("Garyx will move this task"));
+    assert!(!runs[0].message.contains("mark it done"));
     assert_eq!(runs[0].metadata["task_auto_start"], true);
     assert_eq!(
         runs[0].workspace_dir.as_deref(),
@@ -2048,6 +2050,8 @@ async fn task_assign_queues_dispatch_with_original_body() {
             .contains("Use this original body when assigning later.")
     );
     assert!(!runs[0].message.contains("Title: Assignable task"));
+    assert!(!runs[0].message.contains("Garyx will move this task"));
+    assert!(!runs[0].message.contains("mark it done"));
 }
 
 #[tokio::test]

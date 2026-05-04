@@ -1069,11 +1069,11 @@ fn task_auto_dispatch_message(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     match body {
-        Some(body) => format!(
-            "Task {task_id} has been assigned to you and is already in progress.\n\n{body}\n\nGaryx will move this task to review when this run stops. Do not mark it done just because you finished; after a user, reviewer, or task creator explicitly approves it, you may record that approval with `garyx task update {task_id} --status done --note \"approved by <name>\"`."
-        ),
+        Some(body) => {
+            format!("Task {task_id} has been assigned to you and is already in progress.\n\n{body}")
+        }
         None => format!(
-            "Task {task_id} has been assigned to you and is already in progress.\n\nTitle: {title}\n\nGaryx will move this task to review when this run stops. Do not mark it done just because you finished; after a user, reviewer, or task creator explicitly approves it, you may record that approval with `garyx task update {task_id} --status done --note \"approved by <name>\"`."
+            "Task {task_id} has been assigned to you and is already in progress.\n\nTitle: {title}"
         ),
     }
 }

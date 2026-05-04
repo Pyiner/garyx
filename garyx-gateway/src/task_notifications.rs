@@ -178,7 +178,12 @@ pub(crate) fn format_task_ready_notification(
 Task {body_task_id} is ready for review: {title}\n\n\
 {final_message}\n\n\
 View details:\n\
-garyx task get {body_task_id}\n\
+garyx task get {body_task_id}\n\n\
+Review next:\n\
+If changes are needed, move the task back to in progress and send feedback to the task thread:\n\
+garyx task update {body_task_id} --status in_progress --note \"needs changes: summary\"\n\n\
+If approved, mark it done:\n\
+garyx task update {body_task_id} --status done --note \"approved by reviewer\"\n\
 </{TASK_NOTIFICATION_TAG}>"
     )
 }

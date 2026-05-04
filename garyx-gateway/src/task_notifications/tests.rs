@@ -181,6 +181,13 @@ fn format_wraps_notification_with_single_outer_xml_tag() {
     ));
     assert!(text.contains("Task #TASK-42 is ready for review: Ship task notifications"));
     assert!(text.contains("Done."));
+    assert!(text.contains("Review next:"));
+    assert!(text.contains(
+        "garyx task update #TASK-42 --status in_progress --note \"needs changes: summary\""
+    ));
+    assert!(
+        text.contains("garyx task update #TASK-42 --status done --note \"approved by reviewer\"")
+    );
     assert!(text.contains("</ garyx_task_notification>"));
     assert!(text.ends_with("</garyx_task_notification>"));
 }
