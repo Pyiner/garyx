@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,6 +61,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tar::Archive;
+use tokio::process::Command;
 use uuid::Uuid;
 
 use crate::cli::AutomationScheduleArgs;
@@ -3457,7 +3459,9 @@ pub(crate) struct SearchToolMetadata {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SearchStreamState {
     pub(crate) answer: String,
+    #[cfg(test)]
     pub(crate) thread_id: Option<String>,
+    #[cfg(test)]
     pub(crate) run_id: Option<String>,
     pub(crate) searched: bool,
     pub(crate) sources: Vec<SearchSource>,
@@ -3472,19 +3476,51 @@ struct SearchCommandOutput {
     sources: Vec<SearchSource>,
     runtime_thread_id: String,
     run_id: String,
+    model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
     searched: bool,
     tool_metadata: Vec<SearchToolMetadata>,
+}
+
+#[derive(Debug, Default)]
+struct GeminiCliSearchSummary {
+    session_id: Option<String>,
+    model: Option<String>,
+    status: Option<String>,
+    duration_ms: Option<u64>,
 }
 
 fn build_gemini_search_prompt(query: &str) -> String {
     format!(
         "You are handling `garyx tool search`.\n\n\
-Use Gemini CLI's provider-native web/search capability for this request. \
+You must use Gemini CLI's provider-native `google_web_search` tool for this request. \
 Do not use Garyx MCP `search`, do not call any Garyx MCP web search helper, \
-and do not answer only from memory.\n\n\
-Return a concise answer followed by source citations.\n\n\
+and do not answer only from memory. The tool call is mandatory even if you already know the answer.\n\n\
+After the search tool returns, write a concise answer followed by source citations.\n\n\
 <user_query_verbatim>\n{query}\n</user_query_verbatim>"
     )
+}
+
+fn gemini_search_policy_text() -> &'static str {
+    r#"[[rule]]
+toolName = "*"
+decision = "deny"
+priority = 900
+interactive = false
+
+[[rule]]
+toolName = "google_web_search"
+decision = "allow"
+priority = 999
+interactive = false
+"#
+}
+
+async fn write_gemini_search_policy(workspace_dir: &Path) -> io::Result<PathBuf> {
+    let path = workspace_dir.join("search-only-policy.toml");
+    tokio::fs::write(&path, gemini_search_policy_text()).await?;
+    Ok(path)
 }
 
 fn strip_source_url_punctuation(url: &str) -> &str {
@@ -3543,6 +3579,7 @@ pub(crate) fn extract_search_sources_from_text(text: &str) -> Vec<SearchSource> 
     sources
 }
 
+#[cfg(test)]
 fn value_search_sources(value: &Value) -> Vec<SearchSource> {
     value
         .as_array()
@@ -3661,49 +3698,220 @@ pub(crate) fn apply_search_stream_event(state: &mut SearchStreamState, event: &V
     }
 }
 
-fn apply_search_provider_message(state: &mut SearchStreamState, message: &ProviderMessage) {
-    let tool_name = message.tool_name.as_deref().unwrap_or("");
-    let search_metadata = message.metadata.get("gemini_search");
-    if is_search_like_tool_name(tool_name) || search_metadata.is_some() {
-        state.searched = true;
+fn apply_gemini_cli_search_event(
+    state: &mut SearchStreamState,
+    summary: &mut GeminiCliSearchSummary,
+    event: &Value,
+) {
+    let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
+    match event_type {
+        "init" => {
+            summary.session_id = event
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+            summary.model = event
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+        }
+        "tool_use" => {
+            let tool_name = event.get("tool_name").and_then(Value::as_str).unwrap_or("");
+            if is_search_like_tool_name(tool_name) {
+                state.searched = true;
+                state.tool_metadata.push(SearchToolMetadata {
+                    tool_name: tool_name.to_owned(),
+                    tool_use_id: event
+                        .get("tool_id")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    sources: Vec::new(),
+                    output: None,
+                });
+            }
+        }
+        "tool_result" => {
+            let tool_id = event
+                .get("tool_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let output = event
+                .get("output")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            if let (Some(existing), Some(output)) = (
+                tool_id.as_deref().and_then(|id| {
+                    state
+                        .tool_metadata
+                        .iter_mut()
+                        .find(|item| item.tool_use_id.as_deref() == Some(id))
+                }),
+                output,
+            ) {
+                existing.output = Some(output);
+            }
+        }
+        "message" => {
+            if event.get("role").and_then(Value::as_str) == Some("assistant")
+                && let Some(content) = event.get("content").and_then(Value::as_str)
+            {
+                state.answer.push_str(content);
+            }
+        }
+        "result" => {
+            summary.status = event
+                .get("status")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let stats = event.get("stats").and_then(Value::as_object);
+            summary.duration_ms = stats
+                .and_then(|stats| stats.get("duration_ms"))
+                .and_then(Value::as_u64);
+            if let Some(tool_calls) = stats
+                .and_then(|stats| stats.get("tool_calls"))
+                .and_then(Value::as_u64)
+                && tool_calls > 0
+            {
+                state.searched = true;
+            }
+        }
+        _ => {}
     }
-    let Some(search_metadata) = search_metadata else {
-        return;
-    };
-    let mut sources = value_search_sources(&search_metadata["sources"]);
-    if sources.is_empty()
-        && let Some(output) = search_metadata.get("output").and_then(Value::as_str)
-    {
-        sources = extract_search_sources_from_text(output);
-    }
-    for source in &sources {
-        push_source_unique(&mut state.sources, source.clone());
-    }
-    state.tool_metadata.push(SearchToolMetadata {
-        tool_name: tool_name.to_owned(),
-        tool_use_id: message.tool_use_id.clone(),
-        sources,
-        output: search_metadata
-            .get("output")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-    });
 }
 
-pub(crate) fn apply_search_provider_event(state: &mut SearchStreamState, event: &StreamEvent) {
-    match event {
-        StreamEvent::Delta { text } => state.answer.push_str(text),
-        StreamEvent::ToolUse { message } | StreamEvent::ToolResult { message } => {
-            apply_search_provider_message(state, message);
+fn sanitize_gemini_cli_stderr(stderr: &str) -> String {
+    stderr
+        .lines()
+        .map(|line| {
+            let lower = line.to_ascii_lowercase();
+            if lower.contains("authorization")
+                || lower.contains("access_token")
+                || lower.contains("refresh_token")
+                || lower.contains("credential")
+                || lower.contains("api key")
+                || lower.contains("apikey")
+            {
+                "[redacted sensitive stderr line]".to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+async fn run_gemini_cli_search(
+    query: &str,
+    timeout_secs: u64,
+) -> Result<SearchCommandOutput, Box<dyn std::error::Error>> {
+    let workspace_dir = tool_workspace_dir("search")?;
+    let policy_path = write_gemini_search_policy(&workspace_dir).await?;
+    let run_id = format!("tool-run-{}", Uuid::new_v4());
+    let mut command = Command::new("gemini");
+    command
+        .current_dir(&workspace_dir)
+        .kill_on_drop(true)
+        .arg("--skip-trust")
+        .arg("--approval-mode")
+        .arg("yolo")
+        .arg("--model")
+        .arg(TOOL_SEARCH_GEMINI_MODEL)
+        .arg("--policy")
+        .arg(&policy_path)
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("-p")
+        .arg(build_gemini_search_prompt(query))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let output = match tokio::time::timeout(Duration::from_secs(timeout_secs), command.output())
+        .await
+    {
+        Ok(output) => output?,
+        Err(_) => {
+            return Err(
+                format!("timed out after {timeout_secs}s waiting for Gemini CLI search").into(),
+            );
         }
-        StreamEvent::Boundary { .. }
-        | StreamEvent::ThreadTitleUpdated { .. }
-        | StreamEvent::Done => {}
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        let sanitized = sanitize_gemini_cli_stderr(&stderr);
+        return Err(format!(
+            "Gemini CLI search failed with status {}{}",
+            output.status,
+            if sanitized.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {}", sanitized.trim())
+            }
+        )
+        .into());
     }
+
+    let mut state = SearchStreamState::default();
+    let mut summary = GeminiCliSearchSummary::default();
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let event: Value = serde_json::from_str(line)
+            .map_err(|error| format!("Gemini CLI emitted malformed stream JSON: {error}"))?;
+        apply_gemini_cli_search_event(&mut state, &mut summary, &event);
+    }
+
+    let answer = state.answer.trim().to_owned();
+    if summary
+        .status
+        .as_deref()
+        .is_some_and(|status| status != "success")
+    {
+        return Err(format!(
+            "Gemini CLI search finished with status {}",
+            summary.status.as_deref().unwrap_or("unknown")
+        )
+        .into());
+    }
+    if !state.searched {
+        return Err("Gemini completed without using provider-native search".into());
+    }
+    if answer.is_empty() {
+        return Err("Gemini returned no answer".into());
+    }
+    if state.sources.is_empty() {
+        state.sources = extract_search_sources_from_text(&answer);
+    }
+
+    let runtime_thread_id = summary
+        .session_id
+        .as_deref()
+        .map(|session_id| format!("gemini-cli::{session_id}"))
+        .unwrap_or_else(|| format!("tool::search::{}", Uuid::new_v4()));
+    Ok(SearchCommandOutput {
+        ok: true,
+        query: query.to_owned(),
+        answer,
+        sources: state.sources,
+        runtime_thread_id,
+        run_id,
+        model: summary
+            .model
+            .unwrap_or_else(|| TOOL_SEARCH_GEMINI_MODEL.to_owned()),
+        duration_ms: summary.duration_ms,
+        searched: state.searched,
+        tool_metadata: state.tool_metadata,
+    })
 }
 
 pub(crate) async fn cmd_tool_search(
-    config_path: &str,
+    _config_path: &str,
     query_parts: Vec<String>,
     json_output: bool,
     timeout_secs: u64,
@@ -3716,48 +3924,7 @@ pub(crate) async fn cmd_tool_search(
         return Err("timeout must be greater than zero".into());
     }
 
-    let provider_run = run_provider_tool(
-        config_path,
-        ProviderType::GeminiCli,
-        "search",
-        build_gemini_search_prompt(&query),
-        timeout_secs,
-        HashMap::from([
-            ("source".to_owned(), json!("garyx_tool_search")),
-            ("search_query".to_owned(), json!(query.clone())),
-            ("model".to_owned(), json!(TOOL_SEARCH_GEMINI_MODEL)),
-        ]),
-    )
-    .await?;
-    let mut state = SearchStreamState {
-        thread_id: Some(provider_run.runtime_thread_id.clone()),
-        run_id: Some(provider_run.run_id.clone()),
-        ..Default::default()
-    };
-    for event in &provider_run.events {
-        apply_search_provider_event(&mut state, event);
-    }
-
-    let answer = state.answer.trim().to_owned();
-    if !state.searched {
-        return Err("Gemini completed without using provider-native search".into());
-    }
-    if answer.is_empty() {
-        return Err("Gemini returned no answer".into());
-    }
-    if state.sources.is_empty() {
-        state.sources = extract_search_sources_from_text(&answer);
-    }
-    let output = SearchCommandOutput {
-        ok: true,
-        query,
-        answer,
-        sources: state.sources,
-        runtime_thread_id: state.thread_id.unwrap_or(provider_run.runtime_thread_id),
-        run_id: state.run_id.unwrap_or(provider_run.run_id),
-        searched: state.searched,
-        tool_metadata: state.tool_metadata,
-    };
+    let output = run_gemini_cli_search(&query, timeout_secs).await?;
 
     if json_output {
         return print_pretty_json(&serde_json::to_value(output)?);

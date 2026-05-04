@@ -1126,6 +1126,121 @@ fn tool_search_uses_fixed_gemini_flash_model() {
 }
 
 #[test]
+fn gemini_search_policy_allows_only_google_web_search() {
+    let policy = gemini_search_policy_text();
+    assert!(policy.contains("toolName = \"*\""));
+    assert!(policy.contains("decision = \"deny\""));
+    assert!(policy.contains("toolName = \"google_web_search\""));
+    assert!(policy.contains("decision = \"allow\""));
+}
+
+#[test]
+fn gemini_cli_search_event_parser_requires_tool_use_not_direct_answer() {
+    let mut state = SearchStreamState::default();
+    let mut summary = GeminiCliSearchSummary::default();
+
+    apply_gemini_cli_search_event(
+        &mut state,
+        &mut summary,
+        &json!({
+            "type": "init",
+            "session_id": "session-1",
+            "model": "gemini-3-flash-preview"
+        }),
+    );
+    apply_gemini_cli_search_event(
+        &mut state,
+        &mut summary,
+        &json!({
+            "type": "message",
+            "role": "assistant",
+            "content": "Direct answer without a tool."
+        }),
+    );
+
+    assert!(!state.searched);
+    assert_eq!(state.answer, "Direct answer without a tool.");
+    assert_eq!(summary.session_id.as_deref(), Some("session-1"));
+    assert_eq!(summary.model.as_deref(), Some("gemini-3-flash-preview"));
+}
+
+#[test]
+fn gemini_cli_search_event_parser_collects_tool_answer_and_stats() {
+    let mut state = SearchStreamState::default();
+    let mut summary = GeminiCliSearchSummary::default();
+
+    apply_gemini_cli_search_event(
+        &mut state,
+        &mut summary,
+        &json!({
+            "type": "tool_use",
+            "tool_name": "google_web_search",
+            "tool_id": "google_web_search_1",
+            "parameters": { "query": "example" }
+        }),
+    );
+    apply_gemini_cli_search_event(
+        &mut state,
+        &mut summary,
+        &json!({
+            "type": "tool_result",
+            "tool_id": "google_web_search_1",
+            "status": "success",
+            "output": "Search results returned."
+        }),
+    );
+    apply_gemini_cli_search_event(
+        &mut state,
+        &mut summary,
+        &json!({
+            "type": "message",
+            "role": "assistant",
+            "content": "Answer with [Source](https://example.test/source)."
+        }),
+    );
+    apply_gemini_cli_search_event(
+        &mut state,
+        &mut summary,
+        &json!({
+            "type": "result",
+            "status": "success",
+            "stats": {
+                "duration_ms": 1234,
+                "tool_calls": 1
+            }
+        }),
+    );
+
+    assert!(state.searched);
+    assert_eq!(
+        state.answer,
+        "Answer with [Source](https://example.test/source)."
+    );
+    assert_eq!(summary.status.as_deref(), Some("success"));
+    assert_eq!(summary.duration_ms, Some(1234));
+    assert_eq!(state.tool_metadata.len(), 1);
+    assert_eq!(state.tool_metadata[0].tool_name, "google_web_search");
+    assert_eq!(
+        state.tool_metadata[0].tool_use_id.as_deref(),
+        Some("google_web_search_1")
+    );
+    assert_eq!(
+        state.tool_metadata[0].output.as_deref(),
+        Some("Search results returned.")
+    );
+}
+
+#[test]
+fn gemini_cli_stderr_sanitizer_redacts_sensitive_lines() {
+    let stderr = "safe warning\nAuthorization: Bearer secret\nrefresh_token=secret";
+    let sanitized = sanitize_gemini_cli_stderr(stderr);
+    assert!(sanitized.contains("safe warning"));
+    assert!(!sanitized.contains("Bearer secret"));
+    assert!(!sanitized.contains("refresh_token=secret"));
+    assert!(sanitized.contains("[redacted sensitive stderr line]"));
+}
+
+#[test]
 fn search_stream_event_does_not_count_direct_answer_as_search() {
     let mut state = SearchStreamState::default();
 
