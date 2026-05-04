@@ -2,8 +2,11 @@ use super::*;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use garyx_bridge::MultiProviderBridge;
+use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 use garyx_channels::{ChannelDispatcher, ChannelInfo};
 use garyx_models::config::{GaryxConfig, OwnerTargetConfig, TelegramAccount};
+use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent};
 use garyx_models::{Principal, TaskEvent, TaskEventKind};
 
 #[derive(Default)]
@@ -14,6 +17,70 @@ struct RecordingDispatcher {
 impl RecordingDispatcher {
     fn calls(&self) -> Vec<OutboundMessage> {
         self.calls.lock().expect("dispatcher lock poisoned").clone()
+    }
+}
+
+#[derive(Default)]
+struct RecordingProvider {
+    calls: std::sync::Mutex<Vec<(String, String, HashMap<String, Value>)>>,
+}
+
+impl RecordingProvider {
+    fn calls(&self) -> Vec<(String, String, HashMap<String, Value>)> {
+        self.calls.lock().expect("provider lock poisoned").clone()
+    }
+}
+
+#[async_trait]
+impl AgentLoopProvider for RecordingProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        self.calls.lock().expect("provider lock poisoned").push((
+            options.thread_id.clone(),
+            options.message.clone(),
+            options.metadata.clone(),
+        ));
+        on_chunk(StreamEvent::Delta {
+            text: "reviewing task notification".to_owned(),
+        });
+        on_chunk(StreamEvent::Done);
+        Ok(ProviderRunResult {
+            run_id: "task-notification-provider-run".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: "reviewing task notification".to_owned(),
+            session_messages: vec![],
+            sdk_session_id: None,
+            actual_model: None,
+            success: true,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: 0.0,
+            duration_ms: 0,
+        })
+    }
+
+    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+        Ok(session_key.to_owned())
     }
 }
 
@@ -135,9 +202,23 @@ fn final_text_uses_last_assistant_group_after_last_user() {
 #[tokio::test]
 async fn dispatches_ready_notification_to_bot_target() {
     let dispatcher = Arc::new(RecordingDispatcher::default());
+    let provider = Arc::new(RecordingProvider::default());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("recording-provider", provider.clone())
+        .await;
+    bridge
+        .set_route("telegram", "main", "recording-provider")
+        .await;
+    bridge.set_default_provider_key("recording-provider").await;
     let state = crate::app_bootstrap::AppStateBuilder::new(telegram_owner_config())
+        .with_bridge(bridge.clone())
         .with_channel_dispatcher(dispatcher.clone())
         .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
     state
         .threads
         .thread_store
@@ -166,13 +247,52 @@ async fn dispatches_ready_notification_to_bot_target() {
     .unwrap();
 
     let calls = dispatcher.calls();
-    assert_eq!(calls.len(), 1);
-    assert_eq!(calls[0].channel, "telegram");
-    assert_eq!(calls[0].account_id, "main");
-    assert_eq!(calls[0].delivery_target_id, "chat-42");
-    let text = calls[0].content.as_text().unwrap();
+    let notification_call = calls
+        .iter()
+        .find(|call| {
+            call.content
+                .as_text()
+                .is_some_and(|text| text.contains("Task #TASK-42 is ready for review"))
+        })
+        .expect("direct bot notification should be sent");
+    assert_eq!(notification_call.channel, "telegram");
+    assert_eq!(notification_call.account_id, "main");
+    assert_eq!(notification_call.delivery_target_id, "chat-42");
+    let text = notification_call.content.as_text().unwrap();
     assert!(text.contains("Task #TASK-42 is ready for review"));
     assert!(text.contains("The implementation is complete."));
+
+    let provider_calls = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let calls = provider.calls();
+            if !calls.is_empty() {
+                break calls;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("notification should trigger target thread agent");
+    assert_eq!(provider_calls.len(), 1);
+    assert!(provider_calls[0].0.starts_with("thread::"));
+    assert!(
+        provider_calls[0]
+            .1
+            .contains("Task #TASK-42 is ready for review")
+    );
+    assert!(
+        provider_calls[0]
+            .1
+            .contains("The implementation is complete.")
+    );
+    assert_eq!(
+        provider_calls[0].2.get("task_notification"),
+        Some(&Value::Bool(true))
+    );
+    assert_eq!(
+        provider_calls[0].2.get("task_ref"),
+        Some(&Value::String("#TASK-42".to_owned()))
+    );
 
     let mut persisted_notification = false;
     for thread_id in state.threads.thread_store.list_keys(Some("thread::")).await {

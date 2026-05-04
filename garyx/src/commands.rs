@@ -3701,11 +3701,7 @@ fn encode_task_ref(task_ref: &str) -> Result<String, Box<dyn std::error::Error>>
 
 fn print_task_summary(value: &Value) {
     let task = value.get("task").unwrap_or(value);
-    let task_ref = value
-        .get("task_ref")
-        .and_then(Value::as_str)
-        .or_else(|| task.get("task_ref").and_then(Value::as_str))
-        .unwrap_or("-");
+    let task_ref = task_ref_display(value, task);
     let thread_id = value
         .get("thread_id")
         .and_then(Value::as_str)
@@ -3747,6 +3743,22 @@ fn print_task_summary(value: &Value) {
     }
 }
 
+fn task_ref_display(value: &Value, task: &Value) -> String {
+    value
+        .get("task_ref")
+        .and_then(Value::as_str)
+        .or_else(|| task.get("task_ref").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            value
+                .get("number")
+                .and_then(Value::as_u64)
+                .or_else(|| task.get("number").and_then(Value::as_u64))
+                .map(|number| format!("#TASK-{number}"))
+        })
+        .unwrap_or_else(|| "-".to_owned())
+}
+
 #[derive(Debug, Clone)]
 struct TaskProgressMessage {
     role: String,
@@ -3767,11 +3779,7 @@ struct TaskProgressTurn {
 
 fn format_task_progress(task_payload: &Value, history_payload: Option<&Value>) -> String {
     let task = task_payload.get("task").unwrap_or(task_payload);
-    let task_ref = task_payload
-        .get("task_ref")
-        .and_then(Value::as_str)
-        .or_else(|| task.get("task_ref").and_then(Value::as_str))
-        .unwrap_or("-");
+    let task_ref = task_ref_display(task_payload, task);
     let thread_id = task_payload
         .get("thread_id")
         .and_then(Value::as_str)

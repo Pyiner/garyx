@@ -1,18 +1,19 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::Utc;
 use garyx_channels::{OutboundMessage, SendMessageResult};
 use garyx_models::thread_logs::ThreadLogEvent;
 use garyx_models::{
     ChannelOutboundContent, MessageLifecycleStatus, MessageTerminalReason, TaskEventKind,
     TaskNotificationTarget, TaskStatus, ThreadTask,
 };
-use garyx_router::{bindings_from_value, tasks::task_from_record};
+use garyx_router::tasks::task_from_record;
 use serde_json::{Value, json};
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::chat_shared::record_api_thread_log;
+use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
 
 const TASK_NOTIFICATION_EVENT: &str = "task_ready_for_review";
@@ -248,46 +249,19 @@ async fn deliver_notification_to_thread(
     target_thread_id: &str,
     text: &str,
 ) -> Result<(), TaskNotificationError> {
-    let Some(record) = state.threads.thread_store.get(target_thread_id).await else {
+    if state
+        .threads
+        .thread_store
+        .get(target_thread_id)
+        .await
+        .is_none()
+    {
         return Err(TaskNotificationError::new(
             event,
             format!("notification thread target not found: {target_thread_id}"),
         ));
-    };
-    let bindings = bindings_from_value(&record);
-    persist_notification_user_message(state, event, target_thread_id, text).await?;
-    if bindings.is_empty() {
-        record_api_thread_log(
-            state,
-            ThreadLogEvent::info(
-                target_thread_id,
-                "task",
-                "task ready notification stored without channel delivery",
-            )
-            .with_run_id(event.run_id.clone().unwrap_or_default())
-            .with_field("task_ref", json!(event.task_ref)),
-        )
-        .await;
-        return Ok(());
     }
-    for binding in bindings {
-        let delivery_thread_id =
-            crate::routes::binding_delivery_thread_id(&binding.binding_key, &binding.chat_id);
-        send_notification_message(
-            state,
-            event,
-            target_thread_id,
-            &binding.channel,
-            &binding.account_id,
-            &binding.chat_id,
-            &binding.resolved_delivery_target_type(),
-            &binding.resolved_delivery_target_id(),
-            delivery_thread_id.as_deref(),
-            text,
-        )
-        .await?;
-    }
-    Ok(())
+    dispatch_notification_to_thread_agent(state, event, target_thread_id, text).await
 }
 
 async fn deliver_notification_to_bot(
@@ -356,9 +330,9 @@ async fn deliver_notification_to_bot(
         }
     };
 
-    persist_notification_user_message(state, event, &target_thread_id, text).await?;
-
-    send_notification_message(
+    let dispatch_result =
+        dispatch_notification_to_thread_agent(state, event, &target_thread_id, text).await;
+    let send_result = send_notification_message(
         state,
         event,
         &target_thread_id,
@@ -370,117 +344,58 @@ async fn deliver_notification_to_bot(
         endpoint.delivery_thread_id.as_deref(),
         text,
     )
-    .await
+    .await;
+
+    dispatch_result?;
+    send_result
 }
 
-async fn persist_notification_user_message(
+async fn dispatch_notification_to_thread_agent(
     state: &Arc<AppState>,
     event: &TaskReadyForReviewEvent,
     target_thread_id: &str,
     text: &str,
 ) -> Result<(), TaskNotificationError> {
-    let timestamp = Utc::now().to_rfc3339();
-    let message = json!({
-        "role": "user",
-        "content": text,
-        "text": text,
-        "timestamp": timestamp,
-        "metadata": {
-            "source": "task_notification",
-            "event": "ready_for_review",
-            "task_ref": event.task_ref,
-            "task_thread_id": event.thread_id,
-        },
-    });
-    let append_result = state
-        .threads
-        .history
-        .transcript_store()
-        .append_committed_messages(target_thread_id, None, &[message.clone()])
-        .await
-        .map_err(|error| {
-            TaskNotificationError::new(
-                event,
-                format!("failed to append notification transcript: {error}"),
-            )
-        })?;
-    let Some(mut record) = state.threads.thread_store.get(target_thread_id).await else {
-        return Err(TaskNotificationError::new(
-            event,
-            format!("notification thread target not found: {target_thread_id}"),
-        ));
-    };
-    let Some(object) = record.as_object_mut() else {
-        return Err(TaskNotificationError::new(
-            event,
-            format!("notification thread target is not an object: {target_thread_id}"),
-        ));
-    };
-
-    let messages = object
-        .entry("messages".to_owned())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    if !messages.is_array() {
-        *messages = Value::Array(Vec::new());
-    }
-    let messages = messages.as_array_mut().expect("messages array");
-    messages.push(message);
-    let snapshot_limit = garyx_router::DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT;
-    if messages.len() > snapshot_limit {
-        let drain_count = messages.len() - snapshot_limit;
-        messages.drain(0..drain_count);
-    }
-
-    let history = object
-        .entry("history".to_owned())
-        .or_insert_with(|| json!({}));
-    if !history.is_object() {
-        *history = json!({});
-    }
-    let history = history.as_object_mut().expect("history object");
-    history.insert(
-        "source".to_owned(),
-        Value::String("transcript_v1".to_owned()),
-    );
-    if let Some(path) = state
-        .threads
-        .history
-        .transcript_store()
-        .transcript_path(target_thread_id)
-    {
-        history.insert(
-            "transcript_file".to_owned(),
-            Value::String(path.display().to_string()),
+    let mut extra_metadata = HashMap::from([
+        ("task_notification".to_owned(), Value::Bool(true)),
+        (
+            "task_notification_event".to_owned(),
+            Value::String("ready_for_review".to_owned()),
+        ),
+        ("task_ref".to_owned(), Value::String(event.task_ref.clone())),
+        (
+            "task_thread_id".to_owned(),
+            Value::String(event.thread_id.clone()),
+        ),
+    ]);
+    if let Some(source_run_id) = event.run_id.as_deref() {
+        extra_metadata.insert(
+            "task_notification_source_run_id".to_owned(),
+            Value::String(source_run_id.to_owned()),
         );
     }
-    history.insert(
-        "message_count".to_owned(),
-        Value::Number(serde_json::Number::from(
-            append_result.total_messages as u64,
-        )),
+    let run_id = format!(
+        "task-notify-{}-{}",
+        event.task_ref.trim_start_matches('#'),
+        Uuid::now_v7()
     );
-    history.insert(
-        "snapshot_limit".to_owned(),
-        Value::Number(serde_json::Number::from(snapshot_limit as u64)),
-    );
-    history.insert(
-        "snapshot_truncated".to_owned(),
-        Value::Bool(append_result.total_messages > snapshot_limit),
-    );
-    if let Some(last_message_at) = append_result.last_message_at {
-        history.insert("last_message_at".to_owned(), Value::String(last_message_at));
-    }
-    object.insert("updated_at".to_owned(), Value::String(timestamp));
-    state
-        .threads
-        .thread_store
-        .set(target_thread_id, record)
-        .await;
-    state
-        .threads
-        .history
-        .enqueue_conversation_index_for_thread(target_thread_id);
-    Ok(())
+    dispatch_internal_message_to_thread(
+        state,
+        target_thread_id,
+        &run_id,
+        text,
+        InternalDispatchOptions {
+            extra_metadata,
+            ..Default::default()
+        },
+    )
+    .await
+    .map_err(|error| {
+        TaskNotificationError::new(
+            event,
+            format!("failed to dispatch notification to thread agent: {error}"),
+        )
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

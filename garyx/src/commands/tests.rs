@@ -1219,6 +1219,18 @@ fn task_notification_target_resolves_current_thread_from_env() {
 }
 
 #[test]
+fn task_ref_display_falls_back_to_task_number() {
+    let payload = json!({
+        "task": {
+            "number": 42,
+            "title": "Fallback ref"
+        }
+    });
+
+    assert_eq!(task_ref_display(&payload, &payload["task"]), "#TASK-42");
+}
+
+#[test]
 fn format_task_progress_groups_each_user_turn_with_last_assistant_text_group() {
     let task_payload = json!({
         "task_ref": "#TASK-42",
