@@ -222,6 +222,7 @@ impl TaskService {
         validate_notification_target(input.notification_target.as_ref())?;
         let source = normalize_task_source(input.source);
         let runtime = input.runtime.clone();
+        let auto_start = input.start || input.assignee.is_some();
         let thread_agent_id = runtime
             .as_ref()
             .and_then(|runtime| normalized_nonempty_string(runtime.agent_id.as_deref()))
@@ -230,9 +231,10 @@ impl TaskService {
                 Some(Principal::Agent { agent_id }) => Some(agent_id.clone()),
                 _ => None,
             })
-            .or_else(|| match &actor {
-                Principal::Agent { agent_id } => Some(agent_id.clone()),
-                Principal::Human { .. } => Some(DEFAULT_TASK_AGENT_ID.to_owned()),
+            .or_else(|| match (&actor, auto_start) {
+                (Principal::Agent { agent_id }, true) => Some(agent_id.clone()),
+                (Principal::Human { .. }, true) => Some(DEFAULT_TASK_AGENT_ID.to_owned()),
+                (_, false) => None,
             });
         let workspace_dir = runtime
             .as_ref()
@@ -270,7 +272,6 @@ impl TaskService {
         }
 
         let title = derive_title(input.title.as_deref(), &record);
-        let auto_start = input.start || input.assignee.is_some();
         let task = self
             .build_task(
                 title,

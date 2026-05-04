@@ -856,12 +856,10 @@ async fn validate_thread_runtime_allows_assignee(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            TaskServiceError::BadRequest(format!(
-                "task thread {thread_id} has no bound agent; create a new task thread for agent {}",
-                reference.bound_agent_id()
-            ))
-        })?;
+        .map(ToOwned::to_owned);
+    let Some(thread_agent_id) = thread_agent_id else {
+        return Ok(());
+    };
     if thread_agent_id != reference.bound_agent_id() {
         return Err(TaskServiceError::BadRequest(format!(
             "task thread {thread_id} is bound to agent {thread_agent_id}; cannot assign it to agent {}",
@@ -896,12 +894,25 @@ async fn ensure_thread_workspace_from_assignee_default(
     let Some(mut updated) = state.threads.thread_store.get(thread_id).await else {
         return Ok(());
     };
+    let reference = resolve_agent_reference_from_stores(
+        state.ops.custom_agents.as_ref(),
+        state.ops.agent_teams.as_ref(),
+        agent_id,
+    )
+    .await
+    .map_err(TaskServiceError::UnknownAgent)?;
     let existing_workspace_dir = workspace_dir_from_value(&updated);
     let default_workspace_dir = if existing_workspace_dir.is_none() {
         default_workspace_dir_for_agent(state, agent_id).await?
     } else {
         None
     };
+    let should_bind_agent = updated
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none();
     let Some(obj) = updated.as_object_mut() else {
         return Err(TaskServiceError::Store(format!(
             "thread payload is not an object: {thread_id}"
@@ -912,6 +923,13 @@ async fn ensure_thread_workspace_from_assignee_default(
             "workspace_dir".to_owned(),
             Value::String(default_workspace_dir),
         );
+    }
+    if should_bind_agent {
+        obj.insert(
+            "agent_id".to_owned(),
+            Value::String(reference.bound_agent_id().to_owned()),
+        );
+        obj.insert("provider_type".to_owned(), json!(reference.provider_type()));
     }
     obj.insert(
         "updated_at".to_owned(),

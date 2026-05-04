@@ -2165,3 +2165,116 @@ async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
     assert_eq!(after["agent_id"], "claude");
     assert_eq!(after["provider_type"], "claude_code");
 }
+
+#[tokio::test]
+async fn task_create_unassigned_todo_can_be_assigned_to_first_agent() {
+    let dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.tasks.enabled = true;
+    config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+            agent_id: "late-gemini".to_owned(),
+            display_name: "Late Gemini".to_owned(),
+            provider_type: ProviderType::GeminiCli,
+            model: "gemini-test".to_owned(),
+            default_workspace_dir: Some("/tmp/late-gemini-default".to_owned()),
+            system_prompt: "Work normally.".to_owned(),
+        })
+        .await
+        .expect("custom agent");
+
+    let gemini_provider = Arc::new(RecordingTaskProvider::with_provider_type(
+        ProviderType::GeminiCli,
+    ));
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("task-gemini-provider", gemini_provider.clone())
+        .await;
+    bridge
+        .set_default_provider_key("task-gemini-provider")
+        .await;
+
+    let state = AppStateBuilder::new(config)
+        .with_custom_agent_store(custom_agents.clone())
+        .with_bridge(bridge.clone())
+        .build();
+    bridge
+        .replace_agent_profiles(custom_agents.list_agents().await)
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/tasks")
+        .header("X-Garyx-Actor", "agent:codex")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "title": "Assignable later",
+                "body": "Created by an agent, assigned later.",
+                "notification_target": {"kind": "none"}
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let task_id = payload["task_id"].as_str().unwrap();
+    let thread_id = payload["thread_id"].as_str().unwrap().to_owned();
+    assert_eq!(payload["status"], "todo");
+    assert_eq!(payload["runtime_agent_id"], "");
+    assert!(payload.get("dispatch").is_none());
+
+    let before = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .expect("thread before assign");
+    assert!(before.get("agent_id").is_none());
+    assert!(before.get("provider_type").is_none());
+
+    let request = authed_request()
+        .method("PATCH")
+        .uri(format!(
+            "/api/tasks/{}/assign",
+            urlencoding::encode(task_id)
+        ))
+        .header("X-Garyx-Actor", "agent:codex")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "to": {"kind": "agent", "agent_id": "late-gemini"}
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["task"]["status"], "in_progress");
+    assert_eq!(payload["dispatch"]["queued"], true);
+
+    let after = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .expect("thread after assign");
+    assert_eq!(after["agent_id"], "late-gemini");
+    assert_eq!(after["provider_type"], json!(ProviderType::GeminiCli));
+    assert_eq!(after["workspace_dir"], "/tmp/late-gemini-default");
+}
