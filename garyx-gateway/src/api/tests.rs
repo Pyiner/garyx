@@ -1530,7 +1530,7 @@ async fn test_settings_update_partial_payload_preserves_existing_sections() {
 
     let mut initial = GaryxConfig::default();
     initial.gateway.port = 4242;
-    initial.gateway.image_gen.api_key = "image-secret".to_owned();
+    initial.gateway.search.api_key = "search-secret".to_owned();
     initial
         .channels
         .plugin_channel_mut("telegram")
@@ -1582,7 +1582,7 @@ async fn test_settings_update_partial_payload_preserves_existing_sections() {
     let persisted: GaryxConfig = serde_json::from_str(&file_content).unwrap();
     assert_eq!(persisted.commands.len(), 0);
     assert_eq!(persisted.gateway.port, 4242);
-    assert_eq!(persisted.gateway.image_gen.api_key, "image-secret");
+    assert_eq!(persisted.gateway.search.api_key, "search-secret");
     let telegram = persisted
         .channels
         .plugins

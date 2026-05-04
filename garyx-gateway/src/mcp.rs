@@ -8,7 +8,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
 use garyx_channels::OutboundMessage;
 use garyx_models::Verdict;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -72,24 +71,6 @@ pub struct MessageParams {
     #[serde(default)]
     #[schemars(skip)]
     pub token: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct ImageGenParams {
-    /// Text prompt for image generation
-    pub prompt: String,
-    /// Legacy size hint: 256x256, 512x512, or 1024x1024
-    #[serde(default)]
-    pub size: Option<String>,
-    /// Aspect ratio, e.g. "1:1", "16:9"
-    #[serde(default, alias = "aspectRatio")]
-    pub aspect_ratio: Option<String>,
-    /// Output size hint, e.g. "2K" or "4K". Defaults to "2K" if not specified.
-    #[serde(default, alias = "imageSize")]
-    pub image_size: Option<String>,
-    /// Optional local reference image paths
-    #[serde(default, alias = "referenceImages")]
-    pub reference_images: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -330,16 +311,6 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "Generate an image from a text prompt. Default output size is 2K unless specified otherwise."
-    )]
-    async fn image_gen(
-        &self,
-        Parameters(params): Parameters<ImageGenParams>,
-    ) -> Result<String, String> {
-        tools::image_gen::run(self, params).await
-    }
-
-    #[tool(
         description = "Search the web using Google Search grounding via Gemini. Returns grounded answers with source citations."
     )]
     async fn search(&self, Parameters(params): Parameters<SearchParams>) -> Result<String, String> {
@@ -418,7 +389,7 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, message, image_gen, search, conversation_history, conversation_search, rebind_current_channel, stop_loop."
+                "Garyx MCP server. Tools: status, message, search, conversation_history, conversation_search, rebind_current_channel, stop_loop."
                     .to_owned(),
             ),
         }

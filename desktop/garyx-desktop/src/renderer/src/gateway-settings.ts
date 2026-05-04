@@ -1,6 +1,5 @@
 const DEFAULT_GATEWAY_HOST = '0.0.0.0';
 const DEFAULT_GATEWAY_PORT = 31337;
-const DEFAULT_IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
 const DEFAULT_CHANNEL_AGENT_ID = 'claude';
 
 export type GatewaySettingsMode = 'form' | 'json';
@@ -296,11 +295,9 @@ export function ensureGatewayConfig(raw: unknown): any {
   config.gateway.host = String(config.gateway.host || DEFAULT_GATEWAY_HOST);
   config.gateway.port = coerceInteger(config.gateway.port, DEFAULT_GATEWAY_PORT);
   config.gateway.public_url = String(config.gateway.public_url || '');
-  config.gateway.image_gen = ensureRecord(config.gateway.image_gen);
-  config.gateway.image_gen.api_key = String(config.gateway.image_gen.api_key || '');
-  config.gateway.image_gen.model = String(
-    config.gateway.image_gen.model || DEFAULT_IMAGE_MODEL,
-  );
+  // Drop legacy image_gen settings — Garyx no longer ships an MCP image
+  // generation tool, so persisting the section would only keep dead config.
+  delete config.gateway.image_gen;
 
   delete config.agent_defaults;
 

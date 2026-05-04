@@ -47,27 +47,6 @@ pub fn default_true() -> bool {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ImageGenConfig {
-    #[serde(default)]
-    pub api_key: String,
-    #[serde(default = "default_image_gen_model")]
-    pub model: String,
-}
-
-fn default_image_gen_model() -> String {
-    "gemini-3.1-flash-image-preview".to_owned()
-}
-
-impl Default for ImageGenConfig {
-    fn default() -> Self {
-        Self {
-            api_key: String::new(),
-            model: default_image_gen_model(),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SearchConfig {
     #[serde(default)]
     pub api_key: String,
@@ -130,8 +109,6 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub auth_token: String,
     #[serde(default)]
-    pub image_gen: ImageGenConfig,
-    #[serde(default)]
     pub search: SearchConfig,
     #[serde(default)]
     pub conversation_index: ConversationIndexConfig,
@@ -151,7 +128,6 @@ impl Default for GatewayConfig {
             host: default_host(),
             public_url: String::new(),
             auth_token: String::new(),
-            image_gen: ImageGenConfig::default(),
             search: SearchConfig::default(),
             conversation_index: ConversationIndexConfig::default(),
         }

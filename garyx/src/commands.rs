@@ -71,7 +71,6 @@ pub(crate) struct OnboardCommandOptions {
     pub json: bool,
     pub api_account: String,
     pub search_api_key: Option<String>,
-    pub image_gen_api_key: Option<String>,
     pub conversation_index_api_key: Option<String>,
     pub enable_conversation_index: bool,
     pub disable_conversation_index: bool,
@@ -4423,7 +4422,6 @@ struct OnboardSummary {
     api_account: String,
     api_account_created: bool,
     search_api_key_configured: bool,
-    image_gen_api_key_configured: bool,
     conversation_index_enabled: bool,
     conversation_index_api_key_configured: bool,
     conversation_index_model: String,
@@ -4557,14 +4555,6 @@ fn print_onboard_summary(summary: &OnboardSummary) {
         }
     );
     println!(
-        "Image generation API key: {}",
-        if summary.image_gen_api_key_configured {
-            "configured"
-        } else {
-            "missing"
-        }
-    );
-    println!(
         "Conversation index: {} ({}, model={}, base_url={})",
         if summary.conversation_index_enabled {
             "enabled"
@@ -4621,9 +4611,6 @@ pub(crate) async fn cmd_onboard(
     if let Some(value) = trim_to_option(options.search_api_key.as_deref()) {
         cfg.gateway.search.api_key = value;
     }
-    if let Some(value) = trim_to_option(options.image_gen_api_key.as_deref()) {
-        cfg.gateway.image_gen.api_key = value;
-    }
     let explicit_conversation_key = trim_to_option(options.conversation_index_api_key.as_deref());
     if let Some(value) = explicit_conversation_key.clone() {
         cfg.gateway.conversation_index.api_key = value;
@@ -4664,22 +4651,6 @@ pub(crate) async fn cmd_onboard(
                 SecretPromptUpdate::Set => {
                     if let Some(value) = value {
                         cfg.gateway.search.api_key = value;
-                    }
-                }
-            }
-        }
-
-        if options.image_gen_api_key.is_none() {
-            let (action, value) = prompt_secret_update(
-                "Image generation API key",
-                !cfg.gateway.image_gen.api_key.trim().is_empty(),
-            )?;
-            match action {
-                SecretPromptUpdate::Keep => {}
-                SecretPromptUpdate::Clear => cfg.gateway.image_gen.api_key.clear(),
-                SecretPromptUpdate::Set => {
-                    if let Some(value) = value {
-                        cfg.gateway.image_gen.api_key = value;
                     }
                 }
             }
@@ -4769,7 +4740,6 @@ pub(crate) async fn cmd_onboard(
         api_account: api_account.clone(),
         api_account_created,
         search_api_key_configured: !cfg.gateway.search.api_key.trim().is_empty(),
-        image_gen_api_key_configured: !cfg.gateway.image_gen.api_key.trim().is_empty(),
         conversation_index_enabled: cfg.gateway.conversation_index.enabled,
         conversation_index_api_key_configured: !cfg
             .gateway

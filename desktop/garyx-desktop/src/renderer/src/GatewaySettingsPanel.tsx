@@ -1287,36 +1287,6 @@ export function GatewaySettingsPanel({
             description={t('Port used by the desktop client and other runtime callers.')}
             label="gateway.port"
           />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.gateway?.image_gen?.api_key || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.gateway.image_gen.api_key = event.target.value;
-                  });
-                }}
-              />
-            }
-            description={t('API key used by the image generation runtime.')}
-            label="gateway.image_gen.api_key"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.gateway?.image_gen?.model || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.gateway.image_gen.model = event.target.value;
-                  });
-                }}
-              />
-            }
-            description={t('Default image model for generated image requests.')}
-            label="gateway.image_gen.model"
-          />
         </div>
       </div>
       <div className="codex-section">

@@ -12,7 +12,6 @@ fn test_gateway_defaults() {
     let gw = GatewayConfig::default();
     assert_eq!(gw.port, 31337);
     assert_eq!(gw.host, "0.0.0.0");
-    assert_eq!(gw.image_gen.model, "gemini-3.1-flash-image-preview");
     assert_eq!(gw.conversation_index.model, "text-embedding-3-small");
     assert_eq!(gw.conversation_index.base_url, "https://api.openai.com/v1");
 }

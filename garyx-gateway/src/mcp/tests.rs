@@ -507,6 +507,49 @@ fn test_mcp_tool_router_excludes_cron_management() {
 }
 
 #[test]
+fn test_mcp_tool_router_does_not_advertise_image_generation() {
+    let server = test_server();
+    let names = server
+        .tool_router
+        .list_all()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect::<Vec<_>>();
+
+    assert!(
+        !names.iter().any(|name| name == "image_gen"),
+        "image generation tool must no longer be advertised: {names:?}"
+    );
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.contains("image_gen") || name.contains("image_generation")),
+        "no image-generation aliases should be advertised: {names:?}"
+    );
+    // Server instructions must also drop the legacy tool name so agents don't
+    // discover it through the MCP greeting text.
+    let info = ServerHandler::get_info(&server);
+    let instructions = info.instructions.unwrap_or_default();
+    assert!(
+        !instructions.contains("image_gen"),
+        "server instructions still mention the removed image_gen tool: {instructions}"
+    );
+}
+
+#[test]
+fn test_mcp_image_gen_route_is_absent() {
+    let server = test_server();
+    assert!(
+        !server.tool_router.has_route("image_gen"),
+        "image_gen route must not be registered on the MCP tool router"
+    );
+    assert!(
+        server.tool_router.get("image_gen").is_none(),
+        "image_gen must not resolve through the MCP tool router"
+    );
+}
+
+#[test]
 fn test_message_params_camel_case_aliases() {
     let parsed: MessageParams = serde_json::from_value(json!({
         "action": "send",
@@ -535,28 +578,6 @@ fn test_rebind_current_channel_params_camel_case_aliases() {
 
     assert_eq!(parsed.agent_id, "reviewer");
     assert_eq!(parsed.workspace_dir, "/tmp/rebind");
-}
-
-#[test]
-fn test_image_gen_params_camel_case_aliases() {
-    let parsed: ImageGenParams = serde_json::from_value(json!({
-        "prompt": "cat",
-        "aspectRatio": "16:9",
-        "imageSize": "2K",
-        "referenceImages": ["/tmp/a.png"]
-    }))
-    .unwrap();
-
-    assert_eq!(parsed.aspect_ratio.as_deref(), Some("16:9"));
-    assert_eq!(parsed.image_size.as_deref(), Some("2K"));
-    assert_eq!(
-        parsed
-            .reference_images
-            .as_ref()
-            .and_then(|v| v.first())
-            .map(String::as_str),
-        Some("/tmp/a.png")
-    );
 }
 
 #[test]
@@ -1263,120 +1284,6 @@ async fn test_conversation_search_uses_vector_index_backend_and_returns_metadata
             .unwrap()
             .contains("assistant: Use ONCE:1992-10-03 11:11.")
     );
-}
-
-// -- image_gen --
-
-#[tokio::test]
-async fn test_image_gen_ok() {
-    let server = test_server();
-    let result = server
-        .image_gen(Parameters(ImageGenParams {
-            prompt: "a cat".to_owned(),
-            size: None,
-            aspect_ratio: None,
-            image_size: None,
-            reference_images: None,
-        }))
-        .await;
-    assert!(result.is_ok());
-    let v: Value = serde_json::from_str(&result.unwrap()).unwrap();
-    assert_eq!(v["tool"], "image_gen");
-    assert_eq!(v["prompt"], "a cat");
-}
-
-#[tokio::test]
-async fn test_image_gen_missing_key_reports_config_hint() {
-    let server = test_server();
-    let result = server
-        .image_gen(Parameters(ImageGenParams {
-            prompt: "a cat".to_owned(),
-            size: None,
-            aspect_ratio: Some("1:1".to_owned()),
-            image_size: Some("2K".to_owned()),
-            reference_images: None,
-        }))
-        .await
-        .expect("image_gen should return wrapper response");
-
-    let v: Value = serde_json::from_str(&result).expect("valid image_gen json");
-    if GaryMcpServer::resolve_image_gen_api_key("").is_some() {
-        let status = v["status"].as_str().unwrap_or_default();
-        assert!(
-            status == "ok" || status == "error",
-            "unexpected image_gen status when API key is configured: {status}"
-        );
-    } else {
-        assert_eq!(v["status"], "error");
-        let err = v["result"]["error"].as_str().unwrap_or_default();
-        assert!(
-            err.contains("garyx.json") && err.contains("gateway.image_gen.api_key"),
-            "expected config hint in missing-key error, got: {err}"
-        );
-    }
-}
-
-#[tokio::test]
-#[ignore = "requires GEMINI_API_KEY/GOOGLE_API_KEY and network access"]
-async fn test_image_gen_live_with_gemini() {
-    let api_key = std::env::var("GEMINI_API_KEY")
-        .ok()
-        .or_else(|| std::env::var("GOOGLE_API_KEY").ok())
-        .map(|v| v.trim().to_owned())
-        .filter(|v| !v.is_empty())
-        .expect("missing GEMINI_API_KEY/GOOGLE_API_KEY");
-
-    let mut cfg = GaryxConfig::default();
-    cfg.gateway.image_gen.api_key = api_key;
-    if let Ok(model) = std::env::var("GARYX_IMAGE_GEN_MODEL")
-        && !model.trim().is_empty()
-    {
-        cfg.gateway.image_gen.model = model;
-    }
-    let server = GaryMcpServer::new(crate::server::create_app_state(cfg));
-    let result = server
-        .image_gen(Parameters(ImageGenParams {
-            prompt: "minimal red circle on white background, flat icon style".to_owned(),
-            size: None,
-            aspect_ratio: Some("1:1".to_owned()),
-            image_size: Some("2K".to_owned()),
-            reference_images: None,
-        }))
-        .await
-        .expect("image_gen tool should return success wrapper");
-
-    let v: Value = serde_json::from_str(&result).expect("valid image_gen json");
-    assert_eq!(v["tool"], "image_gen");
-    assert_eq!(
-        v["status"], "ok",
-        "image_gen backend failed: {}",
-        v["result"]
-    );
-    assert_eq!(v["result"]["success"], true);
-
-    let image_path = v["result"]["image_path"]
-        .as_str()
-        .expect("image_gen should return output path");
-    let meta = tokio::fs::metadata(image_path)
-        .await
-        .expect("generated image should exist");
-    assert!(meta.len() > 0, "generated image file should not be empty");
-}
-
-#[tokio::test]
-async fn test_image_gen_invalid_size() {
-    let server = test_server();
-    let result = server
-        .image_gen(Parameters(ImageGenParams {
-            prompt: "a cat".to_owned(),
-            size: Some("999x999".to_owned()),
-            aspect_ratio: None,
-            image_size: None,
-            reference_images: None,
-        }))
-        .await;
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("invalid size"));
 }
 
 // -- search --

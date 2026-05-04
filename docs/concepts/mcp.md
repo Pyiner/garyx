@@ -41,8 +41,8 @@ Behind `/mcp/<thread>/<run>` Garyx exposes tools for:
 - **Channel control** — pause / resume polling, lookup endpoint metadata.
 - **Persistent storage** — wiki / knowledge-base CRUD when a wiki is
   attached.
-- **Outbound search and image generation** — when those providers are
-  configured under `gateway.search` / `gateway.image_gen`.
+- **Outbound search** — when a search backend is configured under
+  `gateway.search`.
 
 The exact tool set evolves; the source of truth is the gateway's
 [MCP module](https://github.com/Pyiner/garyx/tree/main/garyx-gateway/src/mcp).

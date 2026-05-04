@@ -1,7 +1,6 @@
 pub(super) mod auto_research;
 pub(super) mod conversation_search;
 pub(super) mod history;
-pub(super) mod image_gen;
 pub(super) mod message;
 pub(super) mod rebind_current_channel;
 pub(super) mod search;

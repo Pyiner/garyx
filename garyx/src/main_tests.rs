@@ -346,8 +346,6 @@ fn parse_onboard_flags() {
         "gateway",
         "--search-api-key",
         "search-key",
-        "--image-gen-api-key",
-        "image-key",
         "--conversation-index-api-key",
         "openai-key",
         "--enable-conversation-index",
@@ -361,7 +359,6 @@ fn parse_onboard_flags() {
         Some(Commands::Onboard {
             api_account,
             search_api_key,
-            image_gen_api_key,
             conversation_index_api_key,
             enable_conversation_index,
             disable_conversation_index,
@@ -372,7 +369,6 @@ fn parse_onboard_flags() {
         }) => {
             assert_eq!(api_account, "gateway");
             assert_eq!(search_api_key.as_deref(), Some("search-key"));
-            assert_eq!(image_gen_api_key.as_deref(), Some("image-key"));
             assert_eq!(conversation_index_api_key.as_deref(), Some("openai-key"));
             assert!(enable_conversation_index);
             assert!(!disable_conversation_index);
@@ -1136,7 +1132,6 @@ async fn onboard_writes_gateway_keys_and_api_account() {
             json: true,
             api_account: "main".to_owned(),
             search_api_key: Some("search-key".to_owned()),
-            image_gen_api_key: Some("image-key".to_owned()),
             conversation_index_api_key: Some("openai-key".to_owned()),
             enable_conversation_index: false,
             disable_conversation_index: false,
@@ -1160,7 +1155,6 @@ async fn onboard_writes_gateway_keys_and_api_account() {
     let api_account = config.channels.api.accounts.get("main").unwrap();
     assert!(api_account.enabled);
     assert_eq!(config.gateway.search.api_key, "search-key");
-    assert_eq!(config.gateway.image_gen.api_key, "image-key");
     assert_eq!(config.gateway.conversation_index.api_key, "openai-key");
     assert!(config.gateway.conversation_index.enabled);
     assert_eq!(
@@ -1201,7 +1195,6 @@ async fn onboard_updates_existing_config_without_resetting_other_fields() {
             json: true,
             api_account: "custom".to_owned(),
             search_api_key: None,
-            image_gen_api_key: Some("new-image-key".to_owned()),
             conversation_index_api_key: None,
             enable_conversation_index: false,
             disable_conversation_index: true,
@@ -1225,7 +1218,6 @@ async fn onboard_updates_existing_config_without_resetting_other_fields() {
     let api_account = config.channels.api.accounts.get("custom").unwrap();
     assert!(api_account.enabled);
     assert_eq!(config.gateway.search.api_key, "keep-search-key");
-    assert_eq!(config.gateway.image_gen.api_key, "new-image-key");
     assert_eq!(config.gateway.conversation_index.api_key, "keep-openai-key");
     assert!(!config.gateway.conversation_index.enabled);
 }

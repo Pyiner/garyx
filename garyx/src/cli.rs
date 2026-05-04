@@ -80,9 +80,6 @@ pub(crate) enum Commands {
         /// Search API key to persist in gateway.search.api_key
         #[arg(long)]
         search_api_key: Option<String>,
-        /// Image generation API key to persist in gateway.image_gen.api_key
-        #[arg(long)]
-        image_gen_api_key: Option<String>,
         /// OpenAI API key to persist in gateway.conversation_index.api_key
         #[arg(long)]
         conversation_index_api_key: Option<String>,
