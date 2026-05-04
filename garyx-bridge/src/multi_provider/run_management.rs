@@ -735,13 +735,13 @@ async fn mark_task_ready_for_review_after_stopped_run(
     .await
     {
         Ok(Some(task)) => {
-            let task_ref = garyx_router::tasks::canonical_task_ref(&task);
+            let task_id = garyx_router::tasks::canonical_task_id(&task);
             if let Some(tx) = &*inner.event_tx.read().await {
                 let event = serde_json::json!({
                     "type": "task_ready_for_review",
                     "thread_id": thread_id,
                     "run_id": run_id,
-                    "task_ref": task_ref,
+                    "task_id": task_id,
                     "final_message": final_message.unwrap_or_default(),
                 });
                 let _ = tx.send(event.to_string());
@@ -751,7 +751,7 @@ async fn mark_task_ready_for_review_after_stopped_run(
                 thread_log_id,
                 ThreadLogEvent::info("", "task", "task moved to review after run stopped")
                     .with_run_id(run_id.to_owned())
-                    .with_field("task_ref", json!(task_ref)),
+                    .with_field("task_id", json!(task_id)),
             )
             .await;
         }

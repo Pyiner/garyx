@@ -51,7 +51,7 @@ fn append_task_suffix_to_user_message_renders_live_task_snapshot() {
         "runtime_context".to_owned(),
         json!({
             "task": {
-                "task_ref": "#TASK-3",
+                "task_id": "#TASK-3",
                 "title": "Fix context prompt",
                 "status": "in_progress",
                 "assignee": { "kind": "agent", "agent_id": "codex" }
@@ -84,8 +84,11 @@ fn task_cli_env_exports_current_agent_and_task_identity() {
             "runtime_context".to_owned(),
             json!({
                 "thread_id": "thread::abc",
+                "bot_id": "telegram:main",
+                "channel": "telegram",
+                "account_id": "main",
                 "task": {
-                    "task_ref": "#TASK-3",
+                    "task_id": "#TASK-3",
                     "status": "in_progress"
                 }
             }),
@@ -106,11 +109,23 @@ fn task_cli_env_exports_current_agent_and_task_identity() {
         Some("agent:reviewer")
     );
     assert_eq!(
-        env.get("GARYX_TASK_REF").map(String::as_str),
+        env.get("GARYX_TASK_ID").map(String::as_str),
         Some("#TASK-3")
     );
     assert_eq!(
         env.get("GARYX_TASK_STATUS").map(String::as_str),
         Some("in_progress")
+    );
+    assert_eq!(
+        env.get("GARYX_BOT_ID").map(String::as_str),
+        Some("telegram:main")
+    );
+    assert_eq!(
+        env.get("GARYX_CHANNEL").map(String::as_str),
+        Some("telegram")
+    );
+    assert_eq!(
+        env.get("GARYX_ACCOUNT_ID").map(String::as_str),
+        Some("main")
     );
 }

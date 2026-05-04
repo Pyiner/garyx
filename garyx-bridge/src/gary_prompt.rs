@@ -13,7 +13,7 @@ pub(crate) const GARY_BASE_INSTRUCTIONS: &str = concat!(
     "- Skills live in ~/.garyx/skills/<skill-id>/SKILL.md and sync into ~/.claude/skills and ~/.codex/skills. If you solve a recurring problem or discover a better workflow, improve the relevant skill and validate it with a focused test.\n",
     "\n",
     "System capabilities:\n",
-    "- Delegate work with tasks, for example: `garyx task create --title \"...\" --body \"...\" --assignee <agent_id> --notify current-thread`; inspect with `garyx task get <task_ref>`. Choose an explicit notification target so the requester sees the final review message; use `--notify none` only when silence is intentional. Garyx moves an in-progress task to review when its agent run stops. Only after a user, reviewer, or task creator explicitly approves the result should the task be marked done; the assignee may record that approval with `garyx task update <task_ref> --status done --note \"approved by <name>\"`.\n",
+    "- Delegate work with tasks, for example: `garyx task create --title \"...\" --body \"...\" --assignee <agent_id> --notify current-thread`; inspect with `garyx task get <task_id>`. Choose an explicit notification target so the requester sees the final review message; use `--notify none` only when silence is intentional. Garyx moves an in-progress task to review when its agent run stops. Only after a user, reviewer, or task creator explicitly approves the result should the task be marked done; the assignee may record that approval with `garyx task update <task_id> --status done --note \"approved by <name>\"`.\n",
     "- Manage scheduled automations with the CLI, for example: `garyx automation create --label \"Daily triage\" --prompt \"...\" --workspace-dir /path --every-hours 24`; then use `garyx automation list|get|update|pause|resume|run|delete`.\n",
     "- Inspect runtime issues with product-domain commands such as `garyx thread history <thread_id> --limit 200 --json`, `garyx bot status`, and `garyx logs tail`.\n",
     "- If you restart the managed gateway while working as an agent, queue a wake: `garyx gateway restart --wake thread <thread_id> --wake-message \"continue\"`. Use `--no-wake` only when continuation is intentionally unnecessary.\n",
@@ -66,6 +66,15 @@ pub(crate) fn task_cli_env(metadata: &HashMap<String, Value>) -> HashMap<String,
     if let Some(thread_id) = runtime.get("thread_id").and_then(scalar_string) {
         env.insert("GARYX_THREAD_ID".to_owned(), thread_id);
     }
+    if let Some(bot_id) = runtime.get("bot_id").and_then(scalar_string) {
+        env.insert("GARYX_BOT_ID".to_owned(), bot_id);
+    }
+    if let Some(channel) = runtime.get("channel").and_then(scalar_string) {
+        env.insert("GARYX_CHANNEL".to_owned(), channel);
+    }
+    if let Some(account_id) = runtime.get("account_id").and_then(scalar_string) {
+        env.insert("GARYX_ACCOUNT_ID".to_owned(), account_id);
+    }
     let agent_id = metadata
         .get("agent_id")
         .and_then(scalar_string)
@@ -81,8 +90,8 @@ pub(crate) fn task_cli_env(metadata: &HashMap<String, Value>) -> HashMap<String,
         env.insert("GARYX_ACTOR".to_owned(), format!("agent:{agent_id}"));
     }
     if let Some(task) = runtime.get("task").and_then(Value::as_object) {
-        if let Some(task_ref) = task.get("task_ref").and_then(scalar_string) {
-            env.insert("GARYX_TASK_REF".to_owned(), task_ref);
+        if let Some(task_id) = task.get("task_id").and_then(scalar_string) {
+            env.insert("GARYX_TASK_ID".to_owned(), task_id);
         }
         if let Some(status) = task.get("status").and_then(scalar_string) {
             env.insert("GARYX_TASK_STATUS".to_owned(), status);
@@ -94,14 +103,14 @@ pub(crate) fn task_cli_env(metadata: &HashMap<String, Value>) -> HashMap<String,
 fn task_suffix(metadata: &HashMap<String, Value>) -> Option<String> {
     let runtime = metadata.get("runtime_context").and_then(Value::as_object)?;
     let task = runtime.get("task").and_then(Value::as_object)?;
-    let task_ref = task.get("task_ref").and_then(scalar_string).or_else(|| {
+    let task_id = task.get("task_id").and_then(scalar_string).or_else(|| {
         task.get("number")
             .and_then(scalar_string)
             .map(|number| format!("#{number}"))
     })?;
     let status = task.get("status").and_then(scalar_string)?;
 
-    let mut suffix = format!("[task {} status={}", one_line(&task_ref), one_line(&status));
+    let mut suffix = format!("[task {} status={}", one_line(&task_id), one_line(&status));
     if let Some(assignee) = task.get("assignee").and_then(principal_label) {
         suffix.push_str(&format!(" assignee={}", one_line(&assignee)));
     }

@@ -56,7 +56,7 @@ fn build_prompt_blocks_prefixes_instructions_and_memory_for_fresh_sessions() {
                 "account_id": "bot1",
                 "bot_id": "telegram:bot1",
                 "task": {
-                    "task_ref": "#TASK-2",
+                    "task_id": "#TASK-2",
                     "status": "in_progress"
                 }
             }),
@@ -88,7 +88,7 @@ fn resolve_runtime_gemini_env_exports_task_cli_env() {
             json!({
                 "thread_id": "thread::gemini-task",
                 "task": {
-                    "task_ref": "#TASK-5",
+                    "task_id": "#TASK-5",
                     "status": "in_review",
                     "scope": "telegram/gemini_bot"
                 }
@@ -107,7 +107,7 @@ fn resolve_runtime_gemini_env_exports_task_cli_env() {
         Some("agent:gemini")
     );
     assert_eq!(
-        env.get("GARYX_TASK_REF").map(String::as_str),
+        env.get("GARYX_TASK_ID").map(String::as_str),
         Some("#TASK-5")
     );
 }

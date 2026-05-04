@@ -16,6 +16,8 @@ pub struct ThreadTask {
     pub assignee: Option<Principal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification_target: Option<TaskNotificationTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<TaskSource>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Principal,
@@ -25,6 +27,22 @@ pub struct ThreadTask {
 
 fn default_task_schema_version() -> u32 {
     TASK_SCHEMA_VERSION_V1
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TaskSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

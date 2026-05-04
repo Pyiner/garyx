@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use garyx_models::{Principal, ThreadTask};
 use serde_json::{Map, Value};
 
-use crate::tasks::{canonical_task_ref, task_from_record};
+use crate::tasks::{canonical_task_id, task_from_record};
 use crate::threads::{
     agent_id_from_value, bindings_from_value, label_from_value, thread_kind_from_value,
     workspace_dir_from_value,
@@ -158,10 +158,7 @@ fn build_thread_context(thread_id: &str, thread_record: &Value) -> Value {
 
 fn build_task_context(task: &ThreadTask) -> Value {
     let mut value = Map::new();
-    value.insert(
-        "task_ref".to_owned(),
-        Value::String(canonical_task_ref(task)),
-    );
+    value.insert("task_id".to_owned(), Value::String(canonical_task_id(task)));
     value.insert("number".to_owned(), Value::Number(task.number.into()));
     insert_string(&mut value, "title", &task.title);
     value.insert(
@@ -171,6 +168,11 @@ fn build_task_context(task: &ThreadTask) -> Value {
     value.insert("creator".to_owned(), principal_value(&task.creator));
     if let Some(assignee) = task.assignee.as_ref() {
         value.insert("assignee".to_owned(), principal_value(assignee));
+    }
+    if let Some(source) = task.source.as_ref()
+        && let Ok(source_value) = serde_json::to_value(source)
+    {
+        value.insert("source".to_owned(), source_value);
     }
     value.insert(
         "updated_at".to_owned(),
@@ -255,6 +257,7 @@ mod tests {
                 agent_id: "codex".to_owned(),
             }),
             notification_target: None,
+            source: None,
             created_at: now,
             updated_at: now,
             updated_by: Principal::Agent {
@@ -307,7 +310,7 @@ mod tests {
         assert_eq!(context["bot"]["thread_binding_key"], "user42");
         assert_eq!(context["thread"]["label"], "Prompt work");
         assert_eq!(context["thread"]["bound_bots"][0], "telegram:bot1");
-        assert_eq!(context["task"]["task_ref"], "#TASK-7");
+        assert_eq!(context["task"]["task_id"], "#TASK-7");
         assert_eq!(context["task"]["status"], "in_progress");
     }
 }

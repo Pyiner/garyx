@@ -40,7 +40,7 @@ pub(crate) fn spawn_listener(state: Arc<AppState>) {
                         if let Err(error) = dispatch_task_ready_notification(&state, event).await {
                             warn!(
                                 thread_id = %error.thread_id,
-                                task_ref = %error.task_ref,
+                                task_id = %error.task_id,
                                 error = %error.message,
                                 "failed to dispatch task ready notification"
                             );
@@ -57,7 +57,7 @@ pub(crate) fn spawn_listener(state: Arc<AppState>) {
 #[derive(Debug, Clone)]
 pub(crate) struct TaskReadyForReviewEvent {
     pub(crate) thread_id: String,
-    pub(crate) task_ref: String,
+    pub(crate) task_id: String,
     pub(crate) run_id: Option<String>,
     pub(crate) final_message: Option<String>,
 }
@@ -65,7 +65,7 @@ pub(crate) struct TaskReadyForReviewEvent {
 #[derive(Debug)]
 pub(crate) struct TaskNotificationError {
     thread_id: String,
-    task_ref: String,
+    task_id: String,
     message: String,
 }
 
@@ -73,7 +73,7 @@ impl TaskNotificationError {
     fn new(event: &TaskReadyForReviewEvent, message: impl Into<String>) -> Self {
         Self {
             thread_id: event.thread_id.clone(),
-            task_ref: event.task_ref.clone(),
+            task_id: event.task_id.clone(),
             message: message.into(),
         }
     }
@@ -84,12 +84,12 @@ fn parse_task_ready_for_review_event(payload: &Value) -> Option<TaskReadyForRevi
         return None;
     }
     let thread_id = trimmed_string(payload.get("thread_id")?)?;
-    let task_ref = trimmed_string(payload.get("task_ref")?)?;
+    let task_id = trimmed_string(payload.get("task_id")?)?;
     let run_id = payload.get("run_id").and_then(trimmed_string);
     let final_message = payload.get("final_message").and_then(trimmed_string);
     Some(TaskReadyForReviewEvent {
         thread_id,
-        task_ref,
+        task_id,
         run_id,
         final_message,
     })
@@ -123,7 +123,7 @@ pub(crate) async fn dispatch_task_ready_notification(
                 "task ready notification skipped by target",
             )
             .with_run_id(event.run_id.clone().unwrap_or_default())
-            .with_field("task_ref", json!(event.task_ref)),
+            .with_field("task_id", json!(event.task_id)),
         )
         .await;
         return Ok(());
@@ -135,7 +135,7 @@ pub(crate) async fn dispatch_task_ready_notification(
             .await
             .unwrap_or_default(),
     };
-    let notification = format_task_ready_notification(&event.task_ref, &task.title, &final_message);
+    let notification = format_task_ready_notification(&event.task_id, &task.title, &final_message);
     match target {
         TaskNotificationTarget::None => Ok(()),
         TaskNotificationTarget::Thread { thread_id } => {
@@ -160,12 +160,12 @@ fn latest_event_is_ready_for_review(task: &ThreadTask) -> bool {
 }
 
 pub(crate) fn format_task_ready_notification(
-    task_ref: &str,
+    task_id: &str,
     title: &str,
     final_message: &str,
 ) -> String {
-    let safe_task_ref = xml_attr(task_ref);
-    let body_task_ref = neutralize_task_notification_tag(task_ref.trim());
+    let safe_task_id = xml_attr(task_id);
+    let body_task_id = neutralize_task_notification_tag(task_id.trim());
     let title = neutralize_task_notification_tag(title.trim());
     let final_message = neutralize_task_notification_tag(final_message.trim());
     let final_message = if final_message.is_empty() {
@@ -174,11 +174,11 @@ pub(crate) fn format_task_ready_notification(
         final_message
     };
     format!(
-        "<{TASK_NOTIFICATION_TAG} event=\"ready_for_review\" task_ref=\"{safe_task_ref}\" status=\"in_review\">\n\
-Task {body_task_ref} is ready for review: {title}\n\n\
+        "<{TASK_NOTIFICATION_TAG} event=\"ready_for_review\" task_id=\"{safe_task_id}\" status=\"in_review\">\n\
+Task {body_task_id} is ready for review: {title}\n\n\
 {final_message}\n\n\
 View details:\n\
-garyx task get {body_task_ref}\n\
+garyx task get {body_task_id}\n\
 </{TASK_NOTIFICATION_TAG}>"
     )
 }
@@ -362,7 +362,7 @@ async fn dispatch_notification_to_thread_agent(
             "task_notification_event".to_owned(),
             Value::String("ready_for_review".to_owned()),
         ),
-        ("task_ref".to_owned(), Value::String(event.task_ref.clone())),
+        ("task_id".to_owned(), Value::String(event.task_id.clone())),
         (
             "task_thread_id".to_owned(),
             Value::String(event.thread_id.clone()),
@@ -376,7 +376,7 @@ async fn dispatch_notification_to_thread_agent(
     }
     let run_id = format!(
         "task-notify-{}-{}",
-        event.task_ref.trim_start_matches('#'),
+        event.task_id.trim_start_matches('#'),
         Uuid::now_v7()
     );
     dispatch_internal_message_to_thread(
@@ -436,7 +436,7 @@ async fn send_notification_message(
                     text_excerpt: Some(text.chars().take(200).collect()),
                     metadata: Some(json!({
                         "source": "task_notification",
-                        "task_ref": event.task_ref,
+                        "task_id": event.task_id,
                         "message_id_count": message_ids.len(),
                     })),
                     ..Default::default()
@@ -473,7 +473,7 @@ async fn send_notification_message(
                     terminal_reason: Some(MessageTerminalReason::ReplyDispatchFailed),
                     metadata: Some(json!({
                         "source": "task_notification",
-                        "task_ref": event.task_ref,
+                        "task_id": event.task_id,
                         "error": error.to_string(),
                     })),
                     ..Default::default()

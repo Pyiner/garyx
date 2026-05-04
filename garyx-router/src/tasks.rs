@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use chrono::Utc;
 use garyx_models::{
     Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskNotificationTarget,
-    TaskStatus, ThreadTask,
+    TaskSource, TaskStatus, ThreadTask,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -70,6 +70,8 @@ pub struct CreateTaskInput {
     pub assignee: Option<Principal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification_target: Option<TaskNotificationTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<TaskSource>,
     #[serde(default)]
     pub start: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,12 +102,14 @@ pub struct PromoteTaskInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification_target: Option<TaskNotificationTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<TaskSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<Principal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateTaskStatusInput {
-    pub task_ref: String,
+    pub task_id: String,
     pub to: TaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
@@ -120,6 +124,9 @@ pub struct TaskListFilter {
     pub status: Option<TaskStatus>,
     pub assignee: Option<Principal>,
     pub creator: Option<Principal>,
+    pub source_thread_id: Option<String>,
+    pub source_task_id: Option<String>,
+    pub source_bot_id: Option<String>,
     pub include_done: bool,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
@@ -128,13 +135,15 @@ pub struct TaskListFilter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSummary {
     pub thread_id: String,
-    pub task_ref: String,
+    pub task_id: String,
     pub number: u64,
     pub title: String,
     pub status: TaskStatus,
     pub creator: Principal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<Principal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<TaskSource>,
     pub updated_at: chrono::DateTime<Utc>,
     pub updated_by: Principal,
     pub runtime_agent_id: String,
@@ -148,16 +157,16 @@ pub struct TaskHistoryPage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TaskRef {
+pub enum TaskId {
     ThreadId(String),
     Number(u64),
 }
 
-impl TaskRef {
+impl TaskId {
     pub fn parse(input: &str) -> Result<Self, TaskServiceError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
-            return Err(TaskServiceError::BadRequest("task_ref is empty".to_owned()));
+            return Err(TaskServiceError::BadRequest("task_id is empty".to_owned()));
         }
         if is_thread_key(trimmed) {
             return Ok(Self::ThreadId(trimmed.to_owned()));
@@ -170,13 +179,13 @@ impl TaskRef {
         if let Ok(number) = rest.parse::<u64>() {
             if number == 0 {
                 return Err(TaskServiceError::BadRequest(
-                    "task_ref number must be greater than zero".to_owned(),
+                    "task_id number must be greater than zero".to_owned(),
                 ));
             }
             return Ok(Self::Number(number));
         }
         Err(TaskServiceError::BadRequest(format!(
-            "task_ref must be #TASK-<number> or a canonical thread id: {trimmed}"
+            "task_id must be #TASK-<number> or a canonical thread id: {trimmed}"
         )))
     }
 }
@@ -211,6 +220,7 @@ impl TaskService {
             validate_principal(assignee)?;
         }
         validate_notification_target(input.notification_target.as_ref())?;
+        let source = normalize_task_source(input.source);
         let runtime = input.runtime.clone();
         let thread_agent_id = runtime
             .as_ref()
@@ -271,6 +281,7 @@ impl TaskService {
                 actor,
                 input.assignee,
                 input.notification_target,
+                source,
                 TaskEventKind::Created {
                     initial_status: if auto_start {
                         TaskStatus::InProgress
@@ -302,6 +313,7 @@ impl TaskService {
             validate_principal(assignee)?;
         }
         validate_notification_target(input.notification_target.as_ref())?;
+        let source = normalize_task_source(input.source);
         let lock = task_thread_lock(&input.thread_id);
         let _guard = lock.lock().await;
         let mut record = self.load_record(&input.thread_id).await?;
@@ -321,6 +333,7 @@ impl TaskService {
                 actor,
                 input.assignee,
                 input.notification_target,
+                source,
                 TaskEventKind::Promoted {
                     initial_status: if auto_start {
                         TaskStatus::InProgress
@@ -343,9 +356,9 @@ impl TaskService {
 
     pub async fn get_task(
         &self,
-        task_ref: &str,
+        task_id: &str,
     ) -> Result<(String, Value, ThreadTask), TaskServiceError> {
-        let (thread_id, record) = self.resolve_task_record(task_ref).await?;
+        let (thread_id, record) = self.resolve_task_record(task_id).await?;
         let task = task_from_record(&record)?
             .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
         Ok((thread_id, record, task))
@@ -397,6 +410,29 @@ impl TaskService {
             {
                 continue;
             }
+            if filter
+                .source_thread_id
+                .as_deref()
+                .is_some_and(|source_thread_id| {
+                    !task_matches_source_thread(&task, source_thread_id)
+                })
+            {
+                continue;
+            }
+            if filter
+                .source_task_id
+                .as_deref()
+                .is_some_and(|source_task_id| !task_matches_source_task(&task, source_task_id))
+            {
+                continue;
+            }
+            if filter
+                .source_bot_id
+                .as_deref()
+                .is_some_and(|source_bot_id| !task_matches_source_bot(&task, source_bot_id))
+            {
+                continue;
+            }
             tasks.push(TaskSummary::from_task(key, &record, &task));
         }
         for index_key in stale_index_keys {
@@ -420,11 +456,11 @@ impl TaskService {
 
     pub async fn task_history(
         &self,
-        task_ref: &str,
+        task_id: &str,
         limit: Option<usize>,
         before: Option<&str>,
     ) -> Result<TaskHistoryPage, TaskServiceError> {
-        let (_, _, task) = self.get_task(task_ref).await?;
+        let (_, _, task) = self.get_task(task_id).await?;
         let limit = limit
             .unwrap_or(DEFAULT_TASK_LIST_LIMIT)
             .clamp(1, MAX_TASK_LIST_LIMIT);
@@ -444,14 +480,14 @@ impl TaskService {
 
     pub async fn assign_task(
         &self,
-        task_ref: &str,
+        task_id: &str,
         to: Principal,
         actor: Option<Principal>,
     ) -> Result<ThreadTask, TaskServiceError> {
         validate_principal(&to)?;
         let actor = actor.unwrap_or_else(default_actor);
         validate_principal(&actor)?;
-        self.mutate_task(task_ref, move |task| {
+        self.mutate_task(task_id, move |task| {
             let previous = task.assignee.clone();
             task.assignee = Some(to.clone());
             let previous_status = task.status;
@@ -481,12 +517,12 @@ impl TaskService {
 
     pub async fn unassign_task(
         &self,
-        task_ref: &str,
+        task_id: &str,
         actor: Option<Principal>,
     ) -> Result<ThreadTask, TaskServiceError> {
         let actor = actor.unwrap_or_else(default_actor);
         validate_principal(&actor)?;
-        self.mutate_task(task_ref, move |task| {
+        self.mutate_task(task_id, move |task| {
             let previous = task.assignee.clone().ok_or_else(|| {
                 TaskServiceError::BadRequest("task is already unassigned".to_owned())
             })?;
@@ -508,7 +544,7 @@ impl TaskService {
     ) -> Result<ThreadTask, TaskServiceError> {
         let actor = input.actor.unwrap_or_else(default_actor);
         validate_principal(&actor)?;
-        self.mutate_task(&input.task_ref, move |task| {
+        self.mutate_task(&input.task_id, move |task| {
             let from = task.status;
             if from == input.to {
                 return Ok(());
@@ -545,7 +581,7 @@ impl TaskService {
 
     pub async fn set_title(
         &self,
-        task_ref: &str,
+        task_id: &str,
         title: String,
         actor: Option<Principal>,
     ) -> Result<ThreadTask, TaskServiceError> {
@@ -553,7 +589,7 @@ impl TaskService {
         validate_principal(&actor)?;
         let next_title = normalized_limited(Some(title), 200)?
             .ok_or_else(|| TaskServiceError::BadRequest("title cannot be empty".to_owned()))?;
-        self.mutate_task(task_ref, move |task| {
+        self.mutate_task(task_id, move |task| {
             let previous = task.title.clone();
             if previous == next_title {
                 return Ok(());
@@ -573,11 +609,11 @@ impl TaskService {
         .await
     }
 
-    async fn mutate_task<F>(&self, task_ref: &str, f: F) -> Result<ThreadTask, TaskServiceError>
+    async fn mutate_task<F>(&self, task_id: &str, f: F) -> Result<ThreadTask, TaskServiceError>
     where
         F: FnOnce(&mut ThreadTask) -> Result<(), TaskServiceError>,
     {
-        let (thread_id, _) = self.resolve_task_record(task_ref).await?;
+        let (thread_id, _) = self.resolve_task_record(task_id).await?;
         let lock = task_thread_lock(&thread_id);
         let _guard = lock.lock().await;
         let mut record = self
@@ -624,6 +660,7 @@ impl TaskService {
         actor: Principal,
         assignee: Option<Principal>,
         notification_target: Option<TaskNotificationTarget>,
+        source: Option<TaskSource>,
         event_kind: TaskEventKind,
     ) -> Result<ThreadTask, TaskServiceError> {
         self.ensure_task_index().await?;
@@ -643,6 +680,7 @@ impl TaskService {
             creator: actor.clone(),
             assignee,
             notification_target,
+            source,
             created_at: now,
             updated_at: now,
             updated_by: actor.clone(),
@@ -668,10 +706,10 @@ impl TaskService {
 
     async fn resolve_task_record(
         &self,
-        task_ref: &str,
+        task_id: &str,
     ) -> Result<(String, Value), TaskServiceError> {
-        match TaskRef::parse(task_ref)? {
-            TaskRef::ThreadId(thread_id) => {
+        match TaskId::parse(task_id)? {
+            TaskId::ThreadId(thread_id) => {
                 let record = self
                     .thread_store
                     .get(&thread_id)
@@ -679,7 +717,7 @@ impl TaskService {
                     .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
                 Ok((thread_id, record))
             }
-            TaskRef::Number(number) => self.find_task_by_number(number).await,
+            TaskId::Number(number) => self.find_task_by_number(number).await,
         }
     }
 
@@ -743,12 +781,13 @@ impl TaskSummary {
     fn from_task(thread_id: String, record: &Value, task: &ThreadTask) -> Self {
         Self {
             thread_id,
-            task_ref: canonical_task_ref(task),
+            task_id: canonical_task_id(task),
             number: task.number,
             title: task.title.clone(),
             status: task.status,
             creator: task.creator.clone(),
             assignee: task.assignee.clone(),
+            source: task.source.clone(),
             updated_at: task.updated_at,
             updated_by: task.updated_by.clone(),
             runtime_agent_id: agent_id_from_value(record).unwrap_or_default(),
@@ -757,7 +796,7 @@ impl TaskSummary {
     }
 }
 
-pub fn canonical_task_ref(task: &ThreadTask) -> String {
+pub fn canonical_task_id(task: &ThreadTask) -> String {
     format!("#TASK-{}", task.number)
 }
 
@@ -980,6 +1019,72 @@ fn normalized_nonempty_string(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn normalize_task_source(source: Option<TaskSource>) -> Option<TaskSource> {
+    let mut source = source?;
+    source.thread_id = normalized_nonempty_string(source.thread_id.as_deref());
+    source.task_id = normalized_nonempty_string(source.task_id.as_deref());
+    source.task_thread_id =
+        normalized_nonempty_string(source.task_thread_id.as_deref()).or_else(|| {
+            source
+                .task_id
+                .is_some()
+                .then(|| source.thread_id.clone())
+                .flatten()
+        });
+    source.bot_id = normalized_nonempty_string(source.bot_id.as_deref());
+    source.channel = normalized_nonempty_string(source.channel.as_deref());
+    source.account_id = normalized_nonempty_string(source.account_id.as_deref());
+    if source.bot_id.is_none()
+        && let (Some(channel), Some(account_id)) = (&source.channel, &source.account_id)
+    {
+        source.bot_id = Some(format!("{channel}:{account_id}"));
+    }
+    (source.thread_id.is_some()
+        || source.task_id.is_some()
+        || source.task_thread_id.is_some()
+        || source.bot_id.is_some()
+        || source.channel.is_some()
+        || source.account_id.is_some())
+    .then_some(source)
+}
+
+fn task_matches_source_thread(task: &ThreadTask, source_thread_id: &str) -> bool {
+    let Some(source_thread_id) = normalized_nonempty_string(Some(source_thread_id)) else {
+        return true;
+    };
+    let Some(source) = task.source.as_ref() else {
+        return false;
+    };
+    source.thread_id.as_deref() == Some(source_thread_id.as_str())
+        || source.task_thread_id.as_deref() == Some(source_thread_id.as_str())
+}
+
+fn task_matches_source_task(task: &ThreadTask, source_task_id: &str) -> bool {
+    let Some(source_task_id) = normalized_nonempty_string(Some(source_task_id)) else {
+        return true;
+    };
+    task.source
+        .as_ref()
+        .and_then(|source| source.task_id.as_deref())
+        .is_some_and(|task_id| task_id.eq_ignore_ascii_case(&source_task_id))
+}
+
+fn task_matches_source_bot(task: &ThreadTask, source_bot_id: &str) -> bool {
+    let Some(source_bot_id) = normalized_nonempty_string(Some(source_bot_id)) else {
+        return true;
+    };
+    let Some(source) = task.source.as_ref() else {
+        return false;
+    };
+    if source.bot_id.as_deref() == Some(source_bot_id.as_str()) {
+        return true;
+    }
+    match (&source.channel, &source.account_id) {
+        (Some(channel), Some(account_id)) => format!("{channel}:{account_id}") == source_bot_id,
+        _ => false,
+    }
+}
+
 fn validate_principal(principal: &Principal) -> Result<(), TaskServiceError> {
     let id = principal.id().trim();
     if id.is_empty()
@@ -1062,6 +1167,7 @@ mod tests {
                 body: Some("Look at launchctl".to_owned()),
                 assignee: None,
                 notification_target: None,
+                source: None,
                 start: false,
                 actor: Some(Principal::Agent {
                     agent_id: "cindy".to_owned(),
@@ -1081,6 +1187,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_create_stores_source_and_list_filters_it() {
+        let service = service();
+        let (_thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Child task".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: Some(TaskSource {
+                    thread_id: Some("thread::origin".to_owned()),
+                    task_id: Some("#TASK-7".to_owned()),
+                    task_thread_id: Some("thread::origin".to_owned()),
+                    bot_id: Some("telegram:main".to_owned()),
+                    channel: Some("telegram".to_owned()),
+                    account_id: Some("main".to_owned()),
+                }),
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            task.source
+                .as_ref()
+                .and_then(|source| source.task_id.as_deref()),
+            Some("#TASK-7")
+        );
+
+        let (filtered, total, has_more) = service
+            .list_tasks(TaskListFilter {
+                source_thread_id: Some("thread::origin".to_owned()),
+                source_task_id: Some("#TASK-7".to_owned()),
+                source_bot_id: Some("telegram:main".to_owned()),
+                include_done: true,
+                limit: None,
+                offset: None,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert!(!has_more);
+        assert_eq!(filtered[0].task_id, canonical_task_id(&task));
+        assert_eq!(
+            filtered[0]
+                .source
+                .as_ref()
+                .and_then(|source| source.bot_id.as_deref()),
+            Some("telegram:main")
+        );
+
+        let (filtered, total, _) = service
+            .list_tasks(TaskListFilter {
+                source_bot_id: Some("telegram:other".to_owned()),
+                include_done: true,
+                limit: None,
+                offset: None,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(total, 0);
+        assert!(filtered.is_empty());
+    }
+
+    #[tokio::test]
     async fn status_machine_rejects_illegal_transition() {
         let service = service();
         let (_thread_id, task) = service
@@ -1089,6 +1264,7 @@ mod tests {
                 body: None,
                 assignee: None,
                 notification_target: None,
+                source: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1099,7 +1275,7 @@ mod tests {
             .unwrap();
         let error = service
             .update_status(UpdateTaskStatusInput {
-                task_ref: canonical_task_ref(&task),
+                task_id: canonical_task_id(&task),
                 to: TaskStatus::Done,
                 note: None,
                 force: false,
@@ -1119,6 +1295,7 @@ mod tests {
                 body: None,
                 assignee: None,
                 notification_target: None,
+                source: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1129,7 +1306,7 @@ mod tests {
             .unwrap();
         let updated = service
             .update_status(UpdateTaskStatusInput {
-                task_ref: canonical_task_ref(&task),
+                task_id: canonical_task_id(&task),
                 to: TaskStatus::InProgress,
                 note: None,
                 force: false,
@@ -1154,6 +1331,7 @@ mod tests {
                     agent_id: "codex".to_owned(),
                 }),
                 notification_target: None,
+                source: None,
                 start: true,
                 actor: None,
                 agent_id: None,
@@ -1176,7 +1354,7 @@ mod tests {
         .expect("in-progress task should move to review");
 
         assert_eq!(updated.status, TaskStatus::InReview);
-        let (_, _, persisted) = service.get_task(&canonical_task_ref(&task)).await.unwrap();
+        let (_, _, persisted) = service.get_task(&canonical_task_id(&task)).await.unwrap();
         assert_eq!(persisted.status, TaskStatus::InReview);
         assert!(matches!(
             persisted.events.last().map(|event| &event.kind),
@@ -1199,6 +1377,7 @@ mod tests {
                     agent_id: "codex".to_owned(),
                 }),
                 notification_target: None,
+                source: None,
                 start: true,
                 actor: None,
                 agent_id: None,
@@ -1209,7 +1388,7 @@ mod tests {
             .unwrap();
         service
             .update_status(UpdateTaskStatusInput {
-                task_ref: canonical_task_ref(&task),
+                task_id: canonical_task_id(&task),
                 to: TaskStatus::InReview,
                 note: None,
                 force: false,
@@ -1230,7 +1409,7 @@ mod tests {
         .unwrap();
 
         assert!(updated.is_none());
-        let (_, _, persisted) = service.get_task(&canonical_task_ref(&task)).await.unwrap();
+        let (_, _, persisted) = service.get_task(&canonical_task_id(&task)).await.unwrap();
         assert_eq!(persisted.status, TaskStatus::InReview);
     }
 
@@ -1246,6 +1425,7 @@ mod tests {
                 body: None,
                 assignee: Some(assignee.clone()),
                 notification_target: None,
+                source: None,
                 start: true,
                 actor: Some(Principal::Human {
                     user_id: "owner".to_owned(),
@@ -1256,11 +1436,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let task_ref = canonical_task_ref(&task);
+        let task_id = canonical_task_id(&task);
 
         service
             .update_status(UpdateTaskStatusInput {
-                task_ref: task_ref.clone(),
+                task_id: task_id.clone(),
                 to: TaskStatus::InReview,
                 note: None,
                 force: false,
@@ -1271,7 +1451,7 @@ mod tests {
 
         let updated = service
             .update_status(UpdateTaskStatusInput {
-                task_ref,
+                task_id,
                 to: TaskStatus::Done,
                 note: Some("review approved by owner".to_owned()),
                 force: false,
@@ -1295,6 +1475,7 @@ mod tests {
                 body: None,
                 assignee: Some(assignee.clone()),
                 notification_target: None,
+                source: None,
                 start: true,
                 actor: Some(Principal::Human {
                     user_id: "owner".to_owned(),
@@ -1305,11 +1486,11 @@ mod tests {
             })
             .await
             .unwrap();
-        let task_ref = canonical_task_ref(&task);
+        let task_id = canonical_task_id(&task);
 
         service
             .update_status(UpdateTaskStatusInput {
-                task_ref: task_ref.clone(),
+                task_id: task_id.clone(),
                 to: TaskStatus::InReview,
                 note: None,
                 force: false,
@@ -1320,7 +1501,7 @@ mod tests {
 
         let updated = service
             .update_status(UpdateTaskStatusInput {
-                task_ref,
+                task_id,
                 to: TaskStatus::Done,
                 note: None,
                 force: false,
@@ -1343,6 +1524,7 @@ mod tests {
                 body: None,
                 assignee: None,
                 notification_target: None,
+                source: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1355,7 +1537,7 @@ mod tests {
             agent_id: "cindy".to_owned(),
         };
         let updated = service
-            .assign_task(&canonical_task_ref(&task), assignee.clone(), Some(assignee))
+            .assign_task(&canonical_task_id(&task), assignee.clone(), Some(assignee))
             .await
             .unwrap();
         assert_eq!(updated.status, TaskStatus::InProgress);
@@ -1377,6 +1559,7 @@ mod tests {
                 body: None,
                 assignee: None,
                 notification_target: None,
+                source: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1385,14 +1568,14 @@ mod tests {
             })
             .await
             .unwrap();
-        let task_ref = canonical_task_ref(&task);
+        let task_id = canonical_task_id(&task);
 
         let left_service = service.clone();
-        let left_ref = task_ref.clone();
+        let left_id = task_id.clone();
         let left = tokio::spawn(async move {
             left_service
                 .assign_task(
-                    &left_ref,
+                    &left_id,
                     Principal::Agent {
                         agent_id: "cindy".to_owned(),
                     },
@@ -1404,14 +1587,14 @@ mod tests {
         let right_service = service.clone();
         let right = tokio::spawn(async move {
             right_service
-                .set_title(&task_ref, "Retitled".to_owned(), None)
+                .set_title(&task_id, "Retitled".to_owned(), None)
                 .await
                 .unwrap();
         });
         left.await.unwrap();
         right.await.unwrap();
 
-        let (_, _, task) = service.get_task(&canonical_task_ref(&task)).await.unwrap();
+        let (_, _, task) = service.get_task(&canonical_task_id(&task)).await.unwrap();
         assert_eq!(task.events.len(), 4);
         assert_eq!(task.title, "Retitled");
         assert_eq!(
@@ -1431,6 +1614,7 @@ mod tests {
                 body: None,
                 assignee: None,
                 notification_target: None,
+                source: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1439,10 +1623,10 @@ mod tests {
             })
             .await
             .unwrap();
-        let task_ref = canonical_task_ref(&task);
+        let task_id = canonical_task_id(&task);
         service
             .assign_task(
-                &task_ref,
+                &task_id,
                 Principal::Agent {
                     agent_id: "cindy".to_owned(),
                 },
@@ -1451,18 +1635,15 @@ mod tests {
             .await
             .unwrap();
         service
-            .set_title(&task_ref, "History updated".to_owned(), None)
+            .set_title(&task_id, "History updated".to_owned(), None)
             .await
             .unwrap();
 
-        let first_page = service
-            .task_history(&task_ref, Some(1), None)
-            .await
-            .unwrap();
+        let first_page = service.task_history(&task_id, Some(1), None).await.unwrap();
         assert_eq!(first_page.events.len(), 1);
         assert!(first_page.has_more);
         let second_page = service
-            .task_history(&task_ref, Some(10), Some(&first_page.events[0].event_id))
+            .task_history(&task_id, Some(10), Some(&first_page.events[0].event_id))
             .await
             .unwrap();
         assert_eq!(second_page.events.len(), 3);
@@ -1478,6 +1659,7 @@ mod tests {
                 body: None,
                 assignee: None,
                 notification_target: None,
+                source: None,
                 start: false,
                 actor: None,
                 agent_id: None,

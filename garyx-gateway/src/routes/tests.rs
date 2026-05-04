@@ -1798,7 +1798,7 @@ async fn thread_summary_omits_team_block_for_standalone_agent_thread() {
 }
 
 #[tokio::test]
-async fn task_routes_resolve_percent_encoded_refs() {
+async fn task_routes_resolve_percent_encoded_ids() {
     let dir = tempdir().unwrap();
     let mut config = test_config();
     config.tasks.enabled = true;
@@ -1824,12 +1824,12 @@ async fn task_routes_resolve_percent_encoded_refs() {
         .await
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    let task_ref = payload["task_ref"].as_str().unwrap();
-    assert!(task_ref.starts_with("#TASK-"));
+    let task_id = payload["task_id"].as_str().unwrap();
+    assert!(task_id.starts_with("#TASK-"));
 
     let request = authed_request()
         .method("GET")
-        .uri(format!("/api/tasks/{}", urlencoding::encode(task_ref)))
+        .uri(format!("/api/tasks/{}", urlencoding::encode(task_id)))
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -1838,7 +1838,7 @@ async fn task_routes_resolve_percent_encoded_refs() {
         .await
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["task_ref"], task_ref);
+    assert_eq!(payload["task_id"], task_id);
     assert_eq!(payload["task"]["title"], "Check task routing");
 }
 
@@ -1909,8 +1909,8 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
         .await
         .unwrap();
     let payload: Value = serde_json::from_slice(&body).unwrap();
-    let task_ref = payload["task_ref"].as_str().unwrap();
-    assert!(task_ref.starts_with("#TASK-"));
+    let task_id = payload["task_id"].as_str().unwrap();
+    assert!(task_id.starts_with("#TASK-"));
     assert_eq!(payload["status"], "in_progress");
     assert_eq!(payload["dispatch"]["queued"], true);
 
@@ -1923,7 +1923,7 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
     let runs = provider.runs();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].thread_id, payload["thread_id"].as_str().unwrap());
-    assert!(runs[0].message.contains(task_ref));
+    assert!(runs[0].message.contains(task_id));
     assert!(runs[0].message.contains("Move this task to review"));
     assert_eq!(runs[0].metadata["task_auto_start"], true);
     assert_eq!(

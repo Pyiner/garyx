@@ -327,7 +327,7 @@ fn test_build_sdk_options_uses_claude_session_agent_for_custom_agent() {
                     "account_id": "main",
                     "bot_id": "api:main",
                     "task": {
-                        "task_ref": "#TASK-12",
+                        "task_id": "#TASK-12",
                         "status": "todo"
                     }
                 }),
@@ -349,7 +349,7 @@ fn test_build_sdk_options_uses_claude_session_agent_for_custom_agent() {
         Some("agent:spec-review")
     );
     assert_eq!(
-        sdk_opts.env.get("GARYX_TASK_REF").map(String::as_str),
+        sdk_opts.env.get("GARYX_TASK_ID").map(String::as_str),
         Some("#TASK-12")
     );
     let definition = sdk_opts.agents.get("spec-review").expect("session agent");
@@ -632,7 +632,7 @@ fn test_build_sdk_options_exports_task_cli_env_from_metadata() {
                     "agent_id": "codex"
                 },
                 "task": {
-                    "task_ref": "#TASK-5",
+                    "task_id": "#TASK-5",
                     "status": "in_review"
                 }
             }),
@@ -643,7 +643,7 @@ fn test_build_sdk_options_exports_task_cli_env_from_metadata() {
     let system_prompt = sdk_opts.system_prompt.unwrap_or_default();
     assert!(system_prompt.contains("System capabilities:"));
     assert!(!system_prompt.contains("channel: weixin"));
-    assert!(!system_prompt.contains("task_ref: #TASK-5"));
+    assert!(!system_prompt.contains("task_id: #TASK-5"));
     assert_eq!(
         sdk_opts.env.get("GARYX_THREAD_ID").map(String::as_str),
         Some("thread::ctx")
@@ -653,7 +653,7 @@ fn test_build_sdk_options_exports_task_cli_env_from_metadata() {
         Some("codex")
     );
     assert_eq!(
-        sdk_opts.env.get("GARYX_TASK_REF").map(String::as_str),
+        sdk_opts.env.get("GARYX_TASK_ID").map(String::as_str),
         Some("#TASK-5")
     );
     assert!(!sdk_opts.env.contains_key("GARYX_TASK_SCOPE"));
@@ -734,7 +734,7 @@ fn test_build_user_message_input_appends_task_suffix() {
             "runtime_context".to_owned(),
             serde_json::json!({
                 "task": {
-                    "task_ref": "#TASK-8",
+                    "task_id": "#TASK-8",
                     "status": "todo",
                     "assignee": { "kind": "agent", "agent_id": "codex" }
                 }

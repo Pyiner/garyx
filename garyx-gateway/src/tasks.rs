@@ -8,7 +8,9 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use garyx_models::local_paths::default_session_data_dir;
-use garyx_models::{Principal, TaskEventKind, TaskNotificationTarget, TaskStatus, ThreadTask};
+use garyx_models::{
+    Principal, TaskEventKind, TaskNotificationTarget, TaskSource, TaskStatus, ThreadTask,
+};
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
     TaskService, TaskServiceError, UpdateTaskStatusInput, update_thread_record,
@@ -37,6 +39,8 @@ pub struct CreateTaskBody {
     #[serde(default, alias = "notificationTarget")]
     pub notification_target: Option<TaskNotificationTargetBody>,
     #[serde(default)]
+    pub source: Option<TaskSource>,
+    #[serde(default)]
     pub start: bool,
     #[serde(default)]
     pub actor: Option<Principal>,
@@ -56,6 +60,8 @@ pub struct BatchCreateTaskBody {
     #[serde(default, alias = "notificationTarget")]
     pub notification_target: Option<TaskNotificationTargetBody>,
     #[serde(default)]
+    pub source: Option<TaskSource>,
+    #[serde(default)]
     pub agent_id: Option<String>,
     #[serde(default)]
     pub workspace_dir: Option<String>,
@@ -73,6 +79,8 @@ pub struct BatchTaskItem {
     pub assignee: Option<Principal>,
     #[serde(default, alias = "notificationTarget")]
     pub notification_target: Option<TaskNotificationTargetBody>,
+    #[serde(default)]
+    pub source: Option<TaskSource>,
     #[serde(default)]
     pub start: bool,
     #[serde(default)]
@@ -112,6 +120,8 @@ pub struct PromoteTaskBody {
     #[serde(default, alias = "notificationTarget")]
     pub notification_target: Option<TaskNotificationTargetBody>,
     #[serde(default)]
+    pub source: Option<TaskSource>,
+    #[serde(default)]
     pub actor: Option<Principal>,
 }
 
@@ -148,6 +158,12 @@ pub struct TaskListQuery {
     pub assignee: Option<String>,
     #[serde(default)]
     pub creator: Option<String>,
+    #[serde(default, alias = "sourceThreadId")]
+    pub source_thread_id: Option<String>,
+    #[serde(default, alias = "sourceTaskId")]
+    pub source_task_id: Option<String>,
+    #[serde(default, alias = "sourceBotId")]
+    pub source_bot_id: Option<String>,
     #[serde(default)]
     pub include_done: bool,
     #[serde(default)]
@@ -200,6 +216,7 @@ pub async fn create_task(
             body: body.body,
             assignee: body.assignee,
             notification_target,
+            source: body.source,
             start: body.start,
             actor,
             agent_id: None,
@@ -212,7 +229,7 @@ pub async fn create_task(
             let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
             let mut payload = json!({
                 "thread_id": thread_id,
-                "task_ref": garyx_router::tasks::canonical_task_ref(&task),
+                "task_id": garyx_router::tasks::canonical_task_id(&task),
                 "number": task.number,
                 "status": task.status,
                 "runtime_agent_id": runtime_agent_id,
@@ -254,6 +271,7 @@ pub async fn create_tasks_batch(
     };
     let top_runtime = task_runtime_input(body.runtime, body.agent_id, body.workspace_dir);
     let top_notification_target = body.notification_target.map(TaskNotificationTarget::from);
+    let top_source = body.source;
     if let Err(error) = validate_runtime_agent(&state, &top_runtime).await {
         return task_error_response(error);
     }
@@ -299,6 +317,7 @@ pub async fn create_tasks_batch(
                 body: item.body,
                 assignee: item.assignee,
                 notification_target: Some(notification_target),
+                source: item.source.or_else(|| top_source.clone()),
                 start: item.start,
                 actor: actor.clone(),
                 agent_id: None,
@@ -311,7 +330,7 @@ pub async fn create_tasks_batch(
                 let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
                 let mut payload = json!({
                     "thread_id": thread_id,
-                    "task_ref": garyx_router::tasks::canonical_task_ref(&task),
+                    "task_id": garyx_router::tasks::canonical_task_id(&task),
                     "number": task.number,
                     "status": task.status,
                     "runtime_agent_id": runtime_agent_id,
@@ -362,6 +381,7 @@ pub async fn promote_task(
             title: body.title,
             assignee: body.assignee,
             notification_target,
+            source: body.source,
             actor,
         })
         .await
@@ -378,7 +398,7 @@ pub async fn promote_task(
             }
             let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
             let mut payload = json!({
-                "task_ref": garyx_router::tasks::canonical_task_ref(&task),
+                "task_id": garyx_router::tasks::canonical_task_id(&task),
                 "number": task.number,
                 "status": task.status,
                 "runtime_agent_id": runtime_agent_id,
@@ -402,17 +422,17 @@ pub async fn promote_task(
 
 pub async fn get_task(
     State(state): State<Arc<AppState>>,
-    Path(task_ref): Path<String>,
+    Path(task_id): Path<String>,
 ) -> (StatusCode, Json<Value>) {
     let Some(service) = task_service(&state) else {
         return tasks_disabled();
     };
-    match service.get_task(&task_ref).await {
+    match service.get_task(&task_id).await {
         Ok((thread_id, thread, task)) => (
             StatusCode::OK,
             Json(json!({
                 "thread_id": thread_id,
-                "task_ref": garyx_router::tasks::canonical_task_ref(&task),
+                "task_id": garyx_router::tasks::canonical_task_id(&task),
                 "task": task,
                 "thread": thread,
             })),
@@ -447,14 +467,14 @@ pub async fn list_tasks(
 
 pub async fn task_history(
     State(state): State<Arc<AppState>>,
-    Path(task_ref): Path<String>,
+    Path(task_id): Path<String>,
     Query(query): Query<TaskHistoryQuery>,
 ) -> (StatusCode, Json<Value>) {
     let Some(service) = task_service(&state) else {
         return tasks_disabled();
     };
     match service
-        .task_history(&task_ref, query.limit, query.before.as_deref())
+        .task_history(&task_id, query.limit, query.before.as_deref())
         .await
     {
         Ok(page) => (
@@ -467,7 +487,7 @@ pub async fn task_history(
 
 pub async fn assign_task(
     State(state): State<Arc<AppState>>,
-    Path(task_ref): Path<String>,
+    Path(task_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<AssignTaskBody>,
 ) -> (StatusCode, Json<Value>) {
@@ -483,11 +503,11 @@ pub async fn assign_task(
     }
     let assignee = body.to;
     let self_claim = actor.as_ref() == Some(&assignee);
-    match service.assign_task(&task_ref, assignee, actor).await {
+    match service.assign_task(&task_id, assignee, actor).await {
         Ok(task) => {
             let assignee_for_workspace = task.assignee.clone();
             let mut payload = json!({ "task": task });
-            if let Ok((thread_id, _, _)) = service.get_task(&task_ref).await {
+            if let Ok((thread_id, _, _)) = service.get_task(&task_id).await {
                 if let Err(error) = ensure_thread_workspace_from_assignee_default(
                     &state,
                     &thread_id,
@@ -518,7 +538,7 @@ pub async fn assign_task(
 
 pub async fn unassign_task(
     State(state): State<Arc<AppState>>,
-    Path(task_ref): Path<String>,
+    Path(task_id): Path<String>,
     headers: HeaderMap,
 ) -> (StatusCode, Json<Value>) {
     let Some(service) = task_service(&state) else {
@@ -528,7 +548,7 @@ pub async fn unassign_task(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
-    match service.unassign_task(&task_ref, actor).await {
+    match service.unassign_task(&task_id, actor).await {
         Ok(task) => (StatusCode::OK, Json(json!({ "task": task }))),
         Err(error) => task_error_response(error),
     }
@@ -536,7 +556,7 @@ pub async fn unassign_task(
 
 pub async fn update_task_status(
     State(state): State<Arc<AppState>>,
-    Path(task_ref): Path<String>,
+    Path(task_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<UpdateTaskStatusBody>,
 ) -> (StatusCode, Json<Value>) {
@@ -549,7 +569,7 @@ pub async fn update_task_status(
     };
     match service
         .update_status(UpdateTaskStatusInput {
-            task_ref: task_ref.clone(),
+            task_id: task_id.clone(),
             to: body.to,
             note: body.note,
             force: body.force,
@@ -559,14 +579,14 @@ pub async fn update_task_status(
     {
         Ok(task) => {
             if task_ready_for_review_transition(&task)
-                && let Ok((thread_id, _, _)) = service.get_task(&task_ref).await
+                && let Ok((thread_id, _, _)) = service.get_task(&task_id).await
             {
-                let task_ref_for_notification = garyx_router::tasks::canonical_task_ref(&task);
+                let task_id_for_notification = garyx_router::tasks::canonical_task_id(&task);
                 let state_for_notification = state.clone();
                 tokio::spawn(async move {
                     let event = crate::task_notifications::TaskReadyForReviewEvent {
                         thread_id,
-                        task_ref: task_ref_for_notification,
+                        task_id: task_id_for_notification,
                         run_id: None,
                         final_message: None,
                     };
@@ -588,7 +608,7 @@ pub async fn update_task_status(
 
 pub async fn set_task_title(
     State(state): State<Arc<AppState>>,
-    Path(task_ref): Path<String>,
+    Path(task_id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<SetTaskTitleBody>,
 ) -> (StatusCode, Json<Value>) {
@@ -599,7 +619,7 @@ pub async fn set_task_title(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
-    match service.set_title(&task_ref, body.title, actor).await {
+    match service.set_title(&task_id, body.title, actor).await {
         Ok(task) => (StatusCode::OK, Json(json!({ "task": task }))),
         Err(error) => task_error_response(error),
     }
@@ -627,6 +647,9 @@ fn task_list_filter(query: TaskListQuery) -> Result<TaskListFilter, TaskServiceE
         status: query.status,
         assignee: query.assignee.as_deref().map(parse_principal).transpose()?,
         creator: query.creator.as_deref().map(parse_principal).transpose()?,
+        source_thread_id: normalized_nonempty(query.source_thread_id),
+        source_task_id: normalized_nonempty(query.source_task_id),
+        source_bot_id: normalized_nonempty(query.source_bot_id),
         include_done: query.include_done,
         limit: query.limit,
         offset: query.offset,
@@ -845,17 +868,17 @@ fn spawn_task_auto_dispatch(
     if task.status != TaskStatus::InProgress {
         return None;
     }
-    let task_ref = garyx_router::tasks::canonical_task_ref(&task);
+    let task_id = garyx_router::tasks::canonical_task_id(&task);
     let run_id = format!("task-auto-{}-{}", task.number, Uuid::now_v7());
     let message =
-        task_auto_dispatch_message(&task_ref, &task.title, requested_title, requested_body);
+        task_auto_dispatch_message(&task_id, &task.title, requested_title, requested_body);
     let mut extra_metadata = HashMap::new();
     extra_metadata.insert("task_auto_start".to_owned(), Value::Bool(true));
     extra_metadata.insert(
         "task_dispatch_reason".to_owned(),
         Value::String(reason.to_owned()),
     );
-    extra_metadata.insert("task_ref".to_owned(), Value::String(task_ref.clone()));
+    extra_metadata.insert("task_id".to_owned(), Value::String(task_id.clone()));
     let dispatch_run_id = run_id.clone();
     let dispatch_thread_id = thread_id.clone();
     tokio::spawn(async move {
@@ -872,7 +895,7 @@ fn spawn_task_auto_dispatch(
         .await
         {
             tracing::warn!(
-                task_ref = %task_ref,
+                task_id = %task_id,
                 thread_id = %dispatch_thread_id,
                 run_id = %dispatch_run_id,
                 error = %error,
@@ -888,7 +911,7 @@ fn spawn_task_auto_dispatch(
 }
 
 fn task_auto_dispatch_message(
-    task_ref: &str,
+    task_id: &str,
     task_title: &str,
     requested_title: Option<&str>,
     requested_body: Option<&str>,
@@ -902,10 +925,10 @@ fn task_auto_dispatch_message(
         .filter(|value| !value.is_empty());
     match body {
         Some(body) => format!(
-            "Task {task_ref} has been assigned to you and is already in progress.\n\n{body}\n\nGaryx will move this task to review when this run stops. Do not mark it done just because you finished; after a user, reviewer, or task creator explicitly approves it, you may record that approval with `garyx task update {task_ref} --status done --note \"approved by <name>\"`."
+            "Task {task_id} has been assigned to you and is already in progress.\n\n{body}\n\nGaryx will move this task to review when this run stops. Do not mark it done just because you finished; after a user, reviewer, or task creator explicitly approves it, you may record that approval with `garyx task update {task_id} --status done --note \"approved by <name>\"`."
         ),
         None => format!(
-            "Task {task_ref} has been assigned to you and is already in progress.\n\nTitle: {title}\n\nGaryx will move this task to review when this run stops. Do not mark it done just because you finished; after a user, reviewer, or task creator explicitly approves it, you may record that approval with `garyx task update {task_ref} --status done --note \"approved by <name>\"`."
+            "Task {task_id} has been assigned to you and is already in progress.\n\nTitle: {title}\n\nGaryx will move this task to review when this run stops. Do not mark it done just because you finished; after a user, reviewer, or task creator explicitly approves it, you may record that approval with `garyx task update {task_id} --status done --note \"approved by <name>\"`."
         ),
     }
 }

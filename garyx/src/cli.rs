@@ -229,7 +229,7 @@ pub(crate) enum GatewayAction {
         long_about = "Restart the managed gateway service and refresh its unit/plist first.\n\nAgent safety: if you are running inside an agent thread, do not use a bare restart. Queue a wake so the new gateway can resume this same thread after the service comes back:\n  garyx gateway restart --wake thread <thread_id> --wake-message \"continue\"\n\nUse --no-wake only when you intentionally want the gateway to restart without resuming any agent thread."
     )]
     Restart {
-        /// Wake a target after restart: `thread <thread_id>`, `task <task_ref>`, or `bot <channel:account_id>`
+        /// Wake a target after restart: `thread <thread_id>`, `task <task_id>`, or `bot <channel:account_id>`
         #[arg(
             long,
             value_names = ["KIND", "TARGET"],
@@ -961,12 +961,12 @@ pub(crate) enum ThreadAction {
     /// Send a message into an internal thread and stream the response
     #[command(
         override_usage = "garyx thread send <thread|task|bot> <target> [message]...",
-        long_about = "Send a message into an internal Garyx thread and stream the agent response.\n\nTargets:\n  thread <thread_id>              Send to a canonical thread id\n  task <task_ref>                 Resolve a task to its backing thread\n  bot <channel:account_id>        Resolve the bot's bound main thread inside the gateway\n\nExamples:\n  garyx thread send thread thread::abc \"hello\"\n  garyx thread send task '#TASK-1' \"status?\"\n  garyx thread send bot telegram:main \"continue\"\n\nFor compatibility, `garyx thread send <thread_id> [message]...` is still accepted."
+        long_about = "Send a message into an internal Garyx thread and stream the agent response.\n\nTargets:\n  thread <thread_id>              Send to a canonical thread id\n  task <task_id>                  Resolve a task to its backing thread\n  bot <channel:account_id>        Resolve the bot's bound main thread inside the gateway\n\nExamples:\n  garyx thread send thread thread::abc \"hello\"\n  garyx thread send task '#TASK-1' \"status?\"\n  garyx thread send bot telegram:main \"continue\"\n\nFor compatibility, `garyx thread send <thread_id> [message]...` is still accepted."
     )]
     Send {
         /// Destination kind: thread, task, or bot
         kind: Option<String>,
-        /// Thread id, task ref, or bot selector
+        /// Thread id, task id, or bot selector
         target: Option<String>,
         /// Message text (reads from stdin if omitted)
         #[arg(value_name = "MESSAGE", num_args = 0..)]
@@ -1011,6 +1011,12 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         assignee: Option<String>,
         #[arg(long)]
+        source_thread: Option<String>,
+        #[arg(long)]
+        source_task: Option<String>,
+        #[arg(long)]
+        source_bot: Option<String>,
+        #[arg(long)]
         include_done: bool,
         #[arg(long, default_value_t = 50)]
         limit: usize,
@@ -1019,9 +1025,9 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         json: bool,
     },
-    /// Get one task by ref
+    /// Get one task by id
     Get {
-        task_ref: String,
+        task_id: String,
         #[arg(long)]
         json: bool,
     },
@@ -1058,7 +1064,7 @@ pub(crate) enum TaskAction {
     },
     /// Claim a task
     Claim {
-        task_ref: String,
+        task_id: String,
         #[arg(long)]
         actor: Option<String>,
         #[arg(long)]
@@ -1066,26 +1072,26 @@ pub(crate) enum TaskAction {
     },
     /// Release a task
     Release {
-        task_ref: String,
+        task_id: String,
         #[arg(long)]
         json: bool,
     },
     /// Assign a task
     Assign {
-        task_ref: String,
+        task_id: String,
         principal: String,
         #[arg(long)]
         json: bool,
     },
     /// Clear task assignee
     Unassign {
-        task_ref: String,
+        task_id: String,
         #[arg(long)]
         json: bool,
     },
     /// Update task status
     Update {
-        task_ref: String,
+        task_id: String,
         #[arg(long)]
         status: String,
         #[arg(long)]
@@ -1097,20 +1103,20 @@ pub(crate) enum TaskAction {
     },
     /// Reopen a done task
     Reopen {
-        task_ref: String,
+        task_id: String,
         #[arg(long)]
         json: bool,
     },
     /// Set task title
     SetTitle {
-        task_ref: String,
+        task_id: String,
         title: String,
         #[arg(long)]
         json: bool,
     },
     /// Show task history
     History {
-        task_ref: String,
+        task_id: String,
         #[arg(long, default_value_t = 50)]
         limit: usize,
         #[arg(long)]

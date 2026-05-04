@@ -3032,7 +3032,7 @@ pub(crate) async fn cmd_thread_send_to_bot(
 
 pub(crate) async fn cmd_thread_send_to_task(
     config_path: &str,
-    task_ref: String,
+    task_id: String,
     message: String,
     workspace_dir: Option<String>,
     timeout_secs: u64,
@@ -3041,7 +3041,7 @@ pub(crate) async fn cmd_thread_send_to_task(
     let gateway = gateway_endpoint(config_path)?;
     let payload = fetch_gateway_json(
         &gateway,
-        &format!("/api/tasks/{}", encode_task_ref(&task_ref)?),
+        &format!("/api/tasks/{}", encode_task_id(&task_id)?),
     )
     .await?;
     let thread_id = payload
@@ -3049,7 +3049,7 @@ pub(crate) async fn cmd_thread_send_to_task(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("task '{task_ref}' did not resolve to a thread"))?
+        .ok_or_else(|| format!("task '{task_id}' did not resolve to a thread"))?
         .to_owned();
     cmd_thread_send_start(
         config_path,
@@ -3188,6 +3188,9 @@ pub(crate) async fn cmd_task_list(
     config_path: &str,
     status: Option<&str>,
     assignee: Option<&str>,
+    source_thread: Option<&str>,
+    source_task: Option<&str>,
+    source_bot: Option<&str>,
     include_done: bool,
     limit: usize,
     offset: usize,
@@ -3202,6 +3205,18 @@ pub(crate) async fn cmd_task_list(
     }
     if let Some(assignee) = assignee.map(str::trim).filter(|value| !value.is_empty()) {
         params.push(("assignee".to_owned(), assignee.to_owned()));
+    }
+    if let Some(source_thread) = source_thread
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        params.push(("source_thread_id".to_owned(), source_thread.to_owned()));
+    }
+    if let Some(source_task) = source_task.map(str::trim).filter(|value| !value.is_empty()) {
+        params.push(("source_task_id".to_owned(), source_task.to_owned()));
+    }
+    if let Some(source_bot) = source_bot.map(str::trim).filter(|value| !value.is_empty()) {
+        params.push(("source_bot_id".to_owned(), source_bot.to_owned()));
     }
     if include_done {
         params.push(("include_done".to_owned(), "true".to_owned()));
@@ -3233,13 +3248,13 @@ pub(crate) async fn cmd_task_list(
 
 pub(crate) async fn cmd_task_get(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
     let payload = fetch_gateway_json(
         &gateway,
-        &format!("/api/tasks/{}", encode_task_ref(task_ref)?),
+        &format!("/api/tasks/{}", encode_task_id(task_id)?),
     )
     .await?;
     if json_output {
@@ -3286,6 +3301,7 @@ pub(crate) async fn cmd_task_create(
     let runtime_agent_id = task_runtime_agent_id_from_assignee(&assignee);
     let start = start || assignee.is_some();
     let notification_target = task_notification_target_payload(notify)?;
+    let source = task_source_payload_from_env();
     let workspace_dir = workspace_dir
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
@@ -3300,6 +3316,7 @@ pub(crate) async fn cmd_task_create(
             "workspace_dir": workspace_dir,
         },
         "notification_target": notification_target,
+        "source": source,
     });
     let payload = post_gateway_json_as_cli_actor(&gateway, "/api/tasks", &request).await?;
     if json_output {
@@ -3325,6 +3342,43 @@ fn task_runtime_agent_id_from_assignee(assignee: &Option<Value>) -> Option<Strin
         .map(ToOwned::to_owned)
 }
 
+fn task_source_payload_from_env() -> Option<Value> {
+    let thread_id = env_nonempty("GARYX_THREAD_ID");
+    let task_id = env_nonempty("GARYX_TASK_ID");
+    let task_thread_id = task_id.as_ref().and_then(|_| thread_id.clone());
+    let channel = env_nonempty("GARYX_CHANNEL");
+    let account_id = env_nonempty("GARYX_ACCOUNT_ID");
+    let bot_id = env_nonempty("GARYX_BOT_ID").or_else(|| match (&channel, &account_id) {
+        (Some(channel), Some(account_id)) => Some(format!("{channel}:{account_id}")),
+        _ => None,
+    });
+
+    if thread_id.is_none() && task_id.is_none() && bot_id.is_none() {
+        return None;
+    }
+
+    let mut source = serde_json::Map::new();
+    if let Some(thread_id) = thread_id {
+        source.insert("thread_id".to_owned(), Value::String(thread_id));
+    }
+    if let Some(task_id) = task_id {
+        source.insert("task_id".to_owned(), Value::String(task_id));
+    }
+    if let Some(task_thread_id) = task_thread_id {
+        source.insert("task_thread_id".to_owned(), Value::String(task_thread_id));
+    }
+    if let Some(bot_id) = bot_id {
+        source.insert("bot_id".to_owned(), Value::String(bot_id));
+    }
+    if let Some(channel) = channel {
+        source.insert("channel".to_owned(), Value::String(channel));
+    }
+    if let Some(account_id) = account_id {
+        source.insert("account_id".to_owned(), Value::String(account_id));
+    }
+    Some(Value::Object(source))
+}
+
 pub(crate) async fn cmd_task_promote(
     config_path: &str,
     thread_id: &str,
@@ -3338,6 +3392,7 @@ pub(crate) async fn cmd_task_promote(
         return Err("thread_id cannot be empty".into());
     }
     let notification_target = task_notification_target_payload(notify)?;
+    let source = task_source_payload_from_env();
     let gateway = gateway_endpoint(config_path)?;
     let payload = post_gateway_json_as_cli_actor(
         &gateway,
@@ -3347,6 +3402,7 @@ pub(crate) async fn cmd_task_promote(
             "title": title,
             "assignee": assignee.map(principal_payload).transpose()?,
             "notification_target": notification_target,
+            "source": source,
         }),
     )
     .await?;
@@ -3430,17 +3486,17 @@ fn task_notification_target_payload(
 
 pub(crate) async fn cmd_task_claim(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     actor: Option<&str>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
-    let encoded_ref = encode_task_ref(task_ref)?;
+    let encoded_id = encode_task_id(task_id)?;
     let assignee = actor
         .map(principal_payload)
         .transpose()?
         .unwrap_or_else(cli_actor_payload);
-    let assign_path = format!("/api/tasks/{encoded_ref}/assign");
+    let assign_path = format!("/api/tasks/{encoded_id}/assign");
     let payload = patch_gateway_json_as_cli_actor(
         &gateway,
         &assign_path,
@@ -3458,13 +3514,13 @@ pub(crate) async fn cmd_task_claim(
 
 pub(crate) async fn cmd_task_release(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
-    let encoded_ref = encode_task_ref(task_ref)?;
-    let status_path = format!("/api/tasks/{encoded_ref}/status");
-    let assign_path = format!("/api/tasks/{encoded_ref}/assign");
+    let encoded_id = encode_task_id(task_id)?;
+    let status_path = format!("/api/tasks/{encoded_id}/status");
+    let assign_path = format!("/api/tasks/{encoded_id}/assign");
     patch_gateway_json_as_cli_actor(
         &gateway,
         &status_path,
@@ -3487,14 +3543,14 @@ pub(crate) async fn cmd_task_release(
 
 pub(crate) async fn cmd_task_assign(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     principal: &str,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
     let payload = patch_gateway_json_as_cli_actor(
         &gateway,
-        &format!("/api/tasks/{}/assign", encode_task_ref(task_ref)?),
+        &format!("/api/tasks/{}/assign", encode_task_id(task_id)?),
         &json!({
             "to": principal_payload(principal)?,
         }),
@@ -3509,13 +3565,13 @@ pub(crate) async fn cmd_task_assign(
 
 pub(crate) async fn cmd_task_unassign(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
     let payload = delete_gateway_json_as_cli_actor(
         &gateway,
-        &format!("/api/tasks/{}/assign", encode_task_ref(task_ref)?),
+        &format!("/api/tasks/{}/assign", encode_task_id(task_id)?),
     )
     .await?;
     if json_output {
@@ -3527,26 +3583,26 @@ pub(crate) async fn cmd_task_unassign(
 
 pub(crate) async fn cmd_task_update(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     status: &str,
     note: Option<String>,
     force: bool,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    patch_task_status(config_path, task_ref, status, note, force, json_output).await
+    patch_task_status(config_path, task_id, status, note, force, json_output).await
 }
 
 pub(crate) async fn cmd_task_reopen(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    patch_task_status(config_path, task_ref, "todo", None, false, json_output).await
+    patch_task_status(config_path, task_id, "todo", None, false, json_output).await
 }
 
 pub(crate) async fn cmd_task_set_title(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     title: &str,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -3557,7 +3613,7 @@ pub(crate) async fn cmd_task_set_title(
     let gateway = gateway_endpoint(config_path)?;
     let payload = patch_gateway_json_as_cli_actor(
         &gateway,
-        &format!("/api/tasks/{}/title", encode_task_ref(task_ref)?),
+        &format!("/api/tasks/{}/title", encode_task_id(task_id)?),
         &json!({
             "title": title,
         }),
@@ -3572,7 +3628,7 @@ pub(crate) async fn cmd_task_set_title(
 
 pub(crate) async fn cmd_task_history(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     limit: usize,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -3581,7 +3637,7 @@ pub(crate) async fn cmd_task_history(
         &gateway,
         &format!(
             "/api/tasks/{}/history?limit={}",
-            encode_task_ref(task_ref)?,
+            encode_task_id(task_id)?,
             limit.clamp(1, 200)
         ),
     )
@@ -3608,7 +3664,7 @@ pub(crate) async fn cmd_task_history(
 
 async fn patch_task_status(
     config_path: &str,
-    task_ref: &str,
+    task_id: &str,
     status: &str,
     note: Option<String>,
     force: bool,
@@ -3617,7 +3673,7 @@ async fn patch_task_status(
     let gateway = gateway_endpoint(config_path)?;
     let payload = patch_gateway_json_as_cli_actor(
         &gateway,
-        &format!("/api/tasks/{}/status", encode_task_ref(task_ref)?),
+        &format!("/api/tasks/{}/status", encode_task_id(task_id)?),
         &json!({
             "to": normalize_task_status(status)?,
             "note": note,
@@ -3691,17 +3747,17 @@ fn normalize_task_status(status: &str) -> Result<String, Box<dyn std::error::Err
     }
 }
 
-fn encode_task_ref(task_ref: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let task_ref = task_ref.trim();
-    if task_ref.is_empty() {
-        return Err("task_ref cannot be empty".into());
+fn encode_task_id(task_id: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let task_id = task_id.trim();
+    if task_id.is_empty() {
+        return Err("task_id cannot be empty".into());
     }
-    Ok(urlencoding::encode(task_ref).into_owned())
+    Ok(urlencoding::encode(task_id).into_owned())
 }
 
 fn print_task_summary(value: &Value) {
     let task = value.get("task").unwrap_or(value);
-    let task_ref = task_ref_display(value, task);
+    let task_id = task_id_display(value, task);
     let thread_id = value
         .get("thread_id")
         .and_then(Value::as_str)
@@ -3722,7 +3778,7 @@ fn print_task_summary(value: &Value) {
         .get("assignee")
         .or_else(|| value.get("assignee"))
         .unwrap_or(&unassigned);
-    println!("Task: {task_ref}");
+    println!("Task: {task_id}");
     println!("Title: {title}");
     println!("Status: {status}");
     println!("Assignee: {}", format_principal(assignee));
@@ -3743,11 +3799,11 @@ fn print_task_summary(value: &Value) {
     }
 }
 
-fn task_ref_display(value: &Value, task: &Value) -> String {
+fn task_id_display(value: &Value, task: &Value) -> String {
     value
-        .get("task_ref")
+        .get("task_id")
         .and_then(Value::as_str)
-        .or_else(|| task.get("task_ref").and_then(Value::as_str))
+        .or_else(|| task.get("task_id").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .or_else(|| {
             value
@@ -3779,7 +3835,7 @@ struct TaskProgressTurn {
 
 fn format_task_progress(task_payload: &Value, history_payload: Option<&Value>) -> String {
     let task = task_payload.get("task").unwrap_or(task_payload);
-    let task_ref = task_ref_display(task_payload, task);
+    let task_id = task_id_display(task_payload, task);
     let thread_id = task_payload
         .get("thread_id")
         .and_then(Value::as_str)
@@ -3806,7 +3862,7 @@ fn format_task_progress(task_payload: &Value, history_payload: Option<&Value>) -
         .unwrap_or(&Value::Null);
 
     let mut output = String::new();
-    let _ = writeln!(&mut output, "Task: {task_ref}");
+    let _ = writeln!(&mut output, "Task: {task_id}");
     let _ = writeln!(&mut output, "Title: {title}");
     let _ = writeln!(&mut output, "Status: {status}");
     let _ = writeln!(&mut output, "Assignee: {}", format_principal(assignee));

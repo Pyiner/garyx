@@ -122,6 +122,7 @@ fn task_for_notification(target: TaskNotificationTarget) -> ThreadTask {
             agent_id: "codex".to_owned(),
         }),
         notification_target: Some(target),
+        source: None,
         created_at: now,
         updated_at: now,
         updated_by: Principal::Agent {
@@ -175,7 +176,7 @@ fn format_wraps_notification_with_single_outer_xml_tag() {
     );
 
     assert!(text.starts_with(
-        "<garyx_task_notification event=\"ready_for_review\" task_ref=\"#TASK-42\" status=\"in_review\">"
+        "<garyx_task_notification event=\"ready_for_review\" task_id=\"#TASK-42\" status=\"in_review\">"
     ));
     assert!(text.contains("Task #TASK-42 is ready for review: Ship task notifications"));
     assert!(text.contains("Done."));
@@ -238,7 +239,7 @@ async fn dispatches_ready_notification_to_bot_target() {
         &state,
         TaskReadyForReviewEvent {
             thread_id: "thread::task".to_owned(),
-            task_ref: "#TASK-42".to_owned(),
+            task_id: "#TASK-42".to_owned(),
             run_id: Some("run-42".to_owned()),
             final_message: Some("The implementation is complete.".to_owned()),
         },
@@ -290,7 +291,7 @@ async fn dispatches_ready_notification_to_bot_target() {
         Some(&Value::Bool(true))
     );
     assert_eq!(
-        provider_calls[0].2.get("task_ref"),
+        provider_calls[0].2.get("task_id"),
         Some(&Value::String("#TASK-42".to_owned()))
     );
 

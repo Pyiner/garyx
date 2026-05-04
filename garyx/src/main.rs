@@ -93,9 +93,9 @@ fn resolve_thread_send_destination(
             })
         }
         "task" | "tasks" => {
-            let task_ref = required_send_target("task", target)?;
+            let task_id = required_send_target("task", target)?;
             Ok(ThreadSendDestination {
-                target: ThreadSendTarget::Task(task_ref),
+                target: ThreadSendTarget::Task(task_id),
                 message_parts: message,
             })
         }
@@ -155,7 +155,7 @@ fn validate_gateway_restart_wake_decision(has_wake: bool, no_wake: bool) -> Resu
 Agent safety: when you restart the gateway from an agent thread, queue a wake so the new gateway resumes the same thread after restart. Do not run a bare restart from agent work.\n\
 Use one of:\n\
   garyx gateway restart --wake thread <thread_id> --wake-message \"...\"\n\
-  garyx gateway restart --wake task <task_ref> --wake-message \"...\"\n\
+  garyx gateway restart --wake task <task_id> --wake-message \"...\"\n\
   garyx gateway restart --wake bot <channel:account_id> --wake-message \"...\"\n\
 If you intentionally want no continuation, run:\n\
   garyx gateway restart --no-wake"
@@ -249,7 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(destination) = wake_destination.as_ref() {
                     let (kind, target) = match &destination.target {
                         ThreadSendTarget::Thread(thread_id) => ("thread", thread_id.as_str()),
-                        ThreadSendTarget::Task(task_ref) => ("task", task_ref.as_str()),
+                        ThreadSendTarget::Task(task_id) => ("task", task_id.as_str()),
                         ThreadSendTarget::Bot(bot) => ("bot", bot.as_str()),
                     };
                     let message = destination.message_parts.join(" ");
@@ -765,10 +765,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         cmd_thread_send(config_path, thread_id, text, workspace_dir, timeout, json)
                             .await
                     }
-                    ThreadSendTarget::Task(task_ref) => {
+                    ThreadSendTarget::Task(task_id) => {
                         cmd_thread_send_to_task(
                             config_path,
-                            task_ref,
+                            task_id,
                             text,
                             workspace_dir,
                             timeout,
@@ -793,6 +793,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             TaskAction::List {
                 status,
                 assignee,
+                source_thread,
+                source_task,
+                source_bot,
                 include_done,
                 limit,
                 offset,
@@ -802,6 +805,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     config_path,
                     status.as_deref(),
                     assignee.as_deref(),
+                    source_thread.as_deref(),
+                    source_task.as_deref(),
+                    source_bot.as_deref(),
                     include_done,
                     limit,
                     offset,
@@ -809,7 +815,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await
             }
-            TaskAction::Get { task_ref, json } => cmd_task_get(config_path, &task_ref, json).await,
+            TaskAction::Get { task_id, json } => cmd_task_get(config_path, &task_id, json).await,
             TaskAction::Create {
                 title,
                 body,
@@ -849,41 +855,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await
             }
             TaskAction::Claim {
-                task_ref,
+                task_id,
                 actor,
                 json,
-            } => cmd_task_claim(config_path, &task_ref, actor.as_deref(), json).await,
-            TaskAction::Release { task_ref, json } => {
-                cmd_task_release(config_path, &task_ref, json).await
+            } => cmd_task_claim(config_path, &task_id, actor.as_deref(), json).await,
+            TaskAction::Release { task_id, json } => {
+                cmd_task_release(config_path, &task_id, json).await
             }
             TaskAction::Assign {
-                task_ref,
+                task_id,
                 principal,
                 json,
-            } => cmd_task_assign(config_path, &task_ref, &principal, json).await,
-            TaskAction::Unassign { task_ref, json } => {
-                cmd_task_unassign(config_path, &task_ref, json).await
+            } => cmd_task_assign(config_path, &task_id, &principal, json).await,
+            TaskAction::Unassign { task_id, json } => {
+                cmd_task_unassign(config_path, &task_id, json).await
             }
             TaskAction::Update {
-                task_ref,
+                task_id,
                 status,
                 note,
                 force,
                 json,
-            } => cmd_task_update(config_path, &task_ref, &status, note, force, json).await,
-            TaskAction::Reopen { task_ref, json } => {
-                cmd_task_reopen(config_path, &task_ref, json).await
+            } => cmd_task_update(config_path, &task_id, &status, note, force, json).await,
+            TaskAction::Reopen { task_id, json } => {
+                cmd_task_reopen(config_path, &task_id, json).await
             }
             TaskAction::SetTitle {
-                task_ref,
+                task_id,
                 title,
                 json,
-            } => cmd_task_set_title(config_path, &task_ref, &title, json).await,
+            } => cmd_task_set_title(config_path, &task_id, &title, json).await,
             TaskAction::History {
-                task_ref,
+                task_id,
                 limit,
                 json,
-            } => cmd_task_history(config_path, &task_ref, limit, json).await,
+            } => cmd_task_history(config_path, &task_id, limit, json).await,
         },
         Some(Commands::Migrate { action }) => match action {
             MigrateAction::ThreadTranscripts {

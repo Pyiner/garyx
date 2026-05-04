@@ -1219,7 +1219,29 @@ fn task_notification_target_resolves_current_thread_from_env() {
 }
 
 #[test]
-fn task_ref_display_falls_back_to_task_number() {
+fn task_source_payload_reads_runtime_env() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _thread_id = ScopedEnvVar::set_string("GARYX_THREAD_ID", "thread::current");
+    let _task_id = ScopedEnvVar::set_string("GARYX_TASK_ID", "#TASK-7");
+    let _bot_id = ScopedEnvVar::set_string("GARYX_BOT_ID", "telegram:main");
+    let _channel = ScopedEnvVar::set_string("GARYX_CHANNEL", "telegram");
+    let _account = ScopedEnvVar::set_string("GARYX_ACCOUNT_ID", "main");
+
+    assert_eq!(
+        task_source_payload_from_env().unwrap(),
+        json!({
+            "thread_id": "thread::current",
+            "task_id": "#TASK-7",
+            "task_thread_id": "thread::current",
+            "bot_id": "telegram:main",
+            "channel": "telegram",
+            "account_id": "main",
+        })
+    );
+}
+
+#[test]
+fn task_id_display_falls_back_to_task_number() {
     let payload = json!({
         "task": {
             "number": 42,
@@ -1227,13 +1249,13 @@ fn task_ref_display_falls_back_to_task_number() {
         }
     });
 
-    assert_eq!(task_ref_display(&payload, &payload["task"]), "#TASK-42");
+    assert_eq!(task_id_display(&payload, &payload["task"]), "#TASK-42");
 }
 
 #[test]
 fn format_task_progress_groups_each_user_turn_with_last_assistant_text_group() {
     let task_payload = json!({
-        "task_ref": "#TASK-42",
+        "task_id": "#TASK-42",
         "thread_id": "thread::task-42",
         "task": {
             "title": "Ship task progress",

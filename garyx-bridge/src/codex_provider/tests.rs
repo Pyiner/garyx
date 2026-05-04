@@ -152,7 +152,7 @@ fn test_resolve_runtime_codex_env_exports_task_cli_env() {
             json!({
                 "thread_id": "thread::task",
                 "task": {
-                    "task_ref": "#TASK-4",
+                    "task_id": "#TASK-4",
                     "status": "todo",
                     "scope": "telegram/codex_bot"
                 }
@@ -171,7 +171,7 @@ fn test_resolve_runtime_codex_env_exports_task_cli_env() {
         Some("agent:codex")
     );
     assert_eq!(
-        env.get("GARYX_TASK_REF").map(String::as_str),
+        env.get("GARYX_TASK_ID").map(String::as_str),
         Some("#TASK-4")
     );
 }
@@ -244,7 +244,7 @@ fn test_build_input_items_appends_task_suffix() {
             "runtime_context".to_owned(),
             json!({
                 "task": {
-                    "task_ref": "#TASK-4",
+                    "task_id": "#TASK-4",
                     "status": "in_progress",
                     "assignee": { "kind": "agent", "agent_id": "codex" }
                 }
@@ -1022,7 +1022,7 @@ fn test_build_thread_start_params_keeps_runtime_context_out_of_developer_instruc
                 "account_id": "main",
                 "bot_id": "macapp:main",
                 "task": {
-                    "task_ref": "#TASK-9",
+                    "task_id": "#TASK-9",
                     "status": "todo"
                 }
             }),
@@ -1035,7 +1035,7 @@ fn test_build_thread_start_params_keeps_runtime_context_out_of_developer_instruc
         .unwrap_or_default();
     assert!(developer_instructions.contains("System capabilities:"));
     assert!(!developer_instructions.contains("channel: macapp"));
-    assert!(!developer_instructions.contains("task_ref: #TASK-9"));
+    assert!(!developer_instructions.contains("task_id: #TASK-9"));
     assert!(!developer_instructions.contains("thread_id: thread::ctx"));
     assert!(!developer_instructions.contains("workspace_dir: /tmp/ws"));
 }

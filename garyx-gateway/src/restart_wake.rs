@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use garyx_models::local_paths::default_session_data_dir;
-use garyx_router::tasks::{canonical_task_ref, task_from_record};
+use garyx_router::tasks::{canonical_task_id, task_from_record};
 use garyx_router::{ThreadStore, is_thread_key};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -145,7 +145,7 @@ async fn resolve_wake_thread_id(
 
 async fn resolve_task_thread_id(
     store: Arc<dyn ThreadStore>,
-    task_ref: &str,
+    task_id: &str,
 ) -> Result<String, String> {
     for key in store.list_keys(None).await {
         if !is_thread_key(&key) {
@@ -157,11 +157,11 @@ async fn resolve_task_thread_id(
         let Ok(Some(task)) = task_from_record(&record) else {
             continue;
         };
-        if canonical_task_ref(&task) == task_ref {
+        if canonical_task_id(&task) == task_id {
             return Ok(key);
         }
     }
-    Err(format!("restart wake task target not found: {task_ref}"))
+    Err(format!("restart wake task target not found: {task_id}"))
 }
 
 async fn resolve_bot_thread_id(state: &Arc<AppState>, bot: &str) -> Result<String, String> {
