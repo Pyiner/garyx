@@ -226,6 +226,11 @@ pub async fn create_task(
         .await
     {
         Ok((thread_id, task)) => {
+            if let Err(error) =
+                ensure_created_task_thread_provider_from_bound_agent(&state, &thread_id).await
+            {
+                return task_error_response(error);
+            }
             let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
             let mut payload = json!({
                 "thread_id": thread_id,
@@ -503,6 +508,13 @@ pub async fn assign_task(
     }
     let assignee = body.to;
     let self_claim = actor.as_ref() == Some(&assignee);
+    if let Ok((thread_id, _, _)) = service.get_task(&task_id).await {
+        if let Err(error) =
+            validate_thread_runtime_allows_assignee(&state, &thread_id, &assignee).await
+        {
+            return task_error_response(error);
+        }
+    }
     match service.assign_task(&task_id, assignee, actor).await {
         Ok(task) => {
             let assignee_for_workspace = task.assignee.clone();
@@ -820,6 +832,59 @@ async fn task_runtime_with_default_workspace(
     Ok(Some(input))
 }
 
+async fn validate_thread_runtime_allows_assignee(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    assignee: &Principal,
+) -> Result<(), TaskServiceError> {
+    let Principal::Agent { agent_id } = assignee else {
+        return Ok(());
+    };
+    let Some(thread) = state.threads.thread_store.get(thread_id).await else {
+        return Ok(());
+    };
+    let reference = resolve_agent_reference_from_stores(
+        state.ops.custom_agents.as_ref(),
+        state.ops.agent_teams.as_ref(),
+        agent_id,
+    )
+    .await
+    .map_err(TaskServiceError::UnknownAgent)?;
+
+    let thread_agent_id = thread
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            TaskServiceError::BadRequest(format!(
+                "task thread {thread_id} has no bound agent; create a new task thread for agent {}",
+                reference.bound_agent_id()
+            ))
+        })?;
+    if thread_agent_id != reference.bound_agent_id() {
+        return Err(TaskServiceError::BadRequest(format!(
+            "task thread {thread_id} is bound to agent {thread_agent_id}; cannot assign it to agent {}",
+            reference.bound_agent_id()
+        )));
+    }
+
+    if let Some(thread_provider_type) = thread
+        .get("provider_type")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<garyx_models::ProviderType>(value).ok())
+    {
+        let reference_provider_type = reference.provider_type();
+        if thread_provider_type != reference_provider_type {
+            return Err(TaskServiceError::BadRequest(format!(
+                "task thread {thread_id} is bound to provider {thread_provider_type:?}; cannot assign it to provider {reference_provider_type:?}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 async fn ensure_thread_workspace_from_assignee_default(
     state: &Arc<AppState>,
     thread_id: &str,
@@ -842,7 +907,6 @@ async fn ensure_thread_workspace_from_assignee_default(
             "thread payload is not an object: {thread_id}"
         )));
     };
-    obj.insert("agent_id".to_owned(), Value::String(agent_id.clone()));
     if let Some(default_workspace_dir) = default_workspace_dir {
         obj.insert(
             "workspace_dir".to_owned(),
@@ -863,6 +927,50 @@ async fn ensure_thread_workspace_from_assignee_default(
         .bridge
         .set_thread_workspace_binding(thread_id, workspace_dir_from_value(&updated))
         .await;
+    Ok(())
+}
+
+async fn ensure_created_task_thread_provider_from_bound_agent(
+    state: &Arc<AppState>,
+    thread_id: &str,
+) -> Result<(), TaskServiceError> {
+    let Some(mut updated) = state.threads.thread_store.get(thread_id).await else {
+        return Ok(());
+    };
+    if updated.get("provider_type").is_some() {
+        return Ok(());
+    }
+    let Some(agent_id) = updated
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+    else {
+        return Ok(());
+    };
+    let reference = resolve_agent_reference_from_stores(
+        state.ops.custom_agents.as_ref(),
+        state.ops.agent_teams.as_ref(),
+        &agent_id,
+    )
+    .await
+    .map_err(TaskServiceError::UnknownAgent)?;
+    let Some(obj) = updated.as_object_mut() else {
+        return Err(TaskServiceError::Store(format!(
+            "thread payload is not an object: {thread_id}"
+        )));
+    };
+    obj.insert(
+        "agent_id".to_owned(),
+        Value::String(reference.bound_agent_id().to_owned()),
+    );
+    obj.insert("provider_type".to_owned(), json!(reference.provider_type()));
+    obj.insert(
+        "updated_at".to_owned(),
+        Value::String(Utc::now().to_rfc3339()),
+    );
+    state.threads.thread_store.set(thread_id, updated).await;
     Ok(())
 }
 

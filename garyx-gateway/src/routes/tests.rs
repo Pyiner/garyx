@@ -61,13 +61,19 @@ struct RecordedProviderRun {
 
 struct RecordingTaskProvider {
     ready: AtomicBool,
+    provider_type: ProviderType,
     runs: std::sync::Mutex<Vec<RecordedProviderRun>>,
 }
 
 impl RecordingTaskProvider {
     fn new() -> Self {
+        Self::with_provider_type(ProviderType::CodexAppServer)
+    }
+
+    fn with_provider_type(provider_type: ProviderType) -> Self {
         Self {
             ready: AtomicBool::new(true),
+            provider_type,
             runs: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -235,7 +241,7 @@ impl AgentLoopProvider for SlowDeleteProvider {
 #[async_trait::async_trait]
 impl AgentLoopProvider for RecordingTaskProvider {
     fn provider_type(&self) -> ProviderType {
-        ProviderType::CodexAppServer
+        self.provider_type.clone()
     }
 
     fn is_ready(&self) -> bool {
@@ -1987,6 +1993,7 @@ async fn task_assign_queues_dispatch_with_original_body() {
             serde_json::to_vec(&json!({
                 "title": "Assignable task",
                 "body": "Use this original body when assigning later.",
+                "runtime": {"agent_id": "workspace-reviewer"},
                 "notification_target": {"kind": "none"},
                 "start": false
             }))
@@ -2041,4 +2048,120 @@ async fn task_assign_queues_dispatch_with_original_body() {
             .contains("Use this original body when assigning later.")
     );
     assert!(!runs[0].message.contains("Title: Assignable task"));
+}
+
+#[tokio::test]
+async fn task_assign_rejects_assignee_that_differs_from_bound_thread_agent() {
+    let dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.tasks.enabled = true;
+    config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+
+    let claude_provider = Arc::new(RecordingTaskProvider::with_provider_type(
+        ProviderType::ClaudeCode,
+    ));
+    let gemini_provider = Arc::new(RecordingTaskProvider::with_provider_type(
+        ProviderType::GeminiCli,
+    ));
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("task-claude-provider", claude_provider.clone())
+        .await;
+    bridge
+        .register_provider("task-gemini-provider", gemini_provider.clone())
+        .await;
+    bridge
+        .set_route("api", "main", "task-claude-provider")
+        .await;
+    bridge
+        .set_default_provider_key("task-claude-provider")
+        .await;
+
+    let state = AppStateBuilder::new(config)
+        .with_custom_agent_store(custom_agents.clone())
+        .with_bridge(bridge.clone())
+        .build();
+    bridge
+        .replace_agent_profiles(custom_agents.list_agents().await)
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/tasks")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "title": "Provider switch task",
+                "body": "Run this with the latest assignee provider.",
+                "runtime": {"agent_id": "claude", "workspace_dir": "/tmp/provider-switch"},
+                "notification_target": {"kind": "none"},
+                "start": false
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let task_id = payload["task_id"].as_str().unwrap();
+    let thread_id = payload["thread_id"].as_str().unwrap().to_owned();
+    assert_eq!(payload["status"], "todo");
+    assert!(payload.get("dispatch").is_none());
+
+    let before = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .expect("thread before assign");
+    assert_eq!(before["agent_id"], "claude");
+    assert_eq!(before["provider_type"], "claude_code");
+
+    let request = authed_request()
+        .method("PATCH")
+        .uri(format!(
+            "/api/tasks/{}/assign",
+            urlencoding::encode(task_id)
+        ))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "to": {"kind": "agent", "agent_id": "gemini"}
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["code"], "BadRequest");
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("is bound to agent claude; cannot assign it to agent gemini")
+    );
+    assert_eq!(claude_provider.runs().len(), 0);
+    assert_eq!(gemini_provider.runs().len(), 0);
+
+    let after = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .expect("thread after assign");
+    assert_eq!(after["agent_id"], "claude");
+    assert_eq!(after["provider_type"], "claude_code");
 }
