@@ -13,6 +13,78 @@ use tracing::info;
 use super::super::*;
 use super::planning::{DispatchContext, DispatchPlan};
 
+fn message_actor_label(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let metadata = object.get("metadata").and_then(Value::as_object);
+    let role = object
+        .get("role")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+
+    let agent_display_name = metadata
+        .and_then(|fields| fields.get("agent_display_name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let agent_id = metadata
+        .and_then(|fields| fields.get("agent_id"))
+        .and_then(Value::as_str)
+        .or_else(|| object.get("agent_id").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let from_id = metadata
+        .and_then(|fields| fields.get("from_id"))
+        .and_then(Value::as_str)
+        .or_else(|| object.get("from_id").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let internal_dispatch = metadata
+        .and_then(|fields| fields.get("internal_dispatch"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    match role {
+        "assistant" => agent_id.or(agent_display_name),
+        "user" if internal_dispatch => agent_id.or(agent_display_name).or(from_id),
+        "user" => Some("user".to_owned()),
+        _ => agent_id.or(agent_display_name).or(from_id),
+    }
+}
+
+fn build_group_transcript_snapshot(thread_data: &Value) -> Value {
+    let Some(messages) = thread_data.get("messages").and_then(Value::as_array) else {
+        return Value::Array(Vec::new());
+    };
+    let mut entries = Vec::with_capacity(messages.len());
+    for message in messages {
+        let Some(object) = message.as_object() else {
+            continue;
+        };
+        let agent_id = message_actor_label(object).unwrap_or_default();
+        let text = object
+            .get("text")
+            .and_then(Value::as_str)
+            .or_else(|| object.get("content").and_then(Value::as_str))
+            .unwrap_or("");
+        if agent_id.is_empty() && text.is_empty() {
+            continue;
+        }
+        let at = object
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        entries.push(json!({
+            "agent_id": agent_id,
+            "text": text,
+            "at": at,
+        }));
+    }
+    Value::Array(entries)
+}
+
 impl MessageRouter {
     fn apply_custom_command_transform_fields(
         &mut self,
@@ -117,6 +189,16 @@ impl MessageRouter {
         let thread_workspace_dir = thread_record
             .as_ref()
             .and_then(crate::workspace_dir_from_value);
+        if let Some(thread_record) = thread_record.as_ref() {
+            for (key, value) in crate::thread_metadata_from_value(thread_record) {
+                dispatch_metadata.entry(key).or_insert(value);
+            }
+            if dispatch_metadata.contains_key("agent_team_id") {
+                dispatch_metadata
+                    .entry("group_transcript_snapshot".to_owned())
+                    .or_insert_with(|| build_group_transcript_snapshot(thread_record));
+            }
+        }
 
         dispatch_metadata.insert(
             "resolved_thread_id".to_owned(),
@@ -146,6 +228,8 @@ impl MessageRouter {
             .and_then(|value| match value {
                 "claude_code" => Some(ProviderType::ClaudeCode),
                 "codex_app_server" => Some(ProviderType::CodexAppServer),
+                "gemini_cli" => Some(ProviderType::GeminiCli),
+                "agent_team" => Some(ProviderType::AgentTeam),
                 _ => None,
             });
 

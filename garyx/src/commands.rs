@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
@@ -47,6 +47,7 @@ use garyx_models::local_paths::{
     default_agent_teams_state_path, default_custom_agents_state_path, default_log_file_path,
     default_session_data_dir, gary_home_dir, thread_transcripts_dir_for_data_dir,
 };
+use garyx_models::provider::{AgentRunRequest, ProviderMessage, StreamEvent};
 use garyx_models::{
     AgentTeamProfile, CustomAgentProfile, ProviderType, builtin_provider_agent_profiles,
 };
@@ -2997,8 +2998,8 @@ struct ImageGenerationCliResult {
     path: PathBuf,
     bytes: usize,
     media_type: Option<String>,
-    thread_id: Option<String>,
-    run_id: Option<String>,
+    runtime_thread_id: String,
+    run_id: String,
     extra_images_seen: bool,
 }
 
@@ -3025,15 +3026,93 @@ impl std::fmt::Display for ImageGenerationEventError {
 
 impl std::error::Error for ImageGenerationEventError {}
 
+#[derive(Debug)]
+struct ToolProviderRun {
+    runtime_thread_id: String,
+    run_id: String,
+    events: Vec<StreamEvent>,
+}
+
+async fn run_provider_tool(
+    config_path: &str,
+    provider_type: ProviderType,
+    tool_name: &str,
+    message: String,
+    timeout_secs: u64,
+    metadata: HashMap<String, Value>,
+) -> Result<ToolProviderRun, Box<dyn std::error::Error>> {
+    if timeout_secs == 0 {
+        return Err("timeout must be greater than 0 seconds".into());
+    }
+
+    let loaded = load_config_or_default(config_path, ConfigRuntimeOverrides::default())?;
+    let bridge = MultiProviderBridge::new();
+    bridge.initialize_from_config(&loaded.config).await?;
+
+    let workspace_dir = tool_workspace_dir(tool_name)?;
+    let runtime_thread_id = format!("tool::{tool_name}::{}", Uuid::new_v4());
+    let run_id = format!("tool-run-{}", Uuid::new_v4());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamEvent>();
+    let callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(move |event| {
+        let _ = tx.send(event);
+    });
+
+    let request = AgentRunRequest::new(
+        runtime_thread_id.clone(),
+        message,
+        run_id.clone(),
+        "tool",
+        tool_name,
+        metadata,
+    )
+    .with_workspace_dir(Some(workspace_dir.to_string_lossy().into_owned()))
+    .with_requested_provider(Some(provider_type));
+
+    if let Err(error) = bridge.start_agent_run(request, Some(callback)).await {
+        bridge.shutdown().await;
+        return Err(error.into());
+    }
+
+    let deadline = tokio::time::sleep(Duration::from_secs(timeout_secs));
+    tokio::pin!(deadline);
+    let mut events = Vec::new();
+
+    loop {
+        tokio::select! {
+            _ = &mut deadline => {
+                let _ = bridge.abort_run(&run_id).await;
+                bridge.shutdown().await;
+                return Err(format!("timed out after {timeout_secs}s waiting for provider tool `{tool_name}`").into());
+            }
+            event = rx.recv() => {
+                let Some(event) = event else {
+                    break;
+                };
+                let done = matches!(event, StreamEvent::Done);
+                events.push(event);
+                if done {
+                    break;
+                }
+            }
+        }
+    }
+
+    bridge.shutdown().await;
+    Ok(ToolProviderRun {
+        runtime_thread_id,
+        run_id,
+        events,
+    })
+}
+
 pub(crate) async fn cmd_tool_image(
     config_path: &str,
     prompt: String,
     output: PathBuf,
     timeout_secs: u64,
-    agent: String,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let result = run_tool_image(config_path, &prompt, output, timeout_secs, &agent).await?;
+    let result = run_tool_image(config_path, &prompt, output, timeout_secs).await?;
     if json_output {
         println!(
             "{}",
@@ -3042,7 +3121,7 @@ pub(crate) async fn cmd_tool_image(
                 "path": result.path.display().to_string(),
                 "bytes": result.bytes,
                 "media_type": result.media_type,
-                "thread_id": result.thread_id,
+                "runtime_thread_id": result.runtime_thread_id,
                 "run_id": result.run_id,
                 "extra_images_seen": result.extra_images_seen,
             }))?
@@ -3055,12 +3134,8 @@ pub(crate) async fn cmd_tool_image(
     if let Some(media_type) = result.media_type.as_deref() {
         println!("Media type: {media_type}");
     }
-    if let Some(thread_id) = result.thread_id.as_deref() {
-        println!("Thread: {thread_id}");
-    }
-    if let Some(run_id) = result.run_id.as_deref() {
-        println!("Run: {run_id}");
-    }
+    println!("Runtime thread: {}", result.runtime_thread_id);
+    println!("Run: {}", result.run_id);
     if result.extra_images_seen {
         println!("Extra images were generated and ignored.");
     }
@@ -3072,131 +3147,25 @@ async fn run_tool_image(
     prompt: &str,
     output: PathBuf,
     timeout_secs: u64,
-    agent: &str,
 ) -> Result<ImageGenerationCliResult, Box<dyn std::error::Error>> {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::{
-        connect_async,
-        tungstenite::{Message, client::IntoClientRequest},
-    };
-
-    let agent = agent.trim();
-    if agent.is_empty() {
-        return Err("agent cannot be empty".into());
-    }
-    if timeout_secs == 0 {
-        return Err("timeout must be greater than 0 seconds".into());
-    }
-
-    let gateway = gateway_endpoint(config_path)?;
-    let workspace_dir = tool_workspace_dir("image")?;
-    let thread_payload = post_gateway_json(
-        &gateway,
-        "/api/threads",
-        &json!({
-            "label": "Image generation",
-            "agentId": agent,
-            "workspaceDir": workspace_dir,
-            "metadata": {
-                "source": "garyx_tool_image"
-            }
-        }),
+    let provider_run = run_provider_tool(
+        config_path,
+        ProviderType::CodexAppServer,
+        "image",
+        build_image_generation_prompt(prompt),
+        timeout_secs,
+        HashMap::from([("source".to_owned(), json!("garyx_tool_image"))]),
     )
-    .await
-    .map_err(|error| format!("gateway unavailable or selected agent is not available: {error}"))?;
-    validate_tool_image_thread_agent(&thread_payload, agent)?;
-    let thread_id = thread_payload
-        .get("id")
-        .or_else(|| thread_payload.get("thread_id"))
-        .or_else(|| thread_payload.get("threadId"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or("gateway did not return a thread id for image generation")?
-        .to_owned();
-
-    let ws_url = gateway
-        .base_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
-    let ws_url = format!("{ws_url}/api/chat/ws");
-
-    let mut request = ws_url.into_client_request()?;
-    if let Some(token) = gateway.auth_token.as_deref() {
-        request
-            .headers_mut()
-            .insert("Authorization", format!("Bearer {token}").parse()?);
-    }
-
-    let (ws_stream, _) = connect_async(request)
-        .await
-        .map_err(|error| format!("WebSocket connect failed: {error}"))?;
-    let (mut write, mut read) = ws_stream.split();
-
-    let start_payload = json!({
-        "op": "start",
-        "message": build_image_generation_prompt(prompt),
-        "threadId": thread_id,
-        "accountId": "cli",
-        "fromId": "cli",
-        "waitForResponse": false,
-    });
-    write
-        .send(Message::Text(serde_json::to_string(&start_payload)?.into()))
-        .await?;
-
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let deadline = tokio::time::sleep(timeout);
-    tokio::pin!(deadline);
-
+    .await?;
     let mut first_image: Option<GeneratedImageResult> = None;
     let mut extra_images_seen = false;
-    let mut run_id: Option<String> = None;
-    let mut stream_thread_id: Option<String> = Some(thread_id);
 
-    loop {
-        tokio::select! {
-            _ = &mut deadline => {
-                return Err(format!("timed out after {timeout_secs}s waiting for CodeX image generation").into());
-            }
-            msg = read.next() => {
-                match msg {
-                    None => break,
-                    Some(Err(error)) => return Err(format!("WebSocket error: {error}").into()),
-                    Some(Ok(Message::Text(text))) => {
-                        let event: Value = match serde_json::from_str(&text) {
-                            Ok(value) => value,
-                            Err(_) => continue,
-                        };
-                        if run_id.is_none() {
-                            run_id = event.get("runId").or_else(|| event.get("run_id")).and_then(Value::as_str).map(str::to_owned);
-                        }
-                        if let Some(next_thread_id) = event.get("threadId").or_else(|| event.get("thread_id")).and_then(Value::as_str) {
-                            stream_thread_id = Some(next_thread_id.to_owned());
-                        }
-                        if let Some(image) = extract_image_from_chat_event(&event)? {
-                            if first_image.is_some() {
-                                extra_images_seen = true;
-                            } else {
-                                first_image = Some(image);
-                            }
-                        }
-
-                        match event.get("type").and_then(Value::as_str).unwrap_or("") {
-                            "done" | "complete" => break,
-                            "error" => {
-                                let message = event.get("message")
-                                    .or_else(|| event.get("error"))
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("unknown gateway error");
-                                return Err(format!("CodeX image generation failed: {message}").into());
-                            }
-                            _ => {}
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) => break,
-                    Some(Ok(_)) => {}
-                }
+    for event in &provider_run.events {
+        if let Some(image) = extract_image_from_stream_event(event)? {
+            if first_image.is_some() {
+                extra_images_seen = true;
+            } else {
+                first_image = Some(image);
             }
         }
     }
@@ -3208,36 +3177,10 @@ async fn run_tool_image(
         path: output,
         bytes: image.bytes.len(),
         media_type: image.media_type,
-        thread_id: stream_thread_id,
-        run_id,
+        runtime_thread_id: provider_run.runtime_thread_id,
+        run_id: provider_run.run_id,
         extra_images_seen,
     })
-}
-
-fn validate_tool_image_thread_agent(
-    thread_payload: &Value,
-    requested_agent: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let provider = thread_payload
-        .get("provider_type")
-        .or_else(|| thread_payload.get("providerType"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if provider == "codex_app_server" || provider == "CodexAppServer" {
-        return Ok(());
-    }
-    if requested_agent == "codex" && provider.is_empty() {
-        return Ok(());
-    }
-    Err(format!(
-        "selected agent '{requested_agent}' is not CodeX-capable (provider_type: {})",
-        if provider.is_empty() {
-            "unknown"
-        } else {
-            provider
-        }
-    )
-    .into())
 }
 
 fn build_image_generation_prompt(prompt: &str) -> String {
@@ -3249,22 +3192,10 @@ Preserve the user prompt below verbatim as the image-generation prompt.\n\n\
     )
 }
 
-fn extract_image_from_chat_event(
-    event: &Value,
+fn extract_image_from_tool_result_message(
+    message: &ProviderMessage,
 ) -> Result<Option<GeneratedImageResult>, ImageGenerationEventError> {
-    if event.get("type").and_then(Value::as_str) != Some("tool_result") {
-        return Ok(None);
-    }
-    let Some(message_value) = event.get("message") else {
-        return Ok(None);
-    };
-    let message: garyx_models::provider::ProviderMessage =
-        serde_json::from_value(message_value.clone()).map_err(|error| {
-            ImageGenerationEventError::MalformedPayload(format!(
-                "generated image event payload was malformed: {error}"
-            ))
-        })?;
-    if provider_message_item_type(&message) != Some("imageGeneration") {
+    if provider_message_item_type(message) != Some("imageGeneration") {
         return Ok(None);
     }
     let result = message
@@ -3276,13 +3207,22 @@ fn extract_image_from_chat_event(
     if result.is_empty() {
         return Ok(None);
     }
-    extract_image_generation_result(&message)
+    extract_image_generation_result(message)
         .map(Some)
         .ok_or_else(|| {
             ImageGenerationEventError::MalformedPayload(
                 "generated image payload was malformed or not valid base64".to_owned(),
             )
         })
+}
+
+fn extract_image_from_stream_event(
+    event: &StreamEvent,
+) -> Result<Option<GeneratedImageResult>, ImageGenerationEventError> {
+    match event {
+        StreamEvent::ToolResult { message } => extract_image_from_tool_result_message(message),
+        _ => Ok(None),
+    }
 }
 
 fn resolve_image_output_path(output: PathBuf, extension: &str) -> PathBuf {
@@ -3530,7 +3470,7 @@ struct SearchCommandOutput {
     query: String,
     answer: String,
     sources: Vec<SearchSource>,
-    thread_id: String,
+    runtime_thread_id: String,
     run_id: String,
     searched: bool,
     tool_metadata: Vec<SearchToolMetadata>,
@@ -3638,6 +3578,7 @@ fn is_search_like_tool_name(tool_name: &str) -> bool {
         || lower.contains("search")
 }
 
+#[cfg(test)]
 pub(crate) fn apply_search_stream_event(state: &mut SearchStreamState, event: &Value) {
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
     if let Some(thread_id) = event
@@ -3720,19 +3661,53 @@ pub(crate) fn apply_search_stream_event(state: &mut SearchStreamState, event: &V
     }
 }
 
+fn apply_search_provider_message(state: &mut SearchStreamState, message: &ProviderMessage) {
+    let tool_name = message.tool_name.as_deref().unwrap_or("");
+    let search_metadata = message.metadata.get("gemini_search");
+    if is_search_like_tool_name(tool_name) || search_metadata.is_some() {
+        state.searched = true;
+    }
+    let Some(search_metadata) = search_metadata else {
+        return;
+    };
+    let mut sources = value_search_sources(&search_metadata["sources"]);
+    if sources.is_empty()
+        && let Some(output) = search_metadata.get("output").and_then(Value::as_str)
+    {
+        sources = extract_search_sources_from_text(output);
+    }
+    for source in &sources {
+        push_source_unique(&mut state.sources, source.clone());
+    }
+    state.tool_metadata.push(SearchToolMetadata {
+        tool_name: tool_name.to_owned(),
+        tool_use_id: message.tool_use_id.clone(),
+        sources,
+        output: search_metadata
+            .get("output")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+    });
+}
+
+pub(crate) fn apply_search_provider_event(state: &mut SearchStreamState, event: &StreamEvent) {
+    match event {
+        StreamEvent::Delta { text } => state.answer.push_str(text),
+        StreamEvent::ToolUse { message } | StreamEvent::ToolResult { message } => {
+            apply_search_provider_message(state, message);
+        }
+        StreamEvent::Boundary { .. }
+        | StreamEvent::ThreadTitleUpdated { .. }
+        | StreamEvent::Done => {}
+    }
+}
+
 pub(crate) async fn cmd_tool_search(
     config_path: &str,
     query_parts: Vec<String>,
     json_output: bool,
     timeout_secs: u64,
-    agent_id: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::{
-        connect_async,
-        tungstenite::{Message, client::IntoClientRequest},
-    };
-
     let query = query_parts.join(" ").trim().to_owned();
     if query.is_empty() {
         return Err("query cannot be empty".into());
@@ -3740,125 +3715,27 @@ pub(crate) async fn cmd_tool_search(
     if timeout_secs == 0 {
         return Err("timeout must be greater than zero".into());
     }
-    let agent_id = agent_id.trim();
-    if agent_id.is_empty() {
-        return Err("agent cannot be empty".into());
-    }
 
-    let gateway = gateway_endpoint(config_path)
-        .map_err(|error| format!("gateway unavailable or misconfigured: {error}"))?;
-    let workspace_dir = tool_workspace_dir("search")?;
-    let thread = post_gateway_json(
-        &gateway,
-        "/api/threads",
-        &json!({
-            "label": format!("Search: {query}"),
-            "agentId": agent_id,
-            "workspaceDir": workspace_dir,
-            "metadata": {
-                "source": "garyx_tool_search",
-                "model": TOOL_SEARCH_GEMINI_MODEL,
-            },
-        }),
+    let provider_run = run_provider_tool(
+        config_path,
+        ProviderType::GeminiCli,
+        "search",
+        build_gemini_search_prompt(&query),
+        timeout_secs,
+        HashMap::from([
+            ("source".to_owned(), json!("garyx_tool_search")),
+            ("search_query".to_owned(), json!(query.clone())),
+            ("model".to_owned(), json!(TOOL_SEARCH_GEMINI_MODEL)),
+        ]),
     )
-    .await
-    .map_err(|error| format!("gateway unavailable or agent not found: {error}"))?;
-    let provider_type = thread
-        .get("provider_type")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if provider_type != "gemini_cli" {
-        return Err(format!(
-            "selected agent '{agent_id}' is not Gemini-capable (provider_type: {})",
-            if provider_type.is_empty() {
-                "unknown"
-            } else {
-                provider_type
-            }
-        )
-        .into());
-    }
-    let thread_id = thread
-        .get("id")
-        .or_else(|| thread.get("thread_id"))
-        .or_else(|| thread.get("threadId"))
-        .and_then(Value::as_str)
-        .ok_or("gateway thread response missing thread id")?
-        .to_owned();
-
-    let ws_url = gateway
-        .base_url
-        .replace("https://", "wss://")
-        .replace("http://", "ws://");
-    let ws_url = format!("{ws_url}/api/chat/ws");
-    let mut request = ws_url.into_client_request()?;
-    if let Some(token) = gateway.auth_token.as_deref() {
-        request
-            .headers_mut()
-            .insert("Authorization", format!("Bearer {token}").parse()?);
-    }
-    let (ws_stream, _) = connect_async(request)
-        .await
-        .map_err(|error| format!("gateway websocket unavailable: {error}"))?;
-    let (mut write, mut read) = ws_stream.split();
-
-    let start_payload = json!({
-        "op": "start",
-        "threadId": thread_id,
-        "message": build_gemini_search_prompt(&query),
-        "accountId": "cli",
-        "fromId": "tool-search",
-        "waitForResponse": false,
-        "metadata": {
-            "source": "garyx_tool_search",
-            "search_query": query,
-            "model": TOOL_SEARCH_GEMINI_MODEL,
-        },
-    });
-    write
-        .send(Message::Text(serde_json::to_string(&start_payload)?.into()))
-        .await?;
-
-    let timeout = tokio::time::Duration::from_secs(timeout_secs);
-    let deadline = tokio::time::sleep(timeout);
-    tokio::pin!(deadline);
-    let mut state = SearchStreamState::default();
-
-    loop {
-        tokio::select! {
-            _ = &mut deadline => {
-                return Err(format!("timeout after {timeout_secs}s").into());
-            }
-            msg = read.next() => {
-                match msg {
-                    None => break,
-                    Some(Err(error)) => {
-                        return Err(format!("gateway websocket error: {error}").into());
-                    }
-                    Some(Ok(Message::Text(text))) => {
-                        let event: Value = match serde_json::from_str(&text) {
-                            Ok(value) => value,
-                            Err(_) => continue,
-                        };
-                        let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
-                        if event_type == "error" {
-                            let message = event
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .or_else(|| event.get("error").and_then(Value::as_str))
-                                .unwrap_or("unknown error");
-                            return Err(message.to_owned().into());
-                        }
-                        apply_search_stream_event(&mut state, &event);
-                        if matches!(event_type, "done" | "complete") {
-                            break;
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) => break,
-                    Some(Ok(_)) => {}
-                }
-            }
-        }
+    .await?;
+    let mut state = SearchStreamState {
+        thread_id: Some(provider_run.runtime_thread_id.clone()),
+        run_id: Some(provider_run.run_id.clone()),
+        ..Default::default()
+    };
+    for event in &provider_run.events {
+        apply_search_provider_event(&mut state, event);
     }
 
     let answer = state.answer.trim().to_owned();
@@ -3876,8 +3753,8 @@ pub(crate) async fn cmd_tool_search(
         query,
         answer,
         sources: state.sources,
-        thread_id: state.thread_id.unwrap_or(thread_id),
-        run_id: state.run_id.unwrap_or_default(),
+        runtime_thread_id: state.thread_id.unwrap_or(provider_run.runtime_thread_id),
+        run_id: state.run_id.unwrap_or(provider_run.run_id),
         searched: state.searched,
         tool_metadata: state.tool_metadata,
     };

@@ -1327,6 +1327,13 @@ async fn run_subagent_streaming_rederives_leaf_metadata_and_persists_history() {
                 "thread_id": "thread::child-coder",
                 "agent_id": "coder",
                 "provider_type": "claude_code",
+                "metadata": {
+                    "agent_id": "coder",
+                    "agent_display_name": "Coder",
+                    "system_prompt": "You are the coder child.",
+                    "model": "claude-opus-child",
+                    "requested_provider_type": "claude_code"
+                }
             }),
         )
         .await;
@@ -1429,12 +1436,16 @@ async fn start_agent_run_rejects_thread_bound_to_missing_team() {
 
     let error = bridge
         .start_agent_run(
-            run_request(
+            AgentRunRequest::new(
                 "thread::deleted-team",
                 "hello",
                 "run-missing-team",
                 "api",
                 "main",
+                HashMap::from([
+                    ("agent_id".to_owned(), json!("team::deleted")),
+                    ("requested_provider_type".to_owned(), json!("agent_team")),
+                ]),
             ),
             None,
         )

@@ -731,14 +731,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 output,
                 json,
                 timeout,
-                agent,
-            } => cmd_tool_image(config_path, prompt, output, timeout, agent, json).await,
+            } => cmd_tool_image(config_path, prompt, output, timeout, json).await,
             ToolAction::Search {
                 query,
                 json,
                 timeout,
-                agent,
-            } => cmd_tool_search(config_path, query, json, timeout, agent).await,
+            } => cmd_tool_search(config_path, query, json, timeout).await,
         },
         Some(Commands::Thread { action }) => match action {
             ThreadAction::List {

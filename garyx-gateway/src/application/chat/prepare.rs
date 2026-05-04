@@ -14,9 +14,11 @@ use garyx_router::{
 };
 use serde_json::{Value, json};
 
+use crate::agent_identity::{
+    agent_runtime_metadata, build_group_transcript_snapshot, resolve_agent_reference_from_stores,
+};
 use crate::application::chat::contracts::ChatRequest;
 use crate::chat_shared::record_api_thread_log;
-use crate::custom_agents::CustomAgentStore;
 use crate::managed_mcp_metadata::inject_managed_mcp_servers;
 use crate::server::AppState;
 
@@ -67,16 +69,6 @@ fn thread_bound_provider_type(thread_data: &Value) -> Option<ProviderType> {
         .ok()
 }
 
-async fn resolve_thread_agent_profile(
-    agent_store: &CustomAgentStore,
-    thread_store: &dyn garyx_router::ThreadStore,
-    thread_id: &str,
-) -> Option<garyx_models::CustomAgentProfile> {
-    let thread_data = thread_store.get(thread_id).await?;
-    let agent_id = thread_bound_agent_id(&thread_data)?;
-    agent_store.get_agent(agent_id).await
-}
-
 async fn persist_thread_provider_type_if_missing(
     state: &Arc<AppState>,
     thread_id: &str,
@@ -121,37 +113,50 @@ pub(crate) async fn prepare_chat_request(
         req.metadata.insert(key, value);
     }
     let thread_data = state.threads.thread_store.get(&thread_id).await;
-    let agent_profile = resolve_thread_agent_profile(
-        state.ops.custom_agents.as_ref(),
-        state.threads.thread_store.as_ref(),
-        &thread_id,
-    )
-    .await;
     let thread_provider_type = thread_data.as_ref().and_then(thread_bound_provider_type);
-    if let Some(profile) = agent_profile.as_ref() {
-        if !profile.system_prompt.trim().is_empty() {
-            req.provider_metadata.insert(
-                "system_prompt".to_owned(),
-                Value::String(profile.system_prompt.clone()),
-            );
+    let agent_reference = match thread_data
+        .as_ref()
+        .and_then(thread_bound_agent_id)
+        .map(ToOwned::to_owned)
+    {
+        Some(agent_id) => {
+            match resolve_agent_reference_from_stores(
+                state.ops.custom_agents.as_ref(),
+                state.ops.agent_teams.as_ref(),
+                &agent_id,
+            )
+            .await
+            {
+                Ok(reference) => Some(reference),
+                Err(error) => {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        agent_id = %agent_id,
+                        error = %error,
+                        "failed to resolve thread-bound agent before chat run"
+                    );
+                    None
+                }
+            }
         }
-        req.metadata.insert(
-            "agent_id".to_owned(),
-            Value::String(profile.agent_id.clone()),
-        );
-        req.metadata.insert(
-            "agent_display_name".to_owned(),
-            Value::String(profile.display_name.clone()),
-        );
-        if !profile.model.trim().is_empty() {
+        None => None,
+    };
+    if let Some(reference) = agent_reference.as_ref() {
+        for (key, value) in agent_runtime_metadata(reference) {
+            req.metadata.entry(key).or_insert(value);
+        }
+        if reference.team().is_some()
+            && let Some(thread_data) = thread_data.as_ref()
+        {
             req.metadata
-                .insert("model".to_owned(), Value::String(profile.model.clone()));
+                .entry("group_transcript_snapshot".to_owned())
+                .or_insert_with(|| build_group_transcript_snapshot(thread_data));
         }
     }
     req.provider_type = thread_provider_type.or_else(|| {
-        agent_profile
+        agent_reference
             .as_ref()
-            .map(|profile| profile.provider_type.clone())
+            .map(|reference| reference.provider_type())
     });
     if let Some(provider_type) = req.provider_type.as_ref() {
         persist_thread_provider_type_if_missing(state, &thread_id, provider_type).await;

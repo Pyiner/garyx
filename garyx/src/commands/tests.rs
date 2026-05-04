@@ -1146,27 +1146,22 @@ fn search_stream_event_does_not_count_direct_answer_as_search() {
 
 #[test]
 fn extract_image_from_synthetic_tool_result_event() {
-    let event = json!({
-        "type": "tool_result",
-        "threadId": "thread::test",
-        "runId": "run-test",
-        "message": {
-            "role": "tool_result",
-            "content": {
+    let event = StreamEvent::ToolResult {
+        message: ProviderMessage::tool_result(
+            json!({
                 "type": "imageGeneration",
                 "id": "img_one",
                 "media_type": "image/png",
                 "result": "aGVsbG8="
-            },
-            "metadata": {
-                "item_type": "imageGeneration"
-            },
-            "tool_name": "imageGeneration",
-            "is_error": false
-        }
-    });
+            }),
+            Some("img_one".to_owned()),
+            Some("imageGeneration".to_owned()),
+            Some(false),
+        )
+        .with_metadata_value("item_type", json!("imageGeneration")),
+    };
 
-    let image = extract_image_from_chat_event(&event)
+    let image = extract_image_from_stream_event(&event)
         .expect("event parse")
         .expect("image");
     assert_eq!(image.bytes, b"hello");
@@ -1176,22 +1171,21 @@ fn extract_image_from_synthetic_tool_result_event() {
 
 #[test]
 fn extract_image_from_synthetic_tool_result_event_rejects_malformed_base64() {
-    let event = json!({
-        "type": "tool_result",
-        "message": {
-            "role": "tool_result",
-            "content": {
+    let event = StreamEvent::ToolResult {
+        message: ProviderMessage::tool_result(
+            json!({
                 "type": "imageGeneration",
                 "id": "img_bad",
                 "result": "not valid base64"
-            },
-            "metadata": {
-                "item_type": "imageGeneration"
-            }
-        }
-    });
+            }),
+            Some("img_bad".to_owned()),
+            Some("imageGeneration".to_owned()),
+            Some(false),
+        )
+        .with_metadata_value("item_type", json!("imageGeneration")),
+    };
 
-    let error = extract_image_from_chat_event(&event).expect_err("malformed image");
+    let error = extract_image_from_stream_event(&event).expect_err("malformed image");
     assert!(error.to_string().contains("malformed"));
 }
 

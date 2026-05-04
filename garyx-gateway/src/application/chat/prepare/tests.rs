@@ -226,7 +226,7 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
     assert_eq!(prepared.provider_type, Some(ProviderType::CodexAppServer));
     assert_eq!(
         prepared
-            .provider_metadata
+            .metadata
             .get("system_prompt")
             .and_then(Value::as_str),
         Some("Review specs carefully.")

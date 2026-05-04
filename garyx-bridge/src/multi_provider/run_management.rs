@@ -12,7 +12,7 @@ use garyx_models::provider::{
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_router::{
     ThreadHistoryRepository, ThreadStore, loop_enabled_from_value, loop_iteration_count_from_value,
-    mark_thread_task_in_review_if_in_progress,
+    mark_thread_task_in_review_if_in_progress, thread_metadata_from_value,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -50,15 +50,6 @@ fn normalize_workspace_dir(workspace_dir: Option<String>) -> Option<String> {
             Some(canonical)
         }
     })
-}
-
-fn provider_type_label(provider_type: &ProviderType) -> &'static str {
-    match provider_type {
-        ProviderType::ClaudeCode => "claude_code",
-        ProviderType::CodexAppServer => "codex_app_server",
-        ProviderType::GeminiCli => "gemini_cli",
-        ProviderType::AgentTeam => "agent_team",
-    }
 }
 
 fn requested_provider_from_metadata(metadata: &HashMap<String, Value>) -> Option<ProviderType> {
@@ -577,103 +568,6 @@ fn non_empty_value_string(value: Option<&Value>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn message_actor_label(object: &serde_json::Map<String, Value>) -> Option<String> {
-    let metadata = object.get("metadata").and_then(Value::as_object);
-    let role = object
-        .get("role")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
-
-    let agent_display_name = metadata
-        .and_then(|fields| fields.get("agent_display_name"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let agent_id = metadata
-        .and_then(|fields| fields.get("agent_id"))
-        .and_then(Value::as_str)
-        .or_else(|| object.get("agent_id").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let from_id = metadata
-        .and_then(|fields| fields.get("from_id"))
-        .and_then(Value::as_str)
-        .or_else(|| object.get("from_id").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let internal_dispatch = metadata
-        .and_then(|fields| fields.get("internal_dispatch"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    match role {
-        "assistant" => agent_id.or(agent_display_name),
-        "user" if internal_dispatch => agent_id.or(agent_display_name).or(from_id),
-        "user" => Some("user".to_owned()),
-        _ => agent_id.or(agent_display_name).or(from_id),
-    }
-}
-
-/// Project a group thread's persisted `messages[]` into the JSON shape
-/// `AgentTeamProvider::parse_group_transcript` consumes:
-/// `[ { "agent_id": String, "text": String, "at": String }, ... ]`.
-///
-/// We include only entries that carry at least an `agent_id` or non-empty
-/// `text` — matching the filter inside the provider — so a malformed or
-/// empty message doesn't produce an empty `<group_activity>` envelope when
-/// the provider later slices the snapshot for per-child catch-up.
-///
-/// The `text` field is resolved with the following precedence:
-/// 1. The message's explicit `text` field (how the persistence layer
-///    records assistant replies and user turns).
-/// 2. `content` when it is a bare string (legacy persisted shape).
-/// 3. Empty string otherwise (structured content such as image blocks or
-///    tool_use payloads — these don't belong in the textual transcript
-///    anyway).
-///
-/// `agent_id` is read from `metadata.agent_id` (the provider-side
-/// attribution used by attach_run_fields and the team planner) with a
-/// fallback to a top-level `agent_id` field in case a future persistence
-/// tweak hoists it. `at` is taken from the message's `timestamp`.
-///
-/// We deliberately snapshot *all* messages, not just assistant replies:
-/// user turns in a team thread carry routing-relevant context (e.g. prior
-/// @mentions) that child agents catch up on through the envelope.
-fn build_group_transcript_snapshot(thread_data: &Value) -> Value {
-    let Some(messages) = thread_data.get("messages").and_then(Value::as_array) else {
-        return Value::Array(Vec::new());
-    };
-    let mut entries = Vec::with_capacity(messages.len());
-    for message in messages {
-        let Some(object) = message.as_object() else {
-            continue;
-        };
-        let agent_id = message_actor_label(object).unwrap_or_default();
-        let text = object
-            .get("text")
-            .and_then(Value::as_str)
-            .or_else(|| object.get("content").and_then(Value::as_str))
-            .unwrap_or("");
-        if agent_id.is_empty() && text.is_empty() {
-            continue;
-        }
-        let at = object
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        entries.push(json!({
-            "agent_id": agent_id,
-            "text": text,
-            "at": at,
-        }));
-    }
-    Value::Array(entries)
-}
-
 fn persisted_provider_type(session_data: &Value) -> Option<ProviderType> {
     let raw = session_data.get("provider_type")?.clone();
     serde_json::from_value(raw.clone())
@@ -1000,127 +894,6 @@ fn missing_agent_team_binding_error(
 }
 
 impl MultiProviderBridge {
-    async fn thread_agent_context(
-        &self,
-        thread_id: &str,
-    ) -> (Option<String>, Option<ProviderType>, Option<Value>) {
-        let Some(store) = self.inner.thread_store.read().await.clone() else {
-            return (None, None, None);
-        };
-        let Some(thread_data) = store.get(thread_id).await else {
-            return (None, None, None);
-        };
-        let agent_id = thread_data
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-        let provider_type = thread_data
-            .get("provider_type")
-            .cloned()
-            .and_then(|value| serde_json::from_value::<ProviderType>(value).ok());
-        (agent_id, provider_type, Some(thread_data))
-    }
-
-    async fn enrich_agent_metadata(
-        &self,
-        thread_id: &str,
-        metadata: &mut HashMap<String, Value>,
-    ) -> Option<ProviderType> {
-        let (thread_agent_id, thread_provider_type, thread_data) =
-            self.thread_agent_context(thread_id).await;
-        let mut agent_id = metadata
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-
-        if agent_id.is_none() {
-            agent_id = thread_agent_id;
-        }
-
-        let Some(agent_id) = agent_id else {
-            return requested_provider_from_metadata(metadata).or(thread_provider_type);
-        };
-
-        metadata
-            .entry("agent_id".to_owned())
-            .or_insert_with(|| Value::String(agent_id.clone()));
-
-        // Team-bound thread short-circuit. If the thread's `agent_id` refers
-        // to an `AgentTeamProfile`, route through the AgentTeamProvider by
-        // forcing `requested_provider_type = "agent_team"` and injecting the
-        // two metadata fields `AgentTeamProvider` consumes:
-        //
-        //   - `agent_team_id`: identifies which team profile to load.
-        //   - `group_transcript_snapshot`: projection of the group thread's
-        //     existing `messages[]` into `[{agent_id, text, at}]`, used by
-        //     the provider for per-child catch-up slicing. The current user
-        //     turn is *not* yet persisted in `messages[]` at this call site
-        //     (the partial persistence worker only starts writing after
-        //     enrich_agent_metadata returns), so the snapshot is correctly
-        //     "transcript without live turn" as the provider expects.
-        //
-        // The AgentTeam provider expects a group transcript snapshot that
-        // excludes the live turn currently being enriched.
-        if let Some(team) = self.team_profile(&agent_id).await {
-            metadata.insert(
-                "agent_team_id".to_owned(),
-                Value::String(team.team_id.clone()),
-            );
-            metadata
-                .entry("agent_display_name".to_owned())
-                .or_insert_with(|| Value::String(team.display_name.clone()));
-
-            let snapshot = thread_data
-                .as_ref()
-                .map(build_group_transcript_snapshot)
-                .unwrap_or_else(|| Value::Array(Vec::new()));
-            metadata.insert("group_transcript_snapshot".to_owned(), snapshot);
-
-            // Force AgentTeamProvider selection regardless of any previously
-            // requested provider: child providers are dispatched *through*
-            // the team provider, never directly, when the thread is bound
-            // to a team.
-            metadata.insert(
-                "requested_provider_type".to_owned(),
-                Value::String(provider_type_label(&ProviderType::AgentTeam).to_owned()),
-            );
-            return Some(ProviderType::AgentTeam);
-        }
-
-        let Some(profile) = self.agent_profile(&agent_id).await else {
-            return requested_provider_from_metadata(metadata).or(thread_provider_type);
-        };
-
-        metadata
-            .entry("agent_display_name".to_owned())
-            .or_insert_with(|| Value::String(profile.display_name.clone()));
-        if !metadata.contains_key("model") && !profile.model.trim().is_empty() {
-            metadata.insert("model".to_owned(), Value::String(profile.model.clone()));
-        }
-        if !metadata.contains_key("system_prompt") && !profile.system_prompt.trim().is_empty() {
-            metadata.insert(
-                "system_prompt".to_owned(),
-                Value::String(profile.system_prompt.clone()),
-            );
-        }
-        if !metadata.contains_key("requested_provider_type") {
-            let preferred_provider_type = thread_provider_type
-                .clone()
-                .unwrap_or_else(|| profile.provider_type.clone());
-            metadata.insert(
-                "requested_provider_type".to_owned(),
-                Value::String(provider_type_label(&preferred_provider_type).to_owned()),
-            );
-        }
-        requested_provider_from_metadata(metadata)
-            .or(thread_provider_type)
-            .or(Some(profile.provider_type.clone()))
-    }
-
     async fn resolve_thread_execution_target(
         &self,
         thread_id: &str,
@@ -1130,10 +903,8 @@ impl MultiProviderBridge {
         requested_provider: Option<ProviderType>,
     ) -> Result<(String, Arc<dyn AgentLoopProvider>, Option<ProviderType>), BridgeError> {
         let _ = restore_thread_affinity_from_store(self, thread_id).await;
-        let inferred_requested_provider = self.enrich_agent_metadata(thread_id, metadata).await;
-        let requested_provider = requested_provider
-            .or(inferred_requested_provider)
-            .or_else(|| requested_provider_from_metadata(metadata));
+        let requested_provider =
+            requested_provider.or_else(|| requested_provider_from_metadata(metadata));
 
         if requested_provider == Some(ProviderType::AgentTeam)
             && !metadata.contains_key("agent_team_id")
@@ -2020,6 +1791,13 @@ impl MultiProviderBridge {
         }
 
         scrub_subagent_runtime_metadata(&mut metadata);
+        if let Some(store) = self.inner.thread_store.read().await.clone()
+            && let Some(thread_data) = store.get(thread_id).await
+        {
+            for (key, value) in thread_metadata_from_value(&thread_data) {
+                metadata.entry(key).or_insert(value);
+            }
+        }
         let thread_log_id = resolve_thread_log_thread_id(thread_id, &metadata);
         let thread_logs = self.thread_log_sink();
         let effective_workspace_dir =

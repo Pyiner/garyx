@@ -373,9 +373,6 @@ pub(crate) enum ToolAction {
         /// Wait up to this many seconds for image generation
         #[arg(long, default_value_t = 600)]
         timeout: u64,
-        /// Agent id to use for the provider run
-        #[arg(long, default_value = "codex")]
-        agent: String,
     },
     /// Search the web through Gemini provider-native search
     Search {
@@ -388,9 +385,6 @@ pub(crate) enum ToolAction {
         /// Timeout in seconds
         #[arg(long, default_value_t = 300)]
         timeout: u64,
-        /// Agent ID to run through
-        #[arg(long, default_value = "gemini")]
-        agent: String,
     },
 }
 

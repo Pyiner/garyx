@@ -122,13 +122,11 @@ fn parse_tool_search_json() {
                     query,
                     json,
                     timeout,
-                    agent,
                 },
         }) => {
             assert_eq!(query, vec!["GitHub Actions Node.js 20 deprecation"]);
             assert!(json);
             assert_eq!(timeout, 240);
-            assert_eq!(agent, "gemini");
         }
         _ => panic!("expected tool search"),
     }
@@ -1106,8 +1104,6 @@ fn parse_tool_image() {
         "--json",
         "--timeout",
         "42",
-        "--agent",
-        "codex",
     ]);
     match cli.command {
         Some(Commands::Tool {
@@ -1117,14 +1113,12 @@ fn parse_tool_image() {
                     output,
                     json,
                     timeout,
-                    agent,
                 },
         }) => {
             assert_eq!(prompt, "a precise product render");
             assert_eq!(output, std::path::PathBuf::from("/tmp/garyx-image.png"));
             assert!(json);
             assert_eq!(timeout, 42);
-            assert_eq!(agent, "codex");
         }
         _ => panic!("expected Tool::Image"),
     }
@@ -1148,14 +1142,12 @@ fn parse_tools_image_alias() {
                     output,
                     json,
                     timeout,
-                    agent,
                 },
         }) => {
             assert_eq!(prompt, "a precise product render");
             assert_eq!(output, std::path::PathBuf::from("/tmp/garyx-image"));
             assert!(!json);
             assert_eq!(timeout, 600);
-            assert_eq!(agent, "codex");
         }
         _ => panic!("expected Tool::Image via alias"),
     }
