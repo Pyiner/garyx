@@ -146,16 +146,26 @@ export type DesktopTaskPrincipal =
 
 export interface DesktopTaskSummary {
   threadId: string;
-  taskRef: string;
+  taskId: string;
   number: number;
   title: string;
   status: DesktopTaskStatus;
   creator: DesktopTaskPrincipal;
   assignee?: DesktopTaskPrincipal | null;
+  source?: DesktopTaskSource | null;
   updatedAt: string;
   updatedBy: DesktopTaskPrincipal;
   runtimeAgentId: string;
   replyCount: number;
+}
+
+export interface DesktopTaskSource {
+  threadId?: string | null;
+  taskId?: string | null;
+  taskThreadId?: string | null;
+  botId?: string | null;
+  channel?: string | null;
+  accountId?: string | null;
 }
 
 export interface DesktopTasksPage {
@@ -167,6 +177,7 @@ export interface DesktopTasksPage {
 export interface ListTasksInput {
   status?: DesktopTaskStatus | null;
   assignee?: string | null;
+  sourceBot?: string | null;
   includeDone?: boolean;
   limit?: number;
   offset?: number;
@@ -193,23 +204,23 @@ export interface PromoteTaskInput {
 }
 
 export interface UpdateTaskStatusInput {
-  taskRef: string;
+  taskId: string;
   status: DesktopTaskStatus;
   note?: string | null;
   force?: boolean;
 }
 
 export interface AssignTaskInput {
-  taskRef: string;
+  taskId: string;
   principal: string;
 }
 
 export interface UnassignTaskInput {
-  taskRef: string;
+  taskId: string;
 }
 
 export interface UpdateTaskTitleInput {
-  taskRef: string;
+  taskId: string;
   title: string;
 }
 

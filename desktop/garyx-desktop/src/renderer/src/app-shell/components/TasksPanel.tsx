@@ -57,7 +57,7 @@ const STATUS_LABELS: Record<DesktopTaskStatus, string> = {
   done: 'Done',
 };
 
-const TASK_DRAG_MIME = 'application/x-garyx-task-ref';
+const TASK_DRAG_MIME = 'application/x-garyx-task-id';
 
 function formatPrincipal(principal: DesktopTaskPrincipal | null | undefined, t: Translate): string {
   if (!principal) {
@@ -108,6 +108,16 @@ function taskCountLabel(count: number, t: Translate): string {
   return t('{count} tasks', { count });
 }
 
+function taskBotFilterValue(group: DesktopBotConsoleSummary): string {
+  const channel = group.channel.trim();
+  const accountId = group.accountId.trim();
+  return channel && accountId ? `${channel}:${accountId}` : group.id;
+}
+
+function taskBotFilterLabel(group: DesktopBotConsoleSummary): string {
+  return group.title || taskBotFilterValue(group);
+}
+
 function taskNotificationTargetFromSelection(
   value: string,
   botGroups: DesktopBotConsoleSummary[],
@@ -142,7 +152,8 @@ export function TasksPanel({
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [mutatingTaskRef, setMutatingTaskRef] = useState<string | null>(null);
+  const [botFilter, setBotFilter] = useState('');
+  const [mutatingTaskId, setMutatingTaskId] = useState<string | null>(null);
   const [draftOpen, setDraftOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftBody, setDraftBody] = useState('');
@@ -150,9 +161,25 @@ export function TasksPanel({
   const [draftWorkspaceDir, setDraftWorkspaceDir] = useState('');
   const [draftNotificationTarget, setDraftNotificationTarget] = useState('');
   const [creating, setCreating] = useState(false);
-  const [draggingTaskRef, setDraggingTaskRef] = useState<string | null>(null);
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [dropStatus, setDropStatus] = useState<DesktopTaskStatus | null>(null);
-  const draggingTaskRefValue = useRef<string | null>(null);
+  const draggingTaskIdValue = useRef<string | null>(null);
+
+  const botFilterOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return botGroups.flatMap((group) => {
+      const value = taskBotFilterValue(group);
+      if (!value || seen.has(value)) {
+        return [];
+      }
+      seen.add(value);
+      return [{
+        id: group.id || value,
+        label: taskBotFilterLabel(group),
+        value,
+      }];
+    });
+  }, [botGroups]);
 
   const loadTasks = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -162,6 +189,7 @@ export function TasksPanel({
     try {
       const page = await getDesktopApi().listTasks({
         includeDone: true,
+        sourceBot: botFilter || null,
         limit: 200,
       });
       setTasks(page.tasks);
@@ -178,11 +206,17 @@ export function TasksPanel({
         setLoading(false);
       }
     }
-  }, []);
+  }, [botFilter]);
 
   useEffect(() => {
     void loadTasks();
   }, [loadTasks]);
+
+  useEffect(() => {
+    if (botFilter && !botFilterOptions.some((option) => option.value === botFilter)) {
+      setBotFilter('');
+    }
+  }, [botFilter, botFilterOptions]);
 
   const tasksByStatus = useMemo(() => {
     const grouped: Record<DesktopTaskStatus, DesktopTaskSummary[]> = {
@@ -201,10 +235,10 @@ export function TasksPanel({
     if (task.status === to) {
       return;
     }
-    setMutatingTaskRef(task.taskRef);
+    setMutatingTaskId(task.taskId);
     try {
       await getDesktopApi().updateTaskStatus({
-        taskRef: task.taskRef,
+        taskId: task.taskId,
         status: to,
       });
       await loadTasks({ silent: true });
@@ -215,22 +249,22 @@ export function TasksPanel({
         'error',
       );
     } finally {
-      setMutatingTaskRef(null);
+      setMutatingTaskId(null);
     }
   }
 
   function draggedTask(event: DragEvent<HTMLElement>): DesktopTaskSummary | null {
-    const taskRef =
+    const taskId =
       event.dataTransfer.getData(TASK_DRAG_MIME) ||
       event.dataTransfer.getData('text/plain') ||
-      draggingTaskRefValue.current ||
-      draggingTaskRef;
-    return tasks.find((task) => task.taskRef === taskRef) || null;
+      draggingTaskIdValue.current ||
+      draggingTaskId;
+    return tasks.find((task) => task.taskId === taskId) || null;
   }
 
   function handleColumnDragOver(event: DragEvent<HTMLElement>, status: DesktopTaskStatus) {
     const task = draggedTask(event);
-    if (!task || task.status === status || mutatingTaskRef === task.taskRef) {
+    if (!task || task.status === status || mutatingTaskId === task.taskId) {
       return;
     }
     event.preventDefault();
@@ -252,9 +286,9 @@ export function TasksPanel({
     event.preventDefault();
     const task = draggedTask(event);
     setDropStatus(null);
-    setDraggingTaskRef(null);
-    draggingTaskRefValue.current = null;
-    if (!task || task.status === status || mutatingTaskRef === task.taskRef) {
+    setDraggingTaskId(null);
+    draggingTaskIdValue.current = null;
+    if (!task || task.status === status || mutatingTaskId === task.taskId) {
       return;
     }
     void moveTask(task, status);
@@ -311,28 +345,28 @@ export function TasksPanel({
 
   const renderTaskCard = (task: DesktopTaskSummary) => {
     const next = nextStatus(task.status);
-    const busy = mutatingTaskRef === task.taskRef;
-    const dragging = draggingTaskRef === task.taskRef;
+    const busy = mutatingTaskId === task.taskId;
+    const dragging = draggingTaskId === task.taskId;
     return (
       <article
         className={`tasks-card ${dragging ? 'is-dragging' : ''}`}
         draggable={!busy}
-        key={task.taskRef}
+        key={task.taskId}
         onDragEnd={() => {
-          draggingTaskRefValue.current = null;
-          setDraggingTaskRef(null);
+          draggingTaskIdValue.current = null;
+          setDraggingTaskId(null);
           setDropStatus(null);
         }}
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = 'move';
-          event.dataTransfer.setData(TASK_DRAG_MIME, task.taskRef);
-          event.dataTransfer.setData('text/plain', task.taskRef);
-          draggingTaskRefValue.current = task.taskRef;
-          setDraggingTaskRef(task.taskRef);
+          event.dataTransfer.setData(TASK_DRAG_MIME, task.taskId);
+          event.dataTransfer.setData('text/plain', task.taskId);
+          draggingTaskIdValue.current = task.taskId;
+          setDraggingTaskId(task.taskId);
         }}
       >
         <div className="tasks-card-topline">
-          <span className="tasks-card-ref">{task.taskRef || `#${task.number}`}</span>
+          <span className="tasks-card-id">{task.taskId || `#TASK-${task.number}`}</span>
         </div>
         <button
           className="tasks-card-title"
@@ -398,6 +432,21 @@ export function TasksPanel({
           <p className="tasks-page-subtitle">{headerCount}</p>
         </div>
         <div className="tasks-header-actions">
+          <label className="tasks-filter-control">
+            <span>{t('Bot')}</span>
+            <select
+              aria-label={t('Filter by bot')}
+              onChange={(event) => setBotFilter(event.target.value)}
+              value={botFilter}
+            >
+              <option value="">{t('All bots')}</option>
+              {botFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             className="tasks-secondary-button"
             disabled={loading}
@@ -578,9 +627,9 @@ export function TasksPanel({
           </div>
           {tasks.map((task) => {
             const next = nextStatus(task.status);
-            const busy = mutatingTaskRef === task.taskRef;
+            const busy = mutatingTaskId === task.taskId;
             return (
-              <div className="tasks-list-row" key={task.taskRef}>
+              <div className="tasks-list-row" key={task.taskId}>
                 <button
                   className="tasks-list-title"
                   disabled={!task.threadId}
@@ -592,7 +641,7 @@ export function TasksPanel({
                   type="button"
                 >
                   <span>{task.title}</span>
-                  <small>{task.taskRef}</small>
+                  <small>{task.taskId}</small>
                 </button>
                 <span className={`tasks-status-chip tone-${task.status.replace('in_', '')}`}>
                   {t(STATUS_LABELS[task.status])}

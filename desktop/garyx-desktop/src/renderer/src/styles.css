@@ -13390,6 +13390,36 @@ button.codex-list-row {
   flex-wrap: wrap;
 }
 
+.tasks-filter-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0.5px solid var(--color-token-input-border);
+  border-radius: 7px;
+  background: var(--color-token-input-background);
+  color: var(--color-token-input-foreground);
+}
+
+.tasks-filter-control span {
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs-plus);
+  font-weight: 560;
+  white-space: nowrap;
+}
+
+.tasks-filter-control select {
+  min-width: 128px;
+  max-width: 190px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  outline: 0;
+}
+
 .tasks-segmented {
   display: inline-flex;
   align-items: center;
@@ -13736,7 +13766,7 @@ button.codex-list-row {
   justify-content: space-between;
 }
 
-.tasks-card-ref,
+.tasks-card-id,
 .tasks-card-meta,
 .tasks-card-updated,
 .tasks-list-muted {
@@ -13748,7 +13778,7 @@ button.codex-list-row {
   white-space: nowrap;
 }
 
-.tasks-card-ref {
+.tasks-card-id {
   color: var(--color-token-text-secondary);
   font-family: var(--message-code-font);
   font-weight: 650;

@@ -26,6 +26,7 @@ import type {
   DesktopBotConversationNode,
   DesktopTeam,
   DesktopTaskPrincipal,
+  DesktopTaskSource,
   DesktopTaskStatus,
   DesktopTaskSummary,
   DesktopTasksPage,
@@ -399,13 +400,14 @@ interface TaskPrincipalPayload {
 interface TaskSummaryPayload {
   thread_id?: string;
   threadId?: string;
-  task_ref?: string;
-  taskRef?: string;
+  task_id?: string;
+  taskId?: string;
   number?: number;
   title?: string | null;
   status?: string | null;
   creator?: TaskPrincipalPayload | null;
   assignee?: TaskPrincipalPayload | null;
+  source?: TaskSourcePayload | null;
   updated_at?: string | null;
   updatedAt?: string | null;
   updated_by?: TaskPrincipalPayload | null;
@@ -415,6 +417,20 @@ interface TaskSummaryPayload {
   reply_count?: number;
   replyCount?: number;
   task?: TaskSummaryPayload | null;
+}
+
+interface TaskSourcePayload {
+  thread_id?: string | null;
+  threadId?: string | null;
+  task_id?: string | null;
+  taskId?: string | null;
+  task_thread_id?: string | null;
+  taskThreadId?: string | null;
+  bot_id?: string | null;
+  botId?: string | null;
+  channel?: string | null;
+  account_id?: string | null;
+  accountId?: string | null;
 }
 
 interface TasksPayload {
@@ -1544,6 +1560,30 @@ function mapTaskPrincipal(value: unknown): DesktopTaskPrincipal {
   };
 }
 
+function mapTaskSource(value: unknown): DesktopTaskSource | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = parseRecord(value);
+  const source: DesktopTaskSource = {
+    threadId: asString(record.thread_id) || asString(record.threadId) || null,
+    taskId: asString(record.task_id) || asString(record.taskId) || null,
+    taskThreadId:
+      asString(record.task_thread_id) || asString(record.taskThreadId) || null,
+    botId: asString(record.bot_id) || asString(record.botId) || null,
+    channel: asString(record.channel) || null,
+    accountId: asString(record.account_id) || asString(record.accountId) || null,
+  };
+  return source.threadId ||
+    source.taskId ||
+    source.taskThreadId ||
+    source.botId ||
+    source.channel ||
+    source.accountId
+    ? source
+    : null;
+}
+
 function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
   const task: TaskSummaryPayload =
     value.task && typeof value.task === "object" ? value.task : {};
@@ -1555,9 +1595,11 @@ function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
     "Untitled task";
   return {
     threadId: asString(value.thread_id) || asString(value.threadId) || "",
-    taskRef:
-      asString(value.task_ref) ||
-      asString(value.taskRef) ||
+    taskId:
+      asString(value.task_id) ||
+      asString(value.taskId) ||
+      asString(task.task_id) ||
+      asString(task.taskId) ||
       (number > 0 ? `#TASK-${number}` : ""),
     number,
     title,
@@ -1567,6 +1609,7 @@ function mapTaskSummary(value: TaskSummaryPayload): DesktopTaskSummary {
       value.assignee || task.assignee
         ? mapTaskPrincipal(value.assignee ?? task.assignee)
         : null,
+    source: mapTaskSource(value.source ?? task.source),
     updatedAt:
       asString(value.updated_at) ||
       asString(value.updatedAt) ||
@@ -3389,6 +3432,10 @@ export async function listTasks(
   if (assignee) {
     query.set("assignee", assignee);
   }
+  const sourceBot = input.sourceBot?.trim() || "";
+  if (sourceBot) {
+    query.set("source_bot_id", sourceBot);
+  }
   if (input.includeDone) {
     query.set("include_done", "true");
   }
@@ -3486,7 +3533,7 @@ export async function updateTaskStatus(
 ): Promise<void> {
   await requestJson<unknown>(
     settings,
-    `/api/tasks/${encodeURIComponent(input.taskRef)}/status`,
+    `/api/tasks/${encodeURIComponent(input.taskId)}/status`,
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
@@ -3505,7 +3552,7 @@ export async function assignTask(
 ): Promise<void> {
   await requestJson<unknown>(
     settings,
-    `/api/tasks/${encodeURIComponent(input.taskRef)}/assign`,
+    `/api/tasks/${encodeURIComponent(input.taskId)}/assign`,
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
@@ -3522,7 +3569,7 @@ export async function unassignTask(
 ): Promise<void> {
   await requestJson<unknown>(
     settings,
-    `/api/tasks/${encodeURIComponent(input.taskRef)}/assign`,
+    `/api/tasks/${encodeURIComponent(input.taskId)}/assign`,
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),
@@ -3536,7 +3583,7 @@ export async function updateTaskTitle(
 ): Promise<void> {
   await requestJson<unknown>(
     settings,
-    `/api/tasks/${encodeURIComponent(input.taskRef)}/title`,
+    `/api/tasks/${encodeURIComponent(input.taskId)}/title`,
     {
       method: "PATCH",
       signal: AbortSignal.timeout(8000),
