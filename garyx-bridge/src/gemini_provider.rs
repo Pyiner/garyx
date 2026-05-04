@@ -474,21 +474,156 @@ fn extract_gemini_thread_title(update: &Value) -> Option<String> {
         .and_then(extract_quoted_topic_title)
 }
 
+fn first_non_empty_path_string(value: &Value, paths: &[&[&str]]) -> Option<String> {
+    paths.iter().find_map(|path| {
+        path.iter()
+            .try_fold(value, |current, key| current.get(*key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn extract_gemini_tool_name(update: &Value) -> Option<String> {
+    first_non_empty_path_string(
+        update,
+        &[
+            &["rawInput", "name"],
+            &["rawInput", "functionName"],
+            &["input", "name"],
+            &["input", "functionName"],
+            &["toolCall", "name"],
+            &["toolCall", "functionName"],
+            &["functionCall", "name"],
+            &["title"],
+            &["kind"],
+        ],
+    )
+}
+
+fn collect_search_outputs(value: &Value, outputs: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(output) = map
+                .get("functionResponse")
+                .and_then(|item| item.get("response"))
+                .and_then(|item| item.get("output"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                outputs.push(output.to_owned());
+            }
+            for child in map.values() {
+                collect_search_outputs(child, outputs);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_search_outputs(item, outputs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn strip_url_punctuation(url: &str) -> &str {
+    url.trim_matches(|ch: char| matches!(ch, ')' | ']' | '}' | '>' | '.' | ',' | ';' | ':'))
+}
+
+fn extract_urls_from_text(text: &str) -> Vec<Value> {
+    let mut sources = Vec::new();
+    let mut seen = HashSet::new();
+    for raw in text.split_whitespace() {
+        let Some(start) = raw.find("http://").or_else(|| raw.find("https://")) else {
+            continue;
+        };
+        let url = strip_url_punctuation(&raw[start..]);
+        if url.is_empty() || !seen.insert(url.to_owned()) {
+            continue;
+        }
+        sources.push(json!({ "url": url }));
+    }
+    sources
+}
+
+fn extract_markdown_sources(text: &str) -> Vec<Value> {
+    let mut sources = Vec::new();
+    let mut seen = HashSet::new();
+    let mut remainder = text;
+    while let Some(open) = remainder.find('[') {
+        let after_open = &remainder[open + 1..];
+        let Some(close) = after_open.find("](") else {
+            remainder = after_open;
+            continue;
+        };
+        let title = after_open[..close].trim();
+        let after_url = &after_open[close + 2..];
+        let Some(end) = after_url.find(')') else {
+            break;
+        };
+        let url = strip_url_punctuation(after_url[..end].trim());
+        if (url.starts_with("http://") || url.starts_with("https://"))
+            && seen.insert(url.to_owned())
+        {
+            sources.push(json!({
+                "title": title,
+                "url": url,
+            }));
+        }
+        remainder = &after_url[end + 1..];
+    }
+    for source in extract_urls_from_text(text) {
+        let Some(url) = source.get("url").and_then(Value::as_str) else {
+            continue;
+        };
+        if seen.insert(url.to_owned()) {
+            sources.push(source);
+        }
+    }
+    sources
+}
+
+fn gemini_search_metadata(update: &Value, tool_name: Option<&str>) -> Option<Value> {
+    let mut outputs = Vec::new();
+    collect_search_outputs(update, &mut outputs);
+    let search_like = match tool_name {
+        Some(name) => {
+            let lower = name.to_ascii_lowercase();
+            lower.contains("google_web_search")
+                || lower.contains("web_search")
+                || lower.contains("google search")
+                || lower.contains("search")
+        }
+        None => !outputs.is_empty(),
+    };
+    if !search_like {
+        return None;
+    }
+    let output = outputs
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let sources = extract_markdown_sources(&output);
+    Some(json!({
+        "provider": "gemini_cli",
+        "tool_name": tool_name,
+        "output": output,
+        "sources": sources,
+    }))
+}
+
 fn tool_message(update: &Value, completed: bool) -> ProviderMessage {
     let tool_use_id = update
         .get("toolCallId")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
-    let tool_name = update
-        .get("title")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            update
-                .get("kind")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        });
+    let tool_name = extract_gemini_tool_name(update);
+    let search_metadata = completed
+        .then(|| gemini_search_metadata(update, tool_name.as_deref()))
+        .flatten();
     let mut message = if completed {
         let is_error = update
             .get("status")
@@ -501,6 +636,9 @@ fn tool_message(update: &Value, completed: bool) -> ProviderMessage {
     message = message
         .with_timestamp(chrono::Utc::now().to_rfc3339())
         .with_metadata_value("source", json!("gemini_cli"));
+    if let Some(search_metadata) = search_metadata {
+        message = message.with_metadata_value("gemini_search", search_metadata);
+    }
     message
 }
 

@@ -8,7 +8,8 @@ use crate::cli::{
     TeamAction, ThreadAction, ToolAction,
 };
 use crate::commands::{
-    OnboardCommandOptions, canonical_channel_id, cmd_channels_add, cmd_channels_login, cmd_onboard,
+    OnboardCommandOptions, SearchStreamState, apply_search_stream_event, canonical_channel_id,
+    cmd_channels_add, cmd_channels_login, cmd_onboard, extract_search_sources_from_text,
     parse_feishu_domain, routing_rebuild_channels, which,
 };
 use crate::config_support::{default_config_path_string, load_config_or_default};
@@ -101,6 +102,110 @@ fn parse_gateway_restart_no_wake() {
         }
         _ => panic!("expected Gateway restart"),
     }
+}
+
+#[test]
+fn parse_tool_search_json() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "tool",
+        "search",
+        "GitHub Actions Node.js 20 deprecation",
+        "--json",
+        "--timeout",
+        "240",
+    ]);
+    match cli.command {
+        Some(Commands::Tool {
+            action:
+                ToolAction::Search {
+                    query,
+                    json,
+                    timeout,
+                    agent,
+                },
+        }) => {
+            assert_eq!(query, vec!["GitHub Actions Node.js 20 deprecation"]);
+            assert!(json);
+            assert_eq!(timeout, 240);
+            assert_eq!(agent, "gemini");
+        }
+        _ => panic!("expected tool search"),
+    }
+}
+
+#[test]
+fn parse_tools_search_alias() {
+    let cli = Cli::parse_from(["garyx", "tools", "search", "synthetic query"]);
+    match cli.command {
+        Some(Commands::Tool {
+            action: ToolAction::Search { query, .. },
+        }) => {
+            assert_eq!(query, vec!["synthetic query"]);
+        }
+        _ => panic!("expected tools search alias"),
+    }
+}
+
+#[test]
+fn search_stream_event_collects_provider_sources() {
+    let mut state = SearchStreamState::default();
+    apply_search_stream_event(
+        &mut state,
+        &serde_json::json!({
+            "type": "accepted",
+            "threadId": "thread::search",
+            "runId": "run-search"
+        }),
+    );
+    apply_search_stream_event(
+        &mut state,
+        &serde_json::json!({
+            "type": "tool_result",
+            "threadId": "thread::search",
+            "runId": "run-search",
+            "message": {
+                "tool_use_id": "call-1",
+                "tool_name": "google_web_search",
+                "metadata": {
+                    "gemini_search": {
+                        "output": "Sources: [Example](https://example.test/a)",
+                        "sources": [
+                            { "title": "Example", "url": "https://example.test/a" }
+                        ]
+                    }
+                }
+            }
+        }),
+    );
+    apply_search_stream_event(
+        &mut state,
+        &serde_json::json!({
+            "type": "assistant_delta",
+            "delta": "A concise answer."
+        }),
+    );
+
+    assert!(state.searched);
+    assert_eq!(state.thread_id.as_deref(), Some("thread::search"));
+    assert_eq!(state.run_id.as_deref(), Some("run-search"));
+    assert_eq!(state.answer, "A concise answer.");
+    assert_eq!(state.sources.len(), 1);
+    assert_eq!(state.sources[0].title.as_deref(), Some("Example"));
+    assert_eq!(state.sources[0].url, "https://example.test/a");
+}
+
+#[test]
+fn search_source_extraction_reads_markdown_and_plain_urls() {
+    let sources = extract_search_sources_from_text(
+        "See [Example](https://example.test/a), then https://docs.example.test/item.",
+    );
+
+    assert_eq!(sources.len(), 2);
+    assert_eq!(sources[0].title.as_deref(), Some("Example"));
+    assert_eq!(sources[0].url, "https://example.test/a");
+    assert_eq!(sources[1].title, None);
+    assert_eq!(sources[1].url, "https://docs.example.test/item");
 }
 
 #[test]

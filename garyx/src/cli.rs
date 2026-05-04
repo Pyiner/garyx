@@ -359,6 +359,42 @@ pub(crate) enum CommandAction {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum ToolAction {
+    /// Generate exactly one image with the configured Codex provider
+    Image {
+        /// Image prompt
+        prompt: String,
+        /// Output file path
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Wait up to this many seconds for image generation
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
+        /// Agent id to use for the provider run
+        #[arg(long, default_value = "codex")]
+        agent: String,
+    },
+    /// Search the web through Gemini provider-native search
+    Search {
+        /// Search query
+        #[arg(required = true)]
+        query: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Timeout in seconds
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+        /// Agent ID to run through
+        #[arg(long, default_value = "gemini")]
+        agent: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub(crate) enum ChannelsAction {
     /// List configured channel accounts
     List {
@@ -923,27 +959,6 @@ pub(crate) enum TeamAction {
         /// Output as JSON
         #[arg(long)]
         json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum ToolAction {
-    /// Generate exactly one image with the configured Codex provider
-    Image {
-        /// Image prompt
-        prompt: String,
-        /// Output file path
-        #[arg(short, long)]
-        output: PathBuf,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-        /// Wait up to this many seconds for image generation
-        #[arg(long, default_value_t = 600)]
-        timeout: u64,
-        /// Agent id to use for the provider run
-        #[arg(long, default_value = "codex")]
-        agent: String,
     },
 }
 

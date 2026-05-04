@@ -126,6 +126,80 @@ fn tool_message_marks_failed_updates_as_errors() {
 }
 
 #[test]
+fn tool_message_preserves_gemini_google_web_search_output() {
+    let update = json!({
+        "toolCallId": "search-1",
+        "status": "completed",
+        "rawInput": {
+            "name": "google_web_search",
+            "query": "synthetic product release"
+        },
+        "toolCalls": [{
+            "result": [{
+                "functionResponse": {
+                    "response": {
+                        "output": "Result summary.\n\nSources:\n- [Example Source](https://example.test/source)\n- https://docs.example.test/item"
+                    }
+                }
+            }]
+        }]
+    });
+
+    let message = tool_message(&update, true);
+
+    assert_eq!(message.tool_name.as_deref(), Some("google_web_search"));
+    let search = message
+        .metadata
+        .get("gemini_search")
+        .expect("gemini_search metadata");
+    assert_eq!(search["provider"], "gemini_cli");
+    assert!(
+        search["output"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Result summary")
+    );
+    let sources = search["sources"].as_array().expect("sources");
+    assert_eq!(sources.len(), 2);
+    assert_eq!(sources[0]["title"], "Example Source");
+    assert_eq!(sources[0]["url"], "https://example.test/source");
+    assert_eq!(sources[1]["url"], "https://docs.example.test/item");
+}
+
+#[test]
+fn gemini_search_metadata_ignores_non_search_tools_without_outputs() {
+    let update = json!({
+        "toolCallId": "read-1",
+        "status": "completed",
+        "title": "Read file"
+    });
+
+    assert!(gemini_search_metadata(&update, Some("Read file")).is_none());
+}
+
+#[test]
+fn gemini_search_metadata_ignores_named_non_search_tools_with_outputs() {
+    let update = json!({
+        "toolCallId": "read-1",
+        "status": "completed",
+        "rawInput": {
+            "name": "read_file"
+        },
+        "toolCalls": [{
+            "result": [{
+                "functionResponse": {
+                    "response": {
+                        "output": "Read file output with https://example.test/link"
+                    }
+                }
+            }]
+        }]
+    });
+
+    assert!(gemini_search_metadata(&update, Some("read_file")).is_none());
+}
+
+#[test]
 fn extract_gemini_thread_title_prefers_update_topic_raw_input() {
     let update = json!({
         "sessionUpdate": "tool_call",

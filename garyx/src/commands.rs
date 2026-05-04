@@ -3486,6 +3486,407 @@ async fn cmd_thread_send_start(
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub(crate) struct SearchSource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SearchToolMetadata {
+    tool_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sources: Vec<SearchSource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SearchStreamState {
+    pub(crate) answer: String,
+    pub(crate) thread_id: Option<String>,
+    pub(crate) run_id: Option<String>,
+    pub(crate) searched: bool,
+    pub(crate) sources: Vec<SearchSource>,
+    pub(crate) tool_metadata: Vec<SearchToolMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SearchCommandOutput {
+    ok: bool,
+    query: String,
+    answer: String,
+    sources: Vec<SearchSource>,
+    thread_id: String,
+    run_id: String,
+    searched: bool,
+    tool_metadata: Vec<SearchToolMetadata>,
+}
+
+fn build_gemini_search_prompt(query: &str) -> String {
+    format!(
+        "You are handling `garyx tool search`.\n\n\
+Use Gemini CLI's provider-native web/search capability for this request. \
+Do not use Garyx MCP `search`, do not call any Garyx MCP web search helper, \
+and do not answer only from memory.\n\n\
+Return a concise answer followed by source citations.\n\n\
+<user_query_verbatim>\n{query}\n</user_query_verbatim>"
+    )
+}
+
+fn strip_source_url_punctuation(url: &str) -> &str {
+    url.trim_matches(|ch: char| matches!(ch, ')' | ']' | '}' | '>' | '.' | ',' | ';' | ':'))
+}
+
+fn push_source_unique(sources: &mut Vec<SearchSource>, source: SearchSource) {
+    if source.url.trim().is_empty() || sources.iter().any(|item| item.url == source.url) {
+        return;
+    }
+    sources.push(source);
+}
+
+pub(crate) fn extract_search_sources_from_text(text: &str) -> Vec<SearchSource> {
+    let mut sources = Vec::new();
+    let mut remainder = text;
+    while let Some(open) = remainder.find('[') {
+        let after_open = &remainder[open + 1..];
+        let Some(close) = after_open.find("](") else {
+            remainder = after_open;
+            continue;
+        };
+        let title = after_open[..close].trim();
+        let after_url = &after_open[close + 2..];
+        let Some(end) = after_url.find(')') else {
+            break;
+        };
+        let url = strip_source_url_punctuation(after_url[..end].trim());
+        if url.starts_with("http://") || url.starts_with("https://") {
+            push_source_unique(
+                &mut sources,
+                SearchSource {
+                    title: (!title.is_empty()).then(|| title.to_owned()),
+                    url: url.to_owned(),
+                },
+            );
+        }
+        remainder = &after_url[end + 1..];
+    }
+
+    for raw in text.split_whitespace() {
+        let Some(start) = raw.find("http://").or_else(|| raw.find("https://")) else {
+            continue;
+        };
+        let url = strip_source_url_punctuation(&raw[start..]);
+        if url.starts_with("http://") || url.starts_with("https://") {
+            push_source_unique(
+                &mut sources,
+                SearchSource {
+                    title: None,
+                    url: url.to_owned(),
+                },
+            );
+        }
+    }
+    sources
+}
+
+fn value_search_sources(value: &Value) -> Vec<SearchSource> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let url = item
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())?;
+                    Some(SearchSource {
+                        title: item
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(ToOwned::to_owned),
+                        url: url.to_owned(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn is_search_like_tool_name(tool_name: &str) -> bool {
+    let lower = tool_name.to_ascii_lowercase();
+    lower.contains("google_web_search")
+        || lower.contains("web_search")
+        || lower.contains("google search")
+        || lower.contains("search")
+}
+
+pub(crate) fn apply_search_stream_event(state: &mut SearchStreamState, event: &Value) {
+    let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
+    if let Some(thread_id) = event
+        .get("threadId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        state.thread_id = Some(thread_id.to_owned());
+    }
+    if let Some(run_id) = event
+        .get("runId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        state.run_id = Some(run_id.to_owned());
+    }
+
+    match event_type {
+        "assistant_delta" => {
+            if let Some(delta) = event.get("delta").and_then(Value::as_str) {
+                state.answer.push_str(delta);
+            }
+        }
+        "tool_use" | "tool_result" => {
+            let Some(message) = event.get("message") else {
+                return;
+            };
+            let tool_name = message
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .or_else(|| message.get("toolName").and_then(Value::as_str))
+                .or_else(|| {
+                    message
+                        .get("content")
+                        .and_then(|content| content.get("rawInput"))
+                        .and_then(|raw| raw.get("name"))
+                        .and_then(Value::as_str)
+                })
+                .or_else(|| {
+                    message
+                        .get("content")
+                        .and_then(|content| content.get("title"))
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or("");
+            let search_metadata = message
+                .get("metadata")
+                .and_then(|metadata| metadata.get("gemini_search"));
+            if is_search_like_tool_name(tool_name) || search_metadata.is_some() {
+                state.searched = true;
+            }
+            let Some(search_metadata) = search_metadata else {
+                return;
+            };
+            let mut sources = value_search_sources(&search_metadata["sources"]);
+            if sources.is_empty()
+                && let Some(output) = search_metadata.get("output").and_then(Value::as_str)
+            {
+                sources = extract_search_sources_from_text(output);
+            }
+            for source in &sources {
+                push_source_unique(&mut state.sources, source.clone());
+            }
+            state.tool_metadata.push(SearchToolMetadata {
+                tool_name: tool_name.to_owned(),
+                tool_use_id: message
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                sources,
+                output: search_metadata
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            });
+        }
+        _ => {}
+    }
+}
+
+pub(crate) async fn cmd_tool_search(
+    config_path: &str,
+    query_parts: Vec<String>,
+    json_output: bool,
+    timeout_secs: u64,
+    agent_id: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{Message, client::IntoClientRequest},
+    };
+
+    let query = query_parts.join(" ").trim().to_owned();
+    if query.is_empty() {
+        return Err("query cannot be empty".into());
+    }
+    if timeout_secs == 0 {
+        return Err("timeout must be greater than zero".into());
+    }
+    let agent_id = agent_id.trim();
+    if agent_id.is_empty() {
+        return Err("agent cannot be empty".into());
+    }
+
+    let gateway = gateway_endpoint(config_path)
+        .map_err(|error| format!("gateway unavailable or misconfigured: {error}"))?;
+    let thread = post_gateway_json(
+        &gateway,
+        "/api/threads",
+        &json!({
+            "label": format!("Search: {query}"),
+            "agentId": agent_id,
+            "metadata": {
+                "source": "garyx_tool_search",
+            },
+        }),
+    )
+    .await
+    .map_err(|error| format!("gateway unavailable or agent not found: {error}"))?;
+    let provider_type = thread
+        .get("provider_type")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if provider_type != "gemini_cli" {
+        return Err(format!(
+            "selected agent '{agent_id}' is not Gemini-capable (provider_type: {})",
+            if provider_type.is_empty() {
+                "unknown"
+            } else {
+                provider_type
+            }
+        )
+        .into());
+    }
+    let thread_id = thread
+        .get("id")
+        .or_else(|| thread.get("thread_id"))
+        .or_else(|| thread.get("threadId"))
+        .and_then(Value::as_str)
+        .ok_or("gateway thread response missing thread id")?
+        .to_owned();
+
+    let ws_url = gateway
+        .base_url
+        .replace("https://", "wss://")
+        .replace("http://", "ws://");
+    let ws_url = format!("{ws_url}/api/chat/ws");
+    let mut request = ws_url.into_client_request()?;
+    if let Some(token) = gateway.auth_token.as_deref() {
+        request
+            .headers_mut()
+            .insert("Authorization", format!("Bearer {token}").parse()?);
+    }
+    let (ws_stream, _) = connect_async(request)
+        .await
+        .map_err(|error| format!("gateway websocket unavailable: {error}"))?;
+    let (mut write, mut read) = ws_stream.split();
+
+    let start_payload = json!({
+        "op": "start",
+        "threadId": thread_id,
+        "message": build_gemini_search_prompt(&query),
+        "accountId": "cli",
+        "fromId": "tool-search",
+        "waitForResponse": false,
+        "metadata": {
+            "source": "garyx_tool_search",
+            "search_query": query,
+        },
+    });
+    write
+        .send(Message::Text(serde_json::to_string(&start_payload)?.into()))
+        .await?;
+
+    let timeout = tokio::time::Duration::from_secs(timeout_secs);
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+    let mut state = SearchStreamState::default();
+
+    loop {
+        tokio::select! {
+            _ = &mut deadline => {
+                return Err(format!("timeout after {timeout_secs}s").into());
+            }
+            msg = read.next() => {
+                match msg {
+                    None => break,
+                    Some(Err(error)) => {
+                        return Err(format!("gateway websocket error: {error}").into());
+                    }
+                    Some(Ok(Message::Text(text))) => {
+                        let event: Value = match serde_json::from_str(&text) {
+                            Ok(value) => value,
+                            Err(_) => continue,
+                        };
+                        let event_type = event.get("type").and_then(Value::as_str).unwrap_or("");
+                        if event_type == "error" {
+                            let message = event
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .or_else(|| event.get("error").and_then(Value::as_str))
+                                .unwrap_or("unknown error");
+                            return Err(message.to_owned().into());
+                        }
+                        apply_search_stream_event(&mut state, &event);
+                        if matches!(event_type, "done" | "complete") {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
+    }
+
+    let answer = state.answer.trim().to_owned();
+    if !state.searched {
+        return Err("Gemini completed without using provider-native search".into());
+    }
+    if answer.is_empty() {
+        return Err("Gemini returned no answer".into());
+    }
+    if state.sources.is_empty() {
+        state.sources = extract_search_sources_from_text(&answer);
+    }
+    let output = SearchCommandOutput {
+        ok: true,
+        query,
+        answer,
+        sources: state.sources,
+        thread_id: state.thread_id.unwrap_or(thread_id),
+        run_id: state.run_id.unwrap_or_default(),
+        searched: state.searched,
+        tool_metadata: state.tool_metadata,
+    };
+
+    if json_output {
+        return print_pretty_json(&serde_json::to_value(output)?);
+    }
+
+    println!("{}", output.answer);
+    if output.sources.is_empty() {
+        println!("\nSources: (none returned by provider; no URLs found in final answer)");
+    } else {
+        println!("\nSources:");
+        for source in output.sources {
+            match source.title.as_deref() {
+                Some(title) => println!("- {title}: {}", source.url),
+                None => println!("- {}", source.url),
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) async fn cmd_task_list(
     config_path: &str,
     status: Option<&str>,
