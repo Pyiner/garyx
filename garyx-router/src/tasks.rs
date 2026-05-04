@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use chrono::Utc;
 use garyx_models::{
-    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskStatus, ThreadTask,
+    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskNotificationTarget,
+    TaskStatus, ThreadTask,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -67,6 +68,8 @@ pub struct CreateTaskInput {
     pub body: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<Principal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_target: Option<TaskNotificationTarget>,
     #[serde(default)]
     pub start: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -94,6 +97,8 @@ pub struct PromoteTaskInput {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<Principal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_target: Option<TaskNotificationTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<Principal>,
 }
@@ -205,6 +210,7 @@ impl TaskService {
         if let Some(assignee) = &input.assignee {
             validate_principal(assignee)?;
         }
+        validate_notification_target(input.notification_target.as_ref())?;
         let runtime = input.runtime.clone();
         let thread_agent_id = runtime
             .as_ref()
@@ -264,6 +270,7 @@ impl TaskService {
                 },
                 actor,
                 input.assignee,
+                input.notification_target,
                 TaskEventKind::Created {
                     initial_status: if auto_start {
                         TaskStatus::InProgress
@@ -294,6 +301,7 @@ impl TaskService {
         if let Some(assignee) = &input.assignee {
             validate_principal(assignee)?;
         }
+        validate_notification_target(input.notification_target.as_ref())?;
         let lock = task_thread_lock(&input.thread_id);
         let _guard = lock.lock().await;
         let mut record = self.load_record(&input.thread_id).await?;
@@ -312,6 +320,7 @@ impl TaskService {
                 },
                 actor,
                 input.assignee,
+                input.notification_target,
                 TaskEventKind::Promoted {
                     initial_status: if auto_start {
                         TaskStatus::InProgress
@@ -614,6 +623,7 @@ impl TaskService {
         status: TaskStatus,
         actor: Principal,
         assignee: Option<Principal>,
+        notification_target: Option<TaskNotificationTarget>,
         event_kind: TaskEventKind,
     ) -> Result<ThreadTask, TaskServiceError> {
         self.ensure_task_index().await?;
@@ -632,6 +642,7 @@ impl TaskService {
             status,
             creator: actor.clone(),
             assignee,
+            notification_target,
             created_at: now,
             updated_at: now,
             updated_by: actor.clone(),
@@ -981,6 +992,37 @@ fn validate_principal(principal: &Principal) -> Result<(), TaskServiceError> {
     Ok(())
 }
 
+fn validate_notification_target(
+    target: Option<&TaskNotificationTarget>,
+) -> Result<(), TaskServiceError> {
+    let Some(target) = target else {
+        return Ok(());
+    };
+    match target {
+        TaskNotificationTarget::None => Ok(()),
+        TaskNotificationTarget::Thread { thread_id } => {
+            let trimmed = thread_id.trim();
+            if trimmed.is_empty() || !is_thread_key(trimmed) {
+                return Err(TaskServiceError::BadRequest(
+                    "notification thread target must be a canonical thread id".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+        TaskNotificationTarget::Bot {
+            channel,
+            account_id,
+        } => {
+            if channel.trim().is_empty() || account_id.trim().is_empty() {
+                return Err(TaskServiceError::BadRequest(
+                    "notification bot target requires channel and account_id".to_owned(),
+                ));
+            }
+            Ok(())
+        }
+    }
+}
+
 fn default_actor() -> Principal {
     Principal::Human {
         user_id: "owner".to_owned(),
@@ -1019,6 +1061,7 @@ mod tests {
                 title: Some("Audit daemons".to_owned()),
                 body: Some("Look at launchctl".to_owned()),
                 assignee: None,
+                notification_target: None,
                 start: false,
                 actor: Some(Principal::Agent {
                     agent_id: "cindy".to_owned(),
@@ -1045,6 +1088,7 @@ mod tests {
                 title: Some("Review".to_owned()),
                 body: None,
                 assignee: None,
+                notification_target: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1074,6 +1118,7 @@ mod tests {
                 title: Some("Claim me".to_owned()),
                 body: None,
                 assignee: None,
+                notification_target: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1108,6 +1153,7 @@ mod tests {
                 assignee: Some(Principal::Agent {
                     agent_id: "codex".to_owned(),
                 }),
+                notification_target: None,
                 start: true,
                 actor: None,
                 agent_id: None,
@@ -1152,6 +1198,7 @@ mod tests {
                 assignee: Some(Principal::Agent {
                     agent_id: "codex".to_owned(),
                 }),
+                notification_target: None,
                 start: true,
                 actor: None,
                 agent_id: None,
@@ -1198,6 +1245,7 @@ mod tests {
                 title: Some("Review gate".to_owned()),
                 body: None,
                 assignee: Some(assignee.clone()),
+                notification_target: None,
                 start: true,
                 actor: Some(Principal::Human {
                     user_id: "owner".to_owned(),
@@ -1246,6 +1294,7 @@ mod tests {
                 title: Some("Review pass".to_owned()),
                 body: None,
                 assignee: Some(assignee.clone()),
+                notification_target: None,
                 start: true,
                 actor: Some(Principal::Human {
                     user_id: "owner".to_owned(),
@@ -1293,6 +1342,7 @@ mod tests {
                 title: Some("Assign me".to_owned()),
                 body: None,
                 assignee: None,
+                notification_target: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1326,6 +1376,7 @@ mod tests {
                 title: Some("Concurrent".to_owned()),
                 body: None,
                 assignee: None,
+                notification_target: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1379,6 +1430,7 @@ mod tests {
                 title: Some("History".to_owned()),
                 body: None,
                 assignee: None,
+                notification_target: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1425,6 +1477,7 @@ mod tests {
                 title: Some("Runtime".to_owned()),
                 body: None,
                 assignee: None,
+                notification_target: None,
                 start: false,
                 actor: None,
                 agent_id: None,

@@ -3434,6 +3434,7 @@ export async function createTask(
         agent_id: runtimeAgentId || null,
         workspace_dir: runtimeWorkspaceDir || null,
       },
+      notification_target: taskNotificationTargetPayload(input.notificationTarget),
     }),
   });
   return mapTaskSummary(payload);
@@ -3456,12 +3457,26 @@ export async function promoteThreadToTask(
         thread_id: input.threadId,
         title: input.title?.trim() || null,
         assignee,
+        notification_target: taskNotificationTargetPayload(input.notificationTarget),
       }),
     },
   );
   return {
     ...mapTaskSummary(payload),
     threadId: input.threadId,
+  };
+}
+
+function taskNotificationTargetPayload(
+  target: CreateTaskInput["notificationTarget"],
+): Record<string, string> {
+  if (target.kind === "none") {
+    return { kind: "none" };
+  }
+  return {
+    kind: "bot",
+    channel: target.channel,
+    account_id: target.accountId,
   };
 }
 

@@ -14,6 +14,8 @@ pub struct ThreadTask {
     pub creator: Principal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<Principal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notification_target: Option<TaskNotificationTarget>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Principal,
@@ -23,6 +25,14 @@ pub struct ThreadTask {
 
 fn default_task_schema_version() -> u32 {
     TASK_SCHEMA_VERSION_V1
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum TaskNotificationTarget {
+    None,
+    Thread { thread_id: String },
+    Bot { channel: String, account_id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

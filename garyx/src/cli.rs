@@ -1037,6 +1037,9 @@ pub(crate) enum TaskAction {
         start: bool,
         #[arg(long)]
         workspace_dir: Option<String>,
+        /// Required notification target when the task enters review: `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`
+        #[arg(long, value_name = "TARGET", num_args = 1..=2)]
+        notify: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -1047,6 +1050,9 @@ pub(crate) enum TaskAction {
         title: Option<String>,
         #[arg(long)]
         assignee: Option<String>,
+        /// Required notification target when the task enters review: `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`
+        #[arg(long, value_name = "TARGET", num_args = 1..=2)]
+        notify: Vec<String>,
         #[arg(long)]
         json: bool,
     },

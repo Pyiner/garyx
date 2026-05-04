@@ -7111,6 +7111,7 @@ export function AppShell() {
             ) : isTasksView ? (
               <TasksPanel
                 agents={desktopAgents}
+                botGroups={botGroups}
                 onOpenThread={(threadId) => {
                   void openExistingThread(threadId);
                 }}

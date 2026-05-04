@@ -918,6 +918,9 @@ fn parse_task_create_runtime_options() {
         "--start",
         "--workspace-dir",
         "/tmp/garyx-task",
+        "--notify",
+        "bot",
+        "telegram:owner",
         "--json",
     ]);
     match cli.command {
@@ -929,6 +932,7 @@ fn parse_task_create_runtime_options() {
                     assignee,
                     start,
                     workspace_dir,
+                    notify,
                     json,
                 },
         }) => {
@@ -937,6 +941,7 @@ fn parse_task_create_runtime_options() {
             assert_eq!(assignee.as_deref(), Some("agent:reviewer"));
             assert!(start);
             assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx-task"));
+            assert_eq!(notify, vec!["bot", "telegram:owner"]);
             assert!(json);
         }
         _ => panic!("expected Task::Create"),

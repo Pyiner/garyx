@@ -717,6 +717,7 @@ async fn mark_task_ready_for_review_after_stopped_run(
     inner: &super::state::Inner,
     thread_id: &str,
     run_id: &str,
+    final_message: Option<&str>,
     thread_logs: Option<Arc<dyn ThreadLogSink>>,
     thread_log_id: Option<&str>,
 ) {
@@ -735,6 +736,16 @@ async fn mark_task_ready_for_review_after_stopped_run(
     {
         Ok(Some(task)) => {
             let task_ref = garyx_router::tasks::canonical_task_ref(&task);
+            if let Some(tx) = &*inner.event_tx.read().await {
+                let event = serde_json::json!({
+                    "type": "task_ready_for_review",
+                    "thread_id": thread_id,
+                    "run_id": run_id,
+                    "task_ref": task_ref,
+                    "final_message": final_message.unwrap_or_default(),
+                });
+                let _ = tx.send(event.to_string());
+            }
             record_thread_log(
                 thread_logs,
                 thread_log_id,
@@ -1700,6 +1711,7 @@ impl MultiProviderBridge {
                             &inner,
                             &thread_id_owned,
                             &run_id_owned,
+                            Some(&res.response),
                             thread_logs_for_task.clone(),
                             thread_log_id_owned.as_deref(),
                         )
@@ -1722,20 +1734,21 @@ impl MultiProviderBridge {
                     )
                     .await;
 
+                    let failed_assistant_response = persistence_result
+                        .as_ref()
+                        .map(|value| value.assistant_response.as_str())
+                        .unwrap_or_default();
+                    let failed_session_messages = persistence_result
+                        .as_ref()
+                        .map(|value| value.session_messages.as_slice())
+                        .unwrap_or(&[]);
+
                     if let (Some(store), Some(history)) = (
                         &*inner.thread_store.read().await,
                         &*inner.thread_history.read().await,
                     ) {
                         let user_images =
                             graph_state.run_options.images.clone().unwrap_or_default();
-                        let failed_assistant_response = persistence_result
-                            .as_ref()
-                            .map(|value| value.assistant_response.as_str())
-                            .unwrap_or_default();
-                        let failed_session_messages = persistence_result
-                            .as_ref()
-                            .map(|value| value.session_messages.as_slice())
-                            .unwrap_or(&[]);
                         save_failed_thread_messages(
                             store,
                             history,
@@ -1812,6 +1825,7 @@ impl MultiProviderBridge {
                         &inner,
                         &thread_id_owned,
                         &run_id_owned,
+                        Some(failed_assistant_response),
                         thread_logs_for_task.clone(),
                         thread_log_id_owned.as_deref(),
                     )

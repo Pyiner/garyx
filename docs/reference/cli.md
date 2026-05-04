@@ -86,9 +86,9 @@ Common flags on `channels add`:
 | Command | Use it for |
 | --- | --- |
 | `garyx task list` | List tasks. |
-| `garyx task create [--title <title>] [--body <body>] [--assignee <principal>] [--workspace-dir <path>] [--start]` | Create a task thread. A bare assignee value is treated as an agent id, assigned tasks start automatically, and `--workspace-dir` overrides the assignee Agent's default workspace. |
+| `garyx task create [--title <title>] [--body <body>] [--assignee <principal>] [--workspace-dir <path>] --notify <target>` | Create a task thread. A bare assignee value is treated as an agent id, assigned tasks start automatically, and `--workspace-dir` overrides the assignee Agent's default workspace. Notification targets are `current-thread`, `thread <thread_id>`, `bot <channel:account_id>`, or `none`. |
 | `garyx task get <task_ref>` | Fetch one task. |
-| `garyx task promote <thread_id>` | Promote an existing thread into a task. |
+| `garyx task promote <thread_id> --notify <target>` | Promote an existing thread into a task with an explicit review notification target. |
 | `garyx task update <task_ref> --status <status> [--note <note>]` | Move a task through its lifecycle. Garyx moves an in-progress task to review when its agent run stops; only mark `done` after explicit approval. |
 | `garyx task claim / release / assign / unassign` | Manage task ownership. |
 | `garyx task set-title / reopen / history` | Rename, reopen, or inspect task history. |

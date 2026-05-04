@@ -18,7 +18,9 @@ import {
 } from 'lucide-react';
 
 import type {
+  DesktopBotConsoleSummary,
   DesktopCustomAgent,
+  DesktopTaskNotificationTarget,
   DesktopTaskPrincipal,
   DesktopTaskStatus,
   DesktopTaskSummary,
@@ -30,6 +32,7 @@ import { getDesktopApi } from '../../platform/desktop-api';
 
 type TasksPanelProps = {
   agents: DesktopCustomAgent[];
+  botGroups: DesktopBotConsoleSummary[];
   onOpenThread: (threadId: string) => void;
   onToast: (message: string, tone?: ToastTone) => void;
 };
@@ -105,8 +108,31 @@ function taskCountLabel(count: number, t: Translate): string {
   return t('{count} tasks', { count });
 }
 
+function taskNotificationTargetFromSelection(
+  value: string,
+  botGroups: DesktopBotConsoleSummary[],
+): DesktopTaskNotificationTarget | null {
+  if (value === 'none') {
+    return { kind: 'none' };
+  }
+  if (!value.startsWith('bot:')) {
+    return null;
+  }
+  const botId = value.slice('bot:'.length);
+  const group = botGroups.find((candidate) => candidate.id === botId);
+  if (!group) {
+    return null;
+  }
+  return {
+    kind: 'bot',
+    channel: group.channel,
+    accountId: group.accountId,
+  };
+}
+
 export function TasksPanel({
   agents,
+  botGroups,
   onOpenThread,
   onToast,
 }: TasksPanelProps) {
@@ -122,6 +148,7 @@ export function TasksPanel({
   const [draftBody, setDraftBody] = useState('');
   const [draftAssignee, setDraftAssignee] = useState('');
   const [draftWorkspaceDir, setDraftWorkspaceDir] = useState('');
+  const [draftNotificationTarget, setDraftNotificationTarget] = useState('');
   const [creating, setCreating] = useState(false);
   const [draggingTaskRef, setDraggingTaskRef] = useState<string | null>(null);
   const [dropStatus, setDropStatus] = useState<DesktopTaskStatus | null>(null);
@@ -239,6 +266,14 @@ export function TasksPanel({
     if (!title) {
       return;
     }
+    const notificationTarget = taskNotificationTargetFromSelection(
+      draftNotificationTarget,
+      botGroups,
+    );
+    if (!notificationTarget) {
+      onToast(t('Choose Do not notify or a bot.'), 'error');
+      return;
+    }
     const assignee = draftAssignee.trim();
     setCreating(true);
     try {
@@ -248,12 +283,14 @@ export function TasksPanel({
         assignee: assignee || null,
         start: Boolean(assignee),
         workspaceDir: draftWorkspaceDir.trim() || null,
+        notificationTarget,
       });
       setDraftOpen(false);
       setDraftTitle('');
       setDraftBody('');
       setDraftAssignee('');
       setDraftWorkspaceDir('');
+      setDraftNotificationTarget('');
       await loadTasks({ silent: true });
       onToast(t('Task created.'), 'success');
     } catch (createError) {
@@ -443,6 +480,21 @@ export function TasksPanel({
                   placeholder={t('Optional workspace directory')}
                   value={draftWorkspaceDir}
                 />
+              </label>
+              <label className="tasks-field tasks-field-full">
+                <span>{t('Notification')}</span>
+                <select
+                  onChange={(event) => setDraftNotificationTarget(event.target.value)}
+                  value={draftNotificationTarget}
+                >
+                  <option value="">{t('Choose notification')}</option>
+                  <option value="none">{t('Do not notify')}</option>
+                  {botGroups.map((group) => (
+                    <option key={group.id} value={`bot:${group.id}`}>
+                      {group.title || `${group.channel}:${group.accountId}`}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="tasks-field tasks-field-full">
                 <span>{t('Body')}</span>

@@ -8,7 +8,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use garyx_models::local_paths::default_session_data_dir;
-use garyx_models::{Principal, TaskStatus, ThreadTask};
+use garyx_models::{Principal, TaskEventKind, TaskNotificationTarget, TaskStatus, ThreadTask};
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
     TaskService, TaskServiceError, UpdateTaskStatusInput, update_thread_record,
@@ -34,6 +34,8 @@ pub struct CreateTaskBody {
     pub body: Option<String>,
     #[serde(default)]
     pub assignee: Option<Principal>,
+    #[serde(default, alias = "notificationTarget")]
+    pub notification_target: Option<TaskNotificationTargetBody>,
     #[serde(default)]
     pub start: bool,
     #[serde(default)]
@@ -51,6 +53,8 @@ pub struct BatchCreateTaskBody {
     pub tasks: Vec<BatchTaskItem>,
     #[serde(default)]
     pub actor: Option<Principal>,
+    #[serde(default, alias = "notificationTarget")]
+    pub notification_target: Option<TaskNotificationTargetBody>,
     #[serde(default)]
     pub agent_id: Option<String>,
     #[serde(default)]
@@ -67,6 +71,8 @@ pub struct BatchTaskItem {
     pub body: Option<String>,
     #[serde(default)]
     pub assignee: Option<Principal>,
+    #[serde(default, alias = "notificationTarget")]
+    pub notification_target: Option<TaskNotificationTargetBody>,
     #[serde(default)]
     pub start: bool,
     #[serde(default)]
@@ -81,6 +87,21 @@ pub struct TaskRuntimeBody {
     pub workspace_dir: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum TaskNotificationTargetBody {
+    None,
+    Thread {
+        #[serde(alias = "threadId")]
+        thread_id: String,
+    },
+    Bot {
+        channel: String,
+        #[serde(alias = "accountId")]
+        account_id: String,
+    },
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PromoteTaskBody {
     pub thread_id: String,
@@ -88,6 +109,8 @@ pub struct PromoteTaskBody {
     pub title: Option<String>,
     #[serde(default)]
     pub assignee: Option<Principal>,
+    #[serde(default, alias = "notificationTarget")]
+    pub notification_target: Option<TaskNotificationTargetBody>,
     #[serde(default)]
     pub actor: Option<Principal>,
 }
@@ -160,6 +183,10 @@ pub async fn create_task(
     if let Err(error) = validate_task_assignee_agent(&state, body.assignee.as_ref()).await {
         return task_error_response(error);
     }
+    let notification_target = match required_notification_target(body.notification_target) {
+        Ok(target) => target,
+        Err(error) => return task_error_response(error),
+    };
     let runtime =
         match task_runtime_with_default_workspace(&state, runtime, body.assignee.as_ref()).await {
             Ok(runtime) => runtime,
@@ -172,6 +199,7 @@ pub async fn create_task(
             title: body.title,
             body: body.body,
             assignee: body.assignee,
+            notification_target,
             start: body.start,
             actor,
             agent_id: None,
@@ -225,6 +253,7 @@ pub async fn create_tasks_batch(
         Err(error) => return task_error_response(error),
     };
     let top_runtime = task_runtime_input(body.runtime, body.agent_id, body.workspace_dir);
+    let top_notification_target = body.notification_target.map(TaskNotificationTarget::from);
     if let Err(error) = validate_runtime_agent(&state, &top_runtime).await {
         return task_error_response(error);
     }
@@ -236,6 +265,18 @@ pub async fn create_tasks_batch(
             .runtime
             .map(TaskRuntimeInput::from)
             .or_else(|| top_runtime.clone());
+        let notification_target = match item
+            .notification_target
+            .map(TaskNotificationTarget::from)
+            .or_else(|| top_notification_target.clone())
+        {
+            Some(target) => target,
+            None => {
+                return task_error_response(TaskServiceError::BadRequest(
+                    "notification_target is required; choose a bot, thread, or none".to_owned(),
+                ));
+            }
+        };
         if let Err(error) = validate_runtime_agent(&state, &runtime).await {
             return task_error_response(error);
         }
@@ -257,6 +298,7 @@ pub async fn create_tasks_batch(
                 title: item.title,
                 body: item.body,
                 assignee: item.assignee,
+                notification_target: Some(notification_target),
                 start: item.start,
                 actor: actor.clone(),
                 agent_id: None,
@@ -308,6 +350,10 @@ pub async fn promote_task(
     if let Err(error) = validate_task_assignee_agent(&state, body.assignee.as_ref()).await {
         return task_error_response(error);
     }
+    let notification_target = match required_notification_target(body.notification_target) {
+        Ok(target) => target,
+        Err(error) => return task_error_response(error),
+    };
     let thread_id = body.thread_id;
     let title_for_dispatch = body.title.clone();
     match service
@@ -315,6 +361,7 @@ pub async fn promote_task(
             thread_id: thread_id.clone(),
             title: body.title,
             assignee: body.assignee,
+            notification_target,
             actor,
         })
         .await
@@ -502,7 +549,7 @@ pub async fn update_task_status(
     };
     match service
         .update_status(UpdateTaskStatusInput {
-            task_ref,
+            task_ref: task_ref.clone(),
             to: body.to,
             note: body.note,
             force: body.force,
@@ -510,7 +557,31 @@ pub async fn update_task_status(
         })
         .await
     {
-        Ok(task) => (StatusCode::OK, Json(json!({ "task": task }))),
+        Ok(task) => {
+            if task_ready_for_review_transition(&task)
+                && let Ok((thread_id, _, _)) = service.get_task(&task_ref).await
+            {
+                let task_ref_for_notification = garyx_router::tasks::canonical_task_ref(&task);
+                let state_for_notification = state.clone();
+                tokio::spawn(async move {
+                    let event = crate::task_notifications::TaskReadyForReviewEvent {
+                        thread_id,
+                        task_ref: task_ref_for_notification,
+                        run_id: None,
+                        final_message: None,
+                    };
+                    if let Err(error) = crate::task_notifications::dispatch_task_ready_notification(
+                        &state_for_notification,
+                        event,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = ?error, "manual task ready notification failed");
+                    }
+                });
+            }
+            (StatusCode::OK, Json(json!({ "task": task })))
+        }
         Err(error) => task_error_response(error),
     }
 }
@@ -602,6 +673,46 @@ impl From<TaskRuntimeBody> for TaskRuntimeInput {
             workspace_dir: normalized_nonempty(value.workspace_dir),
         }
     }
+}
+
+impl From<TaskNotificationTargetBody> for TaskNotificationTarget {
+    fn from(value: TaskNotificationTargetBody) -> Self {
+        match value {
+            TaskNotificationTargetBody::None => Self::None,
+            TaskNotificationTargetBody::Thread { thread_id } => Self::Thread { thread_id },
+            TaskNotificationTargetBody::Bot {
+                channel,
+                account_id,
+            } => Self::Bot {
+                channel,
+                account_id,
+            },
+        }
+    }
+}
+
+fn required_notification_target(
+    value: Option<TaskNotificationTargetBody>,
+) -> Result<Option<TaskNotificationTarget>, TaskServiceError> {
+    value
+        .map(TaskNotificationTarget::from)
+        .map(Some)
+        .ok_or_else(|| {
+            TaskServiceError::BadRequest(
+                "notification_target is required; choose a bot, thread, or none".to_owned(),
+            )
+        })
+}
+
+fn task_ready_for_review_transition(task: &ThreadTask) -> bool {
+    matches!(
+        task.events.last().map(|event| &event.kind),
+        Some(TaskEventKind::StatusChanged {
+            from: TaskStatus::InProgress,
+            to: TaskStatus::InReview,
+            ..
+        })
+    )
 }
 
 fn task_runtime_input(

@@ -1615,6 +1615,7 @@ async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages()
         assignee: Some(Principal::Agent {
             agent_id: "codex".to_owned(),
         }),
+        notification_target: None,
         created_at: now,
         updated_at: now,
         updated_by: Principal::Agent {
@@ -1852,6 +1853,7 @@ async fn test_streaming_input_appends_task_suffix_for_provider_only() {
         assignee: Some(Principal::Agent {
             agent_id: "codex".to_owned(),
         }),
+        notification_target: None,
         created_at: now,
         updated_at: now,
         updated_by: Principal::Agent {

@@ -3279,11 +3279,13 @@ pub(crate) async fn cmd_task_create(
     assignee: Option<&str>,
     start: bool,
     workspace_dir: Option<String>,
+    notify: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let assignee = task_create_assignee_payload(assignee)?;
     let runtime_agent_id = task_runtime_agent_id_from_assignee(&assignee);
     let start = start || assignee.is_some();
+    let notification_target = task_notification_target_payload(notify)?;
     let workspace_dir = workspace_dir
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
@@ -3297,6 +3299,7 @@ pub(crate) async fn cmd_task_create(
             "agent_id": runtime_agent_id,
             "workspace_dir": workspace_dir,
         },
+        "notification_target": notification_target,
     });
     let payload = post_gateway_json_as_cli_actor(&gateway, "/api/tasks", &request).await?;
     if json_output {
@@ -3327,12 +3330,14 @@ pub(crate) async fn cmd_task_promote(
     thread_id: &str,
     title: Option<String>,
     assignee: Option<&str>,
+    notify: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let thread_id = thread_id.trim();
     if thread_id.is_empty() {
         return Err("thread_id cannot be empty".into());
     }
+    let notification_target = task_notification_target_payload(notify)?;
     let gateway = gateway_endpoint(config_path)?;
     let payload = post_gateway_json_as_cli_actor(
         &gateway,
@@ -3341,6 +3346,7 @@ pub(crate) async fn cmd_task_promote(
             "thread_id": thread_id,
             "title": title,
             "assignee": assignee.map(principal_payload).transpose()?,
+            "notification_target": notification_target,
         }),
     )
     .await?;
@@ -3349,6 +3355,77 @@ pub(crate) async fn cmd_task_promote(
     }
     print_task_summary(&payload);
     Ok(())
+}
+
+fn task_notification_target_payload(
+    parts: Vec<String>,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let parts: Vec<String> = parts
+        .into_iter()
+        .map(|part| part.trim().to_owned())
+        .filter(|part| !part.is_empty())
+        .collect();
+    if parts.is_empty() {
+        return Err("--notify is required for task creation; use --notify current-thread, --notify bot <channel:account_id>, --notify thread <thread_id>, or --notify none".into());
+    }
+    let target = parts[0].to_ascii_lowercase().replace('-', "_");
+    match target.as_str() {
+        "none" => {
+            if parts.len() != 1 {
+                return Err("--notify none does not accept an extra value".into());
+            }
+            Ok(json!({ "kind": "none" }))
+        }
+        "current_thread" => {
+            if parts.len() != 1 {
+                return Err("--notify current-thread does not accept an extra value".into());
+            }
+            let thread_id = env_nonempty("GARYX_THREAD_ID")
+                .ok_or("--notify current-thread requires GARYX_THREAD_ID")?;
+            if !is_thread_key(&thread_id) {
+                return Err(
+                    format!("GARYX_THREAD_ID is not a canonical thread id: {thread_id}").into(),
+                );
+            }
+            Ok(json!({ "kind": "thread", "thread_id": thread_id }))
+        }
+        "thread" => {
+            if parts.len() != 2 {
+                return Err("--notify thread requires exactly one thread id".into());
+            }
+            let thread_id = parts[1].trim();
+            if !is_thread_key(thread_id) {
+                return Err(
+                    format!("notification thread id must be canonical: {thread_id}").into(),
+                );
+            }
+            Ok(json!({ "kind": "thread", "thread_id": thread_id }))
+        }
+        "bot" => {
+            if parts.len() != 2 {
+                return Err("--notify bot requires <channel:account_id>".into());
+            }
+            let selector = parts[1].trim();
+            let Some((channel, account_id)) = selector.split_once(':') else {
+                return Err("--notify bot expects <channel:account_id>".into());
+            };
+            let channel = channel.trim();
+            let account_id = account_id.trim();
+            if channel.is_empty() || account_id.is_empty() {
+                return Err("--notify bot expects non-empty channel and account id".into());
+            }
+            Ok(json!({
+                "kind": "bot",
+                "channel": channel,
+                "account_id": account_id,
+            }))
+        }
+        _ => Err(format!(
+            "unknown --notify target: {}; use current-thread, thread, bot, or none",
+            parts[0]
+        )
+        .into()),
+    }
 }
 
 pub(crate) async fn cmd_task_claim(

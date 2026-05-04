@@ -1812,7 +1812,8 @@ async fn task_routes_resolve_percent_encoded_refs() {
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "title": "Check task routing"
+                "title": "Check task routing",
+                "notification_target": {"kind": "none"}
             }))
             .unwrap(),
         ))
@@ -1896,7 +1897,8 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
             serde_json::to_vec(&json!({
                 "title": "Auto dispatch task",
                 "body": "Move this task to review and then done.",
-                "assignee": {"kind": "agent", "agent_id": "workspace-reviewer"}
+                "assignee": {"kind": "agent", "agent_id": "workspace-reviewer"},
+                "notification_target": {"kind": "none"}
             }))
             .unwrap(),
         ))

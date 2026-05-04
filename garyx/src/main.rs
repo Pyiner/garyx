@@ -816,6 +816,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 assignee,
                 start,
                 workspace_dir,
+                notify,
                 json,
             } => {
                 cmd_task_create(
@@ -825,6 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     assignee.as_deref(),
                     start,
                     workspace_dir,
+                    notify,
                     json,
                 )
                 .await
@@ -833,8 +835,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 thread_id,
                 title,
                 assignee,
+                notify,
                 json,
-            } => cmd_task_promote(config_path, &thread_id, title, assignee.as_deref(), json).await,
+            } => {
+                cmd_task_promote(
+                    config_path,
+                    &thread_id,
+                    title,
+                    assignee.as_deref(),
+                    notify,
+                    json,
+                )
+                .await
+            }
             TaskAction::Claim {
                 task_ref,
                 actor,

@@ -254,6 +254,7 @@ mod tests {
             assignee: Some(Principal::Agent {
                 agent_id: "codex".to_owned(),
             }),
+            notification_target: None,
             created_at: now,
             updated_at: now,
             updated_by: Principal::Agent {

@@ -172,18 +172,24 @@ export interface ListTasksInput {
   offset?: number;
 }
 
+export type DesktopTaskNotificationTarget =
+  | { kind: "none" }
+  | { kind: "bot"; channel: string; accountId: string };
+
 export interface CreateTaskInput {
   title?: string | null;
   body?: string | null;
   assignee?: string | null;
   start?: boolean;
   workspaceDir?: string | null;
+  notificationTarget: DesktopTaskNotificationTarget;
 }
 
 export interface PromoteTaskInput {
   threadId: string;
   title?: string | null;
   assignee?: string | null;
+  notificationTarget: DesktopTaskNotificationTarget;
 }
 
 export interface UpdateTaskStatusInput {

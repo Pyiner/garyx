@@ -1195,6 +1195,30 @@ fn task_runtime_agent_id_is_not_derived_from_human_assignee() {
 }
 
 #[test]
+fn task_notification_target_accepts_bot_and_none() {
+    assert_eq!(
+        task_notification_target_payload(vec!["none".to_owned()]).unwrap(),
+        json!({ "kind": "none" })
+    );
+    assert_eq!(
+        task_notification_target_payload(vec!["bot".to_owned(), "telegram:main".to_owned()])
+            .unwrap(),
+        json!({ "kind": "bot", "channel": "telegram", "account_id": "main" })
+    );
+}
+
+#[test]
+fn task_notification_target_resolves_current_thread_from_env() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _thread_id = ScopedEnvVar::set_string("GARYX_THREAD_ID", "thread::current");
+
+    assert_eq!(
+        task_notification_target_payload(vec!["current-thread".to_owned()]).unwrap(),
+        json!({ "kind": "thread", "thread_id": "thread::current" })
+    );
+}
+
+#[test]
 fn format_task_progress_groups_each_user_turn_with_last_assistant_text_group() {
     let task_payload = json!({
         "task_ref": "#TASK-42",

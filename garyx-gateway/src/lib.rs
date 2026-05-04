@@ -29,6 +29,7 @@ pub mod routes;
 mod runtime_diagnostics;
 pub mod server;
 pub mod skills;
+mod task_notifications;
 pub mod tasks;
 pub mod thread_logs;
 mod wikis;
