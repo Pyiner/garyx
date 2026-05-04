@@ -2089,7 +2089,7 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
 }
 
 #[tokio::test]
-async fn test_streaming_input_appends_task_suffix_for_provider_only() {
+async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(QueuedInputProvider::new());
     let delta_sent = provider.delta_sent();
@@ -2181,19 +2181,17 @@ async fn test_streaming_input_appends_task_suffix_for_provider_only() {
             let has_raw_user = messages
                 .iter()
                 .any(|message| message["role"] == "user" && message["content"] == "继续");
-            let has_provider_suffix = messages.iter().any(|message| {
-                message["role"] == "assistant"
-                    && message["content"]
-                        == "follow-up reply: 继续 [task #TASK-7 status=in_progress assignee=agent:codex]"
+            let has_provider_reply = messages.iter().any(|message| {
+                message["role"] == "assistant" && message["content"] == "follow-up reply: 继续"
             });
-            if has_raw_user && has_provider_suffix {
+            if has_raw_user && has_provider_reply {
                 break data;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("provider-facing queued input should include task suffix after ack");
+    .expect("provider-facing queued input should preserve raw task follow-up after ack");
 
     let messages = active_or_committed_messages(&acked_checkpoint);
     assert!(

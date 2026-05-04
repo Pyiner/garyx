@@ -67,14 +67,14 @@ fn build_prompt_blocks_prefixes_instructions_and_memory_for_fresh_sessions() {
     let fresh_text = fresh[0]["text"].as_str().unwrap_or_default();
     assert!(fresh_text.contains("<system_instructions>"));
     assert!(fresh_text.contains("System capabilities:"));
+    assert!(fresh_text.contains("<garyx_thread_metadata>"));
+    assert!(fresh_text.contains("bot_id: telegram:bot1"));
+    assert!(fresh_text.contains("task_id: #TASK-2"));
     assert!(fresh_text.contains("<garyx_memory_context>"));
     assert!(fresh_text.contains("<agent_memory agent_id=\"garyx\""));
-    assert!(!fresh_text.contains("bot_id: telegram:bot1"));
-    assert!(fresh_text.contains("hello [task #TASK-2 status=in_progress]"));
-    assert_eq!(
-        resumed[0]["text"],
-        "hello [task #TASK-2 status=in_progress]"
-    );
+    assert!(!fresh_text.contains("status=in_progress"));
+    assert!(fresh_text.contains("hello"));
+    assert_eq!(resumed[0]["text"], "hello");
     assert_eq!(fresh[1]["type"], "image");
 }
 

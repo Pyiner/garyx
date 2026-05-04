@@ -18,8 +18,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::gary_prompt::{
-    append_task_suffix_to_user_message, compose_gary_instructions,
-    prepend_memory_context_to_user_message, task_cli_env,
+    compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
 };
 use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
@@ -439,9 +438,8 @@ fn build_user_message_input(options: &ProviderRunOptions, include_memory: bool) 
     let attachments = attachments_from_metadata(&options.metadata);
     let message = build_native_skill_prompt(&options.message, &options.metadata)
         .unwrap_or_else(|| options.message.clone());
-    let message = append_task_suffix_to_user_message(&message, &options.metadata);
     let message =
-        prepend_memory_context_to_user_message(&message, &options.metadata, include_memory);
+        prepend_initial_context_to_user_message(&message, &options.metadata, include_memory);
     build_user_message_input_from_parts(&message, images, &attachments)
 }
 

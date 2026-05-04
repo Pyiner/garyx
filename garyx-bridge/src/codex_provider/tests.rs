@@ -234,7 +234,7 @@ fn test_build_input_items_prepends_memory_on_first_turn() {
 }
 
 #[test]
-fn test_build_input_items_appends_task_suffix() {
+fn test_build_input_items_does_not_append_task_status_suffix() {
     let options = ProviderRunOptions {
         thread_id: "s1".to_owned(),
         message: "继续".to_owned(),
@@ -254,9 +254,20 @@ fn test_build_input_items_appends_task_suffix() {
     let items = build_input_items(&options, false);
 
     assert_eq!(items.len(), 1);
-    assert!(
-        matches!(&items[0], InputItem::Text { text } if text == "继续 [task #TASK-4 status=in_progress assignee=agent:codex]")
-    );
+    assert!(matches!(&items[0], InputItem::Text { text } if text == "继续"));
+
+    let items = build_input_items(&options, true);
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        InputItem::Text { text } => {
+            assert!(text.starts_with("<garyx_thread_metadata>"));
+            assert!(text.contains("task_id: #TASK-4"));
+            assert!(!text.contains("status=in_progress"));
+            assert!(!text.contains("assignee=agent:codex"));
+            assert!(text.ends_with("继续"));
+        }
+        _ => panic!("expected text input"),
+    }
 }
 
 #[test]

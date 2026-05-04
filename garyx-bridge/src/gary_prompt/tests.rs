@@ -1,6 +1,7 @@
 use super::{
-    GARY_BASE_INSTRUCTIONS, append_task_suffix_to_user_message,
-    compose_gary_instructions_with_layout, prepend_memory_context_to_user_message, task_cli_env,
+    GARY_BASE_INSTRUCTIONS, compose_gary_instructions_with_layout,
+    prepend_initial_context_to_user_message, prepend_memory_context_to_user_message,
+    prepend_runtime_metadata_to_user_message, task_cli_env,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -46,10 +47,13 @@ fn prepend_memory_context_to_user_message_only_when_requested() {
 }
 
 #[test]
-fn append_task_suffix_to_user_message_renders_live_task_snapshot() {
+fn prepend_runtime_metadata_to_user_message_renders_stable_thread_task_and_bot_ids() {
     let metadata = HashMap::from([(
         "runtime_context".to_owned(),
         json!({
+            "thread_id": "thread::abc",
+            "bot_id": "telegram:main",
+            "workspace_dir": "/tmp/project",
             "task": {
                 "task_id": "#TASK-3",
                 "title": "Fix context prompt",
@@ -58,22 +62,59 @@ fn append_task_suffix_to_user_message_renders_live_task_snapshot() {
             }
         }),
     )]);
-    let rendered = append_task_suffix_to_user_message("继续", &metadata);
+    let rendered = prepend_runtime_metadata_to_user_message("继续", &metadata);
+
+    assert!(rendered.starts_with("<garyx_thread_metadata>"));
+    assert!(rendered.contains("thread_id: thread::abc"));
+    assert!(rendered.contains("bot_id: telegram:main"));
+    assert!(rendered.contains("workspace_dir: /tmp/project"));
+    assert!(rendered.contains("task_id: #TASK-3"));
+    assert!(!rendered.contains("status"));
+    assert!(!rendered.contains("assignee"));
+    assert!(rendered.ends_with("继续"));
+}
+
+#[test]
+fn prepend_runtime_metadata_to_user_message_leaves_unknown_context_unchanged() {
+    let metadata = HashMap::new();
 
     assert_eq!(
-        rendered,
-        "继续 [task #TASK-3 status=in_progress assignee=agent:codex]"
+        prepend_runtime_metadata_to_user_message("plain message\n", &metadata),
+        "plain message\n"
     );
 }
 
 #[test]
-fn append_task_suffix_to_user_message_leaves_non_task_messages_unchanged() {
-    let metadata = HashMap::new();
+fn prepend_initial_context_to_user_message_combines_runtime_metadata_and_memory_once() {
+    let metadata = HashMap::from([
+        ("agent_id".to_owned(), json!("reviewer")),
+        (
+            "runtime_context".to_owned(),
+            json!({
+                "thread_id": "thread::abc",
+                "bot_id": "telegram:main",
+                "task": {
+                    "task_id": "#TASK-3",
+                    "status": "done"
+                }
+            }),
+        ),
+    ]);
 
     assert_eq!(
-        append_task_suffix_to_user_message("plain message\n", &metadata),
-        "plain message\n"
+        prepend_initial_context_to_user_message("hello", &metadata, false),
+        "hello"
     );
+
+    let rendered = prepend_initial_context_to_user_message("hello", &metadata, true);
+    assert!(rendered.starts_with("<garyx_thread_metadata>"));
+    assert!(rendered.contains("thread_id: thread::abc"));
+    assert!(rendered.contains("bot_id: telegram:main"));
+    assert!(rendered.contains("task_id: #TASK-3"));
+    assert!(!rendered.contains("status: done"));
+    assert!(rendered.contains("<garyx_memory_context>"));
+    assert!(rendered.contains("<agent_memory agent_id=\"reviewer\""));
+    assert!(rendered.ends_with("hello"));
 }
 
 #[test]

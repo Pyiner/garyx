@@ -27,6 +27,26 @@ pub(crate) fn compose_gary_instructions(
     compose_gary_instructions_with_layout(extra)
 }
 
+pub(crate) fn prepend_initial_context_to_user_message(
+    message: &str,
+    metadata: &HashMap<String, Value>,
+    include_context: bool,
+) -> String {
+    if !include_context {
+        return message.to_owned();
+    }
+    let mut blocks = Vec::new();
+    if let Some(runtime_metadata) = build_runtime_metadata_user_message(metadata) {
+        blocks.push(runtime_metadata);
+    }
+    blocks.push(build_memory_context_user_message(metadata));
+    if !message.trim().is_empty() {
+        blocks.push(message.to_owned());
+    }
+    blocks.join("\n\n")
+}
+
+#[cfg(test)]
 pub(crate) fn prepend_memory_context_to_user_message(
     message: &str,
     metadata: &HashMap<String, Value>,
@@ -43,19 +63,41 @@ pub(crate) fn prepend_memory_context_to_user_message(
     }
 }
 
-pub(crate) fn append_task_suffix_to_user_message(
+fn build_runtime_metadata_user_message(metadata: &HashMap<String, Value>) -> Option<String> {
+    let runtime = metadata.get("runtime_context").and_then(Value::as_object)?;
+    let mut lines = vec![String::from(
+        "This is stable Garyx routing metadata for the current thread. Treat it as background context, not as a user request.",
+    )];
+    push_runtime_line(&mut lines, "thread_id", runtime.get("thread_id"));
+    push_runtime_line(&mut lines, "bot_id", runtime.get("bot_id"));
+    push_runtime_line(&mut lines, "workspace_dir", runtime.get("workspace_dir"));
+    if let Some(task) = runtime.get("task").and_then(Value::as_object) {
+        push_runtime_line(&mut lines, "task_id", task.get("task_id"));
+    }
+    if lines.len() <= 1 {
+        return None;
+    }
+    Some(format!(
+        "<garyx_thread_metadata>\n{}\n</garyx_thread_metadata>",
+        lines.join("\n")
+    ))
+}
+
+fn push_runtime_line(lines: &mut Vec<String>, key: &str, value: Option<&Value>) {
+    if let Some(value) = value.and_then(scalar_string) {
+        lines.push(format!("{key}: {}", escape_xml_text(&value)));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn prepend_runtime_metadata_to_user_message(
     message: &str,
     metadata: &HashMap<String, Value>,
 ) -> String {
-    let Some(suffix) = task_suffix(metadata) else {
+    let Some(context) = build_runtime_metadata_user_message(metadata) else {
         return message.to_owned();
     };
-    let message = message.trim_end();
-    if message.is_empty() {
-        suffix
-    } else {
-        format!("{message} {suffix}")
-    }
+    format!("{context}\n\n{message}")
 }
 
 pub(crate) fn task_cli_env(metadata: &HashMap<String, Value>) -> HashMap<String, String> {
@@ -100,46 +142,6 @@ pub(crate) fn task_cli_env(metadata: &HashMap<String, Value>) -> HashMap<String,
     env
 }
 
-fn task_suffix(metadata: &HashMap<String, Value>) -> Option<String> {
-    let runtime = metadata.get("runtime_context").and_then(Value::as_object)?;
-    let task = runtime.get("task").and_then(Value::as_object)?;
-    let task_id = task.get("task_id").and_then(scalar_string).or_else(|| {
-        task.get("number")
-            .and_then(scalar_string)
-            .map(|number| format!("#{number}"))
-    })?;
-    let status = task.get("status").and_then(scalar_string)?;
-
-    let mut suffix = format!("[task {} status={}", one_line(&task_id), one_line(&status));
-    if let Some(assignee) = task.get("assignee").and_then(principal_label) {
-        suffix.push_str(&format!(" assignee={}", one_line(&assignee)));
-    }
-    suffix.push(']');
-    Some(suffix)
-}
-
-fn principal_label(value: &Value) -> Option<String> {
-    if let Some(label) = scalar_string(value) {
-        return Some(label);
-    }
-    let principal = value.as_object()?;
-    match principal
-        .get("kind")
-        .or_else(|| principal.get("type"))
-        .and_then(Value::as_str)?
-    {
-        "human" => principal
-            .get("user_id")
-            .and_then(scalar_string)
-            .map(|value| format!("human:{value}")),
-        "agent" => principal
-            .get("agent_id")
-            .and_then(scalar_string)
-            .map(|value| format!("agent:{value}")),
-        other => Some(other.to_owned()),
-    }
-}
-
 fn scalar_string(value: &Value) -> Option<String> {
     match value {
         Value::String(value) => {
@@ -152,8 +154,11 @@ fn scalar_string(value: &Value) -> Option<String> {
     }
 }
 
-fn one_line(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+fn escape_xml_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn compose_gary_instructions_with_layout(extra: Option<&str>) -> String {

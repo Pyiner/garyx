@@ -11,15 +11,14 @@ use garyx_models::provider::{
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_router::{
-    ThreadHistoryRepository, ThreadStore, build_runtime_context_metadata, loop_enabled_from_value,
-    loop_iteration_count_from_value, mark_thread_task_in_review_if_in_progress,
+    ThreadHistoryRepository, ThreadStore, loop_enabled_from_value, loop_iteration_count_from_value,
+    mark_thread_task_in_review_if_in_progress,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep};
 
-use crate::gary_prompt::append_task_suffix_to_user_message;
 use crate::provider_trait::{AgentLoopProvider, BridgeError};
 use crate::run_graph::{RunGraphState, execute_agent_run};
 
@@ -673,44 +672,11 @@ async fn queue_streaming_input_with_retry(
 }
 
 async fn render_streaming_user_message_for_provider(
-    inner: &super::state::Inner,
-    thread_id: &str,
+    _inner: &super::state::Inner,
+    _thread_id: &str,
     message: &str,
 ) -> String {
-    let Some(store) = inner.thread_store.read().await.clone() else {
-        return message.to_owned();
-    };
-    let Some(record) = store.get(thread_id).await else {
-        return message.to_owned();
-    };
-    if record.get("task").is_none() {
-        return message.to_owned();
-    }
-
-    let channel = record
-        .get("channel")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let account_id = record
-        .get("account_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let from_id = record
-        .get("from_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let workspace_dir = record.get("workspace_dir").and_then(Value::as_str);
-    let runtime_context = build_runtime_context_metadata(
-        thread_id,
-        Some(&record),
-        &HashMap::new(),
-        channel,
-        account_id,
-        from_id,
-        workspace_dir,
-    );
-    let metadata = HashMap::from([("runtime_context".to_owned(), runtime_context)]);
-    append_task_suffix_to_user_message(message, &metadata)
+    message.to_owned()
 }
 
 async fn mark_task_ready_for_review_after_stopped_run(

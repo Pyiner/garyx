@@ -724,7 +724,7 @@ fn test_build_user_message_input_uses_native_skill_invocation() {
 }
 
 #[test]
-fn test_build_user_message_input_appends_task_suffix() {
+fn test_build_user_message_input_does_not_append_task_status_suffix() {
     let options = ProviderRunOptions {
         thread_id: "test".to_owned(),
         message: "继续".to_owned(),
@@ -743,8 +743,17 @@ fn test_build_user_message_input_appends_task_suffix() {
     };
 
     match build_user_message_input(&options, false) {
+        UserInput::Text(text) => assert_eq!(text, "继续"),
+        UserInput::Blocks(_) => panic!("expected text input"),
+    }
+
+    match build_user_message_input(&options, true) {
         UserInput::Text(text) => {
-            assert_eq!(text, "继续 [task #TASK-8 status=todo assignee=agent:codex]")
+            assert!(text.starts_with("<garyx_thread_metadata>"));
+            assert!(text.contains("task_id: #TASK-8"));
+            assert!(!text.contains("status=todo"));
+            assert!(!text.contains("assignee=agent:codex"));
+            assert!(text.ends_with("继续"));
         }
         UserInput::Blocks(_) => panic!("expected text input"),
     }
