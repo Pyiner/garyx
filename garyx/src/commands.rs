@@ -45,7 +45,7 @@ use garyx_models::config_loader::{
 };
 use garyx_models::local_paths::{
     default_agent_teams_state_path, default_custom_agents_state_path, default_log_file_path,
-    default_session_data_dir, thread_transcripts_dir_for_data_dir,
+    default_session_data_dir, gary_home_dir, thread_transcripts_dir_for_data_dir,
 };
 use garyx_models::{
     AgentTeamProfile, CustomAgentProfile, ProviderType, builtin_provider_agent_profiles,
@@ -3002,6 +3002,14 @@ struct ImageGenerationCliResult {
     extra_images_seen: bool,
 }
 
+const TOOL_SEARCH_GEMINI_MODEL: &str = "gemini-3-flash-preview";
+
+fn tool_workspace_dir(tool_name: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let dir = gary_home_dir().join("tool-workspaces").join(tool_name);
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ImageGenerationEventError {
     MalformedPayload(String),
@@ -3081,12 +3089,14 @@ async fn run_tool_image(
     }
 
     let gateway = gateway_endpoint(config_path)?;
+    let workspace_dir = tool_workspace_dir("image")?;
     let thread_payload = post_gateway_json(
         &gateway,
         "/api/threads",
         &json!({
             "label": "Image generation",
             "agentId": agent,
+            "workspaceDir": workspace_dir,
             "metadata": {
                 "source": "garyx_tool_image"
             }
@@ -3737,14 +3747,17 @@ pub(crate) async fn cmd_tool_search(
 
     let gateway = gateway_endpoint(config_path)
         .map_err(|error| format!("gateway unavailable or misconfigured: {error}"))?;
+    let workspace_dir = tool_workspace_dir("search")?;
     let thread = post_gateway_json(
         &gateway,
         "/api/threads",
         &json!({
             "label": format!("Search: {query}"),
             "agentId": agent_id,
+            "workspaceDir": workspace_dir,
             "metadata": {
                 "source": "garyx_tool_search",
+                "model": TOOL_SEARCH_GEMINI_MODEL,
             },
         }),
     )
@@ -3799,6 +3812,7 @@ pub(crate) async fn cmd_tool_search(
         "metadata": {
             "source": "garyx_tool_search",
             "search_query": query,
+            "model": TOOL_SEARCH_GEMINI_MODEL,
         },
     });
     write

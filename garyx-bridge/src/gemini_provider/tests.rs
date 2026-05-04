@@ -200,6 +200,25 @@ fn gemini_search_metadata_ignores_named_non_search_tools_with_outputs() {
 }
 
 #[test]
+fn gemini_search_metadata_requires_a_search_like_tool_name() {
+    let update = json!({
+        "toolCallId": "unknown-1",
+        "status": "completed",
+        "toolCalls": [{
+            "result": [{
+                "functionResponse": {
+                    "response": {
+                        "output": "Output with https://example.test/link"
+                    }
+                }
+            }]
+        }]
+    });
+
+    assert!(gemini_search_metadata(&update, None).is_none());
+}
+
+#[test]
 fn extract_gemini_thread_title_prefers_update_topic_raw_input() {
     let update = json!({
         "sessionUpdate": "tool_call",

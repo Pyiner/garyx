@@ -588,16 +588,13 @@ fn extract_markdown_sources(text: &str) -> Vec<Value> {
 fn gemini_search_metadata(update: &Value, tool_name: Option<&str>) -> Option<Value> {
     let mut outputs = Vec::new();
     collect_search_outputs(update, &mut outputs);
-    let search_like = match tool_name {
-        Some(name) => {
-            let lower = name.to_ascii_lowercase();
-            lower.contains("google_web_search")
-                || lower.contains("web_search")
-                || lower.contains("google search")
-                || lower.contains("search")
-        }
-        None => !outputs.is_empty(),
-    };
+    let search_like = tool_name.is_some_and(|name| {
+        let lower = name.to_ascii_lowercase();
+        lower.contains("google_web_search")
+            || lower.contains("web_search")
+            || lower.contains("google search")
+            || lower.contains("search")
+    });
     if !search_like {
         return None;
     }

@@ -1103,6 +1103,48 @@ fn image_generation_prompt_preserves_user_prompt() {
 }
 
 #[test]
+fn tool_workspace_dir_uses_hidden_garyx_home_and_creates_directory() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let home = tempdir().expect("home");
+    let _home = ScopedEnvVar::set_path("HOME", home.path());
+
+    let workspace = tool_workspace_dir("search").expect("workspace");
+
+    assert_eq!(
+        workspace,
+        home.path()
+            .join(".garyx")
+            .join("tool-workspaces")
+            .join("search")
+    );
+    assert!(workspace.is_dir());
+}
+
+#[test]
+fn tool_search_uses_fixed_gemini_flash_model() {
+    assert_eq!(TOOL_SEARCH_GEMINI_MODEL, "gemini-3-flash-preview");
+}
+
+#[test]
+fn search_stream_event_does_not_count_direct_answer_as_search() {
+    let mut state = SearchStreamState::default();
+
+    apply_search_stream_event(
+        &mut state,
+        &json!({
+            "type": "assistant_delta",
+            "delta": "I can answer this from memory without searching."
+        }),
+    );
+
+    assert!(!state.searched);
+    assert_eq!(
+        state.answer,
+        "I can answer this from memory without searching."
+    );
+}
+
+#[test]
 fn extract_image_from_synthetic_tool_result_event() {
     let event = json!({
         "type": "tool_result",
