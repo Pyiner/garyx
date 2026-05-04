@@ -33,6 +33,7 @@ const MAX_SESSION_FAILURES: u32 = 3;
 const MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 const ABORT_TIMEOUT_SECS: u64 = 10;
 const STREAM_IDLE_TIMEOUT_SECS: u64 = 3600; // 1 hour
+const CLAUDE_MISSING_RESULT_ERROR: &str = "claude SDK stream ended without a result message";
 
 // ---------------------------------------------------------------------------
 // Error classification helpers
@@ -936,6 +937,7 @@ impl ClaudeCliProvider {
                 response_text,
                 session_messages: result.session_messages,
                 is_error: result.is_error,
+                error_message: None,
                 input_tokens: result.input_tokens,
                 output_tokens: result.output_tokens,
                 cost_usd: result.cost_usd,
@@ -948,15 +950,15 @@ impl ClaudeCliProvider {
             ))
         } else {
             // Got some text but no formal ResultMessage (e.g. run was
-            // interrupted mid-stream).  Preserve the session_id that was
-            // used to start this run so that `run_streaming` does not
-            // discard the session mapping — the underlying Claude session
-            // is still valid and the next run should resume from it.
+            // interrupted mid-stream). Preserve the partial text and
+            // session_id, but do not report success: task lifecycle depends
+            // on the ResultMessage as the only reliable completion marker.
             Ok(Some(SdkRunOutcome {
                 session_id: session_id.unwrap_or_default().to_owned(),
                 response_text,
                 session_messages: Vec::new(),
-                is_error: false,
+                is_error: true,
+                error_message: Some(CLAUDE_MISSING_RESULT_ERROR.to_owned()),
                 input_tokens: 0,
                 output_tokens: 0,
                 cost_usd: 0.0,
@@ -1119,6 +1121,7 @@ struct SdkRunOutcome {
     response_text: String,
     session_messages: Vec<ProviderMessage>,
     is_error: bool,
+    error_message: Option<String>,
     input_tokens: i64,
     output_tokens: i64,
     cost_usd: f64,
@@ -1317,7 +1320,9 @@ impl AgentLoopProvider for ClaudeCliProvider {
                     .or_else(|| resolve_requested_model(&self.config, &options.metadata)),
                 success: !result.is_error,
                 error: if result.is_error {
-                    Some("claude SDK reported error".to_owned())
+                    result
+                        .error_message
+                        .or_else(|| Some("claude SDK reported error".to_owned()))
                 } else {
                     None
                 },

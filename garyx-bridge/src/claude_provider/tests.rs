@@ -980,6 +980,35 @@ async fn test_process_messages_streaming_emits_user_ack_boundaries() {
 }
 
 #[tokio::test]
+async fn test_process_messages_streaming_requires_result_message_for_completion() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "partial progress".to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let cb: StreamCallback = Box::new(|_| {});
+    let (response_text, result_data) = provider
+        .process_messages_streaming("run-no-result", "thread::test", &mut rx, &cb)
+        .await;
+
+    assert_eq!(response_text, "partial progress");
+    assert!(
+        result_data.is_none(),
+        "Claude text/tool events alone must not be treated as a completed run"
+    );
+}
+
+#[tokio::test]
 async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ack() {
     let provider = make_provider();
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
@@ -1726,6 +1755,7 @@ async fn test_run_streaming_retries_with_fresh_session_after_connect_failure() {
             response_text: "ok".to_owned(),
             session_messages: Vec::new(),
             is_error: false,
+            error_message: None,
             input_tokens: 1,
             output_tokens: 1,
             cost_usd: 0.0,
@@ -1781,6 +1811,7 @@ async fn test_run_streaming_keeps_stable_session_id_when_sdk_reports_different_i
             response_text: "ok".to_owned(),
             session_messages: Vec::new(),
             is_error: false,
+            error_message: None,
             input_tokens: 1,
             output_tokens: 1,
             cost_usd: 0.0,
@@ -1819,6 +1850,49 @@ async fn test_run_streaming_keeps_stable_session_id_when_sdk_reports_different_i
             .as_deref(),
         Some("session-a")
     );
+}
+
+#[tokio::test]
+async fn test_run_streaming_reports_incomplete_stream_as_unsuccessful() {
+    let mut provider = make_provider();
+    provider.ready = true;
+    provider
+        .session_map
+        .lock()
+        .await
+        .insert("sess::incomplete".to_owned(), "session-a".to_owned());
+    provider
+        .enqueue_test_run_attempt(Ok(Some(SdkRunOutcome {
+            session_id: "session-a".to_owned(),
+            response_text: "I will continue from here.".to_owned(),
+            session_messages: Vec::new(),
+            is_error: true,
+            error_message: Some(CLAUDE_MISSING_RESULT_ERROR.to_owned()),
+            input_tokens: 0,
+            output_tokens: 0,
+            cost_usd: 0.0,
+            actual_model: Some("claude-opus-4-7".to_owned()),
+        })))
+        .await;
+
+    let result = provider
+        .run_streaming(
+            &ProviderRunOptions {
+                thread_id: "sess::incomplete".to_owned(),
+                message: "hello".to_owned(),
+                workspace_dir: None,
+                images: None,
+                metadata: HashMap::new(),
+            },
+            Box::new(|_| {}),
+        )
+        .await
+        .expect("incomplete streams should preserve partial response");
+
+    assert!(!result.success);
+    assert_eq!(result.response, "I will continue from here.");
+    assert_eq!(result.error.as_deref(), Some(CLAUDE_MISSING_RESULT_ERROR));
+    assert_eq!(result.sdk_session_id.as_deref(), Some("session-a"));
 }
 
 #[tokio::test]
