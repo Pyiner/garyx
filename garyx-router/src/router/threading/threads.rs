@@ -42,17 +42,17 @@ impl MessageRouter {
     ) -> Result<Option<String>, String> {
         let previous_thread_id =
             bind_endpoint_to_thread(&self.threads, thread_id, binding.clone()).await?;
-        if let Some(previous_thread_id) = previous_thread_id.as_deref() {
-            if previous_thread_id != thread_id {
-                self.clear_last_delivery_for_chat_with_persistence(
-                    previous_thread_id,
-                    &binding.channel,
-                    &binding.account_id,
-                    &binding.chat_id,
-                    Some(&binding.binding_key),
-                )
-                .await;
-            }
+        if let Some(previous_thread_id) = previous_thread_id.as_deref()
+            && previous_thread_id != thread_id
+        {
+            self.clear_last_delivery_for_chat_with_persistence(
+                previous_thread_id,
+                &binding.channel,
+                &binding.account_id,
+                &binding.chat_id,
+                Some(&binding.binding_key),
+            )
+            .await;
         }
         self.set_last_delivery_with_persistence(
             thread_id,

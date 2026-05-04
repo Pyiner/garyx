@@ -251,13 +251,12 @@ fn take_pending_input_for_ack(
     let target_id = pending_input_id
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    if let Some(target_id) = target_id {
-        if let Some(index) = pending_user_inputs
+    if let Some(target_id) = target_id
+        && let Some(index) = pending_user_inputs
             .iter()
             .position(|input| input.id == target_id)
-        {
-            return Some(pending_user_inputs.remove(index));
-        }
+    {
+        return Some(pending_user_inputs.remove(index));
     }
 
     if pending_user_inputs.is_empty() {
@@ -267,6 +266,7 @@ fn take_pending_input_for_ack(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_partial_thread_persistence_worker(
     store: Arc<dyn ThreadStore>,
     history: Arc<ThreadHistoryRepository>,
@@ -576,12 +576,11 @@ fn resolve_persisted_sdk_session_id_for_provider(
 ) -> Option<String> {
     let object = session_data.as_object()?;
 
-    if let Some(expected_provider_type) = provider_type {
-        if persisted_provider_type(session_data).as_ref() == Some(expected_provider_type) {
-            if let Some(sdk_session_id) = non_empty_value_string(object.get("sdk_session_id")) {
-                return Some(sdk_session_id);
-            }
-        }
+    if let Some(expected_provider_type) = provider_type
+        && persisted_provider_type(session_data).as_ref() == Some(expected_provider_type)
+        && let Some(sdk_session_id) = non_empty_value_string(object.get("sdk_session_id"))
+    {
+        return Some(sdk_session_id);
     }
 
     let trimmed_provider_key = provider_key.trim();
@@ -804,27 +803,26 @@ async fn restore_thread_affinity_from_store(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+        && bridge.get_provider(&provider_key).await.is_some()
     {
-        if bridge.get_provider(&provider_key).await.is_some() {
-            bridge
-                .inner
-                .thread_affinity
-                .write()
-                .await
-                .insert(thread_id.to_owned(), provider_key.clone());
-            return Some(provider_key);
-        }
+        bridge
+            .inner
+            .thread_affinity
+            .write()
+            .await
+            .insert(thread_id.to_owned(), provider_key.clone());
+        return Some(provider_key);
     }
-    if let Some(provider_type) = persisted_provider_type(&session_data) {
-        if let Some(provider_key) = bridge.select_best_provider(Some(provider_type), true).await {
-            bridge
-                .inner
-                .thread_affinity
-                .write()
-                .await
-                .insert(thread_id.to_owned(), provider_key.clone());
-            return Some(provider_key);
-        }
+    if let Some(provider_type) = persisted_provider_type(&session_data)
+        && let Some(provider_key) = bridge.select_best_provider(Some(provider_type), true).await
+    {
+        bridge
+            .inner
+            .thread_affinity
+            .write()
+            .await
+            .insert(thread_id.to_owned(), provider_key.clone());
+        return Some(provider_key);
     }
     None
 }
@@ -1258,18 +1256,18 @@ impl MultiProviderBridge {
         // Load the persisted sdk_session_id for the active provider only.
         // This avoids leaking a different provider's session/thread id across
         // provider switches on the same Garyx thread.
-        if let Some(store) = &*self.inner.thread_store.read().await {
-            if let Some(session_data) = store.get(&thread_id).await {
-                let resolved_provider_type = provider.provider_type();
-                if let Some(sid) = resolve_persisted_sdk_session_id_for_provider(
-                    &session_data,
-                    &provider_key_owned,
-                    Some(&resolved_provider_type),
-                ) {
-                    options
-                        .metadata
-                        .insert("sdk_session_id".to_owned(), Value::String(sid.to_owned()));
-                }
+        if let Some(store) = &*self.inner.thread_store.read().await
+            && let Some(session_data) = store.get(&thread_id).await
+        {
+            let resolved_provider_type = provider.provider_type();
+            if let Some(sid) = resolve_persisted_sdk_session_id_for_provider(
+                &session_data,
+                &provider_key_owned,
+                Some(&resolved_provider_type),
+            ) {
+                options
+                    .metadata
+                    .insert("sdk_session_id".to_owned(), Value::String(sid.to_owned()));
             }
         }
 
@@ -1598,94 +1596,83 @@ impl MultiProviderBridge {
 
                     // Auto-continue loop: if loop_enabled, schedule a
                     // continuation run after a short delay.
-                    if res.success {
-                        if let Some(store) = &*inner.thread_store.read().await {
-                            if let Some(mut session_data) = store.get(&thread_id_owned).await {
-                                let loop_enabled = loop_enabled_from_value(&session_data);
-                                let iteration_count =
-                                    loop_iteration_count_from_value(&session_data);
+                    if res.success
+                        && let Some(store) = &*inner.thread_store.read().await
+                        && let Some(mut session_data) = store.get(&thread_id_owned).await
+                    {
+                        let loop_enabled = loop_enabled_from_value(&session_data);
+                        let iteration_count = loop_iteration_count_from_value(&session_data);
 
-                                if loop_enabled {
-                                    const MAX_LOOP_ITERATIONS: u64 = 50;
-                                    if should_auto_disable_loop(
-                                        &graph_state.run_options.metadata,
-                                        res,
-                                    ) {
-                                        tracing::warn!(
-                                            thread_id = %thread_id_owned,
-                                            iteration_count,
-                                            "latest run completed without tool activity; disabling loop"
-                                        );
-                                        if let Some(obj) = session_data.as_object_mut() {
-                                            obj.insert(
-                                                "loop_enabled".to_owned(),
-                                                Value::Bool(false),
-                                            );
-                                            obj.insert("loop_iteration_count".to_owned(), json!(0));
-                                            store.set(&thread_id_owned, session_data).await;
-                                        }
-                                        record_thread_log(
-                                            thread_logs_for_task.clone(),
-                                            thread_log_id_owned.as_deref(),
-                                            ThreadLogEvent::warn(
-                                                "",
-                                                "loop",
-                                                "loop auto-disabled after tool-free completion",
-                                            )
-                                            .with_run_id(run_id_owned.clone())
-                                            .with_field("iteration", json!(iteration_count)),
-                                        )
-                                        .await;
-                                    } else if iteration_count >= MAX_LOOP_ITERATIONS {
-                                        tracing::warn!(
-                                            thread_id = %thread_id_owned,
-                                            iteration_count,
-                                            "loop iteration limit reached, disabling loop"
-                                        );
-                                        if let Some(obj) = session_data.as_object_mut() {
-                                            obj.insert(
-                                                "loop_enabled".to_owned(),
-                                                Value::Bool(false),
-                                            );
-                                            obj.insert("loop_iteration_count".to_owned(), json!(0));
-                                            store.set(&thread_id_owned, session_data).await;
-                                        }
-                                    } else {
-                                        // Increment iteration count.
-                                        if let Some(obj) = session_data.as_object_mut() {
-                                            obj.insert(
-                                                "loop_iteration_count".to_owned(),
-                                                json!(iteration_count + 1),
-                                            );
-                                            store.set(&thread_id_owned, session_data).await;
-                                        }
-
-                                        // Emit loop_continue event for the
-                                        // gateway to pick up.
-                                        if let Some(tx) = &*inner.event_tx.read().await {
-                                            let event = serde_json::json!({
-                                                "type": "loop_continue",
-                                                "thread_id": thread_id_owned,
-                                                "iteration": iteration_count + 1,
-                                            });
-                                            let _ = tx.send(event.to_string());
-                                        }
-                                        scheduled_loop_continue = true;
-
-                                        record_thread_log(
-                                            thread_logs_for_task.clone(),
-                                            thread_log_id_owned.as_deref(),
-                                            ThreadLogEvent::info(
-                                                "",
-                                                "loop",
-                                                "loop auto-continue scheduled",
-                                            )
-                                            .with_run_id(run_id_owned.clone())
-                                            .with_field("iteration", json!(iteration_count + 1)),
-                                        )
-                                        .await;
-                                    }
+                        if loop_enabled {
+                            const MAX_LOOP_ITERATIONS: u64 = 50;
+                            if should_auto_disable_loop(&graph_state.run_options.metadata, res) {
+                                tracing::warn!(
+                                    thread_id = %thread_id_owned,
+                                    iteration_count,
+                                    "latest run completed without tool activity; disabling loop"
+                                );
+                                if let Some(obj) = session_data.as_object_mut() {
+                                    obj.insert("loop_enabled".to_owned(), Value::Bool(false));
+                                    obj.insert("loop_iteration_count".to_owned(), json!(0));
+                                    store.set(&thread_id_owned, session_data).await;
                                 }
+                                record_thread_log(
+                                    thread_logs_for_task.clone(),
+                                    thread_log_id_owned.as_deref(),
+                                    ThreadLogEvent::warn(
+                                        "",
+                                        "loop",
+                                        "loop auto-disabled after tool-free completion",
+                                    )
+                                    .with_run_id(run_id_owned.clone())
+                                    .with_field("iteration", json!(iteration_count)),
+                                )
+                                .await;
+                            } else if iteration_count >= MAX_LOOP_ITERATIONS {
+                                tracing::warn!(
+                                    thread_id = %thread_id_owned,
+                                    iteration_count,
+                                    "loop iteration limit reached, disabling loop"
+                                );
+                                if let Some(obj) = session_data.as_object_mut() {
+                                    obj.insert("loop_enabled".to_owned(), Value::Bool(false));
+                                    obj.insert("loop_iteration_count".to_owned(), json!(0));
+                                    store.set(&thread_id_owned, session_data).await;
+                                }
+                            } else {
+                                // Increment iteration count.
+                                if let Some(obj) = session_data.as_object_mut() {
+                                    obj.insert(
+                                        "loop_iteration_count".to_owned(),
+                                        json!(iteration_count + 1),
+                                    );
+                                    store.set(&thread_id_owned, session_data).await;
+                                }
+
+                                // Emit loop_continue event for the
+                                // gateway to pick up.
+                                if let Some(tx) = &*inner.event_tx.read().await {
+                                    let event = serde_json::json!({
+                                        "type": "loop_continue",
+                                        "thread_id": thread_id_owned,
+                                        "iteration": iteration_count + 1,
+                                    });
+                                    let _ = tx.send(event.to_string());
+                                }
+                                scheduled_loop_continue = true;
+
+                                record_thread_log(
+                                    thread_logs_for_task.clone(),
+                                    thread_log_id_owned.as_deref(),
+                                    ThreadLogEvent::info(
+                                        "",
+                                        "loop",
+                                        "loop auto-continue scheduled",
+                                    )
+                                    .with_run_id(run_id_owned.clone())
+                                    .with_field("iteration", json!(iteration_count + 1)),
+                                )
+                                .await;
                             }
                         }
                     }
@@ -1803,19 +1790,18 @@ impl MultiProviderBridge {
                     }
 
                     // Error guard: disable loop on failure.
-                    if let Some(store) = &*inner.thread_store.read().await {
-                        if let Some(mut session_data) = store.get(&thread_id_owned).await {
-                            if loop_enabled_from_value(&session_data) {
-                                tracing::warn!(
-                                    thread_id = %thread_id_owned,
-                                    "loop run failed, disabling loop mode"
-                                );
-                                if let Some(obj) = session_data.as_object_mut() {
-                                    obj.insert("loop_enabled".to_owned(), Value::Bool(false));
-                                    obj.insert("loop_iteration_count".to_owned(), json!(0));
-                                    store.set(&thread_id_owned, session_data).await;
-                                }
-                            }
+                    if let Some(store) = &*inner.thread_store.read().await
+                        && let Some(mut session_data) = store.get(&thread_id_owned).await
+                        && loop_enabled_from_value(&session_data)
+                    {
+                        tracing::warn!(
+                            thread_id = %thread_id_owned,
+                            "loop run failed, disabling loop mode"
+                        );
+                        if let Some(obj) = session_data.as_object_mut() {
+                            obj.insert("loop_enabled".to_owned(), Value::Bool(false));
+                            obj.insert("loop_iteration_count".to_owned(), json!(0));
+                            store.set(&thread_id_owned, session_data).await;
                         }
                     }
 
@@ -1950,18 +1936,18 @@ impl MultiProviderBridge {
             };
         }
 
-        if let Some(store) = &*self.inner.thread_store.read().await {
-            if let Some(session_data) = store.get(thread_id).await {
-                let resolved_provider_type = provider.provider_type();
-                if let Some(sid) = resolve_persisted_sdk_session_id_for_provider(
-                    &session_data,
-                    &provider_key,
-                    Some(&resolved_provider_type),
-                ) {
-                    options
-                        .metadata
-                        .insert("sdk_session_id".to_owned(), Value::String(sid));
-                }
+        if let Some(store) = &*self.inner.thread_store.read().await
+            && let Some(session_data) = store.get(thread_id).await
+        {
+            let resolved_provider_type = provider.provider_type();
+            if let Some(sid) = resolve_persisted_sdk_session_id_for_provider(
+                &session_data,
+                &provider_key,
+                Some(&resolved_provider_type),
+            ) {
+                options
+                    .metadata
+                    .insert("sdk_session_id".to_owned(), Value::String(sid));
             }
         }
 
@@ -2246,86 +2232,81 @@ impl MultiProviderBridge {
             .await
             .get(thread_id)
             .cloned();
-        if let Some(key) = provider_key {
-            if let Some(provider) = self.get_provider(&key).await {
-                let active_run_id = active_run_id_for_thread(&self.inner, thread_id).await;
-                let persistence_handle = self
-                    .inner
-                    .active_thread_persistence
-                    .lock()
-                    .await
-                    .get(thread_id)
-                    .cloned();
-                let run_id = persistence_handle
-                    .as_ref()
-                    .map(|handle| handle.run_id.clone())
-                    .or(active_run_id)
-                    .unwrap_or_default();
-                let persistence_tx = persistence_handle.as_ref().map(|handle| handle.tx.clone());
-
-                let image_payloads = images.clone().unwrap_or_default();
-                let file_payloads = files.clone().unwrap_or_default();
-                let mut staged_attachments = attachments.clone().unwrap_or_default();
-                staged_attachments.extend(stage_image_payloads_for_prompt(
-                    "garyx-bridge",
-                    &image_payloads,
-                ));
-                staged_attachments.extend(stage_file_payloads_for_prompt(
-                    "garyx-bridge",
-                    &file_payloads,
-                ));
-                let provider_message =
-                    render_streaming_user_message_for_provider(&self.inner, thread_id, message)
-                        .await;
-                let pending_input = PendingUserInput {
-                    id: format!("queued_input:{}", uuid::Uuid::new_v4()),
-                    bridge_run_id: run_id.clone(),
-                    text: message.to_owned(),
-                    content: build_pending_input_content(
-                        message,
-                        &image_payloads,
-                        &staged_attachments,
-                    ),
-                    queued_at: chrono::Utc::now().to_rfc3339(),
-                    status: PendingUserInputStatus::Queued,
-                };
-                if let Some(tx) = persistence_tx.as_ref() {
-                    let _ = tx.send(ThreadPersistenceCommand::QueuePendingInput(
-                        pending_input.clone(),
-                    ));
-                }
-
-                let provider_input = QueuedUserInput {
-                    pending_input_id: Some(pending_input.id.clone()),
-                    message: provider_message,
-                    images: if staged_attachments.is_empty() {
-                        image_payloads
-                    } else {
-                        Vec::new()
-                    },
-                    attachments: staged_attachments,
-                };
-                if queue_streaming_input_with_retry(
-                    &self.inner,
-                    provider.clone(),
-                    thread_id,
-                    provider_input,
-                )
+        if let Some(key) = provider_key
+            && let Some(provider) = self.get_provider(&key).await
+        {
+            let active_run_id = active_run_id_for_thread(&self.inner, thread_id).await;
+            let persistence_handle = self
+                .inner
+                .active_thread_persistence
+                .lock()
                 .await
-                {
-                    return Some(QueuedStreamingInput {
-                        pending_input_id: pending_input.id,
-                        run_id,
-                    });
-                }
+                .get(thread_id)
+                .cloned();
+            let run_id = persistence_handle
+                .as_ref()
+                .map(|handle| handle.run_id.clone())
+                .or(active_run_id)
+                .unwrap_or_default();
+            let persistence_tx = persistence_handle.as_ref().map(|handle| handle.tx.clone());
 
-                if let Some(tx) = persistence_tx {
-                    let _ = tx.send(ThreadPersistenceCommand::DropPendingInput {
-                        pending_input_id: pending_input.id,
-                    });
-                }
-                return None;
+            let image_payloads = images.clone().unwrap_or_default();
+            let file_payloads = files.clone().unwrap_or_default();
+            let mut staged_attachments = attachments.clone().unwrap_or_default();
+            staged_attachments.extend(stage_image_payloads_for_prompt(
+                "garyx-bridge",
+                &image_payloads,
+            ));
+            staged_attachments.extend(stage_file_payloads_for_prompt(
+                "garyx-bridge",
+                &file_payloads,
+            ));
+            let provider_message =
+                render_streaming_user_message_for_provider(&self.inner, thread_id, message).await;
+            let pending_input = PendingUserInput {
+                id: format!("queued_input:{}", uuid::Uuid::new_v4()),
+                bridge_run_id: run_id.clone(),
+                text: message.to_owned(),
+                content: build_pending_input_content(message, &image_payloads, &staged_attachments),
+                queued_at: chrono::Utc::now().to_rfc3339(),
+                status: PendingUserInputStatus::Queued,
+            };
+            if let Some(tx) = persistence_tx.as_ref() {
+                let _ = tx.send(ThreadPersistenceCommand::QueuePendingInput(
+                    pending_input.clone(),
+                ));
             }
+
+            let provider_input = QueuedUserInput {
+                pending_input_id: Some(pending_input.id.clone()),
+                message: provider_message,
+                images: if staged_attachments.is_empty() {
+                    image_payloads
+                } else {
+                    Vec::new()
+                },
+                attachments: staged_attachments,
+            };
+            if queue_streaming_input_with_retry(
+                &self.inner,
+                provider.clone(),
+                thread_id,
+                provider_input,
+            )
+            .await
+            {
+                return Some(QueuedStreamingInput {
+                    pending_input_id: pending_input.id,
+                    run_id,
+                });
+            }
+
+            if let Some(tx) = persistence_tx {
+                let _ = tx.send(ThreadPersistenceCommand::DropPendingInput {
+                    pending_input_id: pending_input.id,
+                });
+            }
+            return None;
         }
         None
     }
@@ -2339,10 +2320,10 @@ impl MultiProviderBridge {
             .await
             .get(thread_id)
             .cloned();
-        if let Some(key) = provider_key {
-            if let Some(provider) = self.get_provider(&key).await {
-                return provider.interrupt_streaming_session(thread_id).await;
-            }
+        if let Some(key) = provider_key
+            && let Some(provider) = self.get_provider(&key).await
+        {
+            return provider.interrupt_streaming_session(thread_id).await;
         }
         false
     }

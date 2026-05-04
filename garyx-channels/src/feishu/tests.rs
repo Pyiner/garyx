@@ -1,3 +1,5 @@
+#![allow(clippy::await_holding_lock, clippy::too_many_arguments)]
+
 use super::ws::FeishuRuntimeContext;
 use super::*;
 

@@ -435,13 +435,12 @@ impl ClaudeAgentOptions {
         }
 
         // Output format / JSON schema
-        if let Some(fmt) = &self.output_format {
-            if fmt.get("type").and_then(|t| t.as_str()) == Some("json_schema") {
-                if let Some(schema) = fmt.get("schema") {
-                    args.push("--json-schema".into());
-                    args.push(schema.to_string());
-                }
-            }
+        if let Some(fmt) = &self.output_format
+            && fmt.get("type").and_then(|t| t.as_str()) == Some("json_schema")
+            && let Some(schema) = fmt.get("schema")
+        {
+            args.push("--json-schema".into());
+            args.push(schema.to_string());
         }
 
         args

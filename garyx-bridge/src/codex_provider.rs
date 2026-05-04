@@ -39,24 +39,26 @@ const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
 
 /// Check whether a notification's params match our expected thread/turn.
 fn matches_turn(params: &Value, thread_id: &str, turn_id: &str) -> bool {
-    if let Some(event_thread) = params.get("threadId").and_then(|v| v.as_str()) {
-        if !event_thread.is_empty() && event_thread != thread_id {
-            return false;
-        }
+    if let Some(event_thread) = params.get("threadId").and_then(|v| v.as_str())
+        && !event_thread.is_empty()
+        && event_thread != thread_id
+    {
+        return false;
     }
-    if let Some(event_turn) = params.get("turnId").and_then(|v| v.as_str()) {
-        if !event_turn.is_empty() && event_turn != turn_id {
-            return false;
-        }
+    if let Some(event_turn) = params.get("turnId").and_then(|v| v.as_str())
+        && !event_turn.is_empty()
+        && event_turn != turn_id
+    {
+        return false;
     }
     if let Some(turn_obj_id) = params
         .get("turn")
         .and_then(|t| t.get("id"))
         .and_then(|v| v.as_str())
+        && !turn_obj_id.is_empty()
+        && turn_obj_id != turn_id
     {
-        if !turn_obj_id.is_empty() && turn_obj_id != turn_id {
-            return false;
-        }
+        return false;
     }
     true
 }
@@ -543,15 +545,14 @@ fn codex_structured_activity_name(item_type: &str, item: &Value) -> String {
         };
     }
 
-    if item_type.eq_ignore_ascii_case("collabAgentToolCall") {
-        if let Some(tool) = item
+    if item_type.eq_ignore_ascii_case("collabAgentToolCall")
+        && let Some(tool) = item
             .get("tool")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|value| !value.is_empty())
-        {
-            return tool.to_owned();
-        }
+    {
+        return tool.to_owned();
     }
 
     item_type.to_owned()
@@ -683,12 +684,11 @@ fn build_thread_start_params(
                 None
             }
         });
-    let model_reasoning_effort = config
-        .model_reasoning_effort
-        .trim()
-        .is_empty()
-        .then_some(None)
-        .unwrap_or_else(|| Some(config.model_reasoning_effort.clone()));
+    let model_reasoning_effort = if config.model_reasoning_effort.trim().is_empty() {
+        None
+    } else {
+        Some(config.model_reasoning_effort.clone())
+    };
 
     ThreadStartParams {
         cwd: cwd.clone(),
@@ -1114,15 +1114,13 @@ impl CodexAgentProvider {
         };
 
         let mut pending_acks = self.active_session_pending_acks.lock().await;
-        if let Some((active_run_id, queue)) = pending_acks.get_mut(garyx_thread_id) {
-            if active_run_id == run_id {
-                if let Some(index) = queue.iter().position(|marker| {
+        if let Some((active_run_id, queue)) = pending_acks.get_mut(garyx_thread_id)
+            && active_run_id == run_id
+                && let Some(index) = queue.iter().position(|marker| {
                     matches!(marker, PendingCodexAckMarker::QueuedInput(id) if id == pending_input_id)
                 }) {
                     queue.remove(index);
                 }
-            }
-        }
     }
 
     async fn emit_streaming_input_ack_boundary(
@@ -1386,11 +1384,11 @@ impl CodexAgentProvider {
                         }
                     }
                     "item/completed" => {
-                        if let Some(item) = params.get("item") {
-                            if let Some(msg) = build_tool_session_message(item, true) {
-                                emit_tool_stream_event(&msg, live_callback.as_ref());
-                                session_messages.push(msg);
-                            }
+                        if let Some(item) = params.get("item")
+                            && let Some(msg) = build_tool_session_message(item, true)
+                        {
+                            emit_tool_stream_event(&msg, live_callback.as_ref());
+                            session_messages.push(msg);
                         }
                     }
                     "error" => {

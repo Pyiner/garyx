@@ -183,10 +183,10 @@ async fn fetch_gemini_acp_models(config: &GaryxConfig) -> Result<GeminiModelDisc
 
 fn configured_gemini_bin(config: &GaryxConfig) -> String {
     for key in ["gemini", "gemini_cli"] {
-        if let Some(value) = config.agents.get(key) {
-            if let Some(bin) = gemini_bin_from_agent_config(value) {
-                return bin;
-            }
+        if let Some(value) = config.agents.get(key)
+            && let Some(bin) = gemini_bin_from_agent_config(value)
+        {
+            return bin;
         }
     }
     for value in config.agents.values() {

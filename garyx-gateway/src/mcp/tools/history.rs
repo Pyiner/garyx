@@ -42,12 +42,12 @@ pub(crate) async fn run(
         let workspace_filter = normalize_workspace_dir(params.workspace_dir.as_deref());
         let from = parse_time_bound(params.from.as_deref(), TimeBound::Start)?;
         let to = parse_time_bound(params.to.as_deref(), TimeBound::End)?;
-        if let (Some(from), Some(to)) = (from, to) {
-            if from > to {
-                return Err(
-                    "invalid time range: `from` must be earlier than or equal to `to`".to_owned(),
-                );
-            }
+        if let (Some(from), Some(to)) = (from, to)
+            && from > to
+        {
+            return Err(
+                "invalid time range: `from` must be earlier than or equal to `to`".to_owned(),
+            );
         }
 
         let limit = params
@@ -59,8 +59,8 @@ pub(crate) async fn run(
             server,
             thread_filter.as_deref(),
             workspace_filter.as_deref(),
-            from.clone(),
-            to.clone(),
+            from,
+            to,
         )
         .await?;
 
@@ -284,23 +284,21 @@ fn build_history_entry(
     let timestamp = timestamp_hint
         .or_else(|| object.get("timestamp").and_then(Value::as_str))
         .and_then(parse_stored_timestamp);
-    if let Some(lower) = from {
-        if timestamp
+    if let Some(lower) = from
+        && timestamp
             .as_ref()
             .map(|candidate| candidate < lower)
             .unwrap_or(true)
-        {
-            return None;
-        }
+    {
+        return None;
     }
-    if let Some(upper) = to {
-        if timestamp
+    if let Some(upper) = to
+        && timestamp
             .as_ref()
             .map(|candidate| candidate > upper)
             .unwrap_or(true)
-        {
-            return None;
-        }
+    {
+        return None;
     }
 
     Some(HistoryEntry {

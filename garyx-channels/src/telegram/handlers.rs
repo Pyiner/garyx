@@ -320,10 +320,10 @@ impl TelegramChannel {
         let mut image_attachments = Vec::new();
         let mut caption = String::new();
         for msg in &entry.messages {
-            if caption.is_empty() {
-                if let Some(c) = msg.caption.as_deref().filter(|s| !s.trim().is_empty()) {
-                    caption = c.to_owned();
-                }
+            if caption.is_empty()
+                && let Some(c) = msg.caption.as_deref().filter(|s| !s.trim().is_empty())
+            {
+                caption = c.to_owned();
             }
             let mut msg_images = extract_image_attachments(
                 &entry.context.http,
@@ -418,30 +418,25 @@ impl TelegramChannel {
                 || msg.sticker.is_some();
 
             // Media handlers bypass debounce and flush buffered text first.
-            if is_media_message {
-                if let Some(key) = debounce_key.clone() {
-                    Self::flush_debounce_for_key(key).await;
-                }
+            if is_media_message && let Some(key) = debounce_key.clone() {
+                Self::flush_debounce_for_key(key).await;
             }
 
             // Buffer rapid text messages and process as a merged message.
-            if !is_media_message {
-                if let Some(text) = msg.text.as_deref() {
-                    if !text.starts_with('/') {
-                        if let Some(key) = debounce_key {
-                            Self::buffer_debounce_text(key, text.to_owned(), context.clone(), msg)
-                                .await;
-                            return;
-                        }
-                    }
-                }
+            if !is_media_message
+                && let Some(text) = msg.text.as_deref()
+                && !text.starts_with('/')
+                && let Some(key) = debounce_key
+            {
+                Self::buffer_debounce_text(key, text.to_owned(), context.clone(), msg).await;
+                return;
             }
 
-            if let Some(media_group_id) = msg.media_group_id.as_deref() {
-                if msg.photo.is_some() || msg.document.is_some() {
-                    Self::buffer_media_group(context.clone(), msg, media_group_id).await;
-                    return;
-                }
+            if let Some(media_group_id) = msg.media_group_id.as_deref()
+                && (msg.photo.is_some() || msg.document.is_some())
+            {
+                Self::buffer_media_group(context.clone(), msg, media_group_id).await;
+                return;
             }
         }
 
@@ -455,10 +450,10 @@ impl TelegramChannel {
         };
 
         // Skip messages from bots (including ourselves)
-        if let Some(from) = &msg.from {
-            if from.is_bot {
-                return;
-            }
+        if let Some(from) = &msg.from
+            && from.is_bot
+        {
+            return;
         }
 
         // Extract text content: text for text messages, caption for media, or media type description
@@ -485,23 +480,23 @@ impl TelegramChannel {
             let group_config = context.account.groups.get(&chat_id_str);
 
             // Check group enabled
-            if let Some(gc) = group_config {
-                if !gc.enabled {
-                    debug!(context.account_id, chat_id, "skipping disabled group");
-                    Self::record_inbound_terminal_event(
-                        context,
-                        msg,
-                        MessageLifecycleStatus::Filtered,
-                        MessageTerminalReason::PolicyFiltered,
-                        &raw_text,
-                        serde_json::json!({
-                            "source": "telegram_inbound",
-                            "reason": "group_disabled",
-                        }),
-                    )
-                    .await;
-                    return;
-                }
+            if let Some(gc) = group_config
+                && !gc.enabled
+            {
+                debug!(context.account_id, chat_id, "skipping disabled group");
+                Self::record_inbound_terminal_event(
+                    context,
+                    msg,
+                    MessageLifecycleStatus::Filtered,
+                    MessageTerminalReason::PolicyFiltered,
+                    &raw_text,
+                    serde_json::json!({
+                        "source": "telegram_inbound",
+                        "reason": "group_disabled",
+                    }),
+                )
+                .await;
+                return;
             }
 
             // Check topic enabled (if forum)
@@ -515,9 +510,44 @@ impl TelegramChannel {
                 .and_then(|tc| tc.system_prompt.clone())
                 .or_else(|| group_config.and_then(|gc| gc.system_prompt.clone()));
 
-            if let Some(tc) = topic_config {
-                if !tc.enabled {
-                    debug!(context.account_id, chat_id, "skipping disabled topic");
+            if let Some(tc) = topic_config
+                && !tc.enabled
+            {
+                debug!(context.account_id, chat_id, "skipping disabled topic");
+                Self::record_inbound_terminal_event(
+                    context,
+                    msg,
+                    MessageLifecycleStatus::Filtered,
+                    MessageTerminalReason::PolicyFiltered,
+                    &raw_text,
+                    serde_json::json!({
+                        "source": "telegram_inbound",
+                        "reason": "topic_disabled",
+                    }),
+                )
+                .await;
+                return;
+            }
+
+            // Resolve effective allow_from (topic overrides group)
+            let effective_allow_from: Option<&Vec<String>> = topic_config
+                .and_then(|tc| tc.allow_from.as_ref())
+                .or_else(|| group_config.and_then(|gc| gc.allow_from.as_ref()));
+
+            if let Some(allowlist) = effective_allow_from
+                && let Some(from) = &msg.from
+            {
+                let user_id_str = from.id.to_string();
+                let username_str = from.username.as_deref().unwrap_or("");
+                if !allowlist
+                    .iter()
+                    .any(|a| a == &user_id_str || a == username_str)
+                {
+                    debug!(
+                        context.account_id,
+                        user_id = %from.id,
+                        "user not in group/topic allow_from"
+                    );
                     Self::record_inbound_terminal_event(
                         context,
                         msg,
@@ -526,46 +556,11 @@ impl TelegramChannel {
                         &raw_text,
                         serde_json::json!({
                             "source": "telegram_inbound",
-                            "reason": "topic_disabled",
+                            "reason": "group_allow_from",
                         }),
                     )
                     .await;
                     return;
-                }
-            }
-
-            // Resolve effective allow_from (topic overrides group)
-            let effective_allow_from: Option<&Vec<String>> = topic_config
-                .and_then(|tc| tc.allow_from.as_ref())
-                .or_else(|| group_config.and_then(|gc| gc.allow_from.as_ref()));
-
-            if let Some(allowlist) = effective_allow_from {
-                if let Some(from) = &msg.from {
-                    let user_id_str = from.id.to_string();
-                    let username_str = from.username.as_deref().unwrap_or("");
-                    if !allowlist
-                        .iter()
-                        .any(|a| a == &user_id_str || a == username_str)
-                    {
-                        debug!(
-                            context.account_id,
-                            user_id = %from.id,
-                            "user not in group/topic allow_from"
-                        );
-                        Self::record_inbound_terminal_event(
-                            context,
-                            msg,
-                            MessageLifecycleStatus::Filtered,
-                            MessageTerminalReason::PolicyFiltered,
-                            &raw_text,
-                            serde_json::json!({
-                                "source": "telegram_inbound",
-                                "reason": "group_allow_from",
-                            }),
-                        )
-                        .await;
-                        return;
-                    }
                 }
             }
 
@@ -690,29 +685,29 @@ impl TelegramChannel {
         // via streaming input instead of interrupting + starting a new run.
         // This preserves full conversation context when the user sends
         // follow-up messages while the agent is still working.
-        if !Self::is_non_interrupting_native_command(&clean_text) {
-            if let Some(thread_id) = existing_thread_id.as_deref() {
-                let queued = context
-                    .bridge
-                    .add_streaming_input(
-                        thread_id,
-                        &dispatch_message,
-                        None,
-                        None,
-                        Some(image_attachments.clone()),
-                    )
-                    .await;
-                if queued.is_some() {
-                    debug!(
-                        context.account_id,
-                        chat_id,
-                        thread_id,
-                        "telegram message queued as streaming input into active session"
-                    );
-                    return;
-                }
-                // No active session — fall through to normal dispatch.
+        if !Self::is_non_interrupting_native_command(&clean_text)
+            && let Some(thread_id) = existing_thread_id.as_deref()
+        {
+            let queued = context
+                .bridge
+                .add_streaming_input(
+                    thread_id,
+                    &dispatch_message,
+                    None,
+                    None,
+                    Some(image_attachments.clone()),
+                )
+                .await;
+            if queued.is_some() {
+                debug!(
+                    context.account_id,
+                    chat_id,
+                    thread_id,
+                    "telegram message queued as streaming input into active session"
+                );
+                return;
             }
+            // No active session — fall through to normal dispatch.
         }
 
         // Dispatch to bridge

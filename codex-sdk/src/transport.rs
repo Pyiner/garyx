@@ -487,10 +487,10 @@ impl CodexTransport {
 
 impl Drop for CodexTransport {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.child.try_lock() {
-            if let Some(ref mut child) = *guard {
-                let _ = child.start_kill();
-            }
+        if let Ok(mut guard) = self.child.try_lock()
+            && let Some(ref mut child) = *guard
+        {
+            let _ = child.start_kill();
         }
     }
 }
@@ -592,17 +592,18 @@ async fn dispatch_message(
     }
 
     // Case 3: Notification (has method, no id)
-    if has_method && !has_id {
-        if let Some(method) = payload.get("method").and_then(|v| v.as_str()) {
-            let params = payload
-                .get("params")
-                .cloned()
-                .unwrap_or(Value::Object(serde_json::Map::new()));
-            let _ = notification_tx.send(JsonRpcNotification {
-                method: method.to_owned(),
-                params,
-            });
-        }
+    if has_method
+        && !has_id
+        && let Some(method) = payload.get("method").and_then(|v| v.as_str())
+    {
+        let params = payload
+            .get("params")
+            .cloned()
+            .unwrap_or(Value::Object(serde_json::Map::new()));
+        let _ = notification_tx.send(JsonRpcNotification {
+            method: method.to_owned(),
+            params,
+        });
     }
 }
 

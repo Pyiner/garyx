@@ -1031,16 +1031,15 @@ impl GeminiCliProvider {
             });
         }
         on_chunk(StreamEvent::Done);
-        if let Some(model) = actual_model.as_ref() {
-            if let Some(message) = session_messages
+        if let Some(model) = actual_model.as_ref()
+            && let Some(message) = session_messages
                 .iter_mut()
                 .rev()
                 .find(|message| message.role == ProviderMessageRole::Assistant)
-            {
-                message
-                    .metadata
-                    .insert("actual_model".to_owned(), Value::String(model.clone()));
-            }
+        {
+            message
+                .metadata
+                .insert("actual_model".to_owned(), Value::String(model.clone()));
         }
 
         Ok(ProviderRunResult {
@@ -1139,13 +1138,13 @@ impl AgentLoopProvider for GeminiCliProvider {
             Err(error) => return Err(error),
         };
 
-        if !result.success {
-            if let Some(error) = result.error.as_deref() {
-                if session_id.is_some() && is_invalid_session_error(error) {
-                    self.session_map.lock().await.remove(&options.thread_id);
-                    result = self.run_once(options, &run_id, None, &on_chunk).await?;
-                }
-            }
+        if !result.success
+            && let Some(error) = result.error.as_deref()
+            && session_id.is_some()
+            && is_invalid_session_error(error)
+        {
+            self.session_map.lock().await.remove(&options.thread_id);
+            result = self.run_once(options, &run_id, None, &on_chunk).await?;
         }
 
         on_chunk(StreamEvent::Done);

@@ -9,6 +9,8 @@ use garyx_models::config::{GaryxConfig, OwnerTargetConfig, TelegramAccount};
 use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent};
 use garyx_models::{Principal, TaskEvent, TaskEventKind};
 
+type ProviderCall = (String, String, HashMap<String, Value>);
+
 #[derive(Default)]
 struct RecordingDispatcher {
     calls: std::sync::Mutex<Vec<OutboundMessage>>,
@@ -22,11 +24,11 @@ impl RecordingDispatcher {
 
 #[derive(Default)]
 struct RecordingProvider {
-    calls: std::sync::Mutex<Vec<(String, String, HashMap<String, Value>)>>,
+    calls: std::sync::Mutex<Vec<ProviderCall>>,
 }
 
 impl RecordingProvider {
-    fn calls(&self) -> Vec<(String, String, HashMap<String, Value>)> {
+    fn calls(&self) -> Vec<ProviderCall> {
         self.calls.lock().expect("provider lock poisoned").clone()
     }
 }

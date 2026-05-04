@@ -10,9 +10,11 @@ use garyx_router::MessageRouter;
 
 use crate::server::create_app_state_with_bridge;
 
+type ProviderCall = (String, String, HashMap<String, Value>);
+
 #[derive(Default)]
 struct RecordingProvider {
-    calls: StdMutex<Vec<(String, String, HashMap<String, Value>)>>,
+    calls: StdMutex<Vec<ProviderCall>>,
 }
 
 #[async_trait]

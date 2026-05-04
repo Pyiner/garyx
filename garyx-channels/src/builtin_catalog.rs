@@ -113,9 +113,7 @@ pub fn builtin_channel_descriptor(id: &str) -> Option<BuiltinChannelDescriptor> 
     builtin_channel_descriptors()
         .iter()
         .copied()
-        .find(|descriptor| {
-            descriptor.id == id || descriptor.aliases.iter().any(|alias| *alias == id)
-        })
+        .find(|descriptor| descriptor.id == id || descriptor.aliases.contains(&id))
 }
 
 /// Built-in channels all share the same "pull, explicit-ack"

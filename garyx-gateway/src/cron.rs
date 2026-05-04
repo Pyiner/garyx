@@ -297,8 +297,7 @@ async fn ensure_dirs(data_dir: &Path) -> std::io::Result<()> {
 async fn persist_job(data_dir: &Path, job: &CronJob) -> std::io::Result<()> {
     let path = jobs_dir(data_dir).join(format!("{}.json", job.id));
     let tmp = path.with_extension("tmp");
-    let bytes = serde_json::to_vec_pretty(job)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let bytes = serde_json::to_vec_pretty(job).map_err(std::io::Error::other)?;
     tokio::fs::write(&tmp, &bytes).await?;
     tokio::fs::rename(&tmp, &path).await?;
     Ok(())
@@ -322,7 +321,7 @@ async fn load_jobs(data_dir: &Path) -> std::io::Result<Vec<CronJob>> {
     let mut entries = tokio::fs::read_dir(&dir).await?;
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
-        if path.extension().map_or(true, |ext| ext != "json") {
+        if path.extension().is_none_or(|ext| ext != "json") {
             continue;
         }
         match tokio::fs::read(&path).await {
@@ -372,8 +371,7 @@ async fn persist_runs(data_dir: &Path, runs: &VecDeque<RunRecord>) -> std::io::R
     let path = runs_file(data_dir);
     let tmp = path.with_extension("tmp");
     let list: Vec<RunRecord> = runs.iter().cloned().collect();
-    let bytes = serde_json::to_vec_pretty(&list)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let bytes = serde_json::to_vec_pretty(&list).map_err(std::io::Error::other)?;
     tokio::fs::write(&tmp, &bytes).await?;
     tokio::fs::rename(&tmp, &path).await?;
     Ok(())
@@ -438,6 +436,7 @@ impl CronService {
     }
 
     /// Attach bridge+router runtime for agent-turn/system-event dispatch.
+    #[allow(clippy::too_many_arguments)]
     pub async fn set_dispatch_runtime(
         &self,
         thread_store: Arc<dyn ThreadStore>,
@@ -1367,13 +1366,13 @@ fn validate_cron_schedule(schedule: &CronSchedule) -> std::io::Result<()> {
                 ));
             }
 
-            if let Some(tz_name) = timezone.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                if tz_name.parse::<Tz>().is_err() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        format!("invalid cron timezone: {tz_name}"),
-                    ));
-                }
+            if let Some(tz_name) = timezone.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                && tz_name.parse::<Tz>().is_err()
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid cron timezone: {tz_name}"),
+                ));
             }
         }
     }

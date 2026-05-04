@@ -35,10 +35,10 @@ pub(super) async fn dedup_scope_id(router: &Arc<Mutex<MessageRouter>>) -> u64 {
     let ptr = Arc::as_ptr(router) as usize;
     let mut registry = dedup_scope_registry().lock().await;
 
-    if let Some((weak_router, scope_id)) = registry.scopes.get(&ptr) {
-        if weak_router.upgrade().is_some() {
-            return *scope_id;
-        }
+    if let Some((weak_router, scope_id)) = registry.scopes.get(&ptr)
+        && weak_router.upgrade().is_some()
+    {
+        return *scope_id;
     }
 
     let scope_id = registry.next_id;
@@ -71,10 +71,10 @@ pub(super) async fn is_duplicate_message(
     let ttl = std::time::Duration::from_secs(DEDUP_TTL_SECONDS);
     let mut store = message_dedup_store().lock().await;
 
-    if let Some(existing_ts) = store.get(&key) {
-        if now.saturating_duration_since(*existing_ts) < ttl {
-            return true;
-        }
+    if let Some(existing_ts) = store.get(&key)
+        && now.saturating_duration_since(*existing_ts) < ttl
+    {
+        return true;
     }
 
     store.insert(key, now);

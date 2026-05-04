@@ -9,9 +9,11 @@ use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType
 use garyx_router::MessageRouter;
 use serde_json::json;
 
+type ProviderCall = (String, String, HashMap<String, Value>);
+
 #[derive(Default)]
 struct RecordingProvider {
-    calls: StdMutex<Vec<(String, String, HashMap<String, Value>)>>,
+    calls: StdMutex<Vec<ProviderCall>>,
 }
 
 #[async_trait]

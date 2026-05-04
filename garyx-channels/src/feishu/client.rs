@@ -225,10 +225,10 @@ impl FeishuClient {
         // Fast path: read-lock check without holding the refresh mutex.
         {
             let state = self.token_state.read().await;
-            if let Some((_, expires_at)) = state.as_ref() {
-                if Instant::now() + TOKEN_REFRESH_MARGIN < *expires_at {
-                    return Ok(());
-                }
+            if let Some((_, expires_at)) = state.as_ref()
+                && Instant::now() + TOKEN_REFRESH_MARGIN < *expires_at
+            {
+                return Ok(());
             }
         }
 
@@ -238,10 +238,10 @@ impl FeishuClient {
         // Re-check after acquiring the mutex — another task may have refreshed already.
         {
             let state = self.token_state.read().await;
-            if let Some((_, expires_at)) = state.as_ref() {
-                if Instant::now() + TOKEN_REFRESH_MARGIN < *expires_at {
-                    return Ok(());
-                }
+            if let Some((_, expires_at)) = state.as_ref()
+                && Instant::now() + TOKEN_REFRESH_MARGIN < *expires_at
+            {
+                return Ok(());
             }
         }
 

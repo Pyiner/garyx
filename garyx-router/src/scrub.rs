@@ -64,22 +64,21 @@ pub fn scrub_legacy_team_fields(doc: &mut Value) -> bool {
     // bulk delete pass.
     let legacy_messages = obj.remove("team_chat_messages");
 
-    if let Some(legacy) = legacy_messages {
-        if let Value::Array(legacy_arr) = legacy {
-            if !legacy_arr.is_empty() {
-                match obj.get_mut("messages") {
-                    Some(Value::Array(existing)) => {
-                        existing.extend(legacy_arr);
-                    }
-                    _ => {
-                        obj.insert("messages".to_owned(), Value::Array(legacy_arr));
-                    }
-                }
+    if let Some(legacy) = legacy_messages
+        && let Value::Array(legacy_arr) = legacy
+        && !legacy_arr.is_empty()
+    {
+        match obj.get_mut("messages") {
+            Some(Value::Array(existing)) => {
+                existing.extend(legacy_arr);
+            }
+            _ => {
+                obj.insert("messages".to_owned(), Value::Array(legacy_arr));
             }
         }
-        // Non-array / empty legacy `team_chat_messages` => just drop it;
-        // the remove() above has already done so.
     }
+    // Non-array / empty legacy `team_chat_messages` => just drop it;
+    // the remove() above has already done so.
 
     for field in LEGACY_TEAM_FIELDS {
         if *field == "team_chat_messages" {

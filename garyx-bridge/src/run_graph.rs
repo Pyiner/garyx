@@ -200,17 +200,15 @@ fn node_execute<'ctx, 'deps>(
             let first_token_instant_cb = Arc::clone(&first_token_instant);
 
             let stream_cb: StreamCallback = Box::new(move |event: StreamEvent| {
-                if let StreamEvent::Delta { text } = &event {
-                    if !text.is_empty() {
-                        if let Ok(mut first_token) = first_token_instant_cb.lock() {
-                            if first_token.is_none() {
-                                *first_token = Some(Instant::now());
-                            }
-                        } else {
-                            tracing::warn!(
-                                "failed to record first token timestamp: mutex poisoned"
-                            );
+                if let StreamEvent::Delta { text } = &event
+                    && !text.is_empty()
+                {
+                    if let Ok(mut first_token) = first_token_instant_cb.lock() {
+                        if first_token.is_none() {
+                            *first_token = Some(Instant::now());
                         }
+                    } else {
+                        tracing::warn!("failed to record first token timestamp: mutex poisoned");
                     }
                 }
                 cb(event);

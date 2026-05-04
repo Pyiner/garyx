@@ -894,6 +894,7 @@ fn normalized_owner_target(
     Some((target_type, target_id.to_owned()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn synthetic_main_endpoint(
     channel: &str,
     account_id: &str,
@@ -1713,10 +1714,10 @@ impl ChannelPluginManager {
                     forked.unregister_plugin(&id);
                     dispatcher.store(Arc::new(forked));
                 }
-                if let Some(mut sub) = entry.subprocess.take() {
-                    if let Some(plugin) = sub.plugin.take() {
-                        let _report = plugin.shutdown_gracefully().await;
-                    }
+                if let Some(mut sub) = entry.subprocess.take()
+                    && let Some(plugin) = sub.plugin.take()
+                {
+                    let _report = plugin.shutdown_gracefully().await;
                 }
                 // Emit the final status under the removed metadata
                 // so observers see the transition, even though the
@@ -2262,7 +2263,7 @@ impl ChannelPluginManager {
         let new_metadata = self
             .plugins
             .get(plugin_id)
-            .and_then(|e| Some(e.plugin.metadata().clone()))
+            .map(|e| e.plugin.metadata().clone())
             .ok_or_else(|| SubprocessPluginError::UnknownPlugin(plugin_id.to_owned()))?;
         let new_adapter: Arc<dyn ChannelPlugin> =
             Arc::new(crate::plugin_host::SubprocessChannelPlugin::new(

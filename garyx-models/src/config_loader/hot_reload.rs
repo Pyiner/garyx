@@ -103,27 +103,26 @@ impl ConfigHotReloader {
                     pending_until = Some(Instant::now() + options.debounce);
                 }
 
-                if let Some(deadline) = pending_until {
-                    if Instant::now() >= deadline {
-                        metrics_bg.attempts.fetch_add(1, Ordering::Relaxed);
-                        match load_config(&path, &load_options) {
-                            Ok(loaded) => {
-                                metrics_bg.successes.fetch_add(1, Ordering::Relaxed);
-                                let hooks =
-                                    callbacks_bg.read().map(|g| g.clone()).unwrap_or_default();
-                                for cb in hooks {
-                                    cb(loaded.config.clone(), loaded.diagnostics.clone());
-                                    metrics_bg
-                                        .callback_notifications
-                                        .fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
-                            Err(_err) => {
-                                metrics_bg.failures.fetch_add(1, Ordering::Relaxed);
+                if let Some(deadline) = pending_until
+                    && Instant::now() >= deadline
+                {
+                    metrics_bg.attempts.fetch_add(1, Ordering::Relaxed);
+                    match load_config(&path, &load_options) {
+                        Ok(loaded) => {
+                            metrics_bg.successes.fetch_add(1, Ordering::Relaxed);
+                            let hooks = callbacks_bg.read().map(|g| g.clone()).unwrap_or_default();
+                            for cb in hooks {
+                                cb(loaded.config.clone(), loaded.diagnostics.clone());
+                                metrics_bg
+                                    .callback_notifications
+                                    .fetch_add(1, Ordering::Relaxed);
                             }
                         }
-                        pending_until = None;
+                        Err(_err) => {
+                            metrics_bg.failures.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
+                    pending_until = None;
                 }
 
                 thread::sleep(options.poll_interval);
@@ -153,10 +152,10 @@ impl ConfigHotReloader {
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Ok(mut handle_guard) = self.join_handle.lock() {
-            if let Some(handle) = handle_guard.take() {
-                let _ = handle.join();
-            }
+        if let Ok(mut handle_guard) = self.join_handle.lock()
+            && let Some(handle) = handle_guard.take()
+        {
+            let _ = handle.join();
         }
     }
 }

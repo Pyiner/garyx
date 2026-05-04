@@ -39,7 +39,7 @@ pub struct MessageLedgerStore {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum MessageLedgerLine {
     Session { version: u32, created_at: String },
-    Event(MessageLedgerEvent),
+    Event(Box<MessageLedgerEvent>),
 }
 
 impl MessageLedgerStore {
@@ -110,7 +110,7 @@ impl MessageLedgerStore {
                         .map_err(|error| MessageLedgerError::Io(error.to_string()))?;
                 }
 
-                let encoded = serde_json::to_string(&MessageLedgerLine::Event(event))
+                let encoded = serde_json::to_string(&MessageLedgerLine::Event(Box::new(event)))
                     .map_err(|error| MessageLedgerError::Parse(error.to_string()))?;
                 file.write_all(encoded.as_bytes())
                     .await
@@ -255,7 +255,7 @@ impl MessageLedgerStore {
                         .map_err(|error| MessageLedgerError::Parse(error.to_string()))?
                     {
                         MessageLedgerLine::Session { .. } => {}
-                        MessageLedgerLine::Event(event) => events.push(event),
+                        MessageLedgerLine::Event(event) => events.push(*event),
                     }
                 }
                 Ok(events)

@@ -286,26 +286,26 @@ pub async fn poll_once_at(
     };
 
     // Success path: client_id is populated.
-    if data.error.is_none() {
-        if let Some(client_id) = data.client_id.filter(|s| !s.is_empty()) {
-            let tenant_brand = data
-                .user_info
-                .as_ref()
-                .and_then(|u| u.tenant_brand.as_deref())
-                .map(|b| {
-                    if b == "lark" {
-                        FeishuDomain::Lark
-                    } else {
-                        FeishuDomain::Feishu
-                    }
-                })
-                .unwrap_or_else(|| poll_domain.clone());
-            return Ok(PollStatus::Success(DeviceFlowResult {
-                app_id: client_id,
-                app_secret: data.client_secret.unwrap_or_default(),
-                tenant_brand,
-            }));
-        }
+    if data.error.is_none()
+        && let Some(client_id) = data.client_id.filter(|s| !s.is_empty())
+    {
+        let tenant_brand = data
+            .user_info
+            .as_ref()
+            .and_then(|u| u.tenant_brand.as_deref())
+            .map(|b| {
+                if b == "lark" {
+                    FeishuDomain::Lark
+                } else {
+                    FeishuDomain::Feishu
+                }
+            })
+            .unwrap_or_else(|| poll_domain.clone());
+        return Ok(PollStatus::Success(DeviceFlowResult {
+            app_id: client_id,
+            app_secret: data.client_secret.unwrap_or_default(),
+            tenant_brand,
+        }));
     }
 
     match data.error.as_deref() {

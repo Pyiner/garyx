@@ -91,12 +91,11 @@ pub fn build_group_thread_key(
     is_forum: bool,
     forum_thread_id: Option<i64>,
 ) -> String {
-    if is_forum {
-        if let Some(thread_id) = forum_thread_id {
-            if thread_id != TELEGRAM_GENERAL_TOPIC_ID {
-                return format!("{chat_id}_t{thread_id}");
-            }
-        }
+    if is_forum
+        && let Some(thread_id) = forum_thread_id
+        && thread_id != TELEGRAM_GENERAL_TOPIC_ID
+    {
+        return format!("{chat_id}_t{thread_id}");
     }
     chat_id.to_string()
 }
@@ -172,12 +171,11 @@ pub fn is_mentioned(text: &str, bot_username: &str, bot_id: i64, msg: &TgMessage
     }
 
     // Check if replying to bot's message
-    if let Some(reply) = &msg.reply_to_message {
-        if let Some(from) = &reply.from {
-            if from.id == bot_id {
-                return true;
-            }
-        }
+    if let Some(reply) = &msg.reply_to_message
+        && let Some(from) = &reply.from
+        && from.id == bot_id
+    {
+        return true;
     }
 
     false

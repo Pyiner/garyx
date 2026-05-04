@@ -383,32 +383,31 @@ impl StreamingRunSnapshot {
     }
 
     fn append_assistant_delta(&mut self, delta: &str, metadata: Option<&HashMap<String, Value>>) {
-        if !self.start_new_assistant_segment {
-            if let Some(last_message) = self.session_messages.last_mut() {
-                if last_message.role == ProviderMessageRole::Assistant {
-                    if let Some(text) = last_message.text.as_mut() {
-                        text.push_str(delta);
-                    } else {
-                        last_message.text = Some(delta.to_owned());
-                    }
+        if !self.start_new_assistant_segment
+            && let Some(last_message) = self.session_messages.last_mut()
+            && last_message.role == ProviderMessageRole::Assistant
+        {
+            if let Some(text) = last_message.text.as_mut() {
+                text.push_str(delta);
+            } else {
+                last_message.text = Some(delta.to_owned());
+            }
 
-                    match &mut last_message.content {
-                        Value::String(text) => text.push_str(delta),
-                        Value::Null => {
-                            last_message.content = Value::String(delta.to_owned());
-                        }
-                        other => {
-                            let mut content =
-                                other.as_str().map(ToOwned::to_owned).unwrap_or_else(|| {
-                                    serde_json::to_string(other).unwrap_or_default()
-                                });
-                            content.push_str(delta);
-                            *other = Value::String(content);
-                        }
-                    }
-                    return;
+            match &mut last_message.content {
+                Value::String(text) => text.push_str(delta),
+                Value::Null => {
+                    last_message.content = Value::String(delta.to_owned());
+                }
+                other => {
+                    let mut content = other
+                        .as_str()
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| serde_json::to_string(other).unwrap_or_default());
+                    content.push_str(delta);
+                    *other = Value::String(content);
                 }
             }
+            return;
         }
 
         let mut message = ProviderMessage::assistant_text(delta);
@@ -506,9 +505,9 @@ fn update_provider_sdk_session_id(
     }
 }
 
-fn history_object_mut<'a>(
-    object: &'a mut serde_json::Map<String, Value>,
-) -> Option<&'a mut serde_json::Map<String, Value>> {
+fn history_object_mut(
+    object: &mut serde_json::Map<String, Value>,
+) -> Option<&mut serde_json::Map<String, Value>> {
     ensure_object(object, "history")
 }
 
@@ -552,12 +551,11 @@ fn build_active_run_snapshot_value(
     run: &PersistedRun<'_>,
     pending_user_inputs: &[PendingUserInput],
 ) -> Value {
-    let provider_key = run
-        .provider_key
-        .trim()
-        .is_empty()
-        .then_some(Value::Null)
-        .unwrap_or_else(|| Value::String(run.provider_key.to_owned()));
+    let provider_key = if run.provider_key.trim().is_empty() {
+        Value::Null
+    } else {
+        Value::String(run.provider_key.to_owned())
+    };
     serde_json::json!({
         "run_id": primary_run_identifier(run.metadata),
         "provider_key": provider_key,

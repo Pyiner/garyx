@@ -213,10 +213,10 @@ async fn telegram_outbox_sender(
     };
 
     let mut outboxes = TELEGRAM_OUTBOXES.lock().await;
-    if let Some(sender) = outboxes.get(&key) {
-        if !sender.is_closed() {
-            return sender.clone();
-        }
+    if let Some(sender) = outboxes.get(&key)
+        && !sender.is_closed()
+    {
+        return sender.clone();
     }
 
     let (sender, receiver) = mpsc::unbounded_channel();
@@ -307,11 +307,10 @@ fn insert_outbox_command(
                         coalesced_count: queued_count,
                         ..
                     } = queued
+                        && queued_body.message_id == message_id
                     {
-                        if queued_body.message_id == message_id {
-                            extra_coalesced = extra_coalesced.saturating_add(*queued_count + 1);
-                            return false;
-                        }
+                        extra_coalesced = extra_coalesced.saturating_add(*queued_count + 1);
+                        return false;
                     }
                     true
                 });
@@ -716,19 +715,19 @@ mod tests {
 
     async fn mount_text_methods(server: &MockServer, token: &str) {
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"/bot{token}/sendMessage")))
+            .and(path_regex(format!(r"/bot{token}/sendMessage")))
             .respond_with(ResponseTemplate::new(200).set_body_json(ok_message(1000, "sent")))
             .mount(server)
             .await;
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"/bot{token}/editMessageText")))
+            .and(path_regex(format!(r"/bot{token}/editMessageText")))
             .respond_with(ResponseTemplate::new(200).set_body_json(ok_message(1000, "edited")))
             .mount(server)
             .await;
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"/bot{token}/deleteMessage")))
+            .and(path_regex(format!(r"/bot{token}/deleteMessage")))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(serde_json::json!({"ok": true, "result": true})),

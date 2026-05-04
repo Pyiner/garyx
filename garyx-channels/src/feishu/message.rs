@@ -53,10 +53,10 @@ fn extract_post_text(parsed: &Value) -> String {
                                 }
                             }
                             "at" => {
-                                if let Some(name) = obj.get("user_name").and_then(|v| v.as_str()) {
-                                    if !name.is_empty() {
-                                        parts.push(format!("@{name}"));
-                                    }
+                                if let Some(name) = obj.get("user_name").and_then(|v| v.as_str())
+                                    && !name.is_empty()
+                                {
+                                    parts.push(format!("@{name}"));
                                 }
                             }
                             "img" => {
@@ -108,10 +108,10 @@ pub fn extract_image_keys(message_type: &str, content: &str) -> Vec<String> {
 
     match message_type {
         "image" => {
-            if let Some(key) = parsed.get("image_key").and_then(|v| v.as_str()) {
-                if !key.is_empty() {
-                    return vec![key.to_owned()];
-                }
+            if let Some(key) = parsed.get("image_key").and_then(|v| v.as_str())
+                && !key.is_empty()
+            {
+                return vec![key.to_owned()];
             }
             Vec::new()
         }
@@ -121,15 +121,12 @@ pub fn extract_image_keys(message_type: &str, content: &str) -> Vec<String> {
                 for paragraph in blocks {
                     if let Some(items) = paragraph.as_array() {
                         for item in items {
-                            if let Some(obj) = item.as_object() {
-                                if obj.get("tag").and_then(|v| v.as_str()) == Some("img") {
-                                    if let Some(key) = obj.get("image_key").and_then(|v| v.as_str())
-                                    {
-                                        if !key.is_empty() {
-                                            keys.push(key.to_owned());
-                                        }
-                                    }
-                                }
+                            if let Some(obj) = item.as_object()
+                                && obj.get("tag").and_then(|v| v.as_str()) == Some("img")
+                                && let Some(key) = obj.get("image_key").and_then(|v| v.as_str())
+                                && !key.is_empty()
+                            {
+                                keys.push(key.to_owned());
                             }
                         }
                     }

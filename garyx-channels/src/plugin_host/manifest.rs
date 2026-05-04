@@ -122,15 +122,11 @@ pub struct AuthFlowDescriptor {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AccountRootBehavior {
+    #[default]
     OpenDefault,
     ExpandOnly,
-}
-
-impl Default for AccountRootBehavior {
-    fn default() -> Self {
-        Self::OpenDefault
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

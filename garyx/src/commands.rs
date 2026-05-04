@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -465,12 +467,10 @@ pub(crate) async fn cmd_migrate_thread_transcripts(
         let original_message_count = messages.len();
         report.total_messages += original_message_count;
 
-        if rewrite_records {
-            if let Some(backup_dir) = &backup_dir {
-                let backup_path =
-                    backup_dir.join(format!("{}.json", encode_thread_backup_key(&thread_id)));
-                fs::write(&backup_path, serde_json::to_vec_pretty(&thread_data)?)?;
-            }
+        if rewrite_records && let Some(backup_dir) = &backup_dir {
+            let backup_path =
+                backup_dir.join(format!("{}.json", encode_thread_backup_key(&thread_id)));
+            fs::write(&backup_path, serde_json::to_vec_pretty(&thread_data)?)?;
         }
 
         let rewrite_result = transcript_store
@@ -1454,7 +1454,7 @@ fn build_provider_metadata_for_local_gateway(base_url: &str) -> Option<Value> {
         }
     }
 
-    (!metadata.is_empty()).then(|| Value::Object(metadata))
+    (!metadata.is_empty()).then_some(Value::Object(metadata))
 }
 
 async fn fetch_gateway_json(
@@ -1888,8 +1888,8 @@ pub(crate) async fn cmd_auto_research_candidates(
     }
     println!();
     println!(
-        "{:<8}  {:>6}  {:>8}  {}",
-        "ID", "SCORE", "ITER", "OUTPUT (truncated)"
+        "{:<8}  {:>6}  {:>8}  OUTPUT (truncated)",
+        "ID", "SCORE", "ITER"
     );
     println!("{}", "-".repeat(90));
     for c in &candidates {
@@ -2236,8 +2236,8 @@ pub(crate) async fn cmd_automation_list(
         return Ok(());
     }
     println!(
-        "{:<42}  {:<7}  {:<28}  {:<25}  {}",
-        "ID", "ENABLED", "SCHEDULE", "NEXT RUN", "NAME"
+        "{:<42}  {:<7}  {:<28}  {:<25}  NAME",
+        "ID", "ENABLED", "SCHEDULE", "NEXT RUN"
     );
     println!("{}", "-".repeat(120));
     for item in &items {
@@ -2699,10 +2699,10 @@ fn print_agent_summary(a: &Value) {
     if !model.is_empty() {
         println!("Model: {model}");
     }
-    if let Some(default_workspace_dir) = a["default_workspace_dir"].as_str() {
-        if !default_workspace_dir.trim().is_empty() {
-            println!("Default workspace: {}", default_workspace_dir.trim());
-        }
+    if let Some(default_workspace_dir) = a["default_workspace_dir"].as_str()
+        && !default_workspace_dir.trim().is_empty()
+    {
+        println!("Default workspace: {}", default_workspace_dir.trim());
     }
     if let Some(prompt) = a["system_prompt"].as_str() {
         let preview: String = prompt.chars().take(120).collect();
@@ -4320,15 +4320,15 @@ pub(crate) async fn cmd_bot_status(
         "Current thread: {}",
         payload["current_thread_id"].as_str().unwrap_or("-")
     );
-    if let Some(workspace_dir) = payload["main_endpoint"]["workspace_dir"].as_str() {
-        if !workspace_dir.trim().is_empty() {
-            println!("Workspace: {workspace_dir}");
-        }
+    if let Some(workspace_dir) = payload["main_endpoint"]["workspace_dir"].as_str()
+        && !workspace_dir.trim().is_empty()
+    {
+        println!("Workspace: {workspace_dir}");
     }
-    if let Some(binding_key) = payload["main_endpoint"]["binding_key"].as_str() {
-        if !binding_key.trim().is_empty() {
-            println!("Binding key: {binding_key}");
-        }
+    if let Some(binding_key) = payload["main_endpoint"]["binding_key"].as_str()
+        && !binding_key.trim().is_empty()
+    {
+        println!("Binding key: {binding_key}");
     }
     println!(
         "Provider: {}",
@@ -5408,21 +5408,19 @@ async fn interactive_fill_plugin_channel_overrides(
         && plugin_required_fields(&manifest.schema)
             .iter()
             .any(|field| value_is_missing(form_state.get(field)))
+        && prompt_plugin_auth_mode(manifest)?
     {
-        if prompt_plugin_auth_mode(manifest)? {
-            let mut values =
-                run_plugin_auth_flow(manifest, Value::Object(form_state.clone())).await?;
-            if overrides.account.is_none() {
-                if let Some(account_id) = plugin_suggested_account_id(&values) {
-                    overrides.account = Some(account_id);
-                }
-            }
-            strip_plugin_identity_hints(&mut values, &manifest.schema);
-            for (key, value) in values {
-                set_plugin_form_value(&mut overrides, &key, value);
-            }
-            form_state = plugin_form_state_from_overrides(&overrides);
+        let mut values = run_plugin_auth_flow(manifest, Value::Object(form_state.clone())).await?;
+        if overrides.account.is_none()
+            && let Some(account_id) = plugin_suggested_account_id(&values)
+        {
+            overrides.account = Some(account_id);
         }
+        strip_plugin_identity_hints(&mut values, &manifest.schema);
+        for (key, value) in values {
+            set_plugin_form_value(&mut overrides, &key, value);
+        }
+        form_state = plugin_form_state_from_overrides(&overrides);
     }
 
     let properties = manifest
@@ -5436,11 +5434,10 @@ async fn interactive_fill_plugin_channel_overrides(
     for (field_name, field_schema) in &properties {
         if value_is_missing(form_state.get(field_name))
             && required.iter().any(|name| name == field_name)
+            && let Some(value) = prompt_plugin_schema_value(field_name, field_schema, true)?
         {
-            if let Some(value) = prompt_plugin_schema_value(field_name, field_schema, true)? {
-                set_plugin_form_value(&mut overrides, field_name, value);
-                form_state = plugin_form_state_from_overrides(&overrides);
-            }
+            set_plugin_form_value(&mut overrides, field_name, value);
+            form_state = plugin_form_state_from_overrides(&overrides);
         }
     }
     for (field_name, field_schema) in &properties {
@@ -5669,10 +5666,10 @@ pub(crate) async fn cmd_channels_add(
                 Value::Object(plugin_form_state_from_overrides(&overrides)),
             )
             .await?;
-            if overrides.account.is_none() {
-                if let Some(account_id) = plugin_suggested_account_id(&values) {
-                    overrides.account = Some(account_id);
-                }
+            if overrides.account.is_none()
+                && let Some(account_id) = plugin_suggested_account_id(&values)
+            {
+                overrides.account = Some(account_id);
             }
             strip_plugin_identity_hints(&mut values, &manifest.schema);
             for (key, value) in values {
@@ -5688,10 +5685,11 @@ pub(crate) async fn cmd_channels_add(
                             .into(),
                     );
                     }
-                    let domain = match overrides.domain.as_deref().and_then(parse_feishu_domain) {
-                        Some(value) => value,
-                        None => FeishuDomain::default(),
-                    };
+                    let domain = overrides
+                        .domain
+                        .as_deref()
+                        .and_then(parse_feishu_domain)
+                        .unwrap_or_default();
                     let domain_str = match domain {
                         FeishuDomain::Feishu => "feishu",
                         FeishuDomain::Lark => "lark",
@@ -5780,10 +5778,10 @@ fn prompt_value(
         io::stdin().read_line(&mut input)?;
         let trimmed = input.trim();
         if trimmed.is_empty() {
-            if let Some(value) = default {
-                if !value.is_empty() || allow_empty {
-                    return Ok(value.to_owned());
-                }
+            if let Some(value) = default
+                && (!value.is_empty() || allow_empty)
+            {
+                return Ok(value.to_owned());
             }
             if allow_empty {
                 return Ok(String::new());
@@ -6758,10 +6756,7 @@ pub(crate) async fn cmd_logs_tail(
         let content = fs::read_to_string(&log_path).unwrap_or_default();
         let mut all_lines: Vec<&str> = content.lines().collect();
         if let Some(ref p) = pattern {
-            all_lines = all_lines
-                .into_iter()
-                .filter(|line| line.contains(p))
-                .collect();
+            all_lines.retain(|line| line.contains(p));
         }
 
         if !follow {
@@ -7202,7 +7197,7 @@ pub(crate) async fn cmd_wiki_status(
                 .map(|entries| {
                     entries
                         .filter_map(|e| e.ok())
-                        .filter(|e| e.path().extension().map_or(false, |ext| ext == "md"))
+                        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
                         .count()
                 })
                 .unwrap_or(0)

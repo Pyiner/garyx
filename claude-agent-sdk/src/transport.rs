@@ -310,10 +310,8 @@ fn cli_candidates(options: &ClaudeAgentOptions) -> Vec<String> {
         false
     };
 
-    if !has_path_override {
-        if let Ok(path) = which::which("claude") {
-            push_candidate(&mut candidates, path.to_string_lossy().to_string());
-        }
+    if !has_path_override && let Ok(path) = which::which("claude") {
+        push_candidate(&mut candidates, path.to_string_lossy().to_string());
     }
 
     let home = dirs_home(options);

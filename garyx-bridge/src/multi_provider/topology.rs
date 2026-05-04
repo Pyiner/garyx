@@ -198,10 +198,10 @@ impl MultiProviderBridge {
             if requested_provider.is_none() {
                 return Some(affinity_key);
             }
-            if let Some(provider) = self.get_provider(&affinity_key).await {
-                if Some(provider.provider_type()) == requested_provider {
-                    return Some(affinity_key);
-                }
+            if let Some(provider) = self.get_provider(&affinity_key).await
+                && Some(provider.provider_type()) == requested_provider
+            {
+                return Some(affinity_key);
             }
         }
 
@@ -224,15 +224,13 @@ impl MultiProviderBridge {
             }
         };
 
-        if let Some(candidate_key) = fallback.as_deref() {
-            if let Some(provider) = self.get_provider(candidate_key).await {
-                if provider.provider_type() == requested_type
-                    && self.provider_active_run_count(candidate_key).await == 0
-                    && provider.is_ready()
-                {
-                    return fallback;
-                }
-            }
+        if let Some(candidate_key) = fallback.as_deref()
+            && let Some(provider) = self.get_provider(candidate_key).await
+            && provider.provider_type() == requested_type
+            && self.provider_active_run_count(candidate_key).await == 0
+            && provider.is_ready()
+        {
+            return fallback;
         }
 
         self.select_best_provider(Some(requested_type), true).await

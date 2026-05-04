@@ -388,10 +388,10 @@ async fn chat_ws_recover_returns_thread_snapshot() {
     loop {
         let payload = recv_json(&mut ws).await;
         let kind = payload["type"].as_str().unwrap_or_default();
-        if kind == "accepted" {
-            if let Some(id) = payload["threadId"].as_str() {
-                active_thread_id = id.to_owned();
-            }
+        if kind == "accepted"
+            && let Some(id) = payload["threadId"].as_str()
+        {
+            active_thread_id = id.to_owned();
         }
         if kind == "done" || kind == "error" {
             break;

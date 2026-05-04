@@ -421,11 +421,11 @@ async fn channel_plugin_for(
     channel: &str,
 ) -> Option<Arc<dyn garyx_channels::plugin::ChannelPlugin>> {
     let manager = state.channel_plugin_manager();
-    let plugin = {
+
+    {
         let guard = manager.lock().await;
         guard.plugin(channel)
-    };
-    plugin
+    }
 }
 
 fn account_root_behavior_value(
@@ -967,36 +967,32 @@ async fn thread_summary_with_history(
     };
 
     let missing_user_preview = object.get("last_user_message").is_none_or(Value::is_null);
-    if missing_user_preview {
-        if let Ok(Some(text)) = state
+    if missing_user_preview
+        && let Ok(Some(text)) = state
             .threads
             .history
             .latest_message_text_for_role(thread_id, "user")
             .await
-        {
-            if let Some(summary_text) = summarize_text(Some(text.as_str()), 160) {
-                object.insert("last_user_message".to_owned(), Value::String(summary_text));
-            }
-        }
+        && let Some(summary_text) = summarize_text(Some(text.as_str()), 160)
+    {
+        object.insert("last_user_message".to_owned(), Value::String(summary_text));
     }
 
     let missing_assistant_preview = object
         .get("last_assistant_message")
         .is_none_or(Value::is_null);
-    if missing_assistant_preview {
-        if let Ok(Some(text)) = state
+    if missing_assistant_preview
+        && let Ok(Some(text)) = state
             .threads
             .history
             .latest_message_text_for_role(thread_id, "assistant")
             .await
-        {
-            if let Some(summary_text) = summarize_text(Some(text.as_str()), 160) {
-                object.insert(
-                    "last_assistant_message".to_owned(),
-                    Value::String(summary_text),
-                );
-            }
-        }
+        && let Some(summary_text) = summarize_text(Some(text.as_str()), 160)
+    {
+        object.insert(
+            "last_assistant_message".to_owned(),
+            Value::String(summary_text),
+        );
     }
 
     // Attach the read-only `team` block whenever the thread's agent_id
@@ -1260,27 +1256,26 @@ pub async fn create_thread(
     .await
     {
         Ok((thread_id, mut data, _resolved)) => {
-            if let Some(recovered) = recovered_session.as_ref() {
-                if let Err(error) =
+            if let Some(recovered) = recovered_session.as_ref()
+                && let Err(error) =
                     seed_imported_thread_history(&state, &thread_id, &mut data, &recovered.messages)
                         .await
-                {
-                    state.threads.thread_store.delete(&thread_id).await;
-                    let _ = state
-                        .threads
-                        .history
-                        .delete_thread_history(&thread_id)
-                        .await;
-                    state
-                        .integration
-                        .bridge
-                        .set_thread_workspace_binding(&thread_id, None)
-                        .await;
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": error })),
-                    );
-                }
+            {
+                state.threads.thread_store.delete(&thread_id).await;
+                let _ = state
+                    .threads
+                    .history
+                    .delete_thread_history(&thread_id)
+                    .await;
+                state
+                    .integration
+                    .bridge
+                    .set_thread_workspace_binding(&thread_id, None)
+                    .await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": error })),
+                );
             }
             rebuild_thread_indexes(&state).await;
             (

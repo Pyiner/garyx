@@ -638,7 +638,8 @@ async fn catch_up_delivers_only_new_entries_and_advances_offset() {
     let msg3 = &coder_calls[2].message;
 
     // Only entry-6 remains unread from the persisted snapshot.
-    for idx in [6] {
+    {
+        let idx = 6;
         assert!(
             msg3.contains(&format!("entry-{idx}")),
             "turn-3 message must include entry-{idx}:\n{msg3}"

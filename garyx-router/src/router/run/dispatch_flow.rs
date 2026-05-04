@@ -30,10 +30,10 @@ impl MessageRouter {
             return result;
         }
 
-        if let Some(command_text) = InboundCommandClassifier::command_text(&request) {
-            if let Some(command) = InboundCommandClassifier::parse(command_text, &request.channel) {
-                return self.handle_local_command(&request, command).await;
-            }
+        if let Some(command_text) = InboundCommandClassifier::command_text(&request)
+            && let Some(command) = InboundCommandClassifier::parse(command_text, &request.channel)
+        {
+            return self.handle_local_command(&request, command).await;
         }
 
         self.apply_custom_command_transform(&mut request, None);

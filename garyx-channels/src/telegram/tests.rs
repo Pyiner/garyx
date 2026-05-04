@@ -1,3 +1,9 @@
+#![allow(
+    clippy::await_holding_lock,
+    clippy::field_reassign_with_default,
+    clippy::too_many_arguments
+)]
+
 use super::*;
 use garyx_models::command_catalog::{CommandCatalogOptions, CommandSurface};
 use garyx_models::config::SlashCommand;
@@ -1071,7 +1077,7 @@ mod e2e_tests {
         let api_prefix = register_unique_api_prefix(&server);
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/sendMessage")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/sendMessage")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true,
                 "result": {
@@ -1085,7 +1091,7 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/sendChatAction")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/sendChatAction")))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(serde_json::json!({"ok": true, "result": true})),
@@ -1094,7 +1100,7 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/sendPhoto")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/sendPhoto")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true,
                 "result": {
@@ -1107,7 +1113,7 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/editMessageText")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/editMessageText")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true,
                 "result": {
@@ -1121,7 +1127,7 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/getFile")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/getFile")))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "ok": true,
                 "result": {
@@ -1134,7 +1140,7 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("GET"))
-            .and(path_regex(&format!(
+            .and(path_regex(format!(
                 r"{api_prefix}/file/bot.+/photos/test_image\.png"
             )))
             .respond_with(
@@ -1485,7 +1491,7 @@ mod e2e_tests {
         let next_message_id = Arc::new(AtomicUsize::new(1000));
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/sendMessage")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/sendMessage")))
             .respond_with({
                 let capture = capture.clone();
                 let next_message_id = next_message_id.clone();
@@ -1507,7 +1513,7 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/sendChatAction")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/sendChatAction")))
             .respond_with({
                 let capture = capture.clone();
                 move |req: &Request| {
@@ -1520,7 +1526,7 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/sendPhoto")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/sendPhoto")))
             .respond_with({
                 let next_message_id = next_message_id.clone();
                 move |_req: &Request| {
@@ -1539,7 +1545,7 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/editMessageText")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/editMessageText")))
             .respond_with({
                 let capture = capture.clone();
                 move |req: &Request| {
@@ -1569,7 +1575,7 @@ mod e2e_tests {
             .await;
 
         Mock::given(method("POST"))
-            .and(path_regex(&format!(r"{api_prefix}/bot.+/deleteMessage")))
+            .and(path_regex(format!(r"{api_prefix}/bot.+/deleteMessage")))
             .respond_with({
                 let capture = capture.clone();
                 move |req: &Request| {
@@ -5363,7 +5369,7 @@ mod e2e_tests {
         )
         .await;
 
-        let send_msg_count = send_reqs.iter().count();
+        let send_msg_count = send_reqs.len();
         assert!(
             send_msg_count >= 1,
             "long message should produce at least one sendMessage call"

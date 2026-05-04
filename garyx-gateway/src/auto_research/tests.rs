@@ -1,3 +1,5 @@
+#![allow(clippy::needless_update)]
+
 use super::*;
 use std::sync::Arc;
 
@@ -467,7 +469,7 @@ fn worker_prompt_includes_previous_candidates_and_best_feedback() {
 
     let work_prompt = build_worker_prompt(
         &run.goal,
-        &[candidate.clone()],
+        std::slice::from_ref(&candidate),
         2,
         run.max_iterations,
         Some(&candidate),
@@ -627,11 +629,11 @@ async fn spawn_auto_research_loop_continues_when_verdict_is_invalid() {
 
     let mut terminal = None;
     for _ in 0..80 {
-        if let Some(run) = state.ops.auto_research.get_run(&run.run_id).await {
-            if run.state.is_terminal() {
-                terminal = Some(run);
-                break;
-            }
+        if let Some(run) = state.ops.auto_research.get_run(&run.run_id).await
+            && run.state.is_terminal()
+        {
+            terminal = Some(run);
+            break;
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }

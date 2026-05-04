@@ -107,17 +107,16 @@ impl ClaudeSDKClient {
         self.start_reader(transport.clone());
 
         // If streaming, send initialize
-        if is_streaming {
-            if let Err(err) = self
+        if is_streaming
+            && let Err(err) = self
                 .send_control_request(
                     ControlRequestKind::Initialize { hooks: None },
                     std::time::Duration::from_secs(60),
                 )
                 .await
-            {
-                self.cleanup_after_failed_connect().await?;
-                return Err(err);
-            }
+        {
+            self.cleanup_after_failed_connect().await?;
+            return Err(err);
         }
 
         // If we have a stream prompt, start streaming it
@@ -514,10 +513,10 @@ impl ClaudeSDKClient {
                 if closed.load(Ordering::SeqCst) {
                     break;
                 }
-                if let Ok(line) = serde_json::to_string(&msg) {
-                    if transport.write(&(line + "\n")).await.is_err() {
-                        break;
-                    }
+                if let Ok(line) = serde_json::to_string(&msg)
+                    && transport.write(&(line + "\n")).await.is_err()
+                {
+                    break;
                 }
             }
 

@@ -426,13 +426,12 @@ impl ThreadTranscriptStore {
         }
         let records = self.read_records(thread_id).await?;
         for record in records.iter().rev() {
-            if message_role(&record.message) == Some(trimmed_role) {
-                if let Some(text) = message_text(&record.message)
+            if message_role(&record.message) == Some(trimmed_role)
+                && let Some(text) = message_text(&record.message)
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                {
-                    return Ok(Some(text.to_owned()));
-                }
+            {
+                return Ok(Some(text.to_owned()));
             }
         }
         Ok(None)
@@ -685,13 +684,12 @@ impl ThreadHistoryRepository {
             .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
 
         for message in active_run_snapshot_messages(&thread_data).iter().rev() {
-            if message_role(message) == Some(trimmed_role) {
-                if let Some(text) = message_text(message)
+            if message_role(message) == Some(trimmed_role)
+                && let Some(text) = message_text(message)
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
-                {
-                    return Ok(Some(text.to_owned()));
-                }
+            {
+                return Ok(Some(text.to_owned()));
             }
         }
 

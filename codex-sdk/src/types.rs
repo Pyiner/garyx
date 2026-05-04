@@ -269,16 +269,15 @@ pub fn extract_thread_id(payload: &Value) -> Option<String> {
         .get("thread")
         .and_then(|t| t.get("id"))
         .and_then(|v| v.as_str())
+        && !id.is_empty()
     {
-        if !id.is_empty() {
-            return Some(id.to_owned());
-        }
+        return Some(id.to_owned());
     }
     for key in &["threadId", "thread_id"] {
-        if let Some(id) = payload.get(*key).and_then(|v| v.as_str()) {
-            if !id.is_empty() {
-                return Some(id.to_owned());
-            }
+        if let Some(id) = payload.get(*key).and_then(|v| v.as_str())
+            && !id.is_empty()
+        {
+            return Some(id.to_owned());
         }
     }
     None
@@ -292,16 +291,15 @@ pub fn extract_turn_id(payload: &Value) -> Option<String> {
         .get("turn")
         .and_then(|t| t.get("id"))
         .and_then(|v| v.as_str())
+        && !id.is_empty()
     {
-        if !id.is_empty() {
-            return Some(id.to_owned());
-        }
+        return Some(id.to_owned());
     }
     for key in &["turnId", "turn_id"] {
-        if let Some(id) = payload.get(*key).and_then(|v| v.as_str()) {
-            if !id.is_empty() {
-                return Some(id.to_owned());
-            }
+        if let Some(id) = payload.get(*key).and_then(|v| v.as_str())
+            && !id.is_empty()
+        {
+            return Some(id.to_owned());
         }
     }
     None

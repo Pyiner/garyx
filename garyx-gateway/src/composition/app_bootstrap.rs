@@ -274,13 +274,13 @@ impl AppStateBuilder {
     }
 
     pub fn build(self) -> Arc<AppState> {
-        if let Ok(recovered) = self.auto_research.recover_interrupted_runs_blocking() {
-            if !recovered.is_empty() {
-                warn!(
-                    recovered_count = recovered.len(),
-                    "recovered interrupted auto research runs during startup"
-                );
-            }
+        if let Ok(recovered) = self.auto_research.recover_interrupted_runs_blocking()
+            && !recovered.is_empty()
+        {
+            warn!(
+                recovered_count = recovered.len(),
+                "recovered interrupted auto research runs during startup"
+            );
         }
 
         // Teams and standalone agents share one agent_id namespace — a team_id

@@ -2,11 +2,11 @@ use super::super::*;
 
 pub(crate) async fn run(server: &GaryMcpServer, params: ImageGenParams) -> Result<String, String> {
     let started = Instant::now();
-    if let Some(size) = params.size.as_deref() {
-        if !["256x256", "512x512", "1024x1024"].contains(&size) {
-            server.record_tool_metric("image_gen", "error", started.elapsed());
-            return Err(format!("invalid size: {size}"));
-        }
+    if let Some(size) = params.size.as_deref()
+        && !["256x256", "512x512", "1024x1024"].contains(&size)
+    {
+        server.record_tool_metric("image_gen", "error", started.elapsed());
+        return Err(format!("invalid size: {size}"));
     }
 
     let aspect_ratio = params.aspect_ratio.as_deref().unwrap_or("1:1");

@@ -304,10 +304,10 @@ fn should_emit_permission_notice(account_id: &str, chat_id: &str) -> bool {
         PERMISSION_NOTICE_CACHE_MAX_KEYS,
         Some(&cache_key),
     );
-    if let Some(last_at) = cache.get(&cache_key) {
-        if now.saturating_duration_since(*last_at) < PERMISSION_ERROR_COOLDOWN {
-            return false;
-        }
+    if let Some(last_at) = cache.get(&cache_key)
+        && now.saturating_duration_since(*last_at) < PERMISSION_ERROR_COOLDOWN
+    {
+        return false;
     }
     cache.insert(cache_key, now);
     true

@@ -36,10 +36,10 @@ impl MessageRouter {
                     .into_iter()
                     .map(|entry| (entry.thread_id, entry.label))
                     .collect();
-                if let Some(current) = current_thread.as_ref() {
-                    if !display.iter().any(|(key, _)| key == current) {
-                        display.insert(0, (current.clone(), None));
-                    }
+                if let Some(current) = current_thread.as_ref()
+                    && !display.iter().any(|(key, _)| key == current)
+                {
+                    display.insert(0, (current.clone(), None));
                 }
 
                 let mut lines = vec!["Your Threads:".to_owned()];
@@ -138,8 +138,8 @@ impl MessageRouter {
                         direction,
                     )
                     .await;
-                if let Some(target_thread) = switched.as_deref() {
-                    if let Some(binding) = self
+                if let Some(target_thread) = switched.as_deref()
+                    && let Some(binding) = self
                         .endpoint_binding_for_thread(
                             channel,
                             account_id,
@@ -147,10 +147,9 @@ impl MessageRouter {
                             Some(target_thread),
                         )
                         .await
-                    {
-                        self.bind_endpoint_runtime(target_thread, binding.clone())
-                            .await?;
-                    }
+                {
+                    self.bind_endpoint_runtime(target_thread, binding.clone())
+                        .await?;
                 }
                 let reply_text = match (command, switched.as_ref()) {
                     (NativeThreadCommand::ThreadPrev, Some(key)) => {
@@ -188,14 +187,14 @@ impl MessageRouter {
 
         let new_state = !current;
 
-        if let Some(mut data) = self.threads.get(thread_id).await {
-            if let Some(obj) = data.as_object_mut() {
-                obj.insert("loop_enabled".to_owned(), Value::Bool(new_state));
-                if !new_state {
-                    obj.insert("loop_iteration_count".to_owned(), json!(0));
-                }
-                self.threads.set(thread_id, data).await;
+        if let Some(mut data) = self.threads.get(thread_id).await
+            && let Some(obj) = data.as_object_mut()
+        {
+            obj.insert("loop_enabled".to_owned(), Value::Bool(new_state));
+            if !new_state {
+                obj.insert("loop_iteration_count".to_owned(), json!(0));
             }
+            self.threads.set(thread_id, data).await;
         }
 
         let reply = if new_state {

@@ -354,15 +354,14 @@ impl SubAgentDispatcher for GatewaySubAgentDispatcher {
             .and_then(|value| {
                 serde_json::from_value::<garyx_models::provider::ProviderType>(value).ok()
             })
+            && persisted_type != profile.provider_type
         {
-            if persisted_type != profile.provider_type {
-                tracing::warn!(
-                    child_agent_id = %child_agent_id,
-                    expected = ?profile.provider_type,
-                    actual = ?persisted_type,
-                    "child thread provider_type does not match agent profile; continuing"
-                );
-            }
+            tracing::warn!(
+                child_agent_id = %child_agent_id,
+                expected = ?profile.provider_type,
+                actual = ?persisted_type,
+                "child thread provider_type does not match agent profile; continuing"
+            );
         }
 
         Ok(thread_id)
@@ -379,7 +378,7 @@ impl SubAgentDispatcher for GatewaySubAgentDispatcher {
             .prepare_child_dispatch_message(child_thread_id, &options.message)
             .await?;
         let callback: Arc<dyn Fn(garyx_models::provider::StreamEvent) + Send + Sync> =
-            Arc::new(move |event| on_chunk(event));
+            Arc::new(on_chunk);
 
         let result = bridge
             .run_subagent_streaming(

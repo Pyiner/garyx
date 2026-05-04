@@ -251,10 +251,10 @@ async fn run_chat_start(ws: &mut TestWebSocket, payload: Value) -> (String, Vec<
     let mut events = Vec::new();
     loop {
         let event = recv_ws_json(ws).await;
-        if thread_id.is_empty() {
-            if let Some(value) = event.get("threadId").and_then(Value::as_str) {
-                thread_id = value.to_owned();
-            }
+        if thread_id.is_empty()
+            && let Some(value) = event.get("threadId").and_then(Value::as_str)
+        {
+            thread_id = value.to_owned();
         }
         let done = matches!(
             event.get("type").and_then(Value::as_str),

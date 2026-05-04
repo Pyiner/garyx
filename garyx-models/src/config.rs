@@ -10,46 +10,31 @@ use serde_json::Value;
 // ---------------------------------------------------------------------------
 
 /// Reply-to mode for controlling how the bot uses reply threading.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReplyToMode {
     Off,
+    #[default]
     First,
     All,
 }
 
-impl Default for ReplyToMode {
-    fn default() -> Self {
-        Self::First
-    }
-}
-
 /// Feishu domain.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FeishuDomain {
+    #[default]
     Feishu,
     Lark,
 }
 
-impl Default for FeishuDomain {
-    fn default() -> Self {
-        Self::Feishu
-    }
-}
-
 /// Feishu topic session mode.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TopicSessionMode {
+    #[default]
     Disabled,
     Enabled,
-}
-
-impl Default for TopicSessionMode {
-    fn default() -> Self {
-        Self::Disabled
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -697,17 +682,12 @@ pub struct ResolvedSlashCommand {
     pub skill_id: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum McpTransport {
+    #[default]
     Stdio,
     StreamableHttp,
-}
-
-impl Default for McpTransport {
-    fn default() -> Self {
-        Self::Stdio
-    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -779,10 +759,11 @@ fn extract_slash_command_name(text: &str) -> Option<&str> {
 // ---------------------------------------------------------------------------
 
 /// Action to perform when a cron job fires.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CronAction {
     /// Log a message (useful for testing / keep-alive).
+    #[default]
     Log,
     /// Send a system event message into a target session.
     SystemEvent,
@@ -790,23 +771,12 @@ pub enum CronAction {
     AgentTurn,
 }
 
-impl Default for CronAction {
-    fn default() -> Self {
-        Self::Log
-    }
-}
-
 /// Product-level subtype carried by persisted cron jobs.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CronJobKind {
+    #[default]
     AutomationPrompt,
-}
-
-impl Default for CronJobKind {
-    fn default() -> Self {
-        Self::AutomationPrompt
-    }
 }
 
 /// UI-friendly schedule form preserved for automation jobs.

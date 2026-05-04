@@ -428,9 +428,7 @@ pub(super) async fn handle_im_message_event(
     let is_group = message.chat_type == "group";
     // For group messages, use chat_id as from_id so all users in the same group
     // share one thread. For DMs, use the sender's open_id for per-user threading.
-    let from_id = if is_group {
-        message.chat_id.clone()
-    } else if sender_open_id.is_empty() {
+    let from_id = if is_group || sender_open_id.is_empty() {
         message.chat_id.clone()
     } else {
         sender_open_id.to_owned()
@@ -495,42 +493,40 @@ pub(super) async fn handle_im_message_event(
 
     let mentioned_bot = is_mentioned(&message.mentions, runtime.bot_open_id);
 
-    if is_group {
-        if requires_group_mention(runtime.account) && !mentioned_bot {
-            let speaker = if sender_open_id.is_empty() {
-                "unknown"
-            } else {
-                speaker
-            };
-            append_pending_history(
-                runtime.account_id,
-                &message.chat_id,
-                format!("{speaker}: {clean_text}"),
-                MENTION_CONTEXT_LIMIT,
-            );
-            record_policy_block("group", "mention_required");
-            info!(
-                account_id = %runtime.account_id,
-                chat_id = %message.chat_id,
-                sender = %sender_open_id,
-                reason = "mention_required",
-                "Feishu group message skipped: bot not mentioned"
-            );
-            record_terminal_inbound_event(
-                runtime,
-                message,
-                &from_id,
-                &clean_text,
-                MessageLifecycleStatus::Filtered,
-                MessageTerminalReason::RoutingRejected,
-                json!({
-                    "source": "feishu_inbound",
-                    "reason": "mention_required",
-                }),
-            )
-            .await;
-            return;
-        }
+    if is_group && requires_group_mention(runtime.account) && !mentioned_bot {
+        let speaker = if sender_open_id.is_empty() {
+            "unknown"
+        } else {
+            speaker
+        };
+        append_pending_history(
+            runtime.account_id,
+            &message.chat_id,
+            format!("{speaker}: {clean_text}"),
+            MENTION_CONTEXT_LIMIT,
+        );
+        record_policy_block("group", "mention_required");
+        info!(
+            account_id = %runtime.account_id,
+            chat_id = %message.chat_id,
+            sender = %sender_open_id,
+            reason = "mention_required",
+            "Feishu group message skipped: bot not mentioned"
+        );
+        record_terminal_inbound_event(
+            runtime,
+            message,
+            &from_id,
+            &clean_text,
+            MessageLifecycleStatus::Filtered,
+            MessageTerminalReason::RoutingRejected,
+            json!({
+                "source": "feishu_inbound",
+                "reason": "mention_required",
+            }),
+        )
+        .await;
+        return;
     }
 
     let native_thread_scope = resolve_native_thread_scope(message, &topic_session_mode);
@@ -589,27 +585,28 @@ pub(super) async fn handle_im_message_event(
             )
             .map(|s| s.to_owned())
     };
-    if reply_thread_id.is_none() && !message.parent_id.is_empty() {
-        if let Ok(Some(quoted)) = runtime.client.fetch_message_text(&message.parent_id).await {
-            route_text = format!("[Replying to: \"{quoted}\"]\n\n{route_text}");
-        }
+    if reply_thread_id.is_none()
+        && !message.parent_id.is_empty()
+        && let Ok(Some(quoted)) = runtime.client.fetch_message_text(&message.parent_id).await
+    {
+        route_text = format!("[Replying to: \"{quoted}\"]\n\n{route_text}");
     }
 
     let mut switched_thread_id_for_notice: Option<String> = None;
-    if let Some(reply_thread_id) = reply_thread_id {
-        if MessageRouter::is_scheduled_thread(&reply_thread_id) {
-            let thread_binding_key = native_thread_scope.as_deref().unwrap_or(&from_id);
-            let binding_context_key = MessageRouter::build_binding_context_key(
-                "feishu",
-                runtime.account_id,
-                thread_binding_key,
-            );
-            {
-                let mut router_guard = runtime.router.lock().await;
-                router_guard.switch_to_thread(&binding_context_key, &reply_thread_id);
-            }
-            switched_thread_id_for_notice = Some(reply_thread_id);
+    if let Some(reply_thread_id) = reply_thread_id
+        && MessageRouter::is_scheduled_thread(&reply_thread_id)
+    {
+        let thread_binding_key = native_thread_scope.as_deref().unwrap_or(&from_id);
+        let binding_context_key = MessageRouter::build_binding_context_key(
+            "feishu",
+            runtime.account_id,
+            thread_binding_key,
+        );
+        {
+            let mut router_guard = runtime.router.lock().await;
+            router_guard.switch_to_thread(&binding_context_key, &reply_thread_id);
         }
+        switched_thread_id_for_notice = Some(reply_thread_id);
     }
 
     let run_id = uuid::Uuid::new_v4().to_string();
@@ -773,19 +770,20 @@ pub(super) async fn handle_im_message_event(
                         state.last_stream_sent_text.clear();
                         drop(state);
 
-                        if let Some(outbound_msg_id) = boundary_outbound {
-                            if !outbound_msg_id.is_empty() && !canonical_thread_id.is_empty() {
-                                let mut r = worker_router.lock().await;
-                                r.record_outbound_message_with_persistence(
-                                    &canonical_thread_id,
-                                    "feishu",
-                                    &worker_account_id,
-                                    &worker_chat_id,
-                                    worker_native_thread_scope.as_deref(),
-                                    &outbound_msg_id,
-                                )
-                                .await;
-                            }
+                        if let Some(outbound_msg_id) = boundary_outbound
+                            && !outbound_msg_id.is_empty()
+                            && !canonical_thread_id.is_empty()
+                        {
+                            let mut r = worker_router.lock().await;
+                            r.record_outbound_message_with_persistence(
+                                &canonical_thread_id,
+                                "feishu",
+                                &worker_account_id,
+                                &worker_chat_id,
+                                worker_native_thread_scope.as_deref(),
+                                &outbound_msg_id,
+                            )
+                            .await;
                         }
                         continue;
                     }
@@ -1037,19 +1035,18 @@ pub(super) async fn handle_im_message_event(
             }
 
             if !state.processing_reaction_removed {
-                if let Some(reaction_id) = state.processing_reaction_id.take() {
-                    if let Err(err) = worker_client
+                if let Some(reaction_id) = state.processing_reaction_id.take()
+                    && let Err(err) = worker_client
                         .remove_reaction(&worker_msg_id, &reaction_id)
                         .await
-                    {
-                        debug!(
-                            account_id = %worker_account_id,
-                            message_id = %worker_msg_id,
-                            reaction_id = %reaction_id,
-                            error = %err,
-                            "Feishu remove processing reaction skipped"
-                        );
-                    }
+                {
+                    debug!(
+                        account_id = %worker_account_id,
+                        message_id = %worker_msg_id,
+                        reaction_id = %reaction_id,
+                        error = %err,
+                        "Feishu remove processing reaction skipped"
+                    );
                 }
                 state.processing_reaction_removed = true;
             }
@@ -1257,10 +1254,10 @@ async fn resolve_sender_name(client: &FeishuClient, sender_open_id: &str) -> Opt
         let now = Instant::now();
         match sender_name_cache().lock() {
             Ok(cache) => {
-                if let Some((cached_name, expires_at)) = cache.get(sender_open_id) {
-                    if *expires_at > now {
-                        return Some(cached_name.clone());
-                    }
+                if let Some((cached_name, expires_at)) = cache.get(sender_open_id)
+                    && *expires_at > now
+                {
+                    return Some(cached_name.clone());
                 }
             }
             Err(_) => {

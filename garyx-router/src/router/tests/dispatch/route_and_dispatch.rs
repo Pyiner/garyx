@@ -921,7 +921,7 @@ async fn test_route_and_dispatch_ignores_stale_reply_route_for_missing_thread() 
         .unwrap();
     assert!(is_thread_key(&result.thread_id));
     assert_ne!(result.thread_id, "thread::missing");
-    assert!(result.metadata.extra.get("is_reply_routed").is_none());
+    assert!(!result.metadata.extra.contains_key("is_reply_routed"));
 }
 
 #[tokio::test]

@@ -757,13 +757,12 @@ impl ClaudeCliProvider {
 
     async fn rollback_pending_input(&self, run_id: &str, pending_input_id: &str) {
         let mut pending = self.run_pending_inputs.lock().await;
-        if let Some(queue) = pending.get_mut(run_id) {
-            if let Some(index) = queue.iter().position(|marker| {
+        if let Some(queue) = pending.get_mut(run_id)
+            && let Some(index) = queue.iter().position(|marker| {
                 matches!(marker, PendingAckMarker::QueuedInput(candidate) if candidate == pending_input_id)
             }) {
                 queue.remove(index);
             }
-        }
     }
 
     async fn acknowledge_next_pending_input(
@@ -1077,16 +1076,15 @@ impl ClaudeCliProvider {
                         // Eagerly capture the session_id from the `init` system
                         // message so it is persisted even if the run is
                         // interrupted before a formal Result message arrives.
-                        if sys_msg.subtype == "init" {
-                            if let Some(sid) = sys_msg
+                        if sys_msg.subtype == "init"
+                            && let Some(sid) = sys_msg
                                 .data
                                 .get("session_id")
                                 .and_then(|v| v.as_str())
                                 .map(str::trim)
                                 .filter(|s| !s.is_empty())
-                            {
-                                let _ = self.stabilize_session_id(thread_id, sid).await;
-                            }
+                        {
+                            let _ = self.stabilize_session_id(thread_id, sid).await;
                         }
                     }
                     Ok(Message::StreamEvent(_)) => {}

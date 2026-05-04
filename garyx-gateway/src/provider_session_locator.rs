@@ -64,27 +64,24 @@ pub(crate) fn locate_local_provider_session_with_roots(
     let mut matches = Vec::new();
     let provider_hint = provider_hint.as_ref();
 
-    if matches_provider_hint(provider_hint, ProviderType::ClaudeCode) {
-        if let Some(claude_projects_dir) = roots.claude_projects_dir.as_deref() {
-            if let Some(binding) = locate_claude_session_binding(session_id, claude_projects_dir) {
-                matches.push(binding);
-            }
-        }
+    if matches_provider_hint(provider_hint, ProviderType::ClaudeCode)
+        && let Some(claude_projects_dir) = roots.claude_projects_dir.as_deref()
+        && let Some(binding) = locate_claude_session_binding(session_id, claude_projects_dir)
+    {
+        matches.push(binding);
     }
 
-    if matches_provider_hint(provider_hint, ProviderType::CodexAppServer) {
-        if let Some(binding) = locate_codex_session_binding(session_id, &roots.codex_session_roots)
-        {
-            matches.push(binding);
-        }
+    if matches_provider_hint(provider_hint, ProviderType::CodexAppServer)
+        && let Some(binding) = locate_codex_session_binding(session_id, &roots.codex_session_roots)
+    {
+        matches.push(binding);
     }
 
-    if matches_provider_hint(provider_hint, ProviderType::GeminiCli) {
-        if let Some(gemini_tmp_dir) = roots.gemini_tmp_dir.as_deref() {
-            if let Some(binding) = locate_gemini_session_binding(session_id, gemini_tmp_dir) {
-                matches.push(binding);
-            }
-        }
+    if matches_provider_hint(provider_hint, ProviderType::GeminiCli)
+        && let Some(gemini_tmp_dir) = roots.gemini_tmp_dir.as_deref()
+        && let Some(binding) = locate_gemini_session_binding(session_id, gemini_tmp_dir)
+    {
+        matches.push(binding);
     }
 
     match matches.len() {
@@ -109,26 +106,24 @@ pub(crate) fn recover_local_provider_session_with_roots(
     let mut matches = Vec::new();
     let provider_hint = provider_hint.as_ref();
 
-    if matches_provider_hint(provider_hint, ProviderType::ClaudeCode) {
-        if let Some(claude_projects_dir) = roots.claude_projects_dir.as_deref() {
-            if let Some(recovered) = recover_claude_session(session_id, claude_projects_dir) {
-                matches.push(recovered);
-            }
-        }
+    if matches_provider_hint(provider_hint, ProviderType::ClaudeCode)
+        && let Some(claude_projects_dir) = roots.claude_projects_dir.as_deref()
+        && let Some(recovered) = recover_claude_session(session_id, claude_projects_dir)
+    {
+        matches.push(recovered);
     }
 
-    if matches_provider_hint(provider_hint, ProviderType::CodexAppServer) {
-        if let Some(recovered) = recover_codex_session(session_id, &roots.codex_session_roots) {
-            matches.push(recovered);
-        }
+    if matches_provider_hint(provider_hint, ProviderType::CodexAppServer)
+        && let Some(recovered) = recover_codex_session(session_id, &roots.codex_session_roots)
+    {
+        matches.push(recovered);
     }
 
-    if matches_provider_hint(provider_hint, ProviderType::GeminiCli) {
-        if let Some(gemini_tmp_dir) = roots.gemini_tmp_dir.as_deref() {
-            if let Some(recovered) = recover_gemini_session(session_id, gemini_tmp_dir) {
-                matches.push(recovered);
-            }
-        }
+    if matches_provider_hint(provider_hint, ProviderType::GeminiCli)
+        && let Some(gemini_tmp_dir) = roots.gemini_tmp_dir.as_deref()
+        && let Some(recovered) = recover_gemini_session(session_id, gemini_tmp_dir)
+    {
+        matches.push(recovered);
     }
 
     match matches.len() {
@@ -585,10 +580,10 @@ fn read_claude_session_cwd(session_file: &Path, session_id: &str) -> Option<Stri
         if value.get("sessionId").and_then(Value::as_str) != Some(session_id) {
             continue;
         }
-        if let Some(cwd) = value.get("cwd").and_then(Value::as_str) {
-            if let Some(path) = normalized_existing_path(cwd) {
-                return Some(path);
-            }
+        if let Some(cwd) = value.get("cwd").and_then(Value::as_str)
+            && let Some(path) = normalized_existing_path(cwd)
+        {
+            return Some(path);
         }
     }
     None

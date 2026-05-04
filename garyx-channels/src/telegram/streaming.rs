@@ -286,31 +286,31 @@ impl StreamingCallbackShared {
         }
 
         if !boundary_text.is_empty() {
-            if let Some(msg_id) = state.message_id {
-                if boundary_text != state.last_rendered_text.trim() {
-                    match edit_message_text(
-                        &self.cfg.http,
-                        &self.cfg.token,
-                        self.cfg.chat_id,
-                        msg_id,
-                        &boundary_text,
-                        None,
-                        &self.cfg.api_base,
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            state.last_rendered_text = boundary_text.clone();
-                            state.last_edit_time = Instant::now();
-                        }
-                        Err(e) => {
-                            warn!(
-                                account_id = %self.cfg.account_id,
-                                error = %e,
-                                "boundary flush edit failed; sending a fresh message"
-                            );
-                            state.message_id = None;
-                        }
+            if let Some(msg_id) = state.message_id
+                && boundary_text != state.last_rendered_text.trim()
+            {
+                match edit_message_text(
+                    &self.cfg.http,
+                    &self.cfg.token,
+                    self.cfg.chat_id,
+                    msg_id,
+                    &boundary_text,
+                    None,
+                    &self.cfg.api_base,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        state.last_rendered_text = boundary_text.clone();
+                        state.last_edit_time = Instant::now();
+                    }
+                    Err(e) => {
+                        warn!(
+                            account_id = %self.cfg.account_id,
+                            error = %e,
+                            "boundary flush edit failed; sending a fresh message"
+                        );
+                        state.message_id = None;
                     }
                 }
             }
@@ -762,30 +762,29 @@ impl StreamingCallbackShared {
                 && !self
                     .roll_stream_segment_if_needed(thread_id, &mut state, &pending_text)
                     .await
+                && let Some(msg_id) = state.message_id
             {
-                if let Some(msg_id) = state.message_id {
-                    match edit_message_text(
-                        &self.cfg.http,
-                        &self.cfg.token,
-                        self.cfg.chat_id,
-                        msg_id,
-                        &pending_text,
-                        None,
-                        &self.cfg.api_base,
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            state.last_rendered_text = pending_text;
-                            state.last_edit_time = Instant::now();
-                        }
-                        Err(e) => {
-                            warn!(
-                                account_id = %self.cfg.account_id,
-                                error = %e,
-                                "pre-final delayed stream flush edit failed"
-                            );
-                        }
+                match edit_message_text(
+                    &self.cfg.http,
+                    &self.cfg.token,
+                    self.cfg.chat_id,
+                    msg_id,
+                    &pending_text,
+                    None,
+                    &self.cfg.api_base,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        state.last_rendered_text = pending_text;
+                        state.last_edit_time = Instant::now();
+                    }
+                    Err(e) => {
+                        warn!(
+                            account_id = %self.cfg.account_id,
+                            error = %e,
+                            "pre-final delayed stream flush edit failed"
+                        );
                     }
                 }
             }
@@ -806,10 +805,8 @@ impl StreamingCallbackShared {
                 state.finalized = true;
                 state.flush_scheduled = false;
             }
-            if is_final {
-                if let Some(msg_id) = state.message_id {
-                    self.record_outbound_messages(thread_id, &[msg_id]).await;
-                }
+            if is_final && let Some(msg_id) = state.message_id {
+                self.record_outbound_messages(thread_id, &[msg_id]).await;
             }
             return;
         }
@@ -908,10 +905,8 @@ impl StreamingCallbackShared {
             state.flush_scheduled = false;
         }
 
-        if is_final {
-            if let Some(msg_id) = state.message_id {
-                self.record_outbound_messages(thread_id, &[msg_id]).await;
-            }
+        if is_final && let Some(msg_id) = state.message_id {
+            self.record_outbound_messages(thread_id, &[msg_id]).await;
         }
     }
 }

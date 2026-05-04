@@ -651,12 +651,12 @@ where
         return Err(append_rollback_error(error, rollback));
     }
 
-    if let Some(path) = state.ops.config_path.clone() {
-        if let Err(error) = persist_config_file(path, config).await {
-            let rollback =
-                rollback_config_change(state, &previous_config, &sync_external_configs).await;
-            return Err(append_rollback_error(error, rollback));
-        }
+    if let Some(path) = state.ops.config_path.clone()
+        && let Err(error) = persist_config_file(path, config).await
+    {
+        let rollback =
+            rollback_config_change(state, &previous_config, &sync_external_configs).await;
+        return Err(append_rollback_error(error, rollback));
     }
 
     Ok(())

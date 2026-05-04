@@ -639,7 +639,7 @@ impl AgentLoopProvider for QueuedInputProvider {
             response: format!("initial replyfollow-up reply: {}", queued_input.message),
             session_messages: vec![
                 ProviderMessage::assistant_text("initial reply"),
-                ProviderMessage::assistant_text(&format!(
+                ProviderMessage::assistant_text(format!(
                     "follow-up reply: {}",
                     queued_input.message
                 )),
@@ -843,7 +843,7 @@ impl AgentLoopProvider for DelayedQueuedInputProvider {
                 run_id: format!("unexpected-run-{invocation}"),
                 thread_id: options.thread_id.clone(),
                 response: format!("unexpected second run: {}", options.message),
-                session_messages: vec![ProviderMessage::assistant_text(&format!(
+                session_messages: vec![ProviderMessage::assistant_text(format!(
                     "unexpected second run: {}",
                     options.message
                 ))],
@@ -889,7 +889,7 @@ impl AgentLoopProvider for DelayedQueuedInputProvider {
             response: format!("initial replyfollow-up reply: {}", queued_input.message),
             session_messages: vec![
                 ProviderMessage::assistant_text("initial reply"),
-                ProviderMessage::assistant_text(&format!(
+                ProviderMessage::assistant_text(format!(
                     "follow-up reply: {}",
                     queued_input.message
                 )),
@@ -953,7 +953,7 @@ impl AgentLoopProvider for InterruptingFollowUpProvider {
             run_id: format!("interrupting-run-{}", self.run_invocations()),
             thread_id: options.thread_id.clone(),
             response: format!("echo: {}", options.message),
-            session_messages: vec![ProviderMessage::assistant_text(&format!(
+            session_messages: vec![ProviderMessage::assistant_text(format!(
                 "echo: {}",
                 options.message
             ))],
@@ -2604,7 +2604,7 @@ async fn test_start_run_ignores_legacy_sdk_session_id_from_other_provider() {
     let snapshots = provider.metadata_snapshots();
     assert_eq!(snapshots.len(), 1);
     assert!(
-        snapshots[0].get("sdk_session_id").is_none(),
+        !snapshots[0].contains_key("sdk_session_id"),
         "claude should not inherit a legacy sdk_session_id from another provider"
     );
 }

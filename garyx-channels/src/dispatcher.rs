@@ -620,10 +620,10 @@ impl FeishuSender {
         // Fast path: read-lock check.
         {
             let state = self.token_state.read().await;
-            if let Some((token, exp)) = state.as_ref() {
-                if tokio::time::Instant::now() + TOKEN_REFRESH_MARGIN < *exp {
-                    return Ok(token.clone());
-                }
+            if let Some((token, exp)) = state.as_ref()
+                && tokio::time::Instant::now() + TOKEN_REFRESH_MARGIN < *exp
+            {
+                return Ok(token.clone());
             }
         }
 
@@ -632,10 +632,10 @@ impl FeishuSender {
         // Re-check after acquiring the mutex.
         {
             let state = self.token_state.read().await;
-            if let Some((token, exp)) = state.as_ref() {
-                if tokio::time::Instant::now() + TOKEN_REFRESH_MARGIN < *exp {
-                    return Ok(token.clone());
-                }
+            if let Some((token, exp)) = state.as_ref()
+                && tokio::time::Instant::now() + TOKEN_REFRESH_MARGIN < *exp
+            {
+                return Ok(token.clone());
             }
         }
 
@@ -999,7 +999,7 @@ impl ChannelDispatcherImpl {
     }
 
     fn is_reserved_channel(name: &str) -> bool {
-        RESERVED_CHANNEL_NAMES.iter().any(|&r| r == name)
+        RESERVED_CHANNEL_NAMES.contains(&name)
     }
 
     /// Remove a plugin sender by `plugin_id`. Returns the removed

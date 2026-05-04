@@ -122,15 +122,15 @@ async fn build_image_attachment_from_file(
         }
     };
 
-    if let Some(size) = file.file_size {
-        if size as usize > MAX_IMAGE_SIZE_BYTES {
-            warn!(
-                file_id = %file.file_id,
-                file_size = size,
-                "skipping oversized image payload"
-            );
-            return None;
-        }
+    if let Some(size) = file.file_size
+        && size as usize > MAX_IMAGE_SIZE_BYTES
+    {
+        warn!(
+            file_id = %file.file_id,
+            file_size = size,
+            "skipping oversized image payload"
+        );
+        return None;
     }
 
     let file_path = match file.file_path.as_deref() {
@@ -230,15 +230,15 @@ pub(super) async fn download_file_to_disk(
         }
     };
 
-    if let Some(size) = file.file_size {
-        if size as usize > MAX_FILE_DOWNLOAD_BYTES {
-            warn!(
-                file_id = %file.file_id,
-                file_size = size,
-                "skipping oversized file for disk download"
-            );
-            return None;
-        }
+    if let Some(size) = file.file_size
+        && size as usize > MAX_FILE_DOWNLOAD_BYTES
+    {
+        warn!(
+            file_id = %file.file_id,
+            file_size = size,
+            "skipping oversized file for disk download"
+        );
+        return None;
     }
 
     let remote_path = match file.file_path.as_deref() {
@@ -302,8 +302,8 @@ pub(super) async fn extract_file_paths(
     // Non-image documents
     if let Some(doc) = &msg.document {
         // Only handle non-image documents here; images are handled by extract_image_attachments
-        if resolve_document_image_media_type(doc).is_none() {
-            if let Some(path) = download_file_to_disk(
+        if resolve_document_image_media_type(doc).is_none()
+            && let Some(path) = download_file_to_disk(
                 http,
                 token,
                 &doc.file_id,
@@ -311,19 +311,17 @@ pub(super) async fn extract_file_paths(
                 api_base,
             )
             .await
-            {
-                paths.push(path);
-            }
+        {
+            paths.push(path);
         }
     }
 
     // Voice messages
-    if let Some(voice) = &msg.voice {
-        if let Some(path) =
+    if let Some(voice) = &msg.voice
+        && let Some(path) =
             download_file_to_disk(http, token, &voice.file_id, Some("voice.ogg"), api_base).await
-        {
-            paths.push(path);
-        }
+    {
+        paths.push(path);
     }
 
     // Audio files
@@ -337,12 +335,11 @@ pub(super) async fn extract_file_paths(
     }
 
     // Video files
-    if let Some(video) = &msg.video {
-        if let Some(path) =
+    if let Some(video) = &msg.video
+        && let Some(path) =
             download_file_to_disk(http, token, &video.file_id, Some("video.mp4"), api_base).await
-        {
-            paths.push(path);
-        }
+    {
+        paths.push(path);
     }
 
     paths
@@ -356,30 +353,26 @@ pub(super) async fn extract_image_attachments(
 ) -> Vec<PromptAttachment> {
     let mut images = Vec::new();
 
-    if let Some(photo_sizes) = &msg.photo {
-        if let Some(photo) = photo_sizes.last() {
-            if let Some(payload) =
-                build_image_attachment_from_file(http, token, &photo.file_id, None, api_base).await
-            {
-                images.push(payload);
-            }
-        }
+    if let Some(photo_sizes) = &msg.photo
+        && let Some(photo) = photo_sizes.last()
+        && let Some(payload) =
+            build_image_attachment_from_file(http, token, &photo.file_id, None, api_base).await
+    {
+        images.push(payload);
     }
 
-    if let Some(document) = &msg.document {
-        if let Some(media_type) = resolve_document_image_media_type(document) {
-            if let Some(payload) = build_image_attachment_from_file(
-                http,
-                token,
-                &document.file_id,
-                Some(media_type),
-                api_base,
-            )
-            .await
-            {
-                images.push(payload);
-            }
-        }
+    if let Some(document) = &msg.document
+        && let Some(media_type) = resolve_document_image_media_type(document)
+        && let Some(payload) = build_image_attachment_from_file(
+            http,
+            token,
+            &document.file_id,
+            Some(media_type),
+            api_base,
+        )
+        .await
+    {
+        images.push(payload);
     }
 
     images

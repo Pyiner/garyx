@@ -16,7 +16,6 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// Tests below exercise the whole HTTP boundary by POSTing directly
 /// to the mock and parsing responses through the same `BeginOrPollResponse`
 /// struct the production path uses.
-
 fn client() -> HttpClient {
     HttpClient::builder()
         .timeout(Duration::from_secs(5))
@@ -205,7 +204,7 @@ async fn poll_response_classification() {
     // Exercise the match arms in `poll_once`'s outcome mapping without
     // spinning a server.
     fn classify(resp: BeginOrPollResponse) -> &'static str {
-        if resp.error.is_none() && resp.client_id.as_deref().map_or(false, |s| !s.is_empty()) {
+        if resp.error.is_none() && resp.client_id.as_deref().is_some_and(|s| !s.is_empty()) {
             return "success";
         }
         match resp.error.as_deref() {

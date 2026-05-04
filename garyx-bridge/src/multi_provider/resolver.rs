@@ -11,26 +11,26 @@ pub(super) async fn resolve_provider_impl(
     let topology = inner.topology.read().await;
 
     // 1. Session affinity
-    if let Some(key) = affinity_key {
-        if topology.provider_pool.contains_key(&key) {
-            return Some(key);
-        }
+    if let Some(key) = affinity_key
+        && topology.provider_pool.contains_key(&key)
+    {
+        return Some(key);
     }
 
     // 2. Route cache
     let route_key = (channel.to_owned(), account_id.to_owned());
-    if let Some(key) = topology.route_cache.get(&route_key) {
-        if topology.provider_pool.contains_key(key) {
-            return Some(key.clone());
-        }
+    if let Some(key) = topology.route_cache.get(&route_key)
+        && topology.provider_pool.contains_key(key)
+    {
+        return Some(key.clone());
     }
 
     // 3. Default
     let default = topology.default_provider_key.clone();
-    if let Some(ref key) = default {
-        if topology.provider_pool.contains_key(key) {
-            return default;
-        }
+    if let Some(ref key) = default
+        && topology.provider_pool.contains_key(key)
+    {
+        return default;
     }
 
     None

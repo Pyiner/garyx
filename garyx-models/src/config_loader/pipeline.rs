@@ -94,36 +94,36 @@ pub fn strip_legacy_config_fields(
         return;
     };
 
-    if root.remove("agent_defaults").is_some() {
-        if let Some(diagnostics) = diagnostics.as_deref_mut() {
-            diagnostics.push_warning(
-                "CONFIG_DEPRECATED_FIELD_IGNORED",
-                "agent_defaults is deprecated and ignored",
-                Some("$.agent_defaults"),
-            );
-        }
+    if root.remove("agent_defaults").is_some()
+        && let Some(diagnostics) = diagnostics.as_deref_mut()
+    {
+        diagnostics.push_warning(
+            "CONFIG_DEPRECATED_FIELD_IGNORED",
+            "agent_defaults is deprecated and ignored",
+            Some("$.agent_defaults"),
+        );
     }
 
     let remove_sessions = if let Some(sessions) =
         root.get_mut("sessions").and_then(Value::as_object_mut)
     {
-        if sessions.remove("redis").is_some() {
-            if let Some(diagnostics) = diagnostics.as_deref_mut() {
-                diagnostics.push_warning(
-                    "CONFIG_DEPRECATED_FIELD_IGNORED",
-                    "sessions.redis is deprecated and ignored; Garyx now persists thread history on local disk only",
-                    Some("$.sessions.redis"),
-                );
-            }
+        if sessions.remove("redis").is_some()
+            && let Some(diagnostics) = diagnostics.as_deref_mut()
+        {
+            diagnostics.push_warning(
+                "CONFIG_DEPRECATED_FIELD_IGNORED",
+                "sessions.redis is deprecated and ignored; Garyx now persists thread history on local disk only",
+                Some("$.sessions.redis"),
+            );
         }
-        if sessions.remove("store_type").is_some() {
-            if let Some(diagnostics) = diagnostics.as_deref_mut() {
-                diagnostics.push_warning(
-                    "CONFIG_DEPRECATED_FIELD_IGNORED",
-                    "sessions.store_type is deprecated and ignored; Garyx now persists thread history on local disk only",
-                    Some("$.sessions.store_type"),
-                );
-            }
+        if sessions.remove("store_type").is_some()
+            && let Some(diagnostics) = diagnostics.as_deref_mut()
+        {
+            diagnostics.push_warning(
+                "CONFIG_DEPRECATED_FIELD_IGNORED",
+                "sessions.store_type is deprecated and ignored; Garyx now persists thread history on local disk only",
+                Some("$.sessions.store_type"),
+            );
         }
         sessions.is_empty()
     } else {
@@ -275,16 +275,16 @@ fn normalize_account_workspace_paths(
     };
 
     for (account_id, account_val) in accounts.iter_mut() {
-        if let Some(ws) = account_val.get_mut("workspace_dir") {
-            if let Some(path_str) = ws.as_str() {
-                let normalized = normalize_one_path(
-                    path_str,
-                    base_dir,
-                    diagnostics,
-                    &format!("$.{}.{}.workspace_dir", account_path.join("."), account_id),
-                );
-                *ws = Value::String(normalized);
-            }
+        if let Some(ws) = account_val.get_mut("workspace_dir")
+            && let Some(path_str) = ws.as_str()
+        {
+            let normalized = normalize_one_path(
+                path_str,
+                base_dir,
+                diagnostics,
+                &format!("$.{}.{}.workspace_dir", account_path.join("."), account_id),
+            );
+            *ws = Value::String(normalized);
         }
     }
 }
@@ -308,16 +308,16 @@ fn normalize_channel_account_workspace_paths(
             continue;
         };
         for (account_id, account_val) in accounts.iter_mut() {
-            if let Some(ws) = account_val.get_mut("workspace_dir") {
-                if let Some(path_str) = ws.as_str() {
-                    let normalized = normalize_one_path(
-                        path_str,
-                        base_dir,
-                        diagnostics,
-                        &format!("$.channels.{channel_id}.accounts.{account_id}.workspace_dir"),
-                    );
-                    *ws = Value::String(normalized);
-                }
+            if let Some(ws) = account_val.get_mut("workspace_dir")
+                && let Some(path_str) = ws.as_str()
+            {
+                let normalized = normalize_one_path(
+                    path_str,
+                    base_dir,
+                    diagnostics,
+                    &format!("$.channels.{channel_id}.accounts.{account_id}.workspace_dir"),
+                );
+                *ws = Value::String(normalized);
             }
         }
     }

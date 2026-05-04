@@ -86,10 +86,9 @@ async fn test_conversation_index_background_indexing_and_metadata() {
                 })
                 .await
                 .unwrap()
+                && !result.results.is_empty()
             {
-                if !result.results.is_empty() {
-                    return result;
-                }
+                return result;
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }

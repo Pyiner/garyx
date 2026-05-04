@@ -218,8 +218,10 @@ fn test_build_sdk_options_defaults() {
 
 #[test]
 fn test_build_sdk_options_maps_auto_to_default_permissions() {
-    let mut config = ClaudeCodeConfig::default();
-    config.permission_mode = "auto".to_owned();
+    let config = ClaudeCodeConfig {
+        permission_mode: "auto".to_owned(),
+        ..Default::default()
+    };
     let provider = ClaudeCliProvider::new(config);
     let opts = ProviderRunOptions {
         thread_id: "test".to_owned(),
@@ -236,8 +238,10 @@ fn test_build_sdk_options_maps_auto_to_default_permissions() {
 
 #[test]
 fn test_build_sdk_options_maps_dont_ask_to_bypass_permissions() {
-    let mut config = ClaudeCodeConfig::default();
-    config.permission_mode = "dontAsk".to_owned();
+    let config = ClaudeCodeConfig {
+        permission_mode: "dontAsk".to_owned(),
+        ..Default::default()
+    };
     let provider = ClaudeCliProvider::new(config);
     let opts = ProviderRunOptions {
         thread_id: "test".to_owned(),

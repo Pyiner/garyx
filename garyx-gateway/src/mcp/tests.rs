@@ -1328,10 +1328,10 @@ async fn test_image_gen_live_with_gemini() {
 
     let mut cfg = GaryxConfig::default();
     cfg.gateway.image_gen.api_key = api_key;
-    if let Ok(model) = std::env::var("GARYX_IMAGE_GEN_MODEL") {
-        if !model.trim().is_empty() {
-            cfg.gateway.image_gen.model = model;
-        }
+    if let Ok(model) = std::env::var("GARYX_IMAGE_GEN_MODEL")
+        && !model.trim().is_empty()
+    {
+        cfg.gateway.image_gen.model = model;
     }
     let server = GaryMcpServer::new(crate::server::create_app_state(cfg));
     let result = server

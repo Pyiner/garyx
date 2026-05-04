@@ -903,39 +903,26 @@ pub async fn build_bound_response_callback(
     run_id: &str,
     streaming_target: Option<StreamingDispatchTarget>,
 ) -> Option<Arc<dyn Fn(StreamEvent) + Send + Sync>> {
-    if let Some(target) = streaming_target {
-        if let Some(callback) = state
+    if let Some(target) = streaming_target
+        && let Some(callback) = state
             .channel_dispatcher()
             .build_streaming_callback(target, state.threads.router.clone())
-        {
-            let image_scan = BoundThreadDeliveryBuffer::default();
-            let image_scan_state = state.clone();
-            let image_scan_thread_id = thread_id.to_owned();
-            let image_scan_run_id = run_id.to_owned();
+    {
+        let image_scan = BoundThreadDeliveryBuffer::default();
+        let image_scan_state = state.clone();
+        let image_scan_thread_id = thread_id.to_owned();
+        let image_scan_run_id = run_id.to_owned();
 
-            return Some(Arc::new(move |event| {
-                match &event {
-                    StreamEvent::Delta { text } => {
-                        image_scan.push_image_scan_delta(text, "streaming markdown image delivery");
+        return Some(Arc::new(move |event| {
+            match &event {
+                StreamEvent::Delta { text } => {
+                    image_scan.push_image_scan_delta(text, "streaming markdown image delivery");
+                }
+                StreamEvent::Boundary { kind, .. } => match kind {
+                    StreamBoundaryKind::AssistantSegment => {
+                        image_scan.push_image_scan_separator("streaming markdown image delivery");
                     }
-                    StreamEvent::Boundary { kind, .. } => match kind {
-                        StreamBoundaryKind::AssistantSegment => {
-                            image_scan
-                                .push_image_scan_separator("streaming markdown image delivery");
-                        }
-                        StreamBoundaryKind::UserAck => {
-                            callback(event.clone());
-                            image_scan.finish_markdown_images_after(
-                                image_scan_state.clone(),
-                                image_scan_thread_id.clone(),
-                                image_scan_run_id.clone(),
-                                "streaming markdown image delivery",
-                                STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY,
-                            );
-                            return;
-                        }
-                    },
-                    StreamEvent::Done => {
+                    StreamBoundaryKind::UserAck => {
                         callback(event.clone());
                         image_scan.finish_markdown_images_after(
                             image_scan_state.clone(),
@@ -946,11 +933,22 @@ pub async fn build_bound_response_callback(
                         );
                         return;
                     }
-                    StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {}
+                },
+                StreamEvent::Done => {
+                    callback(event.clone());
+                    image_scan.finish_markdown_images_after(
+                        image_scan_state.clone(),
+                        image_scan_thread_id.clone(),
+                        image_scan_run_id.clone(),
+                        "streaming markdown image delivery",
+                        STREAMING_MARKDOWN_IMAGE_FORWARD_DELAY,
+                    );
+                    return;
                 }
-                callback(event);
-            }));
-        }
+                StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {}
+            }
+            callback(event);
+        }));
     }
 
     let bound_delivery = BoundThreadDeliveryBuffer::default();

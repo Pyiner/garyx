@@ -157,6 +157,7 @@ impl MessageRouter {
         .await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn record_outbound_message_with_thread_log(
         &mut self,
         thread_id: &str,

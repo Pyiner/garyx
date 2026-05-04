@@ -68,6 +68,7 @@ fn allocate_blocking(path: &Path) -> std::io::Result<u64> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(path)?;
     let _guard = FlockGuard::lock(&file)?;
     let current = read_counter(&mut file)?.unwrap_or(1);
@@ -79,7 +80,7 @@ fn allocate_blocking(path: &Path) -> std::io::Result<u64> {
     })?;
     file.set_len(0)?;
     file.seek(SeekFrom::Start(0))?;
-    write!(file, "{next}\n")?;
+    writeln!(file, "{next}")?;
     file.sync_all()?;
     Ok(current)
 }

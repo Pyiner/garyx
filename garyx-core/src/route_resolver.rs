@@ -167,23 +167,22 @@ impl RouteResolver {
         }
 
         // Get bindings list
-        if let Some(bindings_val) = agents_config.get("bindings") {
-            if let Some(bindings_arr) = bindings_val.as_array() {
-                for (idx, binding_data) in bindings_arr.iter().enumerate() {
-                    if let Some(binding) = self.parse_binding(binding_data, idx) {
-                        self.bindings.push(binding);
-                    }
+        if let Some(bindings_val) = agents_config.get("bindings")
+            && let Some(bindings_arr) = bindings_val.as_array()
+        {
+            for (idx, binding_data) in bindings_arr.iter().enumerate() {
+                if let Some(binding) = self.parse_binding(binding_data, idx) {
+                    self.bindings.push(binding);
                 }
             }
         }
 
         // Get default agent
-        if let Some(default_val) = agents_config.get("default") {
-            if let Some(default_str) = default_val.as_str() {
-                if !default_str.is_empty() {
-                    self.default_agent = default_str.to_owned();
-                }
-            }
+        if let Some(default_val) = agents_config.get("default")
+            && let Some(default_str) = default_val.as_str()
+            && !default_str.is_empty()
+        {
+            self.default_agent = default_str.to_owned();
         }
 
         // Sort by priority (higher first)
@@ -263,31 +262,32 @@ impl RouteResolver {
         context: RouteResolutionContext<'_>,
     ) -> bool {
         // Channel must match if specified
-        if let Some(ref mc) = m.channel {
-            if mc != context.channel {
-                return false;
-            }
+        if let Some(ref mc) = m.channel
+            && mc != context.channel
+        {
+            return false;
         }
 
         // Account must match if specified (or * for any)
-        if let Some(ref ma) = m.account_id {
-            if ma != "*" && context.account_id != Some(ma.as_str()) {
-                return false;
-            }
+        if let Some(ref ma) = m.account_id
+            && ma != "*"
+            && context.account_id != Some(ma.as_str())
+        {
+            return false;
         }
 
         // Peer kind must match if specified
-        if let Some(ref mk) = m.peer_kind {
-            if context.peer_kind != Some(mk.as_str()) {
-                return false;
-            }
+        if let Some(ref mk) = m.peer_kind
+            && context.peer_kind != Some(mk.as_str())
+        {
+            return false;
         }
 
         // Peer ID - exact match
-        if let Some(ref mp) = m.peer_id {
-            if context.peer_id != Some(mp.as_str()) {
-                return false;
-            }
+        if let Some(ref mp) = m.peer_id
+            && context.peer_id != Some(mp.as_str())
+        {
+            return false;
         }
 
         // Peer ID - pattern match
@@ -301,17 +301,17 @@ impl RouteResolver {
         }
 
         // Guild ID must match if specified
-        if let Some(ref mg) = m.guild_id {
-            if context.guild_id != Some(mg.as_str()) {
-                return false;
-            }
+        if let Some(ref mg) = m.guild_id
+            && context.guild_id != Some(mg.as_str())
+        {
+            return false;
         }
 
         // Team ID must match if specified
-        if let Some(ref mt) = m.team_id {
-            if context.team_id != Some(mt.as_str()) {
-                return false;
-            }
+        if let Some(ref mt) = m.team_id
+            && context.team_id != Some(mt.as_str())
+        {
+            return false;
         }
 
         true

@@ -249,10 +249,10 @@ async fn test_resume_thread() {
     // Wait for turn to complete
     let timeout = tokio::time::timeout(Duration::from_secs(120), async {
         loop {
-            if let Ok(notif) = event_rx.recv().await {
-                if notif.method == "turn/completed" {
-                    break;
-                }
+            if let Ok(notif) = event_rx.recv().await
+                && notif.method == "turn/completed"
+            {
+                break;
             }
         }
     })

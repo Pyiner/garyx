@@ -67,12 +67,12 @@ pub(crate) async fn run(
             garyx_router::normalize_workspace_dir(params.workspace_dir.as_deref());
         let from = parse_time_bound(params.from.as_deref(), TimeBound::Start)?;
         let to = parse_time_bound(params.to.as_deref(), TimeBound::End)?;
-        if let (Some(from), Some(to)) = (from.as_ref(), to.as_ref()) {
-            if from > to {
-                return Err(
-                    "invalid time range: `from` must be earlier than or equal to `to`".to_owned(),
-                );
-            }
+        if let (Some(from), Some(to)) = (from.as_ref(), to.as_ref())
+            && from > to
+        {
+            return Err(
+                "invalid time range: `from` must be earlier than or equal to `to`".to_owned(),
+            );
         }
 
         let limit = params
@@ -80,61 +80,61 @@ pub(crate) async fn run(
             .unwrap_or(DEFAULT_SEARCH_LIMIT)
             .clamp(1, MAX_SEARCH_LIMIT);
 
-        if let Some(index) = server.app_state.threads.history.conversation_index() {
-            if index.is_enabled() {
-                let indexed = index
-                    .search(garyx_router::ConversationIndexSearchRequest {
-                        query: query.to_owned(),
-                        thread_id: thread_filter.clone(),
-                        workspace_dir: workspace_filter.clone(),
-                        from: from.clone(),
-                        to: to.clone(),
-                        limit,
-                    })
-                    .await?;
-                if let Some(indexed) = indexed {
-                    if indexed.indexed_threads > 0 || indexed.candidate_chunks > 0 {
-                        return Ok(serde_json::to_string(&json!({
-                            "tool": "conversation_search",
-                            "status": "ok",
-                            "backend": "vector_index",
-                            "query": query,
-                            "thread_id": thread_filter,
-                            "workspace_dir": workspace_filter,
-                            "from": from.map(|value| value.to_rfc3339()),
-                            "to": to.map(|value| value.to_rfc3339()),
-                            "limit": limit,
-                            "threads_scanned": indexed.threads_considered,
-                            "matched_threads": indexed.indexed_threads,
-                            "candidate_chunks": indexed.candidate_chunks,
-                            "results": indexed
-                                .results
-                                .iter()
-                                .enumerate()
-                                .map(|(idx, entry)| json!({
-                                    "rank": idx + 1,
-                                    "score": round_score(entry.score),
-                                    "vector_score": round_score(entry.vector_score),
-                                    "keyword_score": round_score(entry.keyword_score),
-                                    "thread_id": entry.thread_id.clone(),
-                                    "workspace_dir": entry.workspace_dir.clone(),
-                                    "transcript_file": entry.transcript_file.clone(),
-                                    "start_timestamp": entry
-                                        .start_timestamp
-                                        .as_ref()
-                                        .map(DateTime::to_rfc3339),
-                                    "end_timestamp": entry
-                                        .end_timestamp
-                                        .as_ref()
-                                        .map(DateTime::to_rfc3339),
-                                    "message_count": entry.message_count,
-                                    "snippet": entry.snippet.clone(),
-                                }))
-                                .collect::<Vec<_>>(),
+        if let Some(index) = server.app_state.threads.history.conversation_index()
+            && index.is_enabled()
+        {
+            let indexed = index
+                .search(garyx_router::ConversationIndexSearchRequest {
+                    query: query.to_owned(),
+                    thread_id: thread_filter.clone(),
+                    workspace_dir: workspace_filter.clone(),
+                    from,
+                    to,
+                    limit,
+                })
+                .await?;
+            if let Some(indexed) = indexed
+                && (indexed.indexed_threads > 0 || indexed.candidate_chunks > 0)
+            {
+                return Ok(serde_json::to_string(&json!({
+                    "tool": "conversation_search",
+                    "status": "ok",
+                    "backend": "vector_index",
+                    "query": query,
+                    "thread_id": thread_filter,
+                    "workspace_dir": workspace_filter,
+                    "from": from.map(|value| value.to_rfc3339()),
+                    "to": to.map(|value| value.to_rfc3339()),
+                    "limit": limit,
+                    "threads_scanned": indexed.threads_considered,
+                    "matched_threads": indexed.indexed_threads,
+                    "candidate_chunks": indexed.candidate_chunks,
+                    "results": indexed
+                        .results
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, entry)| json!({
+                            "rank": idx + 1,
+                            "score": round_score(entry.score),
+                            "vector_score": round_score(entry.vector_score),
+                            "keyword_score": round_score(entry.keyword_score),
+                            "thread_id": entry.thread_id.clone(),
+                            "workspace_dir": entry.workspace_dir.clone(),
+                            "transcript_file": entry.transcript_file.clone(),
+                            "start_timestamp": entry
+                                .start_timestamp
+                                .as_ref()
+                                .map(DateTime::to_rfc3339),
+                            "end_timestamp": entry
+                                .end_timestamp
+                                .as_ref()
+                                .map(DateTime::to_rfc3339),
+                            "message_count": entry.message_count,
+                            "snippet": entry.snippet.clone(),
                         }))
-                        .unwrap_or_default());
-                    }
-                }
+                        .collect::<Vec<_>>(),
+                }))
+                .unwrap_or_default());
             }
         }
 
@@ -142,8 +142,8 @@ pub(crate) async fn run(
             server,
             thread_filter.as_deref(),
             workspace_filter.as_deref(),
-            from.clone(),
-            to.clone(),
+            from,
+            to,
         )
         .await?;
 
@@ -294,8 +294,8 @@ fn build_chunk(entries: &[HistoryEntry]) -> Option<SearchChunk> {
     Some(SearchChunk {
         thread_id: first.thread_id.clone(),
         workspace_dir: first.workspace_dir.clone(),
-        start_timestamp: first.timestamp.clone(),
-        end_timestamp: last.timestamp.clone(),
+        start_timestamp: first.timestamp,
+        end_timestamp: last.timestamp,
         start_sequence: first.sequence,
         end_sequence: last.sequence,
         message_count: entries.len(),

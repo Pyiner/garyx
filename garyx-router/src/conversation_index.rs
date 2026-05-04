@@ -357,14 +357,13 @@ impl ConversationIndexManager {
         let transcript_messages = records.len();
         let last_seq = records.last().map(|record| record.seq).unwrap_or(0);
 
-        if let Some(state) = load_thread_state(&self.db_path, thread_id).await? {
-            if state.last_seq == last_seq
-                && state.transcript_messages == transcript_messages
-                && state.workspace_dir == workspace_dir
-                && state.transcript_file == transcript_file
-            {
-                return Ok(());
-            }
+        if let Some(state) = load_thread_state(&self.db_path, thread_id).await?
+            && state.last_seq == last_seq
+            && state.transcript_messages == transcript_messages
+            && state.workspace_dir == workspace_dir
+            && state.transcript_file == transcript_file
+        {
+            return Ok(());
         }
 
         let visible_messages = build_visible_messages(&records);
@@ -542,6 +541,7 @@ async fn load_thread_state(
     .map_err(|error| format!("conversation index state task failed: {error}"))?
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn replace_thread_chunks(
     db_path: &Path,
     thread_id: &str,

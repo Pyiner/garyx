@@ -387,28 +387,28 @@ pub fn upsert_thread_fields(value: &mut Value, thread_id: &str, options: &Thread
         );
     }
 
-    if let Some(channel) = options.origin_channel.as_deref() {
-        if obj.get("channel").and_then(Value::as_str).is_none() {
-            obj.insert("channel".to_owned(), Value::String(channel.to_owned()));
-        }
+    if let Some(channel) = options.origin_channel.as_deref()
+        && obj.get("channel").and_then(Value::as_str).is_none()
+    {
+        obj.insert("channel".to_owned(), Value::String(channel.to_owned()));
     }
-    if let Some(account_id) = options.origin_account_id.as_deref() {
-        if obj.get("account_id").and_then(Value::as_str).is_none() {
-            obj.insert(
-                "account_id".to_owned(),
-                Value::String(account_id.to_owned()),
-            );
-        }
+    if let Some(account_id) = options.origin_account_id.as_deref()
+        && obj.get("account_id").and_then(Value::as_str).is_none()
+    {
+        obj.insert(
+            "account_id".to_owned(),
+            Value::String(account_id.to_owned()),
+        );
     }
-    if let Some(from_id) = options.origin_from_id.as_deref() {
-        if obj.get("from_id").and_then(Value::as_str).is_none() {
-            obj.insert("from_id".to_owned(), Value::String(from_id.to_owned()));
-        }
+    if let Some(from_id) = options.origin_from_id.as_deref()
+        && obj.get("from_id").and_then(Value::as_str).is_none()
+    {
+        obj.insert("from_id".to_owned(), Value::String(from_id.to_owned()));
     }
-    if let Some(is_group) = options.is_group {
-        if obj.get("is_group").is_none() {
-            obj.insert("is_group".to_owned(), Value::Bool(is_group));
-        }
+    if let Some(is_group) = options.is_group
+        && obj.get("is_group").is_none()
+    {
+        obj.insert("is_group".to_owned(), Value::Bool(is_group));
     }
 
     if !obj.contains_key("messages") {

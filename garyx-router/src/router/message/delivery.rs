@@ -9,7 +9,7 @@ use tracing::{debug, warn};
 use crate::threads::sync_endpoint_delivery_timestamp;
 
 impl MessageRouter {
-    fn delivery_binding_key<'a>(ctx: &'a DeliveryContext) -> &'a str {
+    fn delivery_binding_key(ctx: &DeliveryContext) -> &str {
         ctx.thread_id
             .as_deref()
             .map(str::trim)
@@ -327,10 +327,10 @@ impl MessageRouter {
         let trimmed = target.trim();
         if !trimmed.is_empty() && trimmed != "last" {
             let thread_id = Self::normalize_thread_target(trimmed);
-            if let Some(thread_data) = thread_store.get(thread_id).await {
-                if let Some(ctx) = Self::extract_delivery_context_from_thread(&thread_data) {
-                    return Some((thread_id.to_owned(), ctx));
-                }
+            if let Some(thread_data) = thread_store.get(thread_id).await
+                && let Some(ctx) = Self::extract_delivery_context_from_thread(&thread_data)
+            {
+                return Some((thread_id.to_owned(), ctx));
             }
             return None;
         }
@@ -382,13 +382,12 @@ impl MessageRouter {
         let trimmed = target.trim();
         if !trimmed.is_empty() && trimmed != "last" {
             let thread_id = Self::normalize_thread_target(trimmed);
-            if let Some(thread_data) = self.threads.get(thread_id).await {
-                if let Some(obj) = thread_data.as_object() {
-                    if let Some(ctx) = Self::extract_delivery_context(obj) {
-                        self.set_last_delivery(thread_id, ctx.clone());
-                        return Some((thread_id.to_owned(), ctx));
-                    }
-                }
+            if let Some(thread_data) = self.threads.get(thread_id).await
+                && let Some(obj) = thread_data.as_object()
+                && let Some(ctx) = Self::extract_delivery_context(obj)
+            {
+                self.set_last_delivery(thread_id, ctx.clone());
+                return Some((thread_id.to_owned(), ctx));
             }
         }
 

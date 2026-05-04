@@ -1,3 +1,5 @@
+#![allow(clippy::needless_update)]
+
 use super::*;
 use axum::Router;
 use axum::body::Body;
@@ -911,11 +913,11 @@ async fn test_create_auto_research_run_progresses_to_terminal_state() {
     // Use a generous timeout (8s) to avoid flaky failures under CI load.
     let mut terminal_state = None;
     for _ in 0..160 {
-        if let Some(run) = state.ops.auto_research.get_run(&run_id).await {
-            if run.state.is_terminal() {
-                terminal_state = Some(run.state);
-                break;
-            }
+        if let Some(run) = state.ops.auto_research.get_run(&run_id).await
+            && run.state.is_terminal()
+        {
+            terminal_state = Some(run.state);
+            break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }

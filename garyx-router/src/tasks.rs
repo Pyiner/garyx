@@ -656,6 +656,7 @@ impl TaskService {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn build_task(
         &self,
         title: String,
@@ -732,12 +733,11 @@ impl TaskService {
             number,
         };
         if let Some(thread_id) = task_index_lookup(&index_key) {
-            if let Some(record) = self.thread_store.get(&thread_id).await {
-                if let Some(task) = task_from_record(&record)? {
-                    if task.number == number {
-                        return Ok((thread_id, record));
-                    }
-                }
+            if let Some(record) = self.thread_store.get(&thread_id).await
+                && let Some(task) = task_from_record(&record)?
+                && task.number == number
+            {
+                return Ok((thread_id, record));
             }
             task_index_remove(&index_key);
         }

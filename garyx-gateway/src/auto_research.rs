@@ -1518,11 +1518,12 @@ fn build_candidate_context_for_worker(candidates: &[Candidate]) -> String {
                 c.iteration,
             ));
             // Show feedback for top candidates to guide refinement (capped)
-            if let Some(ref v) = c.verdict {
-                if !v.feedback.is_empty() && top_k.contains(&idx) {
-                    let feedback_preview = truncate_str(&v.feedback, 500);
-                    lines.push(format!("      feedback: {feedback_preview}",));
-                }
+            if let Some(ref v) = c.verdict
+                && !v.feedback.is_empty()
+                && top_k.contains(&idx)
+            {
+                let feedback_preview = truncate_str(&v.feedback, 500);
+                lines.push(format!("      feedback: {feedback_preview}",));
             }
         }
     }
@@ -1637,11 +1638,11 @@ fn recompute_best(
     *best_score = None;
     *best_candidate_idx = None;
     for (i, c) in candidates.iter().enumerate() {
-        if let Some(v) = &c.verdict {
-            if best_score.is_none() || v.score > best_score.unwrap() {
-                *best_score = Some(v.score);
-                *best_candidate_idx = Some(i);
-            }
+        if let Some(v) = &c.verdict
+            && (best_score.is_none() || v.score > best_score.unwrap())
+        {
+            *best_score = Some(v.score);
+            *best_candidate_idx = Some(i);
         }
     }
 }

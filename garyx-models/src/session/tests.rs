@@ -73,12 +73,14 @@ fn test_session_entry_group_detection() {
 
 #[test]
 fn test_session_entry_exposes_decomposition_views() {
-    let mut entry = SessionEntry::default();
-    entry.session_file = Some("runtime.json".to_owned());
-    entry.queue_mode = Some(QueueMode::Queue);
-    entry.group_channel = Some("telegram".to_owned());
-    entry.system_sent = true;
-    entry.compaction_count = 3;
+    let entry = SessionEntry {
+        session_file: Some("runtime.json".to_owned()),
+        queue_mode: Some(QueueMode::Queue),
+        group_channel: Some("telegram".to_owned()),
+        system_sent: true,
+        compaction_count: 3,
+        ..Default::default()
+    };
 
     let runtime = entry.provider_runtime_state();
     assert_eq!(runtime.session_file.as_deref(), Some("runtime.json"));
@@ -96,10 +98,12 @@ fn test_session_entry_exposes_decomposition_views() {
 
 #[test]
 fn test_session_entry_exposes_thread_record_view() {
-    let mut entry = SessionEntry::default();
-    entry.thread_id = "thread::abc".to_owned();
-    entry.agent_id = "main".to_owned();
-    entry.label = Some("Inbox".to_owned());
+    let mut entry = SessionEntry {
+        thread_id: "thread::abc".to_owned(),
+        agent_id: "main".to_owned(),
+        label: Some("Inbox".to_owned()),
+        ..Default::default()
+    };
     entry.messages.push(HashMap::from([(
         "role".to_owned(),
         Value::String("user".to_owned()),
@@ -114,10 +118,12 @@ fn test_session_entry_exposes_thread_record_view() {
 
 #[test]
 fn test_session_entry_converts_to_owned_thread_record() {
-    let mut entry = SessionEntry::default();
-    entry.thread_id = "thread::owned".to_owned();
-    entry.agent_id = "main".to_owned();
-    entry.label = Some("Owned".to_owned());
+    let mut entry = SessionEntry {
+        thread_id: "thread::owned".to_owned(),
+        agent_id: "main".to_owned(),
+        label: Some("Owned".to_owned()),
+        ..Default::default()
+    };
     entry.messages.push(HashMap::from([(
         "role".to_owned(),
         Value::String("assistant".to_owned()),

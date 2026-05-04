@@ -65,12 +65,12 @@ impl MessageRouter {
     }
 
     pub async fn latest_message_text_for_thread(&self, thread_id: &str) -> Option<String> {
-        if let Some(history) = &self.thread_history {
-            if let Ok(Some(text)) = history.latest_message_text(thread_id).await {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_owned());
-                }
+        if let Some(history) = &self.thread_history
+            && let Ok(Some(text)) = history.latest_message_text(thread_id).await
+        {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
             }
         }
         None
@@ -80,15 +80,14 @@ impl MessageRouter {
         &self,
         thread_id: &str,
     ) -> Option<String> {
-        if let Some(history) = &self.thread_history {
-            if let Ok(Some(text)) = history
+        if let Some(history) = &self.thread_history
+            && let Ok(Some(text)) = history
                 .latest_message_text_for_role(thread_id, "assistant")
                 .await
-            {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_owned());
-                }
+        {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_owned());
             }
         }
         None
@@ -102,13 +101,11 @@ impl MessageRouter {
         }
 
         let mut summary = String::new();
-        let mut count = 0usize;
-        for ch in trimmed.chars() {
+        for (count, ch) in trimmed.chars().enumerate() {
             if count >= max_chars {
                 break;
             }
             summary.push(ch);
-            count += 1;
         }
 
         if summary.is_empty() {
@@ -143,12 +140,11 @@ impl MessageRouter {
             }
         }
 
-        if let Some(history) = &self.thread_history {
-            if let Ok(Some(text)) = history.latest_message_text(thread_id).await {
-                if let Some(summary) = Self::summarize_thread_list_text(&text, 48) {
-                    return Some(summary);
-                }
-            }
+        if let Some(history) = &self.thread_history
+            && let Ok(Some(text)) = history.latest_message_text(thread_id).await
+            && let Some(summary) = Self::summarize_thread_list_text(&text, 48)
+        {
+            return Some(summary);
         }
 
         if is_thread_key(thread_id) {
@@ -515,10 +511,10 @@ impl MessageRouter {
             return;
         }
 
-        if let Some(current) = current_key.as_ref() {
-            if !seen.contains(current) {
-                rebuilt.push(current.clone());
-            }
+        if let Some(current) = current_key.as_ref()
+            && !seen.contains(current)
+        {
+            rebuilt.push(current.clone());
         }
 
         self.thread_nav

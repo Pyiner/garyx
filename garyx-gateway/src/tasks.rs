@@ -508,12 +508,11 @@ pub async fn assign_task(
     }
     let assignee = body.to;
     let self_claim = actor.as_ref() == Some(&assignee);
-    if let Ok((thread_id, _, _)) = service.get_task(&task_id).await {
-        if let Err(error) =
+    if let Ok((thread_id, _, _)) = service.get_task(&task_id).await
+        && let Err(error) =
             validate_thread_runtime_allows_assignee(&state, &thread_id, &assignee).await
-        {
-            return task_error_response(error);
-        }
+    {
+        return task_error_response(error);
     }
     match service.assign_task(&task_id, assignee, actor).await {
         Ok(task) => {

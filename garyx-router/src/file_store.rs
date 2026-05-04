@@ -172,7 +172,7 @@ impl FileThreadStore {
     }
 
     fn decode_key(hex: &str) -> Option<String> {
-        if hex.is_empty() || hex.len() % 2 != 0 {
+        if hex.is_empty() || !hex.len().is_multiple_of(2) {
             return None;
         }
         let mut bytes = Vec::with_capacity(hex.len() / 2);
@@ -199,19 +199,17 @@ impl FileThreadStore {
     /// Check for and remove stale lock files (older than [`STALE_LOCK_THRESHOLD`]).
     async fn check_stale_lock(&self, thread_path: &Path) {
         let lock_path = Self::lock_file_for_path(thread_path);
-        if let Ok(meta) = tokio::fs::metadata(&lock_path).await {
-            if let Ok(modified) = meta.modified() {
-                if let Ok(age) = SystemTime::now().duration_since(modified) {
-                    if age > STALE_LOCK_THRESHOLD {
-                        debug!(
-                            thread_path = %thread_path.display(),
-                            age_secs = age.as_secs(),
-                            "removing stale lock"
-                        );
-                        let _ = tokio::fs::remove_file(&lock_path).await;
-                    }
-                }
-            }
+        if let Ok(meta) = tokio::fs::metadata(&lock_path).await
+            && let Ok(modified) = meta.modified()
+            && let Ok(age) = SystemTime::now().duration_since(modified)
+            && age > STALE_LOCK_THRESHOLD
+        {
+            debug!(
+                thread_path = %thread_path.display(),
+                age_secs = age.as_secs(),
+                "removing stale lock"
+            );
+            let _ = tokio::fs::remove_file(&lock_path).await;
         }
     }
 
@@ -303,13 +301,13 @@ impl FileThreadStore {
             let mut entries = tokio::fs::read_dir(root).await?;
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
-                if let Some(ext) = path.extension() {
-                    if ext == "json" || ext == "lock" {
-                        if ext == "json" {
-                            count += 1;
-                        }
-                        let _ = tokio::fs::remove_file(&path).await;
+                if let Some(ext) = path.extension()
+                    && (ext == "json" || ext == "lock")
+                {
+                    if ext == "json" {
+                        count += 1;
                     }
+                    let _ = tokio::fs::remove_file(&path).await;
                 }
             }
         }
@@ -346,15 +344,15 @@ impl ThreadStore for FileThreadStore {
                     drop(cache);
                     // Validate mtime.
                     let path = self.resolve_thread_file(thread_id);
-                    if let Some(disk_mtime) = Self::file_mtime(&path).await {
-                        if disk_mtime == mtime {
-                            // Defensive scrub on cache-hit: fresh inserts
-                            // are already scrubbed, but an older cached
-                            // entry from before this migration landed
-                            // could still carry fossils.
-                            let _ = scrub_legacy_team_fields(&mut data);
-                            return Some(data);
-                        }
+                    if let Some(disk_mtime) = Self::file_mtime(&path).await
+                        && disk_mtime == mtime
+                    {
+                        // Defensive scrub on cache-hit: fresh inserts
+                        // are already scrubbed, but an older cached
+                        // entry from before this migration landed
+                        // could still carry fossils.
+                        let _ = scrub_legacy_team_fields(&mut data);
+                        return Some(data);
                     }
                     // Invalidate stale cache entry.
                     let mut cache = self.cache.lock().await;
@@ -562,10 +560,10 @@ impl ThreadStore for FileThreadStore {
                     let Some(key) = Self::stem_to_key(stem) else {
                         continue;
                     };
-                    if let Some(p) = prefix {
-                        if !key.starts_with(p) {
-                            continue;
-                        }
+                    if let Some(p) = prefix
+                        && !key.starts_with(p)
+                    {
+                        continue;
                     }
                     if seen.insert(key.clone()) {
                         keys.push(key);

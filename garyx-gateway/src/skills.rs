@@ -870,12 +870,12 @@ fn reject_symlink_path(skill_dir: &Path, relative_path: &str) -> Result<(), Skil
     let mut current = skill_dir.to_path_buf();
     for segment in relative_path.split('/') {
         current.push(segment);
-        if let Ok(metadata) = fs::symlink_metadata(&current) {
-            if metadata.file_type().is_symlink() {
-                return Err(SkillStoreError::Validation(
-                    "skill symlinks are not supported in the editor".to_owned(),
-                ));
-            }
+        if let Ok(metadata) = fs::symlink_metadata(&current)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(SkillStoreError::Validation(
+                "skill symlinks are not supported in the editor".to_owned(),
+            ));
         }
     }
     Ok(())

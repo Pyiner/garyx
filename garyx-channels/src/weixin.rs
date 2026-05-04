@@ -351,10 +351,10 @@ fn load_context_tokens_from_disk() -> Option<HashMap<String, String>> {
 
 fn persist_context_tokens(store: &HashMap<String, String>) {
     let path = context_token_persistence_path();
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            warn!(path = %parent.display(), error = %e, "failed to create parent dir for context tokens");
-        }
+    if let Some(parent) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        warn!(path = %parent.display(), error = %e, "failed to create parent dir for context tokens");
     }
     match serde_json::to_string_pretty(store) {
         Ok(json) => {
@@ -435,13 +435,12 @@ pub async fn get_context_token_for_thread(
         return None;
     }
     let store = context_token_store().lock().await;
-    if let Some(thread_id) = thread_id.map(str::trim).filter(|value| !value.is_empty()) {
-        if let Some(token) = store
+    if let Some(thread_id) = thread_id.map(str::trim).filter(|value| !value.is_empty())
+        && let Some(token) = store
             .get(&context_token_thread_key(account_id, user_id, thread_id))
             .cloned()
-        {
-            return Some(token);
-        }
+    {
+        return Some(token);
     }
     store.get(&context_token_key(account_id, user_id)).cloned()
 }
@@ -1561,20 +1560,19 @@ async fn send_typing_status(
             "Weixin sendtyping HTTP {status_code}: {raw}"
         )));
     }
-    if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
-        if payload
+    if let Ok(payload) = serde_json::from_str::<Value>(&raw)
+        && payload
             .get("ret")
             .and_then(Value::as_i64)
             .is_some_and(|ret| ret != 0)
-        {
-            let message = payload
-                .get("errmsg")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            return Err(ChannelError::SendFailed(format!(
-                "Weixin sendtyping ret!=0: {message}"
-            )));
-        }
+    {
+        let message = payload
+            .get("errmsg")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        return Err(ChannelError::SendFailed(format!(
+            "Weixin sendtyping ret!=0: {message}"
+        )));
     }
     Ok(())
 }
@@ -1604,20 +1602,19 @@ async fn notify_subscription(
             "Weixin {endpoint} HTTP {status}: {raw}"
         )));
     }
-    if let Ok(payload) = serde_json::from_str::<Value>(&raw) {
-        if payload
+    if let Ok(payload) = serde_json::from_str::<Value>(&raw)
+        && payload
             .get("ret")
             .and_then(Value::as_i64)
             .is_some_and(|ret| ret != 0)
-        {
-            let message = payload
-                .get("errmsg")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            return Err(ChannelError::SendFailed(format!(
-                "Weixin {endpoint} ret!=0: {message}"
-            )));
-        }
+    {
+        let message = payload
+            .get("errmsg")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        return Err(ChannelError::SendFailed(format!(
+            "Weixin {endpoint} ret!=0: {message}"
+        )));
     }
     Ok(())
 }
@@ -1657,6 +1654,7 @@ fn build_send_typing_body(to_user_id: &str, typing_ticket: &str, status: i64) ->
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn get_upload_url(
     http: &Client,
     account: &WeixinAccount,
@@ -2618,17 +2616,16 @@ async fn stop_stream_typing(
         return;
     }
     *typing_active = false;
-    if let Some(ticket) = ctx.typing_ticket.as_deref() {
-        if let Err(error) =
+    if let Some(ticket) = ctx.typing_ticket.as_deref()
+        && let Err(error) =
             send_typing_status(&ctx.http, &ctx.account, &ctx.user_id, ticket, 2).await
-        {
-            debug!(
-                account_id = %ctx.account_id,
-                user_id = %ctx.user_id,
-                error = %error,
-                "failed to stop weixin typing"
-            );
-        }
+    {
+        debug!(
+            account_id = %ctx.account_id,
+            user_id = %ctx.user_id,
+            error = %error,
+            "failed to stop weixin typing"
+        );
     }
 }
 
@@ -2871,6 +2868,7 @@ fn collect_poisoned_text(live: &mut LiveMessage, poisoned_texts: &mut Vec<String
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn close_live_for_boundary(
     ctx: &WeixinStreamConsumerContext,
     live: &mut LiveMessage,
@@ -3251,14 +3249,13 @@ impl WeixinChannel {
                 .notify_started
                 .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
                 .is_ok()
+                && let Err(error) = notify_start(&runtime.http, &runtime.account).await
             {
-                if let Err(error) = notify_start(&runtime.http, &runtime.account).await {
-                    warn!(
-                        account_id = %runtime.account_id,
-                        error = %error,
-                        "weixin notifystart failed"
-                    );
-                }
+                warn!(
+                    account_id = %runtime.account_id,
+                    error = %error,
+                    "weixin notifystart failed"
+                );
             }
 
             if !payload.get_updates_buf.is_empty() {
@@ -3397,30 +3394,30 @@ impl WeixinChannel {
         // via streaming input instead of interrupting + starting a new run.
         // This preserves full conversation context when the user sends
         // follow-up messages while the agent is still working.
-        if !is_native_command_text(&clean_text, "weixin") {
-            if let Some(thread_id) = existing_thread_id.as_deref() {
-                let queued = runtime
-                    .bridge
-                    .add_streaming_input(
-                        thread_id,
-                        &clean_text,
-                        None,
-                        None,
-                        Some(image_attachments.clone()),
-                    )
-                    .await;
-                if queued.is_some() {
-                    tracing::info!(
-                        account_id = %runtime.account_id,
-                        user_id = %from_id,
-                        thread_id,
-                        "weixin message queued as streaming input into active session"
-                    );
-                    return;
-                }
-                // No active session to queue into — proceed with a normal
-                // new run below.
+        if !is_native_command_text(&clean_text, "weixin")
+            && let Some(thread_id) = existing_thread_id.as_deref()
+        {
+            let queued = runtime
+                .bridge
+                .add_streaming_input(
+                    thread_id,
+                    &clean_text,
+                    None,
+                    None,
+                    Some(image_attachments.clone()),
+                )
+                .await;
+            if queued.is_some() {
+                tracing::info!(
+                    account_id = %runtime.account_id,
+                    user_id = %from_id,
+                    thread_id,
+                    "weixin message queued as streaming input into active session"
+                );
+                return;
             }
+            // No active session to queue into — proceed with a normal
+            // new run below.
         }
 
         let run_id = uuid::Uuid::new_v4().to_string();
@@ -3532,6 +3529,7 @@ impl WeixinChannel {
                 let mut sent_media_refs = HashSet::<String>::new();
                 let mut pending_media_refs = Vec::<OutboundMediaRef>::new();
 
+                #[allow(clippy::too_many_arguments)]
                 async fn flush_text(
                     text: &str,
                     extra_media_refs: &[OutboundMediaRef],
@@ -3581,45 +3579,41 @@ impl WeixinChannel {
                     // without attempting the send (avoids unnecessary API call + error).
                     // Note: media refs are included as markdown links in the queued text
                     // so they can be retried when a fresh token arrives.
-                    if let Some(ref t) = token {
-                        if token_sends_remaining(t).await == 0 {
-                            // Build the full message including media refs as markdown
-                            // so nothing is lost when we queue for later delivery.
-                            let mut queue_text = outbound.clone();
-                            for media_ref in &media_refs {
-                                let dedupe_key = media_ref.dedupe_key();
-                                if !sent_media_refs.contains(&dedupe_key) {
-                                    // Append media source as text so it's preserved in queue
-                                    let media_str = match media_ref {
-                                        OutboundMediaRef::RemoteUrl(url) => url.clone(),
-                                        OutboundMediaRef::LocalPath(path) => path.clone(),
-                                        OutboundMediaRef::InlineImage { file_name, .. } => {
-                                            format!("[generated image: {file_name}]")
-                                        }
-                                    };
-                                    if !queue_text.is_empty() {
-                                        queue_text.push('\n');
+                    if let Some(ref t) = token
+                        && token_sends_remaining(t).await == 0
+                    {
+                        // Build the full message including media refs as markdown
+                        // so nothing is lost when we queue for later delivery.
+                        let mut queue_text = outbound.clone();
+                        for media_ref in &media_refs {
+                            let dedupe_key = media_ref.dedupe_key();
+                            if !sent_media_refs.contains(&dedupe_key) {
+                                // Append media source as text so it's preserved in queue
+                                let media_str = match media_ref {
+                                    OutboundMediaRef::RemoteUrl(url) => url.clone(),
+                                    OutboundMediaRef::LocalPath(path) => path.clone(),
+                                    OutboundMediaRef::InlineImage { file_name, .. } => {
+                                        format!("[generated image: {file_name}]")
                                     }
-                                    queue_text.push_str(&media_str);
+                                };
+                                if !queue_text.is_empty() {
+                                    queue_text.push('\n');
                                 }
+                                queue_text.push_str(&media_str);
                             }
-                            let plain = markdown_to_plain_text(&queue_text).trim().to_owned();
-                            if !plain.is_empty() {
-                                warn!(
-                                    account_id = %response_account_id,
-                                    user_id = %response_user_id,
-                                    has_media = !media_refs.is_empty(),
-                                    "flush_text: token exhausted, queueing directly"
-                                );
-                                queue_pending_outbound(
-                                    response_account_id,
-                                    response_user_id,
-                                    &plain,
-                                )
-                                .await;
-                            }
-                            return;
                         }
+                        let plain = markdown_to_plain_text(&queue_text).trim().to_owned();
+                        if !plain.is_empty() {
+                            warn!(
+                                account_id = %response_account_id,
+                                user_id = %response_user_id,
+                                has_media = !media_refs.is_empty(),
+                                "flush_text: token exhausted, queueing directly"
+                            );
+                            queue_pending_outbound(response_account_id, response_user_id, &plain)
+                                .await;
+                        }
+                        return;
                     }
                     let plain_text = markdown_to_plain_text(&outbound).trim().to_owned();
                     let mut maybe_message_id: Option<String> = None;
@@ -3745,43 +3739,41 @@ impl WeixinChannel {
                 while let Some(event) = event_rx.recv().await {
                     match event {
                         StreamEvent::Delta { text } => {
-                            if !typing_active {
-                                if let Some(ticket) = typing_ticket.clone() {
-                                    let http = response_http.clone();
-                                    let account = response_account.clone();
-                                    let user_id = response_user_id.clone();
-                                    let ticket_for_task = ticket.clone();
-                                    if let Err(e) = send_typing_status(
-                                        &http,
-                                        &account,
-                                        &user_id,
-                                        &ticket_for_task,
-                                        1,
-                                    )
-                                    .await
-                                    {
-                                        debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to send weixin typing start");
-                                    }
-                                    typing_keepalive_task = Some(tokio::spawn(async move {
-                                        let mut logged_failure = false;
-                                        loop {
-                                            tokio::time::sleep(Duration::from_secs(5)).await;
-                                            if let Err(e) = send_typing_status(
-                                                &http, &account, &user_id, &ticket, 1,
-                                            )
-                                            .await
-                                            {
-                                                if !logged_failure {
-                                                    debug!(error = %e, "weixin typing keepalive failed (suppressing further)");
-                                                    logged_failure = true;
-                                                }
-                                            } else {
-                                                logged_failure = false;
-                                            }
-                                        }
-                                    }));
-                                    typing_active = true;
+                            if !typing_active && let Some(ticket) = typing_ticket.clone() {
+                                let http = response_http.clone();
+                                let account = response_account.clone();
+                                let user_id = response_user_id.clone();
+                                let ticket_for_task = ticket.clone();
+                                if let Err(e) = send_typing_status(
+                                    &http,
+                                    &account,
+                                    &user_id,
+                                    &ticket_for_task,
+                                    1,
+                                )
+                                .await
+                                {
+                                    debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to send weixin typing start");
                                 }
+                                typing_keepalive_task = Some(tokio::spawn(async move {
+                                    let mut logged_failure = false;
+                                    loop {
+                                        tokio::time::sleep(Duration::from_secs(5)).await;
+                                        if let Err(e) = send_typing_status(
+                                            &http, &account, &user_id, &ticket, 1,
+                                        )
+                                        .await
+                                        {
+                                            if !logged_failure {
+                                                debug!(error = %e, "weixin typing keepalive failed (suppressing further)");
+                                                logged_failure = true;
+                                            }
+                                        } else {
+                                            logged_failure = false;
+                                        }
+                                    }
+                                }));
+                                typing_active = true;
                             }
                             stream_text = merge_stream_text(&stream_text, &text);
                         }
@@ -3849,20 +3841,18 @@ impl WeixinChannel {
                             if let Some(task) = typing_keepalive_task.take() {
                                 task.abort();
                             }
-                            if typing_active {
-                                if let Some(ticket) = typing_ticket.as_deref() {
-                                    if let Err(e) = send_typing_status(
-                                        &response_http,
-                                        &response_account,
-                                        &response_user_id,
-                                        ticket,
-                                        2,
-                                    )
-                                    .await
-                                    {
-                                        debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to stop weixin typing on done");
-                                    }
-                                }
+                            if typing_active
+                                && let Some(ticket) = typing_ticket.as_deref()
+                                && let Err(e) = send_typing_status(
+                                    &response_http,
+                                    &response_account,
+                                    &response_user_id,
+                                    ticket,
+                                    2,
+                                )
+                                .await
+                            {
+                                debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to stop weixin typing on done");
                             }
                             let has_final_text = !stream_text.trim().is_empty();
                             flush_text(
@@ -3889,20 +3879,18 @@ impl WeixinChannel {
                 if let Some(task) = typing_keepalive_task.take() {
                     task.abort();
                 }
-                if typing_active {
-                    if let Some(ticket) = typing_ticket.as_deref() {
-                        if let Err(e) = send_typing_status(
-                            &response_http,
-                            &response_account,
-                            &response_user_id,
-                            ticket,
-                            2,
-                        )
-                        .await
-                        {
-                            debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to stop weixin typing on cleanup");
-                        }
-                    }
+                if typing_active
+                    && let Some(ticket) = typing_ticket.as_deref()
+                    && let Err(e) = send_typing_status(
+                        &response_http,
+                        &response_account,
+                        &response_user_id,
+                        ticket,
+                        2,
+                    )
+                    .await
+                {
+                    debug!(account_id = %response_account_id, user_id = %response_user_id, error = %e, "failed to stop weixin typing on cleanup");
                 }
                 if let Some(done_tx) = stream_done_tx.take() {
                     let _ = done_tx.send(());
@@ -3983,48 +3971,47 @@ impl WeixinChannel {
                         };
                         if let Some(fallback_text) =
                             fallback_text.map(|text| text.trim().to_owned())
+                            && !fallback_text.is_empty()
                         {
-                            if !fallback_text.is_empty() {
-                                let token = if message.context_token.trim().is_empty() {
-                                    get_context_token_for_thread(
-                                        &runtime.account_id,
-                                        &from_id,
-                                        Some(&result.thread_id),
-                                    )
-                                    .await
-                                } else {
-                                    Some(message.context_token.clone())
-                                };
-                                match send_text_message(
-                                    &runtime.http,
-                                    &runtime.account,
+                            let token = if message.context_token.trim().is_empty() {
+                                get_context_token_for_thread(
+                                    &runtime.account_id,
                                     &from_id,
-                                    &markdown_to_plain_text(&fallback_text),
-                                    token.as_deref(),
+                                    Some(&result.thread_id),
                                 )
                                 .await
-                                {
-                                    Ok(message_id) => {
-                                        let mut router_guard = runtime.router.lock().await;
-                                        router_guard
-                                            .record_outbound_message_with_persistence(
-                                                &result.thread_id,
-                                                "weixin",
-                                                &runtime.account_id,
-                                                &from_id,
-                                                None,
-                                                &message_id,
-                                            )
-                                            .await;
-                                    }
-                                    Err(error) => {
-                                        error!(
-                                            account_id = %runtime.account_id,
-                                            user_id = %from_id,
-                                            error = %error,
-                                            "failed to send weixin fallback final response"
-                                        );
-                                    }
+                            } else {
+                                Some(message.context_token.clone())
+                            };
+                            match send_text_message(
+                                &runtime.http,
+                                &runtime.account,
+                                &from_id,
+                                &markdown_to_plain_text(&fallback_text),
+                                token.as_deref(),
+                            )
+                            .await
+                            {
+                                Ok(message_id) => {
+                                    let mut router_guard = runtime.router.lock().await;
+                                    router_guard
+                                        .record_outbound_message_with_persistence(
+                                            &result.thread_id,
+                                            "weixin",
+                                            &runtime.account_id,
+                                            &from_id,
+                                            None,
+                                            &message_id,
+                                        )
+                                        .await;
+                                }
+                                Err(error) => {
+                                    error!(
+                                        account_id = %runtime.account_id,
+                                        user_id = %from_id,
+                                        error = %error,
+                                        "failed to send weixin fallback final response"
+                                    );
                                 }
                             }
                         }

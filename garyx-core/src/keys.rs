@@ -118,11 +118,11 @@ pub fn build_agent_session_key(
     thread_id: Option<&str>,
 ) -> String {
     let mut key = format!("agent:{agent_id}:{channel}:{surface}:{peer_id}");
-    if let Some(tid) = thread_id {
-        if !tid.is_empty() {
-            key.push_str(":thread:");
-            key.push_str(tid);
-        }
+    if let Some(tid) = thread_id
+        && !tid.is_empty()
+    {
+        key.push_str(":thread:");
+        key.push_str(tid);
     }
     key
 }
@@ -252,10 +252,10 @@ pub fn classify_session_key(session_key: &str) -> SessionKeyClass {
 
 /// Extract channel name from session key.
 pub fn extract_channel_from_key(session_key: &str) -> Option<String> {
-    if session_key.starts_with(AGENT_PREFIX) {
-        if let Ok(parsed) = parse_hierarchical_key(session_key) {
-            return parsed.channel;
-        }
+    if session_key.starts_with(AGENT_PREFIX)
+        && let Ok(parsed) = parse_hierarchical_key(session_key)
+    {
+        return parsed.channel;
     }
     None
 }

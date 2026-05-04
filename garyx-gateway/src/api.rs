@@ -1133,14 +1133,12 @@ pub(crate) async fn thread_history_for_key(
             "raw_content_type": raw_content_type,
         }));
     }
-    if pending_inputs_repaired {
-        if let Some(obj) = data_raw.as_object_mut() {
-            obj.insert(
-                "pending_user_inputs".to_owned(),
-                Value::Array(persisted_pending_user_inputs),
-            );
-            state.threads.thread_store.set(key, data_raw.clone()).await;
-        }
+    if pending_inputs_repaired && let Some(obj) = data_raw.as_object_mut() {
+        obj.insert(
+            "pending_user_inputs".to_owned(),
+            Value::Array(persisted_pending_user_inputs),
+        );
+        state.threads.thread_store.set(key, data_raw.clone()).await;
     }
     let thread = summarize_thread(key, &data_raw, &messages);
     // Unlike `routes::thread_metadata_response` (which nests `team` inside

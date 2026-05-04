@@ -149,10 +149,10 @@ pub async fn send_photo(
         .text("chat_id", target.chat_id.to_string())
         .part("photo", part);
 
-    if let Some(caption) = caption {
-        if !caption.trim().is_empty() {
-            form = form.text("caption", caption.to_owned());
-        }
+    if let Some(caption) = caption
+        && !caption.trim().is_empty()
+    {
+        form = form.text("caption", caption.to_owned());
     }
     if let Some(reply_to) = reply_to_message_id {
         form = form.text("reply_to_message_id", reply_to.to_string());
@@ -216,10 +216,10 @@ pub async fn send_document(
         .text("chat_id", target.chat_id.to_string())
         .part("document", part);
 
-    if let Some(caption) = caption {
-        if !caption.trim().is_empty() {
-            form = form.text("caption", caption.to_owned());
-        }
+    if let Some(caption) = caption
+        && !caption.trim().is_empty()
+    {
+        form = form.text("caption", caption.to_owned());
     }
     if let Some(reply_to) = reply_to_message_id {
         form = form.text("reply_to_message_id", reply_to.to_string());

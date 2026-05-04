@@ -233,28 +233,25 @@ impl GaryMcpServer {
             .map(str::trim)
             .is_some_and(|value| !value.is_empty());
 
-        if let Some(bot) = requested_bot.as_ref() {
-            if !explicit_target {
-                let Some(endpoint) = crate::routes::resolve_main_endpoint_by_bot(
-                    state,
-                    &bot.channel,
-                    &bot.account_id,
-                )
-                .await
-                else {
-                    return Err(format!("bot '{}' has no resolved main endpoint", bot.bot));
-                };
+        if let Some(bot) = requested_bot.as_ref()
+            && !explicit_target
+        {
+            let Some(endpoint) =
+                crate::routes::resolve_main_endpoint_by_bot(state, &bot.channel, &bot.account_id)
+                    .await
+            else {
+                return Err(format!("bot '{}' has no resolved main endpoint", bot.bot));
+            };
 
-                return Ok(ResolvedMessageTarget {
-                    channel: endpoint.channel,
-                    account_id: endpoint.account_id,
-                    chat_id: endpoint.chat_id,
-                    delivery_target_type: endpoint.delivery_target_type,
-                    delivery_target_id: endpoint.delivery_target_id,
-                    delivery_thread_id: endpoint.delivery_thread_id,
-                    thread_id: endpoint.thread_id,
-                });
-            }
+            return Ok(ResolvedMessageTarget {
+                channel: endpoint.channel,
+                account_id: endpoint.account_id,
+                chat_id: endpoint.chat_id,
+                delivery_target_type: endpoint.delivery_target_type,
+                delivery_target_id: endpoint.delivery_target_id,
+                delivery_thread_id: endpoint.delivery_thread_id,
+                thread_id: endpoint.thread_id,
+            });
         }
 
         let target_input = if let Some(target) = params
@@ -285,18 +282,18 @@ impl GaryMcpServer {
             || target_input.starts_with("thread:")
             || target_input.contains("::");
 
-        if let Some(bot) = requested_bot.as_ref() {
-            if !thread_like_target {
-                return Ok(ResolvedMessageTarget {
-                    channel: bot.channel.clone(),
-                    account_id: bot.account_id.clone(),
-                    chat_id: resolved_target.to_owned(),
-                    delivery_target_type: "chat_id".to_owned(),
-                    delivery_target_id: resolved_target.to_owned(),
-                    delivery_thread_id: None,
-                    thread_id: None,
-                });
-            }
+        if let Some(bot) = requested_bot.as_ref()
+            && !thread_like_target
+        {
+            return Ok(ResolvedMessageTarget {
+                channel: bot.channel.clone(),
+                account_id: bot.account_id.clone(),
+                chat_id: resolved_target.to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: resolved_target.to_owned(),
+                delivery_thread_id: None,
+                thread_id: None,
+            });
         }
 
         // 1) Prefer in-memory delivery target resolution first.
@@ -531,26 +528,24 @@ impl GaryMcpServer {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            && channel != selected.channel
         {
-            if channel != selected.channel {
-                return Err(format!(
-                    "conflicting bot/channel parameters: bot '{}' uses channel '{}', but channel='{}' was requested",
-                    selected.bot, selected.channel, channel
-                ));
-            }
+            return Err(format!(
+                "conflicting bot/channel parameters: bot '{}' uses channel '{}', but channel='{}' was requested",
+                selected.bot, selected.channel, channel
+            ));
         }
         if let Some(account_id) = params
             .account_id
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            && account_id != selected.account_id
         {
-            if account_id != selected.account_id {
-                return Err(format!(
-                    "conflicting bot/account parameters: bot '{}' uses account '{}', but account_id='{}' was requested",
-                    selected.bot, selected.account_id, account_id
-                ));
-            }
+            return Err(format!(
+                "conflicting bot/account parameters: bot '{}' uses account '{}', but account_id='{}' was requested",
+                selected.bot, selected.account_id, account_id
+            ));
         }
 
         Ok(Some(selected))
@@ -687,26 +682,24 @@ impl GaryMcpServer {
                 current_bot = Some((BotSelection::new(channel, account_id), "run_context"));
             }
 
-            if current_bot.is_none() {
-                if let Some(thread_data) = self.app_state.threads.thread_store.get(thread_id).await
-                {
-                    if let (Some(channel), Some(account_id)) = (
-                        thread_data
-                            .get("channel")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty()),
-                        thread_data
-                            .get("account_id")
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty()),
-                    ) {
-                        current_bot =
-                            Some((BotSelection::new(channel, account_id), "thread_origin"));
-                    } else if thread_bound.len() == 1 {
-                        current_bot = Some((thread_bound[0].clone(), "single_thread_binding"));
-                    }
+            if current_bot.is_none()
+                && let Some(thread_data) = self.app_state.threads.thread_store.get(thread_id).await
+            {
+                if let (Some(channel), Some(account_id)) = (
+                    thread_data
+                        .get("channel")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                    thread_data
+                        .get("account_id")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                ) {
+                    current_bot = Some((BotSelection::new(channel, account_id), "thread_origin"));
+                } else if thread_bound.len() == 1 {
+                    current_bot = Some((thread_bound[0].clone(), "single_thread_binding"));
                 }
             }
         } else if let (Some(channel), Some(account_id)) =
