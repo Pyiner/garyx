@@ -137,6 +137,8 @@ struct FailingCheckpointProvider {
     delta_sent: Arc<Notify>,
 }
 
+struct EmptyResponseProvider;
+
 struct QueuedInputProvider {
     delta_sent: Arc<Notify>,
     follow_up_received: Arc<Notify>,
@@ -697,6 +699,51 @@ impl AgentLoopProvider for FailingCheckpointProvider {
         on_chunk(StreamEvent::ToolUse { message: tool_use });
         self.delta_sent.notify_waiters();
         Err(BridgeError::Timeout)
+    }
+
+    async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{session_key}"))
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentLoopProvider for EmptyResponseProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        on_chunk(StreamEvent::Done);
+        Ok(ProviderRunResult {
+            run_id: "empty-response-run".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: String::new(),
+            session_messages: Vec::new(),
+            sdk_session_id: Some(format!("sdk-{}", options.thread_id)),
+            actual_model: None,
+            success: true,
+            error: None,
+            input_tokens: 1,
+            output_tokens: 0,
+            cost: 0.0,
+            duration_ms: 1,
+        })
     }
 
     async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
@@ -1617,6 +1664,7 @@ async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages()
         }),
         notification_target: None,
         source: None,
+        body: None,
         created_at: now,
         updated_at: now,
         updated_by: Principal::Agent {
@@ -1675,7 +1723,7 @@ async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages()
     );
     assert_eq!(final_data["sdk_session_id"], "sdk-existing");
     assert_eq!(final_data["provider_sdk_session_ids"]["p1"], "sdk-existing");
-    assert_eq!(final_data["task"]["status"], "in_review");
+    assert_eq!(final_data["task"]["status"], "in_progress");
 
     let final_messages = final_data["messages"]
         .as_array()
@@ -1695,6 +1743,77 @@ async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages()
                 && message["tool_name"] == "Delegating to agent 'generalist'"),
         "tool trace should survive failure finalization"
     );
+}
+
+#[tokio::test]
+async fn test_empty_successful_task_run_does_not_move_to_review() {
+    let bridge = MultiProviderBridge::new();
+    bridge
+        .register_provider("p1", Arc::new(EmptyResponseProvider))
+        .await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let now = Utc::now();
+    let task = ThreadTask {
+        schema_version: 1,
+        number: 9,
+        title: "Do not review empty runs".to_owned(),
+        status: TaskStatus::InProgress,
+        creator: Principal::Human {
+            user_id: "user42".to_owned(),
+        },
+        assignee: Some(Principal::Agent {
+            agent_id: "codex".to_owned(),
+        }),
+        notification_target: None,
+        source: None,
+        body: None,
+        created_at: now,
+        updated_at: now,
+        updated_by: Principal::Agent {
+            agent_id: "codex".to_owned(),
+        },
+        events: Vec::new(),
+    };
+    store
+        .set(
+            "sess::tg::empty-task",
+            json!({
+                "task": task
+            }),
+        )
+        .await;
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "sess::tg::empty-task",
+                "start empty task",
+                "run-empty-task",
+                "telegram",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-empty-task").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("empty task run should finish");
+
+    let final_data = store
+        .get("sess::tg::empty-task")
+        .await
+        .expect("thread data should exist");
+    assert_eq!(final_data["task"]["status"], "in_progress");
 }
 
 #[tokio::test]
@@ -1856,6 +1975,7 @@ async fn test_streaming_input_appends_task_suffix_for_provider_only() {
         }),
         notification_target: None,
         source: None,
+        body: None,
         created_at: now,
         updated_at: now,
         updated_by: Principal::Agent {

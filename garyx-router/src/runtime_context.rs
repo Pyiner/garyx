@@ -258,6 +258,7 @@ mod tests {
             }),
             notification_target: None,
             source: None,
+            body: None,
             created_at: now,
             updated_at: now,
             updated_by: Principal::Agent {

@@ -721,6 +721,24 @@ async fn mark_task_ready_for_review_after_stopped_run(
     thread_logs: Option<Arc<dyn ThreadLogSink>>,
     thread_log_id: Option<&str>,
 ) {
+    let Some(final_message) = final_message
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        record_thread_log(
+            thread_logs,
+            thread_log_id,
+            ThreadLogEvent::info(
+                "",
+                "task",
+                "task run stopped without final response; leaving task in progress",
+            )
+            .with_run_id(run_id.to_owned())
+            .with_field("thread_id", json!(thread_id)),
+        )
+        .await;
+        return;
+    };
     let Some(store) = inner.thread_store.read().await.clone() else {
         return;
     };
@@ -742,7 +760,7 @@ async fn mark_task_ready_for_review_after_stopped_run(
                     "thread_id": thread_id,
                     "run_id": run_id,
                     "task_id": task_id,
-                    "final_message": final_message.unwrap_or_default(),
+                    "final_message": final_message,
                 });
                 let _ = tx.send(event.to_string());
             }
@@ -1821,13 +1839,20 @@ impl MultiProviderBridge {
                         }
                     }
 
-                    mark_task_ready_for_review_after_stopped_run(
-                        &inner,
-                        &thread_id_owned,
-                        &run_id_owned,
-                        Some(failed_assistant_response),
+                    record_thread_log(
                         thread_logs_for_task.clone(),
                         thread_log_id_owned.as_deref(),
+                        ThreadLogEvent::info(
+                            "",
+                            "task",
+                            "failed task run left in progress for retry",
+                        )
+                        .with_run_id(run_id_owned.clone())
+                        .with_field("thread_id", json!(thread_id_owned.clone()))
+                        .with_field(
+                            "response",
+                            json!(summarize_text(failed_assistant_response, 160)),
+                        ),
                     )
                     .await;
                 }

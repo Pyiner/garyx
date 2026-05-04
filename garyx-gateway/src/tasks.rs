@@ -7,14 +7,14 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
 };
+use chrono::Utc;
 use garyx_models::local_paths::default_session_data_dir;
 use garyx_models::{
     Principal, TaskEventKind, TaskNotificationTarget, TaskSource, TaskStatus, ThreadTask,
 };
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
-    TaskService, TaskServiceError, UpdateTaskStatusInput, update_thread_record,
-    workspace_dir_from_value,
+    TaskService, TaskServiceError, UpdateTaskStatusInput, workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -507,7 +507,7 @@ pub async fn assign_task(
         Ok(task) => {
             let assignee_for_workspace = task.assignee.clone();
             let mut payload = json!({ "task": task });
-            if let Ok((thread_id, _, _)) = service.get_task(&task_id).await {
+            if let Ok((thread_id, record, _)) = service.get_task(&task_id).await {
                 if let Err(error) = ensure_thread_workspace_from_assignee_default(
                     &state,
                     &thread_id,
@@ -518,13 +518,15 @@ pub async fn assign_task(
                     return task_error_response(error);
                 }
                 if !self_claim {
+                    let body_for_dispatch = task_body_for_dispatch(&payload["task"])
+                        .or_else(|| task_body_from_record(&record));
                     if let Some(dispatch) = spawn_task_auto_dispatch(
                         state.clone(),
                         thread_id,
                         payload["task"].clone(),
                         "assign",
                         None,
-                        None,
+                        body_for_dispatch.as_deref(),
                     ) {
                         payload["dispatch"] = dispatch;
                     }
@@ -826,24 +828,36 @@ async fn ensure_thread_workspace_from_assignee_default(
     let Some(Principal::Agent { agent_id }) = assignee else {
         return Ok(());
     };
-    let Some(existing) = state.threads.thread_store.get(thread_id).await else {
+    let Some(mut updated) = state.threads.thread_store.get(thread_id).await else {
         return Ok(());
     };
-    if workspace_dir_from_value(&existing).is_some() {
-        return Ok(());
+    let existing_workspace_dir = workspace_dir_from_value(&updated);
+    let default_workspace_dir = if existing_workspace_dir.is_none() {
+        default_workspace_dir_for_agent(state, agent_id).await?
+    } else {
+        None
+    };
+    let Some(obj) = updated.as_object_mut() else {
+        return Err(TaskServiceError::Store(format!(
+            "thread payload is not an object: {thread_id}"
+        )));
+    };
+    obj.insert("agent_id".to_owned(), Value::String(agent_id.clone()));
+    if let Some(default_workspace_dir) = default_workspace_dir {
+        obj.insert(
+            "workspace_dir".to_owned(),
+            Value::String(default_workspace_dir),
+        );
     }
-    let Some(default_workspace_dir) = default_workspace_dir_for_agent(state, agent_id).await?
-    else {
-        return Ok(());
-    };
-    let updated = update_thread_record(
-        &state.threads.thread_store,
-        thread_id,
-        None,
-        Some(default_workspace_dir),
-    )
-    .await
-    .map_err(TaskServiceError::Store)?;
+    obj.insert(
+        "updated_at".to_owned(),
+        Value::String(Utc::now().to_rfc3339()),
+    );
+    state
+        .threads
+        .thread_store
+        .set(thread_id, updated.clone())
+        .await;
     state
         .integration
         .bridge
@@ -870,8 +884,13 @@ fn spawn_task_auto_dispatch(
     }
     let task_id = garyx_router::tasks::canonical_task_id(&task);
     let run_id = format!("task-auto-{}-{}", task.number, Uuid::now_v7());
+    let body = requested_body
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| task.body.clone());
     let message =
-        task_auto_dispatch_message(&task_id, &task.title, requested_title, requested_body);
+        task_auto_dispatch_message(&task_id, &task.title, requested_title, body.as_deref());
     let mut extra_metadata = HashMap::new();
     extra_metadata.insert("task_auto_start".to_owned(), Value::Bool(true));
     extra_metadata.insert(
@@ -931,6 +950,35 @@ fn task_auto_dispatch_message(
             "Task {task_id} has been assigned to you and is already in progress.\n\nTitle: {title}\n\nGaryx will move this task to review when this run stops. Do not mark it done just because you finished; after a user, reviewer, or task creator explicitly approves it, you may record that approval with `garyx task update {task_id} --status done --note \"approved by <name>\"`."
         ),
     }
+}
+
+fn task_body_for_dispatch(task_value: &Value) -> Option<String> {
+    task_value
+        .get("body")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn task_body_from_record(record: &Value) -> Option<String> {
+    task_body_for_dispatch(record.get("task")?).or_else(|| {
+        record
+            .get("messages")
+            .and_then(Value::as_array)?
+            .iter()
+            .find_map(|message| {
+                if message.get("role").and_then(Value::as_str) != Some("user") {
+                    return None;
+                }
+                message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+    })
 }
 
 fn normalized_nonempty(value: Option<String>) -> Option<String> {

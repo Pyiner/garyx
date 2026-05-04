@@ -123,6 +123,7 @@ fn task_for_notification(target: TaskNotificationTarget) -> ThreadTask {
         }),
         notification_target: Some(target),
         source: None,
+        body: None,
         created_at: now,
         updated_at: now,
         updated_by: Principal::Agent {

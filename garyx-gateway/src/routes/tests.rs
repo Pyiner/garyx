@@ -1931,3 +1931,114 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
         Some("/tmp/agent-route-default")
     );
 }
+
+#[tokio::test]
+async fn task_assign_queues_dispatch_with_original_body() {
+    let dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.tasks.enabled = true;
+    config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
+    let custom_agents = Arc::new(crate::custom_agents::CustomAgentStore::new());
+    custom_agents
+        .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+            agent_id: "workspace-reviewer".to_owned(),
+            display_name: "Workspace Reviewer".to_owned(),
+            provider_type: ProviderType::CodexAppServer,
+            model: "gpt-5".to_owned(),
+            default_workspace_dir: Some("/tmp/agent-route-default".to_owned()),
+            system_prompt: "Review the assigned task.".to_owned(),
+        })
+        .await
+        .expect("custom agent");
+
+    let provider = Arc::new(RecordingTaskProvider::new());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("task-recording-provider", provider.clone())
+        .await;
+    bridge
+        .set_route("garyx", "tasks", "task-recording-provider")
+        .await;
+    bridge
+        .set_route("api", "main", "task-recording-provider")
+        .await;
+    bridge
+        .set_default_provider_key("task-recording-provider")
+        .await;
+
+    let state = AppStateBuilder::new(config)
+        .with_custom_agent_store(custom_agents.clone())
+        .with_bridge(bridge.clone())
+        .build();
+    bridge
+        .replace_agent_profiles(custom_agents.list_agents().await)
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    let router = build_router(state);
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/tasks")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "title": "Assignable task",
+                "body": "Use this original body when assigning later.",
+                "notification_target": {"kind": "none"},
+                "start": false
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let task_id = payload["task_id"].as_str().unwrap();
+    assert_eq!(payload["status"], "todo");
+    assert!(payload.get("dispatch").is_none());
+
+    let request = authed_request()
+        .method("PATCH")
+        .uri(format!(
+            "/api/tasks/{}/assign",
+            urlencoding::encode(task_id)
+        ))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "to": {"kind": "agent", "agent_id": "workspace-reviewer"}
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["task"]["status"], "in_progress");
+    assert_eq!(payload["dispatch"]["queued"], true);
+
+    for _ in 0..250 {
+        if !provider.runs().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let runs = provider.runs();
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].message.contains(task_id));
+    assert!(
+        runs[0]
+            .message
+            .contains("Use this original body when assigning later.")
+    );
+    assert!(!runs[0].message.contains("Title: Assignable task"));
+}

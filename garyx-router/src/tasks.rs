@@ -251,7 +251,8 @@ impl TaskService {
         .await
         .map_err(TaskServiceError::Store)?;
 
-        if let Some(body) = normalized_limited(input.body, 8_000)? {
+        let body = normalized_limited(input.body, 8_000)?;
+        if let Some(body) = body.as_deref() {
             let message = json!({
                 "role": "user",
                 "content": body,
@@ -294,6 +295,7 @@ impl TaskService {
             .await?;
 
         let mut task = task;
+        task.body = body;
         if let TaskEventKind::Created { assignee, .. } = &mut task.events[0].kind {
             *assignee = task.assignee.clone();
         }
@@ -681,6 +683,7 @@ impl TaskService {
             assignee,
             notification_target,
             source,
+            body: None,
             created_at: now,
             updated_at: now,
             updated_by: actor.clone(),
