@@ -4,19 +4,20 @@ use base64::{Engine as _, engine::general_purpose};
 use garyx_models::provider::ProviderMessage;
 
 #[derive(Debug, Clone)]
-pub(crate) struct GeneratedImageResult {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) extension: &'static str,
-    pub(crate) id: String,
+pub struct GeneratedImageResult {
+    pub bytes: Vec<u8>,
+    pub extension: &'static str,
+    pub id: String,
+    pub media_type: Option<String>,
 }
 
 impl GeneratedImageResult {
-    pub(crate) fn file_name(&self) -> String {
+    pub fn file_name(&self) -> String {
         format!("{}.{}", self.id, self.extension)
     }
 }
 
-pub(crate) fn provider_message_item_type(message: &ProviderMessage) -> Option<&str> {
+pub fn provider_message_item_type(message: &ProviderMessage) -> Option<&str> {
     message
         .metadata
         .get("item_type")
@@ -26,7 +27,7 @@ pub(crate) fn provider_message_item_type(message: &ProviderMessage) -> Option<&s
         .filter(|value| !value.is_empty())
 }
 
-fn generated_image_extension(result: &str, content_type: Option<&str>) -> &'static str {
+pub fn generated_image_extension(result: &str, content_type: Option<&str>) -> &'static str {
     if let Some(content_type) = content_type {
         let lower = content_type.trim().to_ascii_lowercase();
         if lower.contains("jpeg") || lower.contains("jpg") {
@@ -59,9 +60,23 @@ fn generated_image_extension(result: &str, content_type: Option<&str>) -> &'stat
     "png"
 }
 
-pub(crate) fn extract_image_generation_result(
-    message: &ProviderMessage,
-) -> Option<GeneratedImageResult> {
+fn generated_image_media_type(result: &str, content_type: Option<&str>) -> Option<String> {
+    if let Some(content_type) = content_type {
+        let trimmed = content_type.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+
+    result
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(';').map(|(prefix, _)| prefix))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+pub fn extract_image_generation_result(message: &ProviderMessage) -> Option<GeneratedImageResult> {
     if provider_message_item_type(message) != Some("imageGeneration") {
         return None;
     }
@@ -93,6 +108,7 @@ pub(crate) fn extract_image_generation_result(
         .or_else(|| message.content.get("contentType"))
         .and_then(|value| value.as_str());
     let extension = generated_image_extension(result, content_type);
+    let media_type = generated_image_media_type(result, content_type);
     let raw_id = message
         .content
         .get("id")
@@ -108,10 +124,11 @@ pub(crate) fn extract_image_generation_result(
         bytes,
         extension,
         id,
+        media_type,
     })
 }
 
-pub(crate) async fn write_generated_image_temp(
+pub async fn write_generated_image_temp(
     channel: &str,
     image: &GeneratedImageResult,
 ) -> std::io::Result<PathBuf> {
@@ -128,4 +145,58 @@ pub(crate) async fn write_generated_image_temp(
     ));
     tokio::fs::write(&image_path, &image.bytes).await?;
     Ok(image_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use garyx_models::provider::ProviderMessage;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_data_url_image_generation_result() {
+        let message = ProviderMessage::tool_result(
+            json!({
+                "type": "imageGeneration",
+                "id": "img:test",
+                "result": "data:image/webp;base64,aGVsbG8="
+            }),
+            None,
+            Some("imageGeneration".to_owned()),
+            Some(false),
+        )
+        .with_metadata_value("item_type", json!("imageGeneration"));
+
+        let image = extract_image_generation_result(&message).expect("image");
+        assert_eq!(image.bytes, b"hello");
+        assert_eq!(image.extension, "webp");
+        assert_eq!(image.media_type.as_deref(), Some("image/webp"));
+        assert_eq!(image.id, "img_test");
+    }
+
+    #[test]
+    fn extracts_raw_base64_image_generation_result() {
+        let message = ProviderMessage::tool_result(
+            json!({
+                "type": "imageGeneration",
+                "id": "img_raw",
+                "media_type": "image/jpeg",
+                "result": "aGVsbG8="
+            }),
+            None,
+            Some("imageGeneration".to_owned()),
+            Some(false),
+        );
+
+        let image = extract_image_generation_result(&message).expect("image");
+        assert_eq!(image.bytes, b"hello");
+        assert_eq!(image.extension, "jpg");
+        assert_eq!(image.media_type.as_deref(), Some("image/jpeg"));
+        assert_eq!(image.id, "img_raw");
+    }
+
+    #[test]
+    fn infers_png_when_media_type_is_missing() {
+        assert_eq!(generated_image_extension("aGVsbG8=", None), "png");
+    }
 }

@@ -18,7 +18,7 @@ mod main_tests;
 use cli::{
     AgentAction, AutoResearchAction, AutomationAction, BotAction, ChannelsAction, Cli,
     CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, MigrateAction, PluginsAction,
-    TaskAction, TeamAction, ThreadAction, WikiAction,
+    TaskAction, TeamAction, ThreadAction, ToolAction, WikiAction,
 };
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
@@ -39,8 +39,9 @@ use commands::{
     cmd_status, cmd_task_assign, cmd_task_claim, cmd_task_create, cmd_task_get, cmd_task_history,
     cmd_task_list, cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title,
     cmd_task_unassign, cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history,
-    cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_update,
-    cmd_wiki_delete, cmd_wiki_get, cmd_wiki_init, cmd_wiki_list, cmd_wiki_status, run_gateway,
+    cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task,
+    cmd_tool_image, cmd_update, cmd_wiki_delete, cmd_wiki_get, cmd_wiki_init, cmd_wiki_list,
+    cmd_wiki_status, run_gateway,
 };
 
 struct ThreadSendDestination {
@@ -723,6 +724,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             TeamAction::Delete { team_id, json } => {
                 cmd_agent_team_delete(config_path, &team_id, json).await
             }
+        },
+        Some(Commands::Tool { action }) => match action {
+            ToolAction::Image {
+                prompt,
+                output,
+                json,
+                timeout,
+                agent,
+            } => cmd_tool_image(config_path, prompt, output, timeout, agent, json).await,
         },
         Some(Commands::Thread { action }) => match action {
             ThreadAction::List {

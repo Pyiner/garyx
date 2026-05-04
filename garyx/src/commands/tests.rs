@@ -1093,6 +1093,78 @@ fn parse_sha256_checksum_accepts_standard_release_file() {
     );
 }
 
+#[test]
+fn image_generation_prompt_preserves_user_prompt() {
+    let user_prompt = "first line\nsecond line with [brackets]";
+    let framed = build_image_generation_prompt(user_prompt);
+    assert!(framed.contains("Generate exactly one image"));
+    assert!(framed.contains("Do not merely describe an image"));
+    assert!(framed.contains(user_prompt));
+}
+
+#[test]
+fn extract_image_from_synthetic_tool_result_event() {
+    let event = json!({
+        "type": "tool_result",
+        "threadId": "thread::test",
+        "runId": "run-test",
+        "message": {
+            "role": "tool_result",
+            "content": {
+                "type": "imageGeneration",
+                "id": "img_one",
+                "media_type": "image/png",
+                "result": "aGVsbG8="
+            },
+            "metadata": {
+                "item_type": "imageGeneration"
+            },
+            "tool_name": "imageGeneration",
+            "is_error": false
+        }
+    });
+
+    let image = extract_image_from_chat_event(&event)
+        .expect("event parse")
+        .expect("image");
+    assert_eq!(image.bytes, b"hello");
+    assert_eq!(image.extension, "png");
+    assert_eq!(image.media_type.as_deref(), Some("image/png"));
+}
+
+#[test]
+fn extract_image_from_synthetic_tool_result_event_rejects_malformed_base64() {
+    let event = json!({
+        "type": "tool_result",
+        "message": {
+            "role": "tool_result",
+            "content": {
+                "type": "imageGeneration",
+                "id": "img_bad",
+                "result": "not valid base64"
+            },
+            "metadata": {
+                "item_type": "imageGeneration"
+            }
+        }
+    });
+
+    let error = extract_image_from_chat_event(&event).expect_err("malformed image");
+    assert!(error.to_string().contains("malformed"));
+}
+
+#[test]
+fn resolve_image_output_path_adds_extension_when_missing() {
+    assert_eq!(
+        resolve_image_output_path(PathBuf::from("/tmp/generated-image"), "webp"),
+        PathBuf::from("/tmp/generated-image.webp")
+    );
+    assert_eq!(
+        resolve_image_output_path(PathBuf::from("/tmp/generated-image.png"), "webp"),
+        PathBuf::from("/tmp/generated-image.png")
+    );
+}
+
 #[tokio::test]
 async fn channels_add_persists_generic_plugin_accounts() {
     let _guard = ENV_LOCK.lock().expect("env lock");

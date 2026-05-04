@@ -5,7 +5,7 @@ use clap::{CommandFactory, Parser};
 use crate::cli::{
     AgentAction, AutoResearchAction, AutomationAction, BotAction, ChannelsAction, Cli,
     CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, MigrateAction, TaskAction,
-    TeamAction, ThreadAction,
+    TeamAction, ThreadAction, ToolAction,
 };
 use crate::commands::{
     OnboardCommandOptions, canonical_channel_id, cmd_channels_add, cmd_channels_login, cmd_onboard,
@@ -986,6 +986,73 @@ fn parse_agent_create() {
             assert!(json);
         }
         _ => panic!("expected Agent::Create"),
+    }
+}
+
+#[test]
+fn parse_tool_image() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "tool",
+        "image",
+        "a precise product render",
+        "--output",
+        "/tmp/garyx-image.png",
+        "--json",
+        "--timeout",
+        "42",
+        "--agent",
+        "codex",
+    ]);
+    match cli.command {
+        Some(Commands::Tool {
+            action:
+                ToolAction::Image {
+                    prompt,
+                    output,
+                    json,
+                    timeout,
+                    agent,
+                },
+        }) => {
+            assert_eq!(prompt, "a precise product render");
+            assert_eq!(output, std::path::PathBuf::from("/tmp/garyx-image.png"));
+            assert!(json);
+            assert_eq!(timeout, 42);
+            assert_eq!(agent, "codex");
+        }
+        _ => panic!("expected Tool::Image"),
+    }
+}
+
+#[test]
+fn parse_tools_image_alias() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "tools",
+        "image",
+        "a precise product render",
+        "--output",
+        "/tmp/garyx-image",
+    ]);
+    match cli.command {
+        Some(Commands::Tool {
+            action:
+                ToolAction::Image {
+                    prompt,
+                    output,
+                    json,
+                    timeout,
+                    agent,
+                },
+        }) => {
+            assert_eq!(prompt, "a precise product render");
+            assert_eq!(output, std::path::PathBuf::from("/tmp/garyx-image"));
+            assert!(!json);
+            assert_eq!(timeout, 600);
+            assert_eq!(agent, "codex");
+        }
+        _ => panic!("expected Tool::Image via alias"),
     }
 }
 

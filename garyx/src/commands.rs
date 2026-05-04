@@ -15,6 +15,9 @@ use flate2::read::GzDecoder;
 use garyx_bridge::MultiProviderBridge;
 use garyx_channels::auth_flow::{AuthDisplayItem, AuthFlowExecutor, AuthPollResult};
 use garyx_channels::feishu::FeishuAuthExecutor;
+use garyx_channels::generated_images::{
+    GeneratedImageResult, extract_image_generation_result, provider_message_item_type,
+};
 use garyx_channels::plugin_host::{
     InboundHandler, ManifestDiscoverer, PluginErrorCode, PluginManifest, SpawnOptions,
     SubprocessAuthFlowExecutor, SubprocessPlugin,
@@ -2987,6 +2990,306 @@ pub(crate) async fn cmd_thread_create(
     }
     print_thread_summary(&payload);
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct ImageGenerationCliResult {
+    path: PathBuf,
+    bytes: usize,
+    media_type: Option<String>,
+    thread_id: Option<String>,
+    run_id: Option<String>,
+    extra_images_seen: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ImageGenerationEventError {
+    MalformedPayload(String),
+}
+
+impl std::fmt::Display for ImageGenerationEventError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MalformedPayload(message) => write!(f, "{message}"),
+        }
+    }
+}
+
+impl std::error::Error for ImageGenerationEventError {}
+
+pub(crate) async fn cmd_tool_image(
+    config_path: &str,
+    prompt: String,
+    output: PathBuf,
+    timeout_secs: u64,
+    agent: String,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let result = run_tool_image(config_path, &prompt, output, timeout_secs, &agent).await?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "ok": true,
+                "path": result.path.display().to_string(),
+                "bytes": result.bytes,
+                "media_type": result.media_type,
+                "thread_id": result.thread_id,
+                "run_id": result.run_id,
+                "extra_images_seen": result.extra_images_seen,
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("Saved image: {}", result.path.display());
+    println!("Bytes: {}", result.bytes);
+    if let Some(media_type) = result.media_type.as_deref() {
+        println!("Media type: {media_type}");
+    }
+    if let Some(thread_id) = result.thread_id.as_deref() {
+        println!("Thread: {thread_id}");
+    }
+    if let Some(run_id) = result.run_id.as_deref() {
+        println!("Run: {run_id}");
+    }
+    if result.extra_images_seen {
+        println!("Extra images were generated and ignored.");
+    }
+    Ok(())
+}
+
+async fn run_tool_image(
+    config_path: &str,
+    prompt: &str,
+    output: PathBuf,
+    timeout_secs: u64,
+    agent: &str,
+) -> Result<ImageGenerationCliResult, Box<dyn std::error::Error>> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{Message, client::IntoClientRequest},
+    };
+
+    let agent = agent.trim();
+    if agent.is_empty() {
+        return Err("agent cannot be empty".into());
+    }
+    if timeout_secs == 0 {
+        return Err("timeout must be greater than 0 seconds".into());
+    }
+
+    let gateway = gateway_endpoint(config_path)?;
+    let thread_payload = post_gateway_json(
+        &gateway,
+        "/api/threads",
+        &json!({
+            "label": "Image generation",
+            "agentId": agent,
+            "metadata": {
+                "source": "garyx_tool_image"
+            }
+        }),
+    )
+    .await
+    .map_err(|error| format!("gateway unavailable or selected agent is not available: {error}"))?;
+    validate_tool_image_thread_agent(&thread_payload, agent)?;
+    let thread_id = thread_payload
+        .get("id")
+        .or_else(|| thread_payload.get("thread_id"))
+        .or_else(|| thread_payload.get("threadId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or("gateway did not return a thread id for image generation")?
+        .to_owned();
+
+    let ws_url = gateway
+        .base_url
+        .replace("https://", "wss://")
+        .replace("http://", "ws://");
+    let ws_url = format!("{ws_url}/api/chat/ws");
+
+    let mut request = ws_url.into_client_request()?;
+    if let Some(token) = gateway.auth_token.as_deref() {
+        request
+            .headers_mut()
+            .insert("Authorization", format!("Bearer {token}").parse()?);
+    }
+
+    let (ws_stream, _) = connect_async(request)
+        .await
+        .map_err(|error| format!("WebSocket connect failed: {error}"))?;
+    let (mut write, mut read) = ws_stream.split();
+
+    let start_payload = json!({
+        "op": "start",
+        "message": build_image_generation_prompt(prompt),
+        "threadId": thread_id,
+        "accountId": "cli",
+        "fromId": "cli",
+        "waitForResponse": false,
+    });
+    write
+        .send(Message::Text(serde_json::to_string(&start_payload)?.into()))
+        .await?;
+
+    let timeout = tokio::time::Duration::from_secs(timeout_secs);
+    let deadline = tokio::time::sleep(timeout);
+    tokio::pin!(deadline);
+
+    let mut first_image: Option<GeneratedImageResult> = None;
+    let mut extra_images_seen = false;
+    let mut run_id: Option<String> = None;
+    let mut stream_thread_id: Option<String> = Some(thread_id);
+
+    loop {
+        tokio::select! {
+            _ = &mut deadline => {
+                return Err(format!("timed out after {timeout_secs}s waiting for CodeX image generation").into());
+            }
+            msg = read.next() => {
+                match msg {
+                    None => break,
+                    Some(Err(error)) => return Err(format!("WebSocket error: {error}").into()),
+                    Some(Ok(Message::Text(text))) => {
+                        let event: Value = match serde_json::from_str(&text) {
+                            Ok(value) => value,
+                            Err(_) => continue,
+                        };
+                        if run_id.is_none() {
+                            run_id = event.get("runId").or_else(|| event.get("run_id")).and_then(Value::as_str).map(str::to_owned);
+                        }
+                        if let Some(next_thread_id) = event.get("threadId").or_else(|| event.get("thread_id")).and_then(Value::as_str) {
+                            stream_thread_id = Some(next_thread_id.to_owned());
+                        }
+                        if let Some(image) = extract_image_from_chat_event(&event)? {
+                            if first_image.is_some() {
+                                extra_images_seen = true;
+                            } else {
+                                first_image = Some(image);
+                            }
+                        }
+
+                        match event.get("type").and_then(Value::as_str).unwrap_or("") {
+                            "done" | "complete" => break,
+                            "error" => {
+                                let message = event.get("message")
+                                    .or_else(|| event.get("error"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown gateway error");
+                                return Err(format!("CodeX image generation failed: {message}").into());
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
+    }
+
+    let image = first_image.ok_or("CodeX completed without generating an image")?;
+    let output = resolve_image_output_path(output, image.extension);
+    write_generated_image_output(&output, &image.bytes).await?;
+    Ok(ImageGenerationCliResult {
+        path: output,
+        bytes: image.bytes.len(),
+        media_type: image.media_type,
+        thread_id: stream_thread_id,
+        run_id,
+        extra_images_seen,
+    })
+}
+
+fn validate_tool_image_thread_agent(
+    thread_payload: &Value,
+    requested_agent: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let provider = thread_payload
+        .get("provider_type")
+        .or_else(|| thread_payload.get("providerType"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if provider == "codex_app_server" || provider == "CodexAppServer" {
+        return Ok(());
+    }
+    if requested_agent == "codex" && provider.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "selected agent '{requested_agent}' is not CodeX-capable (provider_type: {})",
+        if provider.is_empty() {
+            "unknown"
+        } else {
+            provider
+        }
+    )
+    .into())
+}
+
+fn build_image_generation_prompt(prompt: &str) -> String {
+    format!(
+        "You are being invoked by `garyx tool image`.\n\
+Generate exactly one image using your image-generation capability/tooling. Do not merely describe an image. Do not generate more than one image.\n\
+Preserve the user prompt below verbatim as the image-generation prompt.\n\n\
+<garyx-image-prompt>\n{prompt}\n</garyx-image-prompt>"
+    )
+}
+
+fn extract_image_from_chat_event(
+    event: &Value,
+) -> Result<Option<GeneratedImageResult>, ImageGenerationEventError> {
+    if event.get("type").and_then(Value::as_str) != Some("tool_result") {
+        return Ok(None);
+    }
+    let Some(message_value) = event.get("message") else {
+        return Ok(None);
+    };
+    let message: garyx_models::provider::ProviderMessage =
+        serde_json::from_value(message_value.clone()).map_err(|error| {
+            ImageGenerationEventError::MalformedPayload(format!(
+                "generated image event payload was malformed: {error}"
+            ))
+        })?;
+    if provider_message_item_type(&message) != Some("imageGeneration") {
+        return Ok(None);
+    }
+    let result = message
+        .content
+        .get("result")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    if result.is_empty() {
+        return Ok(None);
+    }
+    extract_image_generation_result(&message)
+        .map(Some)
+        .ok_or_else(|| {
+            ImageGenerationEventError::MalformedPayload(
+                "generated image payload was malformed or not valid base64".to_owned(),
+            )
+        })
+}
+
+fn resolve_image_output_path(output: PathBuf, extension: &str) -> PathBuf {
+    if output.extension().is_some() {
+        output
+    } else {
+        output.with_extension(extension)
+    }
+}
+
+async fn write_generated_image_output(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(path, bytes).await
 }
 
 pub(crate) async fn cmd_thread_send(

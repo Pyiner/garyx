@@ -160,6 +160,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: AgentAction,
     },
+    /// Provider-backed utility commands
+    #[command(name = "tool", visible_alias = "tools")]
+    Tool {
+        #[command(subcommand)]
+        action: ToolAction,
+    },
     /// Team asset management
     #[command(name = "team", alias = "teams")]
     Team {
@@ -917,6 +923,27 @@ pub(crate) enum TeamAction {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ToolAction {
+    /// Generate exactly one image with the configured Codex provider
+    Image {
+        /// Image prompt
+        prompt: String,
+        /// Output file path
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Wait up to this many seconds for image generation
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
+        /// Agent id to use for the provider run
+        #[arg(long, default_value = "codex")]
+        agent: String,
     },
 }
 

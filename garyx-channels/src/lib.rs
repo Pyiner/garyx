@@ -3,7 +3,7 @@ pub mod builtin_catalog;
 pub mod channel_trait;
 pub mod dispatcher;
 pub mod feishu;
-pub(crate) mod generated_images;
+pub mod generated_images;
 pub mod plugin;
 pub mod plugin_host;
 pub mod streaming_core;
@@ -16,7 +16,7 @@ pub mod weixin_auth_executor;
 ///
 /// Replaces any character that is not alphanumeric, `.`, `-`, or `_` with `_`.
 /// Returns `"file.bin"` for empty, `"."`, or `".."` inputs.
-pub(crate) fn sanitize_filename(name: &str) -> String {
+pub fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
