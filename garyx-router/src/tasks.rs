@@ -582,6 +582,63 @@ impl TaskService {
         .await
     }
 
+    pub async fn stop_task(
+        &self,
+        task_id: &str,
+        actor: Option<Principal>,
+    ) -> Result<ThreadTask, TaskServiceError> {
+        let actor = actor.unwrap_or_else(default_actor);
+        validate_principal(&actor)?;
+        self.mutate_task(task_id, move |task| {
+            let from_status = task.status;
+            if from_status == TaskStatus::InProgress {
+                task.status = TaskStatus::Todo;
+                push_event(
+                    task,
+                    actor.clone(),
+                    TaskEventKind::StatusChanged {
+                        from: from_status,
+                        to: TaskStatus::Todo,
+                        note: Some("stopped".to_owned()),
+                    },
+                    None,
+                );
+            }
+            if let Some(previous_assignee) = task.assignee.take() {
+                push_event(
+                    task,
+                    actor,
+                    TaskEventKind::Released {
+                        previous_assignee: Some(previous_assignee),
+                    },
+                    None,
+                );
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    pub async fn delete_task(
+        &self,
+        task_id: &str,
+    ) -> Result<(String, ThreadTask), TaskServiceError> {
+        let (thread_id, _) = self.resolve_task_record(task_id).await?;
+        let lock = task_thread_lock(&thread_id);
+        let _guard = lock.lock().await;
+        let mut record = self
+            .thread_store
+            .get(&thread_id)
+            .await
+            .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
+        let task = task_from_record(&record)?
+            .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
+        remove_task_from_record(&mut record)?;
+        self.thread_store.set(&thread_id, record).await;
+        task_index_remove_task(self.index_store_id(), &thread_id, &task);
+        Ok((thread_id, task))
+    }
+
     pub async fn set_title(
         &self,
         task_id: &str,
@@ -823,6 +880,18 @@ fn set_task_on_record(record: &mut Value, task: &ThreadTask) -> Result<(), TaskS
     Ok(())
 }
 
+fn remove_task_from_record(record: &mut Value) -> Result<(), TaskServiceError> {
+    let obj = record
+        .as_object_mut()
+        .ok_or_else(|| TaskServiceError::Store("thread record is not an object".to_owned()))?;
+    obj.remove("task");
+    obj.insert(
+        "updated_at".to_owned(),
+        Value::String(Utc::now().to_rfc3339()),
+    );
+    Ok(())
+}
+
 fn task_thread_lock(thread_id: &str) -> TaskThreadLock {
     let locks = TASK_THREAD_LOCKS.get_or_init(|| StdMutex::new(HashMap::new()));
     let mut locks = locks
@@ -923,6 +992,16 @@ fn task_index_remove(index_key: &TaskIndexKey) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     state.by_number.remove(index_key);
+}
+
+fn task_index_remove_task(store_id: usize, thread_id: &str, task: &ThreadTask) {
+    let mut state = task_index_state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let index_key = task_index_key(store_id, task);
+    state.by_number.retain(|key, value| {
+        !(key == &index_key || (key.store_id == store_id && value == thread_id))
+    });
 }
 
 fn push_event(
@@ -1552,6 +1631,101 @@ mod tests {
             })
         );
         assert_eq!(updated.events.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn stop_running_task_moves_to_todo_and_releases_assignee() {
+        let service = service();
+        let (_thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Stop me".to_owned()),
+                body: None,
+                assignee: Some(Principal::Agent {
+                    agent_id: "codex".to_owned(),
+                }),
+                notification_target: None,
+                source: None,
+                start: true,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+
+        let stopped = service
+            .stop_task(
+                &canonical_task_id(&task),
+                Some(Principal::Human {
+                    user_id: "tester".to_owned(),
+                }),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(stopped.status, TaskStatus::Todo);
+        assert_eq!(stopped.assignee, None);
+        assert!(matches!(
+            stopped.events.iter().rev().nth(1).map(|event| &event.kind),
+            Some(TaskEventKind::StatusChanged {
+                from: TaskStatus::InProgress,
+                to: TaskStatus::Todo,
+                note: Some(note),
+            }) if note == "stopped"
+        ));
+        assert!(matches!(
+            stopped.events.last().map(|event| &event.kind),
+            Some(TaskEventKind::Released {
+                previous_assignee: Some(Principal::Agent { agent_id }),
+            }) if agent_id == "codex"
+        ));
+    }
+
+    #[tokio::test]
+    async fn delete_task_removes_overlay_from_list_but_keeps_thread_record() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Delete task metadata".to_owned()),
+                body: Some("Keep the backing thread for audit.".to_owned()),
+                assignee: None,
+                notification_target: None,
+                source: None,
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let task_id = canonical_task_id(&task);
+
+        let (deleted_thread_id, deleted_task) = service.delete_task(&task_id).await.unwrap();
+
+        assert_eq!(deleted_thread_id, thread_id);
+        assert_eq!(canonical_task_id(&deleted_task), task_id);
+        let record = service
+            .thread_store
+            .get(&thread_id)
+            .await
+            .expect("backing thread remains");
+        assert!(record.get("task").is_none());
+        let (listed, total, has_more) = service
+            .list_tasks(TaskListFilter {
+                include_done: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(total, 0);
+        assert!(!has_more);
+        assert!(listed.is_empty());
+        assert!(matches!(
+            service.get_task(&task_id).await.unwrap_err(),
+            TaskServiceError::NotFound(_)
+        ));
     }
 
     #[tokio::test]

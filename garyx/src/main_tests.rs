@@ -1048,6 +1048,31 @@ fn parse_task_create_runtime_options() {
 }
 
 #[test]
+fn parse_task_stop_and_delete() {
+    let cli = Cli::parse_from(["garyx", "task", "stop", "#TASK-42", "--json"]);
+    match cli.command {
+        Some(Commands::Task {
+            action: TaskAction::Stop { task_id, json },
+        }) => {
+            assert_eq!(task_id, "#TASK-42");
+            assert!(json);
+        }
+        _ => panic!("expected Task::Stop"),
+    }
+
+    let cli = Cli::parse_from(["garyx", "task", "delete", "#TASK-42"]);
+    match cli.command {
+        Some(Commands::Task {
+            action: TaskAction::Delete { task_id, json },
+        }) => {
+            assert_eq!(task_id, "#TASK-42");
+            assert!(!json);
+        }
+        _ => panic!("expected Task::Delete"),
+    }
+}
+
+#[test]
 fn parse_agent_create() {
     let cli = Cli::parse_from([
         "garyx",

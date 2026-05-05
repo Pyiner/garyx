@@ -327,6 +327,13 @@ provider defaults in the desktop app. Gemini only shows a model picker when the
 gateway can discover models from the local Gemini ACP process; Garyx does not
 use a Gemini API key to populate that list.
 
+## Tasks
+
+Tasks are stored as metadata on their backing Garyx thread. Stopping a task
+interrupts any active run on that thread and releases the task back to a
+non-running state. Deleting a task removes that metadata so the task disappears
+from task lists; the backing thread and transcript are retained for audit.
+
 ## Managed MCP Servers
 
 Put managed MCP servers under `mcp_servers` in `~/.garyx/garyx.json`.

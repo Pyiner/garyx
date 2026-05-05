@@ -619,6 +619,69 @@ pub async fn update_task_status(
     }
 }
 
+pub async fn stop_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<String>,
+    headers: HeaderMap,
+) -> (StatusCode, Json<Value>) {
+    let Some(service) = task_service(&state) else {
+        return tasks_disabled();
+    };
+    let actor = match actor_from_request(None, &headers) {
+        Ok(actor) => actor,
+        Err(error) => return task_error_response(error),
+    };
+    let (thread_id, _, _) = match service.get_task(&task_id).await {
+        Ok(task) => task,
+        Err(error) => return task_error_response(error),
+    };
+    let interrupt = crate::chat_control::execute_chat_interrupt(&state, thread_id.clone()).await;
+    match service.stop_task(&task_id, actor).await {
+        Ok(task) => (
+            StatusCode::OK,
+            Json(json!({
+                "task": task,
+                "thread_id": thread_id,
+                "interrupted": interrupt.status == "interrupted",
+                "interrupt_status": interrupt.status,
+                "aborted_runs": interrupt.aborted_runs,
+            })),
+        ),
+        Err(error) => task_error_response(error),
+    }
+}
+
+pub async fn delete_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<String>,
+) -> (StatusCode, Json<Value>) {
+    let Some(service) = task_service(&state) else {
+        return tasks_disabled();
+    };
+    let (thread_id, _, task) = match service.get_task(&task_id).await {
+        Ok(task) => task,
+        Err(error) => return task_error_response(error),
+    };
+    let interrupt = crate::chat_control::execute_chat_interrupt(&state, thread_id.clone()).await;
+    match service.delete_task(&task_id).await {
+        Ok((deleted_thread_id, deleted_task)) => (
+            StatusCode::OK,
+            Json(json!({
+                "deleted": true,
+                "task_id": garyx_router::tasks::canonical_task_id(&deleted_task),
+                "thread_id": deleted_thread_id,
+                "task": task,
+                "thread_retained": true,
+                "transcripts_retained": true,
+                "interrupted": interrupt.status == "interrupted",
+                "interrupt_status": interrupt.status,
+                "aborted_runs": interrupt.aborted_runs,
+            })),
+        ),
+        Err(error) => task_error_response(error),
+    }
+}
+
 pub async fn set_task_title(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
@@ -1025,7 +1088,24 @@ fn spawn_task_auto_dispatch(
     extra_metadata.insert("task_id".to_owned(), Value::String(task_id.clone()));
     let dispatch_run_id = run_id.clone();
     let dispatch_thread_id = thread_id.clone();
+    let dispatch_agent_id = agent_id.clone();
     tokio::spawn(async move {
+        if !task_auto_dispatch_still_current(
+            &state,
+            &dispatch_thread_id,
+            &task_id,
+            &dispatch_agent_id,
+        )
+        .await
+        {
+            tracing::info!(
+                task_id = %task_id,
+                thread_id = %dispatch_thread_id,
+                run_id = %dispatch_run_id,
+                "task auto dispatch skipped because task is no longer active"
+            );
+            return;
+        }
         if let Err(error) = dispatch_internal_message_to_thread(
             &state,
             &dispatch_thread_id,
@@ -1052,6 +1132,30 @@ fn spawn_task_auto_dispatch(
         "run_id": run_id,
         "agent_id": agent_id,
     }))
+}
+
+async fn task_auto_dispatch_still_current(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    task_id: &str,
+    agent_id: &str,
+) -> bool {
+    let Some(record) = state.threads.thread_store.get(thread_id).await else {
+        return false;
+    };
+    let Ok(Some(task)) = garyx_router::tasks::task_from_record(&record) else {
+        return false;
+    };
+    if garyx_router::tasks::canonical_task_id(&task) != task_id {
+        return false;
+    }
+    if task.status != TaskStatus::InProgress {
+        return false;
+    }
+    matches!(
+        task.assignee.as_ref(),
+        Some(Principal::Agent { agent_id: current }) if current == agent_id
+    )
 }
 
 fn task_auto_dispatch_message(

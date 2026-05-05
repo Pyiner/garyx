@@ -13830,6 +13830,15 @@ button.codex-list-row {
   color: var(--color-token-text-primary);
 }
 
+.tasks-icon-button.danger {
+  color: var(--color-token-error-foreground);
+}
+
+.tasks-icon-button.danger:hover {
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
+}
+
 .tasks-list {
   flex: 1 1 0;
   min-height: 0;

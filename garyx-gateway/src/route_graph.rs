@@ -89,10 +89,17 @@ fn thread_routes() -> Router<Arc<AppState>> {
             "/api/tasks/promote",
             axum::routing::post(tasks::promote_task),
         )
-        .route("/api/tasks/{task_id}", axum::routing::get(tasks::get_task))
+        .route(
+            "/api/tasks/{task_id}",
+            axum::routing::get(tasks::get_task).delete(tasks::delete_task),
+        )
         .route(
             "/api/tasks/{task_id}/history",
             axum::routing::get(tasks::task_history),
+        )
+        .route(
+            "/api/tasks/{task_id}/stop",
+            axum::routing::post(tasks::stop_task),
         )
         .route(
             "/api/tasks/{task_id}/assign",

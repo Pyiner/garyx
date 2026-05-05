@@ -5,6 +5,7 @@ import type {
   CreateSkillInput,
   CreateTaskInput,
   DeleteCustomAgentInput,
+  DeleteTaskInput,
   DeleteTeamInput,
   DeleteMcpServerInput,
   DesktopAutomationActivityEntry,
@@ -68,6 +69,7 @@ import type {
   ResearchCandidate,
   SelectCandidateInput,
   StopAutoResearchRunInput,
+  StopTaskInput,
   ThreadLogChunk,
   ThreadChannelBindingInfo,
   ThreadRuntimeInfo,
@@ -3570,6 +3572,34 @@ export async function unassignTask(
   await requestJson<unknown>(
     settings,
     `/api/tasks/${encodeURIComponent(input.taskId)}/assign`,
+    {
+      method: "DELETE",
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+}
+
+export async function stopTask(
+  settings: DesktopSettings,
+  input: StopTaskInput,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/tasks/${encodeURIComponent(input.taskId)}/stop`,
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+}
+
+export async function deleteTask(
+  settings: DesktopSettings,
+  input: DeleteTaskInput,
+): Promise<void> {
+  await requestJson<unknown>(
+    settings,
+    `/api/tasks/${encodeURIComponent(input.taskId)}`,
     {
       method: "DELETE",
       signal: AbortSignal.timeout(8000),

@@ -52,6 +52,7 @@ import type {
   DesktopSettings,
   GetSkillEditorInput,
   GatewayConfigDocument,
+  DeleteTaskInput,
   ListAutoResearchRunsInput,
   ListCandidatesInput,
   ListTasksInput,
@@ -75,6 +76,7 @@ import type {
   DeleteSlashCommandInput,
   SelectCandidateInput,
   StopAutoResearchRunInput,
+  StopTaskInput,
   ToggleSkillInput,
   ToggleMcpServerInput,
   UploadChatAttachmentsInput,
@@ -112,6 +114,7 @@ import {
   deleteSkillEntry,
   deleteSlashCommand,
   deleteSkill,
+  deleteTask,
   detachRemoteChannelEndpoint,
   fetchAutomationActivity,
   fetchChannelEndpoints,
@@ -145,6 +148,7 @@ import {
   deleteAutoResearchRun,
   selectAutoResearchCandidate,
   stopAutoResearchRun,
+  stopTask,
   toggleMcpServer,
   toggleSkill,
   uploadWorkspaceFiles,
@@ -690,6 +694,16 @@ function registerIpcHandlers(): void {
       return unassignTask(settings, input);
     },
   );
+
+  ipcMain.handle("garyx:stop-task", async (_event, input: StopTaskInput) => {
+    const settings = await resolveSettings();
+    return stopTask(settings, input);
+  });
+
+  ipcMain.handle("garyx:delete-task", async (_event, input: DeleteTaskInput) => {
+    const settings = await resolveSettings();
+    return deleteTask(settings, input);
+  });
 
   ipcMain.handle(
     "garyx:update-task-title",

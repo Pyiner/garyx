@@ -4323,6 +4323,89 @@ pub(crate) async fn cmd_task_release(
     Ok(())
 }
 
+pub(crate) async fn cmd_task_stop(
+    config_path: &str,
+    task_id: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = post_gateway_json_as_cli_actor(
+        &gateway,
+        &format!("/api/tasks/{}/stop", encode_task_id(task_id)?),
+        &json!({}),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    print_task_summary(&payload);
+    if payload
+        .get("interrupted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let aborted = payload
+            .get("aborted_runs")
+            .and_then(Value::as_array)
+            .map(|runs| {
+                runs.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "provider session".to_owned());
+        println!("Stopped run: {aborted}");
+    } else {
+        println!("Stopped run: none active");
+    }
+    Ok(())
+}
+
+pub(crate) async fn cmd_task_delete(
+    config_path: &str,
+    task_id: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = delete_gateway_json_as_cli_actor(
+        &gateway,
+        &format!("/api/tasks/{}", encode_task_id(task_id)?),
+    )
+    .await?;
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+    let deleted_task_id = payload
+        .get("task_id")
+        .and_then(Value::as_str)
+        .unwrap_or(task_id);
+    println!("Deleted task: {deleted_task_id}");
+    if let Some(thread_id) = payload.get("thread_id").and_then(Value::as_str) {
+        println!("Thread retained: {thread_id}");
+        println!("Transcripts retained: yes");
+    }
+    if payload
+        .get("interrupted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let aborted = payload
+            .get("aborted_runs")
+            .and_then(Value::as_array)
+            .map(|runs| {
+                runs.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "provider session".to_owned());
+        println!("Stopped run: {aborted}");
+    }
+    Ok(())
+}
+
 pub(crate) async fn cmd_task_assign(
     config_path: &str,
     task_id: &str,

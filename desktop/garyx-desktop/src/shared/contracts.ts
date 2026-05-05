@@ -219,6 +219,14 @@ export interface UnassignTaskInput {
   taskId: string;
 }
 
+export interface StopTaskInput {
+  taskId: string;
+}
+
+export interface DeleteTaskInput {
+  taskId: string;
+}
+
 export interface UpdateTaskTitleInput {
   taskId: string;
   title: string;
@@ -1426,6 +1434,8 @@ export interface GaryxDesktopApi {
   updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
   assignTask: (input: AssignTaskInput) => Promise<void>;
   unassignTask: (input: UnassignTaskInput) => Promise<void>;
+  stopTask: (input: StopTaskInput) => Promise<void>;
+  deleteTask: (input: DeleteTaskInput) => Promise<void>;
   updateTaskTitle: (input: UpdateTaskTitleInput) => Promise<void>;
   listSkills: () => Promise<DesktopSkillInfo[]>;
   listCustomAgents: () => Promise<DesktopCustomAgent[]>;

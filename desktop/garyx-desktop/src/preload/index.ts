@@ -69,6 +69,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:update-task-status", input),
   assignTask: (input) => ipcRenderer.invoke("garyx:assign-task", input),
   unassignTask: (input) => ipcRenderer.invoke("garyx:unassign-task", input),
+  stopTask: (input) => ipcRenderer.invoke("garyx:stop-task", input),
+  deleteTask: (input) => ipcRenderer.invoke("garyx:delete-task", input),
   updateTaskTitle: (input) =>
     ipcRenderer.invoke("garyx:update-task-title", input),
   listSkills: () => ipcRenderer.invoke("garyx:list-skills"),

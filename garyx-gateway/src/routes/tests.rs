@@ -1943,6 +1943,224 @@ async fn task_create_with_agent_assignee_queues_agent_dispatch() {
 }
 
 #[tokio::test]
+async fn task_stop_aborts_active_backing_thread_run_and_releases_task() {
+    let dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.tasks.enabled = true;
+    config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
+    config.channels.api.accounts.insert(
+        "main".to_owned(),
+        ApiAccount {
+            enabled: true,
+            name: None,
+            agent_id: "claude".to_owned(),
+            workspace_dir: None,
+        },
+    );
+
+    let provider = Arc::new(SlowDeleteProvider::new(2_000));
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("task-stop-provider", provider)
+        .await;
+    bridge.set_route("api", "main", "task-stop-provider").await;
+    bridge.set_default_provider_key("task-stop-provider").await;
+
+    let state = AppStateBuilder::new(config)
+        .with_bridge(bridge.clone())
+        .build();
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/tasks")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "title": "Stop active task",
+                "start": true,
+                "notification_target": {"kind": "none"}
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let task_id = payload["task_id"].as_str().unwrap().to_owned();
+    let thread_id = payload["thread_id"].as_str().unwrap().to_owned();
+    assert_eq!(payload["status"], "in_progress");
+
+    bridge
+        .start_agent_run(
+            garyx_models::provider::AgentRunRequest::new(
+                &thread_id,
+                "run until stopped",
+                "run-task-stop",
+                "api",
+                "main",
+                HashMap::new(),
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(bridge.is_run_active("run-task-stop").await);
+
+    let request = authed_request()
+        .method("POST")
+        .uri(format!("/api/tasks/{}/stop", urlencoding::encode(&task_id)))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["task"]["status"], "todo");
+    assert!(payload["task"]["assignee"].is_null());
+    assert_eq!(payload["interrupted"], true);
+    assert_eq!(payload["aborted_runs"], json!(["run-task-stop"]));
+    assert!(!bridge.is_run_active("run-task-stop").await);
+}
+
+#[tokio::test]
+async fn task_delete_aborts_run_and_removes_task_overlay_but_retains_thread() {
+    let dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.tasks.enabled = true;
+    config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
+    config.channels.api.accounts.insert(
+        "main".to_owned(),
+        ApiAccount {
+            enabled: true,
+            name: None,
+            agent_id: "claude".to_owned(),
+            workspace_dir: None,
+        },
+    );
+
+    let provider = Arc::new(SlowDeleteProvider::new(2_000));
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("task-delete-provider", provider)
+        .await;
+    bridge
+        .set_route("api", "main", "task-delete-provider")
+        .await;
+    bridge
+        .set_default_provider_key("task-delete-provider")
+        .await;
+
+    let state = AppStateBuilder::new(config)
+        .with_bridge(bridge.clone())
+        .build();
+    bridge.set_event_tx(state.ops.events.sender()).await;
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/tasks")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "title": "Delete task metadata",
+                "body": "The backing thread remains after deletion.",
+                "start": true,
+                "notification_target": {"kind": "none"}
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let task_id = payload["task_id"].as_str().unwrap().to_owned();
+    let thread_id = payload["thread_id"].as_str().unwrap().to_owned();
+
+    bridge
+        .start_agent_run(
+            garyx_models::provider::AgentRunRequest::new(
+                &thread_id,
+                "delete while running",
+                "run-task-delete",
+                "api",
+                "main",
+                HashMap::new(),
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(bridge.is_run_active("run-task-delete").await);
+
+    let request = authed_request()
+        .method("DELETE")
+        .uri(format!("/api/tasks/{}", urlencoding::encode(&task_id)))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["deleted"], true);
+    assert_eq!(payload["task_id"], task_id);
+    assert_eq!(payload["thread_id"], thread_id);
+    assert_eq!(payload["thread_retained"], true);
+    assert_eq!(payload["transcripts_retained"], true);
+    assert_eq!(payload["aborted_runs"], json!(["run-task-delete"]));
+    assert!(!bridge.is_run_active("run-task-delete").await);
+
+    let retained = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .expect("backing thread should remain");
+    assert!(retained.get("task").is_none());
+
+    let request = authed_request()
+        .method("GET")
+        .uri("/api/tasks?include_done=true")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["total"], 0);
+    assert_eq!(payload["tasks"], json!([]));
+
+    let request = authed_request()
+        .method("GET")
+        .uri(format!("/api/tasks/{}", urlencoding::encode(&task_id)))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn task_assign_queues_dispatch_with_original_body() {
     let dir = tempdir().unwrap();
     let mut config = test_config();

@@ -15,6 +15,8 @@ import {
   MessageSquare,
   Plus,
   RefreshCcw,
+  StopCircle,
+  Trash2,
 } from 'lucide-react';
 
 import type {
@@ -253,6 +255,50 @@ export function TasksPanel({
     }
   }
 
+  async function stopTask(task: DesktopTaskSummary) {
+    if (task.status !== 'in_progress') {
+      return;
+    }
+    setMutatingTaskId(task.taskId);
+    try {
+      await getDesktopApi().stopTask({ taskId: task.taskId });
+      await loadTasks({ silent: true });
+      onToast(t('Task stopped.'), 'success');
+    } catch (stopError) {
+      onToast(
+        stopError instanceof Error ? stopError.message : t('Task stop failed.'),
+        'error',
+      );
+    } finally {
+      setMutatingTaskId(null);
+    }
+  }
+
+  async function deleteTask(task: DesktopTaskSummary) {
+    const confirmed = window.confirm(t(
+      'Delete task {taskId}? The task will leave task lists, but the backing thread and transcript stay available.',
+      { taskId: task.taskId || `#TASK-${task.number}` },
+    ));
+    if (!confirmed) {
+      return;
+    }
+    setMutatingTaskId(task.taskId);
+    try {
+      await getDesktopApi().deleteTask({ taskId: task.taskId });
+      setTasks((current) => current.filter((candidate) => candidate.taskId !== task.taskId));
+      setTotal((current) => Math.max(0, current - 1));
+      await loadTasks({ silent: true });
+      onToast(t('Task deleted.'), 'success');
+    } catch (deleteError) {
+      onToast(
+        deleteError instanceof Error ? deleteError.message : t('Task delete failed.'),
+        'error',
+      );
+    } finally {
+      setMutatingTaskId(null);
+    }
+  }
+
   function draggedTask(event: DragEvent<HTMLElement>): DesktopTaskSummary | null {
     const taskId =
       event.dataTransfer.getData(TASK_DRAG_MIME) ||
@@ -399,6 +445,32 @@ export function TasksPanel({
               type="button"
             >
               <MessageSquare aria-hidden size={14} strokeWidth={1.8} />
+            </button>
+            {task.status === 'in_progress' ? (
+              <button
+                aria-label={t('Stop task')}
+                className="tasks-icon-button"
+                disabled={busy}
+                onClick={() => {
+                  void stopTask(task);
+                }}
+                title={t('Stop task')}
+                type="button"
+              >
+                <StopCircle aria-hidden size={14} strokeWidth={1.8} />
+              </button>
+            ) : null}
+            <button
+              aria-label={t('Delete task')}
+              className="tasks-icon-button danger"
+              disabled={busy}
+              onClick={() => {
+                void deleteTask(task);
+              }}
+              title={t('Delete task')}
+              type="button"
+            >
+              <Trash2 aria-hidden size={14} strokeWidth={1.8} />
             </button>
             <button
               className="tasks-move-button"
@@ -661,6 +733,32 @@ export function TasksPanel({
                     type="button"
                   >
                     <MessageSquare aria-hidden size={14} strokeWidth={1.8} />
+                  </button>
+                  {task.status === 'in_progress' ? (
+                    <button
+                      aria-label={t('Stop task')}
+                      className="tasks-icon-button"
+                      disabled={busy}
+                      onClick={() => {
+                        void stopTask(task);
+                      }}
+                      title={t('Stop task')}
+                      type="button"
+                    >
+                      <StopCircle aria-hidden size={14} strokeWidth={1.8} />
+                    </button>
+                  ) : null}
+                  <button
+                    aria-label={t('Delete task')}
+                    className="tasks-icon-button danger"
+                    disabled={busy}
+                    onClick={() => {
+                      void deleteTask(task);
+                    }}
+                    title={t('Delete task')}
+                    type="button"
+                  >
+                    <Trash2 aria-hidden size={14} strokeWidth={1.8} />
                   </button>
                   <button
                     className="tasks-move-button"

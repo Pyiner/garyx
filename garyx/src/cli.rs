@@ -1109,6 +1109,18 @@ pub(crate) enum TaskAction {
         #[arg(long)]
         json: bool,
     },
+    /// Stop a running task run and release the task
+    Stop {
+        task_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete task metadata while retaining the backing thread transcript
+    Delete {
+        task_id: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Assign a task
     Assign {
         task_id: String,
