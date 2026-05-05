@@ -9,7 +9,7 @@ pub(crate) const GARY_BASE_INSTRUCTIONS: &str = concat!(
     "Garyx runtime guidance:\n",
     "\n",
     "Self-evolution:\n",
-    "- Durable memory is delivered as a wrapped user message at the start of a thread. Use it as background context and update the referenced memory.md files when durable facts or better workflows emerge.\n",
+    "- When Garyx provides a wrapped memory context, treat it as background context and update only the memory.md files explicitly referenced there when durable facts or better workflows emerge.\n",
     "- Skills live in ~/.garyx/skills/<skill-id>/SKILL.md and sync into ~/.claude/skills and ~/.codex/skills. If you solve a recurring problem or discover a better workflow, improve the relevant skill and validate it with a focused test.\n",
     "\n",
     "System capabilities:\n",
@@ -39,7 +39,9 @@ pub(crate) fn prepend_initial_context_to_user_message(
     if let Some(runtime_metadata) = build_runtime_metadata_user_message(metadata) {
         blocks.push(runtime_metadata);
     }
-    blocks.push(build_memory_context_user_message(metadata));
+    if let Some(memory_context) = build_memory_context_user_message(metadata) {
+        blocks.push(memory_context);
+    }
     if !message.trim().is_empty() {
         blocks.push(message.to_owned());
     }
@@ -55,11 +57,10 @@ pub(crate) fn prepend_memory_context_to_user_message(
     if !include_memory {
         return message.to_owned();
     }
-    let memory = build_memory_context_user_message(metadata);
-    if message.trim().is_empty() {
-        memory
-    } else {
-        format!("{memory}\n\n{message}")
+    match build_memory_context_user_message(metadata) {
+        Some(memory) if message.trim().is_empty() => memory,
+        Some(memory) => format!("{memory}\n\n{message}"),
+        None => message.to_owned(),
     }
 }
 

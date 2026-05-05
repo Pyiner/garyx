@@ -246,7 +246,7 @@ fn test_build_input_items_text_only() {
 }
 
 #[test]
-fn test_build_input_items_prepends_memory_on_first_turn() {
+fn test_build_input_items_skips_agent_memory_for_builtin_codex() {
     let options = ProviderRunOptions {
         thread_id: "s1".to_owned(),
         message: "hello world".to_owned(),
@@ -256,8 +256,22 @@ fn test_build_input_items_prepends_memory_on_first_turn() {
     };
     let items = build_input_items(&options, true);
     assert_eq!(items.len(), 1);
+    assert!(matches!(&items[0], InputItem::Text { text } if text == "hello world"));
+}
+
+#[test]
+fn test_build_input_items_prepends_memory_for_custom_agents() {
+    let options = ProviderRunOptions {
+        thread_id: "s1".to_owned(),
+        message: "hello world".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([("agent_id".to_owned(), json!("reviewer"))]),
+    };
+    let items = build_input_items(&options, true);
+    assert_eq!(items.len(), 1);
     assert!(
-        matches!(&items[0], InputItem::Text { text } if text.starts_with("<garyx_memory_context>") && text.contains("<agent_memory agent_id=\"codex\"") && text.ends_with("hello world"))
+        matches!(&items[0], InputItem::Text { text } if text.starts_with("<garyx_memory_context>") && text.contains("<agent_memory agent_id=\"reviewer\"") && text.ends_with("hello world"))
     );
 }
 

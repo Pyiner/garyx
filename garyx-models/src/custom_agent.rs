@@ -68,5 +68,9 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
     ]
 }
 
+pub fn is_builtin_provider_agent_id(agent_id: &str) -> bool {
+    matches!(agent_id.trim(), "claude" | "codex" | "gemini")
+}
+
 #[cfg(test)]
 mod tests;

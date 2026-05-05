@@ -1735,7 +1735,7 @@ fn test_build_user_message_input_plain_text_without_images() {
 }
 
 #[test]
-fn test_build_user_message_input_prepends_memory_on_first_turn() {
+fn test_build_user_message_input_skips_agent_memory_for_builtin_claude() {
     let options = ProviderRunOptions {
         thread_id: "sess".to_owned(),
         message: "describe this".to_owned(),
@@ -1746,9 +1746,26 @@ fn test_build_user_message_input_prepends_memory_on_first_turn() {
 
     let content = build_user_message_input(&options, true);
     match content {
+        UserInput::Text(text) => assert_eq!(text, "describe this"),
+        UserInput::Blocks(_) => panic!("expected text input"),
+    }
+}
+
+#[test]
+fn test_build_user_message_input_prepends_memory_for_custom_agents() {
+    let options = ProviderRunOptions {
+        thread_id: "sess".to_owned(),
+        message: "describe this".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([("agent_id".to_owned(), Value::String("reviewer".to_owned()))]),
+    };
+
+    let content = build_user_message_input(&options, true);
+    match content {
         UserInput::Text(text) => {
             assert!(text.starts_with("<garyx_memory_context>"));
-            assert!(text.contains("<agent_memory agent_id=\"claude\""));
+            assert!(text.contains("<agent_memory agent_id=\"reviewer\""));
             assert!(text.ends_with("describe this"));
         }
         UserInput::Blocks(_) => panic!("expected text input"),

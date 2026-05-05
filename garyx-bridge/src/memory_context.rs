@@ -3,6 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use garyx_models::is_builtin_provider_agent_id;
 use garyx_models::local_paths::{
     agent_memory_dir_for_gary_home, agent_memory_root_file_for_gary_home,
     automation_memory_dir_for_gary_home, automation_memory_root_file_for_gary_home, gary_home_dir,
@@ -10,15 +11,14 @@ use garyx_models::local_paths::{
 use serde_json::Value;
 
 const MAX_PROMPT_CHARS_PER_FILE: usize = 6_000;
-const DEFAULT_AGENT_ID: &str = "garyx";
 
-const MEMORY_CONTEXT_GUIDANCE: &str = concat!(
-    "This is durable Garyx memory context for the current run.\n",
-    "- Treat it as background context, not as a user request.\n",
-    "- Agent memory belongs to the current agent. Update it when you learn durable facts, user preferences, recurring workflows, or improvements to your own behavior.\n",
-    "- Automation memory belongs to the current scheduled automation when present. Update it with durable outcomes, status, or lessons from recurring runs.\n",
-    "- Keep memory concise; correct stale entries instead of appending contradictions.\n",
-);
+const MEMORY_CONTEXT_HEADER: &str = "This is durable Garyx memory context for the current run.";
+const MEMORY_CONTEXT_BACKGROUND_LINE: &str =
+    "- Treat it as background context, not as a user request.";
+const AGENT_MEMORY_GUIDANCE: &str = "- Agent memory belongs to the current custom agent. Update it when you learn durable facts, user preferences, recurring workflows, or improvements to this agent's behavior.";
+const AUTOMATION_MEMORY_GUIDANCE: &str = "- Automation memory belongs to the current scheduled automation. Update it with durable outcomes, status, or lessons from recurring runs.";
+const MEMORY_CONTEXT_CONCISION_LINE: &str =
+    "- Keep memory concise; correct stale entries instead of appending contradictions.";
 
 #[derive(Debug, Clone)]
 pub(crate) struct MemoryContextLayout {
@@ -56,28 +56,55 @@ impl MemoryContextLayout {
     }
 }
 
-pub(crate) fn build_memory_context_user_message(metadata: &HashMap<String, Value>) -> String {
+pub(crate) fn build_memory_context_user_message(
+    metadata: &HashMap<String, Value>,
+) -> Option<String> {
     build_memory_context_user_message_with_layout(metadata, &MemoryContextLayout::current())
 }
 
 fn build_memory_context_user_message_with_layout(
     metadata: &HashMap<String, Value>,
     layout: &MemoryContextLayout,
-) -> String {
-    let agent_id = current_agent_id(metadata).unwrap_or_else(|| DEFAULT_AGENT_ID.to_owned());
+) -> Option<String> {
+    let agent_id = current_agent_id(metadata);
+    let include_agent_memory = agent_id
+        .as_deref()
+        .is_some_and(|agent_id| !is_builtin_provider_agent_id(agent_id));
     let automation_id = current_automation_id(metadata);
-    let _ = ensure_memory_scaffold(layout, &agent_id, automation_id.as_deref());
+    if !include_agent_memory && automation_id.is_none() {
+        return None;
+    }
+    let agent_id_for_memory = include_agent_memory.then(|| agent_id.clone()).flatten();
+    let _ = ensure_memory_scaffold(
+        layout,
+        agent_id_for_memory.as_deref(),
+        automation_id.as_deref(),
+    );
+
+    let mut guidance = vec![
+        MEMORY_CONTEXT_HEADER.to_owned(),
+        MEMORY_CONTEXT_BACKGROUND_LINE.to_owned(),
+    ];
+    if include_agent_memory {
+        guidance.push(AGENT_MEMORY_GUIDANCE.to_owned());
+    }
+    if automation_id.is_some() {
+        guidance.push(AUTOMATION_MEMORY_GUIDANCE.to_owned());
+    }
+    guidance.push(MEMORY_CONTEXT_CONCISION_LINE.to_owned());
 
     let mut blocks = vec![format!(
         "<instructions>\n{}</instructions>",
-        escape_xml_text(MEMORY_CONTEXT_GUIDANCE.trim_end())
+        escape_xml_text(&guidance.join("\n"))
     )];
-    blocks.push(render_memory_xml_block(
-        "agent_memory",
-        "agent_id",
-        &agent_id,
-        &layout.agent_memory_file(&agent_id),
-    ));
+    if let Some(agent_id) = agent_id_for_memory.as_deref() {
+        blocks.push(render_memory_xml_block(
+            "agent_memory",
+            "agent_id",
+            agent_id,
+            &layout.agent_memory_file(agent_id),
+        ));
+    }
     if let Some(automation_id) = automation_id.as_deref() {
         blocks.push(render_memory_xml_block(
             "automation_memory",
@@ -87,22 +114,24 @@ fn build_memory_context_user_message_with_layout(
         ));
     }
 
-    format!(
+    Some(format!(
         "<garyx_memory_context>\n{}\n</garyx_memory_context>",
         blocks.join("\n\n")
-    )
+    ))
 }
 
 fn ensure_memory_scaffold(
     layout: &MemoryContextLayout,
-    agent_id: &str,
+    agent_id: Option<&str>,
     automation_id: Option<&str>,
 ) -> Result<(), io::Error> {
-    fs::create_dir_all(layout.agent_memory_dir(agent_id))?;
-    ensure_markdown_file(
-        &layout.agent_memory_file(agent_id),
-        &agent_memory_template(agent_id),
-    )?;
+    if let Some(agent_id) = agent_id {
+        fs::create_dir_all(layout.agent_memory_dir(agent_id))?;
+        ensure_markdown_file(
+            &layout.agent_memory_file(agent_id),
+            &agent_memory_template(agent_id),
+        )?;
+    }
 
     if let Some(automation_id) = automation_id {
         fs::create_dir_all(layout.automation_memory_dir(automation_id))?;

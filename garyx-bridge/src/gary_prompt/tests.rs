@@ -47,6 +47,19 @@ fn prepend_memory_context_to_user_message_only_when_requested() {
 }
 
 #[test]
+fn prepend_memory_context_skips_builtin_provider_agents() {
+    for agent_id in ["claude", "codex", "gemini"] {
+        let metadata = HashMap::from([("agent_id".to_owned(), json!(agent_id))]);
+
+        assert_eq!(
+            prepend_memory_context_to_user_message("hello", &metadata, true),
+            "hello",
+            "{agent_id} should not receive agent memory guidance"
+        );
+    }
+}
+
+#[test]
 fn prepend_runtime_metadata_to_user_message_renders_stable_thread_task_and_bot_ids() {
     let metadata = HashMap::from([(
         "runtime_context".to_owned(),

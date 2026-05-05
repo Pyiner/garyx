@@ -742,14 +742,16 @@ export function AgentsHubPanel({
                         >
                           {t('Chat')}
                         </Button>
-                        <Button
-                          onClick={(e) => { stopEvent(e); onOpenMemory?.(agent); }}
-                          size="sm"
-                          variant="ghost"
-                        >
-                          <IconDatabase aria-hidden size={15} stroke={1.8} />
-                          {t('Memory')}
-                        </Button>
+                        {!agent.builtIn ? (
+                          <Button
+                            onClick={(e) => { stopEvent(e); onOpenMemory?.(agent); }}
+                            size="sm"
+                            variant="ghost"
+                          >
+                            <IconDatabase aria-hidden size={15} stroke={1.8} />
+                            {t('Memory')}
+                          </Button>
+                        ) : null}
                         <Button
                           onClick={(e) => { stopEvent(e); openCreateTeamDialog(agent.agentId); }}
                           size="sm"
@@ -1068,7 +1070,7 @@ export function AgentsHubPanel({
                     {t('Create Team')}
                   </Button>
                 ) : null}
-                {selectedAgent ? (
+                {selectedAgent && !selectedAgent.builtIn ? (
                   <Button
                     onClick={() => {
                       closeAgentDialog();

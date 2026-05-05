@@ -42,7 +42,9 @@ pub use config_loader::{
     ConfigWriteOptions, LoadedConfig, backup_config, list_backups, load_config, process_includes,
     restore_config, write_config_atomic, write_config_value_atomic,
 };
-pub use custom_agent::{CustomAgentProfile, builtin_provider_agent_profiles};
+pub use custom_agent::{
+    CustomAgentProfile, builtin_provider_agent_profiles, is_builtin_provider_agent_id,
+};
 pub use execution::{
     ElevatedLevel, ExecAsk, ExecHost, ExecSecurity, ReasoningLevel, ResponseUsage,
 };

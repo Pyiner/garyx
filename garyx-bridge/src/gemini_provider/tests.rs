@@ -39,7 +39,7 @@ fn build_mcp_servers_injects_builtin_and_preserves_remote_shapes() {
 }
 
 #[test]
-fn build_prompt_blocks_prefixes_instructions_and_memory_for_fresh_sessions() {
+fn build_prompt_blocks_prefixes_instructions_and_metadata_for_fresh_sessions() {
     let options = ProviderRunOptions {
         thread_id: "thread::1".to_owned(),
         message: "hello".to_owned(),
@@ -70,12 +70,48 @@ fn build_prompt_blocks_prefixes_instructions_and_memory_for_fresh_sessions() {
     assert!(fresh_text.contains("<garyx_thread_metadata>"));
     assert!(fresh_text.contains("bot_id: telegram:bot1"));
     assert!(fresh_text.contains("task_id: #TASK-2"));
-    assert!(fresh_text.contains("<garyx_memory_context>"));
-    assert!(fresh_text.contains("<agent_memory agent_id=\"garyx\""));
+    assert!(!fresh_text.contains("<garyx_memory_context>"));
+    assert!(!fresh_text.contains("<agent_memory"));
     assert!(!fresh_text.contains("status=in_progress"));
     assert!(fresh_text.contains("hello"));
     assert_eq!(resumed[0]["text"], "hello");
     assert_eq!(fresh[1]["type"], "image");
+}
+
+#[test]
+fn build_prompt_blocks_prepends_memory_for_custom_agents() {
+    let options = ProviderRunOptions {
+        thread_id: "thread::1".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([("agent_id".to_owned(), json!("reviewer"))]),
+    };
+
+    let fresh = build_prompt_blocks(&options, None, true);
+    let fresh_text = fresh[0]["text"].as_str().unwrap_or_default();
+
+    assert!(fresh_text.contains("<garyx_memory_context>"));
+    assert!(fresh_text.contains("<agent_memory agent_id=\"reviewer\""));
+    assert!(fresh_text.contains("hello"));
+}
+
+#[test]
+fn build_prompt_blocks_skips_agent_memory_for_builtin_gemini() {
+    let options = ProviderRunOptions {
+        thread_id: "thread::1".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::from([("agent_id".to_owned(), json!("gemini"))]),
+    };
+
+    let fresh = build_prompt_blocks(&options, None, true);
+    let fresh_text = fresh[0]["text"].as_str().unwrap_or_default();
+
+    assert!(!fresh_text.contains("<garyx_memory_context>"));
+    assert!(!fresh_text.contains("<agent_memory"));
+    assert!(fresh_text.contains("hello"));
 }
 
 #[test]

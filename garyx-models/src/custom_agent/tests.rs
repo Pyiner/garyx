@@ -37,3 +37,13 @@ fn custom_agent_profile_defaults_standalone_to_true() {
         Some("/tmp/team-member")
     );
 }
+
+#[test]
+fn builtin_provider_agent_id_detection_is_limited_to_builtin_profiles() {
+    assert!(is_builtin_provider_agent_id("claude"));
+    assert!(is_builtin_provider_agent_id(" codex "));
+    assert!(is_builtin_provider_agent_id("gemini"));
+    assert!(!is_builtin_provider_agent_id("plain-claude"));
+    assert!(!is_builtin_provider_agent_id("codex-reviewer"));
+    assert!(!is_builtin_provider_agent_id("reviewer"));
+}
