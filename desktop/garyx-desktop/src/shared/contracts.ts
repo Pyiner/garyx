@@ -286,6 +286,7 @@ export interface DeleteCustomAgentInput {
 export interface GenerateCustomAgentAvatarInput {
   agentId?: string | null;
   displayName: string;
+  stylePrompt?: string | null;
 }
 
 export interface GenerateCustomAgentAvatarResult {

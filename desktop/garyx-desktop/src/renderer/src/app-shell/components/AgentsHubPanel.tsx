@@ -57,6 +57,7 @@ type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli';
 type HubTab = 'agents' | 'teams';
 type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 type TeamDialogMode = 'create' | 'edit' | 'view' | null;
+type AvatarStyleId = 'clean_glyph' | 'soft_3d' | 'glass_icon' | 'pixel_badge' | 'ink_line' | 'custom';
 
 type AgentDraft = {
   agentId: string;
@@ -71,6 +72,40 @@ type AgentDraft = {
 const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default__';
 const AGENT_AVATAR_MAX_BYTES = 3 * 1024 * 1024;
 const AGENT_AVATAR_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml';
+const CUSTOM_AVATAR_STYLE_ID: AvatarStyleId = 'custom';
+const DEFAULT_AVATAR_STYLE_ID: AvatarStyleId = 'clean_glyph';
+
+const AVATAR_STYLE_OPTIONS: Array<{
+  id: Exclude<AvatarStyleId, 'custom'>;
+  label: string;
+  prompt: string;
+}> = [
+  {
+    id: 'clean_glyph',
+    label: 'Clean glyph',
+    prompt: 'minimal vector glyph, simple geometric mark, balanced negative space, charcoal base with one sharp accent color',
+  },
+  {
+    id: 'soft_3d',
+    label: 'Soft 3D',
+    prompt: 'soft 3D clay icon, rounded abstract forms, gentle studio lighting, compact and friendly without looking childish',
+  },
+  {
+    id: 'glass_icon',
+    label: 'Glass icon',
+    prompt: 'translucent glassmorphism icon, crisp inner symbol, subtle refraction, clean depth, restrained blue green accent',
+  },
+  {
+    id: 'pixel_badge',
+    label: 'Pixel badge',
+    prompt: 'premium pixel-art badge, 32-bit style, readable blocky silhouette, limited palette, modern developer-tool feel',
+  },
+  {
+    id: 'ink_line',
+    label: 'Ink line',
+    prompt: 'monoline ink icon, expressive black linework, small accent fill, simple abstract agent signal, high legibility',
+  },
+];
 
 type TeamDraft = {
   teamId: string;
@@ -265,6 +300,9 @@ export function AgentsHubPanel({
   const [agentDraft, setAgentDraft] = useState<AgentDraft>(() => emptyAgentDraft());
   const [agentIdTouched, setAgentIdTouched] = useState(false);
   const [avatarGenerating, setAvatarGenerating] = useState(false);
+  const [avatarStyleDialogOpen, setAvatarStyleDialogOpen] = useState(false);
+  const [avatarStyleId, setAvatarStyleId] = useState<AvatarStyleId>(DEFAULT_AVATAR_STYLE_ID);
+  const [customAvatarStyle, setCustomAvatarStyle] = useState('');
   const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
   const [providerModelsByType, setProviderModelsByType] = useState<
     Partial<Record<ProviderType, DesktopProviderModels>>
@@ -433,12 +471,22 @@ export function AgentsHubPanel({
           ? t('Local Gemini ACP does not expose a model list yet.')
           : null
       : null;
+  const activeAvatarStylePrompt = avatarStyleId === CUSTOM_AVATAR_STYLE_ID
+    ? customAvatarStyle.trim()
+    : AVATAR_STYLE_OPTIONS.find((option) => option.id === avatarStyleId)?.prompt || '';
+  const avatarStyleValidationError =
+    avatarStyleId === CUSTOM_AVATAR_STYLE_ID && !customAvatarStyle.trim()
+      ? t('Custom style is required.')
+      : null;
 
   function closeAgentDialog() {
     setAgentDialogMode(null);
     setSelectedAgentId(null);
     setAgentDraft(emptyAgentDraft());
     setAgentIdTouched(false);
+    setAvatarStyleDialogOpen(false);
+    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
+    setCustomAvatarStyle('');
   }
 
   function closeTeamDialog() {
@@ -453,6 +501,8 @@ export function AgentsHubPanel({
     setSelectedAgentId(null);
     setAgentDraft(emptyAgentDraft());
     setAgentIdTouched(false);
+    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
+    setCustomAvatarStyle('');
   }
 
   function openViewAgentDialog(agent: DesktopCustomAgent) {
@@ -468,6 +518,8 @@ export function AgentsHubPanel({
       systemPrompt: agent.systemPrompt,
     });
     setAgentIdTouched(true);
+    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
+    setCustomAvatarStyle('');
   }
 
   function openEditAgentDialog(agent: DesktopCustomAgent) {
@@ -487,6 +539,8 @@ export function AgentsHubPanel({
       systemPrompt: agent.systemPrompt,
     });
     setAgentIdTouched(true);
+    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
+    setCustomAvatarStyle('');
   }
 
   function openCreateTeamDialog(seedAgentId?: string) {
@@ -591,7 +645,7 @@ export function AgentsHubPanel({
     }
   }
 
-  async function handleGenerateAvatar() {
+  async function handleGenerateAvatar(stylePrompt: string) {
     const displayName = agentDraft.displayName.trim();
     const agentId = agentDraft.agentId.trim();
     if (!displayName && !agentId) {
@@ -603,11 +657,13 @@ export function AgentsHubPanel({
       const result = await window.garyxDesktop.generateCustomAgentAvatar({
         agentId,
         displayName: displayName || agentId,
+        stylePrompt,
       });
       setAgentDraft((current) => ({
         ...current,
         avatarDataUrl: result.avatarDataUrl,
       }));
+      setAvatarStyleDialogOpen(false);
       onToast?.(t('Avatar generated'), 'success');
     } catch {
       onToast?.(t('Failed to generate avatar'), 'error');
@@ -1014,7 +1070,7 @@ export function AgentsHubPanel({
                   <Button
                     disabled={avatarGenerating}
                     onClick={() => {
-                      void handleGenerateAvatar();
+                      setAvatarStyleDialogOpen(true);
                     }}
                     type="button"
                     variant="outline"
@@ -1254,6 +1310,80 @@ export function AgentsHubPanel({
               </DialogFooter>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={avatarStyleDialogOpen} onOpenChange={setAvatarStyleDialogOpen}>
+        <DialogContent className="agents-hub-avatar-style-dialog">
+          <DialogHeader>
+            <DialogTitle>{t('Avatar style')}</DialogTitle>
+          </DialogHeader>
+
+          <div className="agents-hub-avatar-style-grid">
+            {AVATAR_STYLE_OPTIONS.map((option) => (
+              <button
+                className={`agents-hub-avatar-style-option ${avatarStyleId === option.id ? 'active' : ''}`}
+                key={option.id}
+                onClick={() => {
+                  setAvatarStyleId(option.id);
+                }}
+                type="button"
+              >
+                {t(option.label)}
+              </button>
+            ))}
+            <button
+              className={`agents-hub-avatar-style-option ${avatarStyleId === CUSTOM_AVATAR_STYLE_ID ? 'active' : ''}`}
+              onClick={() => {
+                setAvatarStyleId(CUSTOM_AVATAR_STYLE_ID);
+              }}
+              type="button"
+            >
+              {t('Custom style')}
+            </button>
+          </div>
+
+          {avatarStyleId === CUSTOM_AVATAR_STYLE_ID ? (
+            <div className="codex-form-field">
+              <Label className="codex-form-label" htmlFor="agent-avatar-custom-style">
+                {t('Custom style')}
+              </Label>
+              <Textarea
+                className="agents-hub-avatar-style-textarea"
+                id="agent-avatar-custom-style"
+                onChange={(event) => {
+                  setCustomAvatarStyle(event.target.value);
+                }}
+                placeholder={t('e.g. polished paper-cut icon with emerald accents')}
+                value={customAvatarStyle}
+              />
+            </div>
+          ) : null}
+
+          <DialogFooter className="agents-hub-dialog-footer">
+            <div className="agents-hub-dialog-status">{avatarStyleValidationError}</div>
+            <div className="agents-hub-dialog-actions">
+              <Button
+                disabled={avatarGenerating}
+                onClick={() => {
+                  setAvatarStyleDialogOpen(false);
+                }}
+                type="button"
+                variant="outline"
+              >
+                {t('Cancel')}
+              </Button>
+              <Button
+                disabled={Boolean(avatarStyleValidationError) || avatarGenerating}
+                onClick={() => {
+                  void handleGenerateAvatar(activeAvatarStylePrompt);
+                }}
+                type="button"
+              >
+                {avatarGenerating ? t('Generating...') : t('Generate avatar')}
+              </Button>
+            </div>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
