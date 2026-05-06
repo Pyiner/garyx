@@ -363,7 +363,7 @@ export function WorkspaceThreadSidebar({
                                   {isRemoveConfirming ? (
                                     <div className="workspace-menu-confirm" role="group" aria-label={t('Confirm removal of {name}', { name: workspace.name })}>
                                       <div className="workspace-menu-confirm-copy">
-                                        <span className="workspace-menu-confirm-title">{t('Remove from Desktop?')}</span>
+                                        <span className="workspace-menu-confirm-title">{t('Remove?')}</span>
                                         <p>
                                           {t('This only hides the workspace from Garyx. Threads stay intact.')}
                                         </p>
@@ -400,11 +400,11 @@ export function WorkspaceThreadSidebar({
                                         setConfirmRemoveWorkspacePath(workspacePath);
                                       }}
                                       role="menuitem"
-                                      title={t('Remove this workspace from Garyx')}
+                                      title={t('Remove')}
                                       type="button"
                                     >
                                       <DeleteIcon />
-                                      {t('Remove from Desktop…')}
+                                      {t('Remove')}
                                     </button>
                                   )}
                                 </div>
