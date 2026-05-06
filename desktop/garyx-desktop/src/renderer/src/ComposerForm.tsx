@@ -288,6 +288,24 @@ function renderComposerAgentOptionIcon(option: ComposerAgentOption) {
   );
 }
 
+function renderComposerProviderTriggerIcon(option?: ComposerAgentOption) {
+  if (!option?.avatarDataUrl) {
+    return AGENT_PROVIDER_GLYPH;
+  }
+
+  const classes = [
+    'composer-agent-option-icon',
+    'image',
+    option.kind === 'team' ? 'team' : '',
+  ].filter(Boolean).join(' ');
+
+  return (
+    <span aria-hidden className={classes}>
+      <img alt="" src={option.avatarDataUrl} />
+    </span>
+  );
+}
+
 function renderComposerProviderControl({
   composerProviderType,
   agentLabel,
@@ -304,9 +322,7 @@ function renderComposerProviderControl({
   t: Translate;
 }) {
   const selectedOption = agentOptions?.find((option) => option.id === selectedAgentId);
-  const providerIcon = selectedOption
-    ? renderComposerAgentOptionIcon(selectedOption)
-    : AGENT_PROVIDER_GLYPH;
+  const providerIcon = renderComposerProviderTriggerIcon(selectedOption);
   const providerLabel = agentLabel || providerOptionLabel(composerProviderType);
 
   if (onSelectAgent) {
