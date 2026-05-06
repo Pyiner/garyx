@@ -1450,9 +1450,9 @@ code {
 
 .sidebar-section-title {
   color: var(--color-token-text-secondary);
-  font-size: var(--text-xs);
+  font-size: var(--text-base);
   font-weight: var(--font-weight-medium);
-  letter-spacing: 0.025em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
