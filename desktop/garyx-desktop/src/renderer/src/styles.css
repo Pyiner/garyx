@@ -223,9 +223,9 @@ body {
      through 0.88 (too opaque) / 0.70 (opaque) / 0.55 (too grey) / 0.78
      (near-flat) / 0.45 (too grey again). macOS `vibrancy: "menu"` emits
      ~#ebebeb, so this ratio yields a composite around `#fafafa`: reads
-     as near-white while still letting ~32% of the vibrancy material show
-     for the frosted-glass breath. Main content layers now stay transparent
-     unless a specific panel or control owns its own surface. */
+     as near-white next to the opaque-white main area while still letting
+     ~32% of the vibrancy material show for the frosted-glass breath.
+     Main content overrides this with opaque white via `.conversation`. */
   background-color: rgba(255, 255, 255, 0.68);
   color: var(--color-token-text-primary);
   font-family: var(--default-font-family);
@@ -606,8 +606,9 @@ code {
   height: 100vh;
   max-height: 100vh;
   overflow: hidden;
-  /* Transparent so `vibrancy: "menu"` can peek through the body wash.
-     Individual panels and controls own any opaque surfaces they need. */
+  /* Transparent so `vibrancy: "menu"` can peek through body's 30% alpha
+     gap on the sidebar side. Main content keeps its own opaque background
+     via `.conversation`. */
   background: transparent;
 }
 
@@ -1987,7 +1988,7 @@ code {
   grid-template-rows: var(--inset-toolbar) minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  background: transparent;
+  background: rgb(255, 255, 255);
   border-radius: var(--radius-pill) 0 0 var(--radius-pill);
   overflow: hidden;
 }
@@ -3072,7 +3073,7 @@ code {
   min-width: 0;
   overflow: hidden;
   padding: var(--padding-panel);
-  background: transparent;
+  background: var(--color-token-bg-primary);
 }
 
 .conversation-body.settings-layout {
@@ -3887,6 +3888,11 @@ code {
   padding: 8px 2px 24px 0;
   scroll-padding-block-end: 24px;
   overscroll-behavior: contain;
+  background: var(--color-token-bg-primary);
+}
+
+.conversation:has(.thread-layout),
+.conversation-body:has(.thread-layout) {
   background: transparent;
 }
 
