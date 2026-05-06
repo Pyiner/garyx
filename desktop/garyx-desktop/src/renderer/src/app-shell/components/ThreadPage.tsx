@@ -405,9 +405,16 @@ export function ThreadPage({
     }
 
     const syncComposerHeight = () => {
+      const composerHeight = Math.ceil(
+        composerShellWrap.getBoundingClientRect().height,
+      );
       threadMain.style.setProperty(
         "--composer-overlay-height",
-        `${Math.ceil(composerShellWrap.getBoundingClientRect().height)}px`,
+        `${composerHeight}px`,
+      );
+      threadMain.style.setProperty(
+        "--composer-scroll-clip-height",
+        `${Math.ceil(composerHeight / 2)}px`,
       );
     };
 

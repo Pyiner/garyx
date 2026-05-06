@@ -3059,11 +3059,14 @@ code {
 
 .thread-main {
   --composer-overlay-height: 132px;
+  --composer-scroll-clip-height: 66px;
+  --composer-message-clearance: 32px;
   position: relative;
   display: block;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  background: var(--color-token-bg-primary);
 }
 
 .thread-page-tabs {
@@ -3813,15 +3816,19 @@ code {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  height: 100%;
+  height: calc(100% - var(--composer-scroll-clip-height));
   min-height: 0;
   overflow: auto;
   -ms-overflow-style: none;
   scrollbar-width: none;
   width: min(var(--container-2xl), 100%);
   margin: 0 auto;
-  padding: 8px 2px calc(var(--composer-overlay-height) + 56px) 0;
-  scroll-padding-block-end: calc(var(--composer-overlay-height) + 56px);
+  padding: 8px 2px
+    calc(var(--composer-scroll-clip-height) + var(--composer-message-clearance))
+    0;
+  scroll-padding-block-end: calc(
+    var(--composer-scroll-clip-height) + var(--composer-message-clearance)
+  );
   overscroll-behavior: contain;
   background: var(--color-token-bg-primary);
 }
@@ -6472,6 +6479,18 @@ button.team-agent-speaker:focus-visible {
   overflow: visible;
 }
 
+.composer-shell-wrap::before {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 0;
+  height: calc(var(--composer-scroll-clip-height) + 1px);
+  background: var(--color-token-bg-primary);
+  content: "";
+  pointer-events: none;
+}
+
 .composer-command-panel {
   position: absolute;
   right: 0;
@@ -6648,6 +6667,7 @@ button.team-agent-speaker:focus-visible {
 
 .composer-shell {
   position: relative;
+  z-index: 1;
   display: grid;
   gap: 0;
   width: min(var(--container-2xl), 100%);
@@ -6714,7 +6734,7 @@ button.team-agent-speaker:focus-visible {
   pointer-events: none;
   border: 1px solid rgba(26, 28, 31, 0.06);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.96);
+  background: var(--color-token-bg-primary);
 }
 
 .composer-shell.has-queue .composer-surface {
