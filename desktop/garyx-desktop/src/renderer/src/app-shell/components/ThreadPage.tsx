@@ -1,4 +1,5 @@
 import {
+  useLayoutEffect,
   useRef,
   type CSSProperties,
   type MutableRefObject,
@@ -388,6 +389,7 @@ export function ThreadPage({
 }: ThreadPageProps) {
   const { t } = useI18n();
   const composerShellWrapRef = useRef<HTMLDivElement | null>(null);
+  const threadMainRef = useRef<HTMLDivElement | null>(null);
   const teamView = deriveThreadTeamView(activeThreadSummary);
   const teamSpeakerOptions = {
     leaderAgentId: activeThreadSummary?.team?.leader_agent_id || null,
@@ -395,13 +397,39 @@ export function ThreadPage({
     childThreadIds: activeThreadSummary?.team?.child_thread_ids || {},
   };
 
+  useLayoutEffect(() => {
+    const threadMain = threadMainRef.current;
+    const composerShellWrap = composerShellWrapRef.current;
+    if (!threadMain || !composerShellWrap) {
+      return;
+    }
+
+    const syncComposerHeight = () => {
+      threadMain.style.setProperty(
+        "--composer-overlay-height",
+        `${Math.ceil(composerShellWrap.getBoundingClientRect().height)}px`,
+      );
+    };
+
+    syncComposerHeight();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(syncComposerHeight);
+    observer.observe(composerShellWrap);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
   return (
     <div
       className={`thread-layout ${inspectorOpen ? "with-inspector-panel" : ""} ${threadLogsOpen ? "with-log-panel" : ""} ${threadLogsResizing ? "log-panel-resizing" : ""}`}
       ref={threadLayoutRef}
       style={threadLayoutStyle}
     >
-      <div className="thread-main">
+      <div className="thread-main" ref={threadMainRef}>
         <div className="messages" onScroll={onMessagesScroll} ref={messagesRef}>
           {!activeMessages.length &&
           !historyLoading &&

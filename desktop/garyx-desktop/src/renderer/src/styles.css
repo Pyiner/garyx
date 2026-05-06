@@ -3125,11 +3125,12 @@ code {
 }
 
 .thread-main {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
-  gap: 18px;
+  --composer-overlay-height: 132px;
+  position: relative;
+  display: block;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .thread-page-tabs {
@@ -3879,14 +3880,15 @@ code {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  height: 100%;
   min-height: 0;
   overflow: auto;
   -ms-overflow-style: none;
   scrollbar-width: none;
   width: min(var(--container-2xl), 100%);
   margin: 0 auto;
-  padding: 8px 2px 88px 0;
-  scroll-padding-block-end: 88px;
+  padding: 8px 2px calc(var(--composer-overlay-height) + 56px) 0;
+  scroll-padding-block-end: calc(var(--composer-overlay-height) + 56px);
   overscroll-behavior: contain;
   background: var(--color-token-bg-primary);
 }
@@ -6527,7 +6529,11 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-shell-wrap {
-  position: relative;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
   width: min(var(--container-2xl), 100%);
   margin: 0 auto;
   overflow: visible;
