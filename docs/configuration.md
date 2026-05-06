@@ -384,6 +384,12 @@ the active thread, draft directory, or settings tab. The registered `garyx://`
 protocol uses matching paths such as `garyx://thread/<thread-id>` and
 `garyx://new?workspace=<path>`.
 
+The desktop sidebar shows only folders that were manually added in the Mac app.
+Thread history can still carry `workspace_dir` paths from the gateway, but those
+paths do not appear as sidebar projects until the user adds the folder. The
+project row can be collapsed or expanded from the sidebar, and the row menu can
+remove the folder from the desktop list without deleting transcripts.
+
 Packaged macOS builds check for app updates automatically. You can also open
 Settings > Mac App and use Check Now to manually refresh the update state.
 Development builds report update checks as unavailable because there is no

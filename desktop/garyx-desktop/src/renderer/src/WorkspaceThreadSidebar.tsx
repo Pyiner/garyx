@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 
 import { NewTabIcon } from './app-shell/icons';
 
-import { ChevronDownIcon, DeleteIcon, FolderIcon, FolderOpenIcon, MoreDotsIcon, RenameIcon } from './app-shell/icons';
+import { ChevronDownIcon, DeleteIcon, FolderIcon, FolderOpenIcon, MoreDotsIcon } from './app-shell/icons';
 
 import type { DesktopState, DesktopWorkspace } from '@shared/contracts';
 
@@ -71,9 +71,7 @@ export function WorkspaceThreadSidebar({
   const [workspaceMenuStyle, setWorkspaceMenuStyle] = useState<CSSProperties | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const visibleWorkspaceThreadGroups = workspaceThreadGroups.filter((group) => {
-    return group.threads.some((thread) => thread.id !== deletingThreadId);
-  });
+  const visibleWorkspaceThreadGroups = workspaceThreadGroups;
 
   // Auto-dismiss the confirm state after 3 seconds
   useEffect(() => {
@@ -155,33 +153,18 @@ export function WorkspaceThreadSidebar({
   }, [confirmRemoveWorkspacePath, workspaceMenuOpenPath]);
 
   const handleWorkspaceClick = useCallback(
-    (workspacePath: string, preferredThreadId: string | null) => {
-      // If clicking the same workspace that already has a selected thread, toggle collapse
-      const hasSelectedThread = workspaceThreadGroups.some(
-        (g) => g.workspace.path === workspacePath && g.threads.some((t) => t.id === selectedThreadId),
-      );
-      if (hasSelectedThread) {
-        setCollapsedPaths((prev) => {
-          const next = new Set(prev);
-          if (next.has(workspacePath)) {
-            next.delete(workspacePath);
-          } else {
-            next.add(workspacePath);
-          }
-          return next;
-        });
-        return;
-      }
-      // Expanding a different workspace — uncollapse it and select
+    (workspacePath: string) => {
       setCollapsedPaths((prev) => {
-        if (!prev.has(workspacePath)) return prev;
         const next = new Set(prev);
-        next.delete(workspacePath);
+        if (next.has(workspacePath)) {
+          next.delete(workspacePath);
+        } else {
+          next.add(workspacePath);
+        }
         return next;
       });
-      onSelectWorkspace(workspacePath, preferredThreadId);
     },
-    [onSelectWorkspace, selectedThreadId, workspaceThreadGroups],
+    [],
   );
 
   return (
@@ -240,8 +223,9 @@ export function WorkspaceThreadSidebar({
             >
               <div className="workspace-row workspace-row-shell">
                 <button
+                  aria-expanded={!collapsedPaths.has(workspacePath)}
                   className="workspace-row-main"
-                  onClick={() => handleWorkspaceClick(workspacePath, group.preferredThreadId)}
+                  onClick={() => handleWorkspaceClick(workspacePath)}
                   tabIndex={-1}
                   type="button"
                 >
@@ -376,19 +360,6 @@ export function WorkspaceThreadSidebar({
                                     overflowY: 'auto',
                                   }}
                                 >
-                                  <button
-                                    className="workspace-menu-item"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      setConfirmRemoveWorkspacePath(null);
-                                      onBeginRenameWorkspace(workspace);
-                                    }}
-                                    role="menuitem"
-                                    type="button"
-                                  >
-                                    <RenameIcon />
-                                    {t('Rename Workspace')}
-                                  </button>
                                   {isRemoveConfirming ? (
                                     <div className="workspace-menu-confirm" role="group" aria-label={t('Confirm removal of {name}', { name: workspace.name })}>
                                       <div className="workspace-menu-confirm-copy">
@@ -546,7 +517,7 @@ export function WorkspaceThreadSidebar({
           );
         })}
 
-        {!visibleWorkspaceThreadGroups.length && !desktopState?.workspaces.length ? (
+        {!visibleWorkspaceThreadGroups.length ? (
           <div className="workspace-empty-block">
             <span className="eyebrow">{t('No Folders')}</span>
             <p>{t('Add a folder to start grouping Garyx threads by workspace.')}</p>

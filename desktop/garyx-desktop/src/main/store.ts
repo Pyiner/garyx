@@ -997,14 +997,32 @@ export async function addDesktopWorkspace(path: string): Promise<{
   });
 
   if (duplicate) {
+    const workspace = duplicate.managed
+      ? {
+          ...duplicate,
+          name: workspaceNameFromPath(canonicalPath),
+          path: canonicalPath,
+          updatedAt: new Date().toISOString(),
+          available: true,
+          managed: false,
+        }
+      : duplicate;
     const selectedState = withSortedEntities({
       ...current,
-      selectedWorkspacePath: duplicate.path,
+      workspaces: current.workspaces.map((entry) => {
+        return normalizeWorkspacePathKey(entry.path || '') === normalizeWorkspacePathKey(canonicalPath)
+          ? workspace
+          : entry;
+      }),
+      hiddenWorkspacePaths: (current.hiddenWorkspacePaths || []).filter((entry) => (
+        normalizeWorkspacePathKey(entry) !== normalizeWorkspacePathKey(canonicalPath)
+      )),
+      selectedWorkspacePath: workspace.path,
     });
     await writeState(selectedState);
     return {
-      state: selectedState,
-      workspace: duplicate,
+      state: await getDesktopState(),
+      workspace,
     };
   }
 

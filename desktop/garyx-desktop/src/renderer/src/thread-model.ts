@@ -204,7 +204,9 @@ export function buildWorkspaceThreadGroups(input: {
     return [];
   }
 
-  return input.state.workspaces.map((workspace) => {
+  return input.state.workspaces.filter((workspace) => {
+    return workspace.kind === 'local' && !workspace.managed && Boolean(workspace.path?.trim());
+  }).map((workspace) => {
     const workspacePath = workspace.path || '';
     const workspacePathKey = workspacePath.trim().toLowerCase();
     const threads = input.state!.threads.filter((thread) => {
@@ -213,7 +215,6 @@ export function buildWorkspaceThreadGroups(input: {
     const automationCount = input.state!.automations.filter((automation) => {
       return automation.workspacePath.trim().toLowerCase() === workspacePathKey;
     }).length;
-    const canManageWorkspace = false;
 
     return {
       workspace,
@@ -226,9 +227,9 @@ export function buildWorkspaceThreadGroups(input: {
           : threads[0]?.id || null,
       isSelected:
         (input.workspaceSelectionEntry?.path || '').trim().toLowerCase() === workspacePathKey,
-      canManageWorkspace,
+      canManageWorkspace: true,
     };
-  }).filter((group) => group.threads.length > 0);
+  });
 }
 
 export interface SubAgentThreadLink {
