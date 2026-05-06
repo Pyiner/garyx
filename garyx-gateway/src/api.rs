@@ -386,6 +386,8 @@ pub struct CustomAgentUpsertPayload {
         alias = "workspaceDir"
     )]
     pub default_workspace_dir: Option<String>,
+    #[serde(default, alias = "avatarDataUrl")]
+    pub avatar_data_url: Option<String>,
     pub system_prompt: String,
 }
 
@@ -2379,6 +2381,7 @@ pub async fn create_custom_agent(
             provider_type: payload.provider_type,
             model: payload.model,
             default_workspace_dir: payload.default_workspace_dir,
+            avatar_data_url: payload.avatar_data_url,
             system_prompt: payload.system_prompt,
         })
         .await
@@ -2423,6 +2426,7 @@ pub async fn update_custom_agent(
             provider_type: payload.provider_type,
             model: payload.model,
             default_workspace_dir: payload.default_workspace_dir,
+            avatar_data_url: payload.avatar_data_url,
             system_prompt: payload.system_prompt,
         })
         .await

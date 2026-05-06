@@ -21,6 +21,8 @@ pub struct UpsertCustomAgentRequest {
         alias = "workspaceDir"
     )]
     pub default_workspace_dir: Option<String>,
+    #[serde(default, alias = "avatarDataUrl")]
+    pub avatar_data_url: Option<String>,
     pub system_prompt: String,
 }
 
@@ -118,6 +120,8 @@ impl CustomAgentStore {
         let requested_default_workspace_dir = request
             .default_workspace_dir
             .map(|value| value.trim().to_owned());
+        let requested_avatar_data_url =
+            request.avatar_data_url.map(|value| value.trim().to_owned());
         if agent_id.is_empty() {
             return Err("agent_id is required".to_owned());
         }
@@ -146,12 +150,20 @@ impl CustomAgentStore {
                 .get(agent_id)
                 .and_then(|existing| existing.default_workspace_dir.clone()),
         };
+        let avatar_data_url = match requested_avatar_data_url {
+            Some(value) if value.is_empty() => None,
+            Some(value) => Some(value),
+            None => inner
+                .get(agent_id)
+                .and_then(|existing| existing.avatar_data_url.clone()),
+        };
         let profile = CustomAgentProfile {
             agent_id: agent_id.to_owned(),
             display_name: display_name.to_owned(),
             provider_type: request.provider_type,
             model: model.to_owned(),
             default_workspace_dir,
+            avatar_data_url,
             system_prompt: system_prompt.to_owned(),
             built_in: false,
             standalone: true,

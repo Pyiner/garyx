@@ -66,6 +66,7 @@ fn custom_agent(
         provider_type,
         model: model.to_owned(),
         default_workspace_dir: None,
+        avatar_data_url: None,
         system_prompt: system_prompt.to_owned(),
         built_in: false,
         standalone: true,

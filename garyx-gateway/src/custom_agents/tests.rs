@@ -22,6 +22,7 @@ async fn rejects_builtin_agent_modification() {
             provider_type: ProviderType::ClaudeCode,
             model: "claude-opus-4-1".to_owned(),
             default_workspace_dir: None,
+            avatar_data_url: None,
             system_prompt: "Override".to_owned(),
         })
         .await
@@ -39,6 +40,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5".to_owned(),
             default_workspace_dir: Some("  /tmp/reviewer  ".to_owned()),
+            avatar_data_url: None,
             system_prompt: "Review carefully.".to_owned(),
         })
         .await
@@ -55,6 +57,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5".to_owned(),
             default_workspace_dir: None,
+            avatar_data_url: None,
             system_prompt: "Review carefully.".to_owned(),
         })
         .await
@@ -71,9 +74,62 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5".to_owned(),
             default_workspace_dir: Some("  ".to_owned()),
+            avatar_data_url: None,
             system_prompt: "Review carefully.".to_owned(),
         })
         .await
         .expect("clear agent workspace");
     assert!(cleared.default_workspace_dir.is_none());
+}
+
+#[tokio::test]
+async fn upsert_preserves_and_clears_avatar_data_url() {
+    let store = CustomAgentStore::new();
+    let created = store
+        .upsert_agent(UpsertCustomAgentRequest {
+            agent_id: "designer".to_owned(),
+            display_name: "Designer".to_owned(),
+            provider_type: ProviderType::CodexAppServer,
+            model: "gpt-5".to_owned(),
+            default_workspace_dir: None,
+            avatar_data_url: Some("  data:image/png;base64,dGVzdA==  ".to_owned()),
+            system_prompt: "Design carefully.".to_owned(),
+        })
+        .await
+        .expect("create agent");
+    assert_eq!(
+        created.avatar_data_url.as_deref(),
+        Some("data:image/png;base64,dGVzdA==")
+    );
+
+    let updated = store
+        .upsert_agent(UpsertCustomAgentRequest {
+            agent_id: "designer".to_owned(),
+            display_name: "Designer".to_owned(),
+            provider_type: ProviderType::CodexAppServer,
+            model: "gpt-5".to_owned(),
+            default_workspace_dir: None,
+            avatar_data_url: None,
+            system_prompt: "Design carefully.".to_owned(),
+        })
+        .await
+        .expect("update agent");
+    assert_eq!(
+        updated.avatar_data_url.as_deref(),
+        Some("data:image/png;base64,dGVzdA==")
+    );
+
+    let cleared = store
+        .upsert_agent(UpsertCustomAgentRequest {
+            agent_id: "designer".to_owned(),
+            display_name: "Designer".to_owned(),
+            provider_type: ProviderType::CodexAppServer,
+            model: "gpt-5".to_owned(),
+            default_workspace_dir: None,
+            avatar_data_url: Some("  ".to_owned()),
+            system_prompt: "Design carefully.".to_owned(),
+        })
+        .await
+        .expect("clear agent avatar");
+    assert!(cleared.avatar_data_url.is_none());
 }

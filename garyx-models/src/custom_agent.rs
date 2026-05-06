@@ -18,6 +18,12 @@ pub struct CustomAgentProfile {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_workspace_dir: Option<String>,
+    #[serde(
+        default,
+        alias = "avatarDataUrl",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub avatar_data_url: Option<String>,
     pub system_prompt: String,
     pub built_in: bool,
     #[serde(default = "crate::config::default_true")]
@@ -35,6 +41,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             provider_type: ProviderType::ClaudeCode,
             model: String::new(),
             default_workspace_dir: None,
+            avatar_data_url: None,
             system_prompt: String::new(),
             built_in: true,
             standalone: true,
@@ -47,6 +54,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             provider_type: ProviderType::CodexAppServer,
             model: String::new(),
             default_workspace_dir: None,
+            avatar_data_url: None,
             system_prompt: String::new(),
             built_in: true,
             standalone: true,
@@ -59,6 +67,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             provider_type: ProviderType::GeminiCli,
             model: "gemini-3-flash-preview".to_owned(),
             default_workspace_dir: None,
+            avatar_data_url: None,
             system_prompt: String::new(),
             built_in: true,
             standalone: true,

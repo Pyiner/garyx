@@ -50,6 +50,7 @@ import type {
   DeleteAutomationInput,
   DeleteThreadInput,
   DesktopSettings,
+  GenerateCustomAgentAvatarInput,
   GetSkillEditorInput,
   GatewayConfigDocument,
   DeleteTaskInput,
@@ -171,6 +172,7 @@ import {
   startFeishuChannelAuth,
   startWeixinChannelAuth,
 } from "./channel-setup";
+import { generateCustomAgentAvatar } from "./agent-avatar";
 import {
   addDesktopWorkspace,
   createDesktopAutomation,
@@ -752,6 +754,13 @@ function registerIpcHandlers(): void {
     async (_event, input: DeleteCustomAgentInput) => {
       const settings = await resolveSettings();
       return deleteCustomAgent(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:generate-custom-agent-avatar",
+    async (_event, input: GenerateCustomAgentAvatarInput) => {
+      return generateCustomAgentAvatar(input);
     },
   );
 

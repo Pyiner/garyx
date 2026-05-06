@@ -322,6 +322,10 @@ home/root fallback. Direct task creation uses explicit
 `garyx task create --workspace-dir` first, then the assignee Agent default,
 then the same fallback.
 
+Custom agents may include `avatar_data_url`, a small image data URL used by
+desktop surfaces for the agent avatar. Omit it or set it to an empty string to
+use the generated initials fallback.
+
 Custom agent model selection is provider-specific. Claude and Codex use their
 provider defaults in the desktop app. Gemini only shows a model picker when the
 gateway can discover models from the local Gemini ACP process; Garyx does not

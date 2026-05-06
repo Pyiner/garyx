@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   IconBolt,
   IconCheck,
@@ -7,6 +7,7 @@ import {
   IconRobot,
   IconSearch,
   IconSparkles,
+  IconUpload,
   IconUsersGroup,
   IconX,
 } from '@tabler/icons-react';
@@ -63,10 +64,13 @@ type AgentDraft = {
   providerType: ProviderType;
   model: string;
   defaultWorkspaceDir: string;
+  avatarDataUrl: string;
   systemPrompt: string;
 };
 
 const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default__';
+const AGENT_AVATAR_MAX_BYTES = 3 * 1024 * 1024;
+const AGENT_AVATAR_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml';
 
 type TeamDraft = {
   teamId: string;
@@ -90,6 +94,7 @@ function emptyAgentDraft(): AgentDraft {
     providerType: 'claude_code',
     model: '',
     defaultWorkspaceDir: '',
+    avatarDataUrl: '',
     systemPrompt: '',
   };
 }
@@ -150,6 +155,50 @@ function avatarLabel(value: string): string {
     .join('')
     .slice(0, 2)
     .toUpperCase();
+}
+
+type AgentAvatarProps = {
+  avatarDataUrl?: string | null;
+  builtIn?: boolean;
+  className: string;
+  label: string;
+  team?: boolean;
+};
+
+function AgentAvatar({
+  avatarDataUrl,
+  builtIn,
+  className,
+  label,
+  team,
+}: AgentAvatarProps) {
+  const classes = [
+    className,
+    builtIn ? 'builtin' : '',
+    team ? 'team' : '',
+    avatarDataUrl ? 'image' : '',
+  ].filter(Boolean).join(' ');
+
+  return (
+    <span className={classes}>
+      {avatarDataUrl ? <img alt="" src={avatarDataUrl} /> : avatarLabel(label)}
+    </span>
+  );
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Failed to read avatar image'));
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result);
+      } else {
+        reject(new Error('Failed to read avatar image'));
+      }
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function buildSuggestedWorkflow(
@@ -215,6 +264,8 @@ export function AgentsHubPanel({
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentDraft, setAgentDraft] = useState<AgentDraft>(() => emptyAgentDraft());
   const [agentIdTouched, setAgentIdTouched] = useState(false);
+  const [avatarGenerating, setAvatarGenerating] = useState(false);
+  const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
   const [providerModelsByType, setProviderModelsByType] = useState<
     Partial<Record<ProviderType, DesktopProviderModels>>
   >({});
@@ -413,6 +464,7 @@ export function AgentsHubPanel({
       providerType: agent.providerType,
       model: agent.model,
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
+      avatarDataUrl: agent.avatarDataUrl,
       systemPrompt: agent.systemPrompt,
     });
     setAgentIdTouched(true);
@@ -431,6 +483,7 @@ export function AgentsHubPanel({
       providerType: agent.providerType,
       model: agent.model,
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
+      avatarDataUrl: agent.avatarDataUrl,
       systemPrompt: agent.systemPrompt,
     });
     setAgentIdTouched(true);
@@ -516,6 +569,53 @@ export function AgentsHubPanel({
     });
   }
 
+  async function handleAvatarFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0] || null;
+    event.target.value = '';
+    if (!file) {
+      return;
+    }
+    if (file.size > AGENT_AVATAR_MAX_BYTES) {
+      onToast?.(t('Avatar image is too large.'), 'error');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      onToast?.(t('Choose an image file.'), 'error');
+      return;
+    }
+    try {
+      const avatarDataUrl = await readFileAsDataUrl(file);
+      setAgentDraft((current) => ({ ...current, avatarDataUrl }));
+    } catch {
+      onToast?.(t('Failed to read avatar image'), 'error');
+    }
+  }
+
+  async function handleGenerateAvatar() {
+    const displayName = agentDraft.displayName.trim();
+    const agentId = agentDraft.agentId.trim();
+    if (!displayName && !agentId) {
+      onToast?.(t('Name is required.'), 'error');
+      return;
+    }
+    setAvatarGenerating(true);
+    try {
+      const result = await window.garyxDesktop.generateCustomAgentAvatar({
+        agentId,
+        displayName: displayName || agentId,
+      });
+      setAgentDraft((current) => ({
+        ...current,
+        avatarDataUrl: result.avatarDataUrl,
+      }));
+      onToast?.(t('Avatar generated'), 'success');
+    } catch {
+      onToast?.(t('Failed to generate avatar'), 'error');
+    } finally {
+      setAvatarGenerating(false);
+    }
+  }
+
   async function handleAgentSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
@@ -526,6 +626,7 @@ export function AgentsHubPanel({
         providerType: agentDraft.providerType,
         model: agentSupportsModelSelection ? agentDraft.model.trim() : '',
         defaultWorkspaceDir: agentDraft.defaultWorkspaceDir.trim(),
+        avatarDataUrl: agentDraft.avatarDataUrl.trim(),
         systemPrompt: agentDraft.systemPrompt.trim(),
       };
 
@@ -720,9 +821,12 @@ export function AgentsHubPanel({
                   >
                     <TableCell>
                       <div className="agents-hub-name-cell">
-                        <span className={`agents-hub-avatar-sm ${agent.builtIn ? 'builtin' : ''}`}>
-                          {avatarLabel(agent.displayName || agent.agentId)}
-                        </span>
+                        <AgentAvatar
+                          avatarDataUrl={agent.avatarDataUrl}
+                          builtIn={agent.builtIn}
+                          className="agents-hub-avatar-sm"
+                          label={agent.displayName || agent.agentId}
+                        />
                         <div>
                           <div className="agents-hub-cell-name">{agent.displayName}</div>
                           <div className="agents-hub-cell-id">{agent.agentId}</div>
@@ -793,9 +897,11 @@ export function AgentsHubPanel({
                     >
                       <TableCell>
                         <div className="agents-hub-name-cell">
-                          <span className="agents-hub-avatar-sm team">
-                            {avatarLabel(team.displayName || team.teamId)}
-                          </span>
+                          <AgentAvatar
+                            className="agents-hub-avatar-sm"
+                            label={team.displayName || team.teamId}
+                            team
+                          />
                           <div>
                             <div className="agents-hub-cell-name">{team.displayName}</div>
                             <div className="agents-hub-cell-id">{team.teamId}</div>
@@ -881,6 +987,55 @@ export function AgentsHubPanel({
 
           {agentDialogMode === 'create' || agentDialogMode === 'edit' ? (
             <form className="agents-hub-dialog-form" onSubmit={handleAgentSubmit}>
+              <div className="agents-hub-avatar-editor">
+                <AgentAvatar
+                  avatarDataUrl={agentDraft.avatarDataUrl}
+                  className="agents-hub-avatar-centered large"
+                  label={agentDraft.displayName || agentDraft.agentId || 'A'}
+                />
+                <div className="agents-hub-avatar-editor-actions">
+                  <input
+                    accept={AGENT_AVATAR_ACCEPT}
+                    className="sr-only"
+                    onChange={(event) => {
+                      void handleAvatarFileChange(event);
+                    }}
+                    ref={avatarFileInputRef}
+                    type="file"
+                  />
+                  <Button
+                    onClick={() => avatarFileInputRef.current?.click()}
+                    type="button"
+                    variant="outline"
+                  >
+                    <IconUpload aria-hidden size={15} stroke={1.8} />
+                    {t('Upload avatar')}
+                  </Button>
+                  <Button
+                    disabled={avatarGenerating}
+                    onClick={() => {
+                      void handleGenerateAvatar();
+                    }}
+                    type="button"
+                    variant="outline"
+                  >
+                    <IconSparkles aria-hidden size={15} stroke={1.8} />
+                    {avatarGenerating ? t('Generating...') : t('Generate avatar')}
+                  </Button>
+                  {agentDraft.avatarDataUrl ? (
+                    <Button
+                      onClick={() => {
+                        setAgentDraft((current) => ({ ...current, avatarDataUrl: '' }));
+                      }}
+                      type="button"
+                      variant="ghost"
+                    >
+                      {t('Clear')}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+
               <div className="agents-hub-form-grid">
                 <div className="codex-form-field">
                   <Label className="codex-form-label" htmlFor="agent-dialog-name">{t('Name')}</Label>
@@ -1012,9 +1167,12 @@ export function AgentsHubPanel({
           ) : (
             <div className="agents-hub-dialog-stack">
               <div className="agents-hub-detail-header">
-                <span className={`agents-hub-avatar-centered large ${selectedAgent?.builtIn ? 'builtin' : ''}`}>
-                  {avatarLabel(selectedAgent?.displayName || selectedAgent?.agentId || 'A')}
-                </span>
+                <AgentAvatar
+                  avatarDataUrl={selectedAgent?.avatarDataUrl}
+                  builtIn={selectedAgent?.builtIn}
+                  className="agents-hub-avatar-centered large"
+                  label={selectedAgent?.displayName || selectedAgent?.agentId || 'A'}
+                />
                 <div className="agents-hub-detail-copy">
                 <div className="agents-hub-card-badges">
                   <Badge variant="outline">{selectedAgent?.builtIn ? t('Built-in') : t('Custom')}</Badge>
@@ -1164,9 +1322,12 @@ export function AgentsHubPanel({
                           }}
                           type="button"
                         >
-                          <span className={`agents-hub-avatar-centered small ${agent.builtIn ? 'builtin' : ''}`}>
-                            {avatarLabel(agent.displayName || agent.agentId)}
-                          </span>
+                          <AgentAvatar
+                            avatarDataUrl={agent.avatarDataUrl}
+                            builtIn={agent.builtIn}
+                            className="agents-hub-avatar-centered small"
+                            label={agent.displayName || agent.agentId}
+                          />
                           <div className="team-builder-agent-info">
                             <span className="team-builder-agent-name">{agent.displayName}</span>
                             <span className="team-builder-agent-desc">
@@ -1195,9 +1356,12 @@ export function AgentsHubPanel({
                       const isLeader = teamDraft.leaderAgentId === agentId;
                       return (
                         <div className="team-builder-selected-row" key={agentId}>
-                          <span className={`agents-hub-avatar-centered small ${agent?.builtIn ? 'builtin' : ''}`}>
-                            {avatarLabel(agent?.displayName || agentId)}
-                          </span>
+                          <AgentAvatar
+                            avatarDataUrl={agent?.avatarDataUrl}
+                            builtIn={agent?.builtIn}
+                            className="agents-hub-avatar-centered small"
+                            label={agent?.displayName || agentId}
+                          />
                           <div className="team-builder-agent-info">
                             <span className="team-builder-agent-name">{agent?.displayName || agentId}</span>
                             <span className="team-builder-agent-desc">
@@ -1262,9 +1426,11 @@ export function AgentsHubPanel({
           ) : (
             <div className="agents-hub-dialog-stack">
               <div className="agents-hub-detail-header">
-                <span className="agents-hub-avatar-centered large team">
-                  {avatarLabel(selectedTeam?.displayName || selectedTeam?.teamId || 'T')}
-                </span>
+                <AgentAvatar
+                  className="agents-hub-avatar-centered large"
+                  label={selectedTeam?.displayName || selectedTeam?.teamId || 'T'}
+                  team
+                />
                 <div className="agents-hub-detail-copy">
                   <div className="agents-hub-card-badges">
                     <Badge variant="outline">

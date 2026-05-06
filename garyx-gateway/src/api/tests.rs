@@ -551,6 +551,7 @@ async fn test_create_and_list_custom_agents() {
                 "role": "reviewer",
                 "provider_type": "codex_app_server",
                 "model": "gpt-5-codex",
+                "avatar_data_url": "data:image/png;base64,dGVzdA==",
                 "system_prompt": "Review specs carefully."
             })
             .to_string(),
@@ -575,6 +576,7 @@ async fn test_create_and_list_custom_agents() {
             && agent["provider_type"] == "codex_app_server"
             && agent["display_name"] == "Spec Review"
             && agent["model"] == "gpt-5-codex"
+            && agent["avatar_data_url"] == "data:image/png;base64,dGVzdA=="
     }));
 }
 

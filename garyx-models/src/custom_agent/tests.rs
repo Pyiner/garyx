@@ -16,6 +16,7 @@ fn custom_agent_profile_defaults_standalone_to_true() {
     assert!(profile.standalone);
     assert_eq!(profile.model, "claude-opus-4-1");
     assert!(profile.default_workspace_dir.is_none());
+    assert!(profile.avatar_data_url.is_none());
 
     let explicit = serde_json::json!({
         "agent_id": "team-member",
@@ -23,6 +24,7 @@ fn custom_agent_profile_defaults_standalone_to_true() {
         "provider_type": "claude_code",
         "model": "",
         "default_workspace_dir": "/tmp/team-member",
+        "avatar_data_url": "data:image/png;base64,dGVzdA==",
         "system_prompt": "",
         "built_in": true,
         "standalone": false,
@@ -35,6 +37,10 @@ fn custom_agent_profile_defaults_standalone_to_true() {
     assert_eq!(
         profile.default_workspace_dir.as_deref(),
         Some("/tmp/team-member")
+    );
+    assert_eq!(
+        profile.avatar_data_url.as_deref(),
+        Some("data:image/png;base64,dGVzdA==")
     );
 }
 

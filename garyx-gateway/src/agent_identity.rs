@@ -286,6 +286,7 @@ mod tests {
                 provider_type: ProviderType::CodexAppServer,
                 model: "gpt-5".to_owned(),
                 default_workspace_dir: Some("/tmp/agent-default".to_owned()),
+                avatar_data_url: None,
                 system_prompt: "Review carefully.".to_owned(),
             })
             .await

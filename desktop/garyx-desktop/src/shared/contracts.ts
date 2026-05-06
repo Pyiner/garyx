@@ -247,6 +247,7 @@ export interface DesktopCustomAgent {
   providerType: DesktopApiProviderType;
   model: string;
   defaultWorkspaceDir: string;
+  avatarDataUrl: string;
   systemPrompt: string;
   builtIn: boolean;
   standalone: boolean;
@@ -270,6 +271,7 @@ export interface CreateCustomAgentInput {
   providerType: DesktopApiProviderType;
   model: string;
   defaultWorkspaceDir: string;
+  avatarDataUrl?: string | null;
   systemPrompt: string;
 }
 
@@ -279,6 +281,16 @@ export interface UpdateCustomAgentInput extends CreateCustomAgentInput {
 
 export interface DeleteCustomAgentInput {
   agentId: string;
+}
+
+export interface GenerateCustomAgentAvatarInput {
+  agentId?: string | null;
+  displayName: string;
+}
+
+export interface GenerateCustomAgentAvatarResult {
+  avatarDataUrl: string;
+  mediaType: string;
 }
 
 export interface CreateTeamInput {
@@ -1449,6 +1461,9 @@ export interface GaryxDesktopApi {
     input: UpdateCustomAgentInput,
   ) => Promise<DesktopCustomAgent>;
   deleteCustomAgent: (input: DeleteCustomAgentInput) => Promise<void>;
+  generateCustomAgentAvatar: (
+    input: GenerateCustomAgentAvatarInput,
+  ) => Promise<GenerateCustomAgentAvatarResult>;
   listTeams: () => Promise<DesktopTeam[]>;
   createTeam: (input: CreateTeamInput) => Promise<DesktopTeam>;
   updateTeam: (input: UpdateTeamInput) => Promise<DesktopTeam>;
