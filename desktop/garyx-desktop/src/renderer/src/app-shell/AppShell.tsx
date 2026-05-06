@@ -5612,6 +5612,32 @@ export function AppShell() {
   async function handleRemoveWorkspace(workspacePath: string) {
     setError(null);
     setWorkspaceMutation("remove");
+    const workspaceKey = workspacePath.trim().toLowerCase();
+    const previousState = desktopState;
+    const removedWorkspace = previousState?.workspaces.find((workspace) => {
+      return (workspace.path || "").trim().toLowerCase() === workspaceKey;
+    }) || null;
+    if (previousState && removedWorkspace) {
+      const trimmedWorkspacePath = workspacePath.trim();
+      setDesktopState({
+        ...previousState,
+        workspaces: previousState.workspaces.filter((workspace) => {
+          return (workspace.path || "").trim().toLowerCase() !== workspaceKey;
+        }),
+        hiddenWorkspacePaths: trimmedWorkspacePath
+          ? Array.from(
+              new Set([
+                ...(previousState.hiddenWorkspacePaths || []),
+                trimmedWorkspacePath,
+              ]),
+            )
+          : previousState.hiddenWorkspacePaths,
+        selectedWorkspacePath:
+          (previousState.selectedWorkspacePath || "").trim().toLowerCase() === workspaceKey
+            ? null
+            : previousState.selectedWorkspacePath,
+      });
+    }
     try {
       const nextState = await window.garyxDesktop.removeWorkspace({
         workspacePath,
@@ -5626,6 +5652,31 @@ export function AppShell() {
         }
       }
     } catch (removeError) {
+      if (previousState && removedWorkspace) {
+        setDesktopState((current) => {
+          if (!current) {
+            return previousState;
+          }
+          if (
+            current.workspaces.some((workspace) => {
+              return (workspace.path || "").trim().toLowerCase() === workspaceKey;
+            })
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            workspaces: [...current.workspaces, removedWorkspace],
+            hiddenWorkspacePaths: (current.hiddenWorkspacePaths || []).filter((entry) => {
+              return entry.trim().toLowerCase() !== workspaceKey;
+            }),
+            selectedWorkspacePath:
+              (previousState.selectedWorkspacePath || "").trim().toLowerCase() === workspaceKey
+                ? previousState.selectedWorkspacePath
+                : current.selectedWorkspacePath,
+          };
+        });
+      }
       setError(
         removeError instanceof Error
           ? removeError.message
