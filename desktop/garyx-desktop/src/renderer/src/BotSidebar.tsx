@@ -66,6 +66,7 @@ export function BotSidebar({
   onAddBot,
 }: BotSidebarProps) {
   const { t } = useI18n();
+  const [sectionCollapsed, setSectionCollapsed] = useState(false);
   const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
   const { entries: pluginCatalog } = useChannelPluginCatalog();
 
@@ -98,10 +99,20 @@ export function BotSidebar({
 
   return (
     <div className="sidebar-thread-block sidebar-bot-block">
-      <div className="panel-header sidebar-section-header">
-        <div className="sidebar-section-copy">
+      <div className="panel-header sidebar-section-header sidebar-section-header-interactive">
+        <button
+          aria-expanded={!sectionCollapsed}
+          aria-label={sectionCollapsed ? t('Expand bots') : t('Collapse bots')}
+          className="sidebar-section-toggle"
+          onClick={() => setSectionCollapsed((current) => !current)}
+          type="button"
+        >
           <span className="sidebar-section-title">{t('Bots')}</span>
-        </div>
+          <ChevronDownIcon
+            size={16}
+            className={`icon sidebar-section-chevron ${sectionCollapsed ? 'collapsed' : ''}`}
+          />
+        </button>
         {!groups.length ? (
           <div className="sidebar-section-tools">
             <button
@@ -117,9 +128,10 @@ export function BotSidebar({
             </button>
           </div>
         ) : null}
-        </div>
+      </div>
 
-      <div className="workspace-list sidebar-bot-list">
+      {!sectionCollapsed ? (
+        <div className="workspace-list sidebar-bot-list">
           {groups.map((group) => {
             const childEntries = group.conversationNodes || [];
             const isExpanded = expandedGroupIds.has(group.id);
@@ -212,6 +224,7 @@ export function BotSidebar({
           })}
 
         </div>
+      ) : null}
     </div>
   );
 }
