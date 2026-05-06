@@ -35,6 +35,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
 import { MoreDotsIcon } from '../icons';
@@ -397,6 +398,7 @@ export function TasksPanel({
       : taskCountLabel(total || visibleCount, t);
 
   const renderTaskOverflowMenu = (task: DesktopTaskSummary, busy: boolean) => {
+    const next = nextStatus(task.status);
     const taskMenuLabel = t('More actions for {name}', {
       name: task.taskId || `#TASK-${task.number}`,
     });
@@ -415,6 +417,20 @@ export function TasksPanel({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={4}>
           <DropdownMenuItem
+            disabled={busy}
+            onSelect={() => {
+              void moveTask(task, next.status);
+            }}
+          >
+            {task.status === 'done' ? (
+              <RefreshCcw aria-hidden size={14} strokeWidth={1.8} />
+            ) : (
+              <ArrowRight aria-hidden size={14} strokeWidth={1.8} />
+            )}
+            {t(next.label)}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
             className="tasks-menu-danger"
             disabled={busy}
             onSelect={() => {
@@ -430,7 +446,6 @@ export function TasksPanel({
   };
 
   const renderTaskCard = (task: DesktopTaskSummary) => {
-    const next = nextStatus(task.status);
     const busy = mutatingTaskId === task.taskId;
     const dragging = draggingTaskId === task.taskId;
     return (
@@ -501,21 +516,6 @@ export function TasksPanel({
               </button>
             ) : null}
             {renderTaskOverflowMenu(task, busy)}
-            <button
-              className="tasks-move-button"
-              disabled={busy}
-              onClick={() => {
-                void moveTask(task, next.status);
-              }}
-              type="button"
-            >
-              {task.status === 'done' ? (
-                <RefreshCcw aria-hidden size={13} strokeWidth={1.8} />
-              ) : (
-                <ArrowRight aria-hidden size={13} strokeWidth={1.8} />
-              )}
-              {busy ? t('Saving…') : t(next.label)}
-            </button>
           </div>
         </div>
       </article>
@@ -727,7 +727,6 @@ export function TasksPanel({
             <span />
           </div>
           {tasks.map((task) => {
-            const next = nextStatus(task.status);
             const busy = mutatingTaskId === task.taskId;
             return (
               <div className="tasks-list-row" key={task.taskId}>
@@ -778,16 +777,6 @@ export function TasksPanel({
                     </button>
                   ) : null}
                   {renderTaskOverflowMenu(task, busy)}
-                  <button
-                    className="tasks-move-button"
-                    disabled={busy}
-                    onClick={() => {
-                      void moveTask(task, next.status);
-                    }}
-                    type="button"
-                  >
-                    {busy ? t('Saving…') : t(next.label)}
-                  </button>
                 </div>
               </div>
             );

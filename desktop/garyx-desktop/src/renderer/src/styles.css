@@ -13393,7 +13393,6 @@ button.codex-list-row {
 .tasks-segmented button,
 .tasks-primary-button,
 .tasks-secondary-button,
-.tasks-move-button,
 .tasks-icon-button {
   border: 0;
   font-family: inherit;
@@ -13426,8 +13425,7 @@ button.codex-list-row {
 }
 
 .tasks-primary-button,
-.tasks-secondary-button,
-.tasks-move-button {
+.tasks-secondary-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -13445,8 +13443,7 @@ button.codex-list-row {
   color: var(--color-token-button-foreground);
 }
 
-.tasks-secondary-button,
-.tasks-move-button {
+.tasks-secondary-button {
   background: var(--color-background-button-secondary);
   color: var(--color-token-text-secondary);
 }
@@ -13455,15 +13452,13 @@ button.codex-list-row {
   background: color-mix(in oklab, #000 82%, var(--color-accent-green));
 }
 
-.tasks-secondary-button:hover,
-.tasks-move-button:hover {
+.tasks-secondary-button:hover {
   background: var(--color-background-button-secondary-hover);
   color: var(--color-token-text-primary);
 }
 
 .tasks-primary-button:disabled,
 .tasks-secondary-button:disabled,
-.tasks-move-button:disabled,
 .tasks-icon-button:disabled,
 .tasks-card-title:disabled,
 .tasks-list-title:disabled {
