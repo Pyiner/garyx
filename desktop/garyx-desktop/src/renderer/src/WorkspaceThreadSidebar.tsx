@@ -68,7 +68,6 @@ export function WorkspaceThreadSidebar({
   const [sectionCollapsed, setSectionCollapsed] = useState(false);
   const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [confirmRemoveWorkspacePath, setConfirmRemoveWorkspacePath] = useState<string | null>(null);
   const [expandedWorkspacePreviewPaths, setExpandedWorkspacePreviewPaths] = useState<Set<string>>(new Set());
   const [workspaceMenuStyle, setWorkspaceMenuStyle] = useState<CSSProperties | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -102,8 +101,8 @@ export function WorkspaceThreadSidebar({
 
     const rect = button.getBoundingClientRect();
     const viewportPadding = 12;
-    const menuWidth = confirmRemoveWorkspacePath === workspacePath ? 188 : 146;
-    const estimatedHeight = confirmRemoveWorkspacePath === workspacePath ? 116 : 40;
+    const menuWidth = 146;
+    const estimatedHeight = 40;
     const gap = 4;
     const nextLeft = Math.max(
       viewportPadding,
@@ -118,12 +117,11 @@ export function WorkspaceThreadSidebar({
       left: `${nextLeft}px`,
       top: `${nextTop}px`,
     });
-  }, [confirmRemoveWorkspacePath]);
+  }, []);
 
   useEffect(() => {
     if (!workspaceMenuOpenPath) {
       setWorkspaceMenuStyle(null);
-      setConfirmRemoveWorkspacePath(null);
       return;
     }
 
@@ -139,20 +137,6 @@ export function WorkspaceThreadSidebar({
       window.removeEventListener('scroll', update, true);
     };
   }, [updateWorkspaceMenuPosition, workspaceMenuOpenPath]);
-
-  useEffect(() => {
-    if (!workspaceMenuOpenPath && confirmRemoveWorkspacePath) {
-      setConfirmRemoveWorkspacePath(null);
-      return;
-    }
-    if (
-      confirmRemoveWorkspacePath
-      && workspaceMenuOpenPath
-      && confirmRemoveWorkspacePath !== workspaceMenuOpenPath
-    ) {
-      setConfirmRemoveWorkspacePath(null);
-    }
-  }, [confirmRemoveWorkspacePath, workspaceMenuOpenPath]);
 
   const handleWorkspaceClick = useCallback(
     (workspacePath: string) => {
@@ -206,7 +190,6 @@ export function WorkspaceThreadSidebar({
           const { workspace } = group;
           const workspacePath = workspace.path || workspace.name;
           const isMenuOpen = workspaceMenuOpenPath === workspacePath;
-          const isRemoveConfirming = confirmRemoveWorkspacePath === workspacePath;
           const isRenaming = renamingWorkspacePath === workspacePath;
           const isPreviewExpanded = expandedWorkspacePreviewPaths.has(workspacePath);
           const rows = buildWorkspaceThreadRows({
@@ -371,58 +354,25 @@ export function WorkspaceThreadSidebar({
                                   style={{
                                     position: 'static',
                                     zIndex: 'auto',
-                                    minWidth: isRemoveConfirming ? '188px' : '146px',
+                                    minWidth: '146px',
                                     maxHeight: 'min(240px, calc(100vh - 24px))',
                                     overflowY: 'auto',
                                   }}
                                 >
-                                  {isRemoveConfirming ? (
-                                    <div className="workspace-menu-confirm" role="group" aria-label={t('Confirm removal of {name}', { name: workspace.name })}>
-                                      <div className="workspace-menu-confirm-copy">
-                                        <span className="workspace-menu-confirm-title">{t('Remove?')}</span>
-                                        <p>
-                                          {t('This only hides the workspace from Garyx. Threads stay intact.')}
-                                        </p>
-                                      </div>
-                                      <div className="workspace-menu-confirm-actions">
-                                        <button
-                                          className="workspace-menu-confirm-button"
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            setConfirmRemoveWorkspacePath(null);
-                                          }}
-                                          type="button"
-                                        >
-                                          {t('Cancel')}
-                                        </button>
-                                        <button
-                                          className="workspace-menu-confirm-button workspace-menu-confirm-button-primary"
-                                          onClick={(event) => {
-                                            event.stopPropagation();
-                                            setConfirmRemoveWorkspacePath(null);
-                                            onRequestRemoveWorkspace(workspace);
-                                          }}
-                                          type="button"
-                                        >
-                                          {t('Remove')}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <button
-                                      className="workspace-menu-item"
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        setConfirmRemoveWorkspacePath(workspacePath);
-                                      }}
-                                      role="menuitem"
-                                      title={t('Remove')}
-                                      type="button"
-                                    >
-                                      <DeleteIcon />
-                                      {t('Remove')}
-                                    </button>
-                                  )}
+                                  <button
+                                    className="workspace-menu-item"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setWorkspaceMenuOpenPath(null);
+                                      onRequestRemoveWorkspace(workspace);
+                                    }}
+                                    role="menuitem"
+                                    title={t('Remove')}
+                                    type="button"
+                                  >
+                                    <DeleteIcon />
+                                    {t('Remove')}
+                                  </button>
                                 </div>
                               </div>,
                               document.body,
