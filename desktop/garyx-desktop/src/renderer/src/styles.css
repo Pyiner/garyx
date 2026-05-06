@@ -3891,11 +3891,6 @@ code {
   background: var(--color-token-bg-primary);
 }
 
-.conversation:has(.thread-layout),
-.conversation-body:has(.thread-layout) {
-  background: transparent;
-}
-
 .bots-page {
   display: grid;
   gap: 16px;
@@ -6718,9 +6713,8 @@ button.team-agent-speaker:focus-visible {
   gap: 0;
   width: min(var(--container-2xl), 100%);
   margin: 0 auto;
-  overflow-x: hidden;
-  overflow-y: auto;
-  border: 1px solid rgba(26, 28, 31, 0.06);
+  overflow: visible;
+  border: 0;
   border-radius: 18px;
   background: transparent;
   box-shadow: none;
@@ -6735,10 +6729,6 @@ button.team-agent-speaker:focus-visible {
   border-top-right-radius: 0;
   border-bottom-right-radius: 14px;
   border-bottom-left-radius: 14px;
-  border-top-color: transparent;
-  border-right-color: rgba(26, 28, 31, 0.06);
-  border-bottom-color: rgba(26, 28, 31, 0.06);
-  border-left-color: rgba(26, 28, 31, 0.06);
   box-shadow: none;
 }
 
@@ -6747,11 +6737,15 @@ button.team-agent-speaker:focus-visible {
   border-top-right-radius: 0;
   border-bottom-right-radius: 14px;
   border-bottom-left-radius: 14px;
+  border-top-color: transparent;
 }
 
 .composer-shell:focus-within {
-  border-color: rgba(13, 13, 13, 0.12);
   box-shadow: none;
+}
+
+.composer-shell:focus-within .composer-surface {
+  border-color: rgba(13, 13, 13, 0.12);
 }
 
 .composer {
@@ -6779,6 +6773,7 @@ button.team-agent-speaker:focus-visible {
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  border: 1px solid rgba(26, 28, 31, 0.06);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.96);
 }
