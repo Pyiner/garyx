@@ -58,6 +58,7 @@ type AppLeftRailProps = {
   onOpenBot: (group: ReturnType<typeof buildBotGroups>[number]) => void;
   onOpenBotEndpoint: (endpoint: DesktopChannelEndpoint) => void;
   onAddBot: () => void;
+  onAddWorkspace: () => void;
   onBeginRenameWorkspace: (workspace: DesktopWorkspace) => void;
   onCancelRenameWorkspace: () => void;
   onCreateThreadForWorkspace: (workspacePath: string) => void;
@@ -109,6 +110,7 @@ export function AppLeftRail({
   onOpenBot,
   onOpenBotEndpoint,
   onAddBot,
+  onAddWorkspace,
   onBeginRenameWorkspace,
   onCancelRenameWorkspace,
   onCreateThreadForWorkspace,
@@ -246,6 +248,7 @@ export function AppLeftRail({
             desktopState={desktopState}
             formatThreadTimestamp={formatThreadTimestamp}
             isThreadRuntimeBusy={isThreadRuntimeBusy}
+            onAddWorkspace={onAddWorkspace}
             onBeginRenameWorkspace={onBeginRenameWorkspace}
             onCancelRenameWorkspace={onCancelRenameWorkspace}
             onCreateThreadForWorkspace={onCreateThreadForWorkspace}

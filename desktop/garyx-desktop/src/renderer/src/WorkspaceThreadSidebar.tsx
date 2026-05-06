@@ -37,6 +37,7 @@ type WorkspaceThreadSidebarProps = {
   onCancelRenameWorkspace: () => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
   onDeleteThread: (threadId: string) => void;
+  onAddWorkspace: () => void;
 };
 
 export function WorkspaceThreadSidebar({
@@ -61,6 +62,7 @@ export function WorkspaceThreadSidebar({
   onCancelRenameWorkspace,
   onRequestRemoveWorkspace,
   onDeleteThread,
+  onAddWorkspace,
 }: WorkspaceThreadSidebarProps) {
   const { t } = useI18n();
   const [sectionCollapsed, setSectionCollapsed] = useState(false);
@@ -172,17 +174,31 @@ export function WorkspaceThreadSidebar({
       <div className="panel-header sidebar-section-header sidebar-section-header-interactive">
         <button
           aria-expanded={!sectionCollapsed}
-          aria-label={sectionCollapsed ? t('Expand threads') : t('Collapse threads')}
+          aria-label={sectionCollapsed ? t('Expand workspaces') : t('Collapse workspaces')}
           className="sidebar-section-toggle"
           onClick={() => setSectionCollapsed((c) => !c)}
           type="button"
         >
-          <span className="sidebar-section-title">{t('Threads')}</span>
+          <span className="sidebar-section-title">{t('Workspaces')}</span>
           <ChevronDownIcon
             size={16}
             className={`icon sidebar-section-chevron ${sectionCollapsed ? 'collapsed' : ''}`}
           />
         </button>
+        <div className="sidebar-section-tools">
+          <button
+            aria-label={t('Add workspace…')}
+            className="sidebar-section-action sidebar-section-action-always"
+            disabled={workspaceMutation === 'add'}
+            onClick={onAddWorkspace}
+            title={t('Add workspace…')}
+            type="button"
+          >
+            <svg aria-hidden width="14" height="14" viewBox="0 0 15 15" fill="none" style={{ strokeWidth: 1.21 }}>
+              <path d="M0.5 7.5H14.5M7.5 0.5V14.5" stroke="currentColor" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       {!sectionCollapsed ? <div className="workspace-list">
