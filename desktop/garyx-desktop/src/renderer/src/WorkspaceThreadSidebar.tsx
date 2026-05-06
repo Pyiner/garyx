@@ -102,9 +102,9 @@ export function WorkspaceThreadSidebar({
 
     const rect = button.getBoundingClientRect();
     const viewportPadding = 12;
-    const menuWidth = confirmRemoveWorkspacePath === workspacePath ? 228 : 196;
-    const estimatedHeight = confirmRemoveWorkspacePath === workspacePath ? 154 : 104;
-    const gap = 6;
+    const menuWidth = confirmRemoveWorkspacePath === workspacePath ? 188 : 146;
+    const estimatedHeight = confirmRemoveWorkspacePath === workspacePath ? 116 : 40;
+    const gap = 4;
     const nextLeft = Math.max(
       viewportPadding,
       Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - viewportPadding),
@@ -371,8 +371,8 @@ export function WorkspaceThreadSidebar({
                                   style={{
                                     position: 'static',
                                     zIndex: 'auto',
-                                    minWidth: '196px',
-                                    maxHeight: 'min(280px, calc(100vh - 24px))',
+                                    minWidth: isRemoveConfirming ? '188px' : '146px',
+                                    maxHeight: 'min(240px, calc(100vh - 24px))',
                                     overflowY: 'auto',
                                   }}
                                 >
@@ -396,7 +396,7 @@ export function WorkspaceThreadSidebar({
                                           {t('Cancel')}
                                         </button>
                                         <button
-                                          className="workspace-menu-confirm-button danger"
+                                          className="workspace-menu-confirm-button workspace-menu-confirm-button-primary"
                                           onClick={(event) => {
                                             event.stopPropagation();
                                             setConfirmRemoveWorkspacePath(null);
@@ -410,7 +410,7 @@ export function WorkspaceThreadSidebar({
                                     </div>
                                   ) : (
                                     <button
-                                      className="workspace-menu-item workspace-menu-item-danger"
+                                      className="workspace-menu-item"
                                       onClick={(event) => {
                                         event.stopPropagation();
                                         setConfirmRemoveWorkspacePath(workspacePath);
