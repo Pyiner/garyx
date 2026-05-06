@@ -3885,8 +3885,8 @@ code {
   scrollbar-width: none;
   width: min(var(--container-2xl), 100%);
   margin: 0 auto;
-  padding: 8px 2px 24px 0;
-  scroll-padding-block-end: 24px;
+  padding: 8px 2px 88px 0;
+  scroll-padding-block-end: 88px;
   overscroll-behavior: contain;
   background: var(--color-token-bg-primary);
 }
