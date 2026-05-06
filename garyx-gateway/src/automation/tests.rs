@@ -155,6 +155,7 @@ async fn resolve_automation_agent_id_preserves_raw_team_id() {
             leader_agent_id: "codex".to_owned(),
             member_agent_ids: vec!["codex".to_owned(), "claude".to_owned()],
             workflow_text: "Codex leads and Claude reviews.".to_owned(),
+            avatar_data_url: None,
         })
         .await
         .expect("team saved");

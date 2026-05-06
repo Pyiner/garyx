@@ -261,6 +261,7 @@ export interface DesktopTeam {
   leaderAgentId: string;
   memberAgentIds: string[];
   workflowText: string;
+  avatarDataUrl: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -286,6 +287,7 @@ export interface DeleteCustomAgentInput {
 export interface GenerateCustomAgentAvatarInput {
   agentId?: string | null;
   displayName: string;
+  kind?: "agent" | "team";
   stylePrompt?: string | null;
 }
 
@@ -300,6 +302,7 @@ export interface CreateTeamInput {
   leaderAgentId: string;
   memberAgentIds: string[];
   workflowText: string;
+  avatarDataUrl?: string | null;
 }
 
 export interface UpdateTeamInput extends CreateTeamInput {

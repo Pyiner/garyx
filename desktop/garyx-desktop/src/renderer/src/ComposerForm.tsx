@@ -254,6 +254,40 @@ const AGENT_PROVIDER_GLYPH = (
   </span>
 );
 
+function composerOptionInitials(label: string): string {
+  const trimmed = label.trim();
+  if (!trimmed) {
+    return 'A';
+  }
+  return Array.from(trimmed).slice(0, 2).join('').toUpperCase();
+}
+
+function renderComposerAgentOptionIcon(option: ComposerAgentOption) {
+  const showProviderIcon =
+    option.kind === 'builtin' && hasProviderAgentIcon(option.id, option.providerType);
+  const classes = [
+    'composer-agent-option-icon',
+    option.kind === 'team' ? 'team' : '',
+    option.avatarDataUrl ? 'image' : '',
+    showProviderIcon ? 'provider' : '',
+  ].filter(Boolean).join(' ');
+
+  return (
+    <span aria-hidden className={classes}>
+      {option.avatarDataUrl ? (
+        <img alt="" src={option.avatarDataUrl} />
+      ) : showProviderIcon ? (
+        <ProviderAgentIcon
+          agentId={option.id}
+          className="composer-agent-option-icon-svg"
+          providerType={option.providerType}
+          size={16}
+        />
+      ) : composerOptionInitials(option.label)}
+    </span>
+  );
+}
+
 function renderComposerProviderControl({
   composerProviderType,
   agentLabel,
@@ -270,21 +304,9 @@ function renderComposerProviderControl({
   t: Translate;
 }) {
   const selectedOption = agentOptions?.find((option) => option.id === selectedAgentId);
-  const selectedBuiltInIcon =
-    selectedOption?.kind === 'builtin'
-    && hasProviderAgentIcon(selectedOption.id, selectedOption.providerType)
-      ? (
-        <span aria-hidden className="composer-provider-lobe-icon">
-          <ProviderAgentIcon
-            agentId={selectedOption.id}
-            className="composer-provider-lobe-svg"
-            providerType={selectedOption.providerType}
-            size={16}
-          />
-        </span>
-      )
-      : null;
-  const providerIcon = selectedBuiltInIcon || AGENT_PROVIDER_GLYPH;
+  const providerIcon = selectedOption
+    ? renderComposerAgentOptionIcon(selectedOption)
+    : AGENT_PROVIDER_GLYPH;
   const providerLabel = agentLabel || providerOptionLabel(composerProviderType);
 
   if (onSelectAgent) {
@@ -312,12 +334,7 @@ function renderComposerProviderControl({
               key={option.id}
               onSelect={() => onSelectAgent(option.id)}
             >
-              <ProviderAgentIcon
-                agentId={option.id}
-                className="composer-agent-option-icon"
-                providerType={option.providerType}
-                size={16}
-              />
+              {renderComposerAgentOptionIcon(option)}
               <span className="composer-menu-label">{option.label}</span>
             </FloatingActionMenuItem>
           ))}
@@ -334,9 +351,12 @@ function renderComposerProviderControl({
                     key={option.id}
                     onSelect={() => onSelectAgent(option.id)}
                   >
-                    {option.detail
-                      ? `${option.label} (${option.detail})`
-                      : option.label}
+                    {renderComposerAgentOptionIcon(option)}
+                    <span className="composer-menu-label">
+                      {option.detail
+                        ? `${option.label} (${option.detail})`
+                        : option.label}
+                    </span>
                   </FloatingActionMenuItem>
                 ))}
               </FloatingActionMenuSubContent>
@@ -354,7 +374,8 @@ function renderComposerProviderControl({
                     key={option.id}
                     onSelect={() => onSelectAgent(option.id)}
                   >
-                    {option.label}
+                    {renderComposerAgentOptionIcon(option)}
+                    <span className="composer-menu-label">{option.label}</span>
                   </FloatingActionMenuItem>
                 ))}
               </FloatingActionMenuSubContent>

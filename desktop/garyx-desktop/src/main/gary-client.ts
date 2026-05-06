@@ -692,6 +692,8 @@ interface TeamPayload {
   memberAgentIds?: unknown;
   workflow_text?: string | null;
   workflowText?: string | null;
+  avatar_data_url?: string | null;
+  avatarDataUrl?: string | null;
   created_at?: string;
   createdAt?: string;
   updated_at?: string;
@@ -1443,6 +1445,7 @@ function mapTeam(value: TeamPayload): DesktopTeam {
       (entry): entry is string => typeof entry === "string",
     ),
     workflowText: value.workflow_text || value.workflowText || "",
+    avatarDataUrl: value.avatar_data_url || value.avatarDataUrl || "",
     createdAt: value.created_at || value.createdAt || new Date(0).toISOString(),
     updatedAt: value.updated_at || value.updatedAt || new Date(0).toISOString(),
   };
@@ -3265,6 +3268,7 @@ export async function createTeam(
       leaderAgentId: input.leaderAgentId,
       memberAgentIds: input.memberAgentIds,
       workflowText: input.workflowText,
+      avatarDataUrl: input.avatarDataUrl ?? null,
     }),
   });
   return mapTeam(payload);
@@ -3286,6 +3290,7 @@ export async function updateTeam(
         leaderAgentId: input.leaderAgentId,
         memberAgentIds: input.memberAgentIds,
         workflowText: input.workflowText,
+        avatarDataUrl: input.avatarDataUrl ?? null,
       }),
     },
   );

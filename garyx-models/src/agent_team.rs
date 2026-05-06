@@ -9,6 +9,8 @@ pub struct AgentTeamProfile {
     #[serde(default)]
     pub member_agent_ids: Vec<String>,
     pub workflow_text: String,
+    #[serde(default, alias = "avatarDataUrl")]
+    pub avatar_data_url: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

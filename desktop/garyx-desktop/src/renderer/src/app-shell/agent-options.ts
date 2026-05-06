@@ -6,6 +6,7 @@ export type ComposerAgentOption = {
   id: string;
   label: string;
   kind: AgentOptionKind;
+  avatarDataUrl?: string;
   detail?: string;
   providerType?: DesktopApiProviderType;
 };
@@ -45,6 +46,7 @@ export function buildAgentOptions(
       id: agent.agentId,
       label: agent.displayName,
       kind: "builtin",
+      avatarDataUrl: agent.avatarDataUrl,
       providerType: agent.providerType,
     });
   }
@@ -58,6 +60,7 @@ export function buildAgentOptions(
       id: agent.agentId,
       label: agent.displayName,
       kind: "agent",
+      avatarDataUrl: agent.avatarDataUrl,
       detail: PROVIDER_LABELS[agent.providerType],
       providerType: agent.providerType,
     });
@@ -70,6 +73,7 @@ export function buildAgentOptions(
       id: team.teamId,
       label: team.displayName,
       kind: "team",
+      avatarDataUrl: team.avatarDataUrl,
       detail: `Lead: ${leaderLabel}`,
     });
   }

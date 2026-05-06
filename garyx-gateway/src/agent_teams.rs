@@ -15,6 +15,8 @@ pub struct UpsertAgentTeamRequest {
     #[serde(default)]
     pub member_agent_ids: Vec<String>,
     pub workflow_text: String,
+    #[serde(default, alias = "avatarDataUrl")]
+    pub avatar_data_url: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -114,6 +116,8 @@ impl AgentTeamStore {
         let display_name = request.display_name.trim();
         let leader_agent_id = request.leader_agent_id.trim();
         let workflow_text = request.workflow_text.trim();
+        let requested_avatar_data_url =
+            request.avatar_data_url.map(|value| value.trim().to_owned());
         if team_id.is_empty() {
             return Err("team_id is required".to_owned());
         }
@@ -146,12 +150,20 @@ impl AgentTeamStore {
             .get(team_id)
             .map(|existing| existing.created_at.clone())
             .unwrap_or_else(|| now.clone());
+        let avatar_data_url = match requested_avatar_data_url {
+            Some(value) if value.is_empty() => None,
+            Some(value) => Some(value),
+            None => inner
+                .get(team_id)
+                .and_then(|existing| existing.avatar_data_url.clone()),
+        };
         let team = AgentTeamProfile {
             team_id: team_id.to_owned(),
             display_name: display_name.to_owned(),
             leader_agent_id: leader_agent_id.to_owned(),
             member_agent_ids,
             workflow_text: workflow_text.to_owned(),
+            avatar_data_url,
             created_at,
             updated_at: now,
         };

@@ -23,6 +23,7 @@ fn team_profile(team_id: &str, leader_agent_id: &str) -> AgentTeamProfile {
         leader_agent_id: leader_agent_id.to_owned(),
         member_agent_ids: vec![leader_agent_id.to_owned(), "reviewer".to_owned()],
         workflow_text: "ship it".to_owned(),
+        avatar_data_url: None,
         created_at: "2026-01-01T00:00:00Z".to_owned(),
         updated_at: "2026-01-01T00:00:00Z".to_owned(),
     }

@@ -405,6 +405,8 @@ pub struct AgentTeamUpsertPayload {
     pub member_agent_ids: Vec<String>,
     #[serde(alias = "workflow_text")]
     pub workflow_text: String,
+    #[serde(default, alias = "avatar_data_url")]
+    pub avatar_data_url: Option<String>,
 }
 
 pub async fn list_auto_research_runs(
@@ -2607,6 +2609,7 @@ pub async fn create_agent_team(
             leader_agent_id: payload.leader_agent_id,
             member_agent_ids: payload.member_agent_ids,
             workflow_text: payload.workflow_text,
+            avatar_data_url: payload.avatar_data_url,
         })
         .await
     {
@@ -2652,6 +2655,7 @@ pub async fn update_agent_team(
             leader_agent_id: payload.leader_agent_id,
             member_agent_ids: payload.member_agent_ids,
             workflow_text: payload.workflow_text,
+            avatar_data_url: payload.avatar_data_url,
         })
         .await
     {

@@ -701,6 +701,7 @@ async fn test_update_team_prunes_removed_member_group_state() {
                 "reviewer".to_owned(),
             ],
             workflow_text: "ship".to_owned(),
+            avatar_data_url: None,
         })
         .await
         .expect("seed team");
@@ -783,6 +784,7 @@ async fn test_delete_team_marks_threads_deleted_and_drops_group_state() {
             leader_agent_id: "planner".to_owned(),
             member_agent_ids: vec!["planner".to_owned(), "coder".to_owned()],
             workflow_text: "ship".to_owned(),
+            avatar_data_url: None,
         })
         .await
         .expect("seed team");
@@ -1944,6 +1946,7 @@ async fn seed_history_team(state: &Arc<AppState>) {
                 "reviewer".to_owned(),
             ],
             workflow_text: "Ship the product.".to_owned(),
+            avatar_data_url: None,
         })
         .await
         .expect("team upsert");

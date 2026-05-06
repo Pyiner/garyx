@@ -113,6 +113,7 @@ const AVATAR_STYLE_OPTIONS: Array<{
 type TeamDraft = {
   teamId: string;
   displayName: string;
+  avatarDataUrl: string;
   leaderAgentId: string;
   memberAgentIds: string[];
   workflowText: string;
@@ -141,6 +142,7 @@ function emptyTeamDraft(): TeamDraft {
   return {
     teamId: '',
     displayName: '',
+    avatarDataUrl: '',
     leaderAgentId: '',
     memberAgentIds: [],
     workflowText: '',
@@ -380,9 +382,11 @@ export function AgentsHubPanel({
   const [agentIdTouched, setAgentIdTouched] = useState(false);
   const [avatarGenerating, setAvatarGenerating] = useState(false);
   const [avatarStyleDialogOpen, setAvatarStyleDialogOpen] = useState(false);
+  const [avatarStyleTarget, setAvatarStyleTarget] = useState<'agent' | 'team'>('agent');
   const [avatarStyleId, setAvatarStyleId] = useState<AvatarStyleId>(DEFAULT_AVATAR_STYLE_ID);
   const [customAvatarStyle, setCustomAvatarStyle] = useState('');
   const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
+  const teamAvatarFileInputRef = useRef<HTMLInputElement | null>(null);
   const [providerModelsByType, setProviderModelsByType] = useState<
     Partial<Record<ProviderType, DesktopProviderModels>>
   >({});
@@ -564,6 +568,7 @@ export function AgentsHubPanel({
     setAgentDraft(emptyAgentDraft());
     setAgentIdTouched(false);
     setAvatarStyleDialogOpen(false);
+    setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
   }
@@ -573,6 +578,10 @@ export function AgentsHubPanel({
     setSelectedTeamId(null);
     setTeamDraft(emptyTeamDraft());
     setTeamIdTouched(false);
+    setAvatarStyleDialogOpen(false);
+    setAvatarStyleTarget('agent');
+    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
+    setCustomAvatarStyle('');
   }
 
   function openCreateAgentDialog() {
@@ -580,6 +589,7 @@ export function AgentsHubPanel({
     setSelectedAgentId(null);
     setAgentDraft(emptyAgentDraft());
     setAgentIdTouched(false);
+    setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
   }
@@ -597,6 +607,7 @@ export function AgentsHubPanel({
       systemPrompt: agent.systemPrompt,
     });
     setAgentIdTouched(true);
+    setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
   }
@@ -618,6 +629,7 @@ export function AgentsHubPanel({
       systemPrompt: agent.systemPrompt,
     });
     setAgentIdTouched(true);
+    setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
   }
@@ -632,11 +644,15 @@ export function AgentsHubPanel({
     setTeamDraft({
       teamId: '',
       displayName: nextDisplayName,
+      avatarDataUrl: '',
       leaderAgentId: nextLeaderAgentId,
       memberAgentIds: nextMemberAgentIds,
       workflowText: buildSuggestedWorkflow(agents, nextLeaderAgentId, nextMemberAgentIds),
     });
     setTeamIdTouched(false);
+    setAvatarStyleTarget('team');
+    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
+    setCustomAvatarStyle('');
     setActiveTab('teams');
   }
 
@@ -646,11 +662,15 @@ export function AgentsHubPanel({
     setTeamDraft({
       teamId: team.teamId,
       displayName: team.displayName,
+      avatarDataUrl: team.avatarDataUrl,
       leaderAgentId: team.leaderAgentId,
       memberAgentIds: [...team.memberAgentIds],
       workflowText: team.workflowText,
     });
     setTeamIdTouched(true);
+    setAvatarStyleTarget('team');
+    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
+    setCustomAvatarStyle('');
   }
 
   function openEditTeamDialog(team: DesktopTeam) {
@@ -659,11 +679,15 @@ export function AgentsHubPanel({
     setTeamDraft({
       teamId: team.teamId,
       displayName: team.displayName,
+      avatarDataUrl: team.avatarDataUrl,
       leaderAgentId: team.leaderAgentId,
       memberAgentIds: [...team.memberAgentIds],
       workflowText: team.workflowText,
     });
     setTeamIdTouched(true);
+    setAvatarStyleTarget('team');
+    setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
+    setCustomAvatarStyle('');
     setActiveTab('teams');
   }
 
@@ -702,7 +726,10 @@ export function AgentsHubPanel({
     });
   }
 
-  async function handleAvatarFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+  async function handleAvatarFileChange(
+    event: React.ChangeEvent<HTMLInputElement>,
+    target: 'agent' | 'team' = 'agent',
+  ) {
     const file = event.target.files?.[0] || null;
     event.target.value = '';
     if (!file) {
@@ -718,7 +745,11 @@ export function AgentsHubPanel({
     }
     try {
       const avatarDataUrl = await normalizeAvatarFile(file);
-      setAgentDraft((current) => ({ ...current, avatarDataUrl }));
+      if (target === 'team') {
+        setTeamDraft((current) => ({ ...current, avatarDataUrl }));
+      } else {
+        setAgentDraft((current) => ({ ...current, avatarDataUrl }));
+      }
     } catch (error) {
       const message = error instanceof Error && error.message === 'Avatar image is too large.'
         ? error.message
@@ -728,8 +759,13 @@ export function AgentsHubPanel({
   }
 
   async function handleGenerateAvatar(stylePrompt: string) {
-    const displayName = agentDraft.displayName.trim();
-    const agentId = agentDraft.agentId.trim();
+    const target = avatarStyleTarget;
+    const displayName = target === 'team'
+      ? teamDraft.displayName.trim()
+      : agentDraft.displayName.trim();
+    const agentId = target === 'team'
+      ? teamDraft.teamId.trim()
+      : agentDraft.agentId.trim();
     if (!displayName && !agentId) {
       onToast?.(t('Name is required.'), 'error');
       return;
@@ -739,12 +775,20 @@ export function AgentsHubPanel({
       const result = await window.garyxDesktop.generateCustomAgentAvatar({
         agentId,
         displayName: displayName || agentId,
+        kind: target,
         stylePrompt,
       });
-      setAgentDraft((current) => ({
-        ...current,
-        avatarDataUrl: result.avatarDataUrl,
-      }));
+      if (target === 'team') {
+        setTeamDraft((current) => ({
+          ...current,
+          avatarDataUrl: result.avatarDataUrl,
+        }));
+      } else {
+        setAgentDraft((current) => ({
+          ...current,
+          avatarDataUrl: result.avatarDataUrl,
+        }));
+      }
       setAvatarStyleDialogOpen(false);
       onToast?.(t('Avatar generated'), 'success');
     } catch {
@@ -813,6 +857,11 @@ export function AgentsHubPanel({
 
   async function handleTeamSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const avatarDataUrl = teamDraft.avatarDataUrl.trim();
+    if (avatarDataUrl.length > AGENT_AVATAR_DATA_URL_MAX_LENGTH) {
+      onToast?.(t('Avatar image is too large.'), 'error');
+      return;
+    }
     setSaving(true);
     try {
       const workflowText = teamDraft.workflowText.trim()
@@ -823,6 +872,7 @@ export function AgentsHubPanel({
         leaderAgentId: teamDraft.leaderAgentId.trim(),
         memberAgentIds: teamDraft.memberAgentIds,
         workflowText,
+        avatarDataUrl,
       };
 
       if (teamDialogMode === 'create') {
@@ -1043,6 +1093,7 @@ export function AgentsHubPanel({
                       <TableCell>
                         <div className="agents-hub-name-cell">
                           <AgentAvatar
+                            avatarDataUrl={team.avatarDataUrl}
                             className="agents-hub-avatar-sm"
                             label={team.displayName || team.teamId}
                             team
@@ -1146,7 +1197,7 @@ export function AgentsHubPanel({
                     accept={AGENT_AVATAR_ACCEPT}
                     className="sr-only"
                     onChange={(event) => {
-                      void handleAvatarFileChange(event);
+                      void handleAvatarFileChange(event, 'agent');
                     }}
                     ref={avatarFileInputRef}
                     type="file"
@@ -1162,6 +1213,7 @@ export function AgentsHubPanel({
                   <Button
                     disabled={avatarGenerating}
                     onClick={() => {
+                      setAvatarStyleTarget('agent');
                       setAvatarStyleDialogOpen(true);
                     }}
                     type="button"
@@ -1505,6 +1557,56 @@ export function AgentsHubPanel({
 
           {teamDialogMode === 'create' || teamDialogMode === 'edit' ? (
             <form className="agents-hub-dialog-form" onSubmit={handleTeamSubmit}>
+              <div className="agents-hub-avatar-editor team-builder-avatar-editor">
+                <AgentAvatar
+                  avatarDataUrl={teamDraft.avatarDataUrl}
+                  className="agents-hub-avatar-centered large"
+                  label={teamDraft.displayName || teamDraft.teamId || 'T'}
+                  team
+                />
+                <div className="agents-hub-avatar-editor-actions">
+                  <input
+                    accept={AGENT_AVATAR_ACCEPT}
+                    className="sr-only"
+                    onChange={(event) => {
+                      void handleAvatarFileChange(event, 'team');
+                    }}
+                    ref={teamAvatarFileInputRef}
+                    type="file"
+                  />
+                  <Button
+                    onClick={() => teamAvatarFileInputRef.current?.click()}
+                    type="button"
+                    variant="outline"
+                  >
+                    <IconUpload aria-hidden size={15} stroke={1.8} />
+                    {t('Upload avatar')}
+                  </Button>
+                  <Button
+                    disabled={avatarGenerating}
+                    onClick={() => {
+                      setAvatarStyleTarget('team');
+                      setAvatarStyleDialogOpen(true);
+                    }}
+                    type="button"
+                    variant="outline"
+                  >
+                    <IconSparkles aria-hidden size={15} stroke={1.8} />
+                    {avatarGenerating ? t('Generating...') : t('Generate avatar')}
+                  </Button>
+                  {teamDraft.avatarDataUrl ? (
+                    <Button
+                      onClick={() => {
+                        setTeamDraft((current) => ({ ...current, avatarDataUrl: '' }));
+                      }}
+                      type="button"
+                      variant="ghost"
+                    >
+                      {t('Clear')}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
               <div className="team-builder-form-grid">
                 <div className="codex-form-field">
                   <Label className="codex-form-label" htmlFor="team-dialog-name">{t('Team name')}</Label>
@@ -1655,6 +1757,7 @@ export function AgentsHubPanel({
             <div className="agents-hub-dialog-stack">
               <div className="agents-hub-detail-header">
                 <AgentAvatar
+                  avatarDataUrl={selectedTeam?.avatarDataUrl}
                   className="agents-hub-avatar-centered large"
                   label={selectedTeam?.displayName || selectedTeam?.teamId || 'T'}
                   team

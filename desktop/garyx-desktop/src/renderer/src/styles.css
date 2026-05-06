@@ -7110,10 +7110,42 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-agent-option-icon {
-  display: block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--color-token-foreground) 8%, transparent);
+  color: var(--color-token-text-secondary);
+  font-size: 8px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+}
+
+.composer-agent-option-icon.team {
+  border-radius: 50%;
+  background: color-mix(in oklab, var(--color-accent-green) 14%, transparent);
+  color: color-mix(in oklab, var(--color-accent-green) 78%, black);
+}
+
+.composer-agent-option-icon.provider,
+.composer-agent-option-icon.image {
+  background: transparent;
+  color: inherit;
+}
+
+.composer-agent-option-icon img,
+.composer-agent-option-icon-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.composer-agent-option-icon img {
+  object-fit: cover;
 }
 
 .floating-action-menu-subtrigger.selected .composer-menu-label {
@@ -10071,6 +10103,10 @@ button.codex-list-row {
 .team-builder-form-grid {
   display: grid;
   gap: 12px;
+}
+
+.team-builder-avatar-editor {
+  align-items: center;
 }
 
 .team-builder-form-grid .codex-form-field {

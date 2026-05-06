@@ -28,12 +28,13 @@ function avatarName(input: GenerateCustomAgentAvatarInput): string {
 
 function buildAgentAvatarPrompt(input: GenerateCustomAgentAvatarInput): string {
   const name = JSON.stringify(avatarName(input));
+  const isTeam = input.kind === "team";
   const stylePrompt = input.stylePrompt?.trim()
     || "minimal vector glyph, simple geometry, balanced negative space, one confident accent color";
   return [
-    `Create a square app avatar for an AI agent named ${name}.`,
+    `Create a square app avatar for an AI ${isTeam ? "agent team" : "agent"} named ${name}.`,
     `Visual style: ${stylePrompt}.`,
-    "Composition: one centered abstract agent mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.",
+    `Composition: one centered abstract ${isTeam ? "team" : "agent"} mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.`,
     "Do not include text, letters, watermarks, screenshots, people, or UI chrome.",
   ].join("\n");
 }

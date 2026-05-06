@@ -1597,6 +1597,7 @@ async fn seed_product_ship_team(state: &Arc<AppState>) {
                 "reviewer".to_owned(),
             ],
             workflow_text: "Ship the product.".to_owned(),
+            avatar_data_url: None,
         })
         .await
         .expect("team upsert");
