@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -108,6 +109,8 @@ type ComposerFormProps = {
   slashCommandsLoaded: boolean;
   slashCommandsLoading: boolean;
 };
+
+const COMPOSER_EDITOR_MAX_LINES = 10;
 
 function providerOptionLabel(providerType: DesktopApiProviderType): string {
   if (providerType === 'codex_app_server') {
@@ -516,6 +519,26 @@ export function ComposerForm({
       (slashCommandsLoaded && !slashCommandsLoading && slashCommands.length === 0)
     )
   );
+
+  useLayoutEffect(() => {
+    const textarea = composerTextareaRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    const computedStyle = window.getComputedStyle(textarea);
+    const lineHeight = Number.parseFloat(computedStyle.lineHeight) || 19.5;
+    const paddingTop = Number.parseFloat(computedStyle.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(computedStyle.paddingBottom) || 0;
+    const maxHeight =
+      lineHeight * COMPOSER_EDITOR_MAX_LINES + paddingTop + paddingBottom;
+
+    textarea.style.height = 'auto';
+    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY =
+      textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, [composer, composerTextareaRef]);
 
   useEffect(() => {
     if (!slashTrigger) {

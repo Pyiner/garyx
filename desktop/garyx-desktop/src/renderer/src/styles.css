@@ -6964,8 +6964,9 @@ button.team-agent-speaker:focus-visible {
 
 .composer-editor {
   min-height: 52px;
-  max-height: 144px;
+  max-height: 199px;
   padding: 4px 8px 0;
+  overflow-y: hidden;
   resize: none;
   font-family: -apple-system, "system-ui", "Segoe UI", sans-serif;
   font-size: var(--text-base);
