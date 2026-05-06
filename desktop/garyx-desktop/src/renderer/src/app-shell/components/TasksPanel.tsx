@@ -31,6 +31,13 @@ import type {
 import { useI18n, type Translate } from '../../i18n';
 import type { ToastTone } from '../../toast';
 import { getDesktopApi } from '../../platform/desktop-api';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu';
+import { MoreDotsIcon } from '../icons';
 
 type TasksPanelProps = {
   agents: DesktopCustomAgent[];
@@ -389,6 +396,39 @@ export function TasksPanel({
       ? t('Loading tasks…')
       : taskCountLabel(total || visibleCount, t);
 
+  const renderTaskOverflowMenu = (task: DesktopTaskSummary, busy: boolean) => {
+    const taskMenuLabel = t('More actions for {name}', {
+      name: task.taskId || `#TASK-${task.number}`,
+    });
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            aria-label={taskMenuLabel}
+            className="tasks-icon-button"
+            disabled={busy}
+            title={taskMenuLabel}
+            type="button"
+          >
+            <MoreDotsIcon size={14} />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" sideOffset={4}>
+          <DropdownMenuItem
+            className="tasks-menu-danger"
+            disabled={busy}
+            onSelect={() => {
+              void deleteTask(task);
+            }}
+          >
+            <Trash2 aria-hidden size={14} strokeWidth={1.8} />
+            {t('Delete task')}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  };
+
   const renderTaskCard = (task: DesktopTaskSummary) => {
     const next = nextStatus(task.status);
     const busy = mutatingTaskId === task.taskId;
@@ -460,18 +500,7 @@ export function TasksPanel({
                 <StopCircle aria-hidden size={14} strokeWidth={1.8} />
               </button>
             ) : null}
-            <button
-              aria-label={t('Delete task')}
-              className="tasks-icon-button danger"
-              disabled={busy}
-              onClick={() => {
-                void deleteTask(task);
-              }}
-              title={t('Delete task')}
-              type="button"
-            >
-              <Trash2 aria-hidden size={14} strokeWidth={1.8} />
-            </button>
+            {renderTaskOverflowMenu(task, busy)}
             <button
               className="tasks-move-button"
               disabled={busy}
@@ -748,18 +777,7 @@ export function TasksPanel({
                       <StopCircle aria-hidden size={14} strokeWidth={1.8} />
                     </button>
                   ) : null}
-                  <button
-                    aria-label={t('Delete task')}
-                    className="tasks-icon-button danger"
-                    disabled={busy}
-                    onClick={() => {
-                      void deleteTask(task);
-                    }}
-                    title={t('Delete task')}
-                    type="button"
-                  >
-                    <Trash2 aria-hidden size={14} strokeWidth={1.8} />
-                  </button>
+                  {renderTaskOverflowMenu(task, busy)}
                   <button
                     className="tasks-move-button"
                     disabled={busy}

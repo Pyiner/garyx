@@ -13785,18 +13785,19 @@ button.codex-list-row {
   color: var(--color-token-description-foreground);
 }
 
-.tasks-icon-button:hover {
+.tasks-icon-button:hover,
+.tasks-icon-button[data-state="open"] {
   background: var(--color-token-row-hover);
   color: var(--color-token-text-primary);
 }
 
-.tasks-icon-button.danger {
+.tasks-menu-danger {
   color: var(--color-token-error-foreground);
 }
 
-.tasks-icon-button.danger:hover {
-  background: var(--color-token-bg-error);
-  color: var(--color-token-error-foreground);
+.tasks-menu-danger[data-highlighted] {
+  background: var(--color-token-bg-error) !important;
+  color: var(--color-token-error-foreground) !important;
 }
 
 .tasks-list {
