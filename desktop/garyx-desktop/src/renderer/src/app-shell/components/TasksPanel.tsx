@@ -36,6 +36,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
 import { MoreDotsIcon } from '../icons';
@@ -282,6 +285,28 @@ export function TasksPanel({
     }
   }
 
+  async function assignTask(task: DesktopTaskSummary, principal: string) {
+    if (task.assignee || !principal.trim()) {
+      return;
+    }
+    setMutatingTaskId(task.taskId);
+    try {
+      await getDesktopApi().assignTask({
+        taskId: task.taskId,
+        principal,
+      });
+      await loadTasks({ silent: true });
+      onToast(t('Task assigned.'), 'success');
+    } catch (assignError) {
+      onToast(
+        assignError instanceof Error ? assignError.message : t('Task assign failed.'),
+        'error',
+      );
+    } finally {
+      setMutatingTaskId(null);
+    }
+  }
+
   async function deleteTask(task: DesktopTaskSummary) {
     const confirmed = window.confirm(t(
       'Delete task {taskId}? The task will leave task lists, but the backing thread and transcript stay available.',
@@ -416,6 +441,35 @@ export function TasksPanel({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={4}>
+          {!task.assignee ? (
+            agents.length ? (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger disabled={busy}>
+                  {t('Assign to')}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent sideOffset={6}>
+                  {agents.map((agent) => {
+                    const label = agent.displayName || agent.agentId;
+                    return (
+                      <DropdownMenuItem
+                        disabled={busy}
+                        key={agent.agentId}
+                        onSelect={() => {
+                          void assignTask(task, agent.agentId);
+                        }}
+                      >
+                        {label}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ) : (
+              <DropdownMenuItem disabled>
+                {t('No agents available')}
+              </DropdownMenuItem>
+            )
+          ) : null}
           <DropdownMenuItem
             disabled={busy}
             onSelect={() => {
