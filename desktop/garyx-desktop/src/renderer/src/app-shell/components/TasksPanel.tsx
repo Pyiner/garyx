@@ -8,15 +8,19 @@ import {
   type FormEvent,
 } from 'react';
 import {
-  ArrowRight,
   CheckCircle2,
   Columns3,
   List,
   MessageSquare,
   Plus,
+  Play,
   RefreshCcw,
+  RotateCcw,
+  Send,
   StopCircle,
-  Trash2,
+  Trash,
+  UserPlus,
+  type LucideIcon,
 } from 'lucide-react';
 
 import type {
@@ -110,6 +114,19 @@ function nextStatus(status: DesktopTaskStatus): {
       return { label: 'Done', status: 'done' };
     case 'done':
       return { label: 'Reopen', status: 'todo' };
+  }
+}
+
+function taskStatusMenuIcon(status: DesktopTaskStatus): LucideIcon {
+  switch (status) {
+    case 'todo':
+      return Play;
+    case 'in_progress':
+      return Send;
+    case 'in_review':
+      return CheckCircle2;
+    case 'done':
+      return RotateCcw;
   }
 }
 
@@ -424,6 +441,7 @@ export function TasksPanel({
 
   const renderTaskOverflowMenu = (task: DesktopTaskSummary, busy: boolean) => {
     const next = nextStatus(task.status);
+    const StatusIcon = taskStatusMenuIcon(task.status);
     const taskMenuLabel = t('More actions for {name}', {
       name: task.taskId || `#TASK-${task.number}`,
     });
@@ -444,7 +462,16 @@ export function TasksPanel({
           {!task.assignee ? (
             agents.length ? (
               <DropdownMenuSub>
-                <DropdownMenuSubTrigger disabled={busy}>
+                <DropdownMenuSubTrigger
+                  className="tasks-menu-subtrigger"
+                  disabled={busy}
+                >
+                  <UserPlus
+                    aria-hidden
+                    className="tasks-menu-icon size-4"
+                    size={15}
+                    strokeWidth={1.65}
+                  />
                   {t('Assign to')}
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent sideOffset={6}>
@@ -476,11 +503,12 @@ export function TasksPanel({
               void moveTask(task, next.status);
             }}
           >
-            {task.status === 'done' ? (
-              <RefreshCcw aria-hidden size={14} strokeWidth={1.8} />
-            ) : (
-              <ArrowRight aria-hidden size={14} strokeWidth={1.8} />
-            )}
+            <StatusIcon
+              aria-hidden
+              className="tasks-menu-icon size-4"
+              size={15}
+              strokeWidth={1.65}
+            />
             {t(next.label)}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
@@ -491,7 +519,12 @@ export function TasksPanel({
               void deleteTask(task);
             }}
           >
-            <Trash2 aria-hidden size={14} strokeWidth={1.8} />
+            <Trash
+              aria-hidden
+              className="tasks-menu-icon size-4"
+              size={15}
+              strokeWidth={1.65}
+            />
             {t('Delete task')}
           </DropdownMenuItem>
         </DropdownMenuContent>

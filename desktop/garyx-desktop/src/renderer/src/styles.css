@@ -13786,8 +13786,26 @@ button.codex-list-row {
   color: var(--color-token-text-primary);
 }
 
+.tasks-menu-icon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  color: rgba(26, 28, 31, 0.64);
+}
+
+.tasks-menu-subtrigger > svg:last-child {
+  width: 13px;
+  height: 13px;
+  color: rgba(26, 28, 31, 0.48);
+  stroke-width: 1.7;
+}
+
 .tasks-menu-danger {
   color: var(--color-token-error-foreground);
+}
+
+.tasks-menu-danger .tasks-menu-icon {
+  color: currentColor;
 }
 
 .tasks-menu-danger[data-highlighted] {
