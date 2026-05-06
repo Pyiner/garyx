@@ -5,6 +5,8 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { nativeImage } from "electron";
+
 import type {
   GenerateCustomAgentAvatarInput,
   GenerateCustomAgentAvatarResult,
@@ -13,6 +15,9 @@ import type {
 import { resolveDesktopConfigPath } from "./config-paths";
 
 const execFile = promisify(execFileCallback);
+const AVATAR_IMAGE_SIZE = 256;
+const AVATAR_PNG_MAX_BYTES = 450 * 1024;
+const AVATAR_JPEG_QUALITY = 88;
 
 type ToolImageJsonPayload = {
   ok?: boolean;
@@ -91,6 +96,41 @@ function mediaTypeForPath(path: string, fallback?: string | null): string {
   return "image/png";
 }
 
+function avatarDataUrl(
+  bytes: Buffer,
+  mediaType: string,
+): GenerateCustomAgentAvatarResult {
+  return {
+    avatarDataUrl: `data:${mediaType};base64,${bytes.toString("base64")}`,
+    mediaType,
+  };
+}
+
+function normalizeAvatarImage(
+  bytes: Buffer,
+  fallbackMediaType: string,
+): GenerateCustomAgentAvatarResult {
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) {
+    if (bytes.length > AVATAR_PNG_MAX_BYTES) {
+      throw new Error("Generated avatar image could not be resized.");
+    }
+    return avatarDataUrl(bytes, fallbackMediaType);
+  }
+
+  const resized = image.resize({
+    width: AVATAR_IMAGE_SIZE,
+    height: AVATAR_IMAGE_SIZE,
+    quality: "best",
+  });
+  const png = resized.toPNG();
+  if (png.length <= AVATAR_PNG_MAX_BYTES) {
+    return avatarDataUrl(png, "image/png");
+  }
+
+  return avatarDataUrl(resized.toJPEG(AVATAR_JPEG_QUALITY), "image/jpeg");
+}
+
 async function runToolImage(command: string, prompt: string, outputPath: string) {
   const configPath = await resolveDesktopConfigPath();
   const extraPath = [
@@ -141,10 +181,7 @@ export async function generateCustomAgentAvatar(
         const generatedPath = payload.path?.trim() || outputPath;
         const bytes = await readFile(generatedPath);
         const mediaType = mediaTypeForPath(generatedPath, payload.media_type || payload.mediaType);
-        return {
-          avatarDataUrl: `data:${mediaType};base64,${bytes.toString("base64")}`,
-          mediaType,
-        };
+        return normalizeAvatarImage(bytes, mediaType);
       } catch (error) {
         lastError = error;
       }

@@ -794,11 +794,23 @@ function isLocalGatewayUrl(gatewayUrl: string): boolean {
   }
 }
 
-function parseJson<T>(body: string): T {
+function tryParseJson<T>(body: string): T | null {
   if (!body.trim()) {
     return {} as T;
   }
-  return JSON.parse(body) as T;
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    return null;
+  }
+}
+
+function messageFromPlainTextBody(body: string): string | undefined {
+  const trimmed = body.trim().replace(/\s+/g, " ");
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.length > 500 ? `${trimmed.slice(0, 497)}...` : trimmed;
 }
 
 function errorMessageFromPayload(payload: unknown): string | undefined {
@@ -933,12 +945,19 @@ async function requestJson<T>(
     headers,
   });
   const body = await response.text();
-  const payload = parseJson<T>(body);
+  const payload = tryParseJson<T>(body);
 
   if (!response.ok) {
     throw new Error(
       errorMessageFromPayload(payload) ||
+        messageFromPlainTextBody(body) ||
         `${response.status} ${response.statusText}`,
+    );
+  }
+
+  if (payload === null) {
+    throw new Error(
+      messageFromPlainTextBody(body) || "Gateway returned invalid JSON.",
     );
   }
 
@@ -965,12 +984,19 @@ async function requestJsonFromGatewayUrl<T>(
     headers,
   });
   const body = await response.text();
-  const payload = parseJson<T>(body);
+  const payload = tryParseJson<T>(body);
 
   if (!response.ok) {
     throw new Error(
       errorMessageFromPayload(payload) ||
+        messageFromPlainTextBody(body) ||
         `${response.status} ${response.statusText}`,
+    );
+  }
+
+  if (payload === null) {
+    throw new Error(
+      messageFromPlainTextBody(body) || "Gateway returned invalid JSON.",
     );
   }
 
@@ -3892,12 +3918,12 @@ export async function openChatStream(
             return;
           }
           let payload: Record<string, unknown>;
-          try {
-            payload = parseJson<Record<string, unknown>>(raw);
-          } catch {
+          const parsedPayload = tryParseJson<Record<string, unknown>>(raw);
+          if (!parsedPayload) {
             settleError("invalid websocket payload");
             return;
           }
+          payload = parsedPayload;
           const type = asString(payload.type);
           if (!type || type === "ping") {
             return;

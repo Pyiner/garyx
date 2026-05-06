@@ -71,6 +71,8 @@ type AgentDraft = {
 
 const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default__';
 const AGENT_AVATAR_MAX_BYTES = 3 * 1024 * 1024;
+const AGENT_AVATAR_SIZE = 256;
+const AGENT_AVATAR_DATA_URL_MAX_LENGTH = 700_000;
 const AGENT_AVATAR_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml';
 const CUSTOM_AVATAR_STYLE_ID: AvatarStyleId = 'custom';
 const DEFAULT_AVATAR_STYLE_ID: AvatarStyleId = 'clean_glyph';
@@ -234,6 +236,65 @@ function readFileAsDataUrl(file: File): Promise<string> {
     };
     reader.readAsDataURL(file);
   });
+}
+
+function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onerror = () => reject(new Error('Failed to read avatar image'));
+    image.onload = () => resolve(image);
+    image.src = dataUrl;
+  });
+}
+
+async function normalizeAvatarFile(file: File): Promise<string> {
+  const sourceDataUrl = await readFileAsDataUrl(file);
+  const image = await loadImageFromDataUrl(sourceDataUrl);
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  if (!sourceWidth || !sourceHeight) {
+    throw new Error('Failed to read avatar image');
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = AGENT_AVATAR_SIZE;
+  canvas.height = AGENT_AVATAR_SIZE;
+  const context = canvas.getContext('2d');
+  if (!context) {
+    throw new Error('Failed to read avatar image');
+  }
+
+  const scale = Math.max(
+    AGENT_AVATAR_SIZE / sourceWidth,
+    AGENT_AVATAR_SIZE / sourceHeight,
+  );
+  const drawWidth = Math.round(sourceWidth * scale);
+  const drawHeight = Math.round(sourceHeight * scale);
+  const drawX = Math.round((AGENT_AVATAR_SIZE - drawWidth) / 2);
+  const drawY = Math.round((AGENT_AVATAR_SIZE - drawHeight) / 2);
+
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.clearRect(0, 0, AGENT_AVATAR_SIZE, AGENT_AVATAR_SIZE);
+  context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+
+  const pngDataUrl = canvas.toDataURL('image/png');
+  if (pngDataUrl.length <= AGENT_AVATAR_DATA_URL_MAX_LENGTH) {
+    return pngDataUrl;
+  }
+
+  context.save();
+  context.globalCompositeOperation = 'destination-over';
+  context.fillStyle = '#f7f8fa';
+  context.fillRect(0, 0, AGENT_AVATAR_SIZE, AGENT_AVATAR_SIZE);
+  context.restore();
+
+  const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+  if (jpegDataUrl.length <= AGENT_AVATAR_DATA_URL_MAX_LENGTH) {
+    return jpegDataUrl;
+  }
+
+  throw new Error('Avatar image is too large.');
 }
 
 function buildSuggestedWorkflow(
@@ -638,10 +699,13 @@ export function AgentsHubPanel({
       return;
     }
     try {
-      const avatarDataUrl = await readFileAsDataUrl(file);
+      const avatarDataUrl = await normalizeAvatarFile(file);
       setAgentDraft((current) => ({ ...current, avatarDataUrl }));
-    } catch {
-      onToast?.(t('Failed to read avatar image'), 'error');
+    } catch (error) {
+      const message = error instanceof Error && error.message === 'Avatar image is too large.'
+        ? error.message
+        : 'Failed to read avatar image';
+      onToast?.(t(message), 'error');
     }
   }
 
@@ -674,6 +738,11 @@ export function AgentsHubPanel({
 
   async function handleAgentSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const avatarDataUrl = agentDraft.avatarDataUrl.trim();
+    if (avatarDataUrl.length > AGENT_AVATAR_DATA_URL_MAX_LENGTH) {
+      onToast?.(t('Avatar image is too large.'), 'error');
+      return;
+    }
     setSaving(true);
     try {
       const payload: CreateCustomAgentInput = {
@@ -682,7 +751,7 @@ export function AgentsHubPanel({
         providerType: agentDraft.providerType,
         model: agentSupportsModelSelection ? agentDraft.model.trim() : '',
         defaultWorkspaceDir: agentDraft.defaultWorkspaceDir.trim(),
-        avatarDataUrl: agentDraft.avatarDataUrl.trim(),
+        avatarDataUrl,
         systemPrompt: agentDraft.systemPrompt.trim(),
       };
 
