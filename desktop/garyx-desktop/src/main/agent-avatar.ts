@@ -1,27 +1,23 @@
-import { execFile as execFileCallback } from "node:child_process";
-import { constants } from "node:fs";
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
-
 import { nativeImage } from "electron";
 
 import type {
+  DesktopSettings,
   GenerateCustomAgentAvatarInput,
   GenerateCustomAgentAvatarResult,
 } from "@shared/contracts";
 
-import { resolveDesktopConfigPath } from "./config-paths";
+import { requestJson } from "./gary-client";
 
-const execFile = promisify(execFileCallback);
 const AVATAR_IMAGE_SIZE = 256;
 const AVATAR_PNG_MAX_BYTES = 450 * 1024;
 const AVATAR_JPEG_QUALITY = 88;
+const TOOL_IMAGE_TIMEOUT_SECS = 600;
+const TOOL_IMAGE_REQUEST_TIMEOUT_MS = (TOOL_IMAGE_TIMEOUT_SECS + 30) * 1000;
 
-type ToolImageJsonPayload = {
+type ToolImagePayload = {
   ok?: boolean;
-  path?: string;
+  data_base64?: string | null;
+  dataBase64?: string | null;
   media_type?: string | null;
   mediaType?: string | null;
 };
@@ -40,60 +36,6 @@ function buildAgentAvatarPrompt(input: GenerateCustomAgentAvatarInput): string {
     "Composition: one centered abstract agent mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.",
     "Do not include text, letters, watermarks, screenshots, people, or UI chrome.",
   ].join("\n");
-}
-
-async function executableExists(path: string): Promise<boolean> {
-  try {
-    await access(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function candidateGaryxCommands(): Promise<string[]> {
-  const candidates = [
-    process.env.GARYX_BIN?.trim(),
-    join(process.cwd(), "target", "release", "garyx"),
-    join(process.cwd(), "target", "debug", "garyx"),
-    join(process.cwd(), "..", "..", "target", "release", "garyx"),
-    join(process.cwd(), "..", "..", "target", "debug", "garyx"),
-    join(homedir(), ".cargo", "bin", "garyx"),
-    "/opt/homebrew/bin/garyx",
-    "/usr/local/bin/garyx",
-    "garyx",
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  const uniqueCandidates = Array.from(new Set(candidates));
-  const resolved = await Promise.all(
-    uniqueCandidates.map(async (candidate) => {
-      if (!candidate.includes("/")) {
-        return candidate;
-      }
-      return (await executableExists(candidate)) ? candidate : null;
-    }),
-  );
-  return resolved.filter((candidate): candidate is string => Boolean(candidate));
-}
-
-function parseToolImageJson(stdout: string): ToolImageJsonPayload {
-  const trimmed = stdout.trim();
-  const jsonStart = trimmed.indexOf("{");
-  const jsonText = jsonStart >= 0 ? trimmed.slice(jsonStart) : trimmed;
-  return JSON.parse(jsonText) as ToolImageJsonPayload;
-}
-
-function mediaTypeForPath(path: string, fallback?: string | null): string {
-  if (fallback?.trim()) {
-    return fallback.trim();
-  }
-  if (path.endsWith(".jpg") || path.endsWith(".jpeg")) {
-    return "image/jpeg";
-  }
-  if (path.endsWith(".webp")) {
-    return "image/webp";
-  }
-  return "image/png";
 }
 
 function avatarDataUrl(
@@ -131,67 +73,23 @@ function normalizeAvatarImage(
   return avatarDataUrl(resized.toJPEG(AVATAR_JPEG_QUALITY), "image/jpeg");
 }
 
-async function runToolImage(command: string, prompt: string, outputPath: string) {
-  const configPath = await resolveDesktopConfigPath();
-  const extraPath = [
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    join(homedir(), ".cargo", "bin"),
-  ].join(":");
-  const pathValue = [process.env.PATH, extraPath].filter(Boolean).join(":");
-  return execFile(
-    command,
-    [
-      "--config",
-      configPath,
-      "tool",
-      "image",
-      prompt,
-      "--output",
-      outputPath,
-      "--json",
-      "--timeout",
-      "600",
-    ],
-    {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: pathValue,
-      },
-      maxBuffer: 1024 * 1024,
-    },
-  ) as Promise<{ stdout: string; stderr: string }>;
-}
-
 export async function generateCustomAgentAvatar(
+  settings: DesktopSettings,
   input: GenerateCustomAgentAvatarInput,
 ): Promise<GenerateCustomAgentAvatarResult> {
   const prompt = buildAgentAvatarPrompt(input);
-  const tempDir = await mkdtemp(join(tmpdir(), "garyx-agent-avatar-"));
-  const outputPath = join(tempDir, "avatar.png");
-  const commands = await candidateGaryxCommands();
-  let lastError: unknown = null;
-
-  try {
-    for (const command of commands) {
-      try {
-        const { stdout } = await runToolImage(command, prompt, outputPath);
-        const payload = parseToolImageJson(stdout);
-        const generatedPath = payload.path?.trim() || outputPath;
-        const bytes = await readFile(generatedPath);
-        const mediaType = mediaTypeForPath(generatedPath, payload.media_type || payload.mediaType);
-        return normalizeAvatarImage(bytes, mediaType);
-      } catch (error) {
-        lastError = error;
-      }
-    }
-
-    const detail = lastError instanceof Error && lastError.message.trim()
-      ? ` ${lastError.message.trim()}`
-      : "";
-    throw new Error(`Unable to generate avatar with garyx tool image.${detail}`);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
+  const payload = await requestJson<ToolImagePayload>(settings, "/api/tools/image", {
+    method: "POST",
+    signal: AbortSignal.timeout(TOOL_IMAGE_REQUEST_TIMEOUT_MS),
+    body: JSON.stringify({
+      prompt,
+      timeout_secs: TOOL_IMAGE_TIMEOUT_SECS,
+    }),
+  });
+  const encoded = (payload.data_base64 || payload.dataBase64 || "").trim();
+  if (!encoded) {
+    throw new Error("Image generation API did not return image data.");
   }
+  const mediaType = (payload.media_type || payload.mediaType || "image/png").trim() || "image/png";
+  return normalizeAvatarImage(Buffer.from(encoded, "base64"), mediaType);
 }

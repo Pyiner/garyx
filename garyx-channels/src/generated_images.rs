@@ -17,6 +17,15 @@ impl GeneratedImageResult {
     }
 }
 
+pub fn build_image_generation_prompt(prompt: &str) -> String {
+    format!(
+        "You are being invoked by `garyx tool image`.\n\
+Generate exactly one image using your image-generation capability/tooling. Do not merely describe an image. Do not generate more than one image.\n\
+Preserve the user prompt below verbatim as the image-generation prompt.\n\n\
+<garyx-image-prompt>\n{prompt}\n</garyx-image-prompt>"
+    )
+}
+
 pub fn provider_message_item_type(message: &ProviderMessage) -> Option<&str> {
     message
         .metadata
@@ -198,5 +207,14 @@ mod tests {
     #[test]
     fn infers_png_when_media_type_is_missing() {
         assert_eq!(generated_image_extension("aGVsbG8=", None), "png");
+    }
+
+    #[test]
+    fn image_generation_prompt_preserves_user_prompt() {
+        let user_prompt = "first line\nsecond line with [brackets]";
+        let framed = build_image_generation_prompt(user_prompt);
+        assert!(framed.contains("Generate exactly one image"));
+        assert!(framed.contains("Do not merely describe an image"));
+        assert!(framed.contains(user_prompt));
     }
 }

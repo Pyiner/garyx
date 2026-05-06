@@ -41,8 +41,7 @@ use commands::{
     cmd_task_set_title, cmd_task_stop, cmd_task_unassign, cmd_task_update, cmd_thread_create,
     cmd_thread_get, cmd_thread_history, cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot,
     cmd_thread_send_to_task, cmd_tool_image, cmd_tool_search, cmd_update, cmd_wiki_delete,
-    cmd_wiki_get, cmd_wiki_init,
-    cmd_wiki_list, cmd_wiki_status, run_gateway,
+    cmd_wiki_get, cmd_wiki_init, cmd_wiki_list, cmd_wiki_status, run_gateway,
 };
 
 struct ThreadSendDestination {

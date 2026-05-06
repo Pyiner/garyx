@@ -760,7 +760,8 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "garyx:generate-custom-agent-avatar",
     async (_event, input: GenerateCustomAgentAvatarInput) => {
-      return generateCustomAgentAvatar(input);
+      const settings = await resolveSettings();
+      return generateCustomAgentAvatar(settings, input);
     },
   );
 

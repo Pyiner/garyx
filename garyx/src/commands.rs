@@ -17,7 +17,8 @@ use garyx_bridge::MultiProviderBridge;
 use garyx_channels::auth_flow::{AuthDisplayItem, AuthFlowExecutor, AuthPollResult};
 use garyx_channels::feishu::FeishuAuthExecutor;
 use garyx_channels::generated_images::{
-    GeneratedImageResult, extract_image_generation_result, provider_message_item_type,
+    GeneratedImageResult, build_image_generation_prompt, extract_image_generation_result,
+    provider_message_item_type,
 };
 use garyx_channels::plugin_host::{
     InboundHandler, ManifestDiscoverer, PluginErrorCode, PluginManifest, SpawnOptions,
@@ -3183,15 +3184,6 @@ async fn run_tool_image(
         run_id: provider_run.run_id,
         extra_images_seen,
     })
-}
-
-fn build_image_generation_prompt(prompt: &str) -> String {
-    format!(
-        "You are being invoked by `garyx tool image`.\n\
-Generate exactly one image using your image-generation capability/tooling. Do not merely describe an image. Do not generate more than one image.\n\
-Preserve the user prompt below verbatim as the image-generation prompt.\n\n\
-<garyx-image-prompt>\n{prompt}\n</garyx-image-prompt>"
-    )
 }
 
 fn extract_image_from_tool_result_message(

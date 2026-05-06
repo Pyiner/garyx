@@ -5,7 +5,7 @@ use axum::Router;
 use crate::server::AppState;
 use crate::{
     api, automation, chat, commands, dashboard, gateway_auth, mcp, mcp_config, routes, tasks,
-    workspace_files,
+    tool_image, workspace_files,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -258,6 +258,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/chat/attachments/upload",
             axum::routing::post(workspace_files::upload_chat_attachments),
+        )
+        .route(
+            "/api/tools/image",
+            axum::routing::post(tool_image::generate_image),
         )
         .route("/api/commands", axum::routing::get(commands::list_commands))
         .route(

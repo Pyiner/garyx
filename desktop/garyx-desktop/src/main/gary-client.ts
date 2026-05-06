@@ -926,7 +926,7 @@ function stripNullObjectFields(value: unknown): unknown {
   return Object.fromEntries(entries);
 }
 
-async function requestJson<T>(
+export async function requestJson<T>(
   settings: DesktopSettings,
   path: string,
   init?: RequestInit,
