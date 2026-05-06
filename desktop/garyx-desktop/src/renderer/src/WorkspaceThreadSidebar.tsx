@@ -517,12 +517,6 @@ export function WorkspaceThreadSidebar({
           );
         })}
 
-        {!visibleWorkspaceThreadGroups.length ? (
-          <div className="workspace-empty-block">
-            <span className="eyebrow">{t('No Folders')}</span>
-            <p>{t('Add a folder to start grouping Garyx threads by workspace.')}</p>
-          </div>
-        ) : null}
       </div> : null}
     </div>
   );
