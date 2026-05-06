@@ -1,6 +1,8 @@
+import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
+
 /**
  * Circular avatar for a team agent member.
- * Shows the first letter of the display name with a role-based background color.
+ * Shows built-in provider marks when available, otherwise falls back to initials.
  * Color is injected via --agent-bg CSS custom property; all layout is in styles.css.
  */
 
@@ -33,12 +35,20 @@ export function AgentAvatar({ agentId, displayName, role, size = 36, active, onC
   const bgColor = getAgentColor(agentId, role);
   const initial = displayName.charAt(0).toUpperCase() || '?';
   const label = `${displayName} (${role})`;
-  const className = `agent-avatar${active ? ' agent-avatar--active' : ''}${onClick ? ' agent-avatar--interactive' : ''}`;
+  const hasProviderIcon = hasProviderAgentIcon(agentId);
+  const className = `agent-avatar${active ? ' agent-avatar--active' : ''}${onClick ? ' agent-avatar--interactive' : ''}${hasProviderIcon ? ' agent-avatar--provider' : ''}`;
   const style = {
     '--agent-bg': bgColor,
     '--agent-size': `${size}px`,
     '--agent-font': `${size * 0.42}px`,
   } as React.CSSProperties;
+  const avatarBody = hasProviderIcon ? (
+    <ProviderAgentIcon
+      agentId={agentId}
+      className="agent-avatar-provider-icon"
+      size={Math.round(size * 0.76)}
+    />
+  ) : initial;
 
   if (onClick) {
     return (
@@ -50,7 +60,7 @@ export function AgentAvatar({ agentId, displayName, role, size = 36, active, onC
         title={label}
         type="button"
       >
-        {initial}
+        {avatarBody}
       </button>
     );
   }
@@ -63,7 +73,7 @@ export function AgentAvatar({ agentId, displayName, role, size = 36, active, onC
       style={style}
       title={label}
     >
-      {initial}
+      {avatarBody}
     </span>
   );
 }

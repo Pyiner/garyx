@@ -3289,6 +3289,17 @@ code {
 .agent-avatar--active {
   animation: agent-pulse 2s ease-in-out infinite;
 }
+
+.agent-avatar--provider {
+  background-color: var(--color-token-bg-secondary);
+  color: var(--color-token-text-primary);
+}
+
+.agent-avatar-provider-icon {
+  display: block;
+  flex: 0 0 auto;
+}
+
 @keyframes agent-pulse {
   0%,
   100% {
@@ -7098,6 +7109,13 @@ button.team-agent-speaker:focus-visible {
   color: rgba(13, 13, 13, 0.52);
 }
 
+.composer-agent-option-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
 .floating-action-menu-subtrigger.selected .composer-menu-label {
   font-weight: var(--font-weight-semibold);
 }
@@ -7179,6 +7197,21 @@ button.team-agent-speaker:focus-visible {
 .composer-provider-agent-icon .icon {
   width: 14px;
   height: 14px;
+}
+
+.composer-provider-lobe-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.composer-provider-lobe-svg {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .composer-provider-label {
@@ -9464,6 +9497,24 @@ button.codex-list-row {
 .agents-hub-avatar-centered.builtin {
   background: var(--color-token-bg-warning);
   color: var(--color-token-warning-foreground);
+}
+
+.agents-hub-avatar-sm.provider,
+.agents-hub-avatar-centered.provider {
+  background: var(--color-token-bg-secondary);
+  color: var(--color-token-text-primary);
+  padding: 3px;
+}
+
+.agents-hub-avatar-centered.large.provider {
+  padding: 5px;
+}
+
+.agents-hub-provider-icon {
+  display: block;
+  width: 100%;
+  height: 100%;
+  flex: 0 0 auto;
 }
 
 .agents-hub-avatar-centered.small {

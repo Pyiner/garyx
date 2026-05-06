@@ -52,6 +52,7 @@ import {
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
+import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
 type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli';
 type HubTab = 'agents' | 'teams';
@@ -195,30 +196,47 @@ function avatarLabel(value: string): string {
 }
 
 type AgentAvatarProps = {
+  agentId?: string | null;
   avatarDataUrl?: string | null;
   builtIn?: boolean;
   className: string;
   label: string;
+  providerType?: ProviderType | null;
   team?: boolean;
 };
 
 function AgentAvatar({
+  agentId,
   avatarDataUrl,
   builtIn,
   className,
   label,
+  providerType,
   team,
 }: AgentAvatarProps) {
+  const showProviderIcon =
+    Boolean(builtIn && !team && !avatarDataUrl)
+    && hasProviderAgentIcon(agentId, providerType);
   const classes = [
     className,
     builtIn ? 'builtin' : '',
     team ? 'team' : '',
     avatarDataUrl ? 'image' : '',
+    showProviderIcon ? 'provider' : '',
   ].filter(Boolean).join(' ');
 
   return (
     <span className={classes}>
-      {avatarDataUrl ? <img alt="" src={avatarDataUrl} /> : avatarLabel(label)}
+      {avatarDataUrl ? (
+        <img alt="" src={avatarDataUrl} />
+      ) : showProviderIcon ? (
+        <ProviderAgentIcon
+          agentId={agentId}
+          className="agents-hub-provider-icon"
+          providerType={providerType}
+          size="100%"
+        />
+      ) : avatarLabel(label)}
     </span>
   );
 }
@@ -947,10 +965,12 @@ export function AgentsHubPanel({
                     <TableCell>
                       <div className="agents-hub-name-cell">
                         <AgentAvatar
+                          agentId={agent.agentId}
                           avatarDataUrl={agent.avatarDataUrl}
                           builtIn={agent.builtIn}
                           className="agents-hub-avatar-sm"
                           label={agent.displayName || agent.agentId}
+                          providerType={agent.providerType}
                         />
                         <div>
                           <div className="agents-hub-cell-name">{agent.displayName}</div>
@@ -1114,9 +1134,12 @@ export function AgentsHubPanel({
             <form className="agents-hub-dialog-form" onSubmit={handleAgentSubmit}>
               <div className="agents-hub-avatar-editor">
                 <AgentAvatar
+                  agentId={agentDialogMode === 'edit' ? agentDraft.agentId : undefined}
                   avatarDataUrl={agentDraft.avatarDataUrl}
+                  builtIn={agentDialogMode === 'edit' ? selectedAgent?.builtIn : undefined}
                   className="agents-hub-avatar-centered large"
                   label={agentDraft.displayName || agentDraft.agentId || 'A'}
+                  providerType={agentDraft.providerType}
                 />
                 <div className="agents-hub-avatar-editor-actions">
                   <input
@@ -1293,10 +1316,12 @@ export function AgentsHubPanel({
             <div className="agents-hub-dialog-stack">
               <div className="agents-hub-detail-header">
                 <AgentAvatar
+                  agentId={selectedAgent?.agentId}
                   avatarDataUrl={selectedAgent?.avatarDataUrl}
                   builtIn={selectedAgent?.builtIn}
                   className="agents-hub-avatar-centered large"
                   label={selectedAgent?.displayName || selectedAgent?.agentId || 'A'}
+                  providerType={selectedAgent?.providerType}
                 />
                 <div className="agents-hub-detail-copy">
                 <div className="agents-hub-card-badges">
@@ -1522,10 +1547,12 @@ export function AgentsHubPanel({
                           type="button"
                         >
                           <AgentAvatar
+                            agentId={agent.agentId}
                             avatarDataUrl={agent.avatarDataUrl}
                             builtIn={agent.builtIn}
                             className="agents-hub-avatar-centered small"
                             label={agent.displayName || agent.agentId}
+                            providerType={agent.providerType}
                           />
                           <div className="team-builder-agent-info">
                             <span className="team-builder-agent-name">{agent.displayName}</span>
@@ -1556,10 +1583,12 @@ export function AgentsHubPanel({
                       return (
                         <div className="team-builder-selected-row" key={agentId}>
                           <AgentAvatar
+                            agentId={agent?.agentId || agentId}
                             avatarDataUrl={agent?.avatarDataUrl}
                             builtIn={agent?.builtIn}
                             className="agents-hub-avatar-centered small"
                             label={agent?.displayName || agentId}
+                            providerType={agent?.providerType}
                           />
                           <div className="team-builder-agent-info">
                             <span className="team-builder-agent-name">{agent?.displayName || agentId}</span>

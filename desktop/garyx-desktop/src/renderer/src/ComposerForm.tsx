@@ -62,6 +62,7 @@ import {
   groupAgentOptions,
   type ComposerAgentOption,
 } from './app-shell/agent-options';
+import { ProviderAgentIcon, hasProviderAgentIcon } from './app-shell/components/ProviderAgentIcon';
 import { AgentsIcon } from './app-shell/icons';
 
 export type { ComposerAgentOption };
@@ -268,7 +269,22 @@ function renderComposerProviderControl({
   onSelectAgent?: (agentId: string) => void;
   t: Translate;
 }) {
-  const providerIcon = AGENT_PROVIDER_GLYPH;
+  const selectedOption = agentOptions?.find((option) => option.id === selectedAgentId);
+  const selectedBuiltInIcon =
+    selectedOption?.kind === 'builtin'
+    && hasProviderAgentIcon(selectedOption.id, selectedOption.providerType)
+      ? (
+        <span aria-hidden className="composer-provider-lobe-icon">
+          <ProviderAgentIcon
+            agentId={selectedOption.id}
+            className="composer-provider-lobe-svg"
+            providerType={selectedOption.providerType}
+            size={16}
+          />
+        </span>
+      )
+      : null;
+  const providerIcon = selectedBuiltInIcon || AGENT_PROVIDER_GLYPH;
   const providerLabel = agentLabel || providerOptionLabel(composerProviderType);
 
   if (onSelectAgent) {
@@ -296,7 +312,13 @@ function renderComposerProviderControl({
               key={option.id}
               onSelect={() => onSelectAgent(option.id)}
             >
-              {option.label}
+              <ProviderAgentIcon
+                agentId={option.id}
+                className="composer-agent-option-icon"
+                providerType={option.providerType}
+                size={16}
+              />
+              <span className="composer-menu-label">{option.label}</span>
             </FloatingActionMenuItem>
           ))}
           {hasAgents || hasTeams ? <DropdownMenuSeparator /> : null}

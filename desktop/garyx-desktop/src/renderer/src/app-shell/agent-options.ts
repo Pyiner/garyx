@@ -1,4 +1,4 @@
-import type { DesktopCustomAgent, DesktopTeam } from "@shared/contracts";
+import type { DesktopApiProviderType, DesktopCustomAgent, DesktopTeam } from "@shared/contracts";
 
 export type AgentOptionKind = "builtin" | "agent" | "team";
 
@@ -7,6 +7,7 @@ export type ComposerAgentOption = {
   label: string;
   kind: AgentOptionKind;
   detail?: string;
+  providerType?: DesktopApiProviderType;
 };
 
 export type AgentTargetOption = {
@@ -44,6 +45,7 @@ export function buildAgentOptions(
       id: agent.agentId,
       label: agent.displayName,
       kind: "builtin",
+      providerType: agent.providerType,
     });
   }
 
@@ -57,6 +59,7 @@ export function buildAgentOptions(
       label: agent.displayName,
       kind: "agent",
       detail: PROVIDER_LABELS[agent.providerType],
+      providerType: agent.providerType,
     });
   }
 
