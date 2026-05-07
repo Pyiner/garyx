@@ -1180,6 +1180,165 @@ async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ac
 }
 
 #[tokio::test]
+async fn test_process_messages_streaming_suppresses_claude_synthetic_no_response_placeholder() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+
+    tx.send(Ok(Message::User(UserMessage {
+        content: UserContent::Blocks(vec![ContentBlock::Text(TextBlock {
+            text: "Continue from where you left off.".to_owned(),
+        })]),
+        uuid: None,
+        parent_tool_use_id: None,
+        tool_use_result: None,
+    })))
+    .await
+    .unwrap();
+
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "No response requested.".to_owned(),
+        })],
+        model: "<synthetic>".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+
+    tx.send(Ok(Message::User(UserMessage {
+        content: UserContent::Text("real queued user".to_owned()),
+        uuid: None,
+        parent_tool_use_id: None,
+        tool_use_result: None,
+    })))
+    .await
+    .unwrap();
+
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "真实回复".to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+
+    tx.send(Ok(Message::Result(ResultMessage {
+        subtype: "success".to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        session_id: "sdk-session-synthetic".to_owned(),
+        total_cost_usd: Some(0.0),
+        usage: None,
+        result: None,
+        structured_output: None,
+    })))
+    .await
+    .unwrap();
+    drop(tx);
+
+    provider.run_pending_inputs.lock().await.insert(
+        "run-synthetic".to_owned(),
+        VecDeque::from([
+            PendingAckMarker::RootUserMessage,
+            PendingAckMarker::QueuedInput("queued-1".to_owned()),
+        ]),
+    );
+
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let chunks_cb = chunks.clone();
+    let cb: StreamCallback = Box::new(move |event| {
+        chunks_cb.lock().expect("chunks mutex poisoned").push(event);
+    });
+
+    let (response_text, result_data) = provider
+        .process_messages_streaming("run-synthetic", "thread::test", &mut rx, &cb)
+        .await;
+
+    assert_eq!(response_text, "真实回复");
+    let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
+    assert_eq!(
+        emitted,
+        vec![
+            StreamEvent::Boundary {
+                kind: StreamBoundaryKind::UserAck,
+                pending_input_id: None,
+            },
+            StreamEvent::Boundary {
+                kind: StreamBoundaryKind::UserAck,
+                pending_input_id: Some("queued-1".to_owned()),
+            },
+            StreamEvent::Delta {
+                text: "真实回复".to_owned(),
+            },
+        ]
+    );
+
+    let result = result_data.expect("expected result message");
+    assert_eq!(result.session_id, "sdk-session-synthetic");
+    assert_eq!(result.session_messages.len(), 1);
+    assert_eq!(result.session_messages[0].text.as_deref(), Some("真实回复"));
+}
+
+#[tokio::test]
+async fn test_process_messages_streaming_preserves_non_synthetic_no_response_text() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+
+    tx.send(Ok(Message::Assistant(AssistantMessage {
+        content: vec![ContentBlock::Text(TextBlock {
+            text: "No response requested.".to_owned(),
+        })],
+        model: "claude-test".to_owned(),
+        parent_tool_use_id: None,
+        error: None,
+    })))
+    .await
+    .unwrap();
+
+    tx.send(Ok(Message::Result(ResultMessage {
+        subtype: "success".to_owned(),
+        duration_ms: 1,
+        duration_api_ms: 1,
+        is_error: false,
+        num_turns: 1,
+        session_id: "sdk-session-real-text".to_owned(),
+        total_cost_usd: Some(0.0),
+        usage: None,
+        result: None,
+        structured_output: None,
+    })))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::<StreamEvent>::new()));
+    let chunks_cb = chunks.clone();
+    let cb: StreamCallback = Box::new(move |event| {
+        chunks_cb.lock().expect("chunks mutex poisoned").push(event);
+    });
+
+    let (response_text, result_data) = provider
+        .process_messages_streaming("run-real-text", "thread::test", &mut rx, &cb)
+        .await;
+
+    assert_eq!(response_text, "No response requested.");
+    assert_eq!(
+        chunks.lock().expect("chunks mutex poisoned").as_slice(),
+        &[StreamEvent::Delta {
+            text: "No response requested.".to_owned(),
+        }]
+    );
+    let result = result_data.expect("expected result message");
+    assert_eq!(result.session_messages.len(), 1);
+}
+
+#[tokio::test]
 async fn test_process_messages_streaming_emits_assistant_segment_boundaries() {
     let provider = make_provider();
     let (tx, mut rx) = tokio::sync::mpsc::channel(6);

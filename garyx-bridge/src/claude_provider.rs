@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use claude_agent_sdk::{
-    ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun, ClaudeRunControl, ContentBlock,
-    McpServerConfig, Message, OutboundUserMessage, PermissionMode, TextBlock, UserInput,
-    run_streaming as sdk_run_streaming,
+    AssistantMessage, ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun, ClaudeRunControl,
+    ContentBlock, McpServerConfig, Message, OutboundUserMessage, PermissionMode, TextBlock,
+    UserInput, run_streaming as sdk_run_streaming,
 };
 use garyx_models::provider::{
     ClaudeCodeConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
@@ -256,6 +256,23 @@ fn assistant_blocks_have_visible_text(blocks: &[ContentBlock]) -> bool {
         ContentBlock::Text(TextBlock { text }) => !text.is_empty(),
         _ => false,
     })
+}
+
+fn is_synthetic_no_response_message(message: &AssistantMessage) -> bool {
+    if message.model.trim() != "<synthetic>" {
+        return false;
+    }
+
+    let mut text = String::new();
+    for block in &message.content {
+        match block {
+            ContentBlock::Text(TextBlock { text: block_text }) => text.push_str(block_text),
+            ContentBlock::Thinking(_) => {}
+            _ => return false,
+        }
+    }
+
+    text.trim() == "No response requested."
 }
 
 fn assistant_blocks_start_with_newline(blocks: &[ContentBlock]) -> bool {
@@ -1128,6 +1145,14 @@ impl ClaudeCliProvider {
                         });
                     }
                     Ok(Message::Assistant(assistant_msg)) => {
+                        if is_synthetic_no_response_message(&assistant_msg) {
+                            tracing::debug!(
+                                run_id = %run_id,
+                                thread_id = %thread_id,
+                                "suppressing claude synthetic no-response placeholder"
+                            );
+                            continue;
+                        }
                         assistant_or_tool_activity_seen = true;
                         if actual_model.is_none() {
                             actual_model = Some(assistant_msg.model.trim().to_owned())

@@ -1124,6 +1124,7 @@ async fn test_provider_type_for_team_returns_agent_team_meta_provider() {
             leader_agent_id: "codex".to_owned(),
             member_agent_ids: vec!["codex".to_owned(), "claude".to_owned()],
             workflow_text: "Codex leads and Claude reviews.".to_owned(),
+            avatar_data_url: None,
             created_at: "2026-01-01T00:00:00Z".to_owned(),
             updated_at: "2026-01-01T00:00:00Z".to_owned(),
         }])

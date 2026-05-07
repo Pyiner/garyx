@@ -7,6 +7,7 @@ fn team(leader: &str, members: &[&str]) -> AgentTeamProfile {
         leader_agent_id: leader.to_string(),
         member_agent_ids: members.iter().map(|s| s.to_string()).collect(),
         workflow_text: String::new(),
+        avatar_data_url: None,
         created_at: "2026-04-19T00:00:00Z".to_string(),
         updated_at: "2026-04-19T00:00:00Z".to_string(),
     }
