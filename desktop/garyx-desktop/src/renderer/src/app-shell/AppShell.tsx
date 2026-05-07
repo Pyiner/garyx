@@ -339,30 +339,6 @@ function transcriptSnapshotSignature(
   ].join(":");
 }
 
-function preferredMessageScrollBehavior(input: {
-  threadChanged: boolean;
-  countIncreased: boolean;
-  lastMessage?: UiTranscriptMessage;
-  streamStatus?: LiveStreamStatus | null;
-}): ScrollBehavior {
-  if (input.threadChanged) {
-    return "auto";
-  }
-  if (!input.countIncreased) {
-    return "auto";
-  }
-  if (input.lastMessage && isToolRole(input.lastMessage.role)) {
-    return "auto";
-  }
-  if (
-    input.streamStatus &&
-    ["connecting", "streaming", "reconciling"].includes(input.streamStatus)
-  ) {
-    return "auto";
-  }
-  return "smooth";
-}
-
 function transcriptHasAutomationResponse(
   messages: TranscriptMessage[],
 ): boolean {
@@ -3698,14 +3674,10 @@ export function AppShell() {
   useLayoutEffect(() => {
     const currentThreadId = activeThreadMessageKey;
     const currentCount = activeMessages.length;
-    const lastMessage =
-      currentCount > 0 ? activeMessages[currentCount - 1] : undefined;
     const currentTailSignature = messageTailSignature(activeMessages);
     const previousThreadId = lastRenderedMessageThreadRef.current;
-    const previousCount = lastRenderedMessageCountRef.current;
     const previousTailSignature = lastRenderedMessageTailSignatureRef.current;
     const threadChanged = currentThreadId !== previousThreadId;
-    const countIncreased = currentCount > previousCount;
     const tailChanged = currentTailSignature !== previousTailSignature;
     const shouldSnapToBottom = Boolean(
       currentThreadId &&
@@ -3724,26 +3696,13 @@ export function AppShell() {
       tailChanged &&
       shouldStickMessagesToBottomRef.current
     ) {
-      scrollMessagesToLatest(
-        messagesRef.current,
-        preferredMessageScrollBehavior({
-          threadChanged,
-          countIncreased,
-          lastMessage,
-          streamStatus: activeLiveStream?.streamStatus || null,
-        }),
-      );
+      scrollMessagesToLatest(messagesRef.current, "auto");
     }
 
     lastRenderedMessageThreadRef.current = currentThreadId;
     lastRenderedMessageCountRef.current = currentCount;
     lastRenderedMessageTailSignatureRef.current = currentTailSignature;
-  }, [
-    activeLiveStream?.streamStatus,
-    activeThreadMessageKey,
-    activeMessages,
-    historyLoading,
-  ]);
+  }, [activeThreadMessageKey, activeMessages, historyLoading]);
 
   useEffect(() => {
     threadLogsCursorRef.current = threadLogsCursor;
