@@ -254,7 +254,7 @@ export const SETTINGS_TABS: Array<{
     id: 'gateway',
     label: 'Gateway',
     eyebrow: 'Gateway',
-    description: 'Gateway URL, runtime, and storage.',
+    description: 'Gateway URL and storage.',
   },
   {
     id: 'provider',
@@ -1064,10 +1064,6 @@ export function GatewaySettingsPanel({
       value: localSettings.gatewayAuthToken.trim() ? t('configured') : t('required'),
       tone: localSettings.gatewayAuthToken.trim() ? 'success' : 'danger',
     },
-    {
-      label: t('host'),
-      value: `${String(gatewayDraft?.gateway?.host || '0.0.0.0')}:${String(gatewayDraft?.gateway?.port ?? '--')}`,
-    },
   ];
   const updateDisplay = updateStatusDisplay(updateStatus, updateFeedback, t);
   const updateCheckBusy =
@@ -1250,45 +1246,6 @@ export function GatewaySettingsPanel({
 
   const gatewayRuntimePanel = (
     <>
-      <div className="codex-section">
-        <div className="codex-section-header">
-          <span className="codex-section-title">{t('Gateway')}</span>
-          {renderGatewaySaveAction()}
-        </div>
-        <div className="codex-list-card">
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                value={String(gatewayDraft?.gateway?.host || '')}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.gateway.host = event.target.value;
-                  });
-                }}
-              />
-            }
-            description={t('HTTP listen address for the gateway runtime.')}
-            label="gateway.host"
-          />
-          <SettingsControlRow
-            control={
-              <Input
-                className="rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
-                type="number"
-                value={String(gatewayDraft?.gateway?.port ?? 31337)}
-                onChange={(event) => {
-                  onMutateGatewayDraft((next) => {
-                    next.gateway.port = Number(event.target.value) || 31337;
-                  });
-                }}
-              />
-            }
-            description={t('Port used by the desktop client and other runtime callers.')}
-            label="gateway.port"
-          />
-        </div>
-      </div>
       <div className="codex-section">
         <div className="codex-section-header">
           <span className="codex-section-title">{t('Defaults')}</span>
