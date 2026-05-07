@@ -4,7 +4,7 @@ import {
   canMergeToolTraceMessages,
   shouldRenderToolTraceMessage,
   type ToolTraceMessage,
-} from './tool-trace-registry';
+} from './tool-trace';
 
 export type RenderTranscriptEntry =
   | {
@@ -123,19 +123,10 @@ export function toolMessagesEquivalent(
 export function buildRenderableTranscript(messages: TranscriptMessage[]): RenderTranscriptEntry[] {
   const rendered: RenderTranscriptEntry[] = [];
   const pendingToolUses = new Map<string, number>();
-  const pendingToolUseIndexes: number[] = [];
-
-  function removePendingToolUseIndex(index: number) {
-    const pendingIndex = pendingToolUseIndexes.indexOf(index);
-    if (pendingIndex >= 0) {
-      pendingToolUseIndexes.splice(pendingIndex, 1);
-    }
-  }
 
   for (const message of messages) {
     if (!isToolRole(message.role)) {
       pendingToolUses.clear();
-      pendingToolUseIndexes.splice(0);
       rendered.push({
         kind: 'message',
         key: message.id,
@@ -160,16 +151,15 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
           if (current?.kind === 'tool' && current.toolUse && !current.toolResult) {
             current.toolResult = message;
             pendingToolUses.delete(messageToolUseId);
-            removePendingToolUseIndex(idx);
             matched = true;
           }
         }
       }
 
-      if (!matched && !messageToolUseId) {
-        const compatiblePendingIndexes = pendingToolUseIndexes.filter((idx) => {
+      if (!matched) {
+        for (const [key, idx] of pendingToolUses) {
           const current = rendered[idx];
-          return (
+          if (
             current?.kind === 'tool' &&
             current.toolUse &&
             !current.toolResult &&
@@ -177,20 +167,11 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
               current.toolUse as ToolTraceMessage,
               message as ToolTraceMessage,
             )
-          );
-        });
-
-        if (compatiblePendingIndexes.length === 1) {
-          const idx = compatiblePendingIndexes[0];
-          const current = rendered[idx];
-          if (current?.kind === 'tool' && current.toolUse && !current.toolResult) {
+          ) {
             current.toolResult = message;
-            const currentToolUseId = extractToolUseId(current.toolUse);
-            if (currentToolUseId) {
-              pendingToolUses.delete(currentToolUseId);
-            }
-            removePendingToolUseIndex(idx);
+            pendingToolUses.delete(key);
             matched = true;
+            break;
           }
         }
       }
@@ -212,7 +193,6 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
       toolUse: message,
       defaultExpanded: false,
     });
-    pendingToolUseIndexes.push(rendered.length - 1);
     if (messageToolUseId) {
       pendingToolUses.set(messageToolUseId, rendered.length - 1);
     }

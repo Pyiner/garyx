@@ -1078,15 +1078,6 @@ function asFiniteNumber(value: unknown): number | undefined {
     : undefined;
 }
 
-function asStreamEventSeq(value: unknown): number | undefined {
-  const numberValue = asFiniteNumber(value);
-  return numberValue !== undefined &&
-    Number.isSafeInteger(numberValue) &&
-    numberValue >= 0
-    ? numberValue
-    : undefined;
-}
-
 function buildProviderMetadata(
   settings: DesktopSettings,
 ): Record<string, unknown> | undefined {
@@ -3948,7 +3939,6 @@ export async function openChatStream(
             asString(payload.threadId) ||
             asString(payload.sessionKey) ||
             active.threadId;
-          const eventSeq = asStreamEventSeq(payload.eventSeq);
 
           active.runId = payloadRunId;
           active.threadId = payloadThreadId;
@@ -3961,7 +3951,6 @@ export async function openChatStream(
                 runId: payloadRunId,
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
-                eventSeq,
               });
               return;
             case "assistant_delta": {
@@ -3979,7 +3968,6 @@ export async function openChatStream(
                 runId: payloadRunId,
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
-                eventSeq,
                 delta,
                 metadata: Object.keys(metadata).length ? metadata : null,
               });
@@ -3997,7 +3985,6 @@ export async function openChatStream(
                 runId: payloadRunId,
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
-                eventSeq,
               });
               return;
             case "tool_use":
@@ -4008,7 +3995,6 @@ export async function openChatStream(
                 runId: payloadRunId,
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
-                eventSeq,
                 message: mapStreamToolMessage(payload.message),
               });
               return;
@@ -4020,7 +4006,6 @@ export async function openChatStream(
                 runId: payloadRunId,
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
-                eventSeq,
                 pendingInputId:
                   asString(payload.pendingInputId) ||
                   asString(payload.pending_input_id) ||
@@ -4038,7 +4023,6 @@ export async function openChatStream(
                 runId: payloadRunId,
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
-                eventSeq,
                 title,
               });
               return;
@@ -4051,7 +4035,6 @@ export async function openChatStream(
                 runId: payloadRunId,
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
-                eventSeq,
               });
               socket.close();
               return;
@@ -4094,7 +4077,6 @@ export async function openChatStream(
                 runId: payloadRunId,
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
-                eventSeq,
                 error,
               });
               const pendingInput = active.pendingInputWaiters.splice(0);

@@ -242,17 +242,9 @@ async fn chat_ws_start_streams_events() {
     .unwrap();
 
     let mut seen = Vec::new();
-    let mut event_seqs = Vec::new();
     for _ in 0..5 {
         let payload = recv_json(&mut ws).await;
         let kind = payload["type"].as_str().unwrap_or_default().to_owned();
-        if matches!(kind.as_str(), "accepted" | "assistant_delta" | "done") {
-            event_seqs.push(
-                payload["eventSeq"]
-                    .as_u64()
-                    .expect("stream event should include eventSeq"),
-            );
-        }
         seen.push(kind.clone());
         if kind == "done" {
             break;
@@ -262,15 +254,6 @@ async fn chat_ws_start_streams_events() {
     assert!(seen.iter().any(|item| item == "accepted"));
     assert!(seen.iter().any(|item| item == "assistant_delta"));
     assert!(seen.iter().any(|item| item == "done"));
-    assert_eq!(
-        event_seqs.len(),
-        event_seqs
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        "stream eventSeq values should be unique"
-    );
 }
 
 #[tokio::test]

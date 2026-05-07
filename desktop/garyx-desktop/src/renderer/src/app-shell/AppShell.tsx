@@ -100,10 +100,6 @@ import {
   isToolRole,
   toolMessagesEquivalent,
 } from "../transcript-render";
-import {
-  createChatStreamEventDedupeState,
-  shouldAcceptChatStreamEvent,
-} from "../stream-event-dedupe";
 import { WorkspaceFilePreview } from "../workspace-file-preview";
 import { BotConsolePage } from "../BotConsolePage";
 import { measureUiAction } from "../perf-metrics";
@@ -1561,7 +1557,6 @@ export function AppShell() {
   const threadLogsOpenRef = useRef(false);
   const threadLogsActiveTabRef = useRef<ThreadLogTab>("client");
   const clientLogSequenceRef = useRef(1);
-  const streamEventDedupeRef = useRef(createChatStreamEventDedupeState());
   const messagesByThreadRef = useRef<MessageMap>({});
   const messageStateRef = useRef(initialMessageMachineState);
   const liveStreamStateRef = useRef<Record<string, LiveStreamState>>({});
@@ -3129,9 +3124,6 @@ export function AppShell() {
 
   useEffect(() => {
     const listener = (event: DesktopChatStreamEvent) => {
-      if (!shouldAcceptChatStreamEvent(streamEventDedupeRef.current, event)) {
-        return;
-      }
       const key = `client-log-line-${clientLogSequenceRef.current}`;
       clientLogSequenceRef.current += 1;
       const nextEntry = buildClientStreamLogEntry(event, key);
