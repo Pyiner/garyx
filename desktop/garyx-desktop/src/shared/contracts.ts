@@ -996,12 +996,14 @@ export type DesktopChatStreamEvent =
       runId: string;
       threadId: string;
       sessionId?: string;
+      eventSeq?: number;
     }
   | {
       type: "assistant_delta";
       runId: string;
       threadId: string;
       sessionId?: string;
+      eventSeq?: number;
       delta: string;
       metadata?: Record<string, unknown> | null;
     }
@@ -1010,12 +1012,14 @@ export type DesktopChatStreamEvent =
       runId: string;
       threadId: string;
       sessionId?: string;
+      eventSeq?: number;
     }
   | {
       type: "tool_use";
       runId: string;
       threadId: string;
       sessionId?: string;
+      eventSeq?: number;
       message: ChatStreamToolMessage;
     }
   | {
@@ -1023,6 +1027,7 @@ export type DesktopChatStreamEvent =
       runId: string;
       threadId: string;
       sessionId?: string;
+      eventSeq?: number;
       message: ChatStreamToolMessage;
     }
   | {
@@ -1030,6 +1035,7 @@ export type DesktopChatStreamEvent =
       runId: string;
       threadId: string;
       sessionId?: string;
+      eventSeq?: number;
       pendingInputId?: string;
     }
   | {
@@ -1037,6 +1043,7 @@ export type DesktopChatStreamEvent =
       runId: string;
       threadId: string;
       sessionId?: string;
+      eventSeq?: number;
       title: string;
     }
   | {
@@ -1044,12 +1051,14 @@ export type DesktopChatStreamEvent =
       runId: string;
       threadId: string;
       sessionId?: string;
+      eventSeq?: number;
     }
   | {
       type: "error";
       runId: string;
       threadId: string;
       sessionId?: string;
+      eventSeq?: number;
       error: string;
     };
 

@@ -3,7 +3,10 @@
 //! Rust port of `src/garyx/plugins/channels/api.py`.
 //! Provides HTTP endpoints for sending messages and receiving responses.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 use crate::application::chat::contracts::{
     ChatRequest, InterruptRequest, StreamInputRequest, resolve_existing_thread_key,
@@ -205,7 +208,14 @@ async fn handle_chat_ws_start(
         &run_id,
     );
 
-    let callback = build_chat_ws_stream_callback(out_tx.clone(), state, &run_id, &thread_id);
+    let event_seq = Arc::new(AtomicU64::new(1));
+    let callback = build_chat_ws_stream_callback(
+        out_tx.clone(),
+        state,
+        &run_id,
+        &thread_id,
+        event_seq.clone(),
+    );
     state.sync_external_user_skills_before_run("api_chat_ws_start", &thread_id);
     let start_result = state
         .integration
@@ -248,7 +258,8 @@ async fn handle_chat_ws_start(
             let _ = out_tx.send(json!({
                 "type": "accepted",
                 "runId": run_id,
-                "threadId": thread_id
+                "threadId": thread_id,
+                "eventSeq": event_seq.fetch_add(1, Ordering::Relaxed)
             }));
         }
         Err(error) => {
@@ -430,6 +441,7 @@ fn build_chat_ws_stream_callback(
     state: &Arc<AppState>,
     run_id: &str,
     thread_id: &str,
+    event_seq: Arc<AtomicU64>,
 ) -> Arc<dyn Fn(StreamEvent) + Send + Sync> {
     let callback_run_id = run_id.to_owned();
     let callback_thread_id = thread_id.to_owned();
@@ -443,6 +455,7 @@ fn build_chat_ws_stream_callback(
     let current_speaker_for_delta = Arc::clone(&current_speaker);
     let current_speaker_for_tool = Arc::clone(&current_speaker);
     let current_speaker_for_done = Arc::clone(&current_speaker);
+    let callback_event_seq = Arc::clone(&event_seq);
 
     Arc::new(move |event| match event {
         StreamEvent::Delta { text } => {
@@ -465,6 +478,7 @@ fn build_chat_ws_stream_callback(
                     "threadId": callback_thread_id,
                     "delta": delta,
                     "metadata": metadata,
+                    "eventSeq": callback_event_seq.fetch_add(1, Ordering::Relaxed),
                 }));
             }
         }
@@ -491,7 +505,8 @@ fn build_chat_ws_stream_callback(
                 "type": "tool_use",
                 "runId": callback_run_id,
                 "threadId": callback_thread_id,
-                "message": message
+                "message": message,
+                "eventSeq": callback_event_seq.fetch_add(1, Ordering::Relaxed),
             }));
         }
         StreamEvent::ToolResult { message } => {
@@ -518,7 +533,8 @@ fn build_chat_ws_stream_callback(
                 "type": "tool_result",
                 "runId": callback_run_id,
                 "threadId": callback_thread_id,
-                "message": message
+                "message": message,
+                "eventSeq": callback_event_seq.fetch_add(1, Ordering::Relaxed),
             }));
             if let Some(text) = mirrored_text {
                 bound_delivery_callback.suppress();
@@ -526,7 +542,8 @@ fn build_chat_ws_stream_callback(
                     "type": "assistant_delta",
                     "runId": callback_run_id,
                     "threadId": callback_thread_id,
-                    "delta": text
+                    "delta": text,
+                    "eventSeq": callback_event_seq.fetch_add(1, Ordering::Relaxed),
                 }));
             }
         }
@@ -539,7 +556,8 @@ fn build_chat_ws_stream_callback(
                 let _ = out_tx.send(json!({
                     "type": "assistant_boundary",
                     "runId": callback_run_id,
-                    "threadId": callback_thread_id
+                    "threadId": callback_thread_id,
+                    "eventSeq": callback_event_seq.fetch_add(1, Ordering::Relaxed),
                 }));
             }
             StreamBoundaryKind::UserAck => {
@@ -553,7 +571,8 @@ fn build_chat_ws_stream_callback(
                     "type": "user_ack",
                     "runId": callback_run_id,
                     "threadId": callback_thread_id,
-                    "pendingInputId": pending_input_id
+                    "pendingInputId": pending_input_id,
+                    "eventSeq": callback_event_seq.fetch_add(1, Ordering::Relaxed),
                 }));
             }
         },
@@ -568,7 +587,8 @@ fn build_chat_ws_stream_callback(
             let _ = out_tx.send(json!({
                 "type": "done",
                 "runId": callback_run_id,
-                "threadId": callback_thread_id
+                "threadId": callback_thread_id,
+                "eventSeq": callback_event_seq.fetch_add(1, Ordering::Relaxed),
             }));
         }
         StreamEvent::ThreadTitleUpdated { title } => {
@@ -576,7 +596,8 @@ fn build_chat_ws_stream_callback(
                 "type": "thread_title_updated",
                 "runId": callback_run_id,
                 "threadId": callback_thread_id,
-                "title": title
+                "title": title,
+                "eventSeq": callback_event_seq.fetch_add(1, Ordering::Relaxed),
             }));
         }
     })

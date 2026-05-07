@@ -177,6 +177,10 @@ const api: GaryxDesktopApi = {
   sendStreamingInput: (input) =>
     ipcRenderer.invoke("garyx:send-streaming-input", input),
   subscribeChatStream: (listener) => {
+    const existing = chatStreamListeners.get(listener);
+    if (existing) {
+      ipcRenderer.removeListener("garyx:chat-stream", existing);
+    }
     const wrapped = (_event: Electron.IpcRendererEvent, payload: unknown) => {
       listener(payload as Parameters<typeof listener>[0]);
     };
