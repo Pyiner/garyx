@@ -285,21 +285,11 @@ function renderComposerAgentOptionIcon(option: ComposerAgentOption) {
 }
 
 function renderComposerProviderTriggerIcon(option?: ComposerAgentOption) {
-  if (!option?.avatarDataUrl) {
+  if (!option) {
     return AGENT_PROVIDER_GLYPH;
   }
 
-  const classes = [
-    'composer-agent-option-icon',
-    'image',
-    option.kind === 'team' ? 'team' : '',
-  ].filter(Boolean).join(' ');
-
-  return (
-    <span aria-hidden className={classes}>
-      <img alt="" src={option.avatarDataUrl} />
-    </span>
-  );
+  return renderComposerAgentOptionIcon(option);
 }
 
 function renderComposerProviderControl({
