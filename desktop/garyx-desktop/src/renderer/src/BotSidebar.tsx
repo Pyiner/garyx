@@ -130,8 +130,12 @@ export function BotSidebar({
         ) : null}
       </div>
 
-      {!sectionCollapsed ? (
-        <div className="workspace-list sidebar-bot-list">
+      <div
+        aria-hidden={sectionCollapsed}
+        className={`sidebar-collapsible sidebar-section-panel ${sectionCollapsed ? 'is-collapsed' : ''}`}
+        inert={sectionCollapsed ? true : undefined}
+      >
+        <div className="sidebar-collapsible-inner workspace-list sidebar-bot-list">
           {groups.map((group) => {
             const childEntries = group.conversationNodes || [];
             const isExpanded = expandedGroupIds.has(group.id);
@@ -189,34 +193,40 @@ export function BotSidebar({
                     </button>
                   ) : null}
                 </div>
-                {isExpanded && childEntries.length ? (
-                  <div className="bot-thread-list">
-                    {childEntries.map((entry) => {
-                      const isSelected = selectedThreadId === entry.endpoint.threadId;
-                      return (
-                        <button
-                          className={`workspace-row bot-thread-row ${isSelected ? 'active' : ''}`}
-                          key={entry.id}
-                          onClick={() => {
-                            onOpenEndpoint(entry.endpoint);
-                          }}
-                          tabIndex={-1}
-                          type="button"
-                        >
-                          <div className="workspace-row-copy bot-thread-copy">
-                            <span className="bot-thread-title" title={entry.title}>
-                              {entry.title}
+                {childEntries.length ? (
+                  <div
+                    aria-hidden={!isExpanded}
+                    className={`bot-thread-list sidebar-collapsible ${isExpanded ? '' : 'is-collapsed'}`}
+                    inert={!isExpanded ? true : undefined}
+                  >
+                    <div className="sidebar-collapsible-inner bot-thread-list-inner">
+                      {childEntries.map((entry) => {
+                        const isSelected = selectedThreadId === entry.endpoint.threadId;
+                        return (
+                          <button
+                            className={`workspace-row bot-thread-row ${isSelected ? 'active' : ''}`}
+                            key={entry.id}
+                            onClick={() => {
+                              onOpenEndpoint(entry.endpoint);
+                            }}
+                            tabIndex={-1}
+                            type="button"
+                          >
+                            <div className="workspace-row-copy bot-thread-copy">
+                              <span className="bot-thread-title" title={entry.title}>
+                                {entry.title}
+                              </span>
+                              {entry.badge ? (
+                                <span className="bot-thread-badge">{entry.badge}</span>
+                              ) : null}
+                            </div>
+                            <span className="workspace-status">
+                              {formatThreadTimestamp(entry.latestActivity)}
                             </span>
-                            {entry.badge ? (
-                              <span className="bot-thread-badge">{entry.badge}</span>
-                            ) : null}
-                          </div>
-                          <span className="workspace-status">
-                            {formatThreadTimestamp(entry.latestActivity)}
-                          </span>
-                        </button>
-                      );
-                    })}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 ) : null}
               </section>
@@ -224,7 +234,7 @@ export function BotSidebar({
           })}
 
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }

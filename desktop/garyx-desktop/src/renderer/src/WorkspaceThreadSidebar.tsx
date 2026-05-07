@@ -185,44 +185,50 @@ export function WorkspaceThreadSidebar({
         </div>
       </div>
 
-      {!sectionCollapsed ? <div className="workspace-list">
-        {visibleWorkspaceThreadGroups.map((group) => {
-          const { workspace } = group;
-          const workspacePath = workspace.path || workspace.name;
-          const isMenuOpen = workspaceMenuOpenPath === workspacePath;
-          const isRenaming = renamingWorkspacePath === workspacePath;
-          const isPreviewExpanded = expandedWorkspacePreviewPaths.has(workspacePath);
-          const rows = buildWorkspaceThreadRows({
-            state: desktopState,
-            threads: group.threads,
-            selectedThreadId,
-            deletingThreadId,
-            isThreadRuntimeBusy,
-          });
-          // Hide pending deletes immediately so the sidebar does not wait for
-          // the IPC + gateway round-trip before the row disappears.
-          const visibleRows = rows.filter((row) => !row.isDeleting);
-          const hasPreviewOverflow = visibleRows.length > 3;
-          const previewRows = isPreviewExpanded ? visibleRows : visibleRows.slice(0, 3);
+      <div
+        aria-hidden={sectionCollapsed}
+        className={`sidebar-collapsible sidebar-section-panel ${sectionCollapsed ? 'is-collapsed' : ''}`}
+        inert={sectionCollapsed ? true : undefined}
+      >
+        <div className="sidebar-collapsible-inner workspace-list">
+          {visibleWorkspaceThreadGroups.map((group) => {
+            const { workspace } = group;
+            const workspacePath = workspace.path || workspace.name;
+            const isWorkspaceCollapsed = collapsedPaths.has(workspacePath);
+            const isMenuOpen = workspaceMenuOpenPath === workspacePath;
+            const isRenaming = renamingWorkspacePath === workspacePath;
+            const isPreviewExpanded = expandedWorkspacePreviewPaths.has(workspacePath);
+            const rows = buildWorkspaceThreadRows({
+              state: desktopState,
+              threads: group.threads,
+              selectedThreadId,
+              deletingThreadId,
+              isThreadRuntimeBusy,
+            });
+            // Hide pending deletes immediately so the sidebar does not wait for
+            // the IPC + gateway round-trip before the row disappears.
+            const visibleRows = rows.filter((row) => !row.isDeleting);
+            const hasPreviewOverflow = visibleRows.length > 3;
+            const previewRows = isPreviewExpanded ? visibleRows : visibleRows.slice(0, 3);
 
-          const handleRenameInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              onSubmitRenameWorkspace(workspacePath);
-            } else if (event.key === 'Escape') {
-              event.preventDefault();
-              onCancelRenameWorkspace();
-            }
-          };
+            const handleRenameInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                onSubmitRenameWorkspace(workspacePath);
+              } else if (event.key === 'Escape') {
+                event.preventDefault();
+                onCancelRenameWorkspace();
+              }
+            };
 
-          return (
-            <section
-              className={`workspace-group ${!workspace.available ? 'missing' : ''}`}
-              key={workspacePath}
-            >
+            return (
+              <section
+                className={`workspace-group ${!workspace.available ? 'missing' : ''}`}
+                key={workspacePath}
+              >
               <div className="workspace-row workspace-row-shell">
                 <button
-                  aria-expanded={!collapsedPaths.has(workspacePath)}
+                  aria-expanded={!isWorkspaceCollapsed}
                   className="workspace-row-main"
                   onClick={() => handleWorkspaceClick(workspacePath)}
                   tabIndex={-1}
@@ -231,10 +237,10 @@ export function WorkspaceThreadSidebar({
                   <div className="workspace-row-copy">
                     <span className="workspace-folder-icon">
                       <span className="workspace-folder-icon-default">
-                        {collapsedPaths.has(workspacePath) ? <FolderIcon /> : <FolderOpenIcon />}
+                        {isWorkspaceCollapsed ? <FolderIcon /> : <FolderOpenIcon />}
                       </span>
                       <span className="workspace-folder-icon-hover">
-                        {collapsedPaths.has(workspacePath) ? <FolderOpenIcon /> : <FolderIcon />}
+                        {isWorkspaceCollapsed ? <FolderOpenIcon /> : <FolderIcon />}
                       </span>
                     </span>
                     {isRenaming ? (
@@ -385,8 +391,13 @@ export function WorkspaceThreadSidebar({
                 </div>
               </div>
 
-              <div className={`thread-list workspace-thread-list ${collapsedPaths.has(workspacePath) ? 'collapsed' : ''}`}>
-                {visibleRows.length && !collapsedPaths.has(workspacePath) ? (
+              <div
+                aria-hidden={isWorkspaceCollapsed}
+                className={`thread-list workspace-thread-list sidebar-collapsible ${isWorkspaceCollapsed ? 'is-collapsed' : ''}`}
+                inert={isWorkspaceCollapsed ? true : undefined}
+              >
+                <div className="sidebar-collapsible-inner workspace-thread-list-inner">
+                {visibleRows.length ? (
                   previewRows.map((row) => {
                     const { thread } = row;
                     return (
@@ -453,10 +464,10 @@ export function WorkspaceThreadSidebar({
                       </div>
                     );
                   })
-                ) : collapsedPaths.has(workspacePath) ? null : (
+                ) : (
                   <p className="workspace-empty-note">{t('No threads yet')}</p>
                 )}
-                {!collapsedPaths.has(workspacePath) && hasPreviewOverflow ? (
+                {hasPreviewOverflow ? (
                   <div className="workspace-thread-preview-row">
                     <button
                       aria-expanded={isPreviewExpanded}
@@ -478,12 +489,14 @@ export function WorkspaceThreadSidebar({
                     </button>
                   </div>
                 ) : null}
+                </div>
               </div>
-            </section>
-          );
-        })}
+              </section>
+            );
+          })}
 
-      </div> : null}
+        </div>
+      </div>
     </div>
   );
 }
