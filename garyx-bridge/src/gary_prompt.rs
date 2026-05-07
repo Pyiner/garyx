@@ -66,16 +66,14 @@ pub(crate) fn prepend_memory_context_to_user_message(
 
 fn build_runtime_metadata_user_message(metadata: &HashMap<String, Value>) -> Option<String> {
     let runtime = metadata.get("runtime_context").and_then(Value::as_object)?;
-    let mut lines = vec![String::from(
-        "This is stable Garyx routing metadata for the current thread. Treat it as background context, not as a user request.",
-    )];
+    let mut lines = Vec::new();
     push_runtime_line(&mut lines, "thread_id", runtime.get("thread_id"));
     push_runtime_line(&mut lines, "bot_id", runtime.get("bot_id"));
     push_runtime_line(&mut lines, "workspace_dir", runtime.get("workspace_dir"));
     if let Some(task) = runtime.get("task").and_then(Value::as_object) {
         push_runtime_line(&mut lines, "task_id", task.get("task_id"));
     }
-    if lines.len() <= 1 {
+    if lines.is_empty() {
         return None;
     }
     Some(format!(

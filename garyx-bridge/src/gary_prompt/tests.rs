@@ -78,6 +78,7 @@ fn prepend_runtime_metadata_to_user_message_renders_stable_thread_task_and_bot_i
     let rendered = prepend_runtime_metadata_to_user_message("继续", &metadata);
 
     assert!(rendered.starts_with("<garyx_thread_metadata>"));
+    assert!(!rendered.contains("stable Garyx routing metadata"));
     assert!(rendered.contains("thread_id: thread::abc"));
     assert!(rendered.contains("bot_id: telegram:main"));
     assert!(rendered.contains("workspace_dir: /tmp/project"));
