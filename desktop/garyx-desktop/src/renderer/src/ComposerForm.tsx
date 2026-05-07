@@ -254,22 +254,16 @@ const AGENT_PROVIDER_GLYPH = (
   </span>
 );
 
-function composerOptionInitials(label: string): string {
-  const trimmed = label.trim();
-  if (!trimmed) {
-    return 'A';
-  }
-  return Array.from(trimmed).slice(0, 2).join('').toUpperCase();
-}
-
 function renderComposerAgentOptionIcon(option: ComposerAgentOption) {
   const showProviderIcon =
     option.kind === 'builtin' && hasProviderAgentIcon(option.id, option.providerType);
+  const hasAvatar = Boolean(option.avatarDataUrl);
   const classes = [
     'composer-agent-option-icon',
-    option.kind === 'team' ? 'team' : '',
-    option.avatarDataUrl ? 'image' : '',
+    hasAvatar && option.kind === 'team' ? 'team' : '',
+    hasAvatar ? 'image' : '',
     showProviderIcon ? 'provider' : '',
+    !hasAvatar && !showProviderIcon ? 'default' : '',
   ].filter(Boolean).join(' ');
 
   return (
@@ -283,7 +277,9 @@ function renderComposerAgentOptionIcon(option: ComposerAgentOption) {
           providerType={option.providerType}
           size={16}
         />
-      ) : composerOptionInitials(option.label)}
+      ) : (
+        <AgentsIcon />
+      )}
     </span>
   );
 }

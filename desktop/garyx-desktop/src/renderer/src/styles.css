@@ -7132,13 +7132,15 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-agent-option-icon.provider,
-.composer-agent-option-icon.image {
+.composer-agent-option-icon.image,
+.composer-agent-option-icon.default {
   background: transparent;
   color: inherit;
 }
 
 .composer-agent-option-icon img,
-.composer-agent-option-icon-svg {
+.composer-agent-option-icon-svg,
+.composer-agent-option-icon.default .icon {
   display: block;
   width: 100%;
   height: 100%;
