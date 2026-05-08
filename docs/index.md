@@ -35,6 +35,9 @@ Wire up Telegram, Feishu, or WeChat in three commands.
 What a thread is, where it lives on disk, and how `workspace_dir` ties to
 the agent run.
 
+[**Tasks & threads (中文)**](/concepts/task-thread-model.zh)
+任务如何作为 Thread 上的元数据层建模，以及指派、审阅、通知如何回流到线程。
+
 [**Channels**](/concepts/channels)
 Built-in vs plugin channels, accounts vs bindings, and how a chat ends up
 attached to a thread.
