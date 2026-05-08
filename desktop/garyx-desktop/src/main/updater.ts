@@ -17,6 +17,9 @@ import type { DesktopUpdateStatus } from "@shared/contracts";
 // 8 seconds after app ready to avoid competing with gateway startup.
 const RECURRING_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const INITIAL_CHECK_DELAY_MS = 8_000;
+const UPDATE_QUIT_FALLBACK_MS = 1_500;
+const UPDATE_FORCE_EXIT_FALLBACK_MS = 8_000;
+const UPDATE_INSTALL_READY_TIMEOUT_MS = 60_000;
 const INVALID_MAC_SIGNATURE_UPDATE_MESSAGE =
   "This Garyx app bundle is not signed with a valid Developer ID signature. Download and install the latest Garyx DMG once, then updates will work normally.";
 
@@ -24,9 +27,15 @@ let lastStatus: DesktopUpdateStatus = { phase: "idle" };
 let subscribers = new Set<BrowserWindow>();
 let bootstrapped = false;
 let updatePreflightPromise: Promise<string | null> | null = null;
+let installInProgress = false;
 
 type UpdaterIpcOptions = {
   prepareForInstall?: () => void;
+};
+
+type UpdateQuitEventApp = typeof app & {
+  once(event: "before-quit-for-update", listener: () => void): typeof app;
+  off(event: "before-quit-for-update", listener: () => void): typeof app;
 };
 
 function broadcast(status: DesktopUpdateStatus): void {
@@ -38,7 +47,11 @@ function broadcast(status: DesktopUpdateStatus): void {
   }
 }
 
-function toUpdateInfo(info: UpdateInfo): { version: string; releaseNotes?: string; releaseName?: string } {
+function toUpdateInfo(info: UpdateInfo): {
+  version: string;
+  releaseNotes?: string;
+  releaseName?: string;
+} {
   return {
     version: info.version,
     releaseNotes: typeof info.releaseNotes === "string" ? info.releaseNotes : undefined,
@@ -97,7 +110,9 @@ async function detectMacUpdateBlocker(): Promise<string | null> {
   const teamIdentifier = details.output
     .match(/^TeamIdentifier=(.+)$/m)?.[1]
     ?.trim();
-  const isDeveloperIdSigned = /^Authority=Developer ID Application:/m.test(details.output);
+  const isDeveloperIdSigned = /^Authority=Developer ID Application:/m.test(
+    details.output,
+  );
   if (
     !details.ok ||
     !teamIdentifier ||
@@ -125,19 +140,121 @@ function ensureUpdatePreflight(): Promise<string | null> {
   return updatePreflightPromise;
 }
 
+function unrefTimer(timer: NodeJS.Timeout): void {
+  timer.unref?.();
+}
+
+function requestAppQuitForUpdate(
+  options: UpdaterIpcOptions,
+  source: string,
+): void {
+  try {
+    options.prepareForInstall?.();
+  } catch (error) {
+    console.warn("[updater] update install preparation failed", error);
+  }
+
+  console.warn(`[updater] ensuring app quits for update (${source})`);
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) {
+      window.close();
+    }
+  }
+  app.quit();
+
+  const forceExitTimer = setTimeout(() => {
+    console.warn(
+      "[updater] forcing app exit so macOS update installation can continue",
+    );
+    app.exit(0);
+  }, UPDATE_FORCE_EXIT_FALLBACK_MS);
+  unrefTimer(forceExitTimer);
+}
+
+function armUpdateQuitFallback(options: UpdaterIpcOptions): () => void {
+  const timers = new Set<NodeJS.Timeout>();
+  let completed = false;
+  let quitRequested = false;
+
+  const addTimer = (callback: () => void, delayMs: number) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      callback();
+    }, delayMs);
+    timers.add(timer);
+    unrefTimer(timer);
+  };
+
+  const cleanup = () => {
+    completed = true;
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+    timers.clear();
+  };
+
+  const requestQuitOnce = (source: string) => {
+    if (completed || quitRequested) {
+      return;
+    }
+    quitRequested = true;
+    requestAppQuitForUpdate(options, source);
+  };
+
+  const beforeQuitForUpdate = () => {
+    try {
+      options.prepareForInstall?.();
+    } catch (error) {
+      console.warn("[updater] update install preparation failed", error);
+    }
+    addTimer(
+      () => requestQuitOnce("before-quit-for-update fallback"),
+      UPDATE_QUIT_FALLBACK_MS,
+    );
+  };
+  const updaterError = () => {
+    cleanup();
+  };
+
+  const updateQuitEventApp = app as UpdateQuitEventApp;
+  updateQuitEventApp.once("before-quit-for-update", beforeQuitForUpdate);
+  app.once("will-quit", cleanup);
+  autoUpdater.once("error", updaterError);
+  addTimer(
+    () => requestQuitOnce("install readiness timeout"),
+    UPDATE_INSTALL_READY_TIMEOUT_MS,
+  );
+
+  return () => {
+    updateQuitEventApp.off("before-quit-for-update", beforeQuitForUpdate);
+    app.off("will-quit", cleanup);
+    autoUpdater.off("error", updaterError);
+    cleanup();
+  };
+}
+
 export function registerUpdaterIpc(options: UpdaterIpcOptions = {}): void {
   ipcMain.handle("garyx:get-update-status", () => lastStatus);
   ipcMain.handle("garyx:install-update", () => {
     if (lastStatus.phase !== "downloaded") {
       return { ok: false, reason: "update-not-downloaded" as const };
     }
+    if (installInProgress) {
+      return { ok: true as const };
+    }
+    installInProgress = true;
+    broadcast({ phase: "installing", info: lastStatus.info });
     // setImmediate so the IPC response flushes before the app quits.
     setImmediate(() => {
+      const cancelQuitFallback = armUpdateQuitFallback(options);
       try {
         options.prepareForInstall?.();
         autoUpdater.quitAndInstall(false, true);
       } catch (error) {
         console.error("[updater] quitAndInstall failed", error);
+        cancelQuitFallback();
+        installInProgress = false;
+        broadcast({ phase: "error", message: updateErrorMessage(error) });
       }
     });
     return { ok: true as const };
@@ -205,6 +322,7 @@ export function bootstrapAutoUpdater(): void {
       broadcast({ phase: "downloaded", info: toUpdateInfo(info) });
     });
     autoUpdater.on("error", (error) => {
+      installInProgress = false;
       broadcast({ phase: "error", message: updateErrorMessage(error) });
     });
 

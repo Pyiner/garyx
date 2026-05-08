@@ -782,6 +782,7 @@ const zhCN: Record<string, string> = {
   'Update to v{version} and restart': '更新到 v{version} 并重启',
   'Update v{version} found. Downloading will start automatically.': '发现 v{version} 更新，将自动开始下载。',
   'Update v{version} is ready to install.': 'v{version} 更新已准备好安装。',
+  'Installing update v{version}...': '正在安装 v{version} 更新...',
   'Updated': '更新时间',
   'Updates': '更新',
   'Upload avatar': '上传头像',

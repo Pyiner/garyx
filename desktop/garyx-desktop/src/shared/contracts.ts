@@ -1634,6 +1634,7 @@ export type DesktopUpdateStatus =
   | { phase: "available"; info: DesktopUpdateInfo }
   | { phase: "downloading"; percent: number }
   | { phase: "downloaded"; info: DesktopUpdateInfo }
+  | { phase: "installing"; info: DesktopUpdateInfo }
   | { phase: "error"; message: string };
 
 export type DesktopUpdateCheckResult =

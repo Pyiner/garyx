@@ -218,6 +218,13 @@ function updateStatusDisplay(
         }),
         tone: 'success',
       };
+    case 'installing':
+      return {
+        message: t('Installing update v{version}...', {
+          version: status.info.version,
+        }),
+        tone: 'info',
+      };
     case 'error':
       return { message: status.message ? t(status.message) : t('Update check failed.'), tone: 'danger' };
     case 'idle':
