@@ -921,6 +921,7 @@ pub(crate) async fn thread_history_for_key(
             "thread": thread,
             "session": thread,
             "team": Value::Null,
+            "thread_runtime": Value::Null,
             "messages": [],
             "pending_user_inputs": [],
             "outbound_deliveries": [],
@@ -929,6 +930,9 @@ pub(crate) async fn thread_history_for_key(
     }
 
     let bounded_limit = limit.clamp(1, MAX_THREAD_HISTORY_LIMIT);
+    if let Some(mut thread_value) = state.threads.thread_store.get(key).await {
+        let _ = repair_inactive_active_run_snapshot(state, key, &mut thread_value).await;
+    }
     let snapshot = match state
         .threads
         .history
@@ -944,6 +948,7 @@ pub(crate) async fn thread_history_for_key(
                 "thread": thread,
                 "session": thread,
                 "team": Value::Null,
+                "thread_runtime": Value::Null,
                 "messages": [],
                 "pending_user_inputs": [],
                 "outbound_deliveries": [],
@@ -958,6 +963,7 @@ pub(crate) async fn thread_history_for_key(
                 "thread": thread,
                 "session": thread,
                 "team": Value::Null,
+                "thread_runtime": Value::Null,
                 "messages": [],
                 "pending_user_inputs": [],
                 "outbound_deliveries": [],
@@ -972,6 +978,7 @@ pub(crate) async fn thread_history_for_key(
                 "thread": thread,
                 "session": thread,
                 "team": Value::Null,
+                "thread_runtime": Value::Null,
                 "messages": [],
                 "pending_user_inputs": [],
                 "outbound_deliveries": [],
@@ -1160,6 +1167,7 @@ pub(crate) async fn thread_history_for_key(
         "thread": thread,
         "session": thread,
         "team": team,
+        "thread_runtime": build_thread_runtime_summary(Some(&data_raw)),
         "messages": history_messages,
         "pending_user_inputs": pending_user_inputs,
         "message_stats": {

@@ -688,6 +688,22 @@ function displayTranscriptMessageText(message: UiTranscriptMessage): string {
   return message.text;
 }
 
+function latestUserMessageAwaitsAssistant(
+  messages: UiTranscriptMessage[],
+): boolean {
+  let latestUserIndex = -1;
+  let latestAssistantOrToolIndex = -1;
+  messages.forEach((message, index) => {
+    if (message.role === "user" && !isLoopContinuationMessage(message)) {
+      latestUserIndex = index;
+    }
+    if (message.role === "assistant" || isToolRole(message.role)) {
+      latestAssistantOrToolIndex = index;
+    }
+  });
+  return latestUserIndex >= 0 && latestAssistantOrToolIndex < latestUserIndex;
+}
+
 function seededPendingAssistantBubble(intentId: string): UiTranscriptMessage {
   return {
     ...seededAssistantBubble(),
@@ -2327,6 +2343,11 @@ export function AppShell() {
   const showPendingAckLoading =
     activePendingAckIntents.length > 0 ||
     visibleRemoteAwaitingAckInputs.length > 0;
+  const activeExternalRunAwaitsAssistant = Boolean(
+    activeThreadInfo?.activeRun?.runId &&
+      latestUserMessageAwaitsAssistant(activeMessages) &&
+      !showPendingAckLoading,
+  );
   const isActiveStreamingThread = Boolean(
     activeLiveStream &&
     ["connecting", "streaming", "reconciling"].includes(
@@ -2415,8 +2436,9 @@ export function AppShell() {
   });
   const isActiveSendingThread = Boolean(
     selectedThreadId &&
-    ((activeRuntime && isRuntimeBusy(activeRuntime.state)) ||
-      isActiveStreamingThread),
+      ((activeRuntime && isRuntimeBusy(activeRuntime.state)) ||
+        isActiveStreamingThread ||
+        activeExternalRunAwaitsAssistant),
   );
   const composerLocked = composerAttachmentUploadPending || isDraftSendingThread;
   const botGroups = useMemo(
@@ -2536,9 +2558,10 @@ export function AppShell() {
     !activeHasAssistantOrToolMessage,
   );
   const showAutomationRunTailLoading = Boolean(
-    activePendingAutomationRun &&
-    activeMessages.length > 0 &&
-    !activeHasAssistantOrToolMessage,
+    (activePendingAutomationRun &&
+      activeMessages.length > 0 &&
+      !activeHasAssistantOrToolMessage) ||
+      activeExternalRunAwaitsAssistant,
   );
   useEffect(() => {
     if (contentView === "auto_research" && !showAutoResearchLab) {

@@ -611,7 +611,17 @@ export interface ThreadRuntimeInfo {
   providerLabel?: string | null;
   sdkSessionId?: string | null;
   workspacePath?: string | null;
+  activeRun?: ThreadActiveRunInfo | null;
   channelBindings: ThreadChannelBindingInfo[];
+}
+
+export interface ThreadActiveRunInfo {
+  runId: string;
+  providerType?: DesktopThreadProviderType | null;
+  providerLabel?: string | null;
+  assistantResponse?: string | null;
+  updatedAt?: string | null;
+  pendingUserInputCount?: number;
 }
 
 export interface ConfiguredBot {
