@@ -37,6 +37,15 @@ Check it with:
 curl http://127.0.0.1:31337/health
 ```
 
+## Provider Runtime Detection
+
+The built-in `claude`, `codex`, and `gemini` agents are annotated from local
+runtime detection when `/api/custom-agents` is listed. Garyx checks for the
+corresponding CLI binary on the gateway `PATH`; on macOS it also accepts the
+Codex desktop bundle at `/Applications/Codex.app/Contents/Resources/codex`.
+Unavailable built-in agents are disabled in the desktop picker until the
+Agents view is refreshed after installing or exposing the CLI.
+
 ## Gateway
 
 ```json

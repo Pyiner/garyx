@@ -4,6 +4,7 @@ import {
   IconCheck,
   IconDatabase,
   IconPlus,
+  IconRefresh,
   IconRobot,
   IconSearch,
   IconSparkles,
@@ -166,6 +167,10 @@ function providerLabel(value: ProviderType): string {
     return 'Gemini';
   }
   return 'Claude';
+}
+
+function isBuiltinRuntimeUnavailable(agent: DesktopCustomAgent): boolean {
+  return agent.builtIn && agent.runtimeAvailable === false;
 }
 
 function previewText(value: string | null | undefined, fallback: string): string {
@@ -495,6 +500,10 @@ export function AgentsHubPanel({
     () => teams.find((team) => team.teamId === selectedTeamId) || null,
     [teams, selectedTeamId],
   );
+  const selectableTeamAgents = useMemo(
+    () => agents.filter((agent) => !isBuiltinRuntimeUnavailable(agent)),
+    [agents],
+  );
 
   const filteredAgents = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -532,10 +541,10 @@ export function AgentsHubPanel({
   }, [agentMap, search, teams]);
 
   const teamSelectionCount = useMemo(() => {
-    return agents.filter((agent) => teamDraft.memberAgentIds.includes(agent.agentId)).length;
-  }, [agents, teamDraft.memberAgentIds]);
+    return selectableTeamAgents.filter((agent) => teamDraft.memberAgentIds.includes(agent.agentId)).length;
+  }, [selectableTeamAgents, teamDraft.memberAgentIds]);
 
-  const allAgentsSelected = agents.length > 0 && teamSelectionCount === agents.length;
+  const allAgentsSelected = selectableTeamAgents.length > 0 && teamSelectionCount === selectableTeamAgents.length;
   const teamMemberSelectionState = allAgentsSelected
     ? true
     : teamSelectionCount > 0
@@ -692,6 +701,10 @@ export function AgentsHubPanel({
   }
 
   function toggleTeamMember(agentId: string) {
+    const agent = agentMap.get(agentId);
+    if (agent && isBuiltinRuntimeUnavailable(agent)) {
+      return;
+    }
     setTeamDraft((current) => {
       const exists = current.memberAgentIds.includes(agentId);
       const memberAgentIds = exists
@@ -706,6 +719,10 @@ export function AgentsHubPanel({
   }
 
   function selectTeamLeader(agentId: string) {
+    const agent = agentMap.get(agentId);
+    if (agent && isBuiltinRuntimeUnavailable(agent)) {
+      return;
+    }
     setTeamDraft((current) => {
       const memberAgentIds = current.memberAgentIds.includes(agentId)
         ? current.memberAgentIds
@@ -720,7 +737,7 @@ export function AgentsHubPanel({
       return {
         ...current,
         memberAgentIds: nextChecked
-          ? Array.from(new Set([...preservedLeaderIds, ...agents.map((agent) => agent.agentId)]))
+          ? Array.from(new Set([...preservedLeaderIds, ...selectableTeamAgents.map((agent) => agent.agentId)]))
           : preservedLeaderIds,
       };
     });
@@ -978,6 +995,17 @@ export function AgentsHubPanel({
           </div>
 
           <Button
+            disabled={loading}
+            onClick={() => void loadData()}
+            size="sm"
+            title={t('Refresh local runtime checks')}
+            variant="outline"
+          >
+            <IconRefresh aria-hidden size={15} stroke={2} />
+            {t('Refresh')}
+          </Button>
+
+          <Button
             onClick={showingAgents ? openCreateAgentDialog : () => openCreateTeamDialog()}
             size="sm"
           >
@@ -1006,7 +1034,9 @@ export function AgentsHubPanel({
           <TableBody>
             {showingAgents ? (
               visibleAgents.length ? (
-                visibleAgents.map((agent) => (
+                visibleAgents.map((agent) => {
+                  const runtimeUnavailable = isBuiltinRuntimeUnavailable(agent);
+                  return (
                   <TableRow
                     className="cursor-pointer"
                     key={agent.agentId}
@@ -1024,17 +1054,22 @@ export function AgentsHubPanel({
                         />
                         <div>
                           <div className="agents-hub-cell-name">{agent.displayName}</div>
-                          <div className="agents-hub-cell-id">{agent.agentId}</div>
+                          <div className="agents-hub-cell-id">
+                            {agent.agentId}
+                            {runtimeUnavailable && agent.runtimeUnavailableReason ? ` · ${agent.runtimeUnavailableReason}` : ''}
+                          </div>
                         </div>
                       </div>
                     </TableCell>
                     <TableCell>{providerLabel(agent.providerType)}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{agent.builtIn ? t('Built-in') : t('Custom')}</Badge>
+                      {runtimeUnavailable ? <Badge variant="outline">{t('Unavailable')}</Badge> : null}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="agents-hub-row-actions">
                         <Button
+                          disabled={runtimeUnavailable}
                           onClick={(e) => { stopEvent(e); onStartThread?.(agent.agentId); }}
                           size="sm"
                           variant="outline"
@@ -1052,6 +1087,7 @@ export function AgentsHubPanel({
                           </Button>
                         ) : null}
                         <Button
+                          disabled={runtimeUnavailable}
                           onClick={(e) => { stopEvent(e); openCreateTeamDialog(agent.agentId); }}
                           size="sm"
                           variant="ghost"
@@ -1072,7 +1108,8 @@ export function AgentsHubPanel({
                       </div>
                     </TableCell>
                   </TableRow>
-                ))
+                  );
+                })
               ) : search.trim() ? (
                 <TableRow>
                   <TableCell className="text-center text-muted-foreground" colSpan={4}>
@@ -1379,6 +1416,9 @@ export function AgentsHubPanel({
                 <div className="agents-hub-card-badges">
                   <Badge variant="outline">{selectedAgent?.builtIn ? t('Built-in') : t('Custom')}</Badge>
                   {selectedAgent ? <Badge variant="outline">{providerLabel(selectedAgent.providerType)}</Badge> : null}
+                  {selectedAgent && isBuiltinRuntimeUnavailable(selectedAgent) ? (
+                    <Badge variant="outline">{t('Unavailable')}</Badge>
+                  ) : null}
                 </div>
                 <h3>{selectedAgent?.displayName || t('Agent')}</h3>
                 <p>{selectedAgent?.agentId || ''}</p>
@@ -1408,6 +1448,7 @@ export function AgentsHubPanel({
               <DialogFooter className="agents-hub-dialog-actions">
                 {selectedAgent ? (
                   <Button
+                    disabled={isBuiltinRuntimeUnavailable(selectedAgent)}
                     onClick={() => {
                       closeAgentDialog();
                       onStartThread?.(selectedAgent.agentId);
@@ -1420,6 +1461,7 @@ export function AgentsHubPanel({
                 ) : null}
                 {selectedAgent ? (
                   <Button
+                    disabled={isBuiltinRuntimeUnavailable(selectedAgent)}
                     onClick={() => {
                       closeAgentDialog();
                       openCreateTeamDialog(selectedAgent.agentId);
@@ -1635,13 +1677,15 @@ export function AgentsHubPanel({
 
               <div className="team-builder-body">
                 <div className="team-builder-left">
-                  <div className="team-builder-agent-count">{t('ALL AGENTS')} ({agents.length})</div>
+                  <div className="team-builder-agent-count">{t('ALL AGENTS')} ({selectableTeamAgents.length})</div>
                   <div className="team-builder-agent-list">
                     {agents.map((agent) => {
                       const selected = teamDraft.memberAgentIds.includes(agent.agentId);
+                      const runtimeUnavailable = isBuiltinRuntimeUnavailable(agent);
                       return (
                         <button
                           className={`team-builder-agent-row ${selected ? 'selected' : ''}`}
+                          disabled={runtimeUnavailable}
                           key={agent.agentId}
                           onClick={() => {
                             toggleTeamMember(agent.agentId);
@@ -1659,7 +1703,9 @@ export function AgentsHubPanel({
                           <div className="team-builder-agent-info">
                             <span className="team-builder-agent-name">{agent.displayName}</span>
                             <span className="team-builder-agent-desc">
-                              {previewText(agent.systemPrompt, agent.builtIn ? t('Built-in agent') : t('Custom agent'))}
+                              {runtimeUnavailable
+                                ? previewText(agent.runtimeUnavailableReason, t('Runtime unavailable'))
+                                : previewText(agent.systemPrompt, agent.builtIn ? t('Built-in agent') : t('Custom agent'))}
                             </span>
                           </div>
                           <span className={`team-builder-toggle-btn ${selected ? 'checked' : ''}`}>
@@ -1677,7 +1723,7 @@ export function AgentsHubPanel({
                 </div>
 
                 <div className="team-builder-right">
-                  <div className="team-builder-agent-count">{t('SELECTED MEMBERS')} ({teamDraft.memberAgentIds.length} / {agents.length})</div>
+                  <div className="team-builder-agent-count">{t('SELECTED MEMBERS')} ({teamDraft.memberAgentIds.length} / {selectableTeamAgents.length})</div>
                   <div className="team-builder-selected-list">
                     {teamDraft.memberAgentIds.map((agentId) => {
                       const agent = agentMap.get(agentId);

@@ -26,6 +26,10 @@ pub struct CustomAgentProfile {
     pub avatar_data_url: Option<String>,
     pub system_prompt: String,
     pub built_in: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_available: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_unavailable_reason: Option<String>,
     #[serde(default = "crate::config::default_true")]
     pub standalone: bool,
     pub created_at: String,
@@ -44,6 +48,8 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             avatar_data_url: None,
             system_prompt: String::new(),
             built_in: true,
+            runtime_available: None,
+            runtime_unavailable_reason: None,
             standalone: true,
             created_at: now.clone(),
             updated_at: now.clone(),
@@ -57,6 +63,8 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             avatar_data_url: None,
             system_prompt: String::new(),
             built_in: true,
+            runtime_available: None,
+            runtime_unavailable_reason: None,
             standalone: true,
             created_at: now.clone(),
             updated_at: now.clone(),
@@ -70,6 +78,8 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             avatar_data_url: None,
             system_prompt: String::new(),
             built_in: true,
+            runtime_available: None,
+            runtime_unavailable_reason: None,
             standalone: true,
             created_at: now.clone(),
             updated_at: now,

@@ -375,7 +375,7 @@ function agentProviderLabel(providerType: DesktopCustomAgent['providerType']): s
 
 function sortedStandaloneAgents(agents: DesktopCustomAgent[]): DesktopCustomAgent[] {
   return [...agents]
-    .filter((agent) => agent.standalone)
+    .filter((agent) => agent.standalone && (!agent.builtIn || agent.runtimeAvailable !== false))
     .sort((left, right) => {
       if (left.builtIn !== right.builtIn) {
         return left.builtIn ? -1 : 1;

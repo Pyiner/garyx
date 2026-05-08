@@ -9,9 +9,10 @@ an agent. Garyx ships with three:
 | `codex_app_server` | [Codex CLI](https://github.com/openai/codex) app-server | OpenAI account login via `codex login`. |
 | `gemini_cli` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google account login via `gemini auth login`. |
 
-Providers are not pinned per agent — Garyx auto-detects which CLIs are
-installed at startup and registers them as `claude_code`, `codex_app_server`,
-and `gemini_cli` respectively.
+The built-in `claude`, `codex`, and `gemini` agents are shown only when their
+local CLI runtime is available. Garyx checks `claude`, `codex`, and `gemini` on
+the gateway `PATH`; on macOS it also checks the Codex desktop bundle path. The
+desktop Agents view has a refresh action that re-runs this local check.
 
 ## How runs find a provider
 

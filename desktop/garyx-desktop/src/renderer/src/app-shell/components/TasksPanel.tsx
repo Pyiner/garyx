@@ -130,6 +130,10 @@ function taskStatusMenuIcon(status: DesktopTaskStatus): LucideIcon {
   }
 }
 
+function isAgentUsable(agent: DesktopCustomAgent): boolean {
+  return !agent.builtIn || agent.runtimeAvailable !== false;
+}
+
 function isTasksDisabled(error: string | null): boolean {
   return Boolean(error && /tasks are disabled|TasksDisabled/i.test(error));
 }
@@ -460,7 +464,7 @@ export function TasksPanel({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" sideOffset={4}>
           {!task.assignee ? (
-            agents.length ? (
+            agents.filter(isAgentUsable).length ? (
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger
                   className="tasks-menu-subtrigger"
@@ -475,7 +479,7 @@ export function TasksPanel({
                   {t('Assign to')}
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent sideOffset={6}>
-                  {agents.map((agent) => {
+                  {agents.filter(isAgentUsable).map((agent) => {
                     const label = agent.displayName || agent.agentId;
                     return (
                       <DropdownMenuItem
@@ -703,7 +707,7 @@ export function TasksPanel({
                   value={draftAssignee}
                 >
                   <option value="">{t('Unassigned')}</option>
-                  {agents.map((agent) => (
+                  {agents.filter(isAgentUsable).map((agent) => (
                     <option key={agent.agentId} value={agent.agentId}>
                       {agent.displayName || agent.agentId}
                     </option>

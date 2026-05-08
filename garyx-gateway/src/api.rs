@@ -2341,8 +2341,27 @@ fn collect_unknown_fields(
 }
 
 pub async fn list_custom_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let config = state.config_snapshot();
+    let agents = state
+        .ops
+        .custom_agents
+        .list_agents()
+        .await
+        .into_iter()
+        .map(|mut agent| {
+            if agent.built_in {
+                let availability = crate::runtime_detection::detect_provider_runtime(
+                    config.as_ref(),
+                    &agent.provider_type,
+                );
+                agent.runtime_available = Some(availability.available);
+                agent.runtime_unavailable_reason = availability.unavailable_reason;
+            }
+            agent
+        })
+        .collect::<Vec<_>>();
     Json(json!({
-        "agents": state.ops.custom_agents.list_agents().await,
+        "agents": agents,
     }))
 }
 

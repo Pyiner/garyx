@@ -31,12 +31,16 @@ function defaultAutomationSchedule(): DesktopAutomationSchedule {
   };
 }
 
+function isAgentUsable(agent: DesktopCustomAgent): boolean {
+  return !agent.builtIn || agent.runtimeAvailable !== false;
+}
+
 function buildAutomationDraft(
   workspaces: DesktopState['workspaces'],
   agents: DesktopCustomAgent[],
   automation?: DesktopAutomationSummary | null,
 ): AutomationDraft {
-  const standaloneAgents = agents.filter((agent) => agent.standalone);
+  const standaloneAgents = agents.filter((agent) => agent.standalone && isAgentUsable(agent));
   const defaultAgentId = standaloneAgents.find((agent) => agent.agentId === 'claude')?.agentId
     || standaloneAgents[0]?.agentId
     || 'claude';
@@ -66,7 +70,7 @@ function formatAutomationAgentOptions(
       kind: 'team' as const,
     }));
   const agentOptions = agents
-    .filter((agent) => agent.standalone)
+    .filter((agent) => agent.standalone && isAgentUsable(agent))
     .sort((left, right) => {
       if (left.builtIn !== right.builtIn) {
         return left.builtIn ? -1 : 1;

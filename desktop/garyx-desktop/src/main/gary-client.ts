@@ -671,6 +671,10 @@ interface CustomAgentPayload {
   systemPrompt?: string | null;
   built_in?: boolean;
   builtIn?: boolean;
+  runtime_available?: boolean | null;
+  runtimeAvailable?: boolean | null;
+  runtime_unavailable_reason?: string | null;
+  runtimeUnavailableReason?: string | null;
   standalone?: boolean;
   created_at?: string;
   createdAt?: string;
@@ -2168,6 +2172,16 @@ function mapCustomAgent(value: CustomAgentPayload): DesktopCustomAgent {
     avatarDataUrl: value.avatar_data_url || value.avatarDataUrl || "",
     systemPrompt: value.system_prompt || value.systemPrompt || "",
     builtIn: value.built_in === true || value.builtIn === true,
+    runtimeAvailable:
+      typeof value.runtime_available === "boolean"
+        ? value.runtime_available
+        : typeof value.runtimeAvailable === "boolean"
+          ? value.runtimeAvailable
+          : null,
+    runtimeUnavailableReason:
+      value.runtime_unavailable_reason ||
+      value.runtimeUnavailableReason ||
+      null,
     standalone: value.standalone !== false,
     createdAt: value.created_at || value.createdAt || "",
     updatedAt: value.updated_at || value.updatedAt || "",
