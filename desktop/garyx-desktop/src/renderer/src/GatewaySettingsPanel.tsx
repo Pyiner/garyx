@@ -69,9 +69,8 @@ import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalo
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { EditBotDialog, type EditBotDialogContext, type EditBotPatch } from './app-shell/components/EditBotDialog';
 import { languagePreferenceLabel, type Translate, useI18n } from './i18n';
-import desktopPackage from '../../../package.json';
 
-const DESKTOP_APP_VERSION = desktopPackage.version.trim() || '0.0.0';
+const UNKNOWN_DESKTOP_APP_VERSION = '0.0.0';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
 type GatewaySettingsSaveOptions = {
@@ -1012,6 +1011,7 @@ export function GatewaySettingsPanel({
   const [updateFeedback, setUpdateFeedback] = useState<UpdateFeedback | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [desktopAppVersion, setDesktopAppVersion] = useState(UNKNOWN_DESKTOP_APP_VERSION);
   const updateStatusRef = useRef<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
   const statusClass =
     gatewayStatusMessage && /(failed|error|invalid)/i.test(gatewayStatusMessage)
@@ -1110,6 +1110,21 @@ export function GatewaySettingsPanel({
       api.unsubscribeUpdateStatus(listener);
     };
   }, [t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.garyxDesktop.getAppVersion().then((version) => {
+      if (cancelled) return;
+      setDesktopAppVersion(version.trim() || UNKNOWN_DESKTOP_APP_VERSION);
+    }).catch(() => {
+      if (cancelled) return;
+      setDesktopAppVersion(UNKNOWN_DESKTOP_APP_VERSION);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function renderGatewaySaveAction(_buttonLabel?: string) {
     const statusLabel = gatewaySaving
@@ -2451,7 +2466,7 @@ export function GatewaySettingsPanel({
               <div className="settings-update-control">
                 <div className="settings-update-summary">
                   <span className="settings-update-version">
-                    {t('Current version {version}', { version: `v${DESKTOP_APP_VERSION}` })}
+                    {t('Current version {version}', { version: `v${desktopAppVersion}` })}
                   </span>
                   <span className={`settings-update-status tone-${updateDisplay.tone}`}>
                     {updateDisplay.message}

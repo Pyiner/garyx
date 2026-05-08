@@ -1615,6 +1615,7 @@ export interface GaryxDesktopApi {
   ) => Promise<void>;
   subscribeBrowserState: (listener: DesktopBrowserStateListener) => void;
   unsubscribeBrowserState: (listener: DesktopBrowserStateListener) => void;
+  getAppVersion: () => Promise<string>;
   getUpdateStatus: () => Promise<DesktopUpdateStatus>;
   checkForUpdatesNow: () => Promise<DesktopUpdateCheckResult>;
   installUpdate: () => Promise<DesktopUpdateInstallResult>;

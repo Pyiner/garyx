@@ -234,6 +234,7 @@ function armUpdateQuitFallback(options: UpdaterIpcOptions): () => void {
 }
 
 export function registerUpdaterIpc(options: UpdaterIpcOptions = {}): void {
+  ipcMain.handle("garyx:get-app-version", () => app.getVersion());
   ipcMain.handle("garyx:get-update-status", () => lastStatus);
   ipcMain.handle("garyx:install-update", () => {
     if (lastStatus.phase !== "downloaded") {
