@@ -17,7 +17,6 @@ export type RenderTranscriptEntry =
       key: string;
       toolUse?: TranscriptMessage;
       toolResult?: TranscriptMessage;
-      defaultExpanded: boolean;
     };
 
 export type RenderTranscriptBlock =
@@ -181,7 +180,6 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
           kind: 'tool',
           key: message.id,
           toolResult: message,
-          defaultExpanded: false,
         });
       }
       continue;
@@ -191,7 +189,6 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
       kind: 'tool',
       key: message.id,
       toolUse: message,
-      defaultExpanded: false,
     });
     if (messageToolUseId) {
       pendingToolUses.set(messageToolUseId, rendered.length - 1);

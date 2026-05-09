@@ -1,4 +1,4 @@
-import { type ComponentType, type ReactNode, useEffect, useState } from 'react';
+import { type ComponentType, type ReactNode, useState } from 'react';
 
 import {
   IconTerminal2,
@@ -35,7 +35,6 @@ type ToolTraceEntry = {
   key: string;
   toolUse?: ToolTraceMessage;
   toolResult?: ToolTraceMessage;
-  defaultExpanded: boolean;
 };
 
 type ToolTraceTreeNode = {
@@ -214,7 +213,6 @@ function ToolTraceTree({
     <>
       {nodes.map((node) => (
         <ToolTraceLine
-          defaultExpanded={node.entry.defaultExpanded}
           key={node.entry.key}
           nestedChildren={node.children.length ? <ToolTraceTree nodes={node.children} onThreadNavigate={onThreadNavigate} /> : null}
           onThreadNavigate={onThreadNavigate}
@@ -251,25 +249,19 @@ function extractTargetThreadId(toolResult?: ToolTraceMessage): string | null {
 export function ToolTraceLine({
   toolUse,
   toolResult,
-  defaultExpanded,
   nestedChildren,
   onThreadNavigate,
 }: {
   toolUse?: ToolTraceMessage;
   toolResult?: ToolTraceMessage;
-  defaultExpanded: boolean;
   nestedChildren?: ReactNode;
   onThreadNavigate?: (threadId: string) => void;
 }) {
   const { t } = useI18n();
   const merged = resolveMergedToolTrace(toolUse, toolResult);
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [expanded, setExpanded] = useState(false);
   const targetThreadId = extractTargetThreadId(toolResult);
   const hasDetails = Boolean(merged.inputDetail || merged.resultDetail || nestedChildren);
-
-  useEffect(() => {
-    setExpanded(defaultExpanded);
-  }, [defaultExpanded]);
 
   return (
     <div className={`tool-trace ${merged.isError ? 'is-error' : ''} ${!hasDetails ? 'is-static' : ''}`}>
