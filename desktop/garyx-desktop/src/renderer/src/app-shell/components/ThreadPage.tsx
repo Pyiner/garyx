@@ -425,9 +425,16 @@ export function ThreadPage({
         "--composer-overlay-height",
         `${composerHeight}px`,
       );
+      // Offset scroll-clip above half the composer so the runtime value
+      // lands on 72px at the default composer height (avoids the
+      // unlucky 4-bearing values 66 and 70±). The visible gap above
+      // the composer is `2 × scroll-clip + clearance − composerHeight`;
+      // this +6 offset adds 12 to that gap and is paired with
+      // `--composer-message-clearance` chosen in styles.css to keep
+      // the visible gap at the desired 48px (+50% of the legacy 32).
       threadMain.style.setProperty(
         "--composer-scroll-clip-height",
-        `${Math.ceil(composerHeight / 2)}px`,
+        `${Math.ceil(composerHeight / 2) + 6}px`,
       );
     };
 
