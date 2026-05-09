@@ -7212,13 +7212,13 @@ button.team-agent-speaker:focus-visible {
   line-height: 18.5714px;
   transition:
     opacity var(--duration-fast) var(--ease-standard),
-    background var(--duration-fast) var(--ease-standard),
-    box-shadow var(--duration-fast) var(--ease-standard);
+    background-color var(--duration-fast) var(--ease-standard);
 }
 
 .composer-queue-item:hover,
 .composer-queue-item:focus-within {
-  background: rgba(26, 28, 31, 0.032);
+  background: rgba(26, 28, 31, 0.03);
+  box-shadow: none;
 }
 
 .composer-queue-item.dragging {
@@ -7368,6 +7368,14 @@ button.team-agent-speaker:focus-visible {
 .queue-remove-button:hover {
   background: rgba(26, 28, 31, 0.04);
   color: rgba(26, 28, 31, 0.64);
+  box-shadow: none;
+  transform: none;
+}
+
+.composer-queue .ghost-button:hover,
+.composer-queue button:hover {
+  box-shadow: none;
+  transform: none;
 }
 
 .queue-drag-handle:disabled:hover,
