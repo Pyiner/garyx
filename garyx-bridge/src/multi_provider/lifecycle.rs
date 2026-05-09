@@ -327,6 +327,7 @@ impl MultiProviderBridge {
             "codex" => Some(ProviderType::CodexAppServer),
             "claude" => Some(ProviderType::ClaudeCode),
             "gemini" => Some(ProviderType::GeminiCli),
+            "opencode" => Some(ProviderType::Opencode),
             _ => None,
         }
     }
