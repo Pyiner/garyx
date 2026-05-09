@@ -1,11 +1,11 @@
-export const RUN_LOADING_LABEL = "Garyx is working through the run…";
-const RUN_LOADING_LABEL_ALIASES = new Set([
-  RUN_LOADING_LABEL,
+export const RUN_LOADING_LABEL = "Thinking";
+const LEGACY_RUN_LOADING_PLACEHOLDER_TEXTS = new Set([
+  "Garyx is working through the run…",
   "Garyx is working through the run...",
 ]);
 
 export function isRunLoadingPlaceholderText(value: string | undefined): boolean {
-  return RUN_LOADING_LABEL_ALIASES.has(value?.trim() || "");
+  return LEGACY_RUN_LOADING_PLACEHOLDER_TEXTS.has(value?.trim() || "");
 }
 
 export function isRunLoadingPlaceholderMessage(message: {

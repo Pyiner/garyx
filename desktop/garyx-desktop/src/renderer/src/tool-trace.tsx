@@ -281,10 +281,12 @@ function summarizeToolTraceEntries(
 }
 
 export function ToolTraceGroup({
+  active = false,
   entries,
   defaultExpanded,
   onThreadNavigate,
 }: {
+  active?: boolean;
   entries: ToolTraceEntry[];
   defaultExpanded: boolean;
   onThreadNavigate?: (threadId: string) => void;
@@ -301,7 +303,7 @@ export function ToolTraceGroup({
   }, [defaultExpanded, userControlled]);
 
   return (
-    <div className={`tool-trace-group ${expanded ? 'is-expanded' : 'is-collapsed'}`}>
+    <div className={`tool-trace-group ${expanded ? 'is-expanded' : 'is-collapsed'} ${active ? 'is-active' : ''}`}>
       <button
         aria-expanded={expanded}
         aria-label={expanded ? t('Collapse tool calls') : t('Expand tool calls')}

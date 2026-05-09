@@ -6382,6 +6382,25 @@ button.team-agent-speaker:focus-visible {
   white-space: nowrap;
 }
 
+.message-loading-label--thinking,
+.tool-trace-group.is-active .tool-trace-group-summary {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-token-description-foreground) 76%, transparent) 0%,
+    color-mix(in srgb, var(--color-token-description-foreground) 76%, transparent) 38%,
+    var(--color-token-text-primary) 50%,
+    color-mix(in srgb, var(--color-token-description-foreground) 76%, transparent) 62%,
+    color-mix(in srgb, var(--color-token-description-foreground) 76%, transparent) 100%
+  );
+  background-size: 240% 100%;
+  background-position: -160% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: thinking-shimmer 1.45s linear infinite;
+}
+
 .tool-trace-group-chevron {
   flex: 0 0 auto;
   color: currentColor;
@@ -6781,7 +6800,7 @@ button.team-agent-speaker:focus-visible {
   font-size: var(--text-base);
   font-weight: var(--font-weight-normal, 400);
   line-height: 1.45;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .message-loading-dots {
@@ -13745,6 +13764,16 @@ button.codex-list-row {
   }
 }
 
+@keyframes thinking-shimmer {
+  from {
+    background-position: -160% 0;
+  }
+
+  to {
+    background-position: 160% 0;
+  }
+}
+
 @media (max-width: 1180px) {
   .app-shell {
     grid-template-columns: 240px minmax(0, 1fr);
@@ -17171,8 +17200,10 @@ button.codex-list-row {
   .team-timeline-status-change,
   .agent-avatar--active,
   .team-typing-dots span,
+  .message-loading-label--thinking,
   .team-skeleton-avatar,
   .team-skeleton-line,
+  .tool-trace-group.is-active .tool-trace-group-summary,
   .ar-pulse,
   .ar-spin,
   .add-bot-step-panel,
@@ -17189,6 +17220,12 @@ button.codex-list-row {
   }
   .tool-trace-group-panel {
     transform: none;
+  }
+  .message-loading-label--thinking,
+  .tool-trace-group.is-active .tool-trace-group-summary {
+    color: inherit;
+    -webkit-text-fill-color: currentColor;
+    background-image: none;
   }
   .sidebar-collapsible.is-collapsed > .sidebar-collapsible-inner {
     transform: none;

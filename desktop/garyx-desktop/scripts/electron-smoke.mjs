@@ -81,8 +81,9 @@ const SMOKE_TEXT = {
     Channels: smokeLabel('Channels'),
   },
 };
-const RUN_LOADING_TEXT = 'Garyx is working through the run…';
-const RUN_LOADING_TEXT_ASCII = 'Garyx is working through the run...';
+const RUN_LOADING_TEXT = 'Thinking';
+const RUN_LOADING_TEXT_LEGACY = 'Garyx is working through the run…';
+const RUN_LOADING_TEXT_ASCII_LEGACY = 'Garyx is working through the run...';
 const RUN_LOADING_TEXT_ZH = loadZhTranslation(RUN_LOADING_TEXT);
 
 function oneOfExact(values) {
@@ -440,7 +441,7 @@ async function createMockGateway(workspaceDir) {
         message: payload.scenario.streamToolResultMessage,
       }),
     );
-    await sleep(120);
+    await sleep(800);
     socket.send(
       JSON.stringify({
         type: 'assistant_delta',
@@ -878,6 +879,20 @@ async function main() {
       await window.locator('.message-bubble.assistant.pending').first().waitFor({
         timeout: 10000,
       });
+      assert.equal(
+        await window.locator('.message-loading-label--thinking').filter({ hasText: RUN_LOADING_TEXT_ZH }).count(),
+        1,
+        'external run loading should render Thinking before tool progress exists',
+      );
+      assert.equal(
+        await window
+          .locator('.message-bubble.assistant.pending')
+          .filter({ has: window.locator('.message-loading-label--thinking') })
+          .locator('.message-loading-dots')
+          .count(),
+        0,
+        'Thinking loading should not use trailing dots',
+      );
       gateway.clearExternalRun();
       await window.waitForFunction(
         () => document.querySelectorAll('.message-bubble.assistant.pending').length === 0,
@@ -967,16 +982,35 @@ async function main() {
         'run loading should have a single state-machine rendering surface',
       );
       assert.equal(
-        await window.getByText(RUN_LOADING_TEXT).count(),
+        await window
+          .locator('.message-bubble.assistant.pending')
+          .filter({ has: window.locator('.message-loading-label--thinking') })
+          .locator('.message-loading-dots')
+          .count(),
         0,
-        'pending run loading should follow the configured Chinese locale',
+        'Thinking loading should not use trailing dots',
       );
       assert.equal(
-        await window.getByText(RUN_LOADING_TEXT_ASCII).count(),
+        await window.getByText(RUN_LOADING_TEXT_LEGACY).count(),
+        0,
+        'legacy run loading should not render as transcript text',
+      );
+      assert.equal(
+        await window.getByText(RUN_LOADING_TEXT_ASCII_LEGACY).count(),
         0,
         'ASCII run loading placeholder should not render as transcript text',
       );
-      await window.locator('.tool-trace-group-header').first().waitFor({ timeout: 20000 });
+      await window.locator('.tool-trace-group.is-active .tool-trace-group-header').first().waitFor({ timeout: 20000 });
+      assert.equal(
+        await window.locator('.tool-trace-group.is-active').count(),
+        1,
+        'only the latest tool trace group should express the active run state',
+      );
+      assert.equal(
+        await window.getByText(RUN_LOADING_TEXT_ZH).count(),
+        0,
+        'Thinking should disappear once tool progress is visible',
+      );
       stage = 'verify-new-thread-workspace-path';
       const createRequests = gateway.createdThreadRequests();
       const expectedWorkspacePath = path.join(isolatedHome, 'workspace');
@@ -1011,6 +1045,11 @@ async function main() {
         .filter({ hasText: WARMUP_TOKEN })
         .first()
         .waitFor({ timeout: 20000 });
+      assert.equal(
+        await window.locator('.tool-trace-group.is-active').count(),
+        0,
+        'tool trace active state should clear once assistant text appears after tools',
+      );
       await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) }).waitFor({
         timeout: 15000,
       });
@@ -1054,7 +1093,8 @@ async function main() {
         !assistantBubbleTexts.some((text) => {
           return (
             text.includes(RUN_LOADING_TEXT) ||
-            text.includes(RUN_LOADING_TEXT_ASCII) ||
+            text.includes(RUN_LOADING_TEXT_LEGACY) ||
+            text.includes(RUN_LOADING_TEXT_ASCII_LEGACY) ||
             text.includes(RUN_LOADING_TEXT_ZH)
           );
         }),

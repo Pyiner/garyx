@@ -198,6 +198,7 @@ type ThreadPageProps = {
   agentLabel?: string | null;
   composerAgentOptions?: ComposerAgentOption[];
   activePendingAutomationRun: PendingAutomationRun | null;
+  activeToolTraceLoadingKey: string | null;
   activeQueue: MessageIntent[];
   activeRenderableBlocks: ReturnType<typeof buildRenderTranscriptBlocks>;
   activeThreadLogsHasUnread: boolean;
@@ -301,6 +302,7 @@ export function ThreadPage({
   activeMessages,
   activePendingAckIntents,
   activePendingAutomationRun,
+  activeToolTraceLoadingKey,
   activeQueue,
   activeRenderableBlocks,
   activeThreadLogsHasUnread,
@@ -496,14 +498,9 @@ export function ThreadPage({
               </article>
               <article className="message-bubble assistant pending">
                 <div aria-label={t("Garyx is working")} className="message-loading">
-                  <p className="message-loading-label">
+                  <p className="message-loading-label message-loading-label--thinking">
                     {t(RUN_LOADING_LABEL)}
                   </p>
-                  <span aria-hidden="true" className="message-loading-dots">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
                 </div>
               </article>
             </>
@@ -531,6 +528,7 @@ export function ThreadPage({
                   key={`${block.key}:body`}
                 >
                   <ToolTraceGroup
+                    active={block.key === activeToolTraceLoadingKey}
                     defaultExpanded={block.defaultExpanded}
                     entries={block.entries}
                     onThreadNavigate={onOpenThreadById}
@@ -685,14 +683,9 @@ export function ThreadPage({
           {showAutomationRunTailLoading ? (
             <article className="message-bubble assistant pending">
               <div aria-label={t("Garyx is working")} className="message-loading">
-                <p className="message-loading-label">
+                <p className="message-loading-label message-loading-label--thinking">
                   {t(RUN_LOADING_LABEL)}
                 </p>
-                <span aria-hidden="true" className="message-loading-dots">
-                  <span />
-                  <span />
-                  <span />
-                </span>
               </div>
             </article>
           ) : null}

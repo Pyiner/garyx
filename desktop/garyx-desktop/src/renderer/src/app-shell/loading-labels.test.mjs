@@ -8,7 +8,8 @@ import {
 } from './loading-labels.ts';
 
 test('recognizes run loading placeholder text variants', () => {
-  assert.equal(isRunLoadingPlaceholderText(RUN_LOADING_LABEL), true);
+  assert.equal(isRunLoadingPlaceholderText(RUN_LOADING_LABEL), false);
+  assert.equal(isRunLoadingPlaceholderText('Garyx is working through the run…'), true);
   assert.equal(isRunLoadingPlaceholderText('Garyx is working through the run...'), true);
   assert.equal(isRunLoadingPlaceholderText('A real assistant response'), false);
 });

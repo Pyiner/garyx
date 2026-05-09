@@ -2268,6 +2268,12 @@ export function AppShell() {
   const activeRenderableBlocks = buildRenderTranscriptBlocks(
     activeRenderableMessages,
   );
+  const lastActiveRenderableBlock =
+    activeRenderableBlocks[activeRenderableBlocks.length - 1] || null;
+  const activeTailToolTraceBlockKey =
+    lastActiveRenderableBlock?.kind === "tool_group"
+      ? lastActiveRenderableBlock.key
+      : null;
   const activeQueue = selectQueueIntentIds(messageState, activeThreadMessageKey)
     .map((intentId) => messageState.intentsById[intentId])
     .filter((intent): intent is MessageIntent => Boolean(intent));
@@ -2546,8 +2552,11 @@ export function AppShell() {
     (activePendingAutomationRun &&
       activeMessages.length > 0 &&
       !activeHasAssistantOrToolMessage) ||
-      activeRunLoading,
+      (activeRunLoading && !activeTailToolTraceBlockKey),
   );
+  const activeToolTraceLoadingKey = activeRunLoading
+    ? activeTailToolTraceBlockKey
+    : null;
   useEffect(() => {
     if (contentView === "auto_research" && !showAutoResearchLab) {
       setContentView("thread");
@@ -7412,6 +7421,7 @@ export function AppShell() {
                 activeMessages={activeMessages}
                 activePendingAckIntents={visiblePendingAckIntents}
                 activePendingAutomationRun={activePendingAutomationRun}
+                activeToolTraceLoadingKey={activeToolTraceLoadingKey}
                 activeQueue={activeQueue}
                 activeRenderableBlocks={activeRenderableBlocks}
                 activeThreadLogsHasUnread={activeThreadLogsHasUnread}
