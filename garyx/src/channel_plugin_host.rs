@@ -578,7 +578,7 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
                         );
                     }
                 }
-                StreamEvent::ThreadTitleUpdated { .. } => {}
+                StreamEvent::SessionBound { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
                 StreamEvent::Done => {
                     let text = accumulated.trim().to_owned();
                     accumulated.clear();
