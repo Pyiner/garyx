@@ -85,9 +85,16 @@ export function TurnSummary({
 
   const elapsed = computeElapsed(turn, nowMs, mountStartMs);
   const elapsedLabel = elapsed >= 1 ? formatElapsed(elapsed) : null;
-  const summaryLabel = elapsedLabel
-    ? t('Worked for {duration}', { duration: elapsedLabel })
-    : t('Worked');
+  // English Codex distinguishes "Working for X" (live) vs "Worked for X"
+  // (done); the bundled zh-CN translation collapses both to "已处理 X".
+  // Use distinct labels so the running state reads unambiguously.
+  const summaryLabel = turn.isRunning
+    ? elapsedLabel
+      ? t('Working for {duration}', { duration: elapsedLabel })
+      : t('Working')
+    : elapsedLabel
+      ? t('Worked for {duration}', { duration: elapsedLabel })
+      : t('Worked');
   const hasBody = Boolean(children);
 
   return (

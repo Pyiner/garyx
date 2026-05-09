@@ -827,6 +827,8 @@ const zhCN: Record<string, string> = {
   'Workflow is required.': '工作流必填。',
   'The leader receives the brief first and is automatically included in the member set.': '负责人会先收到任务简报，并自动包含在成员集合中。',
   'Working directory': '工作目录',
+  'Working': '处理中',
+  'Working for {duration}': '处理中 {duration}',
   'Worked': '已处理',
   'Worked for {duration}': '已处理 {duration}',
   'Work thread': '工作线程',
