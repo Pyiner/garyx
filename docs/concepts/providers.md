@@ -1,17 +1,18 @@
 # Providers
 
 A **provider** is the thing that actually executes a model run on behalf of
-an agent. Garyx ships with three:
+an agent. Garyx ships with four:
 
 | Provider key | Backed by | Auth model |
 | --- | --- | --- |
 | `claude_code` | [Claude Code CLI](https://github.com/anthropics/claude-code) | OAuth long-lived token via `claude setup-token` (recommended) or interactive `claude auth login`. |
 | `codex_app_server` | [Codex CLI](https://github.com/openai/codex) app-server | OpenAI account login via `codex login`. |
 | `gemini_cli` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google account login via `gemini auth login`. |
+| `opencode` | [OpenCode CLI](https://opencode.ai/) ACP server | Per-model provider keys configured inside OpenCode itself. |
 
 Providers are not pinned per agent — Garyx auto-detects which CLIs are
 installed at startup and registers them as `claude_code`, `codex_app_server`,
-and `gemini_cli` respectively.
+`gemini_cli`, and `opencode` respectively.
 
 ## How runs find a provider
 

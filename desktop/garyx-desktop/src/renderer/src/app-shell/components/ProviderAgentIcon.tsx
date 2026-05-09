@@ -1,15 +1,17 @@
 import ClaudeCodeColor from '@lobehub/icons/es/ClaudeCode/components/Color';
 import CodexColor from '@lobehub/icons/es/Codex/components/Color';
 import GeminiCliColor from '@lobehub/icons/es/GeminiCLI/components/Color';
+import OpencodeMono from '@lobehub/icons/es/OpenCode/components/Mono';
 
 import type { DesktopApiProviderType } from '@shared/contracts';
 
-type BuiltInAgentIconKey = 'claude' | 'codex' | 'gemini';
+type BuiltInAgentIconKey = 'claude' | 'codex' | 'gemini' | 'opencode';
 
 const BUILT_IN_AGENT_ICONS = {
   claude: ClaudeCodeColor,
   codex: CodexColor,
   gemini: GeminiCliColor,
+  opencode: OpencodeMono,
 };
 
 function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | null {
@@ -25,6 +27,9 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
   }
   if (normalized === 'gemini' || normalized === 'gemini_cli') {
     return 'gemini';
+  }
+  if (normalized === 'opencode') {
+    return 'opencode';
   }
   return null;
 }

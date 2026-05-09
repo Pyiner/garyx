@@ -19,6 +19,7 @@ export type AgentTargetOption = {
 const PROVIDER_LABELS: Record<string, string> = {
   codex_app_server: "Codex",
   gemini_cli: "Gemini",
+  opencode: "OpenCode",
 };
 
 const byDisplayName = <T extends { displayName: string }>(a: T, b: T) =>

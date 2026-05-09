@@ -801,7 +801,7 @@ pub struct CreateThreadBody {
     /// Optional provider-native session id to resume from on the first run.
     #[serde(default, alias = "sessionId")]
     pub sdk_session_id: Option<String>,
-    /// Optional provider hint for sdkSessionId. Supported values: claude, codex, gemini.
+    /// Optional provider hint for sdkSessionId. Supported values: claude, codex, gemini, opencode.
     #[serde(default)]
     pub sdk_session_provider_hint: Option<String>,
 }

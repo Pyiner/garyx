@@ -24,7 +24,8 @@ export interface DesktopGatewayProfile {
 export type DesktopApiProviderType =
   | "claude_code"
   | "codex_app_server"
-  | "gemini_cli";
+  | "gemini_cli"
+  | "opencode";
 
 export interface DesktopProviderModelOption {
   id: string;
@@ -1055,7 +1056,7 @@ export type DesktopChatStreamEvent =
 
 export type DesktopChatStreamListener = (event: DesktopChatStreamEvent) => void;
 
-export type DesktopSessionProviderHint = "claude" | "codex" | "gemini";
+export type DesktopSessionProviderHint = "claude" | "codex" | "gemini" | "opencode";
 
 export type DesktopDeepLinkEvent =
   | {
@@ -1122,7 +1123,7 @@ export interface CreateThreadInput {
   agentId?: string | null;
   /** Optional Claude/Codex/Gemini provider session id to resume from. Garyx resolves the real local provider/workspace from it. */
   sdkSessionId?: string | null;
-  /** Optional provider hint for sdkSessionId. Supported values are claude, codex, and gemini. */
+  /** Optional provider hint for sdkSessionId. Supported values are claude, codex, gemini, and opencode. */
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
 }
 

@@ -19,7 +19,7 @@ import {
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 
-type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli';
+type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli' | 'opencode';
 type EditorMode = 'inspect' | 'create' | 'edit';
 
 type AgentsPanelProps = {
@@ -63,6 +63,9 @@ function providerLabel(value: ProviderType): string {
   }
   if (value === 'gemini_cli') {
     return 'Gemini';
+  }
+  if (value === 'opencode') {
+    return 'OpenCode';
   }
   return 'Claude';
 }
@@ -368,6 +371,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                     <SelectItem value="claude_code">Claude</SelectItem>
                     <SelectItem value="codex_app_server">Codex</SelectItem>
                     <SelectItem value="gemini_cli">Gemini</SelectItem>
+                    <SelectItem value="opencode">OpenCode</SelectItem>
                   </SelectContent>
                 </Select>
                 {modelStatus ? <span className="codex-form-hint">{modelStatus}</span> : null}

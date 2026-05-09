@@ -710,12 +710,15 @@ function baseUrl(settings: DesktopSettings): string {
 
 function normalizeDesktopProviderType(
   value: unknown,
-): "claude_code" | "codex_app_server" | "gemini_cli" {
+): "claude_code" | "codex_app_server" | "gemini_cli" | "opencode" {
   if (value === "codex_app_server") {
     return "codex_app_server";
   }
   if (value === "gemini_cli") {
     return "gemini_cli";
+  }
+  if (value === "opencode") {
+    return "opencode";
   }
   return "claude_code";
 }
@@ -727,6 +730,7 @@ function parseThreadProviderType(
     value === "claude_code" ||
     value === "codex_app_server" ||
     value === "gemini_cli" ||
+    value === "opencode" ||
     value === "agent_team"
   ) {
     return value;
@@ -744,6 +748,8 @@ function providerLabelForThread(
       return "Codex";
     case "gemini_cli":
       return "Gemini";
+    case "opencode":
+      return "OpenCode";
     case "agent_team":
       return "Team";
     default:
@@ -2542,7 +2548,7 @@ export async function createRemoteThread(
     workspacePath?: string | null;
     agentId?: string | null;
     sdkSessionId?: string | null;
-    sdkSessionProviderHint?: "claude" | "codex" | "gemini" | null;
+    sdkSessionProviderHint?: "claude" | "codex" | "gemini" | "opencode" | null;
   },
 ): Promise<DesktopThreadSummary> {
   const payload = await requestJson<ThreadSummaryPayload>(

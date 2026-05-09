@@ -96,7 +96,7 @@ const zhCN: Record<string, string> = {
   'Open {name} thread': '打开 {name} 线程',
   'Opening folder': '正在打开文件夹',
   'Opening folder…': '正在打开文件夹…',
-  'Paste a Claude, Codex, or Gemini session ID. Garyx will recover its workspace and bind a thread to it.': '粘贴 Claude、Codex 或 Gemini 的 session ID。Garyx 会恢复它的工作区并绑定一个线程。',
+  'Paste a Claude, Codex, Gemini, or OpenCode session ID. Garyx will recover its workspace and bind a thread to it.': '粘贴 Claude、Codex、Gemini 或 OpenCode 的 session ID。Garyx 会恢复它的工作区并绑定一个线程。',
   'Paste a session ID to continue.': '粘贴 session ID 后继续。',
   'Ready': '就绪',
   'Reading the current command list.': '正在读取快捷指令列表。',

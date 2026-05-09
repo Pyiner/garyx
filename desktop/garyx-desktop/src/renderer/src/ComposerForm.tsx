@@ -120,6 +120,9 @@ function providerOptionLabel(providerType: DesktopApiProviderType): string {
   if (providerType === 'gemini_cli') {
     return 'Gemini';
   }
+  if (providerType === 'opencode') {
+    return 'OpenCode';
+  }
   return 'Claude';
 }
 

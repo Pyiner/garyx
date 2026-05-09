@@ -54,7 +54,7 @@ import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
-type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli';
+type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli' | 'opencode';
 type HubTab = 'agents' | 'teams';
 type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 type TeamDialogMode = 'create' | 'edit' | 'view' | null;
@@ -164,6 +164,9 @@ function providerLabel(value: ProviderType): string {
   }
   if (value === 'gemini_cli') {
     return 'Gemini';
+  }
+  if (value === 'opencode') {
+    return 'OpenCode';
   }
   return 'Claude';
 }
@@ -1281,6 +1284,7 @@ export function AgentsHubPanel({
                     <SelectItem value="claude_code">Claude</SelectItem>
                     <SelectItem value="codex_app_server">Codex</SelectItem>
                     <SelectItem value="gemini_cli">Gemini</SelectItem>
+                    <SelectItem value="opencode">OpenCode</SelectItem>
                   </SelectContent>
                 </Select>
                 {agentModelStatus ? <span className="codex-form-hint">{agentModelStatus}</span> : null}

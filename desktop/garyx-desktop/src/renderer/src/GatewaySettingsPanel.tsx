@@ -354,6 +354,9 @@ function providerTypeLabel(provider: any): string {
   if (value === 'gemini_cli') {
     return 'gemini';
   }
+  if (value === 'opencode') {
+    return 'opencode';
+  }
   return 'claude';
 }
 
@@ -363,6 +366,9 @@ function agentProviderLabel(providerType: DesktopCustomAgent['providerType']): s
   }
   if (providerType === 'gemini_cli') {
     return 'Gemini';
+  }
+  if (providerType === 'opencode') {
+    return 'OpenCode';
   }
   return 'Claude';
 }
@@ -391,13 +397,17 @@ function preferredStandaloneAgentId(
       ? 'codex_app_server'
       : providerType === 'gemini_cli'
         ? 'gemini_cli'
-        : 'claude_code';
+        : providerType === 'opencode'
+          ? 'opencode'
+          : 'claude_code';
   const builtInId =
     normalizedProviderType === 'codex_app_server'
       ? 'codex'
       : normalizedProviderType === 'gemini_cli'
         ? 'gemini'
-        : 'claude';
+        : normalizedProviderType === 'opencode'
+          ? 'opencode'
+          : 'claude';
 
   return agents.find((agent) => agent.agentId === builtInId)?.agentId
     || agents.find((agent) => agent.providerType === normalizedProviderType)?.agentId
@@ -897,6 +907,7 @@ function AgentProviderFields({
                 <SelectItem value="claude_code">claude_code</SelectItem>
                 <SelectItem value="codex_app_server">codex_app_server</SelectItem>
                 <SelectItem value="gemini_cli">gemini_cli</SelectItem>
+                <SelectItem value="opencode">opencode</SelectItem>
               </SelectContent>
             </Select>
           }

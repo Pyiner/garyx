@@ -1372,6 +1372,9 @@ function presentProviderReadyError(
   if (providerType === "claude_code") {
     return "Claude Code is not ready on this Mac. Check the local Claude CLI auth and environment settings.";
   }
+  if (providerType === "opencode") {
+    return "OpenCode is not ready on this Mac. Check that the opencode CLI is installed and available on the Garyx gateway PATH.";
+  }
   return "The selected provider is not ready on this Mac. Open Status and verify the provider shows Ready.";
 }
 
@@ -1385,7 +1388,8 @@ function inferProviderTypeForThread(
   if (
     runtimeProvider === "claude_code" ||
     runtimeProvider === "codex_app_server" ||
-    runtimeProvider === "gemini_cli"
+    runtimeProvider === "gemini_cli" ||
+    runtimeProvider === "opencode"
   ) {
     return runtimeProvider;
   }
@@ -1403,6 +1407,9 @@ function inferProviderTypeForThread(
   }
   if (agentId === "claude") {
     return "claude_code";
+  }
+  if (agentId === "opencode") {
+    return "opencode";
   }
   return (
     desktopAgents.find((agent) => agent.agentId === agentId)?.providerType ||
@@ -5216,7 +5223,7 @@ export function AppShell() {
   ): Promise<void> {
     const trimmedSessionId = sessionId.trim();
     if (!trimmedSessionId) {
-      throw new Error("Paste a Claude, Codex, or Gemini session ID first.");
+      throw new Error("Paste a Claude, Codex, Gemini, or OpenCode session ID first.");
     }
 
     setError(null);

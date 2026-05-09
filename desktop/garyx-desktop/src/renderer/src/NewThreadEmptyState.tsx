@@ -198,7 +198,7 @@ export function NewThreadEmptyState({
           <DialogHeader>
             <DialogTitle>{t("Resume session")}</DialogTitle>
             <DialogDescription>
-              {t("Paste a Claude, Codex, or Gemini session ID. Garyx will recover its workspace and bind a thread to it.")}
+              {t("Paste a Claude, Codex, Gemini, or OpenCode session ID. Garyx will recover its workspace and bind a thread to it.")}
             </DialogDescription>
           </DialogHeader>
 
