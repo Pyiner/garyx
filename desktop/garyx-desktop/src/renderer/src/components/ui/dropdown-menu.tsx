@@ -18,6 +18,12 @@ function DropdownMenuTrigger(
   );
 }
 
+function DropdownMenuGroup(
+  props: React.ComponentProps<typeof DropdownPrimitive.Group>,
+) {
+  return <DropdownPrimitive.Group data-slot="dropdown-menu-group" {...props} />;
+}
+
 function DropdownMenuContent({
   className,
   sideOffset = 6,
@@ -29,7 +35,7 @@ function DropdownMenuContent({
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         className={cn(
-          "z-50 min-w-[10rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
+          "z-[var(--z-app-floating)] min-w-[10rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
           className,
         )}
         {...props}
@@ -41,13 +47,16 @@ function DropdownMenuContent({
 function DropdownMenuItem({
   className,
   inset,
+  variant,
   ...props
 }: React.ComponentProps<typeof DropdownPrimitive.Item> & {
   inset?: boolean;
+  variant?: "default" | "destructive";
 }) {
   return (
     <DropdownPrimitive.Item
       data-slot="dropdown-menu-item"
+      data-variant={variant}
       className={cn(
         "relative flex cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm outline-none transition-colors data-[highlighted]:bg-[#f5f5f3] data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         inset && "pl-8",
@@ -152,7 +161,7 @@ function DropdownMenuSubContent({
       <DropdownPrimitive.SubContent
         data-slot="dropdown-menu-sub-content"
         className={cn(
-          "z-50 min-w-[8rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
+          "z-[var(--z-app-floating)] min-w-[8rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
           className,
         )}
         {...props}
@@ -164,6 +173,7 @@ function DropdownMenuSubContent({
 export {
   DropdownMenu,
   DropdownMenuTrigger,
+  DropdownMenuGroup,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuCheckboxItem,

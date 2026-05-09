@@ -7,6 +7,7 @@ import {
   type DragEvent,
   type FormEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
   Columns3,
@@ -35,17 +36,39 @@ import type {
 import { useI18n, type Translate } from '../../i18n';
 import type { ToastTone } from '../../toast';
 import { getDesktopApi } from '../../platform/desktop-api';
+import { useChannelPluginCatalog } from '../../channel-plugins/useChannelPluginCatalog';
+import { ChannelLogo } from '../../channel-logo';
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+} from '../../components/ui/field';
 import {
   DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuGroup,
   DropdownMenuSeparator,
   DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
-import { MoreDotsIcon } from '../icons';
+import {
+  FloatingActionMenuContent,
+  FloatingActionMenuItem,
+  FloatingActionMenuSubContent,
+  FloatingActionMenuSubTrigger,
+} from '../../components/ui/floating-action-menu';
+import { Input } from '../../components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '../../components/ui/select';
+import { Textarea } from '../../components/ui/textarea';
+import { AgentOptionRow } from './AgentOptionAvatar';
+import { AgentsIcon, MoreDotsIcon } from '../icons';
 
 type TasksPanelProps = {
   agents: DesktopCustomAgent[];
@@ -75,6 +98,9 @@ const STATUS_LABELS: Record<DesktopTaskStatus, string> = {
 };
 
 const TASK_DRAG_MIME = 'application/x-garyx-task-id';
+const ALL_BOTS_FILTER_VALUE = '__all_bots__';
+const UNASSIGNED_ASSIGNEE_VALUE = '__unassigned__';
+const CHOOSE_NOTIFICATION_VALUE = '__choose_notification__';
 
 function formatPrincipal(principal: DesktopTaskPrincipal | null | undefined, t: Translate): string {
   if (!principal) {
@@ -148,6 +174,36 @@ function taskBotFilterLabel(group: DesktopBotConsoleSummary): string {
   return group.title || taskBotFilterValue(group);
 }
 
+function TaskBotFilterOption({
+  allBots = false,
+  group,
+  iconDataUrl,
+  label,
+}: {
+  allBots?: boolean;
+  group?: DesktopBotConsoleSummary | null;
+  iconDataUrl?: string | null;
+  label: string;
+}) {
+  return (
+    <span className="tasks-bot-filter-option">
+      {allBots ? (
+        <span aria-hidden className="tasks-bot-filter-all-icon">
+          <AgentsIcon />
+        </span>
+      ) : (
+        <ChannelLogo
+          channel={group?.channel || 'bot'}
+          className="channel-logo tasks-bot-filter-logo"
+          iconDataUrl={iconDataUrl}
+          fallbackLabel={label}
+        />
+      )}
+      <span className="tasks-bot-filter-label">{label}</span>
+    </span>
+  );
+}
+
 function taskNotificationTargetFromSelection(
   value: string,
   botGroups: DesktopBotConsoleSummary[],
@@ -177,6 +233,7 @@ export function TasksPanel({
   onToast,
 }: TasksPanelProps) {
   const { t } = useI18n();
+  const { entries: pluginCatalog } = useChannelPluginCatalog();
   const [viewMode, setViewMode] = useState<TaskViewMode>('board');
   const [tasks, setTasks] = useState<DesktopTaskSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -204,12 +261,28 @@ export function TasksPanel({
       }
       seen.add(value);
       return [{
+        group,
         id: group.id || value,
         label: taskBotFilterLabel(group),
         value,
       }];
     });
   }, [botGroups]);
+
+  const iconDataUrlByChannel = useMemo(
+    () =>
+      new Map(
+        (pluginCatalog || []).map((entry) => [
+          entry.id.toLowerCase(),
+          entry.icon_data_url || null,
+        ]),
+      ),
+    [pluginCatalog],
+  );
+
+  const selectedBotFilterOption = botFilter
+    ? botFilterOptions.find((option) => option.value === botFilter) || null
+    : null;
 
   const loadTasks = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -458,76 +531,73 @@ export function TasksPanel({
             <MoreDotsIcon size={14} />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={4}>
-          {!task.assignee ? (
-            agents.length ? (
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger
-                  className="tasks-menu-subtrigger"
-                  disabled={busy}
-                >
-                  <UserPlus
-                    aria-hidden
-                    className="tasks-menu-icon size-4"
-                    size={15}
-                    strokeWidth={1.65}
-                  />
-                  {t('Assign to')}
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent sideOffset={6}>
-                  {agents.map((agent) => {
-                    const label = agent.displayName || agent.agentId;
-                    return (
-                      <DropdownMenuItem
-                        disabled={busy}
-                        key={agent.agentId}
-                        onSelect={() => {
-                          void assignTask(task, agent.agentId);
-                        }}
-                      >
-                        {label}
-                      </DropdownMenuItem>
-                    );
-                  })}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            ) : (
-              <DropdownMenuItem disabled>
-                {t('No agents available')}
-              </DropdownMenuItem>
-            )
-          ) : null}
-          <DropdownMenuItem
-            disabled={busy}
-            onSelect={() => {
-              void moveTask(task, next.status);
-            }}
-          >
-            <StatusIcon
-              aria-hidden
-              className="tasks-menu-icon size-4"
-              size={15}
-              strokeWidth={1.65}
-            />
-            {t(next.label)}
-          </DropdownMenuItem>
+        <FloatingActionMenuContent align="end" sideOffset={4}>
+          <DropdownMenuGroup>
+            {!task.assignee ? (
+              agents.length ? (
+                <DropdownMenuSub>
+                  <FloatingActionMenuSubTrigger
+                    className="tasks-menu-subtrigger"
+                    disabled={busy}
+                  >
+                    <UserPlus aria-hidden />
+                    {t('Assign to')}
+                  </FloatingActionMenuSubTrigger>
+                  <FloatingActionMenuSubContent sideOffset={6}>
+                    {agents.map((agent) => {
+                      const label = agent.displayName || agent.agentId;
+                      return (
+                        <FloatingActionMenuItem
+                          className="tasks-agent-menu-item"
+                          disabled={busy}
+                          key={agent.agentId}
+                          onSelect={() => {
+                            void assignTask(task, agent.agentId);
+                          }}
+                        >
+                          <AgentOptionRow
+                            agentId={agent.agentId}
+                            avatarDataUrl={agent.avatarDataUrl}
+                            detail={agent.providerType}
+                            kind={agent.builtIn ? 'builtin' : 'agent'}
+                            label={label}
+                            providerType={agent.providerType}
+                          />
+                        </FloatingActionMenuItem>
+                      );
+                    })}
+                  </FloatingActionMenuSubContent>
+                </DropdownMenuSub>
+              ) : (
+                <FloatingActionMenuItem disabled>
+                  {t('No agents available')}
+                </FloatingActionMenuItem>
+              )
+            ) : null}
+            <FloatingActionMenuItem
+              disabled={busy}
+              onSelect={() => {
+                void moveTask(task, next.status);
+              }}
+            >
+              <StatusIcon aria-hidden />
+              {t(next.label)}
+            </FloatingActionMenuItem>
+          </DropdownMenuGroup>
           <DropdownMenuSeparator />
-          <DropdownMenuItem
-            className="tasks-menu-danger"
-            disabled={busy}
-            onSelect={() => {
-              void deleteTask(task);
-            }}
-          >
-            <Trash
-              aria-hidden
-              className="tasks-menu-icon size-4"
-              size={15}
-              strokeWidth={1.65}
-            />
-            {t('Delete task')}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
+          <DropdownMenuGroup>
+            <FloatingActionMenuItem
+              disabled={busy}
+              onSelect={() => {
+                void deleteTask(task);
+              }}
+              variant="destructive"
+            >
+              <Trash aria-hidden />
+              {t('Delete task')}
+            </FloatingActionMenuItem>
+          </DropdownMenuGroup>
+        </FloatingActionMenuContent>
       </DropdownMenu>
     );
   };
@@ -620,21 +690,52 @@ export function TasksPanel({
           <p className="tasks-page-subtitle">{headerCount}</p>
         </div>
         <div className="tasks-header-actions">
-          <label className="tasks-filter-control">
-            <span>{t('Bot')}</span>
-            <select
-              aria-label={t('Filter by bot')}
-              onChange={(event) => setBotFilter(event.target.value)}
-              value={botFilter}
+          <Field className="tasks-filter-control" orientation="horizontal">
+            <FieldLabel className="sr-only" htmlFor="tasks-bot-filter-select">
+              {t('Bot')}
+            </FieldLabel>
+            <Select
+              value={botFilter || ALL_BOTS_FILTER_VALUE}
+              onValueChange={(value) => {
+                setBotFilter(value === ALL_BOTS_FILTER_VALUE ? '' : value);
+              }}
             >
-              <option value="">{t('All bots')}</option>
-              {botFilterOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              <SelectTrigger
+                aria-label={t('Filter by bot')}
+                className="tasks-filter-trigger"
+                id="tasks-bot-filter-select"
+                size="sm"
+              >
+                <span aria-hidden className="tasks-filter-trigger-label">{t('Bot')}</span>
+                <TaskBotFilterOption
+                  group={selectedBotFilterOption?.group || null}
+                  iconDataUrl={
+                    selectedBotFilterOption
+                      ? iconDataUrlByChannel.get(selectedBotFilterOption.group.channel.toLowerCase()) || null
+                      : null
+                  }
+                  allBots={!selectedBotFilterOption}
+                  label={selectedBotFilterOption?.label || t('All bots')}
+                />
+              </SelectTrigger>
+              <SelectContent align="end" className="tasks-bot-filter-content" position="popper" sideOffset={4}>
+                <SelectGroup>
+                  <SelectItem textValue={t('All bots')} value={ALL_BOTS_FILTER_VALUE}>
+                    <TaskBotFilterOption allBots label={t('All bots')} />
+                  </SelectItem>
+                  {botFilterOptions.map((option) => (
+                    <SelectItem key={option.value} textValue={option.label} value={option.value}>
+                      <TaskBotFilterOption
+                        group={option.group}
+                        iconDataUrl={iconDataUrlByChannel.get(option.group.channel.toLowerCase()) || null}
+                        label={option.label}
+                      />
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
           <button
             className="tasks-secondary-button"
             disabled={loading}
@@ -675,7 +776,7 @@ export function TasksPanel({
         </div>
       </div>
 
-      {draftOpen ? (
+      {draftOpen && typeof document !== 'undefined' ? createPortal(
         <div className="tasks-modal-backdrop" role="presentation">
           <form
             aria-modal="true"
@@ -686,62 +787,103 @@ export function TasksPanel({
             <div className="tasks-create-header">
               <h2>{t('New task')}</h2>
             </div>
-            <div className="tasks-create-grid">
-              <label className="tasks-field tasks-title-field">
-                <span>{t('Title')}</span>
-                <input
+            <FieldGroup className="tasks-create-grid">
+              <Field className="tasks-field tasks-title-field">
+                <FieldLabel>{t('Title')}</FieldLabel>
+                <Input
                   autoFocus
                   onChange={(event) => setDraftTitle(event.target.value)}
                   placeholder={t('Task title')}
                   value={draftTitle}
                 />
-              </label>
-              <label className="tasks-field">
-                <span>{t('Assignee')}</span>
-                <select
-                  onChange={(event) => setDraftAssignee(event.target.value)}
-                  value={draftAssignee}
+              </Field>
+              <Field className="tasks-field">
+                <FieldLabel>{t('Assignee')}</FieldLabel>
+                <Select
+                  value={draftAssignee || UNASSIGNED_ASSIGNEE_VALUE}
+                  onValueChange={(value) => {
+                    setDraftAssignee(value === UNASSIGNED_ASSIGNEE_VALUE ? '' : value);
+                  }}
                 >
-                  <option value="">{t('Unassigned')}</option>
-                  {agents.map((agent) => (
-                    <option key={agent.agentId} value={agent.agentId}>
-                      {agent.displayName || agent.agentId}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="tasks-field tasks-field-full">
-                <span>{t('Workspace')}</span>
-                <input
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent
+                    className="tasks-create-select-content"
+                    position="popper"
+                    sideOffset={4}
+                  >
+                    <SelectGroup>
+                      <SelectLabel>{t('Agents')}</SelectLabel>
+                      <SelectItem value={UNASSIGNED_ASSIGNEE_VALUE}>
+                        {t('Unassigned')}
+                      </SelectItem>
+                      {agents.map((agent) => {
+                        const label = agent.displayName || agent.agentId;
+                        return (
+                          <SelectItem key={agent.agentId} value={agent.agentId}>
+                            <AgentOptionRow
+                              agentId={agent.agentId}
+                              avatarDataUrl={agent.avatarDataUrl}
+                              kind={agent.builtIn ? 'builtin' : 'agent'}
+                              label={label}
+                              providerType={agent.providerType}
+                            />
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field className="tasks-field tasks-field-full">
+                <FieldLabel>{t('Workspace')}</FieldLabel>
+                <Input
                   onChange={(event) => setDraftWorkspaceDir(event.target.value)}
                   placeholder={t('Optional workspace directory')}
                   value={draftWorkspaceDir}
                 />
-              </label>
-              <label className="tasks-field tasks-field-full">
-                <span>{t('Notification')}</span>
-                <select
-                  onChange={(event) => setDraftNotificationTarget(event.target.value)}
-                  value={draftNotificationTarget}
+              </Field>
+              <Field className="tasks-field tasks-field-full">
+                <FieldLabel>{t('Notification')}</FieldLabel>
+                <Select
+                  value={draftNotificationTarget || CHOOSE_NOTIFICATION_VALUE}
+                  onValueChange={(value) => {
+                    setDraftNotificationTarget(value === CHOOSE_NOTIFICATION_VALUE ? '' : value);
+                  }}
                 >
-                  <option value="">{t('Choose notification')}</option>
-                  <option value="none">{t('Do not notify')}</option>
-                  {botGroups.map((group) => (
-                    <option key={group.id} value={`bot:${group.id}`}>
-                      {group.title || `${group.channel}:${group.accountId}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="tasks-field tasks-field-full">
-                <span>{t('Body')}</span>
-                <textarea
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent
+                    className="tasks-create-select-content"
+                    position="popper"
+                    sideOffset={4}
+                  >
+                    <SelectGroup>
+                      <SelectLabel>{t('Notification')}</SelectLabel>
+                      <SelectItem value={CHOOSE_NOTIFICATION_VALUE}>
+                        {t('Choose notification')}
+                      </SelectItem>
+                      <SelectItem value="none">{t('Do not notify')}</SelectItem>
+                      {botGroups.map((group) => (
+                        <SelectItem key={group.id} value={`bot:${group.id}`}>
+                          {group.title || `${group.channel}:${group.accountId}`}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field className="tasks-field tasks-field-full">
+                <FieldLabel>{t('Body')}</FieldLabel>
+                <Textarea
                   onChange={(event) => setDraftBody(event.target.value)}
                   placeholder={t('Optional task detail')}
                   value={draftBody}
                 />
-              </label>
-            </div>
+              </Field>
+            </FieldGroup>
             <div className="tasks-create-actions">
               <button className="tasks-secondary-button" onClick={() => setDraftOpen(false)} type="button">
                 {t('Cancel')}
@@ -756,7 +898,8 @@ export function TasksPanel({
               </button>
             </div>
           </form>
-        </div>
+        </div>,
+        document.body
       ) : null}
 
       {error ? (
@@ -764,12 +907,6 @@ export function TasksPanel({
           {disabled
             ? t('Tasks are disabled in the gateway config.')
             : error}
-        </div>
-      ) : null}
-
-      {!error && !loading && !tasks.length ? (
-        <div className="tasks-empty-state">
-          {t('No tasks yet.')}
         </div>
       ) : null}
 

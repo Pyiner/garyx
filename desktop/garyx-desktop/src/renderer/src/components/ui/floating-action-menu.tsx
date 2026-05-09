@@ -38,11 +38,19 @@ function FloatingActionMenuSubContent({
 
 function FloatingActionMenuItem({
   className,
+  variant,
   ...props
-}: React.ComponentProps<typeof DropdownMenuItem>) {
+}: React.ComponentProps<typeof DropdownMenuItem> & {
+  variant?: "default" | "destructive";
+}) {
   return (
     <DropdownMenuItem
-      className={cn("floating-action-menu-row", className)}
+      className={cn(
+        "floating-action-menu-row",
+        variant === "destructive" && "floating-action-menu-row--destructive",
+        className,
+      )}
+      variant={variant}
       {...props}
     />
   );

@@ -46,6 +46,7 @@ import { Label } from '../../components/ui/label';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -1165,7 +1166,7 @@ export function AgentsHubPanel({
           }
         }}
       >
-        <DialogContent className="agents-hub-agent-dialog">
+        <DialogContent className="agents-hub-agent-dialog" size="form">
           <DialogHeader className="agents-hub-dialog-header">
             <DialogDescription className="agents-hub-dialog-kicker">
               {t('Agent')}
@@ -1281,10 +1282,12 @@ export function AgentsHubPanel({
                     <SelectValue placeholder={t('Select provider')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="claude_code">Claude</SelectItem>
-                    <SelectItem value="codex_app_server">Codex</SelectItem>
-                    <SelectItem value="gemini_cli">Gemini</SelectItem>
-                    <SelectItem value="opencode">OpenCode</SelectItem>
+                    <SelectGroup>
+                      <SelectItem value="claude_code">Claude</SelectItem>
+                      <SelectItem value="codex_app_server">Codex</SelectItem>
+                      <SelectItem value="gemini_cli">Gemini</SelectItem>
+                      <SelectItem value="opencode">OpenCode</SelectItem>
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
                 {agentModelStatus ? <span className="codex-form-hint">{agentModelStatus}</span> : null}
@@ -1306,12 +1309,14 @@ export function AgentsHubPanel({
                       <SelectValue placeholder={t('Select model')} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={PROVIDER_DEFAULT_MODEL_VALUE}>{t('Provider default')}</SelectItem>
-                      {agentModelOptions.map((model) => (
-                        <SelectItem key={model.id} value={model.id}>
-                          {model.label}
-                        </SelectItem>
-                      ))}
+                      <SelectGroup>
+                        <SelectItem value={PROVIDER_DEFAULT_MODEL_VALUE}>{t('Provider default')}</SelectItem>
+                        {agentModelOptions.map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            {model.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                   <span className="codex-form-hint">
@@ -1464,7 +1469,7 @@ export function AgentsHubPanel({
       </Dialog>
 
       <Dialog open={avatarStyleDialogOpen} onOpenChange={setAvatarStyleDialogOpen}>
-        <DialogContent className="agents-hub-avatar-style-dialog">
+        <DialogContent className="agents-hub-avatar-style-dialog" size="compact">
           <DialogHeader>
             <DialogTitle>{t('Avatar style')}</DialogTitle>
           </DialogHeader>
@@ -1545,7 +1550,7 @@ export function AgentsHubPanel({
           }
         }}
       >
-        <DialogContent className="sm:max-w-[720px] team-builder-dialog">
+        <DialogContent className="sm:max-w-[720px] team-builder-dialog" size="wide">
           <DialogHeader>
             <DialogTitle>
               {teamDialogMode === 'create'

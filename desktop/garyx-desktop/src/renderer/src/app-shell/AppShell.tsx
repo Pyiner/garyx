@@ -75,6 +75,7 @@ import { SkillsPanel } from "../SkillsPanel";
 import { AutomationDialog } from "../components/AutomationDialog";
 import { AutomationListPage } from "../components/AutomationListPage";
 import { MemoryDialog } from "../components/MemoryDialog";
+import { Input } from "../components/ui/input";
 import { AddBotDialog } from "./components/AddBotDialog";
 import { BotSidebar } from "../BotSidebar";
 import { ComposerForm } from "../ComposerForm";
@@ -85,7 +86,7 @@ import { NewThreadEmptyState } from "../NewThreadEmptyState";
 import { BrowserPage } from "../BrowserPage";
 import { WorkspaceThreadSidebar } from "../WorkspaceThreadSidebar";
 import { ToastViewport, type ToastItem, type ToastTone } from "../toast";
-import { ToolTraceGroup } from "../tool-trace";
+import { ToolTraceGroup, shouldRenderToolTraceMessage } from "../tool-trace";
 import {
   RichMessageContent,
   buildOptimisticTranscriptContent,
@@ -100,6 +101,10 @@ import {
   isToolRole,
   toolMessagesEquivalent,
 } from "../transcript-render";
+import {
+  deriveThreadActivityModel,
+  threadActivitySignature,
+} from "./thread-activity";
 import { WorkspaceFilePreview } from "../workspace-file-preview";
 import { BotConsolePage } from "../BotConsolePage";
 import { measureUiAction } from "../perf-metrics";
@@ -186,6 +191,7 @@ import {
   buildThreadLogLines,
   clampThreadLogsPanelWidth,
   computeGatewayIndicator,
+  keepRecentThreadLogLines,
 } from "./diagnostics-helpers";
 import { useSettingsController } from "./useSettingsController";
 import { useWorkspaceController } from "./useWorkspaceController";
@@ -204,6 +210,7 @@ import {
   createTranslator,
   useResolvedLocale,
 } from "../i18n";
+import { isRunLoadingPlaceholderMessage } from "./loading-labels";
 import {
   contentViewForDesktopRoute,
   parseDesktopRoute,
@@ -212,12 +219,18 @@ import {
 } from "./desktop-route";
 
 const NEW_THREAD_DRAFT_THREAD_ID = "__garyx_new_thread_draft__";
+const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
+const HIDDEN_TOOL_USE_STATUS_TEXT = "Garyx is thinking through the next step…";
+const HIDDEN_TOOL_RESULT_STATUS_TEXT = "Garyx finished a reasoning step…";
 
 function messagesNearBottom(node: HTMLDivElement | null): boolean {
   if (!node) {
     return true;
   }
-  return node.scrollHeight - node.scrollTop - node.clientHeight < 48;
+  return (
+    node.scrollHeight - node.scrollTop - node.clientHeight <
+    MESSAGES_BOTTOM_THRESHOLD_PX
+  );
 }
 
 type MemoryDialogTarget =
@@ -312,33 +325,6 @@ function messageTailSignature(messages: UiTranscriptMessage[]): string {
   ].join(":");
 }
 
-function transcriptSnapshotSignature(
-  messages: Array<
-    Pick<
-      TranscriptMessage,
-      "id" | "role" | "text" | "timestamp" | "kind" | "internalKind"
-    >
-  >,
-  pendingInputs: PendingThreadInput[],
-): string {
-  const lastMessage = messages[messages.length - 1];
-  const lastPendingInput = pendingInputs[pendingInputs.length - 1];
-  return [
-    messages.length,
-    lastMessage?.id || "",
-    lastMessage?.role || "",
-    lastMessage?.text || "",
-    lastMessage?.timestamp || "",
-    lastMessage?.kind || "",
-    lastMessage?.internalKind || "",
-    pendingInputs.length,
-    lastPendingInput?.id || "",
-    lastPendingInput?.status || "",
-    lastPendingInput?.active ? "1" : "0",
-    lastPendingInput?.text || "",
-  ].join(":");
-}
-
 function transcriptHasAutomationResponse(
   messages: TranscriptMessage[],
 ): boolean {
@@ -399,15 +385,6 @@ function boundBotsForThread(endpoints: DesktopChannelEndpoint[]): BoundBot[] {
       left.channel.localeCompare(right.channel)
     );
   });
-}
-
-function seededAssistantBubble(): TranscriptMessage {
-  return {
-    id: `pending:${crypto.randomUUID()}`,
-    role: "assistant",
-    text: "Garyx is working through the run…",
-    pending: true,
-  };
 }
 
 function normalizeMessageText(value: string | undefined): string {
@@ -688,14 +665,6 @@ function displayTranscriptMessageText(message: UiTranscriptMessage): string {
   return message.text;
 }
 
-function seededPendingAssistantBubble(intentId: string): UiTranscriptMessage {
-  return {
-    ...seededAssistantBubble(),
-    intentId,
-    localState: "optimistic",
-  };
-}
-
 function seededUserBubble(intent: MessageIntent): UiTranscriptMessage {
   return {
     id: `user:${intent.intentId}`,
@@ -718,6 +687,11 @@ function seededAckedUserBubble(intent: MessageIntent): UiTranscriptMessage {
     localState: "remote_partial",
   };
 }
+
+type SeededTurn = {
+  assistantEntryId: string | null;
+  legacyPendingAssistantId: string | null;
+};
 
 function queuedInputIdFromMessage(
   message: Pick<TranscriptMessage, "metadata">,
@@ -1122,6 +1096,9 @@ function materializeRemoteTranscript(
 
   const materializedRemote: UiTranscriptMessage[] = [];
   for (const message of transcript) {
+    if (isRunLoadingPlaceholderMessage(message)) {
+      continue;
+    }
     materializedRemote.push(materializeMessage(message, true));
     if (message.role === "tool_result") {
       const imageContent = extractImageGenerationImageContent(message);
@@ -1506,6 +1483,14 @@ export function AppShell() {
     startX: number;
     startWidth: number;
   } | null>(null);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--app-sidebar-width", `${sidebarWidth}px`);
+    return () => {
+      root.style.removeProperty("--app-sidebar-width");
+    };
+  }, [sidebarWidth]);
   const [contentView, setContentViewRaw] = useState<ContentView>(() =>
     initialContentView(initialRouteValue),
   );
@@ -1568,6 +1553,8 @@ export function AppShell() {
   const messageStateRef = useRef(initialMessageMachineState);
   const liveStreamStateRef = useRef<Record<string, LiveStreamState>>({});
   const pendingRemoteInputsRef = useRef<PendingThreadInputMap>({});
+  const deferredQueueDrainByThreadRef = useRef<Record<string, boolean>>({});
+  const queueDrainInFlightByThreadRef = useRef<Record<string, boolean>>({});
   const pendingAutomationRunsRef = useRef<Record<string, PendingAutomationRun>>(
     {},
   );
@@ -1596,7 +1583,9 @@ export function AppShell() {
     startWidth: number;
   } | null>(null);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
+  const forceMessagesBottomSnapRef = useRef(false);
   const shouldStickMessagesToBottomRef = useRef(true);
+  const messagesStickScrollFrameRef = useRef<number | null>(null);
   const lastRenderedMessageThreadRef = useRef<string | null>(null);
   const lastRenderedMessageCountRef = useRef(0);
   const lastRenderedMessageTailSignatureRef = useRef("0");
@@ -1937,6 +1926,7 @@ export function AppShell() {
       return [
         "dispatching",
         "remote_accepted",
+        "awaiting_provider_ack",
         "awaiting_response",
         "awaiting_history",
       ].includes(intent.state);
@@ -1957,9 +1947,12 @@ export function AppShell() {
     for (const intent of Object.values(messageStateRef.current.intentsById)) {
       if (
         intent.threadId &&
-        ["remote_accepted", "awaiting_response", "awaiting_history"].includes(
-          intent.state,
-        )
+        [
+          "remote_accepted",
+          "awaiting_provider_ack",
+          "awaiting_response",
+          "awaiting_history",
+        ].includes(intent.state)
       ) {
         ids.add(intent.threadId);
       }
@@ -2213,7 +2206,7 @@ export function AppShell() {
     const options = buildAgentTargetOptions(desktopAgents, desktopTeams);
     return options.length
       ? options
-      : [{ value: "claude", label: "Claude · Claude" }];
+      : [{ value: "claude", label: "Claude · Claude", detail: "Claude", kind: "builtin" as const, providerType: "claude_code" as const }];
   }, [desktopAgents, desktopTeams]);
   const pendingAgentLabel =
     pendingTeam?.displayName?.trim() ||
@@ -2272,7 +2265,9 @@ export function AppShell() {
     selectedThreadId ||
     (hasNewThreadDraft ? NEW_THREAD_DRAFT_THREAD_ID : null);
   const activeMessages = activeThreadMessageKey
-    ? messagesByThread[activeThreadMessageKey] || []
+    ? (messagesByThread[activeThreadMessageKey] || []).filter(
+        (message) => !isRunLoadingPlaceholderMessage(message),
+      )
     : [];
   const activeThreadInfo = selectedThreadId
     ? threadInfoByThread[selectedThreadId] || null
@@ -2290,6 +2285,12 @@ export function AppShell() {
   const activeRenderableBlocks = buildRenderTranscriptBlocks(
     activeRenderableMessages,
   );
+  const lastActiveRenderableBlock =
+    activeRenderableBlocks[activeRenderableBlocks.length - 1] || null;
+  const activeTailToolTraceBlockKey =
+    lastActiveRenderableBlock?.kind === "tool_group"
+      ? lastActiveRenderableBlock.key
+      : null;
   const activeQueue = selectQueueIntentIds(messageState, activeThreadMessageKey)
     .map((intentId) => messageState.intentsById[intentId])
     .filter((intent): intent is MessageIntent => Boolean(intent));
@@ -2331,9 +2332,32 @@ export function AppShell() {
           );
         });
   const visibleRemoteAwaitingAckInputs = visibleRemotePendingInputs;
-  const showPendingAckLoading =
-    activePendingAckIntents.length > 0 ||
-    visibleRemoteAwaitingAckInputs.length > 0;
+  const activePendingHistoryIntent = activeThreadMessageKey
+    ? Object.values(messageState.intentsById).some((intent) => {
+        return (
+          intent.threadId === activeThreadMessageKey &&
+          [
+            "dispatching",
+            "remote_accepted",
+            "awaiting_provider_ack",
+            "awaiting_response",
+            "awaiting_history",
+          ].includes(intent.state)
+        );
+      })
+    : false;
+  const threadActivity = deriveThreadActivityModel({
+    messages: activeMessages,
+    threadInfo: activeThreadInfo,
+    liveStream: activeLiveStream,
+    runtimeBusy: Boolean(activeRuntime && isRuntimeBusy(activeRuntime.state)),
+    pendingAckIntentCount: activePendingAckIntents.length,
+    remoteAwaitingAckInputCount: visibleRemoteAwaitingAckInputs.length,
+    pendingHistoryIntent: activePendingHistoryIntent,
+  });
+  const showPendingAckLoading = threadActivity.showPendingAckLoading;
+  const activeRunLoading = threadActivity.showRunLoading;
+  const canSteerQueuedPrompt = threadActivity.canSteerQueuedPrompt;
   const isActiveStreamingThread = Boolean(
     activeLiveStream &&
     ["connecting", "streaming", "reconciling"].includes(
@@ -2422,8 +2446,7 @@ export function AppShell() {
   });
   const isActiveSendingThread = Boolean(
     selectedThreadId &&
-    ((activeRuntime && isRuntimeBusy(activeRuntime.state)) ||
-      isActiveStreamingThread),
+      (threadActivity.runActive || showPendingAckLoading),
   );
   const composerLocked = composerAttachmentUploadPending || isDraftSendingThread;
   const botGroups = useMemo(
@@ -2543,10 +2566,14 @@ export function AppShell() {
     !activeHasAssistantOrToolMessage,
   );
   const showAutomationRunTailLoading = Boolean(
-    activePendingAutomationRun &&
-    activeMessages.length > 0 &&
-    !activeHasAssistantOrToolMessage,
+    (activePendingAutomationRun &&
+      activeMessages.length > 0 &&
+      !activeHasAssistantOrToolMessage) ||
+      (activeRunLoading && !activeTailToolTraceBlockKey),
   );
+  const activeToolTraceLoadingKey = activeRunLoading
+    ? activeTailToolTraceBlockKey
+    : null;
   useEffect(() => {
     if (contentView === "auto_research" && !showAutoResearchLab) {
       setContentView("thread");
@@ -3080,6 +3107,15 @@ export function AppShell() {
   }, [messageState]);
 
   useEffect(() => {
+    return () => {
+      if (messagesStickScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(messagesStickScrollFrameRef.current);
+        messagesStickScrollFrameRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     threadLogsPanelWidthRef.current = threadLogsPanelWidth;
   }, [threadLogsPanelWidth]);
 
@@ -3610,7 +3646,7 @@ export function AppShell() {
       api: getDesktopApi(),
       threadId: selectedThreadId,
       onBeforeLoad: (threadId) => {
-        pendingThreadBottomSnapRef.current = threadId;
+        requestMessagesBottomSnap(threadId);
       },
       onTranscript: applyRemoteTranscript,
       onAutomationResponseDetected: (threadId) => {
@@ -3649,9 +3685,10 @@ export function AppShell() {
       try {
         const transcript =
           await window.garyxDesktop.getThreadHistory(selectedThreadId);
-        const nextSignature = transcriptSnapshotSignature(
+        const nextSignature = threadActivitySignature(
           transcript.messages,
           transcript.pendingInputs,
+          transcript.threadInfo,
         );
         if (
           nextSignature ===
@@ -3659,7 +3696,7 @@ export function AppShell() {
         ) {
           return;
         }
-        pendingThreadBottomSnapRef.current = selectedThreadId;
+        requestMessagesBottomSnap(selectedThreadId);
         applyRemoteTranscript(selectedThreadId, transcript);
       } catch {
         // Best-effort reconcile loop for passive inbound messages.
@@ -3686,24 +3723,36 @@ export function AppShell() {
     const previousTailSignature = lastRenderedMessageTailSignatureRef.current;
     const threadChanged = currentThreadId !== previousThreadId;
     const tailChanged = currentTailSignature !== previousTailSignature;
+    const pendingSnapMatches =
+      pendingThreadBottomSnapRef.current === currentThreadId;
+    const forceSnap =
+      pendingSnapMatches && forceMessagesBottomSnapRef.current;
     const shouldSnapToBottom = Boolean(
       currentThreadId &&
       currentCount > 0 &&
       !historyLoading &&
-      (pendingThreadBottomSnapRef.current === currentThreadId || threadChanged),
+      (threadChanged ||
+        forceSnap ||
+        (pendingSnapMatches && shouldStickMessagesToBottomRef.current)),
     );
 
     if (shouldSnapToBottom) {
-      scrollMessagesToLatest(messagesRef.current, "auto");
+      scheduleMessagesScrollToLatest("auto");
       pendingThreadBottomSnapRef.current = null;
-      shouldStickMessagesToBottomRef.current = true;
+      forceMessagesBottomSnapRef.current = false;
+      if (threadChanged || forceSnap) {
+        shouldStickMessagesToBottomRef.current = true;
+      }
     } else if (
       currentThreadId &&
       !historyLoading &&
       tailChanged &&
       shouldStickMessagesToBottomRef.current
     ) {
-      scrollMessagesToLatest(messagesRef.current, "auto");
+      scheduleMessagesScrollToLatest("auto");
+    } else if (pendingSnapMatches && currentCount > 0 && !historyLoading) {
+      pendingThreadBottomSnapRef.current = null;
+      forceMessagesBottomSnapRef.current = false;
     }
 
     lastRenderedMessageThreadRef.current = currentThreadId;
@@ -3712,16 +3761,66 @@ export function AppShell() {
   }, [activeThreadMessageKey, activeMessages, historyLoading]);
 
   useEffect(() => {
+    const node = messagesRef.current;
+    if (!node || !activeThreadMessageKey) {
+      return;
+    }
+
+    const scrollIfSticky = () => {
+      if (shouldStickMessagesToBottomRef.current) {
+        scheduleMessagesScrollToLatest("auto");
+      }
+    };
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(scrollIfSticky);
+    const observedChildren = new Set<Element>();
+
+    const syncObservedChildren = () => {
+      if (!resizeObserver) {
+        return;
+      }
+      resizeObserver.observe(node);
+      for (const child of Array.from(node.children)) {
+        if (observedChildren.has(child)) {
+          continue;
+        }
+        observedChildren.add(child);
+        resizeObserver.observe(child);
+      }
+      for (const child of Array.from(observedChildren)) {
+        if (child.parentElement !== node) {
+          observedChildren.delete(child);
+          resizeObserver.unobserve(child);
+        }
+      }
+    };
+
+    syncObservedChildren();
+    const mutationObserver = new MutationObserver(() => {
+      syncObservedChildren();
+      scrollIfSticky();
+    });
+    mutationObserver.observe(node, { childList: true });
+
+    return () => {
+      mutationObserver.disconnect();
+      resizeObserver?.disconnect();
+    };
+  }, [activeThreadMessageKey]);
+
+  useEffect(() => {
     threadLogsCursorRef.current = threadLogsCursor;
   }, [threadLogsCursor]);
 
   useEffect(() => {
     if (activeThreadMessageKey == null) {
       pendingThreadBottomSnapRef.current = null;
+      forceMessagesBottomSnapRef.current = false;
       return;
     }
-    pendingThreadBottomSnapRef.current = activeThreadMessageKey;
-    shouldStickMessagesToBottomRef.current = true;
+    requestMessagesBottomSnap(activeThreadMessageKey, true);
   }, [activeThreadMessageKey]);
 
   useEffect(() => {
@@ -3843,7 +3942,7 @@ export function AppShell() {
         setThreadLogsError(null);
         setThreadLogsLoading(false);
         if (chunk.reset) {
-          setThreadLogsText(chunk.text);
+          setThreadLogsText(keepRecentThreadLogLines(chunk.text));
           setThreadLogsHasUnread(false);
           window.requestAnimationFrame(() => {
             scrollThreadLogsToLatest("auto");
@@ -3853,7 +3952,9 @@ export function AppShell() {
         if (!chunk.text) {
           return;
         }
-        setThreadLogsText((current) => current + chunk.text);
+        setThreadLogsText((current) =>
+          keepRecentThreadLogLines(current + chunk.text),
+        );
         if (wasNearBottom) {
           setThreadLogsHasUnread(false);
           window.requestAnimationFrame(() => {
@@ -3893,12 +3994,15 @@ export function AppShell() {
   useEffect(() => {
     if (
       !threadLogsOpen ||
-      threadLogsActiveTab !== "client" ||
       !selectedThreadId
     ) {
       return;
     }
-    setClientLogsHasUnread(false);
+    if (threadLogsActiveTab === "client") {
+      setClientLogsHasUnread(false);
+    } else {
+      setThreadLogsHasUnread(false);
+    }
     window.requestAnimationFrame(() => {
       scrollThreadLogsToLatest("auto");
     });
@@ -3979,6 +4083,74 @@ export function AppShell() {
     return next;
   }
 
+  function requestMessagesBottomSnap(
+    threadId: string | null | undefined,
+    forceStick = false,
+  ) {
+    if (!threadId) {
+      return;
+    }
+    pendingThreadBottomSnapRef.current = threadId;
+    if (forceStick) {
+      shouldStickMessagesToBottomRef.current = true;
+      forceMessagesBottomSnapRef.current = true;
+    }
+  }
+
+  function scheduleMessagesScrollToLatest(
+    behavior: ScrollBehavior = "auto",
+  ) {
+    scrollMessagesToLatest(messagesRef.current, behavior);
+    if (messagesStickScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(messagesStickScrollFrameRef.current);
+    }
+    messagesStickScrollFrameRef.current = window.requestAnimationFrame(() => {
+      messagesStickScrollFrameRef.current = null;
+      if (shouldStickMessagesToBottomRef.current) {
+        scrollMessagesToLatest(messagesRef.current, "auto");
+      }
+    });
+  }
+
+  function updatePendingAssistantActivity(
+    threadId: string,
+    intentId: string | undefined,
+    assistantEntryId: string | null | undefined,
+    text: string,
+  ) {
+    updateMessagesByThread((current) => {
+      const existing = current[threadId] || [];
+      let changed = false;
+      const nextMessages = existing.map((entry) => {
+        const matchesAssistantEntry =
+          assistantEntryId && entry.id === assistantEntryId;
+        const matchesIntent =
+          intentId && entry.role === "assistant" && entry.intentId === intentId;
+        if (
+          entry.role !== "assistant" ||
+          !entry.pending ||
+          (!matchesAssistantEntry && !matchesIntent) ||
+          entry.text === text
+        ) {
+          return entry;
+        }
+        changed = true;
+        return {
+          ...entry,
+          text,
+        };
+      });
+
+      if (!changed) {
+        return current;
+      }
+      return {
+        ...current,
+        [threadId]: nextMessages,
+      };
+    });
+  }
+
   function applyThreadTitleUpdate(threadId: string, title: string) {
     const nextTitle = title.trim();
     if (!threadId || !nextTitle) {
@@ -4014,60 +4186,37 @@ export function AppShell() {
     intent: MessageIntent,
     options?: {
       seedUserBubble?: boolean;
-      seedPendingAssistant?: boolean;
     },
-  ): {
-    pendingAssistant: UiTranscriptMessage;
-    assistantEntryId: string | null;
-  } {
+  ): SeededTurn {
     const seedUserBubble = options?.seedUserBubble ?? true;
-    const seedPendingAssistant = options?.seedPendingAssistant ?? true;
     const userMessage = seededUserBubble(intent);
-    const pendingAssistant = seededPendingAssistantBubble(intent.intentId);
-    const existingPendingAssistant =
-      (messagesByThreadRef.current[threadId] || []).find((entry) => {
-        return (
+    const legacyPendingAssistant =
+      (messagesByThreadRef.current[threadId] || []).find(
+        (entry) =>
           entry.role === "assistant" &&
           entry.pending &&
-          entry.intentId === intent.intentId
-        );
-      }) || null;
+          entry.intentId === intent.intentId,
+      ) || null;
 
-    if (seedUserBubble || seedPendingAssistant) {
+    if (seedUserBubble) {
       updateMessagesByThread((current) => {
         const existing = current[threadId] || [];
         const hasUserMessage = existing.some((entry) => {
           return entry.role === "user" && entry.intentId === intent.intentId;
         });
-        const hasPendingAssistant = existing.some((entry) => {
-          return (
-            entry.role === "assistant" &&
-            entry.pending &&
-            entry.intentId === intent.intentId
-          );
-        });
-        const additions = [
-          seedUserBubble && !hasUserMessage ? userMessage : null,
-          seedPendingAssistant && !hasPendingAssistant
-            ? pendingAssistant
-            : null,
-        ].filter((entry): entry is UiTranscriptMessage => Boolean(entry));
-
-        if (!additions.length) {
+        if (hasUserMessage) {
           return current;
         }
         return {
           ...current,
-          [threadId]: [...existing, ...additions],
+          [threadId]: [...existing, userMessage],
         };
       });
     }
 
     return {
-      pendingAssistant,
-      assistantEntryId: seedPendingAssistant
-        ? existingPendingAssistant?.id || pendingAssistant.id
-        : null,
+      assistantEntryId: legacyPendingAssistant?.id || null,
+      legacyPendingAssistantId: legacyPendingAssistant?.id || null,
     };
   }
 
@@ -4134,7 +4283,7 @@ export function AppShell() {
       setLiveStreamStateByThread(updated);
     }
 
-    pendingThreadBottomSnapRef.current = threadId;
+    requestMessagesBottomSnap(threadId, true);
   }
 
   function markLocalDispatchFailed(
@@ -4478,9 +4627,10 @@ export function AppShell() {
     }));
     remoteTranscriptSignatureByThreadRef.current = {
       ...remoteTranscriptSignatureByThreadRef.current,
-      [threadId]: transcriptSnapshotSignature(
+      [threadId]: threadActivitySignature(
         transcript.messages,
         transcript.pendingInputs,
+        transcript.threadInfo,
       ),
     };
     setRemotePendingInputs(threadId, transcript.pendingInputs);
@@ -4577,9 +4727,12 @@ export function AppShell() {
           const intent = intentForId(activeIntentId);
           if (
             intent &&
-            !["remote_accepted", "awaiting_history", "completed"].includes(
-              intent.state,
-            )
+            ![
+              "remote_accepted",
+              "awaiting_provider_ack",
+              "awaiting_history",
+              "completed",
+            ].includes(intent.state)
           ) {
             dispatchMessageState({
               type: "intent/remote-accepted",
@@ -4741,6 +4894,29 @@ export function AppShell() {
             break;
           }
         }
+        if (!shouldRenderToolTraceMessage({ ...event.message, text: "" })) {
+          updatePendingAssistantActivity(
+            threadId,
+            activeIntentId,
+            currentStream?.assistantEntryId ?? null,
+            event.type === "tool_use"
+              ? HIDDEN_TOOL_USE_STATUS_TEXT
+              : HIDDEN_TOOL_RESULT_STATUS_TEXT,
+          );
+          updateLiveStreamState(threadId, (current) => ({
+            threadId: threadId,
+            runId: event.runId,
+            activeIntentId: current?.activeIntentId,
+            assistantEntryId: current?.assistantEntryId ?? null,
+            pendingAckIntentIds: current?.pendingAckIntentIds || [],
+            streamStatus: "streaming",
+          }));
+          setThreadRuntimeState(threadId, "running_remote", {
+            activeIntentId: activeIntentId || undefined,
+            remoteRunId: event.runId,
+          });
+          break;
+        }
         appendStreamingToolEvent(
           { ...event, threadId: threadId },
           {
@@ -4798,7 +4974,7 @@ export function AppShell() {
           });
           // Queued follow-ups can surface in the thread snapshot before the transcript catches up.
           scheduleHistoryRefresh(threadId, 8, 250, false);
-          pendingThreadBottomSnapRef.current = threadId;
+          requestMessagesBottomSnap(threadId);
           setThreadRuntimeState(threadId, "running_remote", {
             activeIntentId: nextIntentId,
             remoteRunId: event.runId,
@@ -4810,7 +4986,7 @@ export function AppShell() {
           );
           if (pendingInput) {
             materializeAckedRemotePendingInput(threadId, pendingInput);
-            pendingThreadBottomSnapRef.current = threadId;
+            requestMessagesBottomSnap(threadId);
           }
           scheduleHistoryRefresh(threadId, 4, 250, false);
         }
@@ -4943,6 +5119,7 @@ export function AppShell() {
           [
             "dispatching",
             "remote_accepted",
+            "awaiting_provider_ack",
             "awaiting_response",
             "awaiting_history",
           ].includes(intent.state)
@@ -5004,14 +5181,6 @@ export function AppShell() {
       });
       return null;
     }
-    dispatchMessageState({
-      type: "intent/request-dispatch",
-      threadId,
-      intentId: nextIntentId,
-      mode: "sync_send",
-      source: "queue_send",
-      removeFromQueue: true,
-    });
     return intent;
   }
 
@@ -5113,9 +5282,10 @@ export function AppShell() {
     }));
     remoteTranscriptSignatureByThreadRef.current = {
       ...remoteTranscriptSignatureByThreadRef.current,
-      [threadId]: transcriptSnapshotSignature(
+      [threadId]: threadActivitySignature(
         transcript.messages,
         transcript.pendingInputs,
+        transcript.threadInfo,
       ),
     };
     setRemotePendingInputs(threadId, transcript.pendingInputs);
@@ -5773,6 +5943,7 @@ export function AppShell() {
         intent.threadId === threadId &&
         [
           "remote_accepted",
+          "awaiting_provider_ack",
           "awaiting_history",
           "awaiting_response",
           "dispatching",
@@ -5804,6 +5975,7 @@ export function AppShell() {
     const pendingStates = [
       "dispatching",
       "remote_accepted",
+      "awaiting_provider_ack",
       "awaiting_response",
       "awaiting_history",
     ];
@@ -5833,7 +6005,7 @@ export function AppShell() {
     intentId: string,
     options?: {
       seedUserBubble?: boolean;
-      seedPendingAssistant?: boolean;
+      seededTurn?: SeededTurn;
     },
   ): Promise<boolean> {
     const intent = intentForId(intentId);
@@ -5841,11 +6013,8 @@ export function AppShell() {
       return false;
     }
 
-    const { pendingAssistant, assistantEntryId } = appendSeededTurn(
-      threadId,
-      intent,
-      options,
-    );
+    const { assistantEntryId, legacyPendingAssistantId } =
+      options?.seededTurn || appendSeededTurn(threadId, intent, options);
 
     dispatchMessageState({
       type: "intent/dispatch-started",
@@ -5867,11 +6036,12 @@ export function AppShell() {
     }));
 
     setError(null);
-    pendingThreadBottomSnapRef.current = threadId;
+    requestMessagesBottomSnap(threadId, true);
 
     try {
       const result = await window.garyxDesktop.openChatStream({
         threadId,
+        clientIntentId: intent.intentId,
         message: intent.text,
         images: intent.images,
         files: intent.files,
@@ -5906,9 +6076,12 @@ export function AppShell() {
       const latestIntent = intentForId(intent.intentId);
       if (
         latestIntent &&
-        !["remote_accepted", "awaiting_history", "completed"].includes(
-          latestIntent.state,
-        )
+        ![
+          "remote_accepted",
+          "awaiting_provider_ack",
+          "awaiting_history",
+          "completed",
+        ].includes(latestIntent.state)
       ) {
         dispatchMessageState({
           type: "intent/remote-accepted",
@@ -5959,12 +6132,19 @@ export function AppShell() {
       ) {
         applyCanonicalTranscript(resultThreadId, transcript);
       } else {
-        if (!result.response && result.status === "completed") {
+        if (
+          legacyPendingAssistantId &&
+          !result.response &&
+          result.status === "completed"
+        ) {
           updateMessagesByThread((current) => ({
             ...current,
             [resultThreadId]: (current[resultThreadId] || []).filter(
               (entry) => {
-                return !(entry.id === pendingAssistant.id && entry.pending);
+                return !(
+                  entry.id === legacyPendingAssistantId &&
+                  entry.pending
+                );
               },
             ),
           }));
@@ -5999,7 +6179,7 @@ export function AppShell() {
       const recoveryResult = reconcileAssistantEntriesForGatewayRecovery(
         messagesByThreadRef.current[threadId] || [],
         failedIntentId,
-        [pendingAssistant.id, liveState?.assistantEntryId],
+        [legacyPendingAssistantId, liveState?.assistantEntryId],
       );
       const likelyTransportDrop =
         !interrupted &&
@@ -6030,7 +6210,7 @@ export function AppShell() {
           [threadId]: reconcileAssistantEntriesForGatewayRecovery(
             current[threadId] || [],
             failedIntentId,
-            [pendingAssistant.id, liveState?.assistantEntryId],
+            [legacyPendingAssistantId, liveState?.assistantEntryId],
           ).entries,
         }));
         scheduleHistoryRefresh(threadId, 5, 1200, true);
@@ -6058,7 +6238,7 @@ export function AppShell() {
               entry.role === "assistant" &&
               entry.intentId === failedIntentId &&
               (entry.pending ||
-                entry.id === pendingAssistant.id ||
+                entry.id === legacyPendingAssistantId ||
                 entry.id === liveState?.assistantEntryId);
             if (!isTargetAssistant) {
               return entry;
@@ -6109,20 +6289,33 @@ export function AppShell() {
     try {
       let nextIntentId = firstIntentId;
       let dispatchedFromQueue = false;
+      let seededTurn: SeededTurn | undefined;
 
       while (nextIntentId || queueIntentIdsForThread(threadId).length > 0) {
+        seededTurn = undefined;
         if (!nextIntentId) {
           const currentQueuedIntent = shiftQueuedIntent(threadId);
           nextIntentId = currentQueuedIntent?.intentId || "";
           dispatchedFromQueue = true;
-          if (!nextIntentId) {
+          if (!currentQueuedIntent || !nextIntentId) {
             break;
           }
+          seededTurn = appendSeededTurn(threadId, currentQueuedIntent);
+          dispatchMessageState({
+            type: "intent/request-dispatch",
+            threadId,
+            intentId: nextIntentId,
+            mode: "sync_send",
+            source: "queue_send",
+            removeFromQueue: true,
+          });
         } else {
           dispatchedFromQueue = false;
         }
 
-        const didSucceed = await sendIntentOnce(threadId, nextIntentId);
+        const didSucceed = await sendIntentOnce(threadId, nextIntentId, {
+          seededTurn,
+        });
         if (!didSucceed) {
           if (dispatchedFromQueue) {
             dispatchMessageState({
@@ -6138,14 +6331,48 @@ export function AppShell() {
         nextIntentId = "";
       }
     } finally {
-      dispatchMessageState({
-        type: "thread/clear",
-        threadId,
-      });
+      if (!hasPendingHistoryIntents(threadId)) {
+        dispatchMessageState({
+          type: "thread/clear",
+          threadId,
+        });
+      }
       const status = await window.garyxDesktop.checkConnection();
       setConnection(status);
     }
   }
+
+  useEffect(() => {
+    const threadId = selectedThreadId;
+    if (!threadId || contentView !== "thread") {
+      return;
+    }
+    if (activeQueue.length === 0) {
+      delete deferredQueueDrainByThreadRef.current[threadId];
+      delete queueDrainInFlightByThreadRef.current[threadId];
+      return;
+    }
+    if (
+      isActiveSendingThread ||
+      isDraftSendingThread ||
+      !deferredQueueDrainByThreadRef.current[threadId] ||
+      queueDrainInFlightByThreadRef.current[threadId]
+    ) {
+      return;
+    }
+
+    deferredQueueDrainByThreadRef.current[threadId] = false;
+    queueDrainInFlightByThreadRef.current[threadId] = true;
+    void runQueuedBatch(threadId).finally(() => {
+      delete queueDrainInFlightByThreadRef.current[threadId];
+    });
+  }, [
+    activeQueue.length,
+    contentView,
+    isActiveSendingThread,
+    isDraftSendingThread,
+    selectedThreadId,
+  ]);
 
   async function handleQueueCurrentPrompt() {
     if (composerAttachmentUploadPending) {
@@ -6176,12 +6403,18 @@ export function AppShell() {
       intent,
       enqueue: true,
     });
+    if (isActiveSendingThread) {
+      deferredQueueDrainByThreadRef.current[threadId] = true;
+    }
     clearComposerDraft();
     setError(null);
   }
 
   async function handleSteerQueuedPrompt(intent: MessageIntent) {
     const threadId = intent.threadId;
+    if (!canSteerQueuedPrompt) {
+      return;
+    }
     const latestIntent = intentForId(intent.intentId);
     if (!latestIntent || latestIntent.state !== "queued_local") {
       return;
@@ -6201,22 +6434,29 @@ export function AppShell() {
     });
 
     setError(null);
-    pendingThreadBottomSnapRef.current = threadId;
-    updateLiveStreamState(threadId, (current) =>
-      current
-        ? {
-            ...current,
-            pendingAckIntentIds: [
-              ...current.pendingAckIntentIds,
-              latestIntent.intentId,
-            ],
-          }
-        : current,
-    );
+    requestMessagesBottomSnap(threadId, true);
+    const optimisticRunId =
+      getLiveStreamState(threadId)?.runId ||
+      selectThreadRuntime(messageStateRef.current, threadId)?.remoteRunId ||
+      `stream:${threadId}`;
+    updateLiveStreamState(threadId, (current) => {
+      const pendingAckIntentIds = current?.pendingAckIntentIds || [];
+      return {
+        threadId,
+        runId: current?.runId || optimisticRunId,
+        activeIntentId: current?.activeIntentId,
+        assistantEntryId: current?.assistantEntryId ?? null,
+        pendingAckIntentIds: pendingAckIntentIds.includes(latestIntent.intentId)
+          ? pendingAckIntentIds
+          : [...pendingAckIntentIds, latestIntent.intentId],
+        streamStatus: current?.streamStatus || "streaming",
+      };
+    });
 
     try {
       const result = await window.garyxDesktop.sendStreamingInput({
         threadId,
+        clientIntentId: latestIntent.intentId,
         message: latestIntent.text,
         images: latestIntent.images,
         files: latestIntent.files,
@@ -6235,13 +6475,18 @@ export function AppShell() {
           threadId: resultThreadId,
           pendingInputId: result.pendingInputId,
           removeFromQueue: true,
+          awaitProviderAck: true,
         });
         updateLiveStreamState(resultThreadId, (current) => ({
           threadId: resultThreadId,
           runId: current?.runId || activeRunId,
           activeIntentId: current?.activeIntentId,
           assistantEntryId: current?.assistantEntryId ?? null,
-          pendingAckIntentIds: current?.pendingAckIntentIds || [],
+          pendingAckIntentIds: (
+            current?.pendingAckIntentIds || []
+          ).includes(latestIntent.intentId)
+            ? current?.pendingAckIntentIds || []
+            : [...(current?.pendingAckIntentIds || []), latestIntent.intentId],
           streamStatus: current?.streamStatus || "streaming",
         }));
         setThreadRuntimeState(resultThreadId, "running_remote", {
@@ -6278,7 +6523,6 @@ export function AppShell() {
       });
       const didSucceed = await sendIntentOnce(threadId, latestIntent.intentId, {
         seedUserBubble: true,
-        seedPendingAssistant: true,
       });
       if (!didSucceed) {
         dispatchMessageState({
@@ -6374,7 +6618,7 @@ export function AppShell() {
         pendingAckIntentIds: [],
         streamStatus: "connecting",
       }));
-      pendingThreadBottomSnapRef.current = NEW_THREAD_DRAFT_THREAD_ID;
+      requestMessagesBottomSnap(NEW_THREAD_DRAFT_THREAD_ID, true);
       seededDraftIntentId = draftIntent.intentId;
       clearComposerDraft();
       setError(null);
@@ -6726,7 +6970,7 @@ export function AppShell() {
               <label className="gateway-setup-field">
                 <span>{t('Gateway URL')}</span>
                 <div className="gateway-url-input-shell">
-                  <input
+                  <Input
                     autoCapitalize="off"
                     autoComplete="off"
                     className="gateway-setup-input gateway-url-input-with-history"
@@ -6756,7 +7000,7 @@ export function AppShell() {
 
               <label className="gateway-setup-field">
                 <span>{t('Gateway Token')}</span>
-                <input
+                <Input
                   autoCapitalize="off"
                   autoComplete="off"
                   className="gateway-setup-input"
@@ -7199,6 +7443,7 @@ export function AppShell() {
                 activeMessages={activeMessages}
                 activePendingAckIntents={visiblePendingAckIntents}
                 activePendingAutomationRun={activePendingAutomationRun}
+                activeToolTraceLoadingKey={activeToolTraceLoadingKey}
                 activeQueue={activeQueue}
                 activeRenderableBlocks={activeRenderableBlocks}
                 activeThreadLogsHasUnread={activeThreadLogsHasUnread}
@@ -7230,6 +7475,7 @@ export function AppShell() {
                 ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
                 inspectorOpen={inspectorOpen}
                 isActiveSendingThread={isActiveSendingThread}
+                canSteerQueuedPrompt={canSteerQueuedPrompt}
                 isComposingRef={isComposingRef}
                 messagesRef={messagesRef}
                 mobileThreadLogLines={mobileThreadLogLines}

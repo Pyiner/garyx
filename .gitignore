@@ -49,6 +49,9 @@ dmypy.json
 # Logs
 *.log
 
+# Generated outputs
+outputs/
+
 # Configuration
 config.local.yaml
 .env
@@ -75,9 +78,11 @@ desktop/**/.playwright-cli/
 target/
 
 # Gary runtime state
+.agents/
 .claude/
 .gary/
 .local-research/
+skills-lock.json
 data/.restart_marker
 data/graph_executions.jsonl
 data/graph_executions.lock

@@ -70,6 +70,7 @@ import type {
   SelectCandidateInput,
   StopAutoResearchRunInput,
   StopTaskInput,
+  ThreadActiveRunInfo,
   ThreadLogChunk,
   ThreadChannelBindingInfo,
   ThreadRuntimeInfo,
@@ -95,6 +96,7 @@ import type {
 } from "@shared/contracts";
 
 interface StreamInputWaiter {
+  clientIntentId?: string;
   resolve: (result: SendStreamingInputResult) => void;
   reject: (error: Error) => void;
 }
@@ -280,11 +282,30 @@ interface HistoryPayload {
     content?: unknown;
   }>;
   team?: ThreadTeamBlockPayload | null;
+  thread_runtime?: ThreadRuntimePayload | null;
 }
 
 interface ThreadMetadataPayload extends ThreadSummaryPayload {
   sdk_session_id?: string | null;
   provider_type?: string | null;
+  active_run?: ThreadActiveRunPayload | null;
+  thread_runtime?: ThreadRuntimePayload | null;
+}
+
+interface ThreadRuntimePayload {
+  provider_type?: string | null;
+  provider_label?: string | null;
+  sdk_session_id?: string | null;
+  active_run?: ThreadActiveRunPayload | null;
+}
+
+interface ThreadActiveRunPayload {
+  run_id?: string | null;
+  provider_type?: string | null;
+  provider_label?: string | null;
+  assistant_response?: string | null;
+  updated_at?: string | null;
+  pending_user_input_count?: number;
 }
 
 interface ThreadTeamBlockPayload {
@@ -1356,22 +1377,57 @@ function mapThreadRuntimeInfo(
   if (!value || typeof value !== "object") {
     return null;
   }
-  const providerType = parseThreadProviderType(value.provider_type);
+  const runtime = parseRecord(value.thread_runtime);
+  const providerType = parseThreadProviderType(
+    value.provider_type || asString(runtime.provider_type),
+  );
   const channelBindings = Array.isArray(value.channel_bindings)
     ? value.channel_bindings
         .map((entry) => mapThreadChannelBinding(entry))
         .filter((entry): entry is ThreadChannelBindingInfo => Boolean(entry))
     : [];
+  const activeRun = mapThreadActiveRun(
+    (value.active_run as ThreadActiveRunPayload | null | undefined) ||
+      (runtime.active_run as ThreadActiveRunPayload | null | undefined),
+  );
   return {
     agentId:
       typeof value.agent_id === "string" ? value.agent_id : value.agentId ?? null,
     providerType,
-    providerLabel: providerLabelForThread(providerType),
+    providerLabel: asString(runtime.provider_label) || providerLabelForThread(providerType),
     sdkSessionId:
-      typeof value.sdk_session_id === "string" ? value.sdk_session_id : null,
+      typeof value.sdk_session_id === "string"
+        ? value.sdk_session_id
+        : asString(runtime.sdk_session_id) || null,
     workspacePath:
       typeof value.workspace_dir === "string" ? value.workspace_dir : null,
+    activeRun,
     channelBindings,
+  };
+}
+
+function mapThreadActiveRun(
+  value: ThreadActiveRunPayload | null | undefined,
+): ThreadActiveRunInfo | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const runId = asString(value.run_id);
+  if (!runId) {
+    return null;
+  }
+  const providerType = parseThreadProviderType(value.provider_type);
+  return {
+    runId,
+    providerType,
+    providerLabel: asString(value.provider_label) || providerLabelForThread(providerType),
+    assistantResponse: asString(value.assistant_response) || null,
+    updatedAt: asString(value.updated_at) || null,
+    pendingUserInputCount:
+      typeof value.pending_user_input_count === "number" &&
+      Number.isFinite(value.pending_user_input_count)
+        ? value.pending_user_input_count
+        : undefined,
   };
 }
 
@@ -2483,13 +2539,20 @@ export async function fetchThreadHistory(
     payload.pending_user_inputs
       ?.map((value) => mapPendingUserInput(value))
       .filter((value): value is PendingThreadInput => Boolean(value)) ?? [];
+  const threadInfoPayload =
+    detail || payload.thread_runtime
+      ? ({
+          ...(detail ?? {}),
+          thread_runtime: payload.thread_runtime ?? detail?.thread_runtime ?? null,
+        } as ThreadMetadataPayload)
+      : null;
 
   return {
     threadId,
     remoteFound: Boolean(payload.ok),
     messages,
     pendingInputs,
-    threadInfo: mapThreadRuntimeInfo(detail),
+    threadInfo: mapThreadRuntimeInfo(threadInfoPayload),
     team: mapThreadTeamBlock(payload.team),
   };
 }
@@ -3917,6 +3980,7 @@ export async function openChatStream(
               workspacePath: workspacePath || undefined,
               metadata: {
                 client_timestamp_local: formatLocalChatTimestamp(),
+                client_intent_id: input.clientIntentId,
               },
               providerMetadata,
             }),
@@ -4045,7 +4109,18 @@ export async function openChatStream(
               socket.close();
               return;
             case "stream_input": {
-              const waiter = active.pendingInputWaiters.shift();
+              const clientIntentId =
+                asString(payload.clientIntentId) ||
+                asString(payload.client_intent_id);
+              const waiterIndex = clientIntentId
+                ? active.pendingInputWaiters.findIndex(
+                    (entry) => entry.clientIntentId === clientIntentId,
+                  )
+                : -1;
+              const waiter =
+                waiterIndex >= 0
+                  ? active.pendingInputWaiters.splice(waiterIndex, 1)[0]
+                  : active.pendingInputWaiters.shift();
               if (!waiter) {
                 return;
               }
@@ -4053,6 +4128,7 @@ export async function openChatStream(
                 status: asString(payload.status) || "no_active_session",
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
+                clientIntentId,
                 pendingInputId:
                   asString(payload.pendingInputId) ||
                   asString(payload.pending_input_id),
@@ -4156,6 +4232,7 @@ export async function sendStreamingInput(
     );
     return await new Promise((resolve, reject) => {
       const waiter: StreamInputWaiter = {
+        clientIntentId: input.clientIntentId,
         resolve: (result) => {
           clearTimeout(timeout);
           resolve(result);
@@ -4177,6 +4254,7 @@ export async function sendStreamingInput(
         JSON.stringify({
           op: "input",
           threadId,
+          clientIntentId: input.clientIntentId,
           message: input.message,
           attachments: serializedAttachments.attachments,
           images: serializedAttachments.images,
@@ -4189,6 +4267,7 @@ export async function sendStreamingInput(
     status: "no_active_session",
     threadId,
     sessionId: input.sessionId || threadId,
+    clientIntentId: input.clientIntentId,
   };
 }
 

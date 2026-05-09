@@ -7,7 +7,7 @@
  * `required`, and `enum` / `default` on leaf fields. Covers:
  *
  *   - `type: string` → `<input type="text">`, `<input type="password">`
- *     when `x-garyx.secret === true`, `<select>` when `enum` is set.
+ *     when `x-garyx.secret === true`, shadcn Select when `enum` is set.
  *   - `type: boolean` → `<input type="checkbox">`.
  *   - `type: integer` / `number` → `<input type="number">`.
  *   - `type: array` with `items.type === "string"` → simple comma-
@@ -33,6 +33,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -175,7 +176,7 @@ function SchemaField({
       : prettifyKey(fieldKey);
   const isSecret = schema["x-garyx"]?.secret === true;
 
-  // Scalar with an enum collapses to a <select> regardless of type.
+  // Scalar with an enum collapses to a shadcn Select regardless of type.
   if (Array.isArray(schema.enum) && schema.enum.length > 0) {
     const current =
       value !== undefined && value !== null
@@ -194,14 +195,16 @@ function SchemaField({
             <SelectValue placeholder={t("Choose...")} />
           </SelectTrigger>
           <SelectContent>
-            {schema.enum.map((option) => {
-              const text = String(option);
-              return (
-                <SelectItem key={text} value={text}>
-                  {text}
-                </SelectItem>
-              );
-            })}
+            <SelectGroup>
+              {schema.enum.map((option) => {
+                const text = String(option);
+                return (
+                  <SelectItem key={text} value={text}>
+                    {text}
+                  </SelectItem>
+                );
+              })}
+            </SelectGroup>
           </SelectContent>
         </Select>
       </LabelledField>

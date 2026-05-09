@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Trash } from 'lucide-react';
 
 import {
   DEFAULT_DESKTOP_SETTINGS,
   type ChannelPluginCatalogEntry,
   type ConnectionStatus,
+  type DesktopApiProviderType,
   type DesktopCustomAgent,
   type DesktopTeam,
   type DesktopSettings,
@@ -48,6 +49,7 @@ import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -64,14 +66,14 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { AddBotDialog } from './app-shell/components/AddBotDialog';
+import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { MoreDotsIcon } from './app-shell/icons';
 import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { EditBotDialog, type EditBotDialogContext, type EditBotPatch } from './app-shell/components/EditBotDialog';
 import { languagePreferenceLabel, type Translate, useI18n } from './i18n';
-import desktopPackage from '../../../package.json';
 
-const DESKTOP_APP_VERSION = desktopPackage.version.trim() || '0.0.0';
+const UNKNOWN_DESKTOP_APP_VERSION = '0.0.0';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
 type GatewaySettingsSaveOptions = {
@@ -148,6 +150,10 @@ type AgentProviderFieldsProps = {
 };
 
 type AgentTargetOption = {
+  avatarDataUrl?: string;
+  detail?: string;
+  kind: 'builtin' | 'agent' | 'team';
+  providerType?: DesktopApiProviderType;
   value: string;
   label: string;
 };
@@ -217,6 +223,13 @@ function updateStatusDisplay(
           version: status.info.version,
         }),
         tone: 'success',
+      };
+    case 'installing':
+      return {
+        message: t('Installing update v{version}...', {
+          version: status.info.version,
+        }),
+        tone: 'info',
       };
     case 'error':
       return { message: status.message ? t(status.message) : t('Update check failed.'), tone: 'danger' };
@@ -451,10 +464,17 @@ function sortedAgentTargets(
       return left.displayName.localeCompare(right.displayName) || left.teamId.localeCompare(right.teamId);
     })
     .map((team) => ({
+      avatarDataUrl: team.avatarDataUrl,
+      detail: 'Team',
+      kind: 'team' as const,
       value: team.teamId,
       label: formatTeamOptionLabel(team),
     }));
   const agentOptions = sortedStandaloneAgents(agents).map((agent) => ({
+    avatarDataUrl: agent.avatarDataUrl,
+    detail: agentProviderLabel(agent.providerType),
+    kind: agent.builtIn ? 'builtin' as const : 'agent' as const,
+    providerType: agent.providerType,
     value: agent.agentId,
     label: `${formatAgentOptionLabel(agent)} · ${agentProviderLabel(agent.providerType)}`,
   }));
@@ -904,10 +924,12 @@ function AgentProviderFields({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="rounded-[14px] border-[#e7e7e5] bg-white shadow-[0_12px_32px_rgba(0,0,0,0.08)]">
-                <SelectItem value="claude_code">claude_code</SelectItem>
-                <SelectItem value="codex_app_server">codex_app_server</SelectItem>
-                <SelectItem value="gemini_cli">gemini_cli</SelectItem>
-                <SelectItem value="opencode">opencode</SelectItem>
+                <SelectGroup>
+                  <SelectItem value="claude_code">claude_code</SelectItem>
+                  <SelectItem value="codex_app_server">codex_app_server</SelectItem>
+                  <SelectItem value="gemini_cli">gemini_cli</SelectItem>
+                  <SelectItem value="opencode">opencode</SelectItem>
+                </SelectGroup>
               </SelectContent>
             </Select>
           }
@@ -1016,6 +1038,7 @@ export function GatewaySettingsPanel({
   const [updateFeedback, setUpdateFeedback] = useState<UpdateFeedback | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [desktopAppVersion, setDesktopAppVersion] = useState(UNKNOWN_DESKTOP_APP_VERSION);
   const updateStatusRef = useRef<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
   const statusClass =
     gatewayStatusMessage && /(failed|error|invalid)/i.test(gatewayStatusMessage)
@@ -1114,6 +1137,21 @@ export function GatewaySettingsPanel({
       api.unsubscribeUpdateStatus(listener);
     };
   }, [t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.garyxDesktop.getAppVersion().then((version) => {
+      if (cancelled) return;
+      setDesktopAppVersion(version.trim() || UNKNOWN_DESKTOP_APP_VERSION);
+    }).catch(() => {
+      if (cancelled) return;
+      setDesktopAppVersion(UNKNOWN_DESKTOP_APP_VERSION);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function renderGatewaySaveAction(_buttonLabel?: string) {
     const statusLabel = gatewaySaving
@@ -1218,9 +1256,11 @@ export function GatewaySettingsPanel({
                 />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="system">{t('Follow System')}</SelectItem>
-                <SelectItem value="en">{t('English')}</SelectItem>
-                <SelectItem value="zh-CN">{t('Chinese')}</SelectItem>
+                <SelectGroup>
+                  <SelectItem value="system">{t('Follow System')}</SelectItem>
+                  <SelectItem value="en">{t('English')}</SelectItem>
+                  <SelectItem value="zh-CN">{t('Chinese')}</SelectItem>
+                </SelectGroup>
               </SelectContent>
             </Select>
           }
@@ -1490,7 +1530,6 @@ export function GatewaySettingsPanel({
                 selectedTarget,
                 accountAgentId || t('Default route'),
               );
-              const agentDotSeed = selectedTarget?.value || accountAgentId || 'default';
               const displayName = String(account?.name || accountId);
               const enabled = Boolean(account?.enabled);
               // Catalog-driven channel presentation: show the
@@ -1562,13 +1601,13 @@ export function GatewaySettingsPanel({
                     title={agentLabel}
                   >
                     <span className="bot-table-agent">
-                      <span
-                        className={classNames(
-                          'bot-table-agent-dot',
-                          selectedAgentMissing && 'missing',
-                        )}
-                        data-agent-tone={agentDotSeed.length % 4}
-                        aria-hidden
+                      <AgentOptionAvatar
+                        agentId={selectedTarget?.value || accountAgentId}
+                        avatarDataUrl={selectedTarget?.avatarDataUrl}
+                        className={selectedAgentMissing ? 'agent-option-avatar--missing' : undefined}
+                        kind={selectedTarget?.kind || 'agent'}
+                        label={agentDisplayName}
+                        providerType={selectedTarget?.providerType}
                       />
                       <span className="bot-table-agent-copy">
                         <span className="bot-table-agent-name">{agentDisplayName}</span>
@@ -1614,12 +1653,13 @@ export function GatewaySettingsPanel({
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" sideOffset={4}>
                         <DropdownMenuItem
-                          className="bot-table-menu-danger"
                           disabled={gatewaySaving}
                           onSelect={() => {
                             void handleDeleteBotAccount(kind, accountId, displayName);
                           }}
+                          variant="destructive"
                         >
+                          <Trash aria-hidden />
                           {t('Delete')}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
@@ -1841,6 +1881,7 @@ export function GatewaySettingsPanel({
         <DialogContent
           className="commands-dialog"
           showCloseButton={false}
+          size="form"
         >
           <DialogHeader className="commands-dialog-header">
             <Badge
@@ -2084,9 +2125,7 @@ export function GatewaySettingsPanel({
                     title={t('Delete')}
                     type="button"
                   >
-                    <svg aria-hidden width="16" height="16" viewBox="0 0 20 20" fill="none">
-                      <path d="M8 3.5h4a.5.5 0 0 1 .5.5V5h3a.5.5 0 0 1 0 1h-.6l-.8 9.6A2 2 0 0 1 12.1 17.5H7.9a2 2 0 0 1-1.99-1.9L5.1 6H4.5a.5.5 0 0 1 0-1h3V4a.5.5 0 0 1 .5-.5zm.5 1.5V5h3v-.5zm-2.4 2l.8 9.52a1 1 0 0 0 1 .98h4.2a1 1 0 0 0 1-1l.8-9.5H6.1zM8.5 8a.5.5 0 0 1 .5.5v5a.5.5 0 0 1-1 0v-5a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v5a.5.5 0 0 1-1 0v-5a.5.5 0 0 1 .5-.5z" fill="currentColor"/>
-                    </svg>
+                    <Trash aria-hidden />
                   </button>
                 </div>
               </div>
@@ -2107,6 +2146,7 @@ export function GatewaySettingsPanel({
         <DialogContent
           className="max-w-[520px] rounded-[12px] border-[#e8e8e5] bg-white p-0 shadow-[0_8px_24px_rgba(0,0,0,0.08)] gap-0"
           showCloseButton={false}
+          size="narrow"
         >
           <DialogHeader className="border-b border-[#efefec] px-4 py-3">
             <DialogTitle className="text-[14px] font-semibold tracking-[-0.01em] text-[#111111]">
@@ -2455,7 +2495,7 @@ export function GatewaySettingsPanel({
               <div className="settings-update-control">
                 <div className="settings-update-summary">
                   <span className="settings-update-version">
-                    {t('Current version {version}', { version: `v${DESKTOP_APP_VERSION}` })}
+                    {t('Current version {version}', { version: `v${desktopAppVersion}` })}
                   </span>
                   <span className={`settings-update-status tone-${updateDisplay.tone}`}>
                     {updateDisplay.message}

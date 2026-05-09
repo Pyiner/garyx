@@ -62,7 +62,7 @@ import {
   groupAgentOptions,
   type ComposerAgentOption,
 } from './app-shell/agent-options';
-import { ProviderAgentIcon, hasProviderAgentIcon } from './app-shell/components/ProviderAgentIcon';
+import { AgentOptionAvatar, AgentOptionRow } from './app-shell/components/AgentOptionAvatar';
 import { AgentsIcon } from './app-shell/icons';
 
 export type { ComposerAgentOption };
@@ -258,32 +258,15 @@ const AGENT_PROVIDER_GLYPH = (
 );
 
 function renderComposerAgentOptionIcon(option: ComposerAgentOption) {
-  const showProviderIcon =
-    option.kind === 'builtin' && hasProviderAgentIcon(option.id, option.providerType);
-  const hasAvatar = Boolean(option.avatarDataUrl);
-  const classes = [
-    'composer-agent-option-icon',
-    hasAvatar && option.kind === 'team' ? 'team' : '',
-    hasAvatar ? 'image' : '',
-    showProviderIcon ? 'provider' : '',
-    !hasAvatar && !showProviderIcon ? 'default' : '',
-  ].filter(Boolean).join(' ');
-
   return (
-    <span aria-hidden className={classes}>
-      {option.avatarDataUrl ? (
-        <img alt="" src={option.avatarDataUrl} />
-      ) : showProviderIcon ? (
-        <ProviderAgentIcon
-          agentId={option.id}
-          className="composer-agent-option-icon-svg"
-          providerType={option.providerType}
-          size={16}
-        />
-      ) : (
-        <AgentsIcon />
-      )}
-    </span>
+    <AgentOptionAvatar
+      agentId={option.id}
+      avatarDataUrl={option.avatarDataUrl}
+      className="composer-agent-option-icon"
+      kind={option.kind}
+      label={option.label}
+      providerType={option.providerType}
+    />
   );
 }
 
@@ -339,8 +322,13 @@ function renderComposerProviderControl({
               key={option.id}
               onSelect={() => onSelectAgent(option.id)}
             >
-              {renderComposerAgentOptionIcon(option)}
-              <span className="composer-menu-label">{option.label}</span>
+              <AgentOptionRow
+                agentId={option.id}
+                avatarDataUrl={option.avatarDataUrl}
+                kind={option.kind}
+                label={option.label}
+                providerType={option.providerType}
+              />
             </FloatingActionMenuItem>
           ))}
           {hasAgents || hasTeams ? <DropdownMenuSeparator /> : null}
@@ -356,12 +344,14 @@ function renderComposerProviderControl({
                     key={option.id}
                     onSelect={() => onSelectAgent(option.id)}
                   >
-                    {renderComposerAgentOptionIcon(option)}
-                    <span className="composer-menu-label">
-                      {option.detail
-                        ? `${option.label} (${option.detail})`
-                        : option.label}
-                    </span>
+                    <AgentOptionRow
+                      agentId={option.id}
+                      avatarDataUrl={option.avatarDataUrl}
+                      detail={option.detail}
+                      kind={option.kind}
+                      label={option.label}
+                      providerType={option.providerType}
+                    />
                   </FloatingActionMenuItem>
                 ))}
               </FloatingActionMenuSubContent>
@@ -379,8 +369,14 @@ function renderComposerProviderControl({
                     key={option.id}
                     onSelect={() => onSelectAgent(option.id)}
                   >
-                    {renderComposerAgentOptionIcon(option)}
-                    <span className="composer-menu-label">{option.label}</span>
+                    <AgentOptionRow
+                      agentId={option.id}
+                      avatarDataUrl={option.avatarDataUrl}
+                      detail={option.detail}
+                      kind={option.kind}
+                      label={option.label}
+                      providerType={option.providerType}
+                    />
                   </FloatingActionMenuItem>
                 ))}
               </FloatingActionMenuSubContent>
@@ -822,13 +818,14 @@ export function ComposerForm({
                 src={buildMessageImageDataUrl(image.mediaType, image.data || '')}
               />
               <button
-                className="composer-image-chip-remove"
+                aria-label={t("Remove image attachment")}
+                className="composer-attachment-remove composer-image-chip-remove"
                 onClick={() => {
                   onRemoveComposerImage(image.id);
                 }}
                 type="button"
               >
-                <IconX aria-hidden size={10} stroke={2.2} />
+                <IconX aria-hidden size={12} stroke={2.2} />
                 <span className="sr-only">{t("Remove image attachment")}</span>
               </button>
             </div>
@@ -844,13 +841,14 @@ export function ComposerForm({
               </span>
               <span className="composer-file-chip-label">{file.name}</span>
               <button
-                className="composer-image-chip-remove"
+                aria-label={t("Remove file attachment")}
+                className="composer-attachment-remove composer-file-chip-remove"
                 onClick={() => {
                   onRemoveComposerFile(file.id);
                 }}
                 type="button"
               >
-                <IconX aria-hidden size={10} stroke={2.2} />
+                <IconX aria-hidden size={12} stroke={2.2} />
                 <span className="sr-only">{t("Remove file attachment")}</span>
               </button>
             </div>

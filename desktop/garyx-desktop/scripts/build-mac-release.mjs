@@ -10,6 +10,7 @@ const builderCliPath = resolve(projectRoot, "node_modules", "electron-builder", 
 const requestedVersion = process.env.GARYX_DESKTOP_VERSION?.trim() || null;
 const extraArgs = process.argv.slice(2);
 const defaultArgs = ["--mac", "dmg", "zip", "--universal", "--publish", "never"];
+const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 function assertValidVersion(value) {
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value)) {
@@ -21,6 +22,18 @@ function assertValidVersion(value) {
 
 const originalPackageJson = readFileSync(packageJsonPath, "utf8");
 
+function run(command, args) {
+  const result = spawnSync(command, args, {
+    cwd: projectRoot,
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  return result.status ?? 1;
+}
+
 if (requestedVersion) {
   assertValidVersion(requestedVersion);
   const packageJson = JSON.parse(originalPackageJson);
@@ -29,24 +42,28 @@ if (requestedVersion) {
   console.log(`Temporarily set Garyx version to ${requestedVersion}`);
 }
 
+let exitCode = 0;
+
 try {
+  if (process.env.GARYX_DESKTOP_SKIP_BUILD === "1") {
+    console.log("Skipping UI build because GARYX_DESKTOP_SKIP_BUILD=1.");
+  } else {
+    exitCode = run(npmCommand, ["run", "build:packaged"]);
+  }
+
   const args = [
     builderCliPath,
     ...(extraArgs.length === 0 ? defaultArgs : extraArgs),
   ];
-  const result = spawnSync(process.execPath, args, {
-    cwd: projectRoot,
-    stdio: "inherit",
-    env: process.env,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    process.exitCode = result.status ?? 1;
+  if (exitCode === 0) {
+    exitCode = run(process.execPath, args);
   }
 } finally {
   if (requestedVersion) {
     writeFileSync(packageJsonPath, originalPackageJson);
   }
+}
+
+if (exitCode !== 0) {
+  process.exit(exitCode);
 }

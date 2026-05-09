@@ -757,6 +757,9 @@ pub(super) async fn handle_im_message_event(
             let mut send_interactive_fallback = false;
             let mut send_result: Option<Result<String, FeishuError>> = None;
             match event {
+                StreamEvent::SessionBound { .. } => {
+                    continue;
+                }
                 StreamEvent::Boundary { kind, .. } => match kind {
                     StreamBoundaryKind::UserAck => {
                         let boundary_outbound = state.stream_reply_message_id.clone();

@@ -15,6 +15,15 @@ import type {
 } from '@shared/contracts';
 import type { ToastTone } from './toast';
 import { useI18n } from './i18n';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 
 const SKILL_ID_PATTERN = /^[a-z0-9-]+$/;
 const TRANSIENT_STATUS_MS = 3200;
@@ -752,7 +761,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                       title={t('Delete')}
                       type="button"
                     >
-                      <Trash />
+                      <Trash aria-hidden />
                     </button>
                     <button
                       aria-label={skill.enabled ? t('Disable skill') : t('Enable skill')}
@@ -774,23 +783,21 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
         )}
       </div>
 
-      {createDialogOpen ? (
-        <div
-          className="modal-overlay"
-          onClick={() => {
+      <Dialog
+        open={createDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
             closeCreateDialog();
-          }}
-          role="presentation"
+          }
+        }}
+      >
+        <DialogContent
+          aria-labelledby="skills-create-dialog-title"
+          className="skills-create-modal"
+          scope="content"
+          showCloseButton={false}
+          size="large"
         >
-          <div
-            aria-labelledby="skills-create-dialog-title"
-            aria-modal="true"
-            className="modal-card skills-create-modal"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-            role="dialog"
-          >
             <div className="panel-header skills-create-modal-header">
               <div className="bot-card-copy">
                 <span className="eyebrow">{t('Create Skill')}</span>
@@ -813,9 +820,10 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 void handleCreateSkill(event);
               }}
             >
-              <label>
-                <span>{t('Name')}</span>
-                <input
+              <FieldGroup className="skills-create-field-group">
+              <Field>
+                <FieldLabel>{t('Name')}</FieldLabel>
+                <Input
                   autoFocus
                   onChange={(event) => {
                     setDraft((current) => ({
@@ -826,11 +834,11 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   placeholder={t('Example Skill')}
                   value={draft.name}
                 />
-              </label>
+              </Field>
 
-              <label>
-                <span>{t('Description')}</span>
-                <textarea
+              <Field>
+                <FieldLabel>{t('Description')}</FieldLabel>
+                <Textarea
                   onChange={(event) => {
                     setDraft((current) => ({
                       ...current,
@@ -840,11 +848,11 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   placeholder={t('What this skill should help Garyx do.')}
                   value={draft.description}
                 />
-              </label>
+              </Field>
 
-              <label>
-                <span>{t('Skill Content')}</span>
-                <textarea
+              <Field>
+                <FieldLabel>{t('Skill Content')}</FieldLabel>
+                <Textarea
                   className="skills-create-content-input"
                   onChange={(event) => {
                     setDraft((current) => ({
@@ -856,11 +864,12 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   spellCheck={false}
                   value={draft.body}
                 />
-              </label>
+              </Field>
 
-              <p className="small-note skills-form-note">
+              <FieldDescription className="small-note skills-form-note">
                 {t('Frontmatter is generated automatically from Name and Description. Write only the markdown body for SKILL.md here.')}
-              </p>
+              </FieldDescription>
+              </FieldGroup>
 
               <div className="skills-create-advanced">
                 <button
@@ -880,9 +889,9 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
 
               {createAdvancedOpen ? (
                 <div className="skills-advanced-panel">
-                  <label>
-                    <span>{t('Skill ID')}</span>
-                    <input
+                  <Field>
+                    <FieldLabel>{t('Skill ID')}</FieldLabel>
+                    <Input
                       onChange={(event) => {
                         setDraftIdManuallyEdited(true);
                         setDraft((current) => ({
@@ -894,10 +903,10 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                       spellCheck={false}
                       value={draft.id}
                     />
-                  </label>
-                  <p className="small-note skills-form-note">
+                  </Field>
+                  <FieldDescription className="small-note skills-form-note">
                     {t('Stable slug used as the skill directory name and API key under ~/.garyx/skills/<id>.')}
-                  </p>
+                  </FieldDescription>
                 </div>
               ) : null}
 
@@ -923,26 +932,25 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      ) : null}
+        </DialogContent>
+      </Dialog>
 
-      {editor ? (
-        <div
-          className="modal-overlay"
-          onClick={() => {
+      <Dialog
+        open={Boolean(editor)}
+        onOpenChange={(open) => {
+          if (!open) {
             closeEditor();
-          }}
-          role="presentation"
-        >
-          <div
+          }
+        }}
+      >
+        {editor ? (
+          <DialogContent
             aria-labelledby="skills-editor-title"
-            aria-modal="true"
-            className="modal-card skills-editor-modal"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-            role="dialog"
+            className="skills-editor-modal"
+            scope="content"
+            scroll="content"
+            showCloseButton={false}
+            size="workbench"
           >
             <div className="skills-editor-header">
               <div className="skills-editor-header-copy">
@@ -983,7 +991,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   title={t('Delete file')}
                   type="button"
                 >
-                  <Trash />
+                  <Trash aria-hidden />
                 </button>
                 <button
                   className="primary-button"
@@ -1052,7 +1060,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                       </div>
                     </div>
                   ) : editor.selectedDocument?.editable ? (
-                    <textarea
+                    <Textarea
                       className="skills-editor-textarea"
                       onChange={(event) => {
                         setEditor((current) => current ? {
@@ -1082,9 +1090,9 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 )}
               </section>
             </div>
-          </div>
-        </div>
-      ) : null}
+          </DialogContent>
+        ) : null}
+      </Dialog>
     </>
   );
 }

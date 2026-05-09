@@ -3828,7 +3828,6 @@ async fn run_gemini_cli_search(
     command
         .current_dir(&workspace_dir)
         .kill_on_drop(true)
-        .arg("--skip-trust")
         .arg("--approval-mode")
         .arg("yolo")
         .arg("--model")

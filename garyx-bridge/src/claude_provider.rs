@@ -1218,7 +1218,10 @@ impl ClaudeCliProvider {
                                 .map(str::trim)
                                 .filter(|s| !s.is_empty())
                         {
-                            let _ = self.stabilize_session_id(thread_id, sid).await;
+                            let stable_session_id = self.stabilize_session_id(thread_id, sid).await;
+                            on_chunk(StreamEvent::SessionBound {
+                                sdk_session_id: stable_session_id,
+                            });
                         }
                         if thread_title.is_none() {
                             thread_title = extract_claude_thread_title(&sys_msg.data);

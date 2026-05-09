@@ -27,18 +27,21 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 
+import type { AgentTargetOption } from "../agent-options";
+import { AgentOptionRow } from "./AgentOptionAvatar";
 import { AuthFlowDriver } from "../../channel-plugins/AuthFlowDriver";
 import { JsonSchemaForm } from "../../channel-plugins/JsonSchemaForm";
 import { DirectoryInput } from "../../components/DirectoryInput";
 import { useChannelPluginCatalog } from "../../channel-plugins/useChannelPluginCatalog";
 import { useI18n } from "../../i18n";
 
-type AgentTargetOption = { value: string; label: string };
 type EditBotStep = 1 | 2;
 
 export type EditBotDialogContext = {
@@ -209,7 +212,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
           if (!next) onClose();
         }}
       >
-        <DialogContent className="add-bot-dialog" />
+        <DialogContent className="add-bot-dialog" size="form" />
       </Dialog>
     );
   }
@@ -270,7 +273,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
         if (!next) onClose();
       }}
     >
-      <DialogContent className="add-bot-dialog">
+      <DialogContent className="add-bot-dialog" size="form">
         <DialogHeader className="add-bot-dialog-header">
           <DialogTitle className="add-bot-dialog-title">{t("Edit channel account")}</DialogTitle>
           <DialogDescription className="add-bot-dialog-description">
@@ -316,9 +319,11 @@ export function EditBotDialog(props: EditBotDialogProps) {
                       <SelectValue placeholder={catalogLoading ? t("Loading...") : kind} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={kind}>
-                        {selectedEntry?.display_name || kind}
-                      </SelectItem>
+                      <SelectGroup>
+                        <SelectItem value={kind}>
+                          {selectedEntry?.display_name || kind}
+                        </SelectItem>
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                 </div>
@@ -361,11 +366,21 @@ export function EditBotDialog(props: EditBotDialogProps) {
                       <SelectValue placeholder={t("Choose agent")} />
                     </SelectTrigger>
                     <SelectContent>
-                      {agentTargets.map((target) => (
-                        <SelectItem key={target.value} value={target.value}>
-                          {target.label}
-                        </SelectItem>
-                      ))}
+                      <SelectGroup>
+                        <SelectLabel>{t("Agents")}</SelectLabel>
+                        {agentTargets.map((target) => (
+                          <SelectItem key={target.value} value={target.value}>
+                            <AgentOptionRow
+                              agentId={target.value}
+                              avatarDataUrl={target.avatarDataUrl}
+                              detail={target.detail}
+                              kind={target.kind}
+                              label={target.label}
+                              providerType={target.providerType}
+                            />
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                   {selectedAgentMissing ? (

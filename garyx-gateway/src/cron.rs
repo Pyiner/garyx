@@ -1472,7 +1472,8 @@ fn build_scheduled_response_callback(
                         Some(merged)
                     }
                 }
-                StreamEvent::ToolUse { .. }
+                StreamEvent::SessionBound { .. }
+                | StreamEvent::ToolUse { .. }
                 | StreamEvent::ToolResult { .. }
                 | StreamEvent::ThreadTitleUpdated { .. } => None,
             }

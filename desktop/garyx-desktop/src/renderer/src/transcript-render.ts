@@ -4,7 +4,7 @@ import {
   canMergeToolTraceMessages,
   shouldRenderToolTraceMessage,
   type ToolTraceMessage,
-} from './tool-trace';
+} from './tool-trace-registry';
 
 export type RenderTranscriptEntry =
   | {
@@ -17,7 +17,6 @@ export type RenderTranscriptEntry =
       key: string;
       toolUse?: TranscriptMessage;
       toolResult?: TranscriptMessage;
-      defaultExpanded: boolean;
     };
 
 export type RenderTranscriptBlock =
@@ -29,6 +28,7 @@ export type RenderTranscriptBlock =
   | {
       kind: 'tool_group';
       key: string;
+      defaultExpanded: boolean;
       entries: Array<Extract<RenderTranscriptEntry, { kind: 'tool' }>>;
     };
 
@@ -181,7 +181,6 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
           kind: 'tool',
           key: message.id,
           toolResult: message,
-          defaultExpanded: false,
         });
       }
       continue;
@@ -191,7 +190,6 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
       kind: 'tool',
       key: message.id,
       toolUse: message,
-      defaultExpanded: false,
     });
     if (messageToolUseId) {
       pendingToolUses.set(messageToolUseId, rendered.length - 1);
@@ -215,6 +213,7 @@ export function buildRenderTranscriptBlocks(
     blocks.push({
       kind: 'tool_group',
       key: `tool-group:${firstKey}`,
+      defaultExpanded: false,
       entries: pendingTools,
     });
     pendingTools = [];

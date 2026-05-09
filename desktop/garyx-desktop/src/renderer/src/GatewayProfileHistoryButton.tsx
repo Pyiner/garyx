@@ -45,7 +45,7 @@ export function GatewayProfileHistoryButton({
           <HistoryIcon aria-hidden size={17} strokeWidth={1.9} />
         </button>
       </DialogTrigger>
-      <DialogContent className="gateway-profile-dialog">
+      <DialogContent className="gateway-profile-dialog" size="compact">
         <DialogHeader className="gateway-profile-dialog-header">
           <div className="gateway-profile-dialog-title-row">
             <span className="gateway-profile-dialog-icon" aria-hidden>

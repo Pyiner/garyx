@@ -30,6 +30,7 @@ pub(crate) async fn execute_chat_interrupt(
 pub(crate) async fn execute_chat_stream_input(
     state: &Arc<AppState>,
     thread_id: String,
+    client_intent_id: Option<String>,
     message: String,
     attachments: Vec<garyx_models::provider::PromptAttachment>,
     images: Vec<garyx_models::provider::ImagePayload>,
@@ -67,6 +68,7 @@ pub(crate) async fn execute_chat_stream_input(
         stream_input_response(
             status,
             Some(thread_status.to_owned()),
+            client_intent_id,
             pending_input_id,
             thread_id,
         ),

@@ -1,6 +1,7 @@
 import { type ComponentType, type ReactNode, useEffect, useState } from 'react';
 
 import {
+  IconChevronDown,
   IconTerminal2,
   IconFileText,
   IconPencil,
@@ -13,7 +14,6 @@ import {
   IconMessageQuestion,
   IconTool,
   IconBrain,
-  IconDownload,
 } from '@tabler/icons-react';
 
 import {
@@ -23,7 +23,7 @@ import {
   type MergedToolTrace,
   type ToolTraceMessage,
 } from './tool-trace-registry';
-import { useI18n } from './i18n';
+import { useI18n, type AppLocale, type Translate } from './i18n';
 
 export {
   canMergeToolTraceMessages,
@@ -35,7 +35,6 @@ type ToolTraceEntry = {
   key: string;
   toolUse?: ToolTraceMessage;
   toolResult?: ToolTraceMessage;
-  defaultExpanded: boolean;
 };
 
 type ToolTraceTreeNode = {
@@ -214,7 +213,6 @@ function ToolTraceTree({
     <>
       {nodes.map((node) => (
         <ToolTraceLine
-          defaultExpanded={node.entry.defaultExpanded}
           key={node.entry.key}
           nestedChildren={node.children.length ? <ToolTraceTree nodes={node.children} onThreadNavigate={onThreadNavigate} /> : null}
           onThreadNavigate={onThreadNavigate}
@@ -226,14 +224,115 @@ function ToolTraceTree({
   );
 }
 
+const FILE_TRACE_TITLES = new Set([
+  'Changed',
+  'Created',
+  'Deleted',
+  'Edit',
+  'Moved',
+  'Updated',
+  'Write',
+]);
+
+function countLabel(
+  count: number,
+  singularKey: string,
+  pluralKey: string,
+  t: Translate,
+): string {
+  return t(count === 1 ? singularKey : pluralKey, { count });
+}
+
+function summarizeToolTraceEntries(
+  entries: ToolTraceEntry[],
+  t: Translate,
+  locale: AppLocale,
+): string {
+  let commandCount = 0;
+  let otherCount = 0;
+  const fileKeys = new Set<string>();
+
+  for (const entry of entries) {
+    const merged = resolveMergedToolTrace(entry.toolUse, entry.toolResult);
+    if (merged.icon === '⌘' || merged.title === 'Command') {
+      commandCount += 1;
+      continue;
+    }
+    if (merged.icon === '✎' || FILE_TRACE_TITLES.has(merged.title)) {
+      fileKeys.add(merged.badges[0] || entry.key);
+      continue;
+    }
+    otherCount += 1;
+  }
+
+  const parts: string[] = [];
+  const fileCount = fileKeys.size;
+  if (fileCount) {
+    parts.push(countLabel(fileCount, 'Edited {count} file', 'Edited {count} files', t));
+  }
+  if (commandCount) {
+    parts.push(countLabel(commandCount, 'Ran {count} command', 'Ran {count} commands', t));
+  }
+  if (otherCount || !parts.length) {
+    parts.push(countLabel(otherCount || entries.length, 'Used {count} tool', 'Used {count} tools', t));
+  }
+
+  return parts.join(locale === 'zh-CN' ? '，' : ', ');
+}
+
 export function ToolTraceGroup({
+  active = false,
   entries,
+  defaultExpanded,
   onThreadNavigate,
 }: {
+  active?: boolean;
   entries: ToolTraceEntry[];
+  defaultExpanded: boolean;
   onThreadNavigate?: (threadId: string) => void;
 }) {
-  return <ToolTraceTree nodes={buildToolTraceTree(entries)} onThreadNavigate={onThreadNavigate} />;
+  const { locale, t } = useI18n();
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [userControlled, setUserControlled] = useState(false);
+  const summary = summarizeToolTraceEntries(entries, t, locale);
+
+  useEffect(() => {
+    if (!userControlled) {
+      setExpanded(defaultExpanded);
+    }
+  }, [defaultExpanded, userControlled]);
+
+  return (
+    <div className={`tool-trace-group ${expanded ? 'is-expanded' : 'is-collapsed'} ${active ? 'is-active' : ''}`}>
+      <button
+        aria-expanded={expanded}
+        aria-label={expanded ? t('Collapse tool calls') : t('Expand tool calls')}
+        className="tool-trace-group-header"
+        onClick={() => {
+          setUserControlled(true);
+          setExpanded((current) => !current);
+        }}
+        type="button"
+      >
+        <span className="tool-trace-group-icon">
+          <IconTerminal2 size={ICON_SIZE} stroke={ICON_STROKE} />
+        </span>
+        <span className="tool-trace-group-summary">{summary}</span>
+        <IconChevronDown aria-hidden className="tool-trace-group-chevron" size={15} stroke={1.7} />
+      </button>
+      <div
+        aria-hidden={!expanded}
+        className="tool-trace-group-panel"
+        inert={!expanded ? true : undefined}
+      >
+        <div className="tool-trace-group-panel-inner">
+          <div className="tool-trace-group-list">
+            <ToolTraceTree nodes={buildToolTraceTree(entries)} onThreadNavigate={onThreadNavigate} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function extractTargetThreadId(toolResult?: ToolTraceMessage): string | null {
@@ -251,25 +350,19 @@ function extractTargetThreadId(toolResult?: ToolTraceMessage): string | null {
 export function ToolTraceLine({
   toolUse,
   toolResult,
-  defaultExpanded,
   nestedChildren,
   onThreadNavigate,
 }: {
   toolUse?: ToolTraceMessage;
   toolResult?: ToolTraceMessage;
-  defaultExpanded: boolean;
   nestedChildren?: ReactNode;
   onThreadNavigate?: (threadId: string) => void;
 }) {
   const { t } = useI18n();
   const merged = resolveMergedToolTrace(toolUse, toolResult);
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [expanded, setExpanded] = useState(false);
   const targetThreadId = extractTargetThreadId(toolResult);
   const hasDetails = Boolean(merged.inputDetail || merged.resultDetail || nestedChildren);
-
-  useEffect(() => {
-    setExpanded(defaultExpanded);
-  }, [defaultExpanded]);
 
   return (
     <div className={`tool-trace ${merged.isError ? 'is-error' : ''} ${!hasDetails ? 'is-static' : ''}`}>

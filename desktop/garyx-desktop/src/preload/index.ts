@@ -257,6 +257,7 @@ const api: GaryxDesktopApi = {
       ipcRenderer.send("garyx:browser-state-unsubscribe");
     }
   },
+  getAppVersion: () => ipcRenderer.invoke("garyx:get-app-version"),
   getUpdateStatus: () => ipcRenderer.invoke("garyx:get-update-status"),
   checkForUpdatesNow: () => ipcRenderer.invoke("garyx:check-for-updates-now"),
   installUpdate: () => ipcRenderer.invoke("garyx:install-update"),

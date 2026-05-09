@@ -19,6 +19,7 @@ import { Label } from '../../../components/ui/label';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -30,6 +31,8 @@ import {
   DEFAULT_TIME_BUDGET_MINUTES,
 } from './types';
 import { useI18n } from '../../../i18n';
+
+const MISSING_WORKSPACE_VALUE_PREFIX = '__missing_workspace__:';
 
 type CreateRunDialogProps = {
   saving: boolean;
@@ -83,7 +86,7 @@ export function CreateRunDialog({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-[720px]">
+      <DialogContent className="sm:max-w-[720px]" size="wide">
         <DialogHeader>
           <DialogTitle>{t('Create Auto Research Run')}</DialogTitle>
           <DialogDescription>
@@ -110,20 +113,35 @@ export function CreateRunDialog({
 
           <div className="codex-form-field">
             <Label className="codex-form-label" htmlFor="auto-research-workspace">{t('Workspace')}</Label>
-            <Select onValueChange={setSelectedWorkspacePath} value={selectedWorkspacePath}>
+            <Select
+              onValueChange={(value) => {
+                if (value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) return;
+                setSelectedWorkspacePath(value);
+              }}
+              value={selectedWorkspacePath}
+            >
               <SelectTrigger aria-label={t('Workspace')} className="w-full" id="auto-research-workspace">
                 <SelectValue placeholder={t('Choose workspace')} />
               </SelectTrigger>
               <SelectContent>
-                {selectableWorkspaces.length ? (
-                  selectableWorkspaces.map((workspace) => (
-                    <SelectItem key={workspace.path || workspace.name} value={workspace.path || ''}>
-                      {workspace.name}
-                    </SelectItem>
-                  ))
-                ) : (
-                  <SelectItem disabled value="no-workspaces">{t('No workspaces available')}</SelectItem>
-                )}
+                <SelectGroup>
+                  {selectableWorkspaces.length ? (
+                    selectableWorkspaces.map((workspace) => {
+                      const value = workspace.path || `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
+                      return (
+                        <SelectItem
+                          disabled={!workspace.path}
+                          key={workspace.path || workspace.name}
+                          value={value}
+                        >
+                          {workspace.name}
+                        </SelectItem>
+                      );
+                    })
+                  ) : (
+                    <SelectItem disabled value="no-workspaces">{t('No workspaces available')}</SelectItem>
+                  )}
+                </SelectGroup>
               </SelectContent>
             </Select>
           </div>

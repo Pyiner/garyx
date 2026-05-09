@@ -15,9 +15,25 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { AgentOptionRow } from '@/app-shell/components/AgentOptionAvatar';
 import { useI18n } from '@/i18n';
 
 // ---------------------------------------------------------------------------
@@ -99,7 +115,7 @@ export function AutomationDialog({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-[680px]">
+      <DialogContent className="sm:max-w-[680px]" size="form">
         <DialogHeader>
           <DialogDescription className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
             {t('Automation')}
@@ -116,9 +132,9 @@ export function AutomationDialog({
             onSubmit(event);
           }}
         >
-          {/* Name */}
-          <div className="grid gap-2">
-            <Label className="text-[12px] font-medium">{t('Name')}</Label>
+          <FieldGroup className="gap-4">
+          <Field>
+            <FieldLabel>{t('Name')}</FieldLabel>
             <Input
               autoFocus
               placeholder={t('Daily repo triage')}
@@ -127,36 +143,52 @@ export function AutomationDialog({
                 onDraftChange((d) => ({ ...d, label: e.target.value }))
               }
             />
-          </div>
+          </Field>
 
-          {/* Agent */}
-          <div className="grid gap-2">
-            <Label className="text-[12px] font-medium">{t('Agent or Team')}</Label>
-            <select
-              className="h-10 w-full rounded-lg border border-[#e1e1e1] bg-white px-3 py-2 text-[13px] outline-none focus-visible:border-[#ccc] focus-visible:ring-[3px] focus-visible:ring-ring/50"
-              value={draft.agentId}
-              onChange={(e) =>
-                onDraftChange((d) => ({ ...d, agentId: e.target.value }))
+          <Field>
+            <FieldLabel>{t('Agent or Team')}</FieldLabel>
+            <Select
+              value={draft.agentId || undefined}
+              onValueChange={(value) =>
+                onDraftChange((d) => ({ ...d, agentId: value }))
               }
             >
-              {draft.agentId && !agentOptions.some((option) => option.id === draft.agentId) ? (
-                <option value={draft.agentId}>
-                  {t('{name} (unavailable)', { name: draft.agentId })}
-                </option>
-              ) : null}
-              {agentOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={t('Choose agent')} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectLabel>{t('Agents')}</SelectLabel>
+                  {draft.agentId && !agentOptions.some((option) => option.id === draft.agentId) ? (
+                    <SelectItem value={draft.agentId}>
+                      <AgentOptionRow
+                        agentId={draft.agentId}
+                        kind="agent"
+                        label={t('{name} (unavailable)', { name: draft.agentId })}
+                      />
+                    </SelectItem>
+                  ) : null}
+                  {agentOptions.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      <AgentOptionRow
+                        agentId={option.id}
+                        avatarDataUrl={option.avatarDataUrl}
+                        detail={option.detail}
+                        kind={option.kind}
+                        label={option.label}
+                        providerType={option.providerType}
+                      />
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
 
-          {/* Directory */}
-          <div className="grid gap-2">
-            <Label className="text-[12px] font-medium" htmlFor="automation-workspace-dir">
+          <Field>
+            <FieldLabel htmlFor="automation-workspace-dir">
               {t('Directory')}
-            </Label>
+            </FieldLabel>
             <DirectoryInput
               id="automation-workspace-dir"
               onChange={(value) =>
@@ -165,11 +197,10 @@ export function AutomationDialog({
               placeholder={t('/path/to/project')}
               value={draft.workspacePath}
             />
-          </div>
+          </Field>
 
-          {/* Prompt */}
-          <div className="grid gap-2">
-            <Label className="text-[12px] font-medium">{t('Prompt')}</Label>
+          <Field>
+            <FieldLabel>{t('Prompt')}</FieldLabel>
             <Textarea
               placeholder={t('Summarize Sentry issues that need action.')}
               rows={6}
@@ -178,61 +209,50 @@ export function AutomationDialog({
                 onDraftChange((d) => ({ ...d, prompt: e.target.value }))
               }
             />
-          </div>
+          </Field>
 
-          {/* Schedule */}
-          <div className="grid gap-3">
-            <Label className="text-[12px] font-medium">{t('Schedule')}</Label>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                variant={draft.schedule.kind === 'daily' ? 'default' : 'outline'}
-                size="sm"
-                className="h-8 rounded-full px-4 text-[12px]"
-                onClick={() =>
+          <Field>
+            <FieldLabel>{t('Schedule')}</FieldLabel>
+            <ToggleGroup
+              className="automation-schedule-toggle"
+              type="single"
+              value={draft.schedule.kind}
+              onValueChange={(value) => {
+                if (value === 'daily') {
                   onDraftChange((d) => ({
                     ...d,
                     schedule: d.schedule.kind === 'daily' ? d.schedule : defaultDailySchedule(),
-                  }))
-                }
-              >
-                {t('Daily')}
-              </Button>
-              <Button
-                type="button"
-                variant={draft.schedule.kind === 'interval' ? 'default' : 'outline'}
-                size="sm"
-                className="h-8 rounded-full px-4 text-[12px]"
-                onClick={() =>
+                  }));
+                } else if (value === 'interval') {
                   onDraftChange((d) => ({
                     ...d,
                     schedule: d.schedule.kind === 'interval' ? d.schedule : { kind: 'interval', hours: 24 },
-                  }))
-                }
-              >
-                {t('Interval')}
-              </Button>
-              <Button
-                type="button"
-                variant={draft.schedule.kind === 'once' ? 'default' : 'outline'}
-                size="sm"
-                className="h-8 rounded-full px-4 text-[12px]"
-                onClick={() =>
+                  }));
+                } else if (value === 'once') {
                   onDraftChange((d) => ({
                     ...d,
                     schedule: d.schedule.kind === 'once' ? d.schedule : defaultOnceSchedule(),
-                  }))
+                  }));
                 }
-              >
+              }}
+              size="sm"
+              variant="outline"
+            >
+              <ToggleGroupItem value="daily">
+                {t('Daily')}
+              </ToggleGroupItem>
+              <ToggleGroupItem value="interval">
+                {t('Interval')}
+              </ToggleGroupItem>
+              <ToggleGroupItem value="once">
                 {t('Once')}
-              </Button>
-            </div>
+              </ToggleGroupItem>
+            </ToggleGroup>
 
             {draft.schedule.kind === 'daily' ? (
               <div className="grid grid-cols-2 gap-3">
-                {/* Time */}
-                <div className="grid gap-2">
-                  <Label className="text-[11px] text-muted-foreground">{t('Time')}</Label>
+                <Field>
+                  <FieldLabel>{t('Time')}</FieldLabel>
                   <Input
                     type="time"
                     value={draft.schedule.time}
@@ -244,10 +264,9 @@ export function AutomationDialog({
                       )
                     }
                   />
-                </div>
-                {/* Timezone */}
-                <div className="grid gap-2">
-                  <Label className="text-[11px] text-muted-foreground">{t('Timezone')}</Label>
+                </Field>
+                <Field>
+                  <FieldLabel>{t('Timezone')}</FieldLabel>
                   <Input
                     placeholder="Asia/Shanghai"
                     value={draft.schedule.timezone}
@@ -259,8 +278,7 @@ export function AutomationDialog({
                       )
                     }
                   />
-                </div>
-                {/* Weekdays */}
+                </Field>
                 <div className="col-span-2 flex flex-wrap items-center gap-2">
                   {WEEKDAYS.map((weekday) => {
                     const selected =
@@ -290,8 +308,8 @@ export function AutomationDialog({
                 </div>
               </div>
             ) : draft.schedule.kind === 'interval' ? (
-              <div className="grid gap-2">
-                <Label className="text-[11px] text-muted-foreground">{t('Every')}</Label>
+              <Field>
+                <FieldLabel>{t('Every')}</FieldLabel>
                 <div className="flex items-center gap-2.5">
                   <Input
                     type="number"
@@ -308,10 +326,10 @@ export function AutomationDialog({
                   />
                   <span className="text-[12px] text-muted-foreground">{t('hours')}</span>
                 </div>
-              </div>
+              </Field>
             ) : (
-              <div className="grid gap-2">
-                <Label className="text-[11px] text-muted-foreground">{t('Run At')}</Label>
+              <Field>
+                <FieldLabel>{t('Run At')}</FieldLabel>
                 <Input
                   type="datetime-local"
                   value={draft.schedule.at}
@@ -319,16 +337,17 @@ export function AutomationDialog({
                     onDraftChange((d) =>
                       d.schedule.kind === 'once'
                         ? { ...d, schedule: { ...d.schedule, at: e.target.value } }
-                        : d,
+                      : d,
                     )
                   }
                 />
-                <p className="text-[11px] text-muted-foreground">
+                <FieldDescription>
                   {t("Uses this machine's local time.")}
-                </p>
-              </div>
+                </FieldDescription>
+              </Field>
             )}
-          </div>
+          </Field>
+          </FieldGroup>
 
           {/* Actions */}
           <DialogFooter className="pt-2">

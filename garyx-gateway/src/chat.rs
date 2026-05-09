@@ -290,6 +290,7 @@ async fn handle_chat_ws_input(
     let (_status, payload) = execute_chat_stream_input(
         state,
         thread_id,
+        request.client_intent_id.clone(),
         request.message,
         request.attachments,
         request.images,
@@ -300,6 +301,7 @@ async fn handle_chat_ws_input(
         "type": "stream_input",
         "status": payload.status,
         "threadStatus": payload.thread_status,
+        "clientIntentId": payload.client_intent_id,
         "pendingInputId": payload.pending_input_id,
         "threadId": payload.thread_id
     }));
@@ -445,6 +447,7 @@ fn build_chat_ws_stream_callback(
     let current_speaker_for_done = Arc::clone(&current_speaker);
 
     Arc::new(move |event| match event {
+        StreamEvent::SessionBound { .. } => {}
         StreamEvent::Delta { text } => {
             if !text.is_empty() {
                 bound_delivery_callback.push_delta(&text, "api ws bound delivery");

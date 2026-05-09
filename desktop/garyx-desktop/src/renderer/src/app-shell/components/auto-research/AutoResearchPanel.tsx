@@ -685,7 +685,7 @@ export function AutoResearchPanel({
                           title={t('Delete')}
                           variant="ghost"
                         >
-                          <Trash />
+                          <Trash aria-hidden />
                         </Button>
                       </div>
                     </TableCell>

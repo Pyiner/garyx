@@ -76,7 +76,7 @@ export function MemoryDialog({
         if (!nextOpen) onClose();
       }}
     >
-      <DialogContent className="sm:max-w-[860px]">
+      <DialogContent className="sm:max-w-[860px]" size="large">
         <DialogHeader>
           <DialogTitle className="text-base font-semibold">{title}</DialogTitle>
           <DialogDescription className="break-all font-mono text-[11px] leading-5 text-muted-foreground">

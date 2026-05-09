@@ -13,12 +13,15 @@ import { Label } from '../../components/ui/label';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
+import { AgentOptionRow } from './AgentOptionAvatar';
 
 type TeamsPanelProps = {
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
@@ -369,17 +372,27 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                     <SelectValue placeholder={t('Choose the leader agent')} />
                   </SelectTrigger>
                   <SelectContent>
-                    {agents.length ? (
-                      agents.map((agent) => (
-                        <SelectItem key={agent.agentId} value={agent.agentId}>
-                          {agent.displayName}
+                    <SelectGroup>
+                      <SelectLabel>{t('Agents')}</SelectLabel>
+                      {agents.length ? (
+                        agents.map((agent) => (
+                          <SelectItem key={agent.agentId} value={agent.agentId}>
+                            <AgentOptionRow
+                              agentId={agent.agentId}
+                              avatarDataUrl={agent.avatarDataUrl}
+                              detail={agent.providerType}
+                              kind={agent.builtIn ? 'builtin' : 'agent'}
+                              label={agent.displayName}
+                              providerType={agent.providerType}
+                            />
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <SelectItem disabled value="no-agents">
+                          {t('No agents available')}
                         </SelectItem>
-                      ))
-                    ) : (
-                      <SelectItem disabled value="no-agents">
-                        {t('No agents available')}
-                      </SelectItem>
-                    )}
+                      )}
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
                 <span className="codex-form-hint">
@@ -432,7 +445,14 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                                   }
                                 }}
                               />
-                              <span className="codex-list-row-name">{agent.displayName}</span>
+                              <AgentOptionRow
+                                agentId={agent.agentId}
+                                avatarDataUrl={agent.avatarDataUrl}
+                                detail={agent.providerType}
+                                kind={agent.builtIn ? 'builtin' : 'agent'}
+                                label={agent.displayName}
+                                providerType={agent.providerType}
+                              />
                             </div>
                             <div className="codex-list-row-actions">
                               {leader ? (

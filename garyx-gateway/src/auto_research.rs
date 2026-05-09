@@ -1754,7 +1754,8 @@ async fn execute_provider_prompt(
             callback_progress.notify_waiters();
             callback_done.notify_waiters();
         }
-        StreamEvent::ToolUse { .. }
+        StreamEvent::SessionBound { .. }
+        | StreamEvent::ToolUse { .. }
         | StreamEvent::ToolResult { .. }
         | StreamEvent::Boundary { .. }
         | StreamEvent::ThreadTitleUpdated { .. } => {

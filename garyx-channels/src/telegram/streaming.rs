@@ -703,6 +703,7 @@ impl StreamingCallbackShared {
         let mut state = self.state.lock().await;
 
         let is_final = match event {
+            StreamEvent::SessionBound { .. } => return,
             StreamEvent::Boundary { kind, .. } => match kind {
                 StreamBoundaryKind::UserAck => {
                     self.process_boundary(thread_id, &mut state).await;

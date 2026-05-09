@@ -6192,7 +6192,7 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_photo_message_without_caption_uses_default_prompt() {
+    async fn test_e2e_photo_message_without_caption_has_no_synthetic_prompt() {
         let server = setup_tg_mock().await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(ConfigurableTestProvider::echo());
@@ -6221,7 +6221,7 @@ mod e2e_tests {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 1);
         let calls = provider.calls.lock().unwrap();
-        assert_eq!(calls[0].message, "请描述这张图片。");
+        assert_eq!(calls[0].message, "");
         assert_eq!(calls[0].image_count, 1);
     }
 
@@ -6287,15 +6287,7 @@ mod e2e_tests {
         );
         let calls = provider.calls.lock().unwrap();
         assert_eq!(calls[0].image_count, 2, "media group should merge images");
-        assert!(
-            calls[0].message.contains("用户发送了 2 张图片"),
-            "media group message summary missing: {}",
-            calls[0].message
-        );
-        assert!(
-            calls[0].message.contains("album caption"),
-            "media group caption should be preserved"
-        );
+        assert_eq!(calls[0].message, "album caption");
     }
 
     #[tokio::test]

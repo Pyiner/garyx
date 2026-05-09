@@ -32,6 +32,7 @@ import {
 import { useI18n } from "./i18n";
 
 const ADD_WORKSPACE_VALUE = "__add_workspace__";
+const MISSING_WORKSPACE_VALUE_PREFIX = "__missing_workspace__:";
 
 type NewThreadEmptyStateProps = {
   newThreadWorkspaceEntry: DesktopWorkspace | null;
@@ -114,6 +115,9 @@ export function NewThreadEmptyState({
                 onAddWorkspace();
                 return;
               }
+              if (value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) {
+                return;
+              }
               onSelectWorkspace(value);
             }}
             value={selectedWorkspace?.path ?? ""}
@@ -130,29 +134,34 @@ export function NewThreadEmptyState({
               className="min-w-[var(--radix-select-trigger-width)]"
             >
               <SelectGroup>
-              <SelectLabel>{t("Folders")}</SelectLabel>
-                {selectableNewThreadWorkspaces.map((workspace) => (
-                  <SelectItem
-                    disabled={!workspace.available}
-                    key={workspace.path || workspace.name}
-                    value={workspace.path || ""}
-                  >
-                    {workspace.available
-                      ? workspace.name
-                      : t("{name} (Unavailable)", { name: workspace.name })}
-                  </SelectItem>
-                ))}
+                <SelectLabel>{t("Folders")}</SelectLabel>
+                {selectableNewThreadWorkspaces.map((workspace) => {
+                  const value = workspace.path || `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
+                  return (
+                    <SelectItem
+                      disabled={!workspace.available || !workspace.path}
+                      key={workspace.path || workspace.name}
+                      value={value}
+                    >
+                      {workspace.available && workspace.path
+                        ? workspace.name
+                        : t("{name} (Unavailable)", { name: workspace.name })}
+                    </SelectItem>
+                  );
+                })}
               </SelectGroup>
               <SelectSeparator />
-              <SelectItem
-                value={ADD_WORKSPACE_VALUE}
-                disabled={workspaceMutation === "add"}
-              >
-                <IconPlus aria-hidden size={13} stroke={1.8} />
-                {workspaceMutation === "add"
-                  ? t("Opening folder…")
-                  : t("Choose folder…")}
-              </SelectItem>
+              <SelectGroup>
+                <SelectItem
+                  value={ADD_WORKSPACE_VALUE}
+                  disabled={workspaceMutation === "add"}
+                >
+                  <IconPlus aria-hidden size={13} stroke={1.8} />
+                  {workspaceMutation === "add"
+                    ? t("Opening folder…")
+                    : t("Choose folder…")}
+                </SelectItem>
+              </SelectGroup>
             </SelectContent>
           </Select>
         ) : (
@@ -194,6 +203,7 @@ export function NewThreadEmptyState({
         <DialogContent
           className="sm:max-w-[420px]"
           showCloseButton={!resumeLoading}
+          size="compact"
         >
           <DialogHeader>
             <DialogTitle>{t("Resume session")}</DialogTitle>

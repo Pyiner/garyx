@@ -9,11 +9,27 @@ import type { ClientLogEntry, GatewayIndicatorTone, ThreadLogLine } from './type
 
 const THREAD_LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\S+\s+/;
 export const MAX_CLIENT_STREAM_LOG_ENTRIES = 500;
+export const MAX_GATEWAY_THREAD_LOG_LINES = 100;
 export const THREAD_LOG_PANEL_MIN_WIDTH = 280;
 export const THREAD_LOG_PANEL_MAX_WIDTH = 760;
 const THREAD_LOG_PANEL_MIN_MAIN_WIDTH = 540;
 const THREAD_LOG_PANEL_RESIZER_WIDTH = 10;
 const GATEWAY_OFFLINE_THRESHOLD = 3;
+
+export function keepRecentThreadLogLines(
+  rawText: string,
+  maxLines = MAX_GATEWAY_THREAD_LOG_LINES,
+): string {
+  if (maxLines <= 0 || !rawText) {
+    return '';
+  }
+
+  const hasTrailingNewline = /\r?\n$/.test(rawText);
+  const lines = rawText.split(/\r?\n/);
+  const logLines = hasTrailingNewline ? lines.slice(0, -1) : lines;
+  const tail = logLines.slice(-maxLines).join('\n');
+  return hasTrailingNewline && tail ? `${tail}\n` : tail;
+}
 
 export function buildThreadLogLines(rawText: string): ThreadLogLine[] {
   return rawText.split(/\r?\n/).map((line, index) => {

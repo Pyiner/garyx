@@ -350,12 +350,7 @@ impl TelegramChannel {
         synthetic_msg.animation = None;
         synthetic_msg.sticker = None;
 
-        let summary = format!("[用户发送了 {} 张图片]", image_attachments.len());
-        synthetic_msg.text = Some(if caption.is_empty() {
-            summary
-        } else {
-            format!("{summary} {caption}")
-        });
+        synthetic_msg.text = Some(caption);
         synthetic_msg.caption = None;
 
         let dedup_scope = dedup_scope_id(&entry.context.router).await;
@@ -639,17 +634,19 @@ impl TelegramChannel {
             })
         });
 
-        let dispatch_message = if !image_attachments.is_empty()
+        let clean_text_for_dispatch = if !image_attachments.is_empty()
             && (clean_text.trim().is_empty()
                 || clean_text.trim() == "[photo]"
                 || clean_text.trim().starts_with("[document:"))
         {
-            "请描述这张图片。".to_owned()
+            String::new()
         } else {
-            match reply_context {
-                Some(ctx) => format!("{ctx}{clean_text}"),
-                None => clean_text.clone(),
-            }
+            clean_text.clone()
+        };
+        let dispatch_message = match reply_context {
+            Some(ctx) if clean_text_for_dispatch.trim().is_empty() => ctx.trim_end().to_owned(),
+            Some(ctx) => format!("{ctx}{clean_text_for_dispatch}"),
+            None => clean_text_for_dispatch,
         };
 
         let from_id = msg

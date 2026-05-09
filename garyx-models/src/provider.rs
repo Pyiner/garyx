@@ -273,6 +273,8 @@ impl ProviderMessage {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
+    /// Provider-native session id became known for this Garyx thread.
+    SessionBound { sdk_session_id: String },
     /// Incremental assistant text.
     Delta { text: String },
     /// Tool invocation started.

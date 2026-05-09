@@ -26,7 +26,6 @@ use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
 const ACP_PROTOCOL_VERSION: i64 = 1;
 const GEMINI_ACP_ARG: &str = "--acp";
-const GEMINI_SKIP_TRUST_ARG: &str = "--skip-trust";
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
 const ACTIVE_TOOL_IDLE_TIMEOUT_SECS: u64 = 900;
 
@@ -902,7 +901,6 @@ impl GeminiCliProvider {
         let active_tool_timeout = active_tool_idle_timeout(timeout);
         let mut command = Command::new(gemini_bin(&self.config));
         command.arg(GEMINI_ACP_ARG);
-        command.arg(GEMINI_SKIP_TRUST_ARG);
         command.current_dir(cwd);
         command.stdin(std::process::Stdio::piped());
         command.stdout(std::process::Stdio::piped());
@@ -1022,6 +1020,9 @@ impl GeminiCliProvider {
             .lock()
             .await
             .insert(options.thread_id.clone(), resolved_session_id.clone());
+        on_chunk(StreamEvent::SessionBound {
+            sdk_session_id: resolved_session_id.clone(),
+        });
 
         let mode_id = approval_mode(&self.config, &options.metadata);
         if mode_id != "default" {
@@ -1338,7 +1339,6 @@ impl AgentLoopProvider for GeminiCliProvider {
             result = self.run_once(options, &run_id, None, &on_chunk).await?;
         }
 
-        on_chunk(StreamEvent::Done);
         Ok(result)
     }
 

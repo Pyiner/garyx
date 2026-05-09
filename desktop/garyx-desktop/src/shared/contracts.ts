@@ -612,7 +612,17 @@ export interface ThreadRuntimeInfo {
   providerLabel?: string | null;
   sdkSessionId?: string | null;
   workspacePath?: string | null;
+  activeRun?: ThreadActiveRunInfo | null;
   channelBindings: ThreadChannelBindingInfo[];
+}
+
+export interface ThreadActiveRunInfo {
+  runId: string;
+  providerType?: DesktopThreadProviderType | null;
+  providerLabel?: string | null;
+  assistantResponse?: string | null;
+  updatedAt?: string | null;
+  pendingUserInputCount?: number;
 }
 
 export interface ConfiguredBot {
@@ -1287,6 +1297,8 @@ export interface SendMessageInput {
   threadId: string;
   // Compatibility fallback for older callers. Prefer `threadId`.
   sessionId?: string;
+  // Stable frontend identity for queued/in-flight user intents.
+  clientIntentId?: string;
   message: string;
   images?: MessageImageAttachment[];
   files?: MessageFileAttachment[];
@@ -1315,6 +1327,7 @@ export interface SendStreamingInputResult {
   threadId: string;
   // Compatibility mirror for older responses. Prefer `threadId`.
   sessionId?: string;
+  clientIntentId?: string;
   pendingInputId?: string;
 }
 
@@ -1616,6 +1629,7 @@ export interface GaryxDesktopApi {
   ) => Promise<void>;
   subscribeBrowserState: (listener: DesktopBrowserStateListener) => void;
   unsubscribeBrowserState: (listener: DesktopBrowserStateListener) => void;
+  getAppVersion: () => Promise<string>;
   getUpdateStatus: () => Promise<DesktopUpdateStatus>;
   checkForUpdatesNow: () => Promise<DesktopUpdateCheckResult>;
   installUpdate: () => Promise<DesktopUpdateInstallResult>;
@@ -1635,6 +1649,7 @@ export type DesktopUpdateStatus =
   | { phase: "available"; info: DesktopUpdateInfo }
   | { phase: "downloading"; percent: number }
   | { phase: "downloaded"; info: DesktopUpdateInfo }
+  | { phase: "installing"; info: DesktopUpdateInfo }
   | { phase: "error"; message: string };
 
 export type DesktopUpdateCheckResult =
