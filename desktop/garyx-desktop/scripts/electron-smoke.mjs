@@ -82,6 +82,7 @@ const SMOKE_TEXT = {
   },
 };
 const RUN_LOADING_TEXT = 'Garyx is working through the run…';
+const RUN_LOADING_TEXT_ASCII = 'Garyx is working through the run...';
 const RUN_LOADING_TEXT_ZH = loadZhTranslation(RUN_LOADING_TEXT);
 
 function oneOfExact(values) {
@@ -961,9 +962,19 @@ async function main() {
       stage = 'warmup-loading-locale';
       await window.getByText(RUN_LOADING_TEXT_ZH).first().waitFor({ timeout: 10000 });
       assert.equal(
+        await window.locator('.message-loading-label').filter({ hasText: RUN_LOADING_TEXT_ZH }).count(),
+        1,
+        'run loading should have a single state-machine rendering surface',
+      );
+      assert.equal(
         await window.getByText(RUN_LOADING_TEXT).count(),
         0,
         'pending run loading should follow the configured Chinese locale',
+      );
+      assert.equal(
+        await window.getByText(RUN_LOADING_TEXT_ASCII).count(),
+        0,
+        'ASCII run loading placeholder should not render as transcript text',
       );
       await window.locator('.tool-trace-group-header').first().waitFor({ timeout: 20000 });
       stage = 'verify-new-thread-workspace-path';
@@ -1038,6 +1049,17 @@ async function main() {
           `assistant replies did not contain queue token ${token}, got: ${assistantTexts.join(' | ') || '<empty>'}`,
         );
       }
+      const assistantBubbleTexts = await window.locator('.message-bubble.assistant').allTextContents();
+      assert.ok(
+        !assistantBubbleTexts.some((text) => {
+          return (
+            text.includes(RUN_LOADING_TEXT) ||
+            text.includes(RUN_LOADING_TEXT_ASCII) ||
+            text.includes(RUN_LOADING_TEXT_ZH)
+          );
+        }),
+        `run loading placeholders should not be materialized assistant transcript text, got: ${assistantBubbleTexts.join(' | ') || '<empty>'}`,
+      );
       assert.ok(toolGroupCount >= 1, 'expected at least one collapsed tool trace group');
       assert.equal(
         collapsedToolTraceCount,

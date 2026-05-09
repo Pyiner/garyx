@@ -36,7 +36,7 @@ import {
 import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ThreadLogPanel } from "./ThreadLogPanel";
-import { useI18n, type Translate } from "../../i18n";
+import { useI18n } from "../../i18n";
 import type {
   ClientLogEntry,
   PendingAutomationRun,
@@ -69,14 +69,6 @@ function displayTranscriptMessageText(message: UiTranscriptMessage): string {
     return LOOP_CONTINUATION_SUMMARY;
   }
   return message.text;
-}
-
-function displayPendingAssistantLoadingText(
-  message: UiTranscriptMessage,
-  t: Translate,
-): string {
-  const text = displayTranscriptMessageText(message);
-  return text === RUN_LOADING_LABEL ? t(RUN_LOADING_LABEL) : text;
 }
 
 type TeamSpeaker = {
@@ -505,7 +497,7 @@ export function ThreadPage({
               <article className="message-bubble assistant pending">
                 <div aria-label={t("Garyx is working")} className="message-loading">
                   <p className="message-loading-label">
-                    {t("Garyx is working through the run…")}
+                    {t(RUN_LOADING_LABEL)}
                   </p>
                   <span aria-hidden="true" className="message-loading-dots">
                     <span />
@@ -570,7 +562,7 @@ export function ThreadPage({
                         className="message-loading"
                       >
                         <p className="message-loading-label">
-                          {displayPendingAssistantLoadingText(entry.message, t)}
+                          {displayTranscriptMessageText(entry.message)}
                         </p>
                         <span
                           aria-hidden="true"
@@ -694,7 +686,7 @@ export function ThreadPage({
             <article className="message-bubble assistant pending">
               <div aria-label={t("Garyx is working")} className="message-loading">
                 <p className="message-loading-label">
-                  {t("Garyx is working through the run…")}
+                  {t(RUN_LOADING_LABEL)}
                 </p>
                 <span aria-hidden="true" className="message-loading-dots">
                   <span />

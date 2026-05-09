@@ -208,7 +208,7 @@ import {
   createTranslator,
   useResolvedLocale,
 } from "../i18n";
-import { RUN_LOADING_LABEL } from "./loading-labels";
+import { isRunLoadingPlaceholderMessage } from "./loading-labels";
 import {
   contentViewForDesktopRoute,
   parseDesktopRoute,
@@ -383,15 +383,6 @@ function boundBotsForThread(endpoints: DesktopChannelEndpoint[]): BoundBot[] {
       left.channel.localeCompare(right.channel)
     );
   });
-}
-
-function seededAssistantBubble(): TranscriptMessage {
-  return {
-    id: `pending:${crypto.randomUUID()}`,
-    role: "assistant",
-    text: RUN_LOADING_LABEL,
-    pending: true,
-  };
 }
 
 function normalizeMessageText(value: string | undefined): string {
@@ -672,14 +663,6 @@ function displayTranscriptMessageText(message: UiTranscriptMessage): string {
   return message.text;
 }
 
-function seededPendingAssistantBubble(intentId: string): UiTranscriptMessage {
-  return {
-    ...seededAssistantBubble(),
-    intentId,
-    localState: "optimistic",
-  };
-}
-
 function seededUserBubble(intent: MessageIntent): UiTranscriptMessage {
   return {
     id: `user:${intent.intentId}`,
@@ -702,6 +685,11 @@ function seededAckedUserBubble(intent: MessageIntent): UiTranscriptMessage {
     localState: "remote_partial",
   };
 }
+
+type SeededTurn = {
+  assistantEntryId: string | null;
+  legacyPendingAssistantId: string | null;
+};
 
 function queuedInputIdFromMessage(
   message: Pick<TranscriptMessage, "metadata">,
@@ -1106,6 +1094,9 @@ function materializeRemoteTranscript(
 
   const materializedRemote: UiTranscriptMessage[] = [];
   for (const message of transcript) {
+    if (isRunLoadingPlaceholderMessage(message)) {
+      continue;
+    }
     materializedRemote.push(materializeMessage(message, true));
     if (message.role === "tool_result") {
       const imageContent = extractImageGenerationImageContent(message);
@@ -2257,7 +2248,9 @@ export function AppShell() {
     selectedThreadId ||
     (hasNewThreadDraft ? NEW_THREAD_DRAFT_THREAD_ID : null);
   const activeMessages = activeThreadMessageKey
-    ? messagesByThread[activeThreadMessageKey] || []
+    ? (messagesByThread[activeThreadMessageKey] || []).filter(
+        (message) => !isRunLoadingPlaceholderMessage(message),
+      )
     : [];
   const activeThreadInfo = selectedThreadId
     ? threadInfoByThread[selectedThreadId] || null
@@ -4162,60 +4155,37 @@ export function AppShell() {
     intent: MessageIntent,
     options?: {
       seedUserBubble?: boolean;
-      seedPendingAssistant?: boolean;
     },
-  ): {
-    pendingAssistant: UiTranscriptMessage;
-    assistantEntryId: string | null;
-  } {
+  ): SeededTurn {
     const seedUserBubble = options?.seedUserBubble ?? true;
-    const seedPendingAssistant = options?.seedPendingAssistant ?? true;
     const userMessage = seededUserBubble(intent);
-    const pendingAssistant = seededPendingAssistantBubble(intent.intentId);
-    const existingPendingAssistant =
-      (messagesByThreadRef.current[threadId] || []).find((entry) => {
-        return (
+    const legacyPendingAssistant =
+      (messagesByThreadRef.current[threadId] || []).find(
+        (entry) =>
           entry.role === "assistant" &&
           entry.pending &&
-          entry.intentId === intent.intentId
-        );
-      }) || null;
+          entry.intentId === intent.intentId,
+      ) || null;
 
-    if (seedUserBubble || seedPendingAssistant) {
+    if (seedUserBubble) {
       updateMessagesByThread((current) => {
         const existing = current[threadId] || [];
         const hasUserMessage = existing.some((entry) => {
           return entry.role === "user" && entry.intentId === intent.intentId;
         });
-        const hasPendingAssistant = existing.some((entry) => {
-          return (
-            entry.role === "assistant" &&
-            entry.pending &&
-            entry.intentId === intent.intentId
-          );
-        });
-        const additions = [
-          seedUserBubble && !hasUserMessage ? userMessage : null,
-          seedPendingAssistant && !hasPendingAssistant
-            ? pendingAssistant
-            : null,
-        ].filter((entry): entry is UiTranscriptMessage => Boolean(entry));
-
-        if (!additions.length) {
+        if (hasUserMessage) {
           return current;
         }
         return {
           ...current,
-          [threadId]: [...existing, ...additions],
+          [threadId]: [...existing, userMessage],
         };
       });
     }
 
     return {
-      pendingAssistant,
-      assistantEntryId: seedPendingAssistant
-        ? existingPendingAssistant?.id || pendingAssistant.id
-        : null,
+      assistantEntryId: legacyPendingAssistant?.id || null,
+      legacyPendingAssistantId: legacyPendingAssistant?.id || null,
     };
   }
 
@@ -6004,11 +5974,7 @@ export function AppShell() {
     intentId: string,
     options?: {
       seedUserBubble?: boolean;
-      seedPendingAssistant?: boolean;
-      seededTurn?: {
-        pendingAssistant: UiTranscriptMessage;
-        assistantEntryId: string | null;
-      };
+      seededTurn?: SeededTurn;
     },
   ): Promise<boolean> {
     const intent = intentForId(intentId);
@@ -6016,7 +5982,7 @@ export function AppShell() {
       return false;
     }
 
-    const { pendingAssistant, assistantEntryId } =
+    const { assistantEntryId, legacyPendingAssistantId } =
       options?.seededTurn || appendSeededTurn(threadId, intent, options);
 
     dispatchMessageState({
@@ -6135,12 +6101,19 @@ export function AppShell() {
       ) {
         applyCanonicalTranscript(resultThreadId, transcript);
       } else {
-        if (!result.response && result.status === "completed") {
+        if (
+          legacyPendingAssistantId &&
+          !result.response &&
+          result.status === "completed"
+        ) {
           updateMessagesByThread((current) => ({
             ...current,
             [resultThreadId]: (current[resultThreadId] || []).filter(
               (entry) => {
-                return !(entry.id === pendingAssistant.id && entry.pending);
+                return !(
+                  entry.id === legacyPendingAssistantId &&
+                  entry.pending
+                );
               },
             ),
           }));
@@ -6175,7 +6148,7 @@ export function AppShell() {
       const recoveryResult = reconcileAssistantEntriesForGatewayRecovery(
         messagesByThreadRef.current[threadId] || [],
         failedIntentId,
-        [pendingAssistant.id, liveState?.assistantEntryId],
+        [legacyPendingAssistantId, liveState?.assistantEntryId],
       );
       const likelyTransportDrop =
         !interrupted &&
@@ -6206,7 +6179,7 @@ export function AppShell() {
           [threadId]: reconcileAssistantEntriesForGatewayRecovery(
             current[threadId] || [],
             failedIntentId,
-            [pendingAssistant.id, liveState?.assistantEntryId],
+            [legacyPendingAssistantId, liveState?.assistantEntryId],
           ).entries,
         }));
         scheduleHistoryRefresh(threadId, 5, 1200, true);
@@ -6234,7 +6207,7 @@ export function AppShell() {
               entry.role === "assistant" &&
               entry.intentId === failedIntentId &&
               (entry.pending ||
-                entry.id === pendingAssistant.id ||
+                entry.id === legacyPendingAssistantId ||
                 entry.id === liveState?.assistantEntryId);
             if (!isTargetAssistant) {
               return entry;
@@ -6285,12 +6258,7 @@ export function AppShell() {
     try {
       let nextIntentId = firstIntentId;
       let dispatchedFromQueue = false;
-      let seededTurn:
-        | {
-            pendingAssistant: UiTranscriptMessage;
-            assistantEntryId: string | null;
-          }
-        | undefined;
+      let seededTurn: SeededTurn | undefined;
 
       while (nextIntentId || queueIntentIdsForThread(threadId).length > 0) {
         seededTurn = undefined;
@@ -6524,7 +6492,6 @@ export function AppShell() {
       });
       const didSucceed = await sendIntentOnce(threadId, latestIntent.intentId, {
         seedUserBubble: true,
-        seedPendingAssistant: true,
       });
       if (!didSucceed) {
         dispatchMessageState({
