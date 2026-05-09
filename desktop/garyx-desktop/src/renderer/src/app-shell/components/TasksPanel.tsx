@@ -35,6 +35,8 @@ import type {
 import { useI18n, type Translate } from '../../i18n';
 import type { ToastTone } from '../../toast';
 import { getDesktopApi } from '../../platform/desktop-api';
+import { useChannelPluginCatalog } from '../../channel-plugins/useChannelPluginCatalog';
+import { ChannelLogo } from '../../channel-logo';
 import {
   Field,
   FieldGroup,
@@ -62,7 +64,7 @@ import {
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
 import { AgentOptionRow } from './AgentOptionAvatar';
-import { MoreDotsIcon } from '../icons';
+import { AgentsIcon, MoreDotsIcon } from '../icons';
 
 type TasksPanelProps = {
   agents: DesktopCustomAgent[];
@@ -168,6 +170,36 @@ function taskBotFilterLabel(group: DesktopBotConsoleSummary): string {
   return group.title || taskBotFilterValue(group);
 }
 
+function TaskBotFilterOption({
+  allBots = false,
+  group,
+  iconDataUrl,
+  label,
+}: {
+  allBots?: boolean;
+  group?: DesktopBotConsoleSummary | null;
+  iconDataUrl?: string | null;
+  label: string;
+}) {
+  return (
+    <span className="tasks-bot-filter-option">
+      {allBots ? (
+        <span aria-hidden className="tasks-bot-filter-all-icon">
+          <AgentsIcon />
+        </span>
+      ) : (
+        <ChannelLogo
+          channel={group?.channel || 'bot'}
+          className="channel-logo tasks-bot-filter-logo"
+          iconDataUrl={iconDataUrl}
+          fallbackLabel={label}
+        />
+      )}
+      <span className="tasks-bot-filter-label">{label}</span>
+    </span>
+  );
+}
+
 function taskNotificationTargetFromSelection(
   value: string,
   botGroups: DesktopBotConsoleSummary[],
@@ -197,6 +229,7 @@ export function TasksPanel({
   onToast,
 }: TasksPanelProps) {
   const { t } = useI18n();
+  const { entries: pluginCatalog } = useChannelPluginCatalog();
   const [viewMode, setViewMode] = useState<TaskViewMode>('board');
   const [tasks, setTasks] = useState<DesktopTaskSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -224,12 +257,28 @@ export function TasksPanel({
       }
       seen.add(value);
       return [{
+        group,
         id: group.id || value,
         label: taskBotFilterLabel(group),
         value,
       }];
     });
   }, [botGroups]);
+
+  const iconDataUrlByChannel = useMemo(
+    () =>
+      new Map(
+        (pluginCatalog || []).map((entry) => [
+          entry.id.toLowerCase(),
+          entry.icon_data_url || null,
+        ]),
+      ),
+    [pluginCatalog],
+  );
+
+  const selectedBotFilterOption = botFilter
+    ? botFilterOptions.find((option) => option.value === botFilter) || null
+    : null;
 
   const loadTasks = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -657,14 +706,29 @@ export function TasksPanel({
               }}
             >
               <SelectTrigger aria-label={t('Filter by bot')} size="sm">
-                <SelectValue />
+                <TaskBotFilterOption
+                  group={selectedBotFilterOption?.group || null}
+                  iconDataUrl={
+                    selectedBotFilterOption
+                      ? iconDataUrlByChannel.get(selectedBotFilterOption.group.channel.toLowerCase()) || null
+                      : null
+                  }
+                  allBots={!selectedBotFilterOption}
+                  label={selectedBotFilterOption?.label || t('All bots')}
+                />
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
-                  <SelectItem value={ALL_BOTS_FILTER_VALUE}>{t('All bots')}</SelectItem>
+                  <SelectItem value={ALL_BOTS_FILTER_VALUE}>
+                    <TaskBotFilterOption allBots label={t('All bots')} />
+                  </SelectItem>
                   {botFilterOptions.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
-                      {option.label}
+                      <TaskBotFilterOption
+                        group={option.group}
+                        iconDataUrl={iconDataUrlByChannel.get(option.group.channel.toLowerCase()) || null}
+                        label={option.label}
+                      />
                     </SelectItem>
                   ))}
                 </SelectGroup>

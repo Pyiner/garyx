@@ -14232,8 +14232,8 @@ button.codex-list-row {
 .tasks-filter-control [data-slot="select-trigger"] {
   flex: 0 0 auto;
   width: auto;
-  min-width: 128px;
-  max-width: 190px;
+  min-width: 148px;
+  max-width: 210px;
   height: 26px;
   padding: 0 2px 0 6px;
   border: 0;
@@ -14243,6 +14243,35 @@ button.codex-list-row {
   font-size: var(--text-sm);
   box-shadow: none;
   outline: 0;
+}
+
+.tasks-bot-filter-option {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 7px;
+}
+
+.tasks-bot-filter-logo,
+.tasks-bot-filter-all-icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
+.tasks-bot-filter-all-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-token-description-foreground);
+}
+
+.tasks-bot-filter-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tasks-segmented {
