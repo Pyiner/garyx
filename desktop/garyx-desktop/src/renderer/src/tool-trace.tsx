@@ -1,4 +1,4 @@
-import { type ComponentType, type ReactNode, useState } from 'react';
+import { type ComponentType, type ReactNode, useEffect, useState } from 'react';
 
 import {
   IconChevronDown,
