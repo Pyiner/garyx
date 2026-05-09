@@ -725,7 +725,7 @@ export function TasksPanel({
                   label={selectedBotFilterOption?.label || t('All bots')}
                 />
               </SelectTrigger>
-              <SelectContent align="end" position="popper" sideOffset={4}>
+              <SelectContent align="end" className="tasks-bot-filter-content" position="popper" sideOffset={4}>
                 <SelectGroup>
                   <SelectItem textValue={t('All bots')} value={ALL_BOTS_FILTER_VALUE}>
                     <TaskBotFilterOption allBots label={t('All bots')} />
