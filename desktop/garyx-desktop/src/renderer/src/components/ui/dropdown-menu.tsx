@@ -29,7 +29,7 @@ function DropdownMenuContent({
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}
         className={cn(
-          "z-50 min-w-[10rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
+          "z-[var(--z-app-floating)] min-w-[10rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
           className,
         )}
         {...props}
@@ -152,7 +152,7 @@ function DropdownMenuSubContent({
       <DropdownPrimitive.SubContent
         data-slot="dropdown-menu-sub-content"
         className={cn(
-          "z-50 min-w-[8rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
+          "z-[var(--z-app-floating)] min-w-[8rem] overflow-hidden rounded-xl border border-[#e4e4e2] bg-popover p-1.5 text-popover-foreground shadow-lg shadow-black/8",
           className,
         )}
         {...props}

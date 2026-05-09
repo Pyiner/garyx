@@ -123,6 +123,7 @@
   --z-app-sticky-header: 30;
   --z-app-modal-backdrop: 110;
   --z-app-modal: 111;
+  --z-app-floating: 115;
   --z-app-toast: 120;
   --z-app-tooltip: 130;
   --inset-toolbar: 46px;
@@ -14436,6 +14437,10 @@ button.codex-list-row {
 .tasks-field [data-slot="textarea"] {
   min-height: 120px;
   resize: vertical;
+}
+
+.tasks-create-select-content {
+  max-height: min(var(--radix-select-content-available-height), 280px);
 }
 
 .tasks-board {

@@ -816,7 +816,11 @@ export function TasksPanel({
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent
+                    className="tasks-create-select-content"
+                    position="popper"
+                    sideOffset={4}
+                  >
                     <SelectGroup>
                       <SelectLabel>{t('Agents')}</SelectLabel>
                       <SelectItem value={UNASSIGNED_ASSIGNEE_VALUE}>
@@ -829,7 +833,6 @@ export function TasksPanel({
                             <AgentOptionRow
                               agentId={agent.agentId}
                               avatarDataUrl={agent.avatarDataUrl}
-                              detail={agent.providerType}
                               kind={agent.builtIn ? 'builtin' : 'agent'}
                               label={label}
                               providerType={agent.providerType}
@@ -860,7 +863,11 @@ export function TasksPanel({
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent
+                    className="tasks-create-select-content"
+                    position="popper"
+                    sideOffset={4}
+                  >
                     <SelectGroup>
                       <SelectLabel>{t('Notification')}</SelectLabel>
                       <SelectItem value={CHOOSE_NOTIFICATION_VALUE}>
