@@ -7200,6 +7200,8 @@ button.team-agent-speaker:focus-visible {
   gap: 8px;
   min-width: 0;
   min-height: 28px;
+  margin-top: 0;
+  margin-bottom: 0;
   overflow: visible;
   padding: 2px 0;
   border: 0;
@@ -7212,7 +7214,9 @@ button.team-agent-speaker:focus-visible {
   line-height: 18.5714px;
   transition:
     opacity var(--duration-fast) var(--ease-standard),
-    background-color var(--duration-fast) var(--ease-standard);
+    background-color var(--duration-fast) var(--ease-standard),
+    margin-top 150ms var(--ease-out-expo),
+    margin-bottom 150ms var(--ease-out-expo);
 }
 
 .composer-queue-item:hover,
@@ -7222,15 +7226,15 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-queue-item.dragging {
-  opacity: 0.56;
+  opacity: 0.42;
 }
 
 .composer-queue-item.drop-before {
-  box-shadow: inset 0 1px 0 rgba(26, 28, 31, 0.7);
+  margin-top: 29px;
 }
 
 .composer-queue-item.drop-after {
-  box-shadow: inset 0 -1px 0 rgba(26, 28, 31, 0.7);
+  margin-bottom: 29px;
 }
 
 .composer-queue-primary {
@@ -17128,7 +17132,8 @@ button.codex-list-row {
   }
   .sidebar-collapsible,
   .sidebar-collapsible-inner,
-  .sidebar-section-chevron {
+  .sidebar-section-chevron,
+  .composer-queue-item {
     transition: none !important;
   }
   .sidebar-collapsible.is-collapsed > .sidebar-collapsible-inner {
