@@ -648,7 +648,7 @@ export function TasksPanel({
           <p className="tasks-page-subtitle">{headerCount}</p>
         </div>
         <div className="tasks-header-actions">
-          <Field className="tasks-filter-control">
+          <Field className="tasks-filter-control" orientation="horizontal">
             <FieldLabel>{t('Bot')}</FieldLabel>
             <Select
               value={botFilter || ALL_BOTS_FILTER_VALUE}

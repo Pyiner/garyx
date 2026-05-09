@@ -14208,6 +14208,8 @@ button.codex-list-row {
 
 .tasks-filter-control {
   display: inline-flex;
+  flex: 0 0 auto;
+  width: auto;
   align-items: center;
   gap: 7px;
   min-height: 28px;
@@ -14219,6 +14221,8 @@ button.codex-list-row {
 }
 
 .tasks-filter-control [data-slot="field-label"] {
+  flex: 0 0 auto;
+  width: auto;
   color: var(--color-token-description-foreground);
   font-size: var(--text-xs-plus);
   font-weight: 560;
@@ -14226,6 +14230,8 @@ button.codex-list-row {
 }
 
 .tasks-filter-control [data-slot="select-trigger"] {
+  flex: 0 0 auto;
+  width: auto;
   min-width: 128px;
   max-width: 190px;
   height: 26px;
