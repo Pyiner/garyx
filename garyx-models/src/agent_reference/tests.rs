@@ -10,8 +10,6 @@ fn standalone_agent(agent_id: &str, provider_type: ProviderType) -> CustomAgentP
         avatar_data_url: None,
         system_prompt: String::new(),
         built_in: false,
-        runtime_available: None,
-        runtime_unavailable_reason: None,
         standalone: true,
         created_at: "2026-01-01T00:00:00Z".to_owned(),
         updated_at: "2026-01-01T00:00:00Z".to_owned(),

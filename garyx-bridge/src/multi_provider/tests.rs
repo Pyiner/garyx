@@ -69,8 +69,6 @@ fn custom_agent(
         avatar_data_url: None,
         system_prompt: system_prompt.to_owned(),
         built_in: false,
-        runtime_available: None,
-        runtime_unavailable_reason: None,
         standalone: true,
         created_at: "2026-04-19T00:00:00Z".to_owned(),
         updated_at: "2026-04-19T00:00:00Z".to_owned(),

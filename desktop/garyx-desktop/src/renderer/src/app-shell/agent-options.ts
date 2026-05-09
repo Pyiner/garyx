@@ -24,10 +24,6 @@ const PROVIDER_LABELS: Record<string, string> = {
 const byDisplayName = <T extends { displayName: string }>(a: T, b: T) =>
   a.displayName.localeCompare(b.displayName);
 
-function isAgentUsable(agent: DesktopCustomAgent): boolean {
-  return !agent.builtIn || agent.runtimeAvailable !== false;
-}
-
 /**
  * Build the flat agent-option list shown in new-thread pickers: built-in
  * agents, custom solo agents (excluding team leaders), then teams.
@@ -44,7 +40,7 @@ export function buildAgentOptions(
   const options: ComposerAgentOption[] = [];
 
   for (const agent of agents
-    .filter((a) => a.builtIn && a.standalone && isAgentUsable(a))
+    .filter((a) => a.builtIn && a.standalone)
     .sort(byDisplayName)) {
     options.push({
       id: agent.agentId,
@@ -112,7 +108,6 @@ export function buildAgentTargetOptions(
 ): AgentTargetOption[] {
   const agentOptions = [...agents]
     .filter((agent) => agent.standalone)
-    .filter(isAgentUsable)
     .sort((left, right) => {
       if (left.builtIn !== right.builtIn) {
         return left.builtIn ? -1 : 1;

@@ -250,8 +250,6 @@ export interface DesktopCustomAgent {
   avatarDataUrl: string;
   systemPrompt: string;
   builtIn: boolean;
-  runtimeAvailable: boolean | null;
-  runtimeUnavailableReason: string | null;
   standalone: boolean;
   createdAt: string;
   updatedAt: string;

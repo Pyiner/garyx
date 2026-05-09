@@ -26,7 +26,6 @@ pub mod restart;
 pub mod restart_wake;
 mod route_graph;
 pub mod routes;
-mod runtime_detection;
 mod runtime_diagnostics;
 pub mod server;
 pub mod skills;

@@ -166,8 +166,6 @@ impl CustomAgentStore {
             avatar_data_url,
             system_prompt: system_prompt.to_owned(),
             built_in: false,
-            runtime_available: None,
-            runtime_unavailable_reason: None,
             standalone: true,
             created_at,
             updated_at: now,
