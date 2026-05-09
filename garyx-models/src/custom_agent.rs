@@ -72,13 +72,26 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             built_in: true,
             standalone: true,
             created_at: now.clone(),
+            updated_at: now.clone(),
+        },
+        CustomAgentProfile {
+            agent_id: "opencode".to_owned(),
+            display_name: "Opencode".to_owned(),
+            provider_type: ProviderType::Opencode,
+            model: String::new(),
+            default_workspace_dir: None,
+            avatar_data_url: None,
+            system_prompt: String::new(),
+            built_in: true,
+            standalone: true,
+            created_at: now.clone(),
             updated_at: now,
         },
     ]
 }
 
 pub fn is_builtin_provider_agent_id(agent_id: &str) -> bool {
-    matches!(agent_id.trim(), "claude" | "codex" | "gemini")
+    matches!(agent_id.trim(), "claude" | "codex" | "gemini" | "opencode")
 }
 
 #[cfg(test)]

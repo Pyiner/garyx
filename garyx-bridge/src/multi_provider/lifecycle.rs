@@ -15,6 +15,7 @@ fn default_provider_config(provider_type: ProviderType) -> AgentProviderConfig {
             ProviderType::CodexAppServer => "codex_app_server".to_owned(),
             ProviderType::ClaudeCode => "claude_code".to_owned(),
             ProviderType::GeminiCli => "gemini_cli".to_owned(),
+            ProviderType::Opencode => "opencode".to_owned(),
             // Meta-provider with no backing CLI config.
             ProviderType::AgentTeam => "agent_team".to_owned(),
         },
@@ -92,6 +93,21 @@ impl MultiProviderBridge {
             }
         };
 
+        let opencode_default_agent_cfg = default_provider_config(ProviderType::Opencode);
+        let opencode_default_key = match self
+            .get_or_create_provider(&opencode_default_agent_cfg, &default_workspace)
+            .await
+        {
+            Ok(key) => {
+                tracing::info!(provider_key = %key, "registered quaternary default provider");
+                Some(key)
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to register quaternary default provider");
+                None
+            }
+        };
+
         let mut desired_routes: HashMap<(String, String), String> = HashMap::new();
 
         // 4. Pre-create providers for API channel accounts and build desired routes.
@@ -136,6 +152,9 @@ impl MultiProviderBridge {
             desired_provider_keys.insert(key.clone());
         }
         if let Some(ref key) = gemini_default_key {
+            desired_provider_keys.insert(key.clone());
+        }
+        if let Some(ref key) = opencode_default_key {
             desired_provider_keys.insert(key.clone());
         }
         // Preserve the AgentTeam meta-provider across reloads: it is not owned

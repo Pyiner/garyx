@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
 use garyx_models::config::AgentProviderConfig;
-use garyx_models::provider::{ClaudeCodeConfig, CodexAppServerConfig, GeminiCliConfig};
+use garyx_models::provider::{
+    ClaudeCodeConfig, CodexAppServerConfig, GeminiCliConfig, OpencodeConfig,
+};
 
 use crate::claude_provider::ClaudeCliProvider;
 use crate::codex_provider::CodexAgentProvider;
 use crate::gemini_provider::GeminiCliProvider;
+use crate::opencode_provider::OpencodeProvider;
 use crate::provider_trait::{AgentLoopProvider, BridgeError};
 
 /// Build a `ClaudeCodeConfig` from an agent runtime config.
@@ -54,6 +57,36 @@ fn build_codex_config(
     }
 }
 
+/// Build an `OpencodeConfig` from an agent runtime config.
+fn build_opencode_config(
+    agent_cfg: &AgentProviderConfig,
+    default_workspace: &Option<String>,
+) -> OpencodeConfig {
+    OpencodeConfig {
+        workspace_dir: agent_cfg
+            .workspace_dir
+            .clone()
+            .or_else(|| default_workspace.clone()),
+        default_model: agent_cfg.default_model.clone(),
+        mcp_base_url: agent_cfg.mcp_base_url.clone(),
+        opencode_bin: agent_cfg.opencode_bin.clone(),
+        mode: if agent_cfg.opencode_mode.is_empty() {
+            "build".to_owned()
+        } else {
+            agent_cfg.opencode_mode.clone()
+        },
+        model: if agent_cfg.model.is_empty() {
+            agent_cfg.default_model.clone()
+        } else {
+            agent_cfg.model.clone()
+        },
+        max_turns: agent_cfg.max_turns,
+        timeout_seconds: agent_cfg.timeout_seconds,
+        env: agent_cfg.env.clone(),
+        ..Default::default()
+    }
+}
+
 /// Build a `GeminiCliConfig` from an agent runtime config.
 fn build_gemini_config(
     agent_cfg: &AgentProviderConfig,
@@ -92,6 +125,7 @@ pub(super) fn compute_provider_key(
     match agent_cfg.provider_type.as_str() {
         "codex_app_server" => "codex_app_server".to_owned(),
         "gemini_cli" => "gemini_cli".to_owned(),
+        "opencode" => "opencode".to_owned(),
         _ => "claude_code".to_owned(),
     }
 }
@@ -111,6 +145,12 @@ pub(super) async fn create_provider(
         "gemini_cli" => {
             let config = build_gemini_config(agent_cfg, default_workspace);
             let mut provider = GeminiCliProvider::new(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        "opencode" => {
+            let config = build_opencode_config(agent_cfg, default_workspace);
+            let mut provider = OpencodeProvider::new(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }

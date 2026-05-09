@@ -229,6 +229,7 @@ impl MessageRouter {
                 "claude_code" => Some(ProviderType::ClaudeCode),
                 "codex_app_server" => Some(ProviderType::CodexAppServer),
                 "gemini_cli" => Some(ProviderType::GeminiCli),
+                "opencode" => Some(ProviderType::Opencode),
                 "agent_team" => Some(ProviderType::AgentTeam),
                 _ => None,
             });

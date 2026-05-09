@@ -79,6 +79,7 @@ fn provider_type_from_key(value: &str) -> Option<ProviderType> {
         "claude_code" => Some(ProviderType::ClaudeCode),
         "codex_app_server" => Some(ProviderType::CodexAppServer),
         "gemini_cli" => Some(ProviderType::GeminiCli),
+        "opencode" => Some(ProviderType::Opencode),
         _ => None,
     }
 }
@@ -94,6 +95,7 @@ fn provider_label(provider_type: &ProviderType) -> &'static str {
         ProviderType::ClaudeCode => "Claude",
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
+        ProviderType::Opencode => "Opencode",
         ProviderType::AgentTeam => "Team",
     }
 }

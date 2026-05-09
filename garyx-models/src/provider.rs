@@ -16,6 +16,7 @@ pub enum ProviderType {
     ClaudeCode,
     CodexAppServer,
     GeminiCli,
+    Opencode,
     /// Meta-provider that orchestrates a Team as a group chat over regular
     /// per-sub-agent threads. Selected when a thread's `agent_id` resolves to
     /// an `AgentTeamProfile` rather than a `CustomAgentProfile`.
@@ -493,6 +494,61 @@ impl Default for GeminiCliConfig {
             mcp_base_url: crate::config::default_mcp_base_url(),
             gemini_bin: String::new(),
             approval_mode: default_gemini_approval_mode(),
+            model: String::new(),
+            env: HashMap::new(),
+        }
+    }
+}
+
+/// Configuration for opencode ACP provider.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct OpencodeConfig {
+    #[serde(default = "default_opencode_provider_type")]
+    pub provider_type: ProviderType,
+
+    #[serde(default)]
+    pub default_model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<i64>,
+    #[serde(default)]
+    pub timeout_seconds: f64,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
+    #[serde(default = "crate::config::default_mcp_base_url")]
+    pub mcp_base_url: String,
+    #[serde(default)]
+    pub opencode_bin: String,
+    /// Session mode id, e.g. "build" (default) or "plan".
+    #[serde(default = "default_opencode_mode")]
+    pub mode: String,
+    /// Specific model id to select via `session/set_model`, e.g.
+    /// "opencode/big-pickle" or "deepseek/deepseek-chat".
+    #[serde(default)]
+    pub model: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
+}
+
+fn default_opencode_provider_type() -> ProviderType {
+    ProviderType::Opencode
+}
+
+fn default_opencode_mode() -> String {
+    "build".to_owned()
+}
+
+impl Default for OpencodeConfig {
+    fn default() -> Self {
+        Self {
+            provider_type: ProviderType::Opencode,
+            default_model: String::new(),
+            max_turns: None,
+            timeout_seconds: 0.0,
+            workspace_dir: None,
+            mcp_base_url: crate::config::default_mcp_base_url(),
+            opencode_bin: String::new(),
+            mode: default_opencode_mode(),
             model: String::new(),
             env: HashMap::new(),
         }

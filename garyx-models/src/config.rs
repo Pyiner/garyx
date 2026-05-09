@@ -172,6 +172,12 @@ pub struct AgentProviderConfig {
     pub gemini_bin: String,
     #[serde(default = "default_gemini_approval_mode")]
     pub approval_mode: String,
+
+    // Opencode specific
+    #[serde(default)]
+    pub opencode_bin: String,
+    #[serde(default = "default_opencode_mode")]
+    pub opencode_mode: String,
 }
 
 fn default_provider_type() -> String {
@@ -185,6 +191,9 @@ pub fn default_mcp_base_url() -> String {
 }
 pub fn default_gemini_approval_mode() -> String {
     "yolo".to_owned()
+}
+pub fn default_opencode_mode() -> String {
+    "build".to_owned()
 }
 
 impl Default for AgentProviderConfig {
@@ -203,6 +212,8 @@ impl Default for AgentProviderConfig {
             experimental_api: false,
             gemini_bin: String::new(),
             approval_mode: default_gemini_approval_mode(),
+            opencode_bin: String::new(),
+            opencode_mode: default_opencode_mode(),
         }
     }
 }

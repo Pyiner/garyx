@@ -134,6 +134,7 @@ pub(crate) async fn dispatch_internal_message_to_thread(
             ProviderType::ClaudeCode => "claude_code",
             ProviderType::CodexAppServer => "codex_app_server",
             ProviderType::GeminiCli => "gemini_cli",
+            ProviderType::Opencode => "opencode",
             ProviderType::AgentTeam => "agent_team",
         };
         extra_metadata.insert(

@@ -5242,11 +5242,13 @@ pub(crate) async fn cmd_doctor(
     let config_path_display = config_path.to_string_lossy().to_string();
     let claude_available = which("claude");
     let codex_available = which("codex");
+    let opencode_available = which("opencode");
 
     let checks = [
         ("config_file", config_path_display.as_str(), config_exists),
         ("claude_binary", "claude", claude_available),
         ("codex_binary", "codex", codex_available),
+        ("opencode_binary", "opencode", opencode_available),
     ];
 
     if json {
@@ -6662,6 +6664,7 @@ fn provider_type_label(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
+        ProviderType::Opencode => "Opencode",
         ProviderType::AgentTeam => "Team",
         ProviderType::ClaudeCode => "Claude",
     }
