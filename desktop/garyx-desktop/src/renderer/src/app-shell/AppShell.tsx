@@ -5179,14 +5179,6 @@ export function AppShell() {
       });
       return null;
     }
-    dispatchMessageState({
-      type: "intent/request-dispatch",
-      threadId,
-      intentId: nextIntentId,
-      mode: "sync_send",
-      source: "queue_send",
-      removeFromQueue: true,
-    });
     return intent;
   }
 
@@ -6012,6 +6004,10 @@ export function AppShell() {
     options?: {
       seedUserBubble?: boolean;
       seedPendingAssistant?: boolean;
+      seededTurn?: {
+        pendingAssistant: UiTranscriptMessage;
+        assistantEntryId: string | null;
+      };
     },
   ): Promise<boolean> {
     const intent = intentForId(intentId);
@@ -6019,11 +6015,8 @@ export function AppShell() {
       return false;
     }
 
-    const { pendingAssistant, assistantEntryId } = appendSeededTurn(
-      threadId,
-      intent,
-      options,
-    );
+    const { pendingAssistant, assistantEntryId } =
+      options?.seededTurn || appendSeededTurn(threadId, intent, options);
 
     dispatchMessageState({
       type: "intent/dispatch-started",
@@ -6291,20 +6284,38 @@ export function AppShell() {
     try {
       let nextIntentId = firstIntentId;
       let dispatchedFromQueue = false;
+      let seededTurn:
+        | {
+            pendingAssistant: UiTranscriptMessage;
+            assistantEntryId: string | null;
+          }
+        | undefined;
 
       while (nextIntentId || queueIntentIdsForThread(threadId).length > 0) {
+        seededTurn = undefined;
         if (!nextIntentId) {
           const currentQueuedIntent = shiftQueuedIntent(threadId);
           nextIntentId = currentQueuedIntent?.intentId || "";
           dispatchedFromQueue = true;
-          if (!nextIntentId) {
+          if (!currentQueuedIntent || !nextIntentId) {
             break;
           }
+          seededTurn = appendSeededTurn(threadId, currentQueuedIntent);
+          dispatchMessageState({
+            type: "intent/request-dispatch",
+            threadId,
+            intentId: nextIntentId,
+            mode: "sync_send",
+            source: "queue_send",
+            removeFromQueue: true,
+          });
         } else {
           dispatchedFromQueue = false;
         }
 
-        const didSucceed = await sendIntentOnce(threadId, nextIntentId);
+        const didSucceed = await sendIntentOnce(threadId, nextIntentId, {
+          seededTurn,
+        });
         if (!didSucceed) {
           if (dispatchedFromQueue) {
             dispatchMessageState({

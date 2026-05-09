@@ -905,6 +905,11 @@ async function main() {
         .first()
         .waitFor({ timeout: 10000 });
       await window
+        .locator('.message-bubble.user')
+        .filter({ hasText: EXTERNAL_QUEUE_TOKEN })
+        .first()
+        .waitFor({ timeout: 10000 });
+      await window
         .locator('.message-bubble.assistant p')
         .filter({ hasText: EXTERNAL_QUEUE_TOKEN })
         .first()
