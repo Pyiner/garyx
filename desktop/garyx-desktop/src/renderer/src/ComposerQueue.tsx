@@ -1,3 +1,24 @@
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from '@dnd-kit/core';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { useMemo, type CSSProperties } from 'react';
+
 import { useI18n, type Translate } from './i18n';
 import type { MessageIntent } from './message-machine';
 
@@ -23,28 +44,7 @@ type ComposerQueueProps = {
   onSteerQueuedPrompt: (item: MessageIntent) => void;
 };
 
-let queueDragPreview: HTMLElement | null = null;
-
-function cleanupQueueDragPreview() {
-  queueDragPreview?.remove();
-  queueDragPreview = null;
-}
-
-function createQueueDragPreview(row: HTMLElement): HTMLElement {
-  cleanupQueueDragPreview();
-  const bounds = row.getBoundingClientRect();
-  const preview = row.cloneNode(true) as HTMLElement;
-  preview.classList.remove('dragging', 'drop-before', 'drop-after');
-  preview.classList.add('composer-queue-drag-preview');
-  preview.style.width = `${bounds.width}px`;
-  preview.style.height = `${bounds.height}px`;
-  preview.querySelectorAll('[draggable]').forEach((node) => {
-    node.removeAttribute('draggable');
-  });
-  document.body.appendChild(preview);
-  queueDragPreview = preview;
-  return preview;
-}
+const queueDragModifiers = [restrictToVerticalAxis];
 
 function QueueGripIcon() {
   return (
@@ -132,11 +132,112 @@ function buildIntentPreview(item: MessageIntent, t: Translate): string {
   return `${trimmed} (${attachmentSummary})`;
 }
 
+function isQueueIntentSteering(item: MessageIntent): boolean {
+  return (
+    item.dispatchMode === 'async_steer' &&
+    ['dispatch_requested', 'dispatching', 'remote_accepted', 'awaiting_history'].includes(item.state)
+  );
+}
+
+type QueueItemProps = {
+  activeQueueLength: number;
+  isActiveSendingThread: boolean;
+  item: MessageIntent;
+  onCancelIntent: (threadId: string, intentId: string) => void;
+  onSteerQueuedPrompt: (item: MessageIntent) => void;
+  t: Translate;
+};
+
+function SortableQueueItem({
+  activeQueueLength,
+  isActiveSendingThread,
+  item,
+  onCancelIntent,
+  onSteerQueuedPrompt,
+  t,
+}: QueueItemProps) {
+  const isSteering = isQueueIntentSteering(item);
+  const isSortable = !isSteering && activeQueueLength > 1;
+  const {
+    attributes,
+    isDragging,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({
+    disabled: !isSortable,
+    id: item.intentId,
+  });
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div
+      className={`composer-queue-item ${isDragging ? 'dragging' : ''}`}
+      data-dragging={isDragging ? 'true' : undefined}
+      data-queue-intent-id={item.intentId}
+      ref={setNodeRef}
+      style={style}
+    >
+      <div className="composer-queue-primary">
+        <button
+          className="queue-drag-handle"
+          disabled={!isSortable}
+          ref={setActivatorNodeRef}
+          title={isSortable ? t('Drag to reorder') : t('Queue order locked')}
+          type="button"
+          {...attributes}
+          {...listeners}
+          tabIndex={isSortable ? 0 : -1}
+        >
+          <QueueGripIcon />
+          <span className="sr-only">{t('Drag to reorder queued follow-up')}</span>
+        </button>
+        <span
+          className="composer-queue-text"
+          title={buildIntentPreview(item, t)}
+        >
+          {buildIntentPreview(item, t)}
+        </span>
+      </div>
+      <div className="composer-queue-actions">
+        {isActiveSendingThread ? (
+          <button
+            className="ghost-button queue-steer-button"
+            disabled={isSteering}
+            onClick={() => {
+              onSteerQueuedPrompt(item);
+            }}
+            type="button"
+          >
+            <QueueSteerIcon />
+            <span>{isSteering ? t('Steering…') : t('Steer')}</span>
+          </button>
+        ) : null}
+        <button
+          className="queue-remove-button"
+          disabled={isSteering}
+          onClick={() => {
+            onCancelIntent(item.threadId, item.intentId);
+          }}
+          tabIndex={-1}
+          type="button"
+        >
+          <QueueTrashIcon />
+          <span className="sr-only">{t('Remove queued follow-up')}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function ComposerQueue({
   activeQueue,
-  draggedQueueIntentId,
   isActiveSendingThread,
-  queueDropTarget,
   onCancelIntent,
   onQueueDropTargetChange,
   onReorderQueuedIntent,
@@ -144,6 +245,59 @@ export function ComposerQueue({
   onSteerQueuedPrompt,
 }: ComposerQueueProps) {
   const { t } = useI18n();
+  const queueIntentIds = useMemo(
+    () => activeQueue.map((item) => item.intentId),
+    [activeQueue],
+  );
+  const sensors = useSensors(
+    useSensor(MouseSensor, {
+      activationConstraint: {
+        distance: 3,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 120,
+        tolerance: 5,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  function clearDragState() {
+    onSetDraggedQueueIntentId(null);
+    onQueueDropTargetChange(null);
+  }
+
+  function handleDragStart(event: DragStartEvent) {
+    onSetDraggedQueueIntentId(String(event.active.id));
+    onQueueDropTargetChange(null);
+  }
+
+  function handleDragCancel() {
+    clearDragState();
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const activeIntentId = String(event.active.id);
+    const overIntentId = event.over ? String(event.over.id) : null;
+    if (overIntentId && activeIntentId !== overIntentId) {
+      const activeIndex = activeQueue.findIndex((item) => item.intentId === activeIntentId);
+      const overIndex = activeQueue.findIndex((item) => item.intentId === overIntentId);
+      const activeItem = activeQueue[activeIndex];
+      if (activeItem && activeIndex >= 0 && overIndex >= 0) {
+        onReorderQueuedIntent(
+          activeItem.threadId,
+          activeIntentId,
+          overIntentId,
+          activeIndex < overIndex ? 'after' : 'before',
+        );
+      }
+    }
+    clearDragState();
+  }
 
   if (!activeQueue.length) {
     return null;
@@ -151,118 +305,30 @@ export function ComposerQueue({
 
   return (
     <div className="composer-queue">
-      <div className="composer-queue-list">
-        {activeQueue.map((item) => {
-          const isSteering =
-            item.dispatchMode === 'async_steer' &&
-            ['dispatch_requested', 'dispatching', 'remote_accepted', 'awaiting_history'].includes(item.state);
-          const canSteerNow = true;
-          const isDragging = draggedQueueIntentId === item.intentId;
-          const dropPosition = queueDropTarget?.intentId === item.intentId
-            ? queueDropTarget.position
-            : null;
-          return (
-            <div
-              className={`composer-queue-item ${isDragging ? 'dragging' : ''} ${dropPosition ? `drop-${dropPosition}` : ''}`}
-              key={item.intentId}
-              onDragOver={(event) => {
-                const draggedIntentId = draggedQueueIntentId || event.dataTransfer.getData('text/plain');
-                if (!draggedIntentId || draggedIntentId === item.intentId) {
-                  return;
-                }
-                event.preventDefault();
-                const bounds = event.currentTarget.getBoundingClientRect();
-                const position = event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after';
-                if (
-                  queueDropTarget?.intentId !== item.intentId ||
-                  queueDropTarget.position !== position
-                ) {
-                  onQueueDropTargetChange({
-                    intentId: item.intentId,
-                    position,
-                  });
-                }
-                event.dataTransfer.dropEffect = 'move';
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                const draggedIntentId = draggedQueueIntentId || event.dataTransfer.getData('text/plain');
-                const bounds = event.currentTarget.getBoundingClientRect();
-                const position = event.clientY < bounds.top + bounds.height / 2 ? 'before' : 'after';
-                if (draggedIntentId && draggedIntentId !== item.intentId) {
-                  onReorderQueuedIntent(item.threadId, draggedIntentId, item.intentId, position);
-                }
-                cleanupQueueDragPreview();
-                onSetDraggedQueueIntentId(null);
-                onQueueDropTargetChange(null);
-              }}
-            >
-              <div className="composer-queue-primary">
-                <button
-                  className="queue-drag-handle"
-                  disabled={isSteering || activeQueue.length < 2}
-                  draggable={!isSteering && activeQueue.length > 1}
-                  onDragEnd={() => {
-                    cleanupQueueDragPreview();
-                    onSetDraggedQueueIntentId(null);
-                    onQueueDropTargetChange(null);
-                  }}
-                  onDragStart={(event) => {
-                    onSetDraggedQueueIntentId(item.intentId);
-                    onQueueDropTargetChange(null);
-                    event.dataTransfer.effectAllowed = 'move';
-                    event.dataTransfer.setData('text/plain', item.intentId);
-                    const row = event.currentTarget.closest('.composer-queue-item');
-                    if (row instanceof HTMLElement) {
-                      const dragPreview = createQueueDragPreview(row);
-                      event.dataTransfer.setDragImage(dragPreview, 20, 14);
-                    }
-                  }}
-                  title={activeQueue.length > 1 ? t('Drag to reorder') : t('Queue order locked')}
-                  tabIndex={-1}
-                  type="button"
-                >
-                  <QueueGripIcon />
-                  <span className="sr-only">{t('Drag to reorder queued follow-up')}</span>
-                </button>
-                <span
-                  className="composer-queue-text"
-                  title={buildIntentPreview(item, t)}
-                >
-                  {buildIntentPreview(item, t)}
-                </span>
-              </div>
-              <div className="composer-queue-actions">
-                {isActiveSendingThread && canSteerNow ? (
-                  <button
-                    className="ghost-button queue-steer-button"
-                    disabled={isSteering}
-                    onClick={() => {
-                      onSteerQueuedPrompt(item);
-                    }}
-                    type="button"
-                  >
-                    <QueueSteerIcon />
-                    <span>{isSteering ? t('Steering…') : t('Steer')}</span>
-                  </button>
-                ) : null}
-                <button
-                  className="queue-remove-button"
-                  disabled={isSteering}
-                  onClick={() => {
-                    onCancelIntent(item.threadId, item.intentId);
-                  }}
-                  tabIndex={-1}
-                  type="button"
-                >
-                  <QueueTrashIcon />
-                  <span className="sr-only">{t('Remove queued follow-up')}</span>
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <DndContext
+        collisionDetection={closestCenter}
+        modifiers={queueDragModifiers}
+        onDragCancel={handleDragCancel}
+        onDragEnd={handleDragEnd}
+        onDragStart={handleDragStart}
+        sensors={sensors}
+      >
+        <SortableContext items={queueIntentIds} strategy={verticalListSortingStrategy}>
+          <div className="composer-queue-list">
+            {activeQueue.map((item) => (
+              <SortableQueueItem
+                activeQueueLength={activeQueue.length}
+                isActiveSendingThread={isActiveSendingThread}
+                item={item}
+                key={item.intentId}
+                onCancelIntent={onCancelIntent}
+                onSteerQueuedPrompt={onSteerQueuedPrompt}
+                t={t}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
     </div>
   );
 }

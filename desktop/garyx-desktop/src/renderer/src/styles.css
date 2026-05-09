@@ -7187,6 +7187,7 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-queue-list {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -7194,6 +7195,8 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-queue-item {
+  position: relative;
+  z-index: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -7215,8 +7218,8 @@ button.team-agent-speaker:focus-visible {
   transition:
     opacity var(--duration-fast) var(--ease-standard),
     background-color var(--duration-fast) var(--ease-standard),
-    margin-top 150ms var(--ease-out-expo),
-    margin-bottom 150ms var(--ease-out-expo);
+    box-shadow var(--duration-fast) var(--ease-standard);
+  will-change: transform;
 }
 
 .composer-queue-item:hover,
@@ -7226,34 +7229,12 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-queue-item.dragging {
+  z-index: 10;
+  background: rgba(26, 28, 31, 0.035);
+  cursor: grabbing;
   outline: 0;
-  box-shadow: none;
-  opacity: 0.42;
-}
-
-.composer-queue-item.drop-before {
-  box-shadow: none;
-  margin-top: 29px;
-}
-
-.composer-queue-item.drop-after {
-  box-shadow: none;
-  margin-bottom: 29px;
-}
-
-.composer-queue-drag-preview {
-  position: fixed;
-  top: -1000px;
-  left: -1000px;
-  z-index: 2147483647;
-  overflow: hidden;
-  margin: 0 !important;
-  border: 0;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 8px 24px rgba(13, 13, 13, 0.12);
-  opacity: 0.98;
-  pointer-events: none;
-  transform: translateZ(0);
+  box-shadow: 0 8px 20px rgba(13, 13, 13, 0.06);
+  opacity: 0.94;
 }
 
 .composer-queue-primary {
@@ -7293,12 +7274,21 @@ button.team-agent-speaker:focus-visible {
   cursor: grab;
   font-size: 13px;
   line-height: 18.5714px;
+  touch-action: none;
   transition:
     background var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .queue-drag-handle:active {
+  cursor: grabbing;
+}
+
+.composer-queue-item.dragging .queue-drag-handle {
+  background: rgba(26, 28, 31, 0.045);
+  color: rgba(26, 28, 31, 0.54);
   cursor: grabbing;
 }
 
