@@ -445,6 +445,7 @@ fn build_chat_ws_stream_callback(
     let current_speaker_for_done = Arc::clone(&current_speaker);
 
     Arc::new(move |event| match event {
+        StreamEvent::SessionBound { .. } => {}
         StreamEvent::Delta { text } => {
             if !text.is_empty() {
                 bound_delivery_callback.push_delta(&text, "api ws bound delivery");

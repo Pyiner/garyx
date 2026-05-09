@@ -304,6 +304,7 @@ fn merge_pending_inputs_for_persistence(
 pub(super) struct StreamingRunSnapshot {
     pub assistant_response: String,
     pub session_messages: Vec<ProviderMessage>,
+    pub sdk_session_id: Option<String>,
     start_new_assistant_segment: bool,
     current_assistant_metadata: Option<HashMap<String, Value>>,
 }
@@ -311,6 +312,14 @@ pub(super) struct StreamingRunSnapshot {
 impl StreamingRunSnapshot {
     pub fn apply_stream_event(&mut self, event: &StreamEvent) -> bool {
         match event {
+            StreamEvent::SessionBound { sdk_session_id } => {
+                let trimmed = sdk_session_id.trim();
+                if trimmed.is_empty() || self.sdk_session_id.as_deref() == Some(trimmed) {
+                    return false;
+                }
+                self.sdk_session_id = Some(trimmed.to_owned());
+                true
+            }
             StreamEvent::Delta { text } => {
                 if text.is_empty() {
                     return false;
@@ -562,6 +571,7 @@ fn build_active_run_snapshot_value(
         "run_id": primary_run_identifier(run.metadata),
         "provider_key": provider_key,
         "provider_type": run.provider_type,
+        "sdk_session_id": run.sdk_session_id,
         "assistant_response": (!run.assistant_response.trim().is_empty()).then_some(run.assistant_response.to_owned()),
         "messages": build_run_messages(run),
         "pending_user_inputs": serde_json::to_value(pending_user_inputs).unwrap_or(Value::Array(Vec::new())),
@@ -741,7 +751,8 @@ fn build_run_messages(run: &PersistedRun<'_>) -> Vec<Value> {
 }
 
 /// Save a partial streaming snapshot for the active run without clearing any
-/// previously persisted SDK session id.
+/// previously persisted SDK session id unless this partial snapshot has already
+/// observed the provider-native session id.
 pub(super) async fn save_partial_thread_messages(
     store: &Arc<dyn ThreadStore>,
     history: &Arc<ThreadHistoryRepository>,
@@ -766,7 +777,11 @@ pub(super) async fn save_partial_thread_messages(
             obj.insert("messages".to_owned(), Value::Array(Vec::new()));
         }
         obj.insert("pending_user_inputs".to_owned(), merged_pending_inputs);
-        update_provider_sdk_session_id(obj, run.provider_key, &SdkSessionUpdate::Preserve);
+        let sdk_session_update = match run.sdk_session_id {
+            Some(sid) => SdkSessionUpdate::Set(sid),
+            None => SdkSessionUpdate::Preserve,
+        };
+        update_provider_sdk_session_id(obj, run.provider_key, &sdk_session_update);
         obj.insert(
             "provider_type".to_owned(),
             serde_json::to_value(&run.provider_type).unwrap_or(Value::Null),
@@ -778,6 +793,13 @@ pub(super) async fn save_partial_thread_messages(
                 "provider_key".to_owned(),
                 Value::String(run.provider_key.to_owned()),
             );
+        }
+        match sdk_session_update {
+            SdkSessionUpdate::Preserve => {}
+            SdkSessionUpdate::Set(sid) => {
+                obj.insert("sdk_session_id".to_owned(), Value::String(sid.to_owned()));
+            }
+            SdkSessionUpdate::Clear => {}
         }
         update_history_state(
             obj,
