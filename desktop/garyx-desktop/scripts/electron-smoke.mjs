@@ -955,7 +955,7 @@ async function main() {
       stage = 'warmup-send';
       await composer.fill(`Return exactly the token ${WARMUP_TOKEN} and nothing else.`);
       await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) }).click();
-      await window.locator('.tool-trace').first().waitFor({ timeout: 20000 });
+      await window.locator('.tool-trace-group-header').first().waitFor({ timeout: 20000 });
       stage = 'verify-new-thread-workspace-path';
       const createRequests = gateway.createdThreadRequests();
       const expectedWorkspacePath = path.join(isolatedHome, 'workspace');
@@ -1019,14 +1019,27 @@ async function main() {
       const assistantTexts = await window
         .locator('.message-bubble.assistant p')
         .allTextContents();
-      const toolTraceCount = await window.locator('.tool-trace').count();
-      const toolTraceTexts = await window.locator('.tool-trace').allTextContents();
+      const toolGroupHeaders = window.locator('.tool-trace-group-header');
+      const toolGroupCount = await toolGroupHeaders.count();
+      const collapsedToolTraceCount = await window.locator('.tool-trace:visible').count();
       for (const token of TOKENS) {
         assert.ok(
           assistantTexts.some((text) => text.includes(token)),
           `assistant replies did not contain queue token ${token}, got: ${assistantTexts.join(' | ') || '<empty>'}`,
         );
       }
+      assert.ok(toolGroupCount >= 1, 'expected at least one collapsed tool trace group');
+      assert.equal(
+        collapsedToolTraceCount,
+        0,
+        `tool trace rows should be hidden until the user expands a group, got ${collapsedToolTraceCount} visible rows`,
+      );
+      for (let index = 0; index < toolGroupCount; index += 1) {
+        await toolGroupHeaders.nth(index).click();
+      }
+      await window.locator('.tool-trace:visible').first().waitFor({ timeout: 10000 });
+      const toolTraceCount = await window.locator('.tool-trace:visible').count();
+      const toolTraceTexts = await window.locator('.tool-trace:visible').allTextContents();
       assert.ok(toolTraceCount >= 2, `expected tool traces to be visible, got ${toolTraceCount}`);
       assert.ok(
         toolTraceTexts.some((text) => text.includes('Read 334 lines')),

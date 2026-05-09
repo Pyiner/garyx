@@ -213,7 +213,7 @@ export function buildRenderTranscriptBlocks(
     blocks.push({
       kind: 'tool_group',
       key: `tool-group:${firstKey}`,
-      defaultExpanded: true,
+      defaultExpanded: false,
       entries: pendingTools,
     });
     pendingTools = [];

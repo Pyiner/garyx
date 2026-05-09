@@ -6324,7 +6324,7 @@ button.team-agent-speaker:focus-visible {
 
 .tool-trace-group {
   display: grid;
-  gap: 5px;
+  gap: 0;
   width: 100%;
 }
 
@@ -6391,6 +6391,42 @@ button.team-agent-speaker:focus-visible {
 
 .tool-trace-group.is-collapsed .tool-trace-group-chevron {
   transform: rotate(-90deg);
+}
+
+.tool-trace-group-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  visibility: hidden;
+  transition:
+    grid-template-rows 190ms var(--ease-standard),
+    margin-top 190ms var(--ease-standard),
+    opacity 150ms var(--ease-standard),
+    transform 190ms var(--ease-standard),
+    visibility 0s linear 190ms;
+}
+
+.tool-trace-group.is-expanded .tool-trace-group-panel {
+  grid-template-rows: 1fr;
+  margin-top: 5px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+  visibility: visible;
+  transition:
+    grid-template-rows 210ms var(--ease-standard),
+    margin-top 210ms var(--ease-standard),
+    opacity 150ms var(--ease-standard),
+    transform 210ms var(--ease-standard),
+    visibility 0s linear 0s;
+}
+
+.tool-trace-group-panel-inner {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .tool-trace-group-list {
@@ -17146,8 +17182,13 @@ button.codex-list-row {
   .sidebar-collapsible,
   .sidebar-collapsible-inner,
   .sidebar-section-chevron,
-  .composer-queue-item {
+  .composer-queue-item,
+  .tool-trace-group-chevron,
+  .tool-trace-group-panel {
     transition: none !important;
+  }
+  .tool-trace-group-panel {
+    transform: none;
   }
   .sidebar-collapsible.is-collapsed > .sidebar-collapsible-inner {
     transform: none;
