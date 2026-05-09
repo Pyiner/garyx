@@ -290,6 +290,7 @@ async fn handle_chat_ws_input(
     let (_status, payload) = execute_chat_stream_input(
         state,
         thread_id,
+        request.client_intent_id.clone(),
         request.message,
         request.attachments,
         request.images,
@@ -300,6 +301,7 @@ async fn handle_chat_ws_input(
         "type": "stream_input",
         "status": payload.status,
         "threadStatus": payload.thread_status,
+        "clientIntentId": payload.client_intent_id,
         "pendingInputId": payload.pending_input_id,
         "threadId": payload.thread_id
     }));

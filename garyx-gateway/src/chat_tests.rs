@@ -221,10 +221,12 @@ fn test_interrupt_request_accepts_thread_id_alias() {
 fn test_stream_input_request_accepts_thread_id_alias() {
     let req: StreamInputRequest = serde_json::from_value(json!({
         "threadId": "thread::custom",
+        "clientIntentId": "intent-1",
         "message": "hello"
     }))
     .unwrap();
     assert_eq!(req.thread_id.as_deref(), Some("thread::custom"));
+    assert_eq!(req.client_intent_id.as_deref(), Some("intent-1"));
 }
 
 #[test]

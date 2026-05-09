@@ -281,29 +281,35 @@ function summarizeToolTraceEntries(
 }
 
 export function ToolTraceGroup({
+  active = false,
   entries,
   defaultExpanded,
   onThreadNavigate,
 }: {
+  active?: boolean;
   entries: ToolTraceEntry[];
   defaultExpanded: boolean;
   onThreadNavigate?: (threadId: string) => void;
 }) {
   const { locale, t } = useI18n();
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const [userControlled, setUserControlled] = useState(false);
   const summary = summarizeToolTraceEntries(entries, t, locale);
 
   useEffect(() => {
-    setExpanded(defaultExpanded);
-  }, [defaultExpanded]);
+    if (!userControlled) {
+      setExpanded(defaultExpanded);
+    }
+  }, [defaultExpanded, userControlled]);
 
   return (
-    <div className={`tool-trace-group ${expanded ? 'is-expanded' : 'is-collapsed'}`}>
+    <div className={`tool-trace-group ${expanded ? 'is-expanded' : 'is-collapsed'} ${active ? 'is-active' : ''}`}>
       <button
         aria-expanded={expanded}
         aria-label={expanded ? t('Collapse tool calls') : t('Expand tool calls')}
         className="tool-trace-group-header"
         onClick={() => {
+          setUserControlled(true);
           setExpanded((current) => !current);
         }}
         type="button"
@@ -314,11 +320,17 @@ export function ToolTraceGroup({
         <span className="tool-trace-group-summary">{summary}</span>
         <IconChevronDown aria-hidden className="tool-trace-group-chevron" size={15} stroke={1.7} />
       </button>
-      {expanded ? (
-        <div className="tool-trace-group-list">
-          <ToolTraceTree nodes={buildToolTraceTree(entries)} onThreadNavigate={onThreadNavigate} />
+      <div
+        aria-hidden={!expanded}
+        className="tool-trace-group-panel"
+        inert={!expanded ? true : undefined}
+      >
+        <div className="tool-trace-group-panel-inner">
+          <div className="tool-trace-group-list">
+            <ToolTraceTree nodes={buildToolTraceTree(entries)} onThreadNavigate={onThreadNavigate} />
+          </div>
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }

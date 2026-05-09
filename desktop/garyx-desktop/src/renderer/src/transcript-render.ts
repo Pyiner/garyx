@@ -199,40 +199,13 @@ export function buildRenderableTranscript(messages: TranscriptMessage[]): Render
   return rendered;
 }
 
-function contentHasVisibleText(content: unknown): boolean {
-  if (typeof content === 'string') {
-    return content.trim().length > 0;
-  }
-  if (Array.isArray(content)) {
-    return content.some(contentHasVisibleText);
-  }
-  if (!isRecord(content)) {
-    return false;
-  }
-
-  if (typeof content.text === 'string' && content.text.trim()) {
-    return true;
-  }
-  if (typeof content.content === 'string' && content.content.trim()) {
-    return true;
-  }
-  return Array.isArray(content.content) && content.content.some(contentHasVisibleText);
-}
-
-function messageHasVisibleText(message: TranscriptMessage): boolean {
-  if (message.pending) {
-    return false;
-  }
-  return Boolean(message.text.trim()) || contentHasVisibleText(message.content);
-}
-
 export function buildRenderTranscriptBlocks(
   entries: RenderTranscriptEntry[],
 ): RenderTranscriptBlock[] {
   const blocks: RenderTranscriptBlock[] = [];
   let pendingTools: Array<Extract<RenderTranscriptEntry, { kind: 'tool' }>> = [];
 
-  function flushPendingTools(defaultExpanded: boolean) {
+  function flushPendingTools() {
     if (!pendingTools.length) {
       return;
     }
@@ -240,7 +213,7 @@ export function buildRenderTranscriptBlocks(
     blocks.push({
       kind: 'tool_group',
       key: `tool-group:${firstKey}`,
-      defaultExpanded,
+      defaultExpanded: false,
       entries: pendingTools,
     });
     pendingTools = [];
@@ -252,7 +225,7 @@ export function buildRenderTranscriptBlocks(
       continue;
     }
 
-    flushPendingTools(!messageHasVisibleText(entry.message));
+    flushPendingTools();
     blocks.push({
       kind: 'message',
       key: entry.key,
@@ -260,6 +233,6 @@ export function buildRenderTranscriptBlocks(
     });
   }
 
-  flushPendingTools(true);
+  flushPendingTools();
   return blocks;
 }

@@ -8,12 +8,14 @@ use crate::server::AppState;
 pub(crate) fn stream_input_response(
     status: impl Into<String>,
     thread_status: Option<String>,
+    client_intent_id: Option<String>,
     pending_input_id: Option<String>,
     thread_id: String,
 ) -> StreamInputResponse {
     StreamInputResponse {
         status: status.into(),
         thread_status,
+        client_intent_id,
         pending_input_id,
         thread_id,
     }

@@ -96,6 +96,7 @@ import type {
 } from "@shared/contracts";
 
 interface StreamInputWaiter {
+  clientIntentId?: string;
   resolve: (result: SendStreamingInputResult) => void;
   reject: (error: Error) => void;
 }
@@ -3973,6 +3974,7 @@ export async function openChatStream(
               workspacePath: workspacePath || undefined,
               metadata: {
                 client_timestamp_local: formatLocalChatTimestamp(),
+                client_intent_id: input.clientIntentId,
               },
               providerMetadata,
             }),
@@ -4101,7 +4103,18 @@ export async function openChatStream(
               socket.close();
               return;
             case "stream_input": {
-              const waiter = active.pendingInputWaiters.shift();
+              const clientIntentId =
+                asString(payload.clientIntentId) ||
+                asString(payload.client_intent_id);
+              const waiterIndex = clientIntentId
+                ? active.pendingInputWaiters.findIndex(
+                    (entry) => entry.clientIntentId === clientIntentId,
+                  )
+                : -1;
+              const waiter =
+                waiterIndex >= 0
+                  ? active.pendingInputWaiters.splice(waiterIndex, 1)[0]
+                  : active.pendingInputWaiters.shift();
               if (!waiter) {
                 return;
               }
@@ -4109,6 +4122,7 @@ export async function openChatStream(
                 status: asString(payload.status) || "no_active_session",
                 threadId: payloadThreadId,
                 sessionId: payloadThreadId,
+                clientIntentId,
                 pendingInputId:
                   asString(payload.pendingInputId) ||
                   asString(payload.pending_input_id),
@@ -4212,6 +4226,7 @@ export async function sendStreamingInput(
     );
     return await new Promise((resolve, reject) => {
       const waiter: StreamInputWaiter = {
+        clientIntentId: input.clientIntentId,
         resolve: (result) => {
           clearTimeout(timeout);
           resolve(result);
@@ -4233,6 +4248,7 @@ export async function sendStreamingInput(
         JSON.stringify({
           op: "input",
           threadId,
+          clientIntentId: input.clientIntentId,
           message: input.message,
           attachments: serializedAttachments.attachments,
           images: serializedAttachments.images,
@@ -4245,6 +4261,7 @@ export async function sendStreamingInput(
     status: "no_active_session",
     threadId,
     sessionId: input.sessionId || threadId,
+    clientIntentId: input.clientIntentId,
   };
 }
 

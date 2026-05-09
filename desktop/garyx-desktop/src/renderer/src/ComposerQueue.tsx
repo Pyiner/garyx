@@ -30,6 +30,7 @@ type QueueDropTarget = {
 
 type ComposerQueueProps = {
   activeQueue: MessageIntent[];
+  canSteerQueuedPrompt: boolean;
   draggedQueueIntentId: string | null;
   isActiveSendingThread: boolean;
   queueDropTarget: QueueDropTarget | null;
@@ -126,6 +127,7 @@ function isQueueIntentSteering(item: MessageIntent): boolean {
 
 type QueueItemProps = {
   activeQueueLength: number;
+  canSteerQueuedPrompt: boolean;
   isActiveSendingThread: boolean;
   item: MessageIntent;
   onCancelIntent: (threadId: string, intentId: string) => void;
@@ -135,6 +137,7 @@ type QueueItemProps = {
 
 function SortableQueueItem({
   activeQueueLength,
+  canSteerQueuedPrompt,
   isActiveSendingThread,
   item,
   onCancelIntent,
@@ -190,7 +193,7 @@ function SortableQueueItem({
         </span>
       </div>
       <div className="composer-queue-actions">
-        {isActiveSendingThread ? (
+        {isActiveSendingThread && canSteerQueuedPrompt ? (
           <button
             className="ghost-button queue-steer-button"
             disabled={isSteering}
@@ -222,6 +225,7 @@ function SortableQueueItem({
 
 export function ComposerQueue({
   activeQueue,
+  canSteerQueuedPrompt,
   isActiveSendingThread,
   onCancelIntent,
   onQueueDropTargetChange,
@@ -303,6 +307,7 @@ export function ComposerQueue({
             {activeQueue.map((item) => (
               <SortableQueueItem
                 activeQueueLength={activeQueue.length}
+                canSteerQueuedPrompt={canSteerQueuedPrompt}
                 isActiveSendingThread={isActiveSendingThread}
                 item={item}
                 key={item.intentId}

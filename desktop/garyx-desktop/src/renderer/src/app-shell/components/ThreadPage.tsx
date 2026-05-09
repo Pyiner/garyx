@@ -44,6 +44,7 @@ import type {
   ThreadLogTab,
   UiTranscriptMessage,
 } from "../types";
+import { RUN_LOADING_LABEL } from "../loading-labels";
 
 function normalizeMessageText(value: string | undefined): string {
   return value?.trim() || "";
@@ -197,6 +198,7 @@ type ThreadPageProps = {
   agentLabel?: string | null;
   composerAgentOptions?: ComposerAgentOption[];
   activePendingAutomationRun: PendingAutomationRun | null;
+  activeToolTraceLoadingKey: string | null;
   activeQueue: MessageIntent[];
   activeRenderableBlocks: ReturnType<typeof buildRenderTranscriptBlocks>;
   activeThreadLogsHasUnread: boolean;
@@ -226,6 +228,7 @@ type ThreadPageProps = {
   historyLoading: boolean;
   inspectorOpen: boolean;
   isActiveSendingThread: boolean;
+  canSteerQueuedPrompt: boolean;
   messagesRef: RefObject<HTMLDivElement | null>;
   mobileThreadLogLines: ThreadLogLine[];
   newThreadSelectedAgentId: string;
@@ -299,6 +302,7 @@ export function ThreadPage({
   activeMessages,
   activePendingAckIntents,
   activePendingAutomationRun,
+  activeToolTraceLoadingKey,
   activeQueue,
   activeRenderableBlocks,
   activeThreadLogsHasUnread,
@@ -330,6 +334,7 @@ export function ThreadPage({
   ignoreComposerSubmitUntilRef,
   inspectorOpen,
   isActiveSendingThread,
+  canSteerQueuedPrompt,
   isComposingRef,
   messagesRef,
   mobileThreadLogLines,
@@ -501,14 +506,9 @@ export function ThreadPage({
               </article>
               <article className="message-bubble assistant pending">
                 <div aria-label={t("Garyx is working")} className="message-loading">
-                  <p className="message-loading-label">
-                    {t("Garyx is working through the run…")}
+                  <p className="message-loading-label message-loading-label--thinking">
+                    {t(RUN_LOADING_LABEL)}
                   </p>
-                  <span aria-hidden="true" className="message-loading-dots">
-                    <span />
-                    <span />
-                    <span />
-                  </span>
                 </div>
               </article>
             </>
@@ -536,6 +536,7 @@ export function ThreadPage({
                   key={`${block.key}:body`}
                 >
                   <ToolTraceGroup
+                    active={block.key === activeToolTraceLoadingKey}
                     defaultExpanded={block.defaultExpanded}
                     entries={block.entries}
                     onThreadNavigate={onOpenThreadById}
@@ -567,7 +568,7 @@ export function ThreadPage({
                         className="message-loading"
                       >
                         <p className="message-loading-label">
-                          {entry.message.text}
+                          {displayTranscriptMessageText(entry.message)}
                         </p>
                         <span
                           aria-hidden="true"
@@ -672,17 +673,12 @@ export function ThreadPage({
           {showPendingAckLoading ? (
             <article className="message-bubble assistant pending">
               <div
-                aria-label={t("Waiting for Garyx to accept queued follow-up")}
+                aria-label={t("Garyx is working")}
                 className="message-loading"
               >
-                <p className="message-loading-label">
-                  {t("Waiting for Garyx to accept the queued follow-up…")}
+                <p className="message-loading-label message-loading-label--thinking">
+                  {t(RUN_LOADING_LABEL)}
                 </p>
-                <span aria-hidden="true" className="message-loading-dots">
-                  <span />
-                  <span />
-                  <span />
-                </span>
               </div>
             </article>
           ) : null}
@@ -690,14 +686,9 @@ export function ThreadPage({
           {showAutomationRunTailLoading ? (
             <article className="message-bubble assistant pending">
               <div aria-label={t("Garyx is working")} className="message-loading">
-                <p className="message-loading-label">
-                  {t("Garyx is working through the run…")}
+                <p className="message-loading-label message-loading-label--thinking">
+                  {t(RUN_LOADING_LABEL)}
                 </p>
-                <span aria-hidden="true" className="message-loading-dots">
-                  <span />
-                  <span />
-                  <span />
-                </span>
               </div>
             </article>
           ) : null}
@@ -709,6 +700,7 @@ export function ThreadPage({
           >
             <ComposerQueue
               activeQueue={activeQueue}
+              canSteerQueuedPrompt={canSteerQueuedPrompt}
               draggedQueueIntentId={draggedQueueIntentId}
               isActiveSendingThread={isActiveSendingThread}
               onCancelIntent={onCancelIntent}
