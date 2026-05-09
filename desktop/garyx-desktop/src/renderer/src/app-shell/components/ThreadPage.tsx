@@ -396,6 +396,14 @@ export function ThreadPage({
     agentDisplayNamesById: teamAgentDisplayNamesById,
     childThreadIds: activeThreadSummary?.team?.child_thread_ids || {},
   };
+  const composerSelectedAgentId = selectedThreadId
+    ? teamView.isTeam
+      ? activeThreadSummary?.team?.team_id?.trim() ||
+        activeThreadSummary?.teamId?.trim() ||
+        activeThreadSummary?.agentId?.trim() ||
+        undefined
+      : activeThreadSummary?.agentId?.trim() || undefined
+    : newThreadSelectedAgentId;
 
   useLayoutEffect(() => {
     const threadMain = threadMainRef.current;
@@ -727,12 +735,8 @@ export function ThreadPage({
               botBindingDisabled={botBindingDisabled}
               botGroups={botGroups}
               agentLabel={agentLabel}
-              agentOptions={
-                !selectedThreadId ? composerAgentOptions : undefined
-              }
-              selectedAgentId={
-                !selectedThreadId ? newThreadSelectedAgentId : undefined
-              }
+              agentOptions={composerAgentOptions}
+              selectedAgentId={composerSelectedAgentId}
               onSelectAgent={
                 !selectedThreadId ? onSelectNewThreadAgent : undefined
               }
