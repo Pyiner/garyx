@@ -6137,7 +6137,7 @@ button.team-agent-speaker:focus-visible {
   overflow: hidden;
   color: currentColor;
   font-size: var(--text-base);
-  font-weight: var(--font-weight-semibold, 600);
+  font-weight: var(--font-weight-normal, 400);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
