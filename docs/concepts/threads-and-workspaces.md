@@ -81,7 +81,5 @@ You usually never see this layer; it shows up in the logs as
 ## Where to go next
 
 - [Channels](/concepts/channels) — what binds to a thread on the inbound side
-- [Tasks & threads](/concepts/task-thread-model.zh) — how task metadata and
-  review flow sit on top of threads
 - [Providers](/concepts/providers) — what runs the agent on the outbound side
 - [Configuration](/configuration) — disk layout and overrides

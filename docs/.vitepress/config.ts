@@ -53,7 +53,6 @@ export default defineConfig({
           text: "Concepts",
           items: [
             { text: "Threads & workspaces", link: "/concepts/threads-and-workspaces" },
-            { text: "Tasks & threads (中文)", link: "/concepts/task-thread-model.zh" },
             { text: "Channels", link: "/concepts/channels" },
             { text: "Providers", link: "/concepts/providers" },
             { text: "MCP integration", link: "/concepts/mcp" },
