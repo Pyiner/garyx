@@ -1,10 +1,30 @@
-import type { MouseEvent } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { useMemo, type ComponentProps, type MouseEvent } from 'react';
+import { cjk } from '@streamdown/cjk';
+import { createCodePlugin } from '@streamdown/code';
+import {
+  Streamdown,
+  type Components,
+  type StreamdownTranslations,
+} from 'streamdown';
+
+import { useI18n } from './i18n';
 
 type RichMessageTone = 'default' | 'assistant';
 
 export type LocalFileLinkHandler = (absolutePath: string) => void;
+
+const garyxCodePlugin = createCodePlugin({
+  themes: ['github-light', 'github-dark'],
+});
+
+const STREAMDOWN_CONTROLS = {
+  code: {
+    copy: true,
+    download: false,
+  },
+  mermaid: false,
+  table: false,
+} as const;
 
 function normalizeLocalFilePath(target: string): string | null {
   const trimmed = target.trim();
@@ -48,6 +68,43 @@ function normalizeMessageLinkHref(target: string): string | null {
   return null;
 }
 
+function streamdownUrlTransform(target: string): string | null {
+  if (target === 'streamdown:incomplete-link') {
+    return target;
+  }
+  if (/^(https?:\/\/|mailto:)/i.test(target)) {
+    return target;
+  }
+  const localFilePath = localFilePathFromMessageLinkHref(target);
+  return localFilePath || null;
+}
+
+function useStreamdownTranslations(): Partial<StreamdownTranslations> {
+  const { t } = useI18n();
+  return useMemo(
+    () => ({
+      close: t('Close'),
+      copied: t('Copied'),
+      copyCode: t('Copy code'),
+      copyLink: t('Copy link'),
+      copyTable: t('Copy table'),
+      copyTableAsCsv: t('Copy table as CSV'),
+      copyTableAsMarkdown: t('Copy table as Markdown'),
+      copyTableAsTsv: t('Copy table as TSV'),
+      downloadTable: t('Download table'),
+      exitFullscreen: t('Exit fullscreen'),
+      externalLinkWarning: t("You're about to visit an external website."),
+      openExternalLink: t('Open external link?'),
+      openLink: t('Open link'),
+      tableFormatCsv: t('CSV'),
+      tableFormatMarkdown: t('Markdown'),
+      tableFormatTsv: t('TSV'),
+      viewFullscreen: t('View fullscreen'),
+    }),
+    [t],
+  );
+}
+
 export function RichMessageText({
   text,
   tone = 'default',
@@ -57,48 +114,62 @@ export function RichMessageText({
   tone?: RichMessageTone;
   onLocalFileLinkClick?: LocalFileLinkHandler;
 }) {
+  const translations = useStreamdownTranslations();
+  const components = useMemo<Components>(
+    () => ({
+      a({
+        children,
+        href,
+        node: _node,
+        ...props
+      }: ComponentProps<'a'> & { node?: unknown }) {
+        const rawHref = href || '';
+        const localFilePath = localFilePathFromMessageLinkHref(rawHref);
+        const normalizedHref = normalizeMessageLinkHref(rawHref);
+        const interceptsLocalFileLink = Boolean(
+          localFilePath && onLocalFileLinkClick,
+        );
+        if (!normalizedHref) {
+          return <>{children}</>;
+        }
+        const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+          if (!interceptsLocalFileLink || !localFilePath || !onLocalFileLinkClick) {
+            return;
+          }
+          event.preventDefault();
+          onLocalFileLinkClick(localFilePath);
+        };
+        return (
+          <a
+            {...props}
+            href={normalizedHref}
+            onClick={handleClick}
+            rel={interceptsLocalFileLink ? undefined : 'noreferrer'}
+            target={interceptsLocalFileLink ? undefined : '_blank'}
+          >
+            {children}
+          </a>
+        );
+      },
+    }),
+    [onLocalFileLinkClick],
+  );
+
   return (
     <div className={`message-rich ${tone === 'assistant' ? 'message-rich-assistant' : 'message-rich-default'}`}>
-      <ReactMarkdown
-        components={{
-          a({ children, href }) {
-            const rawHref = href || '';
-            const localFilePath = localFilePathFromMessageLinkHref(rawHref);
-            const normalizedHref = normalizeMessageLinkHref(rawHref);
-            const interceptsLocalFileLink = Boolean(localFilePath && onLocalFileLinkClick);
-            if (!normalizedHref) {
-              return <>{children}</>;
-            }
-            const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
-              if (!interceptsLocalFileLink || !localFilePath || !onLocalFileLinkClick) {
-                return;
-              }
-              event.preventDefault();
-              onLocalFileLinkClick(localFilePath);
-            };
-            return (
-              <a
-                href={normalizedHref}
-                onClick={handleClick}
-                rel={interceptsLocalFileLink ? undefined : 'noreferrer'}
-                target={interceptsLocalFileLink ? undefined : '_blank'}
-              >
-                {children}
-              </a>
-            );
-          },
-          table({ children }) {
-            return (
-              <div className="message-rich-table-wrap">
-                <table>{children}</table>
-              </div>
-            );
-          },
-        }}
-        remarkPlugins={[remarkGfm]}
+      <Streamdown
+        components={components}
+        controls={STREAMDOWN_CONTROLS}
+        dir="auto"
+        lineNumbers={false}
+        mode="streaming"
+        normalizeHtmlIndentation
+        plugins={{ cjk, code: garyxCodePlugin }}
+        translations={translations}
+        urlTransform={streamdownUrlTransform}
       >
         {text}
-      </ReactMarkdown>
+      </Streamdown>
     </div>
   );
 }

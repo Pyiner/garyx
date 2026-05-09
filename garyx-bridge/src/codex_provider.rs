@@ -1289,6 +1289,9 @@ impl CodexAgentProvider {
             .lock()
             .await
             .insert(options.thread_id.clone(), thread_id.clone());
+        live_callback(StreamEvent::SessionBound {
+            sdk_session_id: thread_id.clone(),
+        });
 
         // Start turn
         let input_items = build_input_items(options, include_memory);

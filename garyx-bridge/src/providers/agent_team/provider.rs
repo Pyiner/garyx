@@ -435,6 +435,7 @@ impl AgentLoopProvider for AgentTeamProvider {
             let forwarder = Arc::clone(&on_chunk_shared);
             let needs_prefix = Arc::new(AtomicBool::new(true));
             let forwarding_callback: StreamCallback = Box::new(move |event| match event {
+                StreamEvent::SessionBound { .. } => {}
                 StreamEvent::Delta { text } => {
                     if text.is_empty() {
                         return;

@@ -246,6 +246,7 @@ fn build_pending_input_content(
 
 fn build_stream_event_payload(thread_id: &str, run_id: &str, event: &StreamEvent) -> Option<Value> {
     match event {
+        StreamEvent::SessionBound { .. } => None,
         StreamEvent::Delta { text } => {
             if text.is_empty() {
                 None
@@ -476,7 +477,7 @@ fn spawn_partial_thread_persistence_worker(
                         user_message: &user_message,
                         user_images: &user_images,
                         assistant_response: &snapshot.assistant_response,
-                        sdk_session_id: None,
+                        sdk_session_id: snapshot.sdk_session_id.as_deref(),
                         provider_key: &provider_key,
                         provider_type: provider_type.clone(),
                         session_messages: &snapshot.session_messages,
@@ -507,7 +508,7 @@ fn spawn_partial_thread_persistence_worker(
                     user_message: &user_message,
                     user_images: &user_images,
                     assistant_response: &snapshot.assistant_response,
-                    sdk_session_id: None,
+                    sdk_session_id: snapshot.sdk_session_id.as_deref(),
                     provider_key: &provider_key,
                     provider_type: provider_type.clone(),
                     session_messages: &snapshot.session_messages,
@@ -1261,7 +1262,8 @@ impl MultiProviderBridge {
                             )
                             .await;
                         }
-                        StreamEvent::Boundary { .. }
+                        StreamEvent::SessionBound { .. }
+                        | StreamEvent::Boundary { .. }
                         | StreamEvent::ThreadTitleUpdated { .. }
                         | StreamEvent::Done => {}
                     }
@@ -1969,7 +1971,8 @@ impl MultiProviderBridge {
                             )
                             .await;
                         }
-                        StreamEvent::Boundary { .. }
+                        StreamEvent::SessionBound { .. }
+                        | StreamEvent::Boundary { .. }
                         | StreamEvent::ThreadTitleUpdated { .. }
                         | StreamEvent::Done => {}
                     }

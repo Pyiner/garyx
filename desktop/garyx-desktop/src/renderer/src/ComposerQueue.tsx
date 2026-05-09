@@ -74,16 +74,6 @@ export function ComposerQueue({
 
   return (
     <div className="composer-queue">
-      <div className="composer-queue-header">
-        <div className="composer-queue-copy">
-          <IconGripVertical aria-hidden className="composer-queue-summary-icon" size={16} stroke={1.7} />
-          <span className="composer-queue-note">
-            {activeQueue.length === 1
-              ? t('1 follow-up ready')
-              : t('{count} follow-ups ready', { count: activeQueue.length })}
-          </span>
-        </div>
-      </div>
       <div className="composer-queue-list">
         {activeQueue.map((item) => {
           const isSteering =
@@ -129,61 +119,65 @@ export function ComposerQueue({
                 onQueueDropTargetChange(null);
               }}
             >
-              <button
-                className="queue-drag-handle"
-                disabled={isSteering || activeQueue.length < 2}
-                draggable={!isSteering && activeQueue.length > 1}
-                onDragEnd={() => {
-                  onSetDraggedQueueIntentId(null);
-                  onQueueDropTargetChange(null);
-                }}
-                onDragStart={(event) => {
-                  onSetDraggedQueueIntentId(item.intentId);
-                  onQueueDropTargetChange(null);
-                  event.dataTransfer.effectAllowed = 'move';
-                  event.dataTransfer.setData('text/plain', item.intentId);
-                  const row = event.currentTarget.closest('.composer-queue-item');
-                  if (row instanceof HTMLElement) {
-                    event.dataTransfer.setDragImage(row, 28, 18);
-                  }
-                }}
-                title={activeQueue.length > 1 ? t('Drag to reorder') : t('Queue order locked')}
-                tabIndex={-1}
-                type="button"
-              >
-                <IconGripVertical aria-hidden size={16} stroke={1.7} />
-                <span className="sr-only">{t('Drag to reorder queued follow-up')}</span>
-              </button>
-              <span
-                className="composer-queue-text"
-                title={buildIntentPreview(item, t)}
-              >
-                {buildIntentPreview(item, t)}
-              </span>
-              {isActiveSendingThread && canSteerNow ? (
+              <div className="composer-queue-primary">
                 <button
-                  className="ghost-button queue-steer-button"
-                  disabled={isSteering}
-                  onClick={() => {
-                    onSteerQueuedPrompt(item);
+                  className="queue-drag-handle"
+                  disabled={isSteering || activeQueue.length < 2}
+                  draggable={!isSteering && activeQueue.length > 1}
+                  onDragEnd={() => {
+                    onSetDraggedQueueIntentId(null);
+                    onQueueDropTargetChange(null);
                   }}
+                  onDragStart={(event) => {
+                    onSetDraggedQueueIntentId(item.intentId);
+                    onQueueDropTargetChange(null);
+                    event.dataTransfer.effectAllowed = 'move';
+                    event.dataTransfer.setData('text/plain', item.intentId);
+                    const row = event.currentTarget.closest('.composer-queue-item');
+                    if (row instanceof HTMLElement) {
+                      event.dataTransfer.setDragImage(row, 28, 18);
+                    }
+                  }}
+                  title={activeQueue.length > 1 ? t('Drag to reorder') : t('Queue order locked')}
+                  tabIndex={-1}
                   type="button"
                 >
-                  <span>{isSteering ? t('Steering…') : t('Steer')}</span>
+                  <IconGripVertical aria-hidden size={16} stroke={1.7} />
+                  <span className="sr-only">{t('Drag to reorder queued follow-up')}</span>
                 </button>
-              ) : null}
-              <button
-                className="queue-remove-button"
-                disabled={isSteering}
-                onClick={() => {
-                  onCancelIntent(item.threadId, item.intentId);
-                }}
-                tabIndex={-1}
-                type="button"
-              >
-                <IconX aria-hidden size={16} stroke={1.7} />
-                <span className="sr-only">{t('Remove queued follow-up')}</span>
-              </button>
+                <span
+                  className="composer-queue-text"
+                  title={buildIntentPreview(item, t)}
+                >
+                  {buildIntentPreview(item, t)}
+                </span>
+              </div>
+              <div className="composer-queue-actions">
+                {isActiveSendingThread && canSteerNow ? (
+                  <button
+                    className="ghost-button queue-steer-button"
+                    disabled={isSteering}
+                    onClick={() => {
+                      onSteerQueuedPrompt(item);
+                    }}
+                    type="button"
+                  >
+                    <span>{isSteering ? t('Steering…') : t('Steer')}</span>
+                  </button>
+                ) : null}
+                <button
+                  className="queue-remove-button"
+                  disabled={isSteering}
+                  onClick={() => {
+                    onCancelIntent(item.threadId, item.intentId);
+                  }}
+                  tabIndex={-1}
+                  type="button"
+                >
+                  <IconX aria-hidden size={16} stroke={1.7} />
+                  <span className="sr-only">{t('Remove queued follow-up')}</span>
+                </button>
+              </div>
             </div>
           );
         })}

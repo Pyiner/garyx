@@ -671,7 +671,9 @@ mod dispatch_tests {
             match event {
                 StreamEvent::Delta { text } => assert!(text.contains("echo:")),
                 StreamEvent::Done => {}
-                StreamEvent::Boundary { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
+                StreamEvent::SessionBound { .. }
+                | StreamEvent::Boundary { .. }
+                | StreamEvent::ThreadTitleUpdated { .. } => {}
                 StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {}
             }
         });
@@ -718,7 +720,9 @@ mod dispatch_tests {
                 let full = parts_cb.lock().unwrap().join("");
                 *final_cb.lock().unwrap() = Some(full);
             }
-            StreamEvent::Boundary { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
+            StreamEvent::SessionBound { .. }
+            | StreamEvent::Boundary { .. }
+            | StreamEvent::ThreadTitleUpdated { .. } => {}
             StreamEvent::ToolUse { .. } | StreamEvent::ToolResult { .. } => {}
         });
 

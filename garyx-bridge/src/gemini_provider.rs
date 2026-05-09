@@ -1022,6 +1022,9 @@ impl GeminiCliProvider {
             .lock()
             .await
             .insert(options.thread_id.clone(), resolved_session_id.clone());
+        on_chunk(StreamEvent::SessionBound {
+            sdk_session_id: resolved_session_id.clone(),
+        });
 
         let mode_id = approval_mode(&self.config, &options.metadata);
         if mode_id != "default" {

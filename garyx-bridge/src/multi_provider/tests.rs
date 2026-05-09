@@ -618,6 +618,9 @@ impl AgentLoopProvider for CheckpointingProvider {
         on_chunk: StreamCallback,
     ) -> Result<ProviderRunResult, BridgeError> {
         let sdk_session_id = format!("sdk-{}", options.thread_id);
+        on_chunk(StreamEvent::SessionBound {
+            sdk_session_id: sdk_session_id.clone(),
+        });
         on_chunk(StreamEvent::Delta {
             text: "partial reply".to_owned(),
         });
@@ -1911,6 +1914,15 @@ async fn test_thread_persistence_checkpoints_streaming_output_before_run_complet
     assert_eq!(checkpoint_messages[0]["content"], "keep this");
     assert_eq!(checkpoint_messages[1]["role"], "assistant");
     assert_eq!(checkpoint_messages[1]["content"], "partial reply");
+    assert_eq!(checkpointed["sdk_session_id"], "sdk-sess::tg::checkpoint");
+    assert_eq!(
+        checkpointed["provider_sdk_session_ids"]["p1"],
+        "sdk-sess::tg::checkpoint"
+    );
+    assert_eq!(
+        checkpointed["history"]["active_run_snapshot"]["sdk_session_id"],
+        "sdk-sess::tg::checkpoint"
+    );
 
     provider.release_run();
     tokio::time::timeout(std::time::Duration::from_secs(3), async {

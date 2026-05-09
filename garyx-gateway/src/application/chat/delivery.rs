@@ -945,7 +945,8 @@ pub async fn build_bound_response_callback(
                     );
                     return;
                 }
-                StreamEvent::ToolUse { .. }
+                StreamEvent::SessionBound { .. }
+                | StreamEvent::ToolUse { .. }
                 | StreamEvent::ToolResult { .. }
                 | StreamEvent::ThreadTitleUpdated { .. } => {}
             }
@@ -962,6 +963,7 @@ pub async fn build_bound_response_callback(
     let callback_flush_scheduled = delayed_flush_scheduled.clone();
 
     Some(Arc::new(move |event| match event {
+        StreamEvent::SessionBound { .. } => {}
         StreamEvent::Delta { text } => {
             if callback_delivery.push_delta(&text, "bound delivery") {
                 schedule_loop_bound_delivery_flush(

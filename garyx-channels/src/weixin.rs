@@ -2936,6 +2936,7 @@ async fn run_streaming_update_consumer(
                     break;
                 };
                 match event {
+                    StreamEvent::SessionBound { .. } => {}
                     StreamEvent::Delta { text } => {
                         ensure_stream_typing(&ctx, &mut typing_keepalive_task, &mut typing_active).await;
                         let now = Instant::now();
@@ -3739,6 +3740,7 @@ impl WeixinChannel {
 
                 while let Some(event) = event_rx.recv().await {
                     match event {
+                        StreamEvent::SessionBound { .. } => {}
                         StreamEvent::Delta { text } => {
                             if !typing_active && let Some(ticket) = typing_ticket.clone() {
                                 let http = response_http.clone();
