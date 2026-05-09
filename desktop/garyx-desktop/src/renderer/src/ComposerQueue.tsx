@@ -23,6 +23,20 @@ type ComposerQueueProps = {
   onSteerQueuedPrompt: (item: MessageIntent) => void;
 };
 
+let transparentQueueDragImage: HTMLCanvasElement | null = null;
+
+function getTransparentQueueDragImage(): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  if (!transparentQueueDragImage) {
+    transparentQueueDragImage = document.createElement('canvas');
+    transparentQueueDragImage.width = 1;
+    transparentQueueDragImage.height = 1;
+  }
+  return transparentQueueDragImage;
+}
+
 function QueueGripIcon() {
   return (
     <svg
@@ -187,9 +201,9 @@ export function ComposerQueue({
                     onQueueDropTargetChange(null);
                     event.dataTransfer.effectAllowed = 'move';
                     event.dataTransfer.setData('text/plain', item.intentId);
-                    const row = event.currentTarget.closest('.composer-queue-item');
-                    if (row instanceof HTMLElement) {
-                      event.dataTransfer.setDragImage(row, 20, 14);
+                    const dragImage = getTransparentQueueDragImage();
+                    if (dragImage) {
+                      event.dataTransfer.setDragImage(dragImage, 0, 0);
                     }
                   }}
                   title={activeQueue.length > 1 ? t('Drag to reorder') : t('Queue order locked')}

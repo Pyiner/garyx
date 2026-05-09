@@ -7226,14 +7226,18 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-queue-item.dragging {
+  outline: 0;
+  box-shadow: none;
   opacity: 0.42;
 }
 
 .composer-queue-item.drop-before {
+  box-shadow: none;
   margin-top: 29px;
 }
 
 .composer-queue-item.drop-after {
+  box-shadow: none;
   margin-bottom: 29px;
 }
 
