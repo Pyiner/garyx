@@ -180,8 +180,6 @@ const zhCN: Record<string, string> = {
   'Unavailable': '不可用',
   'Unsaved Changes': '未保存改动',
   'Updated {time}': '更新于 {time}',
-  'Waiting for Garyx to accept queued follow-up': '等待 Garyx 接收排队的后续输入',
-  'Waiting for Garyx to accept the queued follow-up…': '正在等待 Garyx 接收排队的后续输入…',
   'Weixin bot connected.': '微信 Bot 已连接。',
   'Workspace for the new thread': '新线程的工作区',
   'Workspaces': '工作区',

@@ -6395,7 +6395,7 @@ button.team-agent-speaker:focus-visible {
     color-mix(in srgb, var(--color-token-description-foreground) 76%, transparent) 100%
   );
   background-size: 240% 100%;
-  background-position: -160% 0;
+  background-position: 160% 0;
   -webkit-background-clip: text;
   background-clip: text;
   animation: thinking-shimmer 1.45s linear infinite;
@@ -13766,11 +13766,11 @@ button.codex-list-row {
 
 @keyframes thinking-shimmer {
   from {
-    background-position: -160% 0;
+    background-position: 160% 0;
   }
 
   to {
-    background-position: 160% 0;
+    background-position: -160% 0;
   }
 }
 

@@ -665,17 +665,12 @@ export function ThreadPage({
           {showPendingAckLoading ? (
             <article className="message-bubble assistant pending">
               <div
-                aria-label={t("Waiting for Garyx to accept queued follow-up")}
+                aria-label={t("Garyx is working")}
                 className="message-loading"
               >
-                <p className="message-loading-label">
-                  {t("Waiting for Garyx to accept the queued follow-up…")}
+                <p className="message-loading-label message-loading-label--thinking">
+                  {t(RUN_LOADING_LABEL)}
                 </p>
-                <span aria-hidden="true" className="message-loading-dots">
-                  <span />
-                  <span />
-                  <span />
-                </span>
               </div>
             </article>
           ) : null}
