@@ -49,6 +49,9 @@ dmypy.json
 # Logs
 *.log
 
+# Generated outputs
+outputs/
+
 # Configuration
 config.local.yaml
 .env
