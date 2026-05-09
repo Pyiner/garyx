@@ -819,13 +819,14 @@ export function ComposerForm({
                 src={buildMessageImageDataUrl(image.mediaType, image.data || '')}
               />
               <button
-                className="composer-image-chip-remove"
+                aria-label={t("Remove image attachment")}
+                className="composer-attachment-remove composer-image-chip-remove"
                 onClick={() => {
                   onRemoveComposerImage(image.id);
                 }}
                 type="button"
               >
-                <IconX aria-hidden size={10} stroke={2.2} />
+                <IconX aria-hidden size={12} stroke={2.2} />
                 <span className="sr-only">{t("Remove image attachment")}</span>
               </button>
             </div>
@@ -841,13 +842,14 @@ export function ComposerForm({
               </span>
               <span className="composer-file-chip-label">{file.name}</span>
               <button
-                className="composer-image-chip-remove"
+                aria-label={t("Remove file attachment")}
+                className="composer-attachment-remove composer-file-chip-remove"
                 onClick={() => {
                   onRemoveComposerFile(file.id);
                 }}
                 type="button"
               >
-                <IconX aria-hidden size={10} stroke={2.2} />
+                <IconX aria-hidden size={12} stroke={2.2} />
                 <span className="sr-only">{t("Remove file attachment")}</span>
               </button>
             </div>
