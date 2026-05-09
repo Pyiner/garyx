@@ -77,13 +77,19 @@ function summarizeTurn(
   steps: RenderTranscriptBlock[],
   finalBlock: RenderTranscriptBlock | null,
   key: string,
+  precedingUserTs: string | null,
 ): TurnRow {
   const allBlocks = finalBlock ? [...steps, finalBlock] : steps;
   const isRunning = allBlocks.some(blockIsPending);
   const timestamps = allBlocks
     .map(blockTimestamp)
     .filter((value): value is string => Boolean(value));
-  const startedAt = timestamps.length ? (timestamps[0] ?? null) : null;
+  // Prefer the preceding user message's timestamp so the "Worked for X"
+  // counter starts ticking from the submit moment (matching Codex), even
+  // when the turn ends up with a single short assistant reply that
+  // doesn't carry meaningful intra-turn timestamps of its own.
+  const startedAt =
+    precedingUserTs ?? (timestamps.length ? (timestamps[0] ?? null) : null);
   const finishedAt = isRunning
     ? null
     : timestamps.length
@@ -114,6 +120,7 @@ export function buildTurnRows(
   const rows: TurnRenderRow[] = [];
   let currentSteps: RenderTranscriptBlock[] = [];
   let currentKey: string | null = null;
+  let precedingUserTs: string | null = null;
 
   const flush = () => {
     if (!currentSteps.length || !currentKey) {
@@ -122,15 +129,11 @@ export function buildTurnRows(
       return;
     }
     const { steps, finalBlock } = pickFinalBlock(currentSteps);
-    if (steps.length === 0) {
-      // No intermediate steps — nothing to collapse; fall back to a flat
-      // render of the final block alone so the user just sees the answer.
-      if (finalBlock) {
-        rows.push({ kind: 'flat', key: finalBlock.key, block: finalBlock });
-      }
-    } else {
-      rows.push(summarizeTurn(steps, finalBlock, currentKey));
-    }
+    // Always emit a TurnRow so every assistant turn shows the
+    // Codex-parity "Worked for X" header — even short replies with no
+    // intermediate tool calls. The header is the visible end-of-run
+    // marker plus the toggle to inspect the run details if any exist.
+    rows.push(summarizeTurn(steps, finalBlock, currentKey, precedingUserTs));
     currentSteps = [];
     currentKey = null;
   };
@@ -139,6 +142,9 @@ export function buildTurnRows(
     if (isUserBlock(block)) {
       flush();
       rows.push({ kind: 'flat', key: block.key, block });
+      if (block.kind === 'message' && block.entry.message.timestamp) {
+        precedingUserTs = block.entry.message.timestamp;
+      }
       continue;
     }
     if (currentKey === null) {
