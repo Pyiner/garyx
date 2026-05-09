@@ -191,6 +191,7 @@ import {
   buildThreadLogLines,
   clampThreadLogsPanelWidth,
   computeGatewayIndicator,
+  keepRecentThreadLogLines,
 } from "./diagnostics-helpers";
 import { useSettingsController } from "./useSettingsController";
 import { useWorkspaceController } from "./useWorkspaceController";
@@ -3934,7 +3935,7 @@ export function AppShell() {
         setThreadLogsError(null);
         setThreadLogsLoading(false);
         if (chunk.reset) {
-          setThreadLogsText(chunk.text);
+          setThreadLogsText(keepRecentThreadLogLines(chunk.text));
           setThreadLogsHasUnread(false);
           window.requestAnimationFrame(() => {
             scrollThreadLogsToLatest("auto");
@@ -3944,7 +3945,9 @@ export function AppShell() {
         if (!chunk.text) {
           return;
         }
-        setThreadLogsText((current) => current + chunk.text);
+        setThreadLogsText((current) =>
+          keepRecentThreadLogLines(current + chunk.text),
+        );
         if (wasNearBottom) {
           setThreadLogsHasUnread(false);
           window.requestAnimationFrame(() => {
@@ -3984,12 +3987,15 @@ export function AppShell() {
   useEffect(() => {
     if (
       !threadLogsOpen ||
-      threadLogsActiveTab !== "client" ||
       !selectedThreadId
     ) {
       return;
     }
-    setClientLogsHasUnread(false);
+    if (threadLogsActiveTab === "client") {
+      setClientLogsHasUnread(false);
+    } else {
+      setThreadLogsHasUnread(false);
+    }
     window.requestAnimationFrame(() => {
       scrollThreadLogsToLatest("auto");
     });
