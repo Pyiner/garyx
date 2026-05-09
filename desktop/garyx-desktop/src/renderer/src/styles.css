@@ -7219,18 +7219,20 @@ button.team-agent-speaker:focus-visible {
     opacity var(--duration-fast) var(--ease-standard),
     background-color var(--duration-fast) var(--ease-standard),
     box-shadow var(--duration-fast) var(--ease-standard);
+  user-select: none;
+  -webkit-user-select: none;
   will-change: transform;
 }
 
 .composer-queue-item:hover,
 .composer-queue-item:focus-within {
-  background: rgba(26, 28, 31, 0.03);
+  background: transparent;
   box-shadow: none;
 }
 
 .composer-queue-item.dragging {
   z-index: 10;
-  background: rgba(26, 28, 31, 0.035);
+  background: transparent;
   cursor: grabbing;
   outline: 0;
   box-shadow: 0 8px 20px rgba(13, 13, 13, 0.06);
@@ -7287,7 +7289,7 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-queue-item.dragging .queue-drag-handle {
-  background: rgba(26, 28, 31, 0.045);
+  background: transparent;
   color: rgba(26, 28, 31, 0.54);
   cursor: grabbing;
 }
@@ -7318,6 +7320,8 @@ button.team-agent-speaker:focus-visible {
   font-weight: var(--font-weight-normal);
   line-height: 18.5714px;
   text-overflow: ellipsis;
+  user-select: none;
+  -webkit-user-select: none;
   white-space: nowrap;
 }
 
