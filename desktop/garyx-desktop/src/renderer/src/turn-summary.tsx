@@ -29,9 +29,12 @@ function parseTimestamp(value: string | null | undefined): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function computeElapsed(turn: TurnRow, nowMs: number): number {
-  const start = parseTimestamp(turn.startedAt);
-  if (start === null) return 0;
+function computeElapsed(
+  turn: TurnRow,
+  nowMs: number,
+  fallbackStartMs: number,
+): number {
+  const start = parseTimestamp(turn.startedAt) ?? fallbackStartMs;
   if (turn.isRunning) {
     return Math.max(0, (nowMs - start) / 1000);
   }
@@ -54,12 +57,16 @@ export function TurnSummary({
   children,
 }: {
   turn: TurnRow;
-  children: ReactNode;
+  children?: ReactNode;
 }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState(turn.isRunning);
   const [userControlled, setUserControlled] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // Fallback start time when the turn doesn't carry a real timestamp
+  // (e.g. the synthetic placeholder rendered while we wait for the gateway
+  // to ack a freshly-submitted prompt).
+  const [mountStartMs] = useState(() => Date.now());
 
   // Auto-sync expanded state with isRunning until the user clicks once.
   useEffect(() => {
@@ -76,15 +83,16 @@ export function TurnSummary({
     return () => window.clearInterval(id);
   }, [turn.isRunning]);
 
-  const elapsed = computeElapsed(turn, nowMs);
-  const elapsedLabel = elapsed > 0 ? formatElapsed(elapsed) : null;
+  const elapsed = computeElapsed(turn, nowMs, mountStartMs);
+  const elapsedLabel = elapsed >= 1 ? formatElapsed(elapsed) : null;
   const summaryLabel = elapsedLabel
     ? t('Worked for {duration}', { duration: elapsedLabel })
     : t('Worked');
+  const hasBody = Boolean(children);
 
   return (
     <div
-      className={`turn-summary ${expanded ? 'is-expanded' : 'is-collapsed'} ${turn.isRunning ? 'is-running' : ''}`}
+      className={`turn-summary ${expanded ? 'is-expanded' : 'is-collapsed'} ${turn.isRunning ? 'is-running' : ''} ${hasBody ? 'has-body' : 'no-body'}`}
     >
       <button
         aria-expanded={expanded}
@@ -107,13 +115,40 @@ export function TurnSummary({
         />
       </button>
       <div aria-hidden className="turn-summary-divider" />
-      <div
-        aria-hidden={!expanded}
-        className="turn-summary-body"
-        inert={!expanded ? true : undefined}
-      >
-        {children}
-      </div>
+      {hasBody ? (
+        <div
+          aria-hidden={!expanded}
+          className="turn-summary-body"
+          inert={!expanded ? true : undefined}
+        >
+          {children}
+        </div>
+      ) : null}
     </div>
   );
 }
+
+/**
+ * Synthetic TurnRow used by the gateway-ack placeholder — displays the
+ * Codex-style "Worked for Xs" header immediately after the user submits,
+ * before the first real assistant message arrives.
+ */
+export const PENDING_ACK_TURN: TurnRow = {
+  kind: 'turn',
+  key: 'turn:pending-ack',
+  steps: [],
+  finalBlock: null,
+  isRunning: true,
+  startedAt: null,
+  finishedAt: null,
+};
+
+export const PENDING_AUTOMATION_HEAD_TURN: TurnRow = {
+  ...PENDING_ACK_TURN,
+  key: 'turn:pending-automation-head',
+};
+
+export const PENDING_AUTOMATION_TAIL_TURN: TurnRow = {
+  ...PENDING_ACK_TURN,
+  key: 'turn:pending-automation-tail',
+};
