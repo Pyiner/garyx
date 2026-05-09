@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useLayoutEffect,
   useRef,
   type CSSProperties,
@@ -33,6 +34,8 @@ import {
   buildRenderTranscriptBlocks,
   type RenderTranscriptBlock,
 } from "../../transcript-render";
+import { buildTurnRows, type TurnRow } from "../../turn-render";
+import { TurnSummary } from "../../turn-summary";
 import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ThreadLogPanel } from "./ThreadLogPanel";
@@ -521,40 +524,29 @@ export function ThreadPage({
             </>
           ) : null}
 
-          {activeRenderableBlocks.map((block, index) => {
-            const speaker = teamView.isTeam
-              ? speakerForTranscriptBlock(block, teamSpeakerOptions)
-              : null;
-            const previousSpeaker =
-              teamView.isTeam && index > 0
-                ? speakerForTranscriptBlock(
-                    activeRenderableBlocks[index - 1]!,
-                    teamSpeakerOptions,
-                  )
-                : null;
-            const showSpeakerHeader =
-              Boolean(speaker) && speaker!.agentId !== previousSpeaker?.agentId;
-
-            let blockBody: ReactNode;
-            if (block.kind === "tool_group") {
-              blockBody = (
-                <article
-                  className="message-bubble tool-cluster"
-                  key={`${block.key}:body`}
-                >
-                  <ToolTraceGroup
-                    active={block.key === activeToolTraceLoadingKey}
-                    defaultExpanded={block.defaultExpanded}
-                    entries={block.entries}
-                    onThreadNavigate={onOpenThreadById}
-                  />
-                </article>
-              );
-            } else {
+          {(() => {
+            const renderBlockBody = (
+              block: RenderTranscriptBlock,
+            ): ReactNode => {
+              if (block.kind === "tool_group") {
+                return (
+                  <article
+                    className="message-bubble tool-cluster"
+                    key={`${block.key}:body`}
+                  >
+                    <ToolTraceGroup
+                      active={block.key === activeToolTraceLoadingKey}
+                      defaultExpanded={block.defaultExpanded}
+                      entries={block.entries}
+                      onThreadNavigate={onOpenThreadById}
+                    />
+                  </article>
+                );
+              }
               const entry = block.entry;
               const loopContinuation = isLoopContinuationMessage(entry.message);
               if (entry.message.role === "user" && !loopContinuation) {
-                blockBody = renderUserMessageBubbleParts({
+                return renderUserMessageBubbleParts({
                   keyPrefix: `${block.key}:body`,
                   text: displayTranscriptMessageText(entry.message),
                   content: entry.message.content,
@@ -562,98 +554,142 @@ export function ThreadPage({
                   error: entry.message.error,
                   onLocalFileLinkClick: onLocalWorkspaceFileLinkClick,
                 });
-              } else {
-                blockBody = (
-                  <article
-                    key={`${block.key}:body`}
-                    className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""} ${loopContinuation ? "loop-continuation" : ""}`}
-                  >
-                    {entry.message.role === "assistant" &&
-                    entry.message.pending ? (
-                      <div
-                        aria-label={t("Garyx is working")}
-                        className="message-loading"
-                      >
-                        <p className="message-loading-label">
-                          {displayTranscriptMessageText(entry.message)}
-                        </p>
-                        <span
-                          aria-hidden="true"
-                          className="message-loading-dots"
-                        >
-                          <span />
-                          <span />
-                          <span />
-                        </span>
-                      </div>
-                    ) : (
-                      <RichMessageContent
-                        altPrefix={entry.message.role}
-                        content={
-                          loopContinuation
-                            ? LOOP_CONTINUATION_SUMMARY
-                            : entry.message.content
-                        }
-                        onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
-                        text={displayTranscriptMessageText(entry.message)}
+              }
+              return (
+                <article
+                  key={`${block.key}:body`}
+                  className={`message-bubble ${entry.message.role} ${entry.message.pending ? "pending" : ""} ${entry.message.error ? "error" : ""} ${loopContinuation ? "loop-continuation" : ""}`}
+                >
+                  {entry.message.role === "assistant" &&
+                  entry.message.pending ? (
+                    <div
+                      aria-label={t("Garyx is working")}
+                      className="message-loading"
+                    >
+                      <p className="message-loading-label">
+                        {displayTranscriptMessageText(entry.message)}
+                      </p>
+                      <span aria-hidden="true" className="message-loading-dots">
+                        <span />
+                        <span />
+                        <span />
+                      </span>
+                    </div>
+                  ) : (
+                    <RichMessageContent
+                      altPrefix={entry.message.role}
+                      content={
+                        loopContinuation
+                          ? LOOP_CONTINUATION_SUMMARY
+                          : entry.message.content
+                      }
+                      onLocalFileLinkClick={onLocalWorkspaceFileLinkClick}
+                      text={displayTranscriptMessageText(entry.message)}
+                    />
+                  )}
+                </article>
+              );
+            };
+
+            // Team mode keeps the per-block iteration so we can still emit
+            // speaker headers between consecutive agents. Solo threads route
+            // through `buildTurnRows` so each multi-step assistant turn ends
+            // up behind a Codex-style "Worked for X" collapsible.
+            if (teamView.isTeam) {
+              return activeRenderableBlocks.map((block, index) => {
+                const speaker = speakerForTranscriptBlock(
+                  block,
+                  teamSpeakerOptions,
+                );
+                const previousSpeaker =
+                  index > 0
+                    ? speakerForTranscriptBlock(
+                        activeRenderableBlocks[index - 1]!,
+                        teamSpeakerOptions,
+                      )
+                    : null;
+                const showSpeakerHeader =
+                  Boolean(speaker) &&
+                  speaker!.agentId !== previousSpeaker?.agentId;
+                const blockBody = renderBlockBody(block);
+                if (!speaker) {
+                  return blockBody;
+                }
+                const speakerHeader = showSpeakerHeader ? (
+                  speaker.threadId ? (
+                    <button
+                      className="team-agent-speaker"
+                      key={`${block.key}:speaker`}
+                      onClick={() => onOpenThreadById(speaker.threadId!)}
+                      title={t("Open {name} thread", {
+                        name: speaker.displayName,
+                      })}
+                      type="button"
+                    >
+                      <AgentAvatar
+                        agentId={speaker.agentId}
+                        displayName={speaker.displayName}
+                        role={speaker.role}
+                        size={28}
                       />
-                    )}
-                  </article>
+                      <span className="team-agent-speaker-name">
+                        {speaker.displayName}
+                      </span>
+                    </button>
+                  ) : (
+                    <div
+                      className="team-agent-speaker"
+                      key={`${block.key}:speaker`}
+                    >
+                      <AgentAvatar
+                        agentId={speaker.agentId}
+                        displayName={speaker.displayName}
+                        role={speaker.role}
+                        size={28}
+                      />
+                      <span className="team-agent-speaker-name">
+                        {speaker.displayName}
+                      </span>
+                    </div>
+                  )
+                ) : null;
+                return (
+                  <div
+                    key={block.key}
+                    className={`team-agent-block ${showSpeakerHeader ? "with-speaker-header" : "continued-speaker"}`}
+                  >
+                    {speakerHeader}
+                    <div className="team-agent-block-body">{blockBody}</div>
+                  </div>
+                );
+              });
+            }
+
+            return buildTurnRows(activeRenderableBlocks).map((row) => {
+              if (row.kind === "flat") {
+                return (
+                  <Fragment key={row.key}>
+                    {renderBlockBody(row.block)}
+                  </Fragment>
                 );
               }
-            }
-
-            if (!speaker) {
-              return blockBody;
-            }
-
-            const speakerHeader = showSpeakerHeader ? (
-              speaker.threadId ? (
-                <button
-                  className="team-agent-speaker"
-                  key={`${block.key}:speaker`}
-                  onClick={() => onOpenThreadById(speaker.threadId!)}
-                  title={t("Open {name} thread", { name: speaker.displayName })}
-                  type="button"
-                >
-                  <AgentAvatar
-                    agentId={speaker.agentId}
-                    displayName={speaker.displayName}
-                    role={speaker.role}
-                    size={28}
-                  />
-                  <span className="team-agent-speaker-name">
-                    {speaker.displayName}
-                  </span>
-                </button>
-              ) : (
-                <div
-                  className="team-agent-speaker"
-                  key={`${block.key}:speaker`}
-                >
-                  <AgentAvatar
-                    agentId={speaker.agentId}
-                    displayName={speaker.displayName}
-                    role={speaker.role}
-                    size={28}
-                  />
-                  <span className="team-agent-speaker-name">
-                    {speaker.displayName}
-                  </span>
-                </div>
-              )
-            ) : null;
-
-            return (
-              <div
-                key={block.key}
-                className={`team-agent-block ${showSpeakerHeader ? "with-speaker-header" : "continued-speaker"}`}
-              >
-                {speakerHeader}
-                <div className="team-agent-block-body">{blockBody}</div>
-              </div>
-            );
-          })}
+              const turn: TurnRow = row;
+              return (
+                <Fragment key={turn.key}>
+                  <TurnSummary turn={turn}>
+                    {turn.steps.map((step) => (
+                      <Fragment key={step.key}>
+                        {renderBlockBody(step)}
+                      </Fragment>
+                    ))}
+                  </TurnSummary>
+                  {turn.finalBlock
+                    ? renderBlockBody(turn.finalBlock)
+                    : null}
+                </Fragment>
+              );
+            });
+          })()}
 
           {activePendingAckIntents.map((intent) =>
             renderUserMessageBubbleParts({
