@@ -48,7 +48,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "app-dialog-overlay fixed inset-0 bg-transparent",
+        "app-dialog-overlay fixed inset-0",
         className
       )}
       {...props}

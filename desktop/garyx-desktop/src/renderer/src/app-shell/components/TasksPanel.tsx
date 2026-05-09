@@ -7,6 +7,7 @@ import {
   type DragEvent,
   type FormEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
   Columns3,
@@ -783,7 +784,7 @@ export function TasksPanel({
         </div>
       </div>
 
-      {draftOpen ? (
+      {draftOpen && typeof document !== 'undefined' ? createPortal(
         <div className="tasks-modal-backdrop" role="presentation">
           <form
             aria-modal="true"
@@ -898,7 +899,8 @@ export function TasksPanel({
               </button>
             </div>
           </form>
-        </div>
+        </div>,
+        document.body
       ) : null}
 
       {error ? (

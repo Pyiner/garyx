@@ -118,6 +118,7 @@
   --spacing-token-sidebar: 300px;
   --app-sidebar-width: var(--spacing-token-sidebar);
   --app-modal-gutter: 24px;
+  --app-modal-backdrop-bg: rgba(13, 13, 13, 0.16);
   --z-app-sidebar-resizer: 20;
   --z-app-sticky-header: 30;
   --z-app-modal-backdrop: 110;
@@ -5116,18 +5117,20 @@ button.new-thread-resume-link:hover {
   display: grid;
   place-items: center;
   padding: 24px;
-  background: rgba(13, 13, 13, 0.18);
-  backdrop-filter: blur(8px);
+  background: var(--app-modal-backdrop-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   z-index: var(--z-app-modal-backdrop);
 }
 
 .app-dialog-overlay {
+  background: var(--app-modal-backdrop-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   z-index: var(--z-app-modal-backdrop);
 }
 
-/* Shared dialog geometry.
-   `scope="content"` centers large workbench surfaces inside the main pane
-   so the resizable left rail never covers editor chrome or inputs. */
+/* Shared dialog geometry. Dialogs are centered in the full app window. */
 .app-dialog-content {
   --app-dialog-content-left: 0px;
   --app-dialog-content-width: 100dvw;
@@ -5151,8 +5154,8 @@ button.new-thread-resume-link:hover {
 }
 
 .app-dialog-content[data-scope="content"] {
-  --app-dialog-content-left: var(--app-sidebar-width);
-  --app-dialog-content-width: calc(100dvw - var(--app-sidebar-width));
+  --app-dialog-content-left: 0px;
+  --app-dialog-content-width: 100dvw;
 }
 
 .app-dialog-content[data-size="compact"] {
@@ -5203,20 +5206,6 @@ button.new-thread-resume-link:hover {
 .app-dialog-body {
   min-height: 0;
   overflow: auto;
-}
-
-@media (max-width: 1180px) {
-  .app-dialog-content[data-scope="content"] {
-    --app-dialog-content-left: 240px;
-    --app-dialog-content-width: calc(100dvw - 240px);
-  }
-}
-
-@media (max-width: 920px) {
-  .app-dialog-content[data-scope="content"] {
-    --app-dialog-content-left: 0px;
-    --app-dialog-content-width: 100dvw;
-  }
 }
 
 .toast-viewport {
@@ -8543,8 +8532,8 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 }
 
 .workspace-preview-modal {
-  --app-dialog-content-left: var(--app-sidebar-width);
-  --app-dialog-content-width: calc(100dvw - var(--app-sidebar-width));
+  --app-dialog-content-left: 0px;
+  --app-dialog-content-width: 100dvw;
   position: fixed;
   top: 50%;
   right: 0;
@@ -8556,20 +8545,6 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
   max-height: calc(100dvh - 48px);
   margin-inline: auto;
   transform: translateY(-50%);
-}
-
-@media (max-width: 1180px) {
-  .workspace-preview-modal {
-    --app-dialog-content-left: 240px;
-    --app-dialog-content-width: calc(100dvw - 240px);
-  }
-}
-
-@media (max-width: 920px) {
-  .workspace-preview-modal {
-    --app-dialog-content-left: 0px;
-    --app-dialog-content-width: 100dvw;
-  }
 }
 
 .workspace-preview-modal-shell {
@@ -14394,37 +14369,27 @@ button.codex-list-row {
 
 .tasks-modal-backdrop {
   position: fixed;
-  inset: 0 0 0 var(--app-sidebar-width);
+  inset: 0;
   z-index: var(--z-app-modal-backdrop);
   display: grid;
   place-items: center;
   padding: 24px;
-  background: transparent;
+  background: var(--app-modal-backdrop-bg);
 }
 
 .tasks-create-panel {
   display: grid;
-  gap: 12px;
-  width: min(680px, 100%);
-  max-height: min(720px, calc(100dvh - 48px));
+  gap: 14px;
+  width: min(560px, calc(100dvw - 48px));
+  min-height: min(540px, calc(100dvh - 48px));
+  max-height: calc(100dvh - 48px);
+  box-sizing: border-box;
   overflow: auto;
-  padding: 16px;
+  padding: 18px;
   border: 0.5px solid var(--color-token-border);
   border-radius: 8px;
   background: var(--color-token-bg-primary);
   box-shadow: none;
-}
-
-@media (max-width: 1180px) {
-  .tasks-modal-backdrop {
-    left: 240px;
-  }
-}
-
-@media (max-width: 920px) {
-  .tasks-modal-backdrop {
-    left: 0;
-  }
 }
 
 .tasks-create-header h2 {
@@ -14436,8 +14401,8 @@ button.codex-list-row {
 
 .tasks-create-grid {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(180px, 0.7fr);
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   min-width: 0;
 }
 
@@ -14469,7 +14434,7 @@ button.codex-list-row {
 }
 
 .tasks-field [data-slot="textarea"] {
-  min-height: 54px;
+  min-height: 120px;
   resize: vertical;
 }
 
@@ -17365,7 +17330,7 @@ button.codex-list-row {
 .modal-overlay,
 .tasks-modal-backdrop,
 [data-slot="dialog-overlay"] {
-  background: transparent !important;
+  background: var(--app-modal-backdrop-bg) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
