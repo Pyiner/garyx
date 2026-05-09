@@ -3878,9 +3878,12 @@ code {
   height: calc(100% - var(--composer-scroll-clip-height));
   min-height: 0;
   overflow: auto;
+  overflow-x: hidden;
   -ms-overflow-style: none;
   scrollbar-width: none;
   width: min(var(--container-2xl), 100%);
+  max-width: 100%;
+  box-sizing: border-box;
   margin: 0 auto;
   padding: 8px 2px
     calc(var(--composer-scroll-clip-height) + var(--composer-message-clearance))
@@ -5327,6 +5330,7 @@ button.new-thread-resume-link:hover {
 .message-bubble {
   display: grid;
   gap: 8px;
+  box-sizing: border-box;
   max-width: 100%;
   min-width: 0;
   animation: bubble-in 180ms ease-out;
@@ -5390,12 +5394,16 @@ button.new-thread-resume-link:hover {
 .message-rich {
   display: grid;
   min-width: 0;
+  max-width: 100%;
   gap: 12px;
 }
 
 .message-rich
   > :where(p, ul, ol, blockquote, pre, hr, h1, h2, h3, h4, h5, h6, table) {
   margin: 0;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .message-rich p,
@@ -5579,6 +5587,8 @@ button.new-thread-resume-link:hover {
   font-size: 0.92em;
   line-height: inherit;
   box-decoration-break: clone;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-rich hr {
@@ -5596,6 +5606,7 @@ button.new-thread-resume-link:hover {
   display: grid;
   gap: 14px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .message-rich-content-media-above {
@@ -5644,7 +5655,11 @@ button.new-thread-resume-link:hover {
     color-mix(in oklab, var(--color-token-foreground) 8%, transparent);
   background: var(--color-token-bg-secondary);
   box-shadow: none;
-  overflow-x: auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .message-rich pre code {
@@ -5656,13 +5671,16 @@ button.new-thread-resume-link:hover {
   font-family: var(--message-code-font);
   font-size: 11.5px;
   line-height: 1.55;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-rich-table-wrap {
   width: 100%;
   max-width: 100%;
   min-width: 0;
+  box-sizing: border-box;
   margin: 0;
   overflow-x: auto;
   overflow-y: hidden;
@@ -5815,7 +5833,11 @@ button.message-file-card {
   border-radius: 10px;
   border: 1px solid var(--color-token-border);
   background: var(--color-token-bg-secondary);
-  overflow-x: auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .message-rich-json code {
@@ -5823,7 +5845,9 @@ button.message-file-card {
   font-family: var(--message-code-font);
   font-size: var(--text-xs-plus);
   line-height: 1.45;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .message-bubble.assistant {
