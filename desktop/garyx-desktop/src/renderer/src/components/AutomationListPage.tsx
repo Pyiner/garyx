@@ -1,5 +1,5 @@
 import React from 'react';
-import { Settings2 } from 'lucide-react';
+import { Settings2, Trash } from 'lucide-react';
 
 import type {
   DesktopAutomationSchedule,
@@ -116,12 +116,6 @@ function hasUnread(
 const PlusIcon = (
   <svg aria-hidden width="14" height="14" viewBox="0 0 20 20" fill="none">
     <path d="M9.33496 16.5V10.665H3.5C3.13273 10.665 2.83496 10.3673 2.83496 10C2.83496 9.63273 3.13273 9.33496 3.5 9.33496H9.33496V3.5C9.33496 3.13273 9.63273 2.83496 10 2.83496C10.3673 2.83496 10.665 3.13273 10.665 3.5V9.33496H16.5C16.8673 9.33496 17.165 9.63273 17.165 10C17.165 10.3673 16.8673 10.665 16.5 10.665H10.665V16.5C10.665 16.8673 10.3673 17.165 10 17.165C9.63273 17.165 9.33496 16.8673 9.33496 16.5Z" fill="currentColor"/>
-  </svg>
-);
-
-const TrashIcon = (
-  <svg aria-hidden width="16" height="16" viewBox="0 0 20 20" fill="none">
-    <path d="M5.5 2.5H14.5V4.5H5.5V2.5ZM3.5 5.5H16.5V6.83333H15.1667V15.5C15.1667 16.2364 14.5697 16.8333 13.8333 16.8333H6.16667C5.43029 16.8333 4.83333 16.2364 4.83333 15.5V6.83333H3.5V5.5ZM6.16667 6.83333V15.5H13.8333V6.83333H6.16667ZM8.16667 8.83333H9.5V13.5H8.16667V8.83333ZM10.5 8.83333H11.8333V13.5H10.5V8.83333Z" fill="currentColor"/>
   </svg>
 );
 
@@ -263,7 +257,7 @@ export function AutomationListPage({
                     title={t('Delete')}
                     type="button"
                   >
-                    {TrashIcon}
+                    <Trash aria-hidden />
                   </button>
                 </div>
               </div>

@@ -45,14 +45,17 @@ import {
 } from '../../components/ui/field';
 import {
   DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuGroup,
   DropdownMenuSeparator,
   DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
+import {
+  FloatingActionMenuContent,
+  FloatingActionMenuItem,
+  FloatingActionMenuSubContent,
+  FloatingActionMenuSubTrigger,
+} from '../../components/ui/floating-action-menu';
 import { Input } from '../../components/ui/input';
 import {
   Select,
@@ -528,84 +531,73 @@ export function TasksPanel({
             <MoreDotsIcon size={14} />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={4}>
-          {!task.assignee ? (
-            agents.length ? (
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger
-                  className="tasks-menu-subtrigger"
-                  disabled={busy}
-                >
-                  <UserPlus
-                    aria-hidden
-                    className="tasks-menu-icon size-4"
-                    size={15}
-                    strokeWidth={1.65}
-                  />
-                  {t('Assign to')}
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent sideOffset={6}>
-                  {agents.map((agent) => {
-                    const label = agent.displayName || agent.agentId;
-                    return (
-                      <DropdownMenuItem
-                        className="tasks-agent-menu-item"
-                        disabled={busy}
-                        key={agent.agentId}
-                        onSelect={() => {
-                          void assignTask(task, agent.agentId);
-                        }}
-                      >
-                        <AgentOptionRow
-                          agentId={agent.agentId}
-                          avatarDataUrl={agent.avatarDataUrl}
-                          detail={agent.providerType}
-                          kind={agent.builtIn ? 'builtin' : 'agent'}
-                          label={label}
-                          providerType={agent.providerType}
-                        />
-                      </DropdownMenuItem>
-                    );
-                  })}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            ) : (
-              <DropdownMenuItem disabled>
-                {t('No agents available')}
-              </DropdownMenuItem>
-            )
-          ) : null}
-          <DropdownMenuItem
-            disabled={busy}
-            onSelect={() => {
-              void moveTask(task, next.status);
-            }}
-          >
-            <StatusIcon
-              aria-hidden
-              className="tasks-menu-icon size-4"
-              size={15}
-              strokeWidth={1.65}
-            />
-            {t(next.label)}
-          </DropdownMenuItem>
+        <FloatingActionMenuContent align="end" sideOffset={4}>
+          <DropdownMenuGroup>
+            {!task.assignee ? (
+              agents.length ? (
+                <DropdownMenuSub>
+                  <FloatingActionMenuSubTrigger
+                    className="tasks-menu-subtrigger"
+                    disabled={busy}
+                  >
+                    <UserPlus aria-hidden />
+                    {t('Assign to')}
+                  </FloatingActionMenuSubTrigger>
+                  <FloatingActionMenuSubContent sideOffset={6}>
+                    {agents.map((agent) => {
+                      const label = agent.displayName || agent.agentId;
+                      return (
+                        <FloatingActionMenuItem
+                          className="tasks-agent-menu-item"
+                          disabled={busy}
+                          key={agent.agentId}
+                          onSelect={() => {
+                            void assignTask(task, agent.agentId);
+                          }}
+                        >
+                          <AgentOptionRow
+                            agentId={agent.agentId}
+                            avatarDataUrl={agent.avatarDataUrl}
+                            detail={agent.providerType}
+                            kind={agent.builtIn ? 'builtin' : 'agent'}
+                            label={label}
+                            providerType={agent.providerType}
+                          />
+                        </FloatingActionMenuItem>
+                      );
+                    })}
+                  </FloatingActionMenuSubContent>
+                </DropdownMenuSub>
+              ) : (
+                <FloatingActionMenuItem disabled>
+                  {t('No agents available')}
+                </FloatingActionMenuItem>
+              )
+            ) : null}
+            <FloatingActionMenuItem
+              disabled={busy}
+              onSelect={() => {
+                void moveTask(task, next.status);
+              }}
+            >
+              <StatusIcon aria-hidden />
+              {t(next.label)}
+            </FloatingActionMenuItem>
+          </DropdownMenuGroup>
           <DropdownMenuSeparator />
-          <DropdownMenuItem
-            className="tasks-menu-danger"
-            disabled={busy}
-            onSelect={() => {
-              void deleteTask(task);
-            }}
-          >
-            <Trash
-              aria-hidden
-              className="tasks-menu-icon size-4"
-              size={15}
-              strokeWidth={1.65}
-            />
-            {t('Delete task')}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
+          <DropdownMenuGroup>
+            <FloatingActionMenuItem
+              disabled={busy}
+              onSelect={() => {
+                void deleteTask(task);
+              }}
+              variant="destructive"
+            >
+              <Trash aria-hidden />
+              {t('Delete task')}
+            </FloatingActionMenuItem>
+          </DropdownMenuGroup>
+        </FloatingActionMenuContent>
       </DropdownMenu>
     );
   };

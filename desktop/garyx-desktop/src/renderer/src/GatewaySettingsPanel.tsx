@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Trash } from 'lucide-react';
 
 import {
   DEFAULT_DESKTOP_SETTINGS,
@@ -1642,12 +1642,13 @@ export function GatewaySettingsPanel({
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" sideOffset={4}>
                         <DropdownMenuItem
-                          className="bot-table-menu-danger"
                           disabled={gatewaySaving}
                           onSelect={() => {
                             void handleDeleteBotAccount(kind, accountId, displayName);
                           }}
+                          variant="destructive"
                         >
+                          <Trash aria-hidden />
                           {t('Delete')}
                         </DropdownMenuItem>
                       </DropdownMenuContent>
@@ -2113,9 +2114,7 @@ export function GatewaySettingsPanel({
                     title={t('Delete')}
                     type="button"
                   >
-                    <svg aria-hidden width="16" height="16" viewBox="0 0 20 20" fill="none">
-                      <path d="M8 3.5h4a.5.5 0 0 1 .5.5V5h3a.5.5 0 0 1 0 1h-.6l-.8 9.6A2 2 0 0 1 12.1 17.5H7.9a2 2 0 0 1-1.99-1.9L5.1 6H4.5a.5.5 0 0 1 0-1h3V4a.5.5 0 0 1 .5-.5zm.5 1.5V5h3v-.5zm-2.4 2l.8 9.52a1 1 0 0 0 1 .98h4.2a1 1 0 0 0 1-1l.8-9.5H6.1zM8.5 8a.5.5 0 0 1 .5.5v5a.5.5 0 0 1-1 0v-5a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v5a.5.5 0 0 1-1 0v-5a.5.5 0 0 1 .5-.5z" fill="currentColor"/>
-                    </svg>
+                    <Trash aria-hidden />
                   </button>
                 </div>
               </div>

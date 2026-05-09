@@ -1288,10 +1288,12 @@ code {
   text-align: left;
 }
 
-.workspace-menu-item .icon {
+.workspace-menu-item .icon,
+.workspace-menu-item > svg:first-child {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
+  stroke-width: 1.65;
 }
 
 .workspace-menu-item:hover {
@@ -1722,7 +1724,8 @@ code {
     color var(--duration-fast) var(--ease-standard);
 }
 
-.thread-delete-button .icon {
+.thread-delete-button .icon,
+.thread-delete-button > svg {
   width: 13px;
   height: 13px;
   stroke-width: 1.55;
@@ -1747,8 +1750,8 @@ code {
   width: auto;
   height: 22px;
   padding: 0 10px;
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
   font-size: 11px;
   font-weight: 600;
   line-height: 1;
@@ -1759,8 +1762,12 @@ code {
 }
 
 .thread-delete-button.confirm:hover {
-  background: rgba(239, 68, 68, 0.16);
-  color: #dc2626;
+  background: color-mix(
+    in oklab,
+    var(--color-token-bg-error) 78%,
+    var(--color-token-error-foreground) 22%
+  );
+  color: var(--color-token-error-foreground);
 }
 
 .thread-binding-badges,
@@ -1962,14 +1969,18 @@ code {
 }
 
 .left-rail .thread-delete-button.confirm {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
   box-shadow: none;
 }
 
 .left-rail .thread-delete-button.confirm:hover {
-  background: rgba(239, 68, 68, 0.16);
-  color: #dc2626;
+  background: color-mix(
+    in oklab,
+    var(--color-token-bg-error) 78%,
+    var(--color-token-error-foreground) 22%
+  );
+  color: var(--color-token-error-foreground);
 }
 
 .left-rail .workspace-empty-block {
@@ -2323,7 +2334,7 @@ code {
   border: none;
   border-radius: 6px;
   background: transparent;
-  color: var(--color-token-text-tertiary);
+  color: var(--color-token-error-foreground);
   cursor: pointer;
   transition:
     background-color 0.15s ease,
@@ -7452,7 +7463,7 @@ button.team-agent-speaker:focus-visible {
 }
 
 .queue-steer-icon,
-.queue-remove-icon {
+.queue-remove-button > svg {
   display: block;
   width: 14px;
   height: 14px;
@@ -7471,7 +7482,7 @@ button.team-agent-speaker:focus-visible {
   padding: 4px;
   border-radius: 6px;
   background: transparent;
-  color: rgba(26, 28, 31, 0.494);
+  color: var(--color-token-error-foreground);
   cursor: pointer;
   font-size: 13px;
   line-height: 18.5714px;
@@ -7486,8 +7497,8 @@ button.team-agent-speaker:focus-visible {
 
 .queue-drag-handle:hover,
 .queue-remove-button:hover {
-  background: rgba(26, 28, 31, 0.04);
-  color: rgba(26, 28, 31, 0.64);
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
   box-shadow: none;
   transform: none;
 }
@@ -7743,6 +7754,22 @@ button.team-agent-speaker:focus-visible {
 
 .floating-action-menu-row > svg:first-child {
   color: rgba(13, 13, 13, 0.52);
+}
+
+.floating-action-menu-row--destructive,
+[data-slot="dropdown-menu-item"][data-variant="destructive"] {
+  color: var(--color-token-error-foreground);
+}
+
+.floating-action-menu-row--destructive > svg:first-child,
+[data-slot="dropdown-menu-item"][data-variant="destructive"] > svg:first-child {
+  color: currentColor;
+}
+
+.floating-action-menu-row--destructive[data-highlighted],
+[data-slot="dropdown-menu-item"][data-variant="destructive"][data-highlighted] {
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
 }
 
 .agent-option-avatar {
@@ -9570,6 +9597,13 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
   color: var(--color-token-text-primary);
 }
 
+.codex-icon-button > svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  stroke-width: 1.75;
+}
+
 .codex-autosave-status {
   font-size: 12px;
   color: #8a8a87;
@@ -9578,16 +9612,16 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 }
 
 .codex-icon-button-danger {
-  color: #9b3d3d;
+  color: var(--color-token-error-foreground);
 }
 
 .codex-icon-button-danger:hover {
-  background: #fdf3f3;
-  color: #7a2f2f;
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
 }
 
 .codex-icon-button-danger:disabled {
-  color: #c7a3a3;
+  color: color-mix(in oklab, var(--color-token-error-foreground) 42%, transparent);
   cursor: not-allowed;
 }
 
@@ -9885,15 +9919,6 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 .bot-table-action-button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-.bot-table-menu-danger {
-  color: #9b3d3d;
-}
-
-.bot-table-menu-danger[data-highlighted] {
-  background: #fff1f1 !important;
-  color: #8f2e2e !important;
 }
 
 .bot-table .codex-sync-pill {
@@ -12768,7 +12793,7 @@ button.codex-list-row {
   border: none;
   border-radius: 10px;
   background: transparent;
-  color: var(--color-token-text-tertiary);
+  color: var(--color-token-error-foreground);
   font-size: var(--text-lg);
   cursor: pointer;
   transition:
@@ -12778,8 +12803,8 @@ button.codex-list-row {
 }
 
 .mcp-form-delete-btn:hover:not(:disabled) {
-  background: rgba(255, 59, 48, 0.08);
-  color: rgb(255, 59, 48);
+  background: var(--color-token-bg-error);
+  color: var(--color-token-error-foreground);
 }
 
 .mcp-form-delete-btn:disabled {
@@ -14682,31 +14707,11 @@ button.codex-list-row {
   color: var(--color-token-text-primary);
 }
 
-.tasks-menu-icon {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 15px;
-  color: rgba(26, 28, 31, 0.64);
-}
-
 .tasks-menu-subtrigger > svg:last-child {
   width: 13px;
   height: 13px;
   color: rgba(26, 28, 31, 0.48);
   stroke-width: 1.7;
-}
-
-.tasks-menu-danger {
-  color: var(--color-token-error-foreground);
-}
-
-.tasks-menu-danger .tasks-menu-icon {
-  color: currentColor;
-}
-
-.tasks-menu-danger[data-highlighted] {
-  background: var(--color-token-bg-error) !important;
-  color: var(--color-token-error-foreground) !important;
 }
 
 .tasks-list {
@@ -14946,6 +14951,10 @@ button.codex-list-row {
 .skills-icon-button:hover {
   background: color-mix(in srgb, var(--color-token-text-primary) 7%, transparent);
   color: var(--color-token-text-primary);
+}
+
+.skills-icon-button-danger {
+  color: var(--color-token-error-foreground);
 }
 
 .skills-icon-button-danger:hover {
@@ -16405,7 +16414,7 @@ button.codex-list-row {
 }
 
 .ar-run-delete-button {
-  color: var(--color-token-description-foreground);
+  color: var(--color-token-error-foreground);
 }
 
 .ar-run-delete-button:hover {

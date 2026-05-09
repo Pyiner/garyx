@@ -329,16 +329,6 @@ export function BrowserCloseTabIcon() {
   );
 }
 
-export function DeleteIcon() {
-  return (
-    <svg aria-hidden width="16" height="16" viewBox={vb} fill="none" className="icon" style={sw}>
-      <g transform="translate(2.5,1.5) scale(0.938,0.941)">
-        <path d="M0.5 3.5H15.5M5.5 3.5V2.88095C5.5 1.56599 6.61929 0.5 8 0.5C9.38071 0.5 10.5 1.56599 10.5 2.88095V3.5M6.25 7V13.5M9.75 7V13.5M2.5 3.5H13.5V14.5C13.5 15.8807 12.3807 17 11 17H5C3.61929 17 2.5 15.8807 2.5 14.5V3.5Z" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round"/>
-      </g>
-    </svg>
-  );
-}
-
 export function ChevronDownIcon({ size = 16, className = 'icon' }: { size?: number; className?: string }) {
   return (
     <svg aria-hidden width={size} height={size} viewBox={vb} fill="none" className={className} style={sw}>

@@ -761,7 +761,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                       title={t('Delete')}
                       type="button"
                     >
-                      <Trash />
+                      <Trash aria-hidden />
                     </button>
                     <button
                       aria-label={skill.enabled ? t('Disable skill') : t('Enable skill')}
@@ -991,7 +991,7 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                   title={t('Delete file')}
                   type="button"
                 >
-                  <Trash />
+                  <Trash aria-hidden />
                 </button>
                 <button
                   className="primary-button"
