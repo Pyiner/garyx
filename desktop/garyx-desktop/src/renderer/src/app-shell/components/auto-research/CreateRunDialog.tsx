@@ -83,7 +83,7 @@ export function CreateRunDialog({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-[720px]">
+      <DialogContent className="sm:max-w-[720px]" size="wide">
         <DialogHeader>
           <DialogTitle>{t('Create Auto Research Run')}</DialogTitle>
           <DialogDescription>

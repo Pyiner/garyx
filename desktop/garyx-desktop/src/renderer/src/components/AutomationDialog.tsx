@@ -99,7 +99,7 @@ export function AutomationDialog({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="sm:max-w-[680px]">
+      <DialogContent className="sm:max-w-[680px]" size="form">
         <DialogHeader>
           <DialogDescription className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
             {t('Automation')}

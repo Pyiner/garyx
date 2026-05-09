@@ -116,6 +116,14 @@
   --text-display-2xl: 30px;
   --container-2xl: 42rem;
   --spacing-token-sidebar: 300px;
+  --app-sidebar-width: var(--spacing-token-sidebar);
+  --app-modal-gutter: 24px;
+  --z-app-sidebar-resizer: 20;
+  --z-app-sticky-header: 30;
+  --z-app-modal-backdrop: 110;
+  --z-app-modal: 111;
+  --z-app-toast: 120;
+  --z-app-tooltip: 130;
   --inset-toolbar: 46px;
   --inset-toolbar-sm: 36px;
   --padding-panel: calc(0.25rem * 3);
@@ -496,6 +504,7 @@ code {
 }
 
 .gateway-profile-dialog {
+  --app-dialog-card-width: min(340px, calc(100dvw - 32px));
   width: min(340px, calc(100vw - 32px));
   gap: 10px;
   padding: 14px;
@@ -625,7 +634,7 @@ code {
   right: -4px;
   width: 8px;
   cursor: col-resize;
-  z-index: 20;
+  z-index: var(--z-app-sidebar-resizer);
   user-select: none;
   touch-action: none;
   display: flex;
@@ -2001,7 +2010,7 @@ code {
 
 .conversation-header {
   position: relative;
-  z-index: 30;
+  z-index: var(--z-app-sticky-header);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -5109,14 +5118,112 @@ button.new-thread-resume-link:hover {
   padding: 24px;
   background: rgba(13, 13, 13, 0.18);
   backdrop-filter: blur(8px);
-  z-index: 40;
+  z-index: var(--z-app-modal-backdrop);
+}
+
+.app-dialog-overlay {
+  z-index: var(--z-app-modal-backdrop);
+}
+
+/* Shared dialog geometry.
+   `scope="content"` centers large workbench surfaces inside the main pane
+   so the resizable left rail never covers editor chrome or inputs. */
+.app-dialog-content {
+  --app-dialog-content-left: 0px;
+  --app-dialog-content-width: 100dvw;
+  --app-dialog-gutter: var(--app-modal-gutter);
+  --app-dialog-available-width: calc(
+    var(--app-dialog-content-width) - (var(--app-dialog-gutter) * 2)
+  );
+  --app-dialog-card-width: min(680px, var(--app-dialog-available-width));
+  --app-dialog-max-height: calc(100dvh - (var(--app-dialog-gutter) * 2));
+  top: 50%;
+  right: 0;
+  left: var(--app-dialog-content-left);
+  z-index: var(--z-app-modal);
+  width: var(--app-dialog-card-width);
+  max-width: var(--app-dialog-available-width);
+  max-height: var(--app-dialog-max-height);
+  margin-inline: auto;
+  box-sizing: border-box;
+  overflow-y: auto;
+  transform: translateY(-50%);
+}
+
+.app-dialog-content[data-scope="content"] {
+  --app-dialog-content-left: var(--app-sidebar-width);
+  --app-dialog-content-width: calc(100dvw - var(--app-sidebar-width));
+}
+
+.app-dialog-content[data-size="compact"] {
+  --app-dialog-card-width: min(420px, var(--app-dialog-available-width));
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+}
+
+.app-dialog-content[data-size="narrow"] {
+  --app-dialog-card-width: min(520px, var(--app-dialog-available-width));
+}
+
+.app-dialog-content[data-size="form"] {
+  --app-dialog-card-width: min(680px, var(--app-dialog-available-width));
+}
+
+.app-dialog-content[data-size="wide"] {
+  --app-dialog-card-width: min(720px, var(--app-dialog-available-width));
+}
+
+.app-dialog-content[data-size="large"] {
+  --app-dialog-card-width: min(860px, var(--app-dialog-available-width));
+}
+
+.app-dialog-content[data-size="workbench"] {
+  --app-dialog-card-width: min(1240px, var(--app-dialog-available-width));
+  --app-dialog-card-height: min(840px, calc(100dvh - 40px));
+  height: var(--app-dialog-card-height);
+  max-height: var(--app-dialog-card-height);
+  overflow: hidden;
+}
+
+.app-dialog-content[data-size="viewer"] {
+  --app-dialog-card-width: min(980px, var(--app-dialog-available-width));
+  --app-dialog-card-height: min(860px, calc(100dvh - 48px));
+  height: min(78dvh, var(--app-dialog-card-height));
+  min-height: min(620px, calc(100dvh - 48px));
+  max-height: var(--app-dialog-card-height);
+  overflow: hidden;
+}
+
+.app-dialog-content[data-scroll="content"] {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.app-dialog-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+@media (max-width: 1180px) {
+  .app-dialog-content[data-scope="content"] {
+    --app-dialog-content-left: 240px;
+    --app-dialog-content-width: calc(100dvw - 240px);
+  }
+}
+
+@media (max-width: 920px) {
+  .app-dialog-content[data-scope="content"] {
+    --app-dialog-content-left: 0px;
+    --app-dialog-content-width: 100dvw;
+  }
 }
 
 .toast-viewport {
   position: fixed;
   top: max(16px, env(safe-area-inset-top));
   left: 50%;
-  z-index: 120;
+  z-index: var(--z-app-toast);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -5231,7 +5338,7 @@ button.new-thread-resume-link:hover {
 
 .modal-card {
   width: min(760px, 100%);
-  max-height: min(88vh, 900px);
+  max-height: min(88dvh, 900px);
   overflow: auto;
   padding: 20px;
   border: 1px solid var(--color-token-border);
@@ -8384,7 +8491,7 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 .workspace-preview-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 42;
+  z-index: var(--z-app-modal-backdrop);
   border: 0;
   background: rgba(7, 10, 18, 0.48);
   opacity: 0;
@@ -8398,14 +8505,33 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 }
 
 .workspace-preview-modal {
+  --app-dialog-content-left: var(--app-sidebar-width);
+  --app-dialog-content-width: calc(100dvw - var(--app-sidebar-width));
   position: fixed;
-  inset: 50% auto auto 50%;
-  z-index: 43;
-  width: min(980px, calc(100vw - 48px));
-  height: min(78vh, 860px);
-  min-height: 620px;
-  max-height: calc(100vh - 48px);
-  transform: translate(-50%, -50%);
+  top: 50%;
+  right: 0;
+  left: var(--app-dialog-content-left);
+  z-index: var(--z-app-modal);
+  width: min(980px, calc(var(--app-dialog-content-width) - 48px));
+  height: min(78dvh, 860px);
+  min-height: min(620px, calc(100dvh - 48px));
+  max-height: calc(100dvh - 48px);
+  margin-inline: auto;
+  transform: translateY(-50%);
+}
+
+@media (max-width: 1180px) {
+  .workspace-preview-modal {
+    --app-dialog-content-left: 240px;
+    --app-dialog-content-width: calc(100dvw - 240px);
+  }
+}
+
+@media (max-width: 920px) {
+  .workspace-preview-modal {
+    --app-dialog-content-left: 0px;
+    --app-dialog-content-width: 100dvw;
+  }
 }
 
 .workspace-preview-modal-shell {
@@ -10114,7 +10240,7 @@ button.codex-list-row {
 .agents-hub-agent-dialog[data-slot="dialog-content"] {
   width: min(680px, calc(100vw - 32px));
   max-width: min(680px, calc(100vw - 32px));
-  max-height: calc(100vh - 36px);
+  max-height: calc(100dvh - 36px);
   gap: 16px;
   padding: 20px 22px 18px;
   border-color: rgba(26, 28, 31, 0.1);
@@ -10417,8 +10543,8 @@ button.codex-list-row {
 }
 
 /* ── Team Builder Dialog ── */
-.team-builder-dialog [data-slot="dialog-content"] {
-  max-width: 860px;
+.team-builder-dialog[data-slot="dialog-content"] {
+  --app-dialog-card-width: min(720px, var(--app-dialog-available-width));
 }
 
 .team-builder-body {
@@ -11439,7 +11565,7 @@ button.codex-list-row {
   display: flex;
   width: min(600px, calc(100vw - 32px));
   max-width: min(600px, calc(100vw - 32px));
-  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   flex-direction: column;
   gap: 0;
   overflow: hidden;
@@ -14196,8 +14322,8 @@ button.codex-list-row {
 
 .tasks-modal-backdrop {
   position: fixed;
-  inset: 0;
-  z-index: 120;
+  inset: 0 0 0 var(--app-sidebar-width);
+  z-index: var(--z-app-modal-backdrop);
   display: grid;
   place-items: center;
   padding: 24px;
@@ -14208,13 +14334,25 @@ button.codex-list-row {
   display: grid;
   gap: 12px;
   width: min(680px, 100%);
-  max-height: min(720px, calc(100vh - 48px));
+  max-height: min(720px, calc(100dvh - 48px));
   overflow: auto;
   padding: 16px;
   border: 0.5px solid var(--color-token-border);
   border-radius: 8px;
   background: var(--color-token-bg-primary);
   box-shadow: 0 18px 48px rgba(13, 13, 13, 0.18);
+}
+
+@media (max-width: 1180px) {
+  .tasks-modal-backdrop {
+    left: 240px;
+  }
+}
+
+@media (max-width: 920px) {
+  .tasks-modal-backdrop {
+    left: 0;
+  }
 }
 
 .tasks-create-header h2 {
@@ -14788,7 +14926,8 @@ button.codex-list-row {
 .skills-create-modal {
   display: grid;
   gap: 18px;
-  width: min(860px, calc(100vw - 48px));
+  width: var(--app-dialog-card-width, min(860px, calc(100vw - 48px)));
+  max-width: var(--app-dialog-available-width, calc(100vw - 48px));
 }
 
 .skills-create-form {
@@ -14828,8 +14967,9 @@ button.codex-list-row {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
-  width: min(1240px, calc(100vw - 48px));
-  height: min(840px, calc(100vh - 40px));
+  width: var(--app-dialog-card-width, min(1240px, calc(100vw - 48px)));
+  max-width: var(--app-dialog-available-width, calc(100vw - 48px));
+  height: var(--app-dialog-card-height, min(840px, calc(100dvh - 40px)));
   padding: 18px;
   overflow: hidden;
 }

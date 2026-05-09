@@ -1521,6 +1521,14 @@ export function AppShell() {
     startX: number;
     startWidth: number;
   } | null>(null);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--app-sidebar-width", `${sidebarWidth}px`);
+    return () => {
+      root.style.removeProperty("--app-sidebar-width");
+    };
+  }, [sidebarWidth]);
   const [contentView, setContentViewRaw] = useState<ContentView>(() =>
     initialContentView(initialRouteValue),
   );

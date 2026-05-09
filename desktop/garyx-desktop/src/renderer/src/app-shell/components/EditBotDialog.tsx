@@ -209,7 +209,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
           if (!next) onClose();
         }}
       >
-        <DialogContent className="add-bot-dialog" />
+        <DialogContent className="add-bot-dialog" size="form" />
       </Dialog>
     );
   }
@@ -270,7 +270,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
         if (!next) onClose();
       }}
     >
-      <DialogContent className="add-bot-dialog">
+      <DialogContent className="add-bot-dialog" size="form">
         <DialogHeader className="add-bot-dialog-header">
           <DialogTitle className="add-bot-dialog-title">{t("Edit channel account")}</DialogTitle>
           <DialogDescription className="add-bot-dialog-description">

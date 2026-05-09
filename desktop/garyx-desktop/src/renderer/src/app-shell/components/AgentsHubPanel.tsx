@@ -1162,7 +1162,7 @@ export function AgentsHubPanel({
           }
         }}
       >
-        <DialogContent className="agents-hub-agent-dialog">
+        <DialogContent className="agents-hub-agent-dialog" size="form">
           <DialogHeader className="agents-hub-dialog-header">
             <DialogDescription className="agents-hub-dialog-kicker">
               {t('Agent')}
@@ -1460,7 +1460,7 @@ export function AgentsHubPanel({
       </Dialog>
 
       <Dialog open={avatarStyleDialogOpen} onOpenChange={setAvatarStyleDialogOpen}>
-        <DialogContent className="agents-hub-avatar-style-dialog">
+        <DialogContent className="agents-hub-avatar-style-dialog" size="compact">
           <DialogHeader>
             <DialogTitle>{t('Avatar style')}</DialogTitle>
           </DialogHeader>
@@ -1541,7 +1541,7 @@ export function AgentsHubPanel({
           }
         }}
       >
-        <DialogContent className="sm:max-w-[720px] team-builder-dialog">
+        <DialogContent className="sm:max-w-[720px] team-builder-dialog" size="wide">
           <DialogHeader>
             <DialogTitle>
               {teamDialogMode === 'create'

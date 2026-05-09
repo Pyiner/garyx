@@ -194,6 +194,7 @@ export function NewThreadEmptyState({
         <DialogContent
           className="sm:max-w-[420px]"
           showCloseButton={!resumeLoading}
+          size="compact"
         >
           <DialogHeader>
             <DialogTitle>{t("Resume session")}</DialogTitle>

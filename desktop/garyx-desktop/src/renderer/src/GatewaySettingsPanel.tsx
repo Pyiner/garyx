@@ -1852,6 +1852,7 @@ export function GatewaySettingsPanel({
         <DialogContent
           className="commands-dialog"
           showCloseButton={false}
+          size="form"
         >
           <DialogHeader className="commands-dialog-header">
             <Badge
@@ -2118,6 +2119,7 @@ export function GatewaySettingsPanel({
         <DialogContent
           className="max-w-[520px] rounded-[12px] border-[#e8e8e5] bg-white p-0 shadow-[0_8px_24px_rgba(0,0,0,0.08)] gap-0"
           showCloseButton={false}
+          size="narrow"
         >
           <DialogHeader className="border-b border-[#efefec] px-4 py-3">
             <DialogTitle className="text-[14px] font-semibold tracking-[-0.01em] text-[#111111]">

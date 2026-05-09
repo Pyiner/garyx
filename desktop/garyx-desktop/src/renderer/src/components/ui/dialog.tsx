@@ -5,6 +5,17 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { useI18n } from "@/i18n"
 
+type DialogScope = "window" | "content"
+type DialogSize =
+  | "compact"
+  | "narrow"
+  | "form"
+  | "wide"
+  | "large"
+  | "workbench"
+  | "viewer"
+type DialogScroll = "auto" | "content"
+
 function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
@@ -37,7 +48,7 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "fixed inset-0 z-50 bg-black/[0.18] backdrop-blur-[8px]",
+        "app-dialog-overlay fixed inset-0 bg-black/[0.18] backdrop-blur-[8px]",
         className
       )}
       {...props}
@@ -48,10 +59,16 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
+  scope = "window",
+  scroll = "auto",
   showCloseButton = true,
+  size = "form",
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
+  scope?: DialogScope
+  scroll?: DialogScroll
   showCloseButton?: boolean
+  size?: DialogSize
 }) {
   const { t } = useI18n()
   return (
@@ -59,8 +76,11 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        data-scope={scope}
+        data-scroll={scroll}
+        data-size={size}
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100vh-4rem)] translate-x-[-50%] translate-y-[-50%] gap-[18px] rounded-xl border border-[#eee] bg-background p-5 shadow-[0_8px_24px_rgba(0,0,0,0.08),0_2px_6px_rgba(0,0,0,0.04)] outline-none overflow-y-auto sm:max-w-[760px]",
+          "app-dialog-content fixed grid w-full rounded-xl border border-[#eee] bg-background p-5 shadow-[0_8px_24px_rgba(0,0,0,0.08),0_2px_6px_rgba(0,0,0,0.04)] outline-none",
           className
         )}
         {...props}
@@ -77,6 +97,16 @@ function DialogContent({
         )}
       </DialogPrimitive.Content>
     </DialogPortal>
+  )
+}
+
+function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="dialog-body"
+      className={cn("app-dialog-body", className)}
+      {...props}
+    />
   )
 }
 
@@ -146,6 +176,7 @@ function DialogDescription({
 
 export {
   Dialog,
+  DialogBody,
   DialogClose,
   DialogContent,
   DialogDescription,

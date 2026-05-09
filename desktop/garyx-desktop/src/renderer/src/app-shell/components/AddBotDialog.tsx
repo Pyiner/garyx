@@ -390,7 +390,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="add-bot-dialog">
+      <DialogContent className="add-bot-dialog" size="form">
         <DialogHeader className="add-bot-dialog-header">
           <DialogTitle className="add-bot-dialog-title">{t("Add channel account")}</DialogTitle>
           <DialogDescription className="add-bot-dialog-description">

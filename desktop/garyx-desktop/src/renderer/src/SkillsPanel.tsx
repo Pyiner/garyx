@@ -15,6 +15,7 @@ import type {
 } from '@shared/contracts';
 import type { ToastTone } from './toast';
 import { useI18n } from './i18n';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 
 const SKILL_ID_PATTERN = /^[a-z0-9-]+$/;
 const TRANSIENT_STATUS_MS = 3200;
@@ -774,23 +775,21 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
         )}
       </div>
 
-      {createDialogOpen ? (
-        <div
-          className="modal-overlay"
-          onClick={() => {
+      <Dialog
+        open={createDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
             closeCreateDialog();
-          }}
-          role="presentation"
+          }
+        }}
+      >
+        <DialogContent
+          aria-labelledby="skills-create-dialog-title"
+          className="skills-create-modal"
+          scope="content"
+          showCloseButton={false}
+          size="large"
         >
-          <div
-            aria-labelledby="skills-create-dialog-title"
-            aria-modal="true"
-            className="modal-card skills-create-modal"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-            role="dialog"
-          >
             <div className="panel-header skills-create-modal-header">
               <div className="bot-card-copy">
                 <span className="eyebrow">{t('Create Skill')}</span>
@@ -923,26 +922,25 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      ) : null}
+        </DialogContent>
+      </Dialog>
 
-      {editor ? (
-        <div
-          className="modal-overlay"
-          onClick={() => {
+      <Dialog
+        open={Boolean(editor)}
+        onOpenChange={(open) => {
+          if (!open) {
             closeEditor();
-          }}
-          role="presentation"
-        >
-          <div
+          }
+        }}
+      >
+        {editor ? (
+          <DialogContent
             aria-labelledby="skills-editor-title"
-            aria-modal="true"
-            className="modal-card skills-editor-modal"
-            onClick={(event) => {
-              event.stopPropagation();
-            }}
-            role="dialog"
+            className="skills-editor-modal"
+            scope="content"
+            scroll="content"
+            showCloseButton={false}
+            size="workbench"
           >
             <div className="skills-editor-header">
               <div className="skills-editor-header-copy">
@@ -1082,9 +1080,9 @@ export function SkillsPanel({ onToast }: SkillsPanelProps) {
                 )}
               </section>
             </div>
-          </div>
-        </div>
-      ) : null}
+          </DialogContent>
+        ) : null}
+      </Dialog>
     </>
   );
 }
