@@ -698,14 +698,22 @@ export function TasksPanel({
         </div>
         <div className="tasks-header-actions">
           <Field className="tasks-filter-control" orientation="horizontal">
-            <FieldLabel>{t('Bot')}</FieldLabel>
+            <FieldLabel className="sr-only" htmlFor="tasks-bot-filter-select">
+              {t('Bot')}
+            </FieldLabel>
             <Select
               value={botFilter || ALL_BOTS_FILTER_VALUE}
               onValueChange={(value) => {
                 setBotFilter(value === ALL_BOTS_FILTER_VALUE ? '' : value);
               }}
             >
-              <SelectTrigger aria-label={t('Filter by bot')} size="sm">
+              <SelectTrigger
+                aria-label={t('Filter by bot')}
+                className="tasks-filter-trigger"
+                id="tasks-bot-filter-select"
+                size="sm"
+              >
+                <span aria-hidden className="tasks-filter-trigger-label">{t('Bot')}</span>
                 <TaskBotFilterOption
                   group={selectedBotFilterOption?.group || null}
                   iconDataUrl={
@@ -717,13 +725,13 @@ export function TasksPanel({
                   label={selectedBotFilterOption?.label || t('All bots')}
                 />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent align="end" position="popper" sideOffset={4}>
                 <SelectGroup>
-                  <SelectItem value={ALL_BOTS_FILTER_VALUE}>
+                  <SelectItem textValue={t('All bots')} value={ALL_BOTS_FILTER_VALUE}>
                     <TaskBotFilterOption allBots label={t('All bots')} />
                   </SelectItem>
                   {botFilterOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
+                    <SelectItem key={option.value} textValue={option.label} value={option.value}>
                       <TaskBotFilterOption
                         group={option.group}
                         iconDataUrl={iconDataUrlByChannel.get(option.group.channel.toLowerCase()) || null}

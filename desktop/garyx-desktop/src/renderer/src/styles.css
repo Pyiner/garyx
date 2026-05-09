@@ -14211,13 +14211,10 @@ button.codex-list-row {
   flex: 0 0 auto;
   width: auto;
   align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  padding: 0 8px;
-  border: 0.5px solid var(--color-token-input-border);
-  border-radius: 7px;
-  background: var(--color-token-input-background);
-  color: var(--color-token-input-foreground);
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .tasks-filter-control [data-slot="field-label"] {
@@ -14231,18 +14228,25 @@ button.codex-list-row {
 
 .tasks-filter-control [data-slot="select-trigger"] {
   flex: 0 0 auto;
-  width: auto;
-  min-width: 148px;
-  max-width: 210px;
-  height: 26px;
-  padding: 0 2px 0 6px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
+  width: 230px;
+  max-width: min(230px, calc(100vw - 56px));
+  height: 30px;
+  padding: 0 8px 0 10px;
+  border: 0.5px solid var(--color-token-input-border);
+  border-radius: 7px;
+  background: var(--color-token-input-background);
+  color: var(--color-token-input-foreground);
   font-size: var(--text-sm);
-  box-shadow: none;
-  outline: 0;
+  font-weight: 520;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.02);
+}
+
+.tasks-filter-trigger-label {
+  flex: 0 0 auto;
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-sm);
+  font-weight: 560;
+  line-height: 1;
 }
 
 .tasks-bot-filter-option {
@@ -14251,6 +14255,7 @@ button.codex-list-row {
   max-width: 100%;
   align-items: center;
   gap: 7px;
+  pointer-events: none;
 }
 
 .tasks-bot-filter-logo,
