@@ -7749,6 +7749,7 @@ button.team-agent-speaker:focus-visible {
 .floating-action-menu-row {
   min-height: 34px;
   color: var(--color-token-text-primary);
+  font-weight: var(--font-weight-normal);
   line-height: 1;
 }
 
@@ -7826,7 +7827,7 @@ button.team-agent-speaker:focus-visible {
   overflow: hidden;
   color: var(--color-token-text-primary);
   font-size: var(--text-sm);
-  font-weight: 520;
+  font-weight: var(--font-weight-normal);
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -7837,7 +7838,7 @@ button.team-agent-speaker:focus-visible {
   overflow: hidden;
   color: var(--color-token-text-tertiary);
   font-size: var(--text-xs-plus);
-  font-weight: 450;
+  font-weight: var(--font-weight-normal);
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -7848,7 +7849,7 @@ button.team-agent-speaker:focus-visible {
 }
 
 .floating-action-menu-subtrigger.selected .composer-menu-label {
-  font-weight: var(--font-weight-semibold);
+  font-weight: var(--font-weight-normal);
 }
 
 .composer-menu-label {
@@ -8019,7 +8020,7 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
 }
 
 [data-slot="dropdown-menu-item"][data-active] {
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-normal);
   color: var(--color-token-text-primary);
 }
 
@@ -14223,7 +14224,7 @@ button.codex-list-row {
   width: auto;
   color: var(--color-token-description-foreground);
   font-size: var(--text-xs-plus);
-  font-weight: 560;
+  font-weight: var(--font-weight-normal);
   white-space: nowrap;
 }
 
@@ -14422,7 +14423,7 @@ button.codex-list-row {
   margin: 0;
   color: var(--color-token-text-primary);
   font-size: var(--text-lg);
-  font-weight: 680;
+  font-weight: var(--font-weight-medium);
 }
 
 .tasks-create-grid {
@@ -14449,7 +14450,7 @@ button.codex-list-row {
 .tasks-field [data-slot="field-label"] {
   color: var(--color-token-text-secondary);
   font-size: var(--text-xs-plus);
-  font-weight: 560;
+  font-weight: var(--font-weight-normal);
 }
 
 .tasks-field [data-slot="input"],
@@ -14657,7 +14658,7 @@ button.codex-list-row {
 .tasks-card-id {
   color: var(--color-token-text-secondary);
   font-family: var(--message-code-font);
-  font-weight: 650;
+  font-weight: var(--font-weight-medium);
 }
 
 .tasks-card-meta {
@@ -14680,7 +14681,7 @@ button.codex-list-row {
 
 .tasks-card-title {
   font-size: var(--text-base);
-  font-weight: 590;
+  font-weight: var(--font-weight-normal);
   line-height: 1.38;
 }
 
@@ -14764,7 +14765,7 @@ button.codex-list-row {
 
 .tasks-list-title span {
   font-size: var(--text-sm);
-  font-weight: 590;
+  font-weight: var(--font-weight-normal);
 }
 
 .tasks-list-title small {
