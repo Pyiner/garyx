@@ -23,11 +23,7 @@ const STREAMDOWN_CONTROLS = {
     download: false,
   },
   mermaid: false,
-  table: {
-    copy: true,
-    download: false,
-    fullscreen: true,
-  },
+  table: false,
 } as const;
 
 function normalizeLocalFilePath(target: string): string | null {
