@@ -6510,7 +6510,7 @@ button.team-agent-speaker:focus-visible {
   background-position: 160% 0;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: thinking-shimmer 1.45s linear infinite;
+  animation: thinking-shimmer 2.2s linear infinite;
 }
 
 .tool-trace-group-chevron {
@@ -13883,12 +13883,10 @@ button.codex-list-row {
 @keyframes bubble-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
