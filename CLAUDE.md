@@ -38,9 +38,10 @@ from a real chat captured during local debugging.
 2. Keep the change scoped to the smallest correct surface.
 3. Prefer existing crate and UI patterns over new abstractions.
 4. Run focused deterministic tests for the touched area.
-5. When touching the macOS app under `desktop/garyx-desktop`, package and launch
-   the app before handoff so the installed desktop surface is verified, not only
-   the dev build.
+5. When touching the macOS app under `desktop/garyx-desktop`, start the dev
+   client and use it for user-facing previews unless the user explicitly asks
+   for a packaged app or the change affects packaging, install, release, or
+   startup behavior.
 6. Update [docs/configuration.md](docs/configuration.md) when user-facing configuration or behavior changes.
 7. Commit every completed code change before handoff. Stage only the files changed
    for the current task, and leave unrelated user work untouched.
@@ -55,8 +56,10 @@ cd desktop/garyx-desktop && npm run dev
 
 This launches the Garyx Mac app in development mode. Renderer changes are visible
 directly in the running Mac app as you edit, so use this mode for quick visual
-and interaction feedback. Before handoff, still run the packaged-app validation
-flow below so the installed desktop surface is verified too.
+and interaction feedback. Prefer showing the user this dev client during normal
+UI iteration because code changes take effect without rebuilding a package.
+Packaging is optional unless the user asks for a packaged app or the change
+needs installed-app validation.
 
 ## Validation
 
@@ -68,7 +71,8 @@ cd desktop/garyx-desktop && npm run build:ui
 cd desktop/garyx-desktop && npm run test:smoke
 ```
 
-For macOS app changes, run the packaging flow and launch the installed app:
+When a packaged app is requested, or when validating packaging, install, release,
+or startup behavior, run the packaging flow and launch the installed app:
 
 ```bash
 cd desktop/garyx-desktop && npm run dist:dir
