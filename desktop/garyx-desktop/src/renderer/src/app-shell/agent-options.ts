@@ -12,6 +12,10 @@ export type ComposerAgentOption = {
 };
 
 export type AgentTargetOption = {
+  avatarDataUrl?: string;
+  detail?: string;
+  kind: AgentOptionKind;
+  providerType?: DesktopApiProviderType;
   value: string;
   label: string;
 };
@@ -116,6 +120,10 @@ export function buildAgentTargetOptions(
         || left.agentId.localeCompare(right.agentId);
     })
     .map((agent) => ({
+      avatarDataUrl: agent.avatarDataUrl,
+      detail: PROVIDER_LABELS[agent.providerType] || "Claude",
+      kind: agent.builtIn ? "builtin" as const : "agent" as const,
+      providerType: agent.providerType,
       value: agent.agentId,
       label: formatAgentTargetLabel(agent),
     }));
@@ -126,6 +134,9 @@ export function buildAgentTargetOptions(
         || left.teamId.localeCompare(right.teamId);
     })
     .map((team) => ({
+      avatarDataUrl: team.avatarDataUrl,
+      detail: "Team",
+      kind: "team" as const,
       value: team.teamId,
       label: formatTeamTargetLabel(team),
     }));

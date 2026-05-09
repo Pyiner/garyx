@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 're
 
 import type { DesktopBrowserState } from '@shared/contracts';
 
+import { Input } from '@/components/ui/input';
 import { getDesktopApi } from './platform/desktop-api';
 import { BrowserBackIcon, BrowserForwardIcon, BrowserRefreshIcon, BrowserCloseTabIcon, ExternalLinkIcon, NewTabIcon, BrowserIcon, LockIcon, InfoIcon } from './app-shell/icons';
 import { useI18n } from './i18n';
@@ -210,7 +211,7 @@ export function BrowserPage() {
             <span className="browser-address-icon">
               {active && isHttpsUrl(active.url) ? <LockIcon /> : <BrowserIcon />}
             </span>
-            <input
+            <Input
               className="browser-address-input"
               onChange={(event) => {
                 setAddressValue(event.target.value);

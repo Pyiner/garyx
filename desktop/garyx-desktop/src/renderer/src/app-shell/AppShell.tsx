@@ -75,6 +75,7 @@ import { SkillsPanel } from "../SkillsPanel";
 import { AutomationDialog } from "../components/AutomationDialog";
 import { AutomationListPage } from "../components/AutomationListPage";
 import { MemoryDialog } from "../components/MemoryDialog";
+import { Input } from "../components/ui/input";
 import { AddBotDialog } from "./components/AddBotDialog";
 import { BotSidebar } from "../BotSidebar";
 import { ComposerForm } from "../ComposerForm";
@@ -2238,7 +2239,7 @@ export function AppShell() {
     const options = buildAgentTargetOptions(desktopAgents, desktopTeams);
     return options.length
       ? options
-      : [{ value: "claude", label: "Claude · Claude" }];
+      : [{ value: "claude", label: "Claude · Claude", detail: "Claude", kind: "builtin" as const, providerType: "claude_code" as const }];
   }, [desktopAgents, desktopTeams]);
   const pendingAgentLabel =
     pendingTeam?.displayName?.trim() ||
@@ -6920,7 +6921,7 @@ export function AppShell() {
               <label className="gateway-setup-field">
                 <span>{t('Gateway URL')}</span>
                 <div className="gateway-url-input-shell">
-                  <input
+                  <Input
                     autoCapitalize="off"
                     autoComplete="off"
                     className="gateway-setup-input gateway-url-input-with-history"
@@ -6950,7 +6951,7 @@ export function AppShell() {
 
               <label className="gateway-setup-field">
                 <span>{t('Gateway Token')}</span>
-                <input
+                <Input
                   autoCapitalize="off"
                   autoComplete="off"
                   className="gateway-setup-input"

@@ -7,6 +7,14 @@ import {
   UICardHeader,
   UICardTitle,
 } from './ui';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 type ParsedLogLine = {
   level: string;
@@ -24,6 +32,8 @@ type WebLogsPageProps = {
   onLevelChange: (level: string) => void;
   onRefresh?: () => void;
 };
+
+const ALL_LOG_LEVELS_VALUE = '__all_log_levels__';
 
 function levelTone(level: string): 'status-connected' | 'status-idle' {
   const normalized = level.toUpperCase();
@@ -55,19 +65,25 @@ export function WebLogsPage({
             </p>
           </div>
           <div className="shadcn-hero-actions">
-            <select
-              className="composer-provider-select"
-              onChange={(event) => {
-                onLevelChange(event.target.value);
+            <Select
+              value={level || ALL_LOG_LEVELS_VALUE}
+              onValueChange={(value) => {
+                onLevelChange(value === ALL_LOG_LEVELS_VALUE ? '' : value);
               }}
-              value={level}
             >
-              <option value="">All levels</option>
-              <option value="ERROR">ERROR</option>
-              <option value="WARNING">WARNING</option>
-              <option value="INFO">INFO</option>
-              <option value="DEBUG">DEBUG</option>
-            </select>
+              <SelectTrigger className="composer-provider-select">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value={ALL_LOG_LEVELS_VALUE}>All levels</SelectItem>
+                  <SelectItem value="ERROR">ERROR</SelectItem>
+                  <SelectItem value="WARNING">WARNING</SelectItem>
+                  <SelectItem value="INFO">INFO</SelectItem>
+                  <SelectItem value="DEBUG">DEBUG</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
             {onRefresh ? (
               <UIButton onClick={onRefresh} variant="outline">
                 Refresh

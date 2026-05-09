@@ -48,11 +48,15 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 
+import type { AgentTargetOption } from "../agent-options";
+import { AgentOptionRow } from "./AgentOptionAvatar";
 import { AuthFlowDriver } from "../../channel-plugins/AuthFlowDriver";
 import { DirectoryInput } from "../../components/DirectoryInput";
 import { JsonSchemaForm } from "../../channel-plugins/JsonSchemaForm";
@@ -60,7 +64,6 @@ import { useChannelPluginCatalog } from "../../channel-plugins/useChannelPluginC
 import { useI18n } from "../../i18n";
 
 type FeishuDomain = "feishu" | "lark";
-type AgentTargetOption = { value: string; label: string };
 type AddBotStep = 1 | 2;
 
 type AddBotDialogProps = {
@@ -448,33 +451,36 @@ export function AddBotDialog(props: AddBotDialogProps) {
                       <SelectValue placeholder={catalogLoading ? t("Loading...") : t("Choose channel")} />
                     </SelectTrigger>
                     <SelectContent>
-                      {(entries ?? []).map((entry) => (
-                        <SelectItem key={entry.id} value={entry.id}>
-                          <span className="add-bot-select-option">
-                            {entry.icon_data_url ? (
-                              <img
-                                alt=""
-                                className="add-bot-select-icon"
-                                height={18}
-                                src={entry.icon_data_url}
-                                width={18}
-                              />
-                            ) : (
-                              <span className="add-bot-select-badge">
-                                {channelInitials(entry)}
-                              </span>
-                            )}
-                            <span className="add-bot-select-copy">
-                              <span>{entry.display_name || entry.id}</span>
-                              {entry.version ? (
-                                <span className="add-bot-select-version">
-                                  v{entry.version}
+                      <SelectGroup>
+                        <SelectLabel>{t("Channels")}</SelectLabel>
+                        {(entries ?? []).map((entry) => (
+                          <SelectItem key={entry.id} value={entry.id}>
+                            <span className="add-bot-select-option">
+                              {entry.icon_data_url ? (
+                                <img
+                                  alt=""
+                                  className="add-bot-select-icon"
+                                  height={18}
+                                  src={entry.icon_data_url}
+                                  width={18}
+                                />
+                              ) : (
+                                <span className="add-bot-select-badge">
+                                  {channelInitials(entry)}
                                 </span>
-                              ) : null}
+                              )}
+                              <span className="add-bot-select-copy">
+                                <span>{entry.display_name || entry.id}</span>
+                                {entry.version ? (
+                                  <span className="add-bot-select-version">
+                                    v{entry.version}
+                                  </span>
+                                ) : null}
+                              </span>
                             </span>
-                          </span>
-                        </SelectItem>
-                      ))}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                 </div>
@@ -518,11 +524,21 @@ export function AddBotDialog(props: AddBotDialogProps) {
                       <SelectValue placeholder={t("Choose agent")} />
                     </SelectTrigger>
                     <SelectContent>
-                      {agentTargets.map((target) => (
-                        <SelectItem key={target.value} value={target.value}>
-                          {target.label}
-                        </SelectItem>
-                      ))}
+                      <SelectGroup>
+                        <SelectLabel>{t("Agents")}</SelectLabel>
+                        {agentTargets.map((target) => (
+                          <SelectItem key={target.value} value={target.value}>
+                            <AgentOptionRow
+                              agentId={target.value}
+                              avatarDataUrl={target.avatarDataUrl}
+                              detail={target.detail}
+                              kind={target.kind}
+                              label={target.label}
+                              providerType={target.providerType}
+                            />
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                   {selectedAgentMissing ? (

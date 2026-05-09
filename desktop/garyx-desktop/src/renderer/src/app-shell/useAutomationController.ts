@@ -58,6 +58,8 @@ function formatAutomationAgentOptions(
       return left.displayName.localeCompare(right.displayName) || left.teamId.localeCompare(right.teamId);
     })
     .map((team) => ({
+      avatarDataUrl: team.avatarDataUrl,
+      detail: 'Team',
       id: team.teamId,
       label:
         team.displayName.trim() === team.teamId.trim()
@@ -74,12 +76,15 @@ function formatAutomationAgentOptions(
       return left.displayName.localeCompare(right.displayName) || left.agentId.localeCompare(right.agentId);
     })
     .map((agent) => ({
+      avatarDataUrl: agent.avatarDataUrl,
+      detail: agent.providerType,
       id: agent.agentId,
       label:
         agent.displayName.trim() === agent.agentId.trim()
           ? `${agent.displayName} (agent${agent.builtIn ? ', built-in' : ''})`
           : `${agent.displayName} (${agent.agentId}, agent${agent.builtIn ? ', built-in' : ''})`,
-      kind: 'agent' as const,
+      kind: agent.builtIn ? 'builtin' as const : 'agent' as const,
+      providerType: agent.providerType,
     }));
   return [...teamOptions, ...agentOptions];
 }

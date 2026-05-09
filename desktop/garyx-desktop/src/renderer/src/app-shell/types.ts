@@ -1,4 +1,5 @@
 import type {
+  DesktopApiProviderType,
   DesktopAutomationActivityFeed,
   DesktopAutomationSchedule,
   DesktopBotConsoleSummary,
@@ -66,9 +67,12 @@ export type AutomationDraft = {
 };
 
 export type AutomationAgentOption = {
+  avatarDataUrl?: string;
+  detail?: string;
   id: string;
   label: string;
-  kind: 'agent' | 'team';
+  kind: 'builtin' | 'agent' | 'team';
+  providerType?: DesktopApiProviderType;
 };
 
 export type AutomationDialogState = {

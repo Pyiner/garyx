@@ -23,7 +23,7 @@ export function DirectoryInput({ value, onChange, id, placeholder }: DirectoryIn
   return (
     <div className="flex items-center gap-2">
       <Input
-        className="flex-1 rounded-[14px] border-[#e7e7e5] bg-white shadow-none"
+        className="flex-1"
         id={id}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
@@ -31,7 +31,7 @@ export function DirectoryInput({ value, onChange, id, placeholder }: DirectoryIn
         value={value}
       />
       <Button
-        className="shrink-0 rounded-[14px] border-[#e7e7e5] bg-white text-[#555] shadow-none hover:bg-[#f4f4f2]"
+        className="shrink-0"
         onClick={handleBrowse}
         size="sm"
         type="button"

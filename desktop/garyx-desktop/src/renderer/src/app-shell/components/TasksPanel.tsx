@@ -36,6 +36,11 @@ import { useI18n, type Translate } from '../../i18n';
 import type { ToastTone } from '../../toast';
 import { getDesktopApi } from '../../platform/desktop-api';
 import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+} from '../../components/ui/field';
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -45,6 +50,18 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
+import { Input } from '../../components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from '../../components/ui/select';
+import { Textarea } from '../../components/ui/textarea';
+import { AgentOptionRow } from './AgentOptionAvatar';
 import { MoreDotsIcon } from '../icons';
 
 type TasksPanelProps = {
@@ -75,6 +92,9 @@ const STATUS_LABELS: Record<DesktopTaskStatus, string> = {
 };
 
 const TASK_DRAG_MIME = 'application/x-garyx-task-id';
+const ALL_BOTS_FILTER_VALUE = '__all_bots__';
+const UNASSIGNED_ASSIGNEE_VALUE = '__unassigned__';
+const CHOOSE_NOTIFICATION_VALUE = '__choose_notification__';
 
 function formatPrincipal(principal: DesktopTaskPrincipal | null | undefined, t: Translate): string {
   if (!principal) {
@@ -479,13 +499,21 @@ export function TasksPanel({
                     const label = agent.displayName || agent.agentId;
                     return (
                       <DropdownMenuItem
+                        className="tasks-agent-menu-item"
                         disabled={busy}
                         key={agent.agentId}
                         onSelect={() => {
                           void assignTask(task, agent.agentId);
                         }}
                       >
-                        {label}
+                        <AgentOptionRow
+                          agentId={agent.agentId}
+                          avatarDataUrl={agent.avatarDataUrl}
+                          detail={agent.providerType}
+                          kind={agent.builtIn ? 'builtin' : 'agent'}
+                          label={label}
+                          providerType={agent.providerType}
+                        />
                       </DropdownMenuItem>
                     );
                   })}
@@ -620,21 +648,29 @@ export function TasksPanel({
           <p className="tasks-page-subtitle">{headerCount}</p>
         </div>
         <div className="tasks-header-actions">
-          <label className="tasks-filter-control">
-            <span>{t('Bot')}</span>
-            <select
-              aria-label={t('Filter by bot')}
-              onChange={(event) => setBotFilter(event.target.value)}
-              value={botFilter}
+          <Field className="tasks-filter-control">
+            <FieldLabel>{t('Bot')}</FieldLabel>
+            <Select
+              value={botFilter || ALL_BOTS_FILTER_VALUE}
+              onValueChange={(value) => {
+                setBotFilter(value === ALL_BOTS_FILTER_VALUE ? '' : value);
+              }}
             >
-              <option value="">{t('All bots')}</option>
-              {botFilterOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              <SelectTrigger aria-label={t('Filter by bot')} size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value={ALL_BOTS_FILTER_VALUE}>{t('All bots')}</SelectItem>
+                  {botFilterOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
           <button
             className="tasks-secondary-button"
             disabled={loading}
@@ -686,62 +722,96 @@ export function TasksPanel({
             <div className="tasks-create-header">
               <h2>{t('New task')}</h2>
             </div>
-            <div className="tasks-create-grid">
-              <label className="tasks-field tasks-title-field">
-                <span>{t('Title')}</span>
-                <input
+            <FieldGroup className="tasks-create-grid">
+              <Field className="tasks-field tasks-title-field">
+                <FieldLabel>{t('Title')}</FieldLabel>
+                <Input
                   autoFocus
                   onChange={(event) => setDraftTitle(event.target.value)}
                   placeholder={t('Task title')}
                   value={draftTitle}
                 />
-              </label>
-              <label className="tasks-field">
-                <span>{t('Assignee')}</span>
-                <select
-                  onChange={(event) => setDraftAssignee(event.target.value)}
-                  value={draftAssignee}
+              </Field>
+              <Field className="tasks-field">
+                <FieldLabel>{t('Assignee')}</FieldLabel>
+                <Select
+                  value={draftAssignee || UNASSIGNED_ASSIGNEE_VALUE}
+                  onValueChange={(value) => {
+                    setDraftAssignee(value === UNASSIGNED_ASSIGNEE_VALUE ? '' : value);
+                  }}
                 >
-                  <option value="">{t('Unassigned')}</option>
-                  {agents.map((agent) => (
-                    <option key={agent.agentId} value={agent.agentId}>
-                      {agent.displayName || agent.agentId}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="tasks-field tasks-field-full">
-                <span>{t('Workspace')}</span>
-                <input
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>{t('Agents')}</SelectLabel>
+                      <SelectItem value={UNASSIGNED_ASSIGNEE_VALUE}>
+                        {t('Unassigned')}
+                      </SelectItem>
+                      {agents.map((agent) => {
+                        const label = agent.displayName || agent.agentId;
+                        return (
+                          <SelectItem key={agent.agentId} value={agent.agentId}>
+                            <AgentOptionRow
+                              agentId={agent.agentId}
+                              avatarDataUrl={agent.avatarDataUrl}
+                              detail={agent.providerType}
+                              kind={agent.builtIn ? 'builtin' : 'agent'}
+                              label={label}
+                              providerType={agent.providerType}
+                            />
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field className="tasks-field tasks-field-full">
+                <FieldLabel>{t('Workspace')}</FieldLabel>
+                <Input
                   onChange={(event) => setDraftWorkspaceDir(event.target.value)}
                   placeholder={t('Optional workspace directory')}
                   value={draftWorkspaceDir}
                 />
-              </label>
-              <label className="tasks-field tasks-field-full">
-                <span>{t('Notification')}</span>
-                <select
-                  onChange={(event) => setDraftNotificationTarget(event.target.value)}
-                  value={draftNotificationTarget}
+              </Field>
+              <Field className="tasks-field tasks-field-full">
+                <FieldLabel>{t('Notification')}</FieldLabel>
+                <Select
+                  value={draftNotificationTarget || CHOOSE_NOTIFICATION_VALUE}
+                  onValueChange={(value) => {
+                    setDraftNotificationTarget(value === CHOOSE_NOTIFICATION_VALUE ? '' : value);
+                  }}
                 >
-                  <option value="">{t('Choose notification')}</option>
-                  <option value="none">{t('Do not notify')}</option>
-                  {botGroups.map((group) => (
-                    <option key={group.id} value={`bot:${group.id}`}>
-                      {group.title || `${group.channel}:${group.accountId}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="tasks-field tasks-field-full">
-                <span>{t('Body')}</span>
-                <textarea
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectLabel>{t('Notification')}</SelectLabel>
+                      <SelectItem value={CHOOSE_NOTIFICATION_VALUE}>
+                        {t('Choose notification')}
+                      </SelectItem>
+                      <SelectItem value="none">{t('Do not notify')}</SelectItem>
+                      {botGroups.map((group) => (
+                        <SelectItem key={group.id} value={`bot:${group.id}`}>
+                          {group.title || `${group.channel}:${group.accountId}`}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field className="tasks-field tasks-field-full">
+                <FieldLabel>{t('Body')}</FieldLabel>
+                <Textarea
                   onChange={(event) => setDraftBody(event.target.value)}
                   placeholder={t('Optional task detail')}
                   value={draftBody}
                 />
-              </label>
-            </div>
+              </Field>
+            </FieldGroup>
             <div className="tasks-create-actions">
               <button className="tasks-secondary-button" onClick={() => setDraftOpen(false)} type="button">
                 {t('Cancel')}

@@ -12,6 +12,7 @@ import { Label } from '../../components/ui/label';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -365,9 +366,11 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                     <SelectValue placeholder={t('Select provider')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="claude_code">Claude</SelectItem>
-                    <SelectItem value="codex_app_server">Codex</SelectItem>
-                    <SelectItem value="gemini_cli">Gemini</SelectItem>
+                    <SelectGroup>
+                      <SelectItem value="claude_code">Claude</SelectItem>
+                      <SelectItem value="codex_app_server">Codex</SelectItem>
+                      <SelectItem value="gemini_cli">Gemini</SelectItem>
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
                 {modelStatus ? <span className="codex-form-hint">{modelStatus}</span> : null}
@@ -388,12 +391,14 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       <SelectValue placeholder={t('Select model')} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value={PROVIDER_DEFAULT_MODEL_VALUE}>{t('Provider default')}</SelectItem>
-                      {modelOptions.map((model) => (
-                        <SelectItem key={model.id} value={model.id}>
-                          {model.label}
-                        </SelectItem>
-                      ))}
+                      <SelectGroup>
+                        <SelectItem value={PROVIDER_DEFAULT_MODEL_VALUE}>{t('Provider default')}</SelectItem>
+                        {modelOptions.map((model) => (
+                          <SelectItem key={model.id} value={model.id}>
+                            {model.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                   <span className="codex-form-hint">

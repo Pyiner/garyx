@@ -9,6 +9,17 @@ import {
   UICardHeader,
   UICardTitle,
 } from './ui';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 
 import type {
   DesktopBotConsoleSummary,
@@ -239,7 +250,7 @@ export function WebSettingsPage({
                 <div className="web-settings-form-grid">
               <label className="web-settings-field">
                 <span className="eyebrow">gateway.host</span>
-                <input
+                <Input
                   onChange={(event) => {
                     onPatchGateway({ host: event.target.value });
                   }}
@@ -249,7 +260,7 @@ export function WebSettingsPage({
               </label>
               <label className="web-settings-field">
                 <span className="eyebrow">gateway.port</span>
-                <input
+                <Input
                   onChange={(event) => {
                     const parsed = Number.parseInt(event.target.value, 10);
                     onPatchGateway({ port: Number.isFinite(parsed) ? parsed : 31337 });
@@ -260,7 +271,7 @@ export function WebSettingsPage({
               </label>
               <label className="web-settings-field web-settings-field-span">
                 <span className="eyebrow">gateway.public_url</span>
-                <input
+                <Input
                   onChange={(event) => {
                     onPatchGateway({ publicUrl: event.target.value });
                   }}
@@ -271,7 +282,7 @@ export function WebSettingsPage({
               </label>
               <label className="web-settings-field web-settings-field-span">
                 <span className="eyebrow">sessions.data_dir</span>
-                <input
+                <Input
                   onChange={(event) => {
                     onPatchSessions({ dataDir: event.target.value });
                   }}
@@ -344,18 +355,17 @@ export function WebSettingsPage({
                           </div>
                         </div>
                         <label className="web-settings-check">
-                          <input
+                          <Checkbox
                             checked={Boolean(account.enabled)}
-                            onChange={(event) => {
-                              onPatchTelegramAccount(accountId, { enabled: event.target.checked });
+                            onCheckedChange={(checked) => {
+                              onPatchTelegramAccount(accountId, { enabled: checked === true });
                             }}
-                            type="checkbox"
                           />
                           <span className="small-note">enabled</span>
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">name</span>
-                          <input
+                          <Input
                             onChange={(event) => {
                               onPatchTelegramAccount(accountId, { name: event.target.value });
                             }}
@@ -367,7 +377,7 @@ export function WebSettingsPage({
                           <span className="eyebrow">token</span>
                           {isScopedBotSettings ? (
                             <div className="web-settings-secret-row">
-                              <input readOnly type="text" value={String(account.token || '')} />
+                              <Input readOnly type="text" value={String(account.token || '')} />
                               <UIButton
                                 onClick={() => {
                                   void copySecret(`telegram:${accountId}:token`, String(account.token || ''));
@@ -380,7 +390,7 @@ export function WebSettingsPage({
                               </UIButton>
                             </div>
                           ) : (
-                          <input
+                          <Input
                             onChange={(event) => {
                               onPatchTelegramAccount(accountId, { token: event.target.value });
                             }}
@@ -391,7 +401,7 @@ export function WebSettingsPage({
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">agent_id</span>
-                          <input
+                          <Input
                             onChange={(event) => {
                               onPatchTelegramAccount(accountId, { agentId: event.target.value });
                             }}
@@ -401,7 +411,7 @@ export function WebSettingsPage({
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">workspace_dir</span>
-                          <input
+                          <Input
                             onChange={(event) => {
                               onPatchTelegramAccount(accountId, { workspaceDir: event.target.value });
                             }}
@@ -427,11 +437,11 @@ export function WebSettingsPage({
                   </p>
                   <label className="web-settings-field">
                     <span className="eyebrow">workspace_dir</span>
-                    <input readOnly type="text" value={runtimeBotSummary.workspaceDir || ''} />
+                    <Input readOnly type="text" value={runtimeBotSummary.workspaceDir || ''} />
                   </label>
                   <label className="web-settings-field">
                     <span className="eyebrow">endpoints</span>
-                    <input
+                    <Input
                       readOnly
                       type="text"
                       value={`${runtimeBotSummary.boundEndpointCount}/${runtimeBotSummary.endpointCount} bound`}
@@ -494,18 +504,17 @@ export function WebSettingsPage({
                           ) : null}
                         </div>
                         <label className="web-settings-check">
-                          <input
+                          <Checkbox
                             checked={Boolean(account.enabled)}
-                            onChange={(event) => {
-                              onPatchFeishuAccount(accountId, { enabled: event.target.checked });
+                            onCheckedChange={(checked) => {
+                              onPatchFeishuAccount(accountId, { enabled: checked === true });
                             }}
-                            type="checkbox"
                           />
                           <span className="small-note">enabled</span>
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">name</span>
-                          <input
+                          <Input
                             onChange={(event) => {
                               onPatchFeishuAccount(accountId, { name: event.target.value });
                             }}
@@ -517,7 +526,7 @@ export function WebSettingsPage({
                           <span className="eyebrow">app_id</span>
                           {isScopedBotSettings ? (
                             <div className="web-settings-secret-row">
-                              <input readOnly type="text" value={String(account.app_id || '')} />
+                              <Input readOnly type="text" value={String(account.app_id || '')} />
                               <UIButton
                                 onClick={() => {
                                   void copySecret(`feishu:${accountId}:app_id`, String(account.app_id || ''));
@@ -530,7 +539,7 @@ export function WebSettingsPage({
                               </UIButton>
                             </div>
                           ) : (
-                          <input
+                          <Input
                             onChange={(event) => {
                               onPatchFeishuAccount(accountId, { appId: event.target.value });
                             }}
@@ -543,7 +552,7 @@ export function WebSettingsPage({
                           <span className="eyebrow">app_secret</span>
                           {isScopedBotSettings ? (
                             <div className="web-settings-secret-row">
-                              <input readOnly type="text" value={String(account.app_secret || '')} />
+                              <Input readOnly type="text" value={String(account.app_secret || '')} />
                               <UIButton
                                 onClick={() => {
                                   void copySecret(`feishu:${accountId}:app_secret`, String(account.app_secret || ''));
@@ -556,7 +565,7 @@ export function WebSettingsPage({
                               </UIButton>
                             </div>
                           ) : (
-                          <input
+                          <Input
                             onChange={(event) => {
                               onPatchFeishuAccount(accountId, { appSecret: event.target.value });
                             }}
@@ -567,41 +576,54 @@ export function WebSettingsPage({
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">domain</span>
-                          <select
-                            onChange={(event) => {
-                              onPatchFeishuAccount(accountId, { domain: event.target.value });
-                            }}
+                          <Select
                             value={String(account.domain || 'feishu')}
+                            onValueChange={(value) => {
+                              onPatchFeishuAccount(accountId, { domain: value });
+                            }}
                           >
-                            <option value="feishu">feishu</option>
-                            <option value="lark">lark</option>
-                          </select>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="feishu">feishu</SelectItem>
+                                <SelectItem value="lark">lark</SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
                         </label>
                         <label className="web-settings-check">
-                          <input
+                          <Checkbox
                             checked={Boolean(account.require_mention)}
-                            onChange={(event) => {
-                              onPatchFeishuAccount(accountId, { requireMention: event.target.checked });
+                            onCheckedChange={(checked) => {
+                              onPatchFeishuAccount(accountId, { requireMention: checked === true });
                             }}
-                            type="checkbox"
                           />
                           <span className="small-note">require_mention</span>
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">topic_session_mode</span>
-                          <select
-                            onChange={(event) => {
-                              onPatchFeishuAccount(accountId, { topicSessionMode: event.target.value });
-                            }}
+                          <Select
                             value={String(account.topic_session_mode || 'disabled')}
+                            onValueChange={(value) => {
+                              onPatchFeishuAccount(accountId, { topicSessionMode: value });
+                            }}
                           >
-                            <option value="disabled">group</option>
-                            <option value="enabled">topic</option>
-                          </select>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectGroup>
+                                <SelectItem value="disabled">group</SelectItem>
+                                <SelectItem value="enabled">topic</SelectItem>
+                              </SelectGroup>
+                            </SelectContent>
+                          </Select>
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">agent_id</span>
-                          <input
+                          <Input
                             onChange={(event) => {
                               onPatchFeishuAccount(accountId, { agentId: event.target.value });
                             }}
@@ -611,7 +633,7 @@ export function WebSettingsPage({
                         </label>
                         <label className="web-settings-field">
                           <span className="eyebrow">workspace_dir</span>
-                          <input
+                          <Input
                             onChange={(event) => {
                               onPatchFeishuAccount(accountId, { workspaceDir: event.target.value });
                             }}
@@ -637,11 +659,11 @@ export function WebSettingsPage({
                   </p>
                   <label className="web-settings-field">
                     <span className="eyebrow">workspace_dir</span>
-                    <input readOnly type="text" value={runtimeBotSummary.workspaceDir || ''} />
+                    <Input readOnly type="text" value={runtimeBotSummary.workspaceDir || ''} />
                   </label>
                   <label className="web-settings-field">
                     <span className="eyebrow">endpoints</span>
-                    <input
+                    <Input
                       readOnly
                       type="text"
                       value={`${runtimeBotSummary.boundEndpointCount}/${runtimeBotSummary.endpointCount} bound`}
@@ -651,7 +673,7 @@ export function WebSettingsPage({
               ) : null}
             </section>
             {!isScopedBotSettings ? (
-            <textarea
+            <Textarea
               className="web-settings-editor"
               onChange={(event) => {
                 onChangeJson(event.target.value);

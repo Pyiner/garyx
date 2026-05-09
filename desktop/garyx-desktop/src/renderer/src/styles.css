@@ -5358,21 +5358,21 @@ button.new-thread-resume-link:hover {
   gap: 14px;
 }
 
-.automation-form label,
-.automation-form-section label {
+.automation-form [data-slot="field"],
+.automation-form-section [data-slot="field"] {
   display: grid;
   gap: 8px;
 }
 
-.automation-form span,
-.automation-form-section > span {
+.automation-form [data-slot="field-label"],
+.automation-form-section [data-slot="field-label"] {
   font-size: var(--text-sm);
   font-weight: var(--font-weight-medium);
 }
 
-.automation-form input,
-.automation-form select,
-.automation-form textarea {
+.automation-form [data-slot="input"],
+.automation-form [data-slot="select-trigger"],
+.automation-form [data-slot="textarea"] {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--color-token-input-border);
@@ -5381,9 +5381,13 @@ button.new-thread-resume-link:hover {
   color: var(--color-token-input-foreground);
 }
 
-.automation-form textarea {
+.automation-form [data-slot="textarea"] {
   resize: vertical;
   min-height: 132px;
+}
+
+.automation-schedule-toggle {
+  width: fit-content;
 }
 
 .automation-schedule-mode {
@@ -7751,45 +7755,79 @@ button.team-agent-speaker:focus-visible {
   color: rgba(13, 13, 13, 0.52);
 }
 
-.composer-agent-option-icon {
+.agent-option-avatar {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
   flex: 0 0 auto;
-  overflow: hidden;
-  border-radius: 5px;
-  background: color-mix(in oklab, var(--color-token-foreground) 8%, transparent);
+  border: 0.5px solid var(--color-token-border);
+  background: color-mix(in oklab, var(--color-token-foreground) 6%, transparent);
   color: var(--color-token-text-secondary);
-  font-size: 8px;
   font-weight: var(--font-weight-semibold);
-  line-height: 1;
 }
 
-.composer-agent-option-icon.team {
-  border-radius: 50%;
+.agent-option-avatar [data-slot="avatar-fallback"] {
+  background: transparent;
+  color: inherit;
+  font-size: 10px;
+  font-weight: 680;
+  letter-spacing: 0;
+}
+
+.agent-option-avatar--team {
   background: color-mix(in oklab, var(--color-accent-green) 14%, transparent);
   color: color-mix(in oklab, var(--color-accent-green) 78%, black);
 }
 
-.composer-agent-option-icon.provider,
-.composer-agent-option-icon.image,
-.composer-agent-option-icon.default {
-  background: transparent;
-  color: inherit;
+.agent-option-avatar--provider {
+  background: white;
 }
 
-.composer-agent-option-icon img,
-.composer-agent-option-icon-svg,
-.composer-agent-option-icon.default .icon {
-  display: block;
-  width: 100%;
-  height: 100%;
+.agent-option-avatar--missing {
+  border-color: color-mix(in oklab, var(--color-destructive) 42%, transparent);
+  color: var(--color-destructive);
 }
 
-.composer-agent-option-icon img {
-  object-fit: cover;
+.agent-option-row {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-option-copy {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.agent-option-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-sm);
+  font-weight: 520;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-option-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-token-text-tertiary);
+  font-size: var(--text-xs-plus);
+  font-weight: 450;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-agent-option-icon {
+  border-radius: 6px;
 }
 
 .floating-action-menu-subtrigger.selected .composer-menu-label {
@@ -9794,30 +9832,6 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
   min-width: 0;
   align-items: center;
   gap: 7px;
-}
-
-.bot-table-agent-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: 2px;
-  background: #10a37f;
-}
-
-.bot-table-agent-dot[data-agent-tone="1"] {
-  background: #d97757;
-}
-
-.bot-table-agent-dot[data-agent-tone="2"] {
-  background: #3478f6;
-}
-
-.bot-table-agent-dot[data-agent-tone="3"] {
-  background: #8f65d8;
-}
-
-.bot-table-agent-dot.missing {
-  background: #c84d4d;
 }
 
 .bot-table-agent-copy {
@@ -14204,21 +14218,24 @@ button.codex-list-row {
   color: var(--color-token-input-foreground);
 }
 
-.tasks-filter-control span {
+.tasks-filter-control [data-slot="field-label"] {
   color: var(--color-token-description-foreground);
   font-size: var(--text-xs-plus);
   font-weight: 560;
   white-space: nowrap;
 }
 
-.tasks-filter-control select {
+.tasks-filter-control [data-slot="select-trigger"] {
   min-width: 128px;
   max-width: 190px;
+  height: 26px;
+  padding: 0 2px 0 6px;
   border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   font-size: var(--text-sm);
+  box-shadow: none;
   outline: 0;
 }
 
@@ -14308,9 +14325,9 @@ button.codex-list-row {
   cursor: not-allowed;
 }
 
-.tasks-field input,
-.tasks-field select,
-.tasks-field textarea {
+.tasks-field [data-slot="input"],
+.tasks-field [data-slot="select-trigger"],
+.tasks-field [data-slot="textarea"] {
   min-height: 30px;
   border: 0.5px solid var(--color-token-input-border);
   border-radius: 7px;
@@ -14383,20 +14400,20 @@ button.codex-list-row {
   grid-column: 1 / -1;
 }
 
-.tasks-field span {
+.tasks-field [data-slot="field-label"] {
   color: var(--color-token-text-secondary);
   font-size: var(--text-xs-plus);
   font-weight: 560;
 }
 
-.tasks-field input,
-.tasks-field select,
-.tasks-field textarea {
+.tasks-field [data-slot="input"],
+.tasks-field [data-slot="select-trigger"],
+.tasks-field [data-slot="textarea"] {
   width: 100%;
   padding: 6px 9px;
 }
 
-.tasks-field textarea {
+.tasks-field [data-slot="textarea"] {
   min-height: 54px;
   resize: vertical;
 }
@@ -15873,7 +15890,7 @@ button.codex-list-row {
   grid-column: 1 / -1;
 }
 
-.web-settings-field input {
+.web-settings-field [data-slot="input"] {
   width: 100%;
   padding: 8px 10px;
   border-radius: 12px;
@@ -15930,8 +15947,8 @@ button.codex-list-row {
 }
 
 .web-settings-textarea,
-.web-settings-field select,
-.web-settings-field textarea {
+.web-settings-field [data-slot="select-trigger"],
+.web-settings-field [data-slot="textarea"] {
   width: 100%;
   padding: 8px 10px;
   border-radius: 12px;

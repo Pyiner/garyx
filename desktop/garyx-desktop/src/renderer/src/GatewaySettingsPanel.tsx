@@ -6,6 +6,7 @@ import {
   DEFAULT_DESKTOP_SETTINGS,
   type ChannelPluginCatalogEntry,
   type ConnectionStatus,
+  type DesktopApiProviderType,
   type DesktopCustomAgent,
   type DesktopTeam,
   type DesktopSettings,
@@ -48,6 +49,7 @@ import { Label } from '@/components/ui/label';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -64,6 +66,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { AddBotDialog } from './app-shell/components/AddBotDialog';
+import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { MoreDotsIcon } from './app-shell/icons';
 import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
@@ -147,6 +150,10 @@ type AgentProviderFieldsProps = {
 };
 
 type AgentTargetOption = {
+  avatarDataUrl?: string;
+  detail?: string;
+  kind: 'builtin' | 'agent' | 'team';
+  providerType?: DesktopApiProviderType;
   value: string;
   label: string;
 };
@@ -447,10 +454,17 @@ function sortedAgentTargets(
       return left.displayName.localeCompare(right.displayName) || left.teamId.localeCompare(right.teamId);
     })
     .map((team) => ({
+      avatarDataUrl: team.avatarDataUrl,
+      detail: 'Team',
+      kind: 'team' as const,
       value: team.teamId,
       label: formatTeamOptionLabel(team),
     }));
   const agentOptions = sortedStandaloneAgents(agents).map((agent) => ({
+    avatarDataUrl: agent.avatarDataUrl,
+    detail: agentProviderLabel(agent.providerType),
+    kind: agent.builtIn ? 'builtin' as const : 'agent' as const,
+    providerType: agent.providerType,
     value: agent.agentId,
     label: `${formatAgentOptionLabel(agent)} · ${agentProviderLabel(agent.providerType)}`,
   }));
@@ -900,9 +914,11 @@ function AgentProviderFields({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="rounded-[14px] border-[#e7e7e5] bg-white shadow-[0_12px_32px_rgba(0,0,0,0.08)]">
-                <SelectItem value="claude_code">claude_code</SelectItem>
-                <SelectItem value="codex_app_server">codex_app_server</SelectItem>
-                <SelectItem value="gemini_cli">gemini_cli</SelectItem>
+                <SelectGroup>
+                  <SelectItem value="claude_code">claude_code</SelectItem>
+                  <SelectItem value="codex_app_server">codex_app_server</SelectItem>
+                  <SelectItem value="gemini_cli">gemini_cli</SelectItem>
+                </SelectGroup>
               </SelectContent>
             </Select>
           }
@@ -1229,9 +1245,11 @@ export function GatewaySettingsPanel({
                 />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="system">{t('Follow System')}</SelectItem>
-                <SelectItem value="en">{t('English')}</SelectItem>
-                <SelectItem value="zh-CN">{t('Chinese')}</SelectItem>
+                <SelectGroup>
+                  <SelectItem value="system">{t('Follow System')}</SelectItem>
+                  <SelectItem value="en">{t('English')}</SelectItem>
+                  <SelectItem value="zh-CN">{t('Chinese')}</SelectItem>
+                </SelectGroup>
               </SelectContent>
             </Select>
           }
@@ -1501,7 +1519,6 @@ export function GatewaySettingsPanel({
                 selectedTarget,
                 accountAgentId || t('Default route'),
               );
-              const agentDotSeed = selectedTarget?.value || accountAgentId || 'default';
               const displayName = String(account?.name || accountId);
               const enabled = Boolean(account?.enabled);
               // Catalog-driven channel presentation: show the
@@ -1573,13 +1590,13 @@ export function GatewaySettingsPanel({
                     title={agentLabel}
                   >
                     <span className="bot-table-agent">
-                      <span
-                        className={classNames(
-                          'bot-table-agent-dot',
-                          selectedAgentMissing && 'missing',
-                        )}
-                        data-agent-tone={agentDotSeed.length % 4}
-                        aria-hidden
+                      <AgentOptionAvatar
+                        agentId={selectedTarget?.value || accountAgentId}
+                        avatarDataUrl={selectedTarget?.avatarDataUrl}
+                        className={selectedAgentMissing ? 'agent-option-avatar--missing' : undefined}
+                        kind={selectedTarget?.kind || 'agent'}
+                        label={agentDisplayName}
+                        providerType={selectedTarget?.providerType}
                       />
                       <span className="bot-table-agent-copy">
                         <span className="bot-table-agent-name">{agentDisplayName}</span>
