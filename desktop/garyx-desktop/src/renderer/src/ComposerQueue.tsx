@@ -1,4 +1,8 @@
-import { IconGripVertical, IconX } from '@tabler/icons-react';
+import {
+  IconCornerDownRight,
+  IconTrash,
+} from '@tabler/icons-react';
+import { GripVertical } from 'lucide-react';
 
 import { useI18n, type Translate } from './i18n';
 import type { MessageIntent } from './message-machine';
@@ -142,7 +146,7 @@ export function ComposerQueue({
                   tabIndex={-1}
                   type="button"
                 >
-                  <IconGripVertical aria-hidden size={16} stroke={1.7} />
+                  <GripVertical aria-hidden size={18} strokeWidth={1.7} />
                   <span className="sr-only">{t('Drag to reorder queued follow-up')}</span>
                 </button>
                 <span
@@ -162,6 +166,7 @@ export function ComposerQueue({
                     }}
                     type="button"
                   >
+                    <IconCornerDownRight aria-hidden size={15} stroke={1.7} />
                     <span>{isSteering ? t('Steering…') : t('Steer')}</span>
                   </button>
                 ) : null}
@@ -170,13 +175,13 @@ export function ComposerQueue({
                   disabled={isSteering}
                   onClick={() => {
                     onCancelIntent(item.threadId, item.intentId);
-                  }}
-                  tabIndex={-1}
-                  type="button"
-                >
-                  <IconX aria-hidden size={16} stroke={1.7} />
-                  <span className="sr-only">{t('Remove queued follow-up')}</span>
-                </button>
+                }}
+                tabIndex={-1}
+                type="button"
+              >
+                <IconTrash aria-hidden size={16} stroke={1.65} />
+                <span className="sr-only">{t('Remove queued follow-up')}</span>
+              </button>
               </div>
             </div>
           );
