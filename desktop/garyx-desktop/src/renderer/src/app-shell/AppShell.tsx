@@ -85,7 +85,7 @@ import { NewThreadEmptyState } from "../NewThreadEmptyState";
 import { BrowserPage } from "../BrowserPage";
 import { WorkspaceThreadSidebar } from "../WorkspaceThreadSidebar";
 import { ToastViewport, type ToastItem, type ToastTone } from "../toast";
-import { ToolTraceGroup } from "../tool-trace";
+import { ToolTraceGroup, shouldRenderToolTraceMessage } from "../tool-trace";
 import {
   RichMessageContent,
   buildOptimisticTranscriptContent,
@@ -212,12 +212,18 @@ import {
 } from "./desktop-route";
 
 const NEW_THREAD_DRAFT_THREAD_ID = "__garyx_new_thread_draft__";
+const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
+const HIDDEN_TOOL_USE_STATUS_TEXT = "Garyx is thinking through the next step…";
+const HIDDEN_TOOL_RESULT_STATUS_TEXT = "Garyx finished a reasoning step…";
 
 function messagesNearBottom(node: HTMLDivElement | null): boolean {
   if (!node) {
     return true;
   }
-  return node.scrollHeight - node.scrollTop - node.clientHeight < 48;
+  return (
+    node.scrollHeight - node.scrollTop - node.clientHeight <
+    MESSAGES_BOTTOM_THRESHOLD_PX
+  );
 }
 
 type MemoryDialogTarget =
@@ -1605,7 +1611,9 @@ export function AppShell() {
     startWidth: number;
   } | null>(null);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
+  const forceMessagesBottomSnapRef = useRef(false);
   const shouldStickMessagesToBottomRef = useRef(true);
+  const messagesStickScrollFrameRef = useRef<number | null>(null);
   const lastRenderedMessageThreadRef = useRef<string | null>(null);
   const lastRenderedMessageCountRef = useRef(0);
   const lastRenderedMessageTailSignatureRef = useRef("0");
@@ -3096,6 +3104,15 @@ export function AppShell() {
   }, [messageState]);
 
   useEffect(() => {
+    return () => {
+      if (messagesStickScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(messagesStickScrollFrameRef.current);
+        messagesStickScrollFrameRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     threadLogsPanelWidthRef.current = threadLogsPanelWidth;
   }, [threadLogsPanelWidth]);
 
@@ -3626,7 +3643,7 @@ export function AppShell() {
       api: getDesktopApi(),
       threadId: selectedThreadId,
       onBeforeLoad: (threadId) => {
-        pendingThreadBottomSnapRef.current = threadId;
+        requestMessagesBottomSnap(threadId);
       },
       onTranscript: applyRemoteTranscript,
       onAutomationResponseDetected: (threadId) => {
@@ -3675,7 +3692,7 @@ export function AppShell() {
         ) {
           return;
         }
-        pendingThreadBottomSnapRef.current = selectedThreadId;
+        requestMessagesBottomSnap(selectedThreadId);
         applyRemoteTranscript(selectedThreadId, transcript);
       } catch {
         // Best-effort reconcile loop for passive inbound messages.
@@ -3702,24 +3719,36 @@ export function AppShell() {
     const previousTailSignature = lastRenderedMessageTailSignatureRef.current;
     const threadChanged = currentThreadId !== previousThreadId;
     const tailChanged = currentTailSignature !== previousTailSignature;
+    const pendingSnapMatches =
+      pendingThreadBottomSnapRef.current === currentThreadId;
+    const forceSnap =
+      pendingSnapMatches && forceMessagesBottomSnapRef.current;
     const shouldSnapToBottom = Boolean(
       currentThreadId &&
       currentCount > 0 &&
       !historyLoading &&
-      (pendingThreadBottomSnapRef.current === currentThreadId || threadChanged),
+      (threadChanged ||
+        forceSnap ||
+        (pendingSnapMatches && shouldStickMessagesToBottomRef.current)),
     );
 
     if (shouldSnapToBottom) {
-      scrollMessagesToLatest(messagesRef.current, "auto");
+      scheduleMessagesScrollToLatest("auto");
       pendingThreadBottomSnapRef.current = null;
-      shouldStickMessagesToBottomRef.current = true;
+      forceMessagesBottomSnapRef.current = false;
+      if (threadChanged || forceSnap) {
+        shouldStickMessagesToBottomRef.current = true;
+      }
     } else if (
       currentThreadId &&
       !historyLoading &&
       tailChanged &&
       shouldStickMessagesToBottomRef.current
     ) {
-      scrollMessagesToLatest(messagesRef.current, "auto");
+      scheduleMessagesScrollToLatest("auto");
+    } else if (pendingSnapMatches && currentCount > 0 && !historyLoading) {
+      pendingThreadBottomSnapRef.current = null;
+      forceMessagesBottomSnapRef.current = false;
     }
 
     lastRenderedMessageThreadRef.current = currentThreadId;
@@ -3728,16 +3757,66 @@ export function AppShell() {
   }, [activeThreadMessageKey, activeMessages, historyLoading]);
 
   useEffect(() => {
+    const node = messagesRef.current;
+    if (!node || !activeThreadMessageKey) {
+      return;
+    }
+
+    const scrollIfSticky = () => {
+      if (shouldStickMessagesToBottomRef.current) {
+        scheduleMessagesScrollToLatest("auto");
+      }
+    };
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(scrollIfSticky);
+    const observedChildren = new Set<Element>();
+
+    const syncObservedChildren = () => {
+      if (!resizeObserver) {
+        return;
+      }
+      resizeObserver.observe(node);
+      for (const child of Array.from(node.children)) {
+        if (observedChildren.has(child)) {
+          continue;
+        }
+        observedChildren.add(child);
+        resizeObserver.observe(child);
+      }
+      for (const child of Array.from(observedChildren)) {
+        if (child.parentElement !== node) {
+          observedChildren.delete(child);
+          resizeObserver.unobserve(child);
+        }
+      }
+    };
+
+    syncObservedChildren();
+    const mutationObserver = new MutationObserver(() => {
+      syncObservedChildren();
+      scrollIfSticky();
+    });
+    mutationObserver.observe(node, { childList: true });
+
+    return () => {
+      mutationObserver.disconnect();
+      resizeObserver?.disconnect();
+    };
+  }, [activeThreadMessageKey]);
+
+  useEffect(() => {
     threadLogsCursorRef.current = threadLogsCursor;
   }, [threadLogsCursor]);
 
   useEffect(() => {
     if (activeThreadMessageKey == null) {
       pendingThreadBottomSnapRef.current = null;
+      forceMessagesBottomSnapRef.current = false;
       return;
     }
-    pendingThreadBottomSnapRef.current = activeThreadMessageKey;
-    shouldStickMessagesToBottomRef.current = true;
+    requestMessagesBottomSnap(activeThreadMessageKey, true);
   }, [activeThreadMessageKey]);
 
   useEffect(() => {
@@ -3995,6 +4074,74 @@ export function AppShell() {
     return next;
   }
 
+  function requestMessagesBottomSnap(
+    threadId: string | null | undefined,
+    forceStick = false,
+  ) {
+    if (!threadId) {
+      return;
+    }
+    pendingThreadBottomSnapRef.current = threadId;
+    if (forceStick) {
+      shouldStickMessagesToBottomRef.current = true;
+      forceMessagesBottomSnapRef.current = true;
+    }
+  }
+
+  function scheduleMessagesScrollToLatest(
+    behavior: ScrollBehavior = "auto",
+  ) {
+    scrollMessagesToLatest(messagesRef.current, behavior);
+    if (messagesStickScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(messagesStickScrollFrameRef.current);
+    }
+    messagesStickScrollFrameRef.current = window.requestAnimationFrame(() => {
+      messagesStickScrollFrameRef.current = null;
+      if (shouldStickMessagesToBottomRef.current) {
+        scrollMessagesToLatest(messagesRef.current, "auto");
+      }
+    });
+  }
+
+  function updatePendingAssistantActivity(
+    threadId: string,
+    intentId: string | undefined,
+    assistantEntryId: string | null | undefined,
+    text: string,
+  ) {
+    updateMessagesByThread((current) => {
+      const existing = current[threadId] || [];
+      let changed = false;
+      const nextMessages = existing.map((entry) => {
+        const matchesAssistantEntry =
+          assistantEntryId && entry.id === assistantEntryId;
+        const matchesIntent =
+          intentId && entry.role === "assistant" && entry.intentId === intentId;
+        if (
+          entry.role !== "assistant" ||
+          !entry.pending ||
+          (!matchesAssistantEntry && !matchesIntent) ||
+          entry.text === text
+        ) {
+          return entry;
+        }
+        changed = true;
+        return {
+          ...entry,
+          text,
+        };
+      });
+
+      if (!changed) {
+        return current;
+      }
+      return {
+        ...current,
+        [threadId]: nextMessages,
+      };
+    });
+  }
+
   function applyThreadTitleUpdate(threadId: string, title: string) {
     const nextTitle = title.trim();
     if (!threadId || !nextTitle) {
@@ -4150,7 +4297,7 @@ export function AppShell() {
       setLiveStreamStateByThread(updated);
     }
 
-    pendingThreadBottomSnapRef.current = threadId;
+    requestMessagesBottomSnap(threadId, true);
   }
 
   function markLocalDispatchFailed(
@@ -4757,6 +4904,29 @@ export function AppShell() {
             break;
           }
         }
+        if (!shouldRenderToolTraceMessage({ ...event.message, text: "" })) {
+          updatePendingAssistantActivity(
+            threadId,
+            activeIntentId,
+            currentStream?.assistantEntryId ?? null,
+            event.type === "tool_use"
+              ? HIDDEN_TOOL_USE_STATUS_TEXT
+              : HIDDEN_TOOL_RESULT_STATUS_TEXT,
+          );
+          updateLiveStreamState(threadId, (current) => ({
+            threadId: threadId,
+            runId: event.runId,
+            activeIntentId: current?.activeIntentId,
+            assistantEntryId: current?.assistantEntryId ?? null,
+            pendingAckIntentIds: current?.pendingAckIntentIds || [],
+            streamStatus: "streaming",
+          }));
+          setThreadRuntimeState(threadId, "running_remote", {
+            activeIntentId: activeIntentId || undefined,
+            remoteRunId: event.runId,
+          });
+          break;
+        }
         appendStreamingToolEvent(
           { ...event, threadId: threadId },
           {
@@ -4814,7 +4984,7 @@ export function AppShell() {
           });
           // Queued follow-ups can surface in the thread snapshot before the transcript catches up.
           scheduleHistoryRefresh(threadId, 8, 250, false);
-          pendingThreadBottomSnapRef.current = threadId;
+          requestMessagesBottomSnap(threadId);
           setThreadRuntimeState(threadId, "running_remote", {
             activeIntentId: nextIntentId,
             remoteRunId: event.runId,
@@ -4826,7 +4996,7 @@ export function AppShell() {
           );
           if (pendingInput) {
             materializeAckedRemotePendingInput(threadId, pendingInput);
-            pendingThreadBottomSnapRef.current = threadId;
+            requestMessagesBottomSnap(threadId);
           }
           scheduleHistoryRefresh(threadId, 4, 250, false);
         }
@@ -5883,7 +6053,7 @@ export function AppShell() {
     }));
 
     setError(null);
-    pendingThreadBottomSnapRef.current = threadId;
+    requestMessagesBottomSnap(threadId, true);
 
     try {
       const result = await window.garyxDesktop.openChatStream({
@@ -6217,7 +6387,7 @@ export function AppShell() {
     });
 
     setError(null);
-    pendingThreadBottomSnapRef.current = threadId;
+    requestMessagesBottomSnap(threadId, true);
     updateLiveStreamState(threadId, (current) =>
       current
         ? {
@@ -6390,7 +6560,7 @@ export function AppShell() {
         pendingAckIntentIds: [],
         streamStatus: "connecting",
       }));
-      pendingThreadBottomSnapRef.current = NEW_THREAD_DRAFT_THREAD_ID;
+      requestMessagesBottomSnap(NEW_THREAD_DRAFT_THREAD_ID, true);
       seededDraftIntentId = draftIntent.intentId;
       clearComposerDraft();
       setError(null);
