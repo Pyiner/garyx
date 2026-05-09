@@ -24,6 +24,9 @@ const TOKENS = [
   'GARYX_DESKTOP_QUEUE_PASS_TWO_20260306',
 ];
 const WARMUP_TOKEN = 'GARYX_DESKTOP_QUEUE_WARMUP_20260318';
+const EXTERNAL_LOADING_TOKEN = 'GARYX_DESKTOP_EXTERNAL_TELEGRAM_LOADING_20260509';
+const EXTERNAL_DONE_TOKEN = 'GARYX_DESKTOP_EXTERNAL_TELEGRAM_DONE_20260509';
+const EXTERNAL_QUEUE_TOKEN = 'GARYX_DESKTOP_EXTERNAL_MAC_QUEUE_20260509';
 const RUN_ID = Date.now().toString(36);
 const STARTUP_FAILURE_BUDGET = new Map([
   ['/api/threads', 2],
@@ -250,6 +253,7 @@ async function createMockGateway(workspaceDir) {
     histories: {
       [THREAD_ID]: [],
     },
+    activeRuns: {},
     commands: [
       {
         name: SLASH_COMMAND_NAME,
@@ -336,6 +340,74 @@ async function createMockGateway(workspaceDir) {
       scenario,
       sessionId,
     };
+  }
+
+  function appendExternalUserMessage(sessionId, userText) {
+    const session = ensureSession(sessionId);
+    if (!session) {
+      return null;
+    }
+    const history = state.histories[sessionId] || [];
+    const userIndex = history.length;
+    history.push({
+      index: userIndex,
+      role: 'user',
+      kind: 'user_input',
+      timestamp: new Date().toISOString(),
+      content: userText,
+      metadata: {
+        channel: 'telegram',
+        source: 'synthetic_external_channel',
+      },
+    });
+    state.histories[sessionId] = history;
+    session.updated_at = new Date().toISOString();
+    session.message_count = history.length;
+    session.last_user_message = userText;
+    return history[userIndex];
+  }
+
+  function startExternalRun(sessionId, userText) {
+    const userMessage = appendExternalUserMessage(sessionId, userText);
+    if (!userMessage) {
+      return null;
+    }
+    const runId = `run::external-${Date.now()}`;
+    state.activeRuns[sessionId] = {
+      run_id: runId,
+      provider_type: 'codex',
+      provider_label: 'Codex',
+      assistant_response: null,
+      updated_at: new Date().toISOString(),
+      pending_user_input_count: 0,
+    };
+    return runId;
+  }
+
+  function clearExternalRun(sessionId) {
+    delete state.activeRuns[sessionId];
+  }
+
+  function finishExternalRun(sessionId, assistantText) {
+    const session = ensureSession(sessionId);
+    if (!session) {
+      return null;
+    }
+    const history = state.histories[sessionId] || [];
+    const assistantIndex = history.length;
+    history.push({
+      index: assistantIndex,
+      role: 'assistant',
+      kind: 'assistant_reply',
+      timestamp: new Date().toISOString(),
+      content: assistantText,
+    });
+    state.histories[sessionId] = history;
+    session.updated_at = new Date().toISOString();
+    session.message_count = history.length;
+    session.last_assistant_message = assistantText;
+    clearExternalRun(sessionId);
+    return history[assistantIndex];
   }
 
   async function streamRunToSocket(socket, payload) {
@@ -521,6 +593,12 @@ async function createMockGateway(workspaceDir) {
       return writeJson(res, 200, {
         ok: Boolean(ensureSession(sessionId)),
         messages: state.histories[sessionId] || [],
+        pending_user_inputs: [],
+        thread_runtime: {
+          provider_type: 'codex',
+          provider_label: 'Codex',
+          active_run: state.activeRuns[sessionId] || null,
+        },
       });
     }
     if (req.method === 'POST' && (pathname === '/api/threads' || pathname === '/api/sessions')) {
@@ -720,6 +798,11 @@ async function createMockGateway(workspaceDir) {
   return {
     gatewayUrl: `http://127.0.0.1:${port}`,
     createdThreadRequests: () => [...state.threadCreateRequests],
+    startExternalRun: ({ sessionId = THREAD_ID, userText }) =>
+      startExternalRun(sessionId, userText),
+    clearExternalRun: ({ sessionId = THREAD_ID } = {}) => clearExternalRun(sessionId),
+    finishExternalRun: ({ sessionId = THREAD_ID, assistantText }) =>
+      finishExternalRun(sessionId, assistantText),
     scheduleTransientDisconnect: ({ offlineMs = 3500 } = {}) => {
       state.nextStreamDisconnect = { offlineMs };
     },
@@ -778,6 +861,55 @@ async function main() {
           timeout: 6000,
         });
       }
+      const composer = window.locator('.composer textarea');
+      stage = 'external-telegram-loading';
+      gateway.startExternalRun({
+        userText: `Synthetic Telegram inbound ${EXTERNAL_LOADING_TOKEN}`,
+      });
+      await window
+        .locator('.message-bubble.user')
+        .filter({ hasText: EXTERNAL_LOADING_TOKEN })
+        .first()
+        .waitFor({ timeout: 10000 });
+      await window.locator('.message-bubble.assistant.pending').first().waitFor({
+        timeout: 10000,
+      });
+      gateway.clearExternalRun();
+      await window.waitForFunction(
+        () => document.querySelectorAll('.message-bubble.assistant.pending').length === 0,
+        null,
+        { timeout: 10000 },
+      );
+
+      stage = 'external-telegram-complete';
+      gateway.startExternalRun({
+        userText: `Synthetic Telegram inbound ${EXTERNAL_DONE_TOKEN}`,
+      });
+      await window
+        .locator('.message-bubble.user')
+        .filter({ hasText: EXTERNAL_DONE_TOKEN })
+        .first()
+        .waitFor({ timeout: 10000 });
+      await window.locator('.message-bubble.assistant.pending').first().waitFor({
+        timeout: 10000,
+      });
+      await composer.fill(`Return exactly the token ${EXTERNAL_QUEUE_TOKEN} and nothing else.`);
+      await composer.press('Enter');
+      await window.getByText(oneOfExact(SMOKE_TEXT.followUpsReady)).waitFor({ timeout: 3000 }).catch(() => {});
+      gateway.finishExternalRun({
+        assistantText: EXTERNAL_DONE_TOKEN,
+      });
+      await window
+        .locator('.message-bubble.assistant p')
+        .filter({ hasText: EXTERNAL_DONE_TOKEN })
+        .first()
+        .waitFor({ timeout: 10000 });
+      await window
+        .locator('.message-bubble.assistant p')
+        .filter({ hasText: EXTERNAL_QUEUE_TOKEN })
+        .first()
+        .waitFor({ timeout: 20000 });
+
       stage = 'selected-workspace-new-thread';
       await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.newThread) }).click();
       await window.getByText(oneOfExact(SMOKE_TEXT.startNewThread)).waitFor({
@@ -797,7 +929,6 @@ async function main() {
       });
 
       stage = 'warmup-send';
-      const composer = window.locator('.composer textarea');
       stage = 'slash-command-palette';
       await composer.fill('/');
       await window.locator('[data-testid="slash-command-panel"]').waitFor({
@@ -940,6 +1071,7 @@ async function main() {
           {
             ok: true,
             tokens: TOKENS,
+            externalTokens: [EXTERNAL_LOADING_TOKEN, EXTERNAL_DONE_TOKEN, EXTERNAL_QUEUE_TOKEN],
             screenshot: SCREENSHOT_PATH,
             isolatedHome,
             gatewayUrl: gateway.gatewayUrl,

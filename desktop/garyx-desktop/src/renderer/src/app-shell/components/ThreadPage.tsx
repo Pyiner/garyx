@@ -226,6 +226,7 @@ type ThreadPageProps = {
   historyLoading: boolean;
   inspectorOpen: boolean;
   isActiveSendingThread: boolean;
+  canSteerQueuedPrompt: boolean;
   messagesRef: RefObject<HTMLDivElement | null>;
   mobileThreadLogLines: ThreadLogLine[];
   newThreadSelectedAgentId: string;
@@ -330,6 +331,7 @@ export function ThreadPage({
   ignoreComposerSubmitUntilRef,
   inspectorOpen,
   isActiveSendingThread,
+  canSteerQueuedPrompt,
   isComposingRef,
   messagesRef,
   mobileThreadLogLines,
@@ -701,6 +703,7 @@ export function ThreadPage({
           >
             <ComposerQueue
               activeQueue={activeQueue}
+              canSteerQueuedPrompt={canSteerQueuedPrompt}
               draggedQueueIntentId={draggedQueueIntentId}
               isActiveSendingThread={isActiveSendingThread}
               onCancelIntent={onCancelIntent}

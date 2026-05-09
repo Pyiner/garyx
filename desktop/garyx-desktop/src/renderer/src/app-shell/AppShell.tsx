@@ -100,6 +100,10 @@ import {
   isToolRole,
   toolMessagesEquivalent,
 } from "../transcript-render";
+import {
+  deriveThreadActivityModel,
+  threadActivitySignature,
+} from "./thread-activity";
 import { WorkspaceFilePreview } from "../workspace-file-preview";
 import { BotConsolePage } from "../BotConsolePage";
 import { measureUiAction } from "../perf-metrics";
@@ -315,33 +319,6 @@ function messageTailSignature(messages: UiTranscriptMessage[]): string {
     lastMessage.text.length,
     lastMessage.pending ? "1" : "0",
     lastMessage.localState || "",
-  ].join(":");
-}
-
-function transcriptSnapshotSignature(
-  messages: Array<
-    Pick<
-      TranscriptMessage,
-      "id" | "role" | "text" | "timestamp" | "kind" | "internalKind"
-    >
-  >,
-  pendingInputs: PendingThreadInput[],
-): string {
-  const lastMessage = messages[messages.length - 1];
-  const lastPendingInput = pendingInputs[pendingInputs.length - 1];
-  return [
-    messages.length,
-    lastMessage?.id || "",
-    lastMessage?.role || "",
-    lastMessage?.text || "",
-    lastMessage?.timestamp || "",
-    lastMessage?.kind || "",
-    lastMessage?.internalKind || "",
-    pendingInputs.length,
-    lastPendingInput?.id || "",
-    lastPendingInput?.status || "",
-    lastPendingInput?.active ? "1" : "0",
-    lastPendingInput?.text || "",
   ].join(":");
 }
 
@@ -692,22 +669,6 @@ function displayTranscriptMessageText(message: UiTranscriptMessage): string {
     );
   }
   return message.text;
-}
-
-function latestUserMessageAwaitsAssistant(
-  messages: UiTranscriptMessage[],
-): boolean {
-  let latestUserIndex = -1;
-  let latestAssistantOrToolIndex = -1;
-  messages.forEach((message, index) => {
-    if (message.role === "user" && !isLoopContinuationMessage(message)) {
-      latestUserIndex = index;
-    }
-    if (message.role === "assistant" || isToolRole(message.role)) {
-      latestAssistantOrToolIndex = index;
-    }
-  });
-  return latestUserIndex >= 0 && latestAssistantOrToolIndex < latestUserIndex;
 }
 
 function seededPendingAssistantBubble(intentId: string): UiTranscriptMessage {
@@ -1583,6 +1544,8 @@ export function AppShell() {
   const messageStateRef = useRef(initialMessageMachineState);
   const liveStreamStateRef = useRef<Record<string, LiveStreamState>>({});
   const pendingRemoteInputsRef = useRef<PendingThreadInputMap>({});
+  const deferredQueueDrainByThreadRef = useRef<Record<string, boolean>>({});
+  const queueDrainInFlightByThreadRef = useRef<Record<string, boolean>>({});
   const pendingAutomationRunsRef = useRef<Record<string, PendingAutomationRun>>(
     {},
   );
@@ -2366,15 +2329,18 @@ export function AppShell() {
         );
       })
     : false;
-  const showPendingAckLoading =
-    activePendingAckIntents.length > 0 ||
-    visibleRemoteAwaitingAckInputs.length > 0 ||
-    (activePendingHistoryIntent && latestUserMessageAwaitsAssistant(activeMessages));
-  const activeExternalRunAwaitsAssistant = Boolean(
-    activeThreadInfo?.activeRun?.runId &&
-      latestUserMessageAwaitsAssistant(activeMessages) &&
-      !showPendingAckLoading,
-  );
+  const threadActivity = deriveThreadActivityModel({
+    messages: activeMessages,
+    threadInfo: activeThreadInfo,
+    liveStream: activeLiveStream,
+    runtimeBusy: Boolean(activeRuntime && isRuntimeBusy(activeRuntime.state)),
+    pendingAckIntentCount: activePendingAckIntents.length,
+    remoteAwaitingAckInputCount: visibleRemoteAwaitingAckInputs.length,
+    pendingHistoryIntent: activePendingHistoryIntent,
+  });
+  const showPendingAckLoading = threadActivity.showPendingAckLoading;
+  const activeRunLoading = threadActivity.showRunLoading;
+  const canSteerQueuedPrompt = threadActivity.canSteerQueuedPrompt;
   const isActiveStreamingThread = Boolean(
     activeLiveStream &&
     ["connecting", "streaming", "reconciling"].includes(
@@ -2463,9 +2429,7 @@ export function AppShell() {
   });
   const isActiveSendingThread = Boolean(
     selectedThreadId &&
-      ((activeRuntime && isRuntimeBusy(activeRuntime.state)) ||
-        isActiveStreamingThread ||
-        activeExternalRunAwaitsAssistant),
+      (threadActivity.runActive || showPendingAckLoading),
   );
   const composerLocked = composerAttachmentUploadPending || isDraftSendingThread;
   const botGroups = useMemo(
@@ -2588,7 +2552,7 @@ export function AppShell() {
     (activePendingAutomationRun &&
       activeMessages.length > 0 &&
       !activeHasAssistantOrToolMessage) ||
-      activeExternalRunAwaitsAssistant,
+      activeRunLoading,
   );
   useEffect(() => {
     if (contentView === "auto_research" && !showAutoResearchLab) {
@@ -3701,9 +3665,10 @@ export function AppShell() {
       try {
         const transcript =
           await window.garyxDesktop.getThreadHistory(selectedThreadId);
-        const nextSignature = transcriptSnapshotSignature(
+        const nextSignature = threadActivitySignature(
           transcript.messages,
           transcript.pendingInputs,
+          transcript.threadInfo,
         );
         if (
           nextSignature ===
@@ -4660,9 +4625,10 @@ export function AppShell() {
     }));
     remoteTranscriptSignatureByThreadRef.current = {
       ...remoteTranscriptSignatureByThreadRef.current,
-      [threadId]: transcriptSnapshotSignature(
+      [threadId]: threadActivitySignature(
         transcript.messages,
         transcript.pendingInputs,
+        transcript.threadInfo,
       ),
     };
     setRemotePendingInputs(threadId, transcript.pendingInputs);
@@ -5322,9 +5288,10 @@ export function AppShell() {
     }));
     remoteTranscriptSignatureByThreadRef.current = {
       ...remoteTranscriptSignatureByThreadRef.current,
-      [threadId]: transcriptSnapshotSignature(
+      [threadId]: threadActivitySignature(
         transcript.messages,
         transcript.pendingInputs,
+        transcript.threadInfo,
       ),
     };
     setRemotePendingInputs(threadId, transcript.pendingInputs);
@@ -6364,6 +6331,38 @@ export function AppShell() {
     }
   }
 
+  useEffect(() => {
+    const threadId = selectedThreadId;
+    if (!threadId || contentView !== "thread") {
+      return;
+    }
+    if (activeQueue.length === 0) {
+      delete deferredQueueDrainByThreadRef.current[threadId];
+      delete queueDrainInFlightByThreadRef.current[threadId];
+      return;
+    }
+    if (
+      isActiveSendingThread ||
+      isDraftSendingThread ||
+      !deferredQueueDrainByThreadRef.current[threadId] ||
+      queueDrainInFlightByThreadRef.current[threadId]
+    ) {
+      return;
+    }
+
+    deferredQueueDrainByThreadRef.current[threadId] = false;
+    queueDrainInFlightByThreadRef.current[threadId] = true;
+    void runQueuedBatch(threadId).finally(() => {
+      delete queueDrainInFlightByThreadRef.current[threadId];
+    });
+  }, [
+    activeQueue.length,
+    contentView,
+    isActiveSendingThread,
+    isDraftSendingThread,
+    selectedThreadId,
+  ]);
+
   async function handleQueueCurrentPrompt() {
     if (composerAttachmentUploadPending) {
       setError("Attachments are still uploading to gateway.");
@@ -6393,12 +6392,18 @@ export function AppShell() {
       intent,
       enqueue: true,
     });
+    if (isActiveSendingThread) {
+      deferredQueueDrainByThreadRef.current[threadId] = true;
+    }
     clearComposerDraft();
     setError(null);
   }
 
   async function handleSteerQueuedPrompt(intent: MessageIntent) {
     const threadId = intent.threadId;
+    if (!canSteerQueuedPrompt) {
+      return;
+    }
     const latestIntent = intentForId(intent.intentId);
     if (!latestIntent || latestIntent.state !== "queued_local") {
       return;
@@ -7459,6 +7464,7 @@ export function AppShell() {
                 ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
                 inspectorOpen={inspectorOpen}
                 isActiveSendingThread={isActiveSendingThread}
+                canSteerQueuedPrompt={canSteerQueuedPrompt}
                 isComposingRef={isComposingRef}
                 messagesRef={messagesRef}
                 mobileThreadLogLines={mobileThreadLogLines}
