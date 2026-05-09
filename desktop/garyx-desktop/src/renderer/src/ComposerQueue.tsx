@@ -23,18 +23,27 @@ type ComposerQueueProps = {
   onSteerQueuedPrompt: (item: MessageIntent) => void;
 };
 
-let transparentQueueDragImage: HTMLCanvasElement | null = null;
+let queueDragPreview: HTMLElement | null = null;
 
-function getTransparentQueueDragImage(): HTMLCanvasElement | null {
-  if (typeof document === 'undefined') {
-    return null;
-  }
-  if (!transparentQueueDragImage) {
-    transparentQueueDragImage = document.createElement('canvas');
-    transparentQueueDragImage.width = 1;
-    transparentQueueDragImage.height = 1;
-  }
-  return transparentQueueDragImage;
+function cleanupQueueDragPreview() {
+  queueDragPreview?.remove();
+  queueDragPreview = null;
+}
+
+function createQueueDragPreview(row: HTMLElement): HTMLElement {
+  cleanupQueueDragPreview();
+  const bounds = row.getBoundingClientRect();
+  const preview = row.cloneNode(true) as HTMLElement;
+  preview.classList.remove('dragging', 'drop-before', 'drop-after');
+  preview.classList.add('composer-queue-drag-preview');
+  preview.style.width = `${bounds.width}px`;
+  preview.style.height = `${bounds.height}px`;
+  preview.querySelectorAll('[draggable]').forEach((node) => {
+    node.removeAttribute('draggable');
+  });
+  document.body.appendChild(preview);
+  queueDragPreview = preview;
+  return preview;
 }
 
 function QueueGripIcon() {
@@ -183,6 +192,7 @@ export function ComposerQueue({
                 if (draggedIntentId && draggedIntentId !== item.intentId) {
                   onReorderQueuedIntent(item.threadId, draggedIntentId, item.intentId, position);
                 }
+                cleanupQueueDragPreview();
                 onSetDraggedQueueIntentId(null);
                 onQueueDropTargetChange(null);
               }}
@@ -193,6 +203,7 @@ export function ComposerQueue({
                   disabled={isSteering || activeQueue.length < 2}
                   draggable={!isSteering && activeQueue.length > 1}
                   onDragEnd={() => {
+                    cleanupQueueDragPreview();
                     onSetDraggedQueueIntentId(null);
                     onQueueDropTargetChange(null);
                   }}
@@ -201,9 +212,10 @@ export function ComposerQueue({
                     onQueueDropTargetChange(null);
                     event.dataTransfer.effectAllowed = 'move';
                     event.dataTransfer.setData('text/plain', item.intentId);
-                    const dragImage = getTransparentQueueDragImage();
-                    if (dragImage) {
-                      event.dataTransfer.setDragImage(dragImage, 0, 0);
+                    const row = event.currentTarget.closest('.composer-queue-item');
+                    if (row instanceof HTMLElement) {
+                      const dragPreview = createQueueDragPreview(row);
+                      event.dataTransfer.setDragImage(dragPreview, 20, 14);
                     }
                   }}
                   title={activeQueue.length > 1 ? t('Drag to reorder') : t('Queue order locked')}
