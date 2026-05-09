@@ -225,13 +225,13 @@ export function ComposerQueue({
                   disabled={isSteering}
                   onClick={() => {
                     onCancelIntent(item.threadId, item.intentId);
-                }}
-                tabIndex={-1}
-                type="button"
-              >
-                <QueueTrashIcon />
-                <span className="sr-only">{t('Remove queued follow-up')}</span>
-              </button>
+                  }}
+                  tabIndex={-1}
+                  type="button"
+                >
+                  <QueueTrashIcon />
+                  <span className="sr-only">{t('Remove queued follow-up')}</span>
+                </button>
               </div>
             </div>
           );

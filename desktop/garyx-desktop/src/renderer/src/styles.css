@@ -7339,6 +7339,7 @@ button.team-agent-speaker:focus-visible {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
+  pointer-events: none;
 }
 
 .queue-remove-button {
