@@ -36,7 +36,7 @@ import {
 import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ThreadLogPanel } from "./ThreadLogPanel";
-import { useI18n } from "../../i18n";
+import { useI18n, type Translate } from "../../i18n";
 import type {
   ClientLogEntry,
   PendingAutomationRun,
@@ -44,6 +44,7 @@ import type {
   ThreadLogTab,
   UiTranscriptMessage,
 } from "../types";
+import { RUN_LOADING_LABEL } from "../loading-labels";
 
 function normalizeMessageText(value: string | undefined): string {
   return value?.trim() || "";
@@ -68,6 +69,14 @@ function displayTranscriptMessageText(message: UiTranscriptMessage): string {
     return LOOP_CONTINUATION_SUMMARY;
   }
   return message.text;
+}
+
+function displayPendingAssistantLoadingText(
+  message: UiTranscriptMessage,
+  t: Translate,
+): string {
+  const text = displayTranscriptMessageText(message);
+  return text === RUN_LOADING_LABEL ? t(RUN_LOADING_LABEL) : text;
 }
 
 type TeamSpeaker = {
@@ -561,7 +570,7 @@ export function ThreadPage({
                         className="message-loading"
                       >
                         <p className="message-loading-label">
-                          {entry.message.text}
+                          {displayPendingAssistantLoadingText(entry.message, t)}
                         </p>
                         <span
                           aria-hidden="true"

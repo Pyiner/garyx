@@ -81,6 +81,8 @@ const SMOKE_TEXT = {
     Channels: smokeLabel('Channels'),
   },
 };
+const RUN_LOADING_TEXT = 'Garyx is working through the run…';
+const RUN_LOADING_TEXT_ZH = loadZhTranslation(RUN_LOADING_TEXT);
 
 function oneOfExact(values) {
   return new RegExp(`^(?:${values.map(escapeRegExp).join('|')})$`);
@@ -109,6 +111,7 @@ async function prepareIsolatedHome(gatewayUrl, homeDirOverride = null) {
           accountId: `smoke-${RUN_ID}`,
           fromId: `playwright-smoke-${RUN_ID}`,
           timeoutSeconds: 120,
+          languagePreference: 'zh-CN',
         },
         workspaces: [
           {
@@ -955,6 +958,13 @@ async function main() {
       stage = 'warmup-send';
       await composer.fill(`Return exactly the token ${WARMUP_TOKEN} and nothing else.`);
       await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.send) }).click();
+      stage = 'warmup-loading-locale';
+      await window.getByText(RUN_LOADING_TEXT_ZH).first().waitFor({ timeout: 10000 });
+      assert.equal(
+        await window.getByText(RUN_LOADING_TEXT).count(),
+        0,
+        'pending run loading should follow the configured Chinese locale',
+      );
       await window.locator('.tool-trace-group-header').first().waitFor({ timeout: 20000 });
       stage = 'verify-new-thread-workspace-path';
       const createRequests = gateway.createdThreadRequests();

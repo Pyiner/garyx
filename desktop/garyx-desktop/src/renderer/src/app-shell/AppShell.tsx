@@ -208,6 +208,7 @@ import {
   createTranslator,
   useResolvedLocale,
 } from "../i18n";
+import { RUN_LOADING_LABEL } from "./loading-labels";
 import {
   contentViewForDesktopRoute,
   parseDesktopRoute,
@@ -388,7 +389,7 @@ function seededAssistantBubble(): TranscriptMessage {
   return {
     id: `pending:${crypto.randomUUID()}`,
     role: "assistant",
-    text: "Garyx is working through the run…",
+    text: RUN_LOADING_LABEL,
     pending: true,
   };
 }
