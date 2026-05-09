@@ -767,12 +767,6 @@ export function TasksPanel({
         </div>
       ) : null}
 
-      {!error && !loading && !tasks.length ? (
-        <div className="tasks-empty-state">
-          {t('No tasks yet.')}
-        </div>
-      ) : null}
-
       {viewMode === 'board' ? (
         <div className="tasks-board" aria-busy={loading}>
           {TASK_COLUMNS.map((column) => {
