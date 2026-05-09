@@ -80,6 +80,8 @@ pub fn resolve_existing_thread_key(
 pub struct StreamInputRequest {
     #[serde(default, alias = "threadId", alias = "thread_id")]
     pub thread_id: Option<String>,
+    #[serde(default, alias = "clientIntentId", alias = "client_intent_id")]
+    pub client_intent_id: Option<String>,
     pub message: String,
     #[serde(default)]
     pub attachments: Vec<PromptAttachment>,
@@ -96,6 +98,8 @@ pub struct StreamInputResponse {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_intent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_input_id: Option<String>,
     pub thread_id: String,

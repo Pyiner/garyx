@@ -1954,6 +1954,7 @@ export function AppShell() {
       return [
         "dispatching",
         "remote_accepted",
+        "awaiting_provider_ack",
         "awaiting_response",
         "awaiting_history",
       ].includes(intent.state);
@@ -1974,9 +1975,12 @@ export function AppShell() {
     for (const intent of Object.values(messageStateRef.current.intentsById)) {
       if (
         intent.threadId &&
-        ["remote_accepted", "awaiting_response", "awaiting_history"].includes(
-          intent.state,
-        )
+        [
+          "remote_accepted",
+          "awaiting_provider_ack",
+          "awaiting_response",
+          "awaiting_history",
+        ].includes(intent.state)
       ) {
         ids.add(intent.threadId);
       }
@@ -2348,9 +2352,24 @@ export function AppShell() {
           );
         });
   const visibleRemoteAwaitingAckInputs = visibleRemotePendingInputs;
+  const activePendingHistoryIntent = activeThreadMessageKey
+    ? Object.values(messageState.intentsById).some((intent) => {
+        return (
+          intent.threadId === activeThreadMessageKey &&
+          [
+            "dispatching",
+            "remote_accepted",
+            "awaiting_provider_ack",
+            "awaiting_response",
+            "awaiting_history",
+          ].includes(intent.state)
+        );
+      })
+    : false;
   const showPendingAckLoading =
     activePendingAckIntents.length > 0 ||
-    visibleRemoteAwaitingAckInputs.length > 0;
+    visibleRemoteAwaitingAckInputs.length > 0 ||
+    (activePendingHistoryIntent && latestUserMessageAwaitsAssistant(activeMessages));
   const activeExternalRunAwaitsAssistant = Boolean(
     activeThreadInfo?.activeRun?.runId &&
       latestUserMessageAwaitsAssistant(activeMessages) &&
@@ -4740,9 +4759,12 @@ export function AppShell() {
           const intent = intentForId(activeIntentId);
           if (
             intent &&
-            !["remote_accepted", "awaiting_history", "completed"].includes(
-              intent.state,
-            )
+            ![
+              "remote_accepted",
+              "awaiting_provider_ack",
+              "awaiting_history",
+              "completed",
+            ].includes(intent.state)
           ) {
             dispatchMessageState({
               type: "intent/remote-accepted",
@@ -5129,6 +5151,7 @@ export function AppShell() {
           [
             "dispatching",
             "remote_accepted",
+            "awaiting_provider_ack",
             "awaiting_response",
             "awaiting_history",
           ].includes(intent.state)
@@ -5959,6 +5982,7 @@ export function AppShell() {
         intent.threadId === threadId &&
         [
           "remote_accepted",
+          "awaiting_provider_ack",
           "awaiting_history",
           "awaiting_response",
           "dispatching",
@@ -5990,6 +6014,7 @@ export function AppShell() {
     const pendingStates = [
       "dispatching",
       "remote_accepted",
+      "awaiting_provider_ack",
       "awaiting_response",
       "awaiting_history",
     ];
@@ -6058,6 +6083,7 @@ export function AppShell() {
     try {
       const result = await window.garyxDesktop.openChatStream({
         threadId,
+        clientIntentId: intent.intentId,
         message: intent.text,
         images: intent.images,
         files: intent.files,
@@ -6092,9 +6118,12 @@ export function AppShell() {
       const latestIntent = intentForId(intent.intentId);
       if (
         latestIntent &&
-        !["remote_accepted", "awaiting_history", "completed"].includes(
-          latestIntent.state,
-        )
+        ![
+          "remote_accepted",
+          "awaiting_provider_ack",
+          "awaiting_history",
+          "completed",
+        ].includes(latestIntent.state)
       ) {
         dispatchMessageState({
           type: "intent/remote-accepted",
@@ -6324,10 +6353,12 @@ export function AppShell() {
         nextIntentId = "";
       }
     } finally {
-      dispatchMessageState({
-        type: "thread/clear",
-        threadId,
-      });
+      if (!hasPendingHistoryIntents(threadId)) {
+        dispatchMessageState({
+          type: "thread/clear",
+          threadId,
+        });
+      }
       const status = await window.garyxDesktop.checkConnection();
       setConnection(status);
     }
@@ -6388,21 +6419,28 @@ export function AppShell() {
 
     setError(null);
     requestMessagesBottomSnap(threadId, true);
-    updateLiveStreamState(threadId, (current) =>
-      current
-        ? {
-            ...current,
-            pendingAckIntentIds: [
-              ...current.pendingAckIntentIds,
-              latestIntent.intentId,
-            ],
-          }
-        : current,
-    );
+    const optimisticRunId =
+      getLiveStreamState(threadId)?.runId ||
+      selectThreadRuntime(messageStateRef.current, threadId)?.remoteRunId ||
+      `stream:${threadId}`;
+    updateLiveStreamState(threadId, (current) => {
+      const pendingAckIntentIds = current?.pendingAckIntentIds || [];
+      return {
+        threadId,
+        runId: current?.runId || optimisticRunId,
+        activeIntentId: current?.activeIntentId,
+        assistantEntryId: current?.assistantEntryId ?? null,
+        pendingAckIntentIds: pendingAckIntentIds.includes(latestIntent.intentId)
+          ? pendingAckIntentIds
+          : [...pendingAckIntentIds, latestIntent.intentId],
+        streamStatus: current?.streamStatus || "streaming",
+      };
+    });
 
     try {
       const result = await window.garyxDesktop.sendStreamingInput({
         threadId,
+        clientIntentId: latestIntent.intentId,
         message: latestIntent.text,
         images: latestIntent.images,
         files: latestIntent.files,
@@ -6421,13 +6459,18 @@ export function AppShell() {
           threadId: resultThreadId,
           pendingInputId: result.pendingInputId,
           removeFromQueue: true,
+          awaitProviderAck: true,
         });
         updateLiveStreamState(resultThreadId, (current) => ({
           threadId: resultThreadId,
           runId: current?.runId || activeRunId,
           activeIntentId: current?.activeIntentId,
           assistantEntryId: current?.assistantEntryId ?? null,
-          pendingAckIntentIds: current?.pendingAckIntentIds || [],
+          pendingAckIntentIds: (
+            current?.pendingAckIntentIds || []
+          ).includes(latestIntent.intentId)
+            ? current?.pendingAckIntentIds || []
+            : [...(current?.pendingAckIntentIds || []), latestIntent.intentId],
           streamStatus: current?.streamStatus || "streaming",
         }));
         setThreadRuntimeState(resultThreadId, "running_remote", {

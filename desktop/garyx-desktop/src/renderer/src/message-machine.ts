@@ -12,6 +12,7 @@ export type IntentState =
   | 'dispatch_requested'
   | 'dispatching'
   | 'remote_accepted'
+  | 'awaiting_provider_ack'
   | 'awaiting_response'
   | 'awaiting_history'
   | 'completed'
@@ -100,6 +101,7 @@ export type MessageMachineAction =
       pendingInputId?: string;
       responseText?: string;
       removeFromQueue: boolean;
+      awaitProviderAck?: boolean;
     }
   | {
       type: 'intent/awaiting-response';
@@ -421,10 +423,12 @@ export function messageMachineReducer(
 
     case 'intent/remote-accepted': {
       const existingIntent = state.intentsById[action.intentId];
-      const nextIntentState =
-        existingIntent?.state === 'awaiting_history' || existingIntent?.state === 'completed'
-          ? existingIntent.state
-          : 'remote_accepted';
+      let nextIntentState: IntentState = 'remote_accepted';
+      if (existingIntent?.state === 'awaiting_history' || existingIntent?.state === 'completed') {
+        nextIntentState = existingIntent.state;
+      } else if (action.awaitProviderAck) {
+        nextIntentState = 'awaiting_provider_ack';
+      }
       const next = patchIntent(state, action.intentId, {
         state: nextIntentState,
         remoteRunId: action.runId,

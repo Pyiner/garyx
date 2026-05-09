@@ -53,3 +53,60 @@ test('moves draft thread state to the created thread id', () => {
   assert.equal(next.threadRuntimeByThread.thread2.threadId, 'thread2');
   assert.equal(next.threadRuntimeByThread.thread2.activeIntentId, 'intent-1');
 });
+
+test('tracks queued downstream input until provider ack', () => {
+  const created = messageMachineReducer(initialMessageMachineState, {
+    type: 'intent/created',
+    enqueue: true,
+    intent: {
+      intentId: 'intent-follow-up-1',
+      threadId: 'thread-1',
+      text: 'follow up',
+      images: [],
+      files: [],
+      createdAt: '2026-05-09T00:00:00.000Z',
+      updatedAt: '2026-05-09T00:00:00.000Z',
+      state: 'queued_local',
+      source: 'composer_queue',
+    },
+  });
+
+  const dispatched = messageMachineReducer(created, {
+    type: 'intent/request-dispatch',
+    threadId: 'thread-1',
+    intentId: 'intent-follow-up-1',
+    mode: 'async_steer',
+    source: 'queue_steer',
+    removeFromQueue: false,
+  });
+
+  const queued = messageMachineReducer(dispatched, {
+    type: 'intent/remote-accepted',
+    intentId: 'intent-follow-up-1',
+    runId: 'run-1',
+    threadId: 'thread-1',
+    pendingInputId: 'queued_input:1',
+    removeFromQueue: true,
+    awaitProviderAck: true,
+  });
+
+  assert.equal(
+    queued.intentsById['intent-follow-up-1'].state,
+    'awaiting_provider_ack',
+  );
+  assert.equal(
+    queued.intentsById['intent-follow-up-1'].pendingInputId,
+    'queued_input:1',
+  );
+  assert.deepEqual(queued.queueByThread['thread-1'], []);
+
+  const acked = messageMachineReducer(queued, {
+    type: 'intent/awaiting-history',
+    intentId: 'intent-follow-up-1',
+  });
+
+  assert.equal(
+    acked.intentsById['intent-follow-up-1'].state,
+    'awaiting_history',
+  );
+});

@@ -294,7 +294,9 @@ export function ToolTraceGroup({
   const summary = summarizeToolTraceEntries(entries, t, locale);
 
   useEffect(() => {
-    setExpanded(defaultExpanded);
+    if (defaultExpanded) {
+      setExpanded(true);
+    }
   }, [defaultExpanded]);
 
   return (

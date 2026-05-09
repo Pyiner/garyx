@@ -1296,6 +1296,8 @@ export interface SendMessageInput {
   threadId: string;
   // Compatibility fallback for older callers. Prefer `threadId`.
   sessionId?: string;
+  // Stable frontend identity for queued/in-flight user intents.
+  clientIntentId?: string;
   message: string;
   images?: MessageImageAttachment[];
   files?: MessageFileAttachment[];
@@ -1324,6 +1326,7 @@ export interface SendStreamingInputResult {
   threadId: string;
   // Compatibility mirror for older responses. Prefer `threadId`.
   sessionId?: string;
+  clientIntentId?: string;
   pendingInputId?: string;
 }
 

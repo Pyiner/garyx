@@ -333,6 +333,7 @@ async fn chat_ws_codex_like_user_ack_can_arrive_before_stream_input_response() {
         json!({
             "op": "input",
             "threadId": thread_id,
+            "clientIntentId": "intent-follow-up-1",
             "message": "follow-up"
         })
         .to_string()
@@ -346,6 +347,10 @@ async fn chat_ws_codex_like_user_ack_can_arrive_before_stream_input_response() {
     assert_eq!(ack_payload["type"], "user_ack");
     assert_eq!(stream_input_payload["type"], "stream_input");
     assert_eq!(stream_input_payload["status"], "queued");
+    assert_eq!(
+        stream_input_payload["clientIntentId"],
+        "intent-follow-up-1"
+    );
     assert_eq!(ack_payload["threadId"], thread_id);
     assert_eq!(stream_input_payload["threadId"], thread_id);
     assert_eq!(
