@@ -5703,6 +5703,7 @@ button.new-thread-resume-link:hover {
   max-width: 100%;
   box-sizing: border-box;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-color: color-mix(in oklab, var(--color-token-foreground) 18%, transparent)
     transparent;
   scrollbar-width: thin;
@@ -5833,8 +5834,8 @@ button.new-thread-resume-link:hover {
 
 .message-rich pre::-webkit-scrollbar,
 .message-rich [data-streamdown="code-block-body"]::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 3px;
+  height: 3px;
 }
 
 .message-rich pre::-webkit-scrollbar-track,
