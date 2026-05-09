@@ -528,6 +528,7 @@ export function ThreadPage({
                   key={`${block.key}:body`}
                 >
                   <ToolTraceGroup
+                    defaultExpanded={block.defaultExpanded}
                     entries={block.entries}
                     onThreadNavigate={onOpenThreadById}
                   />

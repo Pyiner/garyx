@@ -6059,6 +6059,82 @@ button.team-agent-speaker:focus-visible {
   z-index: 0;
 }
 
+.tool-trace-group {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+}
+
+.tool-trace-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-token-description-foreground);
+  cursor: pointer;
+  text-align: left;
+  -webkit-appearance: none;
+  appearance: none;
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.tool-trace-group-header:hover,
+.tool-trace-group-header:focus-visible {
+  color: var(--color-token-text-secondary);
+}
+
+.tool-trace-group-header:focus-visible {
+  outline: 2px solid
+    color-mix(in srgb, var(--color-token-accent) 38%, transparent);
+  outline-offset: 3px;
+}
+
+.tool-trace-group-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.tool-trace-group-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: currentColor;
+  font-size: var(--text-base);
+  font-weight: var(--font-weight-semibold, 600);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-trace-group-chevron {
+  flex: 0 0 auto;
+  color: currentColor;
+  opacity: 0.74;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.tool-trace-group.is-collapsed .tool-trace-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.tool-trace-group-list {
+  display: grid;
+  gap: 5px;
+}
+
 .tool-trace {
   display: grid;
   gap: 6px;
