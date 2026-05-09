@@ -2,9 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  findPendingAckIntentIndex,
   initialMessageMachineState,
   messageMachineReducer,
 } from './message-machine.ts';
+
+function intent(overrides) {
+  return {
+    intentId: 'intent-1',
+    threadId: 'thread-1',
+    text: 'hello',
+    images: [],
+    files: [],
+    createdAt: '2026-05-09T00:00:00.000Z',
+    updatedAt: '2026-05-09T00:00:00.000Z',
+    state: 'queued_local',
+    source: 'composer_queue',
+    ...overrides,
+  };
+}
 
 test('moves draft thread state to the created thread id', () => {
   const state = {
@@ -58,17 +74,11 @@ test('tracks queued downstream input until provider ack', () => {
   const created = messageMachineReducer(initialMessageMachineState, {
     type: 'intent/created',
     enqueue: true,
-    intent: {
+    intent: intent({
       intentId: 'intent-follow-up-1',
       threadId: 'thread-1',
       text: 'follow up',
-      images: [],
-      files: [],
-      createdAt: '2026-05-09T00:00:00.000Z',
-      updatedAt: '2026-05-09T00:00:00.000Z',
-      state: 'queued_local',
-      source: 'composer_queue',
-    },
+    }),
   });
 
   const dispatched = messageMachineReducer(created, {
@@ -108,5 +118,135 @@ test('tracks queued downstream input until provider ack', () => {
   assert.equal(
     acked.intentsById['intent-follow-up-1'].state,
     'awaiting_history',
+  );
+});
+
+test('keeps awaiting provider ack stable across duplicate remote accepted events', () => {
+  const state = {
+    ...initialMessageMachineState,
+    intentsById: {
+      'intent-follow-up-1': intent({
+        intentId: 'intent-follow-up-1',
+        state: 'awaiting_provider_ack',
+        remoteRunId: 'run-1',
+        remoteThreadKey: 'thread-1',
+        pendingInputId: 'queued_input:1',
+      }),
+    },
+  };
+
+  const next = messageMachineReducer(state, {
+    type: 'intent/remote-accepted',
+    intentId: 'intent-follow-up-1',
+    runId: 'run-1',
+    threadId: 'thread-1',
+    removeFromQueue: false,
+  });
+
+  assert.equal(
+    next.intentsById['intent-follow-up-1'].state,
+    'awaiting_provider_ack',
+  );
+  assert.equal(
+    next.intentsById['intent-follow-up-1'].pendingInputId,
+    'queued_input:1',
+  );
+});
+
+test('requeue clears stale downstream ack identity', () => {
+  const state = {
+    ...initialMessageMachineState,
+    intentsById: {
+      'intent-follow-up-1': intent({
+        intentId: 'intent-follow-up-1',
+        state: 'awaiting_provider_ack',
+        remoteRunId: 'run-1',
+        remoteThreadKey: 'thread-1',
+        pendingInputId: 'queued_input:1',
+      }),
+    },
+    queueByThread: {
+      'thread-1': [],
+    },
+  };
+
+  const next = messageMachineReducer(state, {
+    type: 'intent/requeue-front',
+    threadId: 'thread-1',
+    intentId: 'intent-follow-up-1',
+    error: 'temporary failure',
+  });
+
+  assert.equal(next.intentsById['intent-follow-up-1'].state, 'queued_local');
+  assert.equal(next.intentsById['intent-follow-up-1'].pendingInputId, undefined);
+  assert.deepEqual(next.queueByThread['thread-1'], ['intent-follow-up-1']);
+});
+
+test('matches provider ack by exact pending input id', () => {
+  const pendingAckIntentIds = ['intent-1', 'intent-2'];
+  const intentsById = {
+    'intent-1': intent({
+      intentId: 'intent-1',
+      pendingInputId: 'queued_input:1',
+    }),
+    'intent-2': intent({
+      intentId: 'intent-2',
+      pendingInputId: 'queued_input:2',
+    }),
+  };
+
+  assert.equal(
+    findPendingAckIntentIndex(
+      pendingAckIntentIds,
+      'queued_input:2',
+      intentsById,
+    ),
+    1,
+  );
+});
+
+test('matches provider ack to the only unresolved downstream intent', () => {
+  const pendingAckIntentIds = ['intent-1', 'intent-2'];
+  const intentsById = {
+    'intent-1': intent({
+      intentId: 'intent-1',
+      pendingInputId: 'queued_input:1',
+    }),
+    'intent-2': intent({
+      intentId: 'intent-2',
+      pendingInputId: undefined,
+    }),
+  };
+
+  assert.equal(
+    findPendingAckIntentIndex(
+      pendingAckIntentIds,
+      'queued_input:2',
+      intentsById,
+    ),
+    1,
+  );
+});
+
+test('does not match unknown provider ack when all pending input ids are resolved', () => {
+  const pendingAckIntentIds = ['intent-1', 'intent-2'];
+  const intentsById = {
+    'intent-1': intent({
+      intentId: 'intent-1',
+      pendingInputId: 'queued_input:1',
+    }),
+    'intent-2': intent({
+      intentId: 'intent-2',
+      pendingInputId: 'queued_input:2',
+    }),
+  };
+
+  assert.equal(
+    findPendingAckIntentIndex(
+      pendingAckIntentIds,
+      'queued_input:missing',
+      intentsById,
+    ),
+    -1,
   );
 });

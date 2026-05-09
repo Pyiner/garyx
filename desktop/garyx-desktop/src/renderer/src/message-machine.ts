@@ -424,7 +424,11 @@ export function messageMachineReducer(
     case 'intent/remote-accepted': {
       const existingIntent = state.intentsById[action.intentId];
       let nextIntentState: IntentState = 'remote_accepted';
-      if (existingIntent?.state === 'awaiting_history' || existingIntent?.state === 'completed') {
+      if (
+        existingIntent?.state === 'awaiting_provider_ack' ||
+        existingIntent?.state === 'awaiting_history' ||
+        existingIntent?.state === 'completed'
+      ) {
         nextIntentState = existingIntent.state;
       } else if (action.awaitProviderAck) {
         nextIntentState = 'awaiting_provider_ack';
@@ -433,8 +437,8 @@ export function messageMachineReducer(
         state: nextIntentState,
         remoteRunId: action.runId,
         remoteThreadKey: action.threadId,
-        pendingInputId: action.pendingInputId,
-        responseText: action.responseText,
+        pendingInputId: action.pendingInputId ?? existingIntent?.pendingInputId,
+        responseText: action.responseText ?? existingIntent?.responseText,
         error: undefined,
       });
       if (!action.removeFromQueue) {
@@ -499,6 +503,7 @@ export function messageMachineReducer(
         dispatchMode: undefined,
         remoteRunId: undefined,
         remoteThreadKey: undefined,
+        pendingInputId: undefined,
         responseText: undefined,
         error: action.error,
         source: action.source || 'queue_send',

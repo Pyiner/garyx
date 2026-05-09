@@ -1,6 +1,7 @@
 use super::*;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
 #[test]
 fn build_mcp_servers_injects_builtin_and_preserves_remote_shapes() {
@@ -375,7 +376,6 @@ fn strip_gemini_thought_output_keeps_only_visible_tail_after_markers() {
 #[test]
 fn gemini_provider_uses_current_acp_flag() {
     assert_eq!(GEMINI_ACP_ARG, "--acp");
-    assert_eq!(GEMINI_SKIP_TRUST_ARG, "--skip-trust");
 }
 
 #[tokio::test]
@@ -392,7 +392,7 @@ if "--version" in sys.argv:
     print("0.0-test")
     sys.exit(0)
 
-if "--acp" not in sys.argv or "--skip-trust" not in sys.argv or "--experimental-acp" in sys.argv:
+if "--acp" not in sys.argv or "--skip-trust" in sys.argv or "--experimental-acp" in sys.argv:
     print("unexpected args: " + " ".join(sys.argv[1:]), file=sys.stderr)
     sys.exit(2)
 
@@ -442,7 +442,11 @@ for line in sys.stdin:
     });
     provider.ready = true;
 
-    let callback: Box<dyn Fn(StreamEvent) + Send + Sync> = Box::new(|_| {});
+    let events = StdArc::new(StdMutex::new(Vec::new()));
+    let events_for_callback = StdArc::clone(&events);
+    let callback: Box<dyn Fn(StreamEvent) + Send + Sync> = Box::new(move |event| {
+        events_for_callback.lock().unwrap().push(event);
+    });
     let result = provider
         .run_streaming(
             &ProviderRunOptions {
@@ -458,6 +462,14 @@ for line in sys.stdin:
         .expect("run should succeed");
     assert!(result.success, "run failed: {:?}", result.error);
     assert_eq!(result.response, "OK");
+    let events = events.lock().unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, StreamEvent::Done))
+            .count(),
+        1,
+    );
 }
 
 #[tokio::test]
