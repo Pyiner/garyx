@@ -2,7 +2,7 @@ import type { Dispatch, SetStateAction } from 'react';
 
 import type { DesktopChannelEndpoint, DesktopState, DesktopWorkspace } from '@shared/contracts';
 
-import { SETTINGS_TABS, type SettingsTabId } from '../../GatewaySettingsPanel';
+import { SETTINGS_TABS, type SettingsTabId } from '../../settings-tabs';
 import { BotSidebar } from '../../BotSidebar';
 import { WorkspaceThreadSidebar } from '../../WorkspaceThreadSidebar';
 import { UpdatePill } from './UpdatePill';

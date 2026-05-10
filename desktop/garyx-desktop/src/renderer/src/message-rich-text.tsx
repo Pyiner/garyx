@@ -1,4 +1,4 @@
-import { useMemo, type ComponentProps, type MouseEvent } from 'react';
+import { memo, useMemo, type ComponentProps, type MouseEvent } from 'react';
 import { cjk } from '@streamdown/cjk';
 import { createCodePlugin } from '@streamdown/code';
 import {
@@ -105,7 +105,7 @@ function useStreamdownTranslations(): Partial<StreamdownTranslations> {
   );
 }
 
-export function RichMessageText({
+export const RichMessageText = memo(function RichMessageText({
   text,
   tone = 'default',
   onLocalFileLinkClick,
@@ -172,4 +172,4 @@ export function RichMessageText({
       </Streamdown>
     </div>
   );
-}
+});

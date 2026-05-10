@@ -1,6 +1,7 @@
 import {
   Fragment,
   useLayoutEffect,
+  useMemo,
   useRef,
   type CSSProperties,
   type MutableRefObject,
@@ -398,12 +399,26 @@ export function ThreadPage({
   const { t } = useI18n();
   const composerShellWrapRef = useRef<HTMLDivElement | null>(null);
   const threadMainRef = useRef<HTMLDivElement | null>(null);
-  const teamView = deriveThreadTeamView(activeThreadSummary);
-  const teamSpeakerOptions = {
-    leaderAgentId: activeThreadSummary?.team?.leader_agent_id || null,
-    agentDisplayNamesById: teamAgentDisplayNamesById,
-    childThreadIds: activeThreadSummary?.team?.child_thread_ids || {},
-  };
+  const teamView = useMemo(
+    () => deriveThreadTeamView(activeThreadSummary),
+    [activeThreadSummary],
+  );
+  const teamSpeakerOptions = useMemo(
+    () => ({
+      leaderAgentId: activeThreadSummary?.team?.leader_agent_id || null,
+      agentDisplayNamesById: teamAgentDisplayNamesById,
+      childThreadIds: activeThreadSummary?.team?.child_thread_ids || {},
+    }),
+    [
+      activeThreadSummary?.team?.child_thread_ids,
+      activeThreadSummary?.team?.leader_agent_id,
+      teamAgentDisplayNamesById,
+    ],
+  );
+  const turnRows = useMemo(
+    () => (teamView.isTeam ? [] : buildTurnRows(activeRenderableBlocks)),
+    [activeRenderableBlocks, teamView.isTeam],
+  );
   const composerSelectedAgentId = selectedThreadId
     ? teamView.isTeam
       ? activeThreadSummary?.team?.team_id?.trim() ||
@@ -668,7 +683,6 @@ export function ThreadPage({
               });
             }
 
-            const turnRows = buildTurnRows(activeRenderableBlocks);
             return turnRows.map((row, idx) => {
               if (row.kind === "flat") {
                 return (

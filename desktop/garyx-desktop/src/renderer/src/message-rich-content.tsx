@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 import { FileText } from "lucide-react";
 
 import type {
@@ -547,7 +547,7 @@ export function extractTranscriptText(content: unknown): string {
     .trim();
 }
 
-export function RichMessageContent({
+export const RichMessageContent = memo(function RichMessageContent({
   text,
   content,
   altPrefix = "message",
@@ -560,19 +560,26 @@ export function RichMessageContent({
   layout?: RichMessageLayout;
   onLocalFileLinkClick?: LocalFileLinkHandler;
 }) {
-  const segments = collectTranscriptSegments(content, altPrefix);
-  const tone = resolveMessageTone(altPrefix);
-  const renderableSegments = segments.length
-    ? segments
-    : text.trim()
-      ? [
-          {
-            kind: "text" as const,
-            key: "fallback:text",
-            text,
-          },
-        ]
-      : fallbackJsonSegment(content);
+  const segments = useMemo(
+    () => collectTranscriptSegments(content, altPrefix),
+    [altPrefix, content],
+  );
+  const tone = useMemo(() => resolveMessageTone(altPrefix), [altPrefix]);
+  const renderableSegments = useMemo<TranscriptSegment[]>(
+    () =>
+      segments.length
+        ? segments
+        : text.trim()
+          ? [
+              {
+                kind: "text",
+                key: "fallback:text",
+                text,
+              },
+            ]
+          : fallbackJsonSegment(content),
+    [content, segments, text],
+  );
 
   if (!renderableSegments.length) {
     return null;
@@ -653,4 +660,4 @@ export function RichMessageContent({
       {renderableSegments.map(renderSegment)}
     </div>
   );
-}
+});

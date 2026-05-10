@@ -745,7 +745,7 @@ async function createMockGateway(workspaceDir) {
         sessionKey: sessionId,
         message: scenario.streamToolResultMessage,
       });
-      await sleep(120);
+      await sleep(800);
       sendEvent('assistant_delta', {
         runId,
         threadId: sessionId,
@@ -1106,6 +1106,10 @@ async function main() {
         0,
         `tool trace rows should be hidden until the user expands a group, got ${collapsedToolTraceCount} visible rows`,
       );
+      const collapsedTurnSummaries = window.locator('.turn-summary.is-collapsed .turn-summary-toggle');
+      for (let guard = 0; guard < 20 && (await collapsedTurnSummaries.count()) > 0; guard += 1) {
+        await collapsedTurnSummaries.first().click();
+      }
       for (let index = 0; index < toolGroupCount; index += 1) {
         await toolGroupHeaders.nth(index).click();
       }

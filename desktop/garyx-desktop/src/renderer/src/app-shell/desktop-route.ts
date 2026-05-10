@@ -1,4 +1,4 @@
-import type { SettingsTabId } from '../GatewaySettingsPanel';
+import type { SettingsTabId } from '../settings-tabs';
 
 import type { ContentView } from './types';
 

@@ -11,7 +11,7 @@ import {
 
 import type { DesktopWorkspaceFileEntry } from '@shared/contracts';
 
-import type { SettingsTabId } from '../GatewaySettingsPanel';
+import type { SettingsTabId } from '../settings-tabs';
 
 function SettingsRailIcon({
   glyph: Glyph,

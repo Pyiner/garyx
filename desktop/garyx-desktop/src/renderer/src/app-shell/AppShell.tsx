@@ -1,4 +1,6 @@
 import {
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -65,16 +67,9 @@ import {
   type MessageIntent,
   type ThreadRuntimeState,
 } from "../message-machine";
-import {
-  GatewaySettingsPanel,
-  type SettingsTabId,
-} from "../GatewaySettingsPanel";
+import type { SettingsTabId } from "../settings-tabs";
 import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
-import { SkillsPanel } from "../SkillsPanel";
-import { AutomationDialog } from "../components/AutomationDialog";
-import { AutomationListPage } from "../components/AutomationListPage";
-import { MemoryDialog } from "../components/MemoryDialog";
 import { Input } from "../components/ui/input";
 import { AddBotDialog } from "./components/AddBotDialog";
 import { BotSidebar } from "../BotSidebar";
@@ -83,7 +78,6 @@ import { ComposerQueue } from "../ComposerQueue";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
 import { ConversationHeaderTitle } from "../ConversationHeaderTitle";
 import { NewThreadEmptyState } from "../NewThreadEmptyState";
-import { BrowserPage } from "../BrowserPage";
 import { WorkspaceThreadSidebar } from "../WorkspaceThreadSidebar";
 import { ToastViewport, type ToastItem, type ToastTone } from "../toast";
 import { ToolTraceGroup, shouldRenderToolTraceMessage } from "../tool-trace";
@@ -105,8 +99,6 @@ import {
   deriveThreadActivityModel,
   threadActivitySignature,
 } from "./thread-activity";
-import { WorkspaceFilePreview } from "../workspace-file-preview";
-import { BotConsolePage } from "../BotConsolePage";
 import { measureUiAction } from "../perf-metrics";
 import {
   activateBotDraftThread,
@@ -175,12 +167,8 @@ import type {
   WorkspaceDirectoryState,
 } from "./types";
 import { ThreadLogPanel } from "./components/ThreadLogPanel";
-import { WorkspacePreviewModal } from "./components/WorkspacePreviewModal";
 import { AppLeftRail } from "./components/AppLeftRail";
-import { AgentsHubPanel } from "./components/AgentsHubPanel";
-import { AutoResearchPanel } from "./components/auto-research";
 import { ThreadPage } from "./components/ThreadPage";
-import { TasksPanel } from "./components/TasksPanel";
 import { useAutomationController } from "./useAutomationController";
 import { useAutoResearchController } from "./useAutoResearchController";
 import {
@@ -222,6 +210,63 @@ const NEW_THREAD_DRAFT_THREAD_ID = "__garyx_new_thread_draft__";
 const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
 const HIDDEN_TOOL_USE_STATUS_TEXT = "Garyx is thinking through the next step…";
 const HIDDEN_TOOL_RESULT_STATUS_TEXT = "Garyx finished a reasoning step…";
+
+const GatewaySettingsPanel = lazy(() =>
+  import("../GatewaySettingsPanel").then((module) => ({
+    default: module.GatewaySettingsPanel,
+  })),
+);
+const BrowserPage = lazy(() =>
+  import("../BrowserPage").then((module) => ({
+    default: module.BrowserPage,
+  })),
+);
+const BotConsolePage = lazy(() =>
+  import("../BotConsolePage").then((module) => ({
+    default: module.BotConsolePage,
+  })),
+);
+const SkillsPanel = lazy(() =>
+  import("../SkillsPanel").then((module) => ({
+    default: module.SkillsPanel,
+  })),
+);
+const AutomationDialog = lazy(() =>
+  import("../components/AutomationDialog").then((module) => ({
+    default: module.AutomationDialog,
+  })),
+);
+const AutomationListPage = lazy(() =>
+  import("../components/AutomationListPage").then((module) => ({
+    default: module.AutomationListPage,
+  })),
+);
+const MemoryDialog = lazy(() =>
+  import("../components/MemoryDialog").then((module) => ({
+    default: module.MemoryDialog,
+  })),
+);
+const WorkspacePreviewModal = lazy(() =>
+  import("./components/WorkspacePreviewModal").then((module) => ({
+    default: module.WorkspacePreviewModal,
+  })),
+);
+const AgentsHubPanel = lazy(() =>
+  import("./components/AgentsHubPanel").then((module) => ({
+    default: module.AgentsHubPanel,
+  })),
+);
+const AutoResearchPanel = lazy(() =>
+  import("./components/auto-research").then((module) => ({
+    default: module.AutoResearchPanel,
+  })),
+);
+const TasksPanel = lazy(() =>
+  import("./components/TasksPanel").then((module) => ({
+    default: module.TasksPanel,
+  })),
+);
+const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
 
 function messagesNearBottom(node: HTMLDivElement | null): boolean {
   if (!node) {
@@ -2229,7 +2274,10 @@ export function AppShell() {
     recovering: hasGatewayRecoveryActivity(),
     reason: gatewayStatusHint || connection?.error || null,
   });
-  const mobileThreadLogLines = buildThreadLogLines(threadLogsText);
+  const mobileThreadLogLines = useMemo(
+    () => buildThreadLogLines(threadLogsText),
+    [threadLogsText],
+  );
   const clientThreadLogEntries = selectedThreadId
     ? clientLogsByThread[selectedThreadId] || []
     : [];
@@ -2257,11 +2305,16 @@ export function AppShell() {
   const activeThreadMessageKey =
     selectedThreadId ||
     (hasNewThreadDraft ? NEW_THREAD_DRAFT_THREAD_ID : null);
-  const activeMessages = activeThreadMessageKey
-    ? (messagesByThread[activeThreadMessageKey] || []).filter(
+  const rawActiveMessages = activeThreadMessageKey
+    ? messagesByThread[activeThreadMessageKey] || EMPTY_UI_TRANSCRIPT_MESSAGES
+    : EMPTY_UI_TRANSCRIPT_MESSAGES;
+  const activeMessages = useMemo(
+    () =>
+      rawActiveMessages.filter(
         (message) => !isRunLoadingPlaceholderMessage(message),
-      )
-    : [];
+      ),
+    [rawActiveMessages],
+  );
   const activeThreadInfo = selectedThreadId
     ? threadInfoByThread[selectedThreadId] || null
     : null;
@@ -2271,12 +2324,20 @@ export function AppShell() {
   const activePendingAutomationRun = selectedThreadId
     ? pendingAutomationRunsByThread[selectedThreadId] || null
     : null;
-  const activeHasAssistantOrToolMessage = activeMessages.some((message) => {
-    return message.role === "assistant" || isToolRole(message.role);
-  });
-  const activeRenderableMessages = buildRenderableTranscript(activeMessages);
-  const activeRenderableBlocks = buildRenderTranscriptBlocks(
-    activeRenderableMessages,
+  const activeHasAssistantOrToolMessage = useMemo(
+    () =>
+      activeMessages.some((message) => {
+        return message.role === "assistant" || isToolRole(message.role);
+      }),
+    [activeMessages],
+  );
+  const activeRenderableMessages = useMemo(
+    () => buildRenderableTranscript(activeMessages),
+    [activeMessages],
+  );
+  const activeRenderableBlocks = useMemo(
+    () => buildRenderTranscriptBlocks(activeRenderableMessages),
+    [activeRenderableMessages],
   );
   const lastActiveRenderableBlock =
     activeRenderableBlocks[activeRenderableBlocks.length - 1] || null;
@@ -2564,7 +2625,7 @@ export function AppShell() {
       !activeHasAssistantOrToolMessage) ||
       (activeRunLoading && !activeTailToolTraceBlockKey),
   );
-  const activeToolTraceLoadingKey = activeRunLoading
+  const activeToolTraceLoadingKey = threadActivity.runActive
     ? activeTailToolTraceBlockKey
     : null;
   useEffect(() => {
@@ -7177,7 +7238,15 @@ export function AppShell() {
 
       {isBrowserView ? (
         <main className="conversation browser-view">
-          <BrowserPage />
+          <Suspense
+            fallback={
+              <div className="view-loading-fallback">
+                {t("Loading…")}
+              </div>
+            }
+          >
+            <BrowserPage />
+          </Suspense>
         </main>
       ) : (
         <main className={conversationClassName}>
@@ -7241,6 +7310,13 @@ export function AppShell() {
           <section
             className={`conversation-body ${isSettingsView ? "settings-layout" : ""}`}
           >
+            <Suspense
+              fallback={
+                <div className="view-loading-fallback">
+                  {t("Loading…")}
+                </div>
+              }
+            >
             {isSettingsView ? (
               <div className="settings-page">
                 <SettingsErrorBoundary
@@ -7609,58 +7685,69 @@ export function AppShell() {
                 workspaceMutation={workspaceMutation}
               />
             )}
+            </Suspense>
           </section>
         </main>
       )}
-      <WorkspacePreviewModal
-        error={workspaceFilePreviewError}
-        loading={workspaceFilePreviewLoading}
-        onClose={() => {
-          setWorkspacePreviewModalOpen(false);
-        }}
-        onLocalFileLinkClick={handleLocalFileLinkClick}
-        open={workspacePreviewModalOpen}
-        preview={workspaceFilePreview}
-        title={workspacePreviewTitle}
-      />
-
-      {automationDialog ? (
-        <AutomationDialog
-          state={automationDialog}
-          agentOptions={automationAgentOptions}
-          saving={
-            automationMutation === "create" ||
-            automationMutation === `edit:${automationDialog.automationId || ""}`
-          }
-          onDraftChange={updateAutomationDialogDraft}
-          onSubmit={(event) => {
-            void handleSubmitAutomationDialog(event);
-          }}
-          onClose={() => {
-            setAutomationDialog(null);
-          }}
-        />
+      {workspacePreviewModalOpen ? (
+        <Suspense fallback={null}>
+          <WorkspacePreviewModal
+            error={workspaceFilePreviewError}
+            loading={workspaceFilePreviewLoading}
+            onClose={() => {
+              setWorkspacePreviewModalOpen(false);
+            }}
+            onLocalFileLinkClick={handleLocalFileLinkClick}
+            open={workspacePreviewModalOpen}
+            preview={workspaceFilePreview}
+            title={workspacePreviewTitle}
+          />
+        </Suspense>
       ) : null}
 
-      <MemoryDialog
-        dirty={memoryDialogDirty}
-        draftContent={memoryDialogDraft}
-        error={memoryDialogError}
-        exists={memoryDialogDocument?.exists ?? false}
-        loading={memoryDialogLoading}
-        modifiedAt={memoryDialogDocument?.modifiedAt ?? null}
-        onClose={closeMemoryDialog}
-        onDraftChange={setMemoryDialogDraft}
-        onSave={() => {
-          void saveMemoryDialog();
-        }}
-        open={Boolean(memoryDialogTarget)}
-        path={memoryDialogDocument?.path || null}
-        saving={memoryDialogSaving}
-        scope={memoryDialogTarget?.scope || "agent"}
-        status={memoryDialogStatus}
-        title={memoryDialogTarget?.title || "memory.md"}
-      />
+      {automationDialog ? (
+        <Suspense fallback={null}>
+          <AutomationDialog
+            state={automationDialog}
+            agentOptions={automationAgentOptions}
+            saving={
+              automationMutation === "create" ||
+              automationMutation === `edit:${automationDialog.automationId || ""}`
+            }
+            onDraftChange={updateAutomationDialogDraft}
+            onSubmit={(event) => {
+              void handleSubmitAutomationDialog(event);
+            }}
+            onClose={() => {
+              setAutomationDialog(null);
+            }}
+          />
+        </Suspense>
+      ) : null}
+
+      {memoryDialogTarget ? (
+        <Suspense fallback={null}>
+          <MemoryDialog
+            dirty={memoryDialogDirty}
+            draftContent={memoryDialogDraft}
+            error={memoryDialogError}
+            exists={memoryDialogDocument?.exists ?? false}
+            loading={memoryDialogLoading}
+            modifiedAt={memoryDialogDocument?.modifiedAt ?? null}
+            onClose={closeMemoryDialog}
+            onDraftChange={setMemoryDialogDraft}
+            onSave={() => {
+              void saveMemoryDialog();
+            }}
+            open={Boolean(memoryDialogTarget)}
+            path={memoryDialogDocument?.path || null}
+            saving={memoryDialogSaving}
+            scope={memoryDialogTarget?.scope || "agent"}
+            status={memoryDialogStatus}
+            title={memoryDialogTarget?.title || "memory.md"}
+          />
+        </Suspense>
+      ) : null}
     </div>
     </I18nProvider>
   );
