@@ -1090,7 +1090,7 @@ pub async fn list_threads(
         .thread_store
         .list_keys(params.prefix.as_deref())
         .await;
-    let mut summaries = Vec::new();
+    let mut candidates = Vec::new();
     for key in keys {
         if !is_thread_key(&key) {
             continue;
@@ -1101,10 +1101,10 @@ pub async fn list_threads(
         if !params.include_hidden && is_hidden_thread_value(&data) {
             continue;
         }
-        summaries.push(thread_summary_with_history(&state, &key, &data).await);
+        candidates.push((key, data));
     }
 
-    summaries.sort_by(|left, right| {
+    candidates.sort_by(|(left_key, left), (right_key, right)| {
         let right_updated = right
             .get("updated_at")
             .and_then(Value::as_str)
@@ -1112,13 +1112,18 @@ pub async fn list_threads(
         let left_updated = left.get("updated_at").and_then(Value::as_str).unwrap_or("");
         right_updated
             .cmp(left_updated)
-            .then_with(|| left["thread_id"].as_str().cmp(&right["thread_id"].as_str()))
+            .then_with(|| left_key.as_str().cmp(right_key.as_str()))
     });
 
-    let total = summaries.len();
+    let total = candidates.len();
     let limit = params.limit.min(MAX_THREAD_LIMIT);
     let offset = params.offset.min(total);
-    let page: Vec<Value> = summaries.into_iter().skip(offset).take(limit).collect();
+    let page_candidates: Vec<(String, Value)> =
+        candidates.into_iter().skip(offset).take(limit).collect();
+    let mut page = Vec::with_capacity(page_candidates.len());
+    for (key, data) in page_candidates {
+        page.push(thread_summary_with_history(&state, &key, &data).await);
+    }
     let count = page.len();
 
     Json(json!({
