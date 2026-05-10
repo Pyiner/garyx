@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { memo, type ReactNode, useEffect, useState } from 'react';
 
 import { IconChevronDown } from '@tabler/icons-react';
 
@@ -53,7 +53,7 @@ function computeElapsed(
  * the "已处理 Xs" counter ticks every second; when the stream finishes
  * it auto-collapses (unless the user manually toggled it).
  */
-export function TurnSummary({
+function TurnSummaryComponent({
   turn,
   children,
   forceRunning = false,
@@ -146,3 +146,9 @@ export function TurnSummary({
   );
 }
 
+export const TurnSummary = memo(
+  TurnSummaryComponent,
+  (previous, next) =>
+    previous.turn === next.turn &&
+    previous.forceRunning === next.forceRunning,
+);

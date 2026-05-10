@@ -82,6 +82,7 @@ type ComposerFormProps = {
   composerLocked: boolean;
   composerPlaceholder: string;
   composerProviderType: DesktopApiProviderType;
+  composerResetKey: number;
   composerTextareaRef: RefObject<HTMLTextAreaElement | null>;
   activeThreadBot?: DesktopBotConsoleSummary | null;
   activeThreadBotId?: string | null;
@@ -491,6 +492,7 @@ export function ComposerForm({
   composerLocked,
   composerPlaceholder,
   composerProviderType,
+  composerResetKey,
   composerTextareaRef,
   activeThreadBot,
   activeThreadBotId,
@@ -530,18 +532,24 @@ export function ComposerForm({
     [pluginCatalog],
   );
   const [composerCursor, setComposerCursor] = useState(composer.length);
+  const [draft, setDraft] = useState(composer);
   const [highlightedSlashCommandIndex, setHighlightedSlashCommandIndex] = useState(0);
   const [dismissedSlashQuery, setDismissedSlashQuery] = useState<string | null>(null);
   const slashCommandItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    setDraft(composer);
+    setComposerCursor(composer.length);
+  }, [composer, composerResetKey]);
 
   const slashCursor = Math.max(
     0,
     Math.min(
       composerTextareaRef.current?.selectionStart ?? composerCursor,
-      composer.length,
+      draft.length,
     ),
   );
-  const slashTrigger = resolveSlashTrigger(composer, slashCursor);
+  const slashTrigger = resolveSlashTrigger(draft, slashCursor);
   const slashQuery = slashTrigger ? slashTrigger.query : null;
   const filteredSlashCommands = slashTrigger
     ? slashCommands.filter((command) => {
@@ -579,7 +587,7 @@ export function ComposerForm({
     textarea.style.height = `${nextHeight}px`;
     textarea.style.overflowY =
       textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
-  }, [composer, composerTextareaRef]);
+  }, [draft, composerTextareaRef]);
 
   useEffect(() => {
     if (!slashTrigger) {
@@ -633,8 +641,9 @@ export function ComposerForm({
   function applySlashCommand(command: SlashCommand) {
     const insertion = `/${command.name} `;
     const nextValue = slashTrigger
-      ? `${composer.slice(0, slashTrigger.start)}${insertion}${composer.slice(slashTrigger.end)}`
+      ? `${draft.slice(0, slashTrigger.start)}${insertion}${draft.slice(slashTrigger.end)}`
       : insertion;
+    setDraft(nextValue);
     onComposerChange(nextValue);
     setDismissedSlashQuery(null);
     setHighlightedSlashCommandIndex(0);
@@ -856,10 +865,12 @@ export function ComposerForm({
         className="composer-editor"
         ref={composerTextareaRef}
         disabled={composerLocked}
-        value={composer}
+        value={draft}
         onChange={(event) => {
+          const nextValue = event.target.value;
+          setDraft(nextValue);
           syncComposerCursor(event.target.selectionStart);
-          onComposerChange(event.target.value);
+          onComposerChange(nextValue);
         }}
         onClick={(event) => {
           syncComposerCursor(event.currentTarget.selectionStart);

@@ -220,6 +220,7 @@ type ThreadPageProps = {
   composerLocked: boolean;
   composerPlaceholder: string;
   composerProviderType: DesktopApiProviderType;
+  composerResetKey: number;
   activeThreadBot: DesktopBotConsoleSummary | null;
   activeThreadBotId: string | null;
   botBindingDisabled: boolean;
@@ -324,6 +325,7 @@ export function ThreadPage({
   composerLocked,
   composerPlaceholder,
   composerProviderType,
+  composerResetKey,
   activeThreadBot,
   activeThreadBotId,
   botBindingDisabled,
@@ -795,6 +797,7 @@ export function ThreadPage({
               composerLocked={composerLocked}
               composerPlaceholder={composerPlaceholder}
               composerProviderType={composerProviderType}
+              composerResetKey={composerResetKey}
               composerTextareaRef={composerTextareaRef}
               activeThreadBot={activeThreadBot}
               activeThreadBotId={activeThreadBotId}

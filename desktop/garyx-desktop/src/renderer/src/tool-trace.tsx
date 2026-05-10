@@ -1,4 +1,4 @@
-import { type ComponentType, type ReactNode, useEffect, useState } from 'react';
+import { memo, type ComponentType, type ReactNode, useEffect, useMemo, useState } from 'react';
 
 import {
   IconChevronDown,
@@ -280,7 +280,7 @@ function summarizeToolTraceEntries(
   return parts.join(locale === 'zh-CN' ? '，' : ', ');
 }
 
-export function ToolTraceGroup({
+function ToolTraceGroupComponent({
   active = false,
   entries,
   defaultExpanded,
@@ -294,7 +294,11 @@ export function ToolTraceGroup({
   const { locale, t } = useI18n();
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [userControlled, setUserControlled] = useState(false);
-  const summary = summarizeToolTraceEntries(entries, t, locale);
+  const summary = useMemo(
+    () => summarizeToolTraceEntries(entries, t, locale),
+    [entries, locale, t],
+  );
+  const treeNodes = useMemo(() => buildToolTraceTree(entries), [entries]);
 
   useEffect(() => {
     if (!userControlled) {
@@ -327,13 +331,21 @@ export function ToolTraceGroup({
       >
         <div className="tool-trace-group-panel-inner">
           <div className="tool-trace-group-list">
-            <ToolTraceTree nodes={buildToolTraceTree(entries)} onThreadNavigate={onThreadNavigate} />
+            <ToolTraceTree nodes={treeNodes} onThreadNavigate={onThreadNavigate} />
           </div>
         </div>
       </div>
     </div>
   );
 }
+
+export const ToolTraceGroup = memo(
+  ToolTraceGroupComponent,
+  (previous, next) =>
+    previous.active === next.active &&
+    previous.defaultExpanded === next.defaultExpanded &&
+    previous.entries === next.entries,
+);
 
 function extractTargetThreadId(toolResult?: ToolTraceMessage): string | null {
   try {

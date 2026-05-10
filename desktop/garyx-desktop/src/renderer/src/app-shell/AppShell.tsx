@@ -1478,6 +1478,8 @@ export function AppShell() {
     initialMessageMachineState,
   );
   const [composer, setComposer] = useState("");
+  const [composerResetKey, setComposerResetKey] = useState(0);
+  const [composerTextPresent, setComposerTextPresent] = useState(false);
   const [composerImages, setComposerImages] = useState<
     MessageImageAttachment[]
   >([]);
@@ -1608,6 +1610,8 @@ export function AppShell() {
   const threadLogsCursorRef = useRef(0);
   const toastSequenceRef = useRef(1);
   const toastTimeoutsRef = useRef<Record<number, number>>({});
+  const composerDraftRef = useRef("");
+  const composerPhaseSyncKeyRef = useRef("");
   const gatewayRetryStepRef = useRef(0);
   const gatewaySetupSavedConnectionRef = useRef<ConnectionStatus | null>(null);
   const botBindingRequestSequenceRef = useRef(0);
@@ -2552,7 +2556,7 @@ export function AppShell() {
   const activeThreadBot = activeThreadBotId
     ? (botGroups.find((g) => g.id === activeThreadBotId) ?? null)
     : null;
-  const composerHasText = composer.trim().length > 0;
+  const composerHasText = composerTextPresent;
   const composerHasImages = composerImages.length > 0;
   const composerHasFiles = composerFiles.length > 0;
   const composerHasPayload =
@@ -2948,7 +2952,10 @@ export function AppShell() {
   }
 
   function clearComposerDraft() {
+    composerDraftRef.current = "";
     setComposer("");
+    setComposerTextPresent(false);
+    setComposerResetKey((current) => current + 1);
     setComposerImages([]);
     setComposerFiles([]);
     resetComposerAttachmentPicker();
@@ -4066,12 +4073,18 @@ export function AppShell() {
     nextText: string,
     isComposing = isComposingRef.current,
   ) {
+    const hasText =
+      nextText.trim().length > 0 ||
+      composerImages.length > 0 ||
+      composerFiles.length > 0;
+    const syncKey = `${hasText}:${isComposing}:${composerLocked}`;
+    if (composerPhaseSyncKeyRef.current === syncKey) {
+      return;
+    }
+    composerPhaseSyncKeyRef.current = syncKey;
     dispatchMessageState({
       type: "composer/sync",
-      hasText:
-        nextText.trim().length > 0 ||
-        composerImages.length > 0 ||
-        composerFiles.length > 0,
+      hasText,
       isComposing,
       locked: composerLocked,
     });
@@ -6433,7 +6446,7 @@ export function AppShell() {
       setError("Attachments are still uploading to gateway.");
       return;
     }
-    const prompt = composer.trim();
+    const prompt = composerDraftRef.current.trim();
     if (!prompt && !composerImages.length && !composerFiles.length) {
       return;
     }
@@ -6615,7 +6628,7 @@ export function AppShell() {
 
   async function handleStartDispatch() {
     const startingNewThread = !selectedThreadId;
-    const prompt = composer.trim();
+    const prompt = composerDraftRef.current.trim();
     const promptImages = [...composerImages];
     const promptFiles = [...composerFiles];
     const hasPromptPayload =
@@ -7530,6 +7543,7 @@ export function AppShell() {
                 composerLocked={composerLocked}
                 composerPlaceholder={composerPlaceholder}
                 composerProviderType={composerProviderType}
+                composerResetKey={composerResetKey}
                 activeThreadBot={activeThreadBot}
                 activeThreadBotId={activeThreadBotId}
                 botBindingDisabled={bindingMutation === "bot-binding"}
@@ -7564,7 +7578,18 @@ export function AppShell() {
                   });
                 }}
                 onComposerChange={(value) => {
-                  setComposer(value);
+                  composerDraftRef.current = value;
+                  const nextTextPresent = value.trim().length > 0;
+                  setComposerTextPresent((current) =>
+                    current === nextTextPresent ? current : nextTextPresent,
+                  );
+                  if (
+                    /^\/[a-z0-9_]*$/i.test(value) &&
+                    !commandsLoaded &&
+                    !commandsLoading
+                  ) {
+                    void loadSlashCommands();
+                  }
                   syncComposerPhase(value);
                 }}
                 onComposerCompositionEnd={(value) => {
@@ -7574,7 +7599,7 @@ export function AppShell() {
                 }}
                 onComposerCompositionStart={() => {
                   isComposingRef.current = true;
-                  syncComposerPhase(composer, true);
+                  syncComposerPhase(composerDraftRef.current, true);
                 }}
                 onComposerInterrupt={() => {
                   void handleInterrupt();
