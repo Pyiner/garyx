@@ -35,12 +35,7 @@ import {
   type RenderTranscriptBlock,
 } from "../../transcript-render";
 import { buildTurnRows, type TurnRow } from "../../turn-render";
-import {
-  PENDING_ACK_TURN,
-  PENDING_AUTOMATION_HEAD_TURN,
-  PENDING_AUTOMATION_TAIL_TURN,
-  TurnSummary,
-} from "../../turn-summary";
+import { TurnSummary } from "../../turn-summary";
 import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ThreadLogPanel } from "./ThreadLogPanel";
@@ -519,20 +514,16 @@ export function ThreadPage({
                   text={activePendingAutomationRun.prompt}
                 />
               </article>
-              {teamView.isTeam ? (
-                <article className="message-bubble assistant pending">
-                  <div
-                    aria-label={t("Garyx is working")}
-                    className="message-loading"
-                  >
-                    <p className="message-loading-label message-loading-label--thinking">
-                      {t(RUN_LOADING_LABEL)}
-                    </p>
-                  </div>
-                </article>
-              ) : (
-                <TurnSummary turn={PENDING_AUTOMATION_HEAD_TURN} />
-              )}
+              <article className="message-bubble assistant pending">
+                <div
+                  aria-label={t("Garyx is working")}
+                  className="message-loading"
+                >
+                  <p className="message-loading-label message-loading-label--thinking">
+                    {t(RUN_LOADING_LABEL)}
+                  </p>
+                </div>
+              </article>
             </>
           ) : null}
 
@@ -677,7 +668,8 @@ export function ThreadPage({
               });
             }
 
-            return buildTurnRows(activeRenderableBlocks).map((row) => {
+            const turnRows = buildTurnRows(activeRenderableBlocks);
+            return turnRows.map((row, idx) => {
               if (row.kind === "flat") {
                 return (
                   <Fragment key={row.key}>
@@ -686,9 +678,19 @@ export function ThreadPage({
                 );
               }
               const turn: TurnRow = row;
+              // Bridge the gap where the assistant message is no longer
+              // pending=true but the thread run is still active (e.g.
+              // tool call in flight): force the bottom-most turn to read
+              // as running so the header stays "Working for X" instead
+              // of prematurely flipping to "Worked for X".
+              const isLastRow = idx === turnRows.length - 1;
+              const forceRunning =
+                isLastRow &&
+                isActiveSendingThread &&
+                turn.finalBlock === null;
               return (
                 <Fragment key={turn.key}>
-                  <TurnSummary turn={turn}>
+                  <TurnSummary turn={turn} forceRunning={forceRunning}>
                     {turn.steps.map((step) => (
                       <Fragment key={step.key}>
                         {renderBlockBody(step)}
@@ -726,37 +728,29 @@ export function ThreadPage({
           )}
 
           {showPendingAckLoading ? (
-            teamView.isTeam ? (
-              <article className="message-bubble assistant pending">
-                <div
-                  aria-label={t("Garyx is working")}
-                  className="message-loading"
-                >
-                  <p className="message-loading-label message-loading-label--thinking">
-                    {t(RUN_LOADING_LABEL)}
-                  </p>
-                </div>
-              </article>
-            ) : (
-              <TurnSummary turn={PENDING_ACK_TURN} />
-            )
+            <article className="message-bubble assistant pending">
+              <div
+                aria-label={t("Garyx is working")}
+                className="message-loading"
+              >
+                <p className="message-loading-label message-loading-label--thinking">
+                  {t(RUN_LOADING_LABEL)}
+                </p>
+              </div>
+            </article>
           ) : null}
 
           {showAutomationRunTailLoading ? (
-            teamView.isTeam ? (
-              <article className="message-bubble assistant pending">
-                <div
-                  aria-label={t("Garyx is working")}
-                  className="message-loading"
-                >
-                  <p className="message-loading-label message-loading-label--thinking">
-                    {t(RUN_LOADING_LABEL)}
-                  </p>
-                </div>
-              </article>
-            ) : (
-              <TurnSummary turn={PENDING_AUTOMATION_TAIL_TURN} />
-            )
+            <article className="message-bubble assistant pending">
+              <div
+                aria-label={t("Garyx is working")}
+                className="message-loading"
+              >
+                <p className="message-loading-label message-loading-label--thinking">
+                  {t(RUN_LOADING_LABEL)}
+                </p>
+              </div>
+            </article>
           ) : null}
         </div>
 

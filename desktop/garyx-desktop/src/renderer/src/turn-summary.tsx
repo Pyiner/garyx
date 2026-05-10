@@ -31,11 +31,12 @@ function parseTimestamp(value: string | null | undefined): number | null {
 
 function computeElapsed(
   turn: TurnRow,
+  isRunning: boolean,
   nowMs: number,
   fallbackStartMs: number,
 ): number {
   const start = parseTimestamp(turn.startedAt) ?? fallbackStartMs;
-  if (turn.isRunning) {
+  if (isRunning) {
     return Math.max(0, (nowMs - start) / 1000);
   }
   const end = parseTimestamp(turn.finishedAt);
@@ -55,12 +56,22 @@ function computeElapsed(
 export function TurnSummary({
   turn,
   children,
+  forceRunning = false,
 }: {
   turn: TurnRow;
   children?: ReactNode;
+  /**
+   * When true, treat the turn as still in flight even if no block in it
+   * is `pending=true`. ThreadPage uses this for the bottom-most turn
+   * while the gateway/agent run is still active — covers the gap
+   * between an assistant message finishing streaming and a tool call
+   * settling.
+   */
+  forceRunning?: boolean;
 }) {
+  const isRunning = turn.isRunning || forceRunning;
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(turn.isRunning);
+  const [expanded, setExpanded] = useState(isRunning);
   const [userControlled, setUserControlled] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   // Fallback start time when the turn doesn't carry a real timestamp
@@ -71,24 +82,24 @@ export function TurnSummary({
   // Auto-sync expanded state with isRunning until the user clicks once.
   useEffect(() => {
     if (!userControlled) {
-      setExpanded(turn.isRunning);
+      setExpanded(isRunning);
     }
-  }, [turn.isRunning, userControlled]);
+  }, [isRunning, userControlled]);
 
   // Live ticker for the running counter.
   useEffect(() => {
-    if (!turn.isRunning) return;
+    if (!isRunning) return;
     setNowMs(Date.now());
     const id = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, [turn.isRunning]);
+  }, [isRunning]);
 
-  const elapsed = computeElapsed(turn, nowMs, mountStartMs);
+  const elapsed = computeElapsed(turn, isRunning, nowMs, mountStartMs);
   const elapsedLabel = elapsed >= 1 ? formatElapsed(elapsed) : null;
   // English Codex distinguishes "Working for X" (live) vs "Worked for X"
   // (done); the bundled zh-CN translation collapses both to "已处理 X".
   // Use distinct labels so the running state reads unambiguously.
-  const summaryLabel = turn.isRunning
+  const summaryLabel = isRunning
     ? elapsedLabel
       ? t('Working for {duration}', { duration: elapsedLabel })
       : t('Working')
@@ -99,7 +110,7 @@ export function TurnSummary({
 
   return (
     <div
-      className={`turn-summary ${expanded ? 'is-expanded' : 'is-collapsed'} ${turn.isRunning ? 'is-running' : ''} ${hasBody ? 'has-body' : 'no-body'}`}
+      className={`turn-summary ${expanded ? 'is-expanded' : 'is-collapsed'} ${isRunning ? 'is-running' : ''} ${hasBody ? 'has-body' : 'no-body'}`}
     >
       <button
         aria-expanded={expanded}
@@ -135,27 +146,3 @@ export function TurnSummary({
   );
 }
 
-/**
- * Synthetic TurnRow used by the gateway-ack placeholder — displays the
- * Codex-style "Worked for Xs" header immediately after the user submits,
- * before the first real assistant message arrives.
- */
-export const PENDING_ACK_TURN: TurnRow = {
-  kind: 'turn',
-  key: 'turn:pending-ack',
-  steps: [],
-  finalBlock: null,
-  isRunning: true,
-  startedAt: null,
-  finishedAt: null,
-};
-
-export const PENDING_AUTOMATION_HEAD_TURN: TurnRow = {
-  ...PENDING_ACK_TURN,
-  key: 'turn:pending-automation-head',
-};
-
-export const PENDING_AUTOMATION_TAIL_TURN: TurnRow = {
-  ...PENDING_ACK_TURN,
-  key: 'turn:pending-automation-tail',
-};
