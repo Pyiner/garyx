@@ -128,12 +128,23 @@ export function buildTurnRows(
       currentKey = null;
       return;
     }
-    const { steps, finalBlock } = pickFinalBlock(currentSteps);
-    // Always emit a TurnRow so every assistant turn shows the
-    // Codex-parity "Worked for X" header — even short replies with no
-    // intermediate tool calls. The header is the visible end-of-run
-    // marker plus the toggle to inspect the run details if any exist.
-    rows.push(summarizeTurn(steps, finalBlock, currentKey, precedingUserTs));
+    // Codex emits its `worked-for` divider only as part of a turn that
+    // had real agent activity (reasoning + tool calls). A pure-text
+    // reply ("1 + 1 = 2") should sit flat under the user message with
+    // no Worked-for header. Detect that case here so we mirror the
+    // same UX.
+    const isPureTextReply =
+      currentSteps.length === 1 &&
+      currentSteps[0]!.kind === 'message' &&
+      currentSteps[0]!.entry.message.role === 'assistant' &&
+      currentSteps[0]!.entry.message.pending !== true;
+    if (isPureTextReply) {
+      const only = currentSteps[0]!;
+      rows.push({ kind: 'flat', key: only.key, block: only });
+    } else {
+      const { steps, finalBlock } = pickFinalBlock(currentSteps);
+      rows.push(summarizeTurn(steps, finalBlock, currentKey, precedingUserTs));
+    }
     currentSteps = [];
     currentKey = null;
   };
