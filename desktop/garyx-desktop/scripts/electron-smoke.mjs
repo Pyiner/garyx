@@ -857,6 +857,16 @@ async function main() {
       await window.getByRole('button', { name: oneOfExact(SMOKE_TEXT.newThread) }).waitFor({
         timeout: 15000,
       });
+      stage = 'verify-browser-lazy-startup';
+      const startupWebContents = await electronApp.evaluate(({ webContents }) =>
+        webContents.getAllWebContents().map((content) => content.getURL()),
+      );
+      assert.equal(
+        startupWebContents.some((url) => url.startsWith('https://www.google.com/')),
+        false,
+        'browser runtime should not load the default browser tab during app startup',
+      );
+      stage = 'wait-thread-list';
       try {
         await window.locator('.thread-title').filter({ hasText: THREAD_LABEL }).first().waitFor({
           timeout: 6000,

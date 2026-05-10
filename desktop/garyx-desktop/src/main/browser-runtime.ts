@@ -92,7 +92,6 @@ class BrowserRuntime {
 
   bindWindow(window: BrowserWindow): void {
     this.window = window;
-    this.ensureInitialized();
     this.reconcileMountedView();
   }
 
