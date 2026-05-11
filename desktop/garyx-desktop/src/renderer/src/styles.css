@@ -6503,41 +6503,36 @@ button.team-agent-speaker:focus-visible {
 }
 
 .turn-summary-toggle {
+  /* Match Codex's pattern: button sits flush-left so its text aligns
+     with the final-answer body content below the divider. No
+     horizontal padding, no rounded hover pill, no pointer cursor —
+     it's a quiet "I am clickable" toggle, not a UI button. */
   align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin: 0;
-  padding: 1px 6px;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  padding: 0;
+  border: 0;
   background: transparent;
   color: var(--color-token-text-secondary);
   font-family: var(--message-reading-font);
   font-size: 13px;
   line-height: 18px;
-  cursor: pointer;
-  transition:
-    background-color var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
-}
-
-.turn-summary-toggle:hover {
-  background: color-mix(
-    in oklab,
-    var(--color-token-foreground) 5%,
-    transparent
-  );
-  color: var(--color-token-foreground);
+  cursor: default;
+  transition: color var(--duration-fast) var(--ease-standard);
 }
 
 .turn-summary-toggle:focus-visible {
   outline: none;
-  border-color: color-mix(
+  /* Subtle focus ring only when keyboard-traversed; no hover treatment. */
+  text-decoration: underline;
+  text-decoration-color: color-mix(
     in oklab,
-    var(--color-token-foreground) 30%,
+    var(--color-token-foreground) 35%,
     transparent
   );
+  text-underline-offset: 3px;
 }
 
 .turn-summary-label {
@@ -6569,18 +6564,52 @@ button.team-agent-speaker:focus-visible {
   );
 }
 
+/* Header is the visual anchor — when the body collapses, the header
+   stays exactly where it was and the final answer below pulls upward
+   into the freed space. `overflow-anchor: auto` pins the toggle as the
+   scroll anchor so the messages container doesn't auto-scroll the
+   thread when the inner height shrinks. */
+.turn-summary-toggle {
+  overflow-anchor: auto;
+}
+
+.turn-summary-divider {
+  overflow-anchor: none;
+}
+
+/* Use the modern grid-row 1fr⇄0fr trick instead of display:none so the
+   collapse animates smoothly downward-into-the-line; the header
+   position never jumps. */
 .turn-summary-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  min-width: 0;
+  margin-top: 12px;
+  overflow-anchor: none;
+  transition:
+    grid-template-rows 0.18s ease-out,
+    margin-top 0.18s ease-out,
+    opacity 0.14s ease-out;
+}
+
+.turn-summary-body > * {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.turn-summary-body > .turn-summary-body-inner {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-width: 0;
-  /* Push the body down only when the panel is actually expanded so the
-     1px divider stays flush with whatever follows when collapsed. */
-  margin-top: 12px;
 }
 
+/* When collapsed: 0fr row + 0 top-margin collapses the body to zero
+   height; the inner flex column keeps its layout intact so reopening
+   restores the previous content without flicker. */
 .turn-summary.is-collapsed .turn-summary-body {
-  display: none;
+  grid-template-rows: 0fr;
+  margin-top: 0;
+  opacity: 0;
 }
 
 /* Subtle pulse on the running label so it's easy to tell the run is
@@ -7202,7 +7231,9 @@ button.team-agent-speaker:focus-visible {
 .composer-shell-wrap {
   position: absolute;
   right: 0;
-  bottom: 0;
+  /* Float 12px above the thread-main bottom so the composer's 4×16
+     drop shadow doesn't get clipped by thread-main's overflow:hidden. */
+  bottom: 12px;
   left: 0;
   z-index: 10;
   width: min(var(--container-2xl), 100%);
@@ -7405,7 +7436,8 @@ button.team-agent-speaker:focus-visible {
   margin: 0 auto;
   overflow: visible;
   border: 0;
-  border-radius: 18px;
+  /* Match Codex's `rounded-3xl` (25px effective) pillowy composer. */
+  border-radius: 25px;
   background: transparent;
   box-shadow: none;
   transition:
@@ -7443,13 +7475,15 @@ button.team-agent-speaker:focus-visible {
   z-index: 2;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  min-height: 98px;
+  /* Tightened to match Codex's 96px tall composer — minHeight 80 + 4/6
+     vertical padding + editor minHeight 44 + 32-tall footer ≈ 96. */
+  min-height: 80px;
   margin: 0;
-  padding: 12px 10px 8px;
+  padding: 8px 10px 6px;
   border: 0;
-  border-radius: 18px;
+  border-radius: 25px;
   background: transparent;
   box-shadow: none;
   isolation: isolate;
@@ -7464,10 +7498,23 @@ button.team-agent-speaker:focus-visible {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  border: 1px solid rgba(26, 28, 31, 0.075);
-  border-radius: 18px;
-  background: var(--color-token-bg-primary);
-  box-shadow: 0 1px 2px rgba(13, 13, 13, 0.024);
+  /* Codex-style frosted glass: semi-transparent fill + backdrop blur, with
+     a 1px ring + soft 4×16 drop for native-Mac depth. The card sits on
+     top of the messages scroll-clip layer, so when the user scrolls fast
+     the blur reveals just enough content to feel alive. */
+  border: 0;
+  border-radius: 25px;
+  background: color-mix(
+    in srgb,
+    var(--color-token-bg-primary) 86%,
+    transparent
+  );
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  /* 1:1 with Codex: 1px ring at 10% black + 4×16 soft drop at 5% black. */
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.1),
+    0 4px 16px 0 rgba(0, 0, 0, 0.05);
 }
 
 .composer-shell.has-queue .composer {
@@ -7749,15 +7796,18 @@ button.team-agent-speaker:focus-visible {
 }
 
 .composer-editor {
-  min-height: 52px;
+  /* Match Codex's editor minHeight = 44 (we shaved 8px off the old 52). */
+  min-height: 44px;
   max-height: 199px;
   padding: 4px 8px 0;
   overflow-y: hidden;
   resize: none;
   font-family: -apple-system, "system-ui", "Segoe UI", sans-serif;
-  font-size: var(--text-base);
+  /* Bump to Codex's 14/20 so the input copy matches the chat-body type
+     scale instead of looking a touch smaller. */
+  font-size: 14px;
   font-weight: 400;
-  line-height: 19.5px;
+  line-height: 20px;
   caret-color: var(--color-token-foreground);
 }
 

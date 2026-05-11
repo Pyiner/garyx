@@ -139,7 +139,7 @@ function TurnSummaryComponent({
           className="turn-summary-body"
           inert={!expanded ? true : undefined}
         >
-          {children}
+          <div className="turn-summary-body-inner">{children}</div>
         </div>
       ) : null}
     </div>
