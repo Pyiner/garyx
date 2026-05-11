@@ -7856,17 +7856,27 @@ pub(crate) async fn cmd_send_message(
     config_path: &str,
     bot: Option<&str>,
     image: Option<&Path>,
+    file: Option<&Path>,
     text: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let bot = resolve_cli_message_bot(bot)?;
+    if image.is_some() && file.is_some() {
+        return Err("message supports at most one attachment: choose --image or --file".into());
+    }
     let image_path = image.map(|path| {
         std::fs::canonicalize(path)
             .unwrap_or_else(|_| path.to_path_buf())
             .to_string_lossy()
             .to_string()
     });
-    if text.trim().is_empty() && image_path.is_none() {
-        return Err("message text or --image is required".into());
+    let file_path = file.map(|path| {
+        std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string()
+    });
+    if text.trim().is_empty() && image_path.is_none() && file_path.is_none() {
+        return Err("message text, --image, or --file is required".into());
     }
 
     let gateway = gateway_endpoint(config_path)?;
@@ -7878,6 +7888,9 @@ pub(crate) async fn cmd_send_message(
     });
     if let Some(image_path) = image_path {
         body["image"] = serde_json::Value::String(image_path);
+    }
+    if let Some(file_path) = file_path {
+        body["file"] = serde_json::Value::String(file_path);
     }
 
     let client = reqwest::Client::new();

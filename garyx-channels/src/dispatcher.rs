@@ -166,6 +166,9 @@ impl OutboundSender for TelegramSender {
         } else if let Some((image_path, _alt)) = request.image_content() {
             self.send_image(chat_id, Path::new(image_path), None, reply_to, thread_id)
                 .await?
+        } else if let Some((file_path, caption)) = request.file_content() {
+            self.send_file(chat_id, Path::new(file_path), caption, reply_to, thread_id)
+                .await?
         } else {
             return Ok(SendMessageResult::default());
         };
@@ -221,6 +224,30 @@ impl TelegramSender {
         .await?;
         Ok(vec![message_id])
     }
+
+    pub async fn send_file(
+        &self,
+        chat_id: i64,
+        file_path: &Path,
+        caption: Option<&str>,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+    ) -> Result<Vec<i64>, ChannelError> {
+        let message_id = crate::telegram::send_document(
+            crate::telegram::TelegramSendTarget::new(
+                &self.http,
+                &self.token,
+                chat_id,
+                message_thread_id,
+                &self.api_base,
+            ),
+            file_path,
+            caption,
+            reply_to_message_id,
+        )
+        .await?;
+        Ok(vec![message_id])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +294,10 @@ impl OutboundSender for FeishuSender {
                 reply_target.as_deref(),
             )
             .await?
+        } else if request.file_content().is_some() {
+            return Err(ChannelError::SendFailed(
+                "file sending is currently supported only for telegram".to_owned(),
+            ));
         } else {
             return Ok(SendMessageResult::default());
         };
@@ -807,6 +838,10 @@ impl OutboundMessage {
 
     pub fn image_content(&self) -> Option<(&str, Option<&str>)> {
         self.content.as_image()
+    }
+
+    pub fn file_content(&self) -> Option<(&str, Option<&str>)> {
+        self.content.as_file()
     }
 
     pub fn resolved_delivery_target_type(&self) -> String {
@@ -1428,6 +1463,10 @@ impl OutboundSender for WeixinSender {
             )
             .await
             .map(|message_ids| SendMessageResult { message_ids })
+        } else if request.file_content().is_some() {
+            Err(ChannelError::SendFailed(
+                "file sending is currently supported only for telegram".to_owned(),
+            ))
         } else {
             Ok(SendMessageResult::default())
         }

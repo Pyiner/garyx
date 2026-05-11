@@ -317,6 +317,63 @@ async fn test_send_telegram_image_content_uses_send_photo() {
     );
 }
 
+#[tokio::test]
+async fn test_send_telegram_file_content_uses_send_document() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendDocument"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {
+                "message_id": 43,
+                "chat": { "id": 123, "type": "private" },
+                "date": 1
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let temp = tempfile::tempdir().expect("temp dir");
+    let file_path = temp.path().join("note.md");
+    std::fs::write(&file_path, b"# Test\n").expect("file");
+
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_telegram(TelegramSender {
+        account_id: "main".to_string(),
+        token: "test-token".to_string(),
+        http: Client::new(),
+        api_base: server.uri(),
+        is_running: true,
+    });
+
+    let result = dispatcher
+        .send_message(OutboundMessage {
+            channel: "telegram".to_string(),
+            account_id: "main".to_string(),
+            chat_id: "123".to_string(),
+            delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
+            delivery_target_id: "123".to_string(),
+            content: ChannelOutboundContent::file(
+                file_path.to_string_lossy().to_string(),
+                Some("note".to_string()),
+            ),
+            reply_to: None,
+            thread_id: None,
+        })
+        .await
+        .expect("send file");
+
+    assert_eq!(result.message_ids, vec!["43".to_string()]);
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/bottest-token/sendDocument")
+            .count(),
+        1
+    );
+}
+
 #[test]
 fn test_normalize_telegram_thread_id_ignores_private_chat_binding_key() {
     assert_eq!(normalize_telegram_thread_id(42, Some("42")), None);

@@ -942,11 +942,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 cmd_wiki_status(config_path, &wiki_id, json).await
             }
         },
-        Some(Commands::Message { bot, image, text }) => {
+        Some(Commands::Message {
+            bot,
+            image,
+            file,
+            text,
+        }) => {
             cmd_send_message(
                 config_path,
                 bot.as_deref(),
                 image.as_deref(),
+                file.as_deref(),
                 &text.join(" "),
             )
             .await

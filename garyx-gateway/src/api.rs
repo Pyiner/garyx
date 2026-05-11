@@ -2532,6 +2532,9 @@ pub struct SendPayload {
     /// Optional local image path. When text is also provided, it is used as the caption.
     #[serde(default)]
     pub image: Option<String>,
+    /// Optional local file path. When text is also provided, it is used as the caption.
+    #[serde(default)]
+    pub file: Option<String>,
 }
 
 pub async fn send_message(
@@ -2567,10 +2570,24 @@ pub async fn send_message(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    if text.trim().is_empty() && image.is_none() {
+    let file = payload
+        .file
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if image.is_some() && file.is_some() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "ok": false, "error": "text or image is required" })),
+            Json(
+                json!({ "ok": false, "error": "message supports at most one attachment: choose image or file" }),
+            ),
+        );
+    }
+    if text.trim().is_empty() && image.is_none() && file.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "text, image, or file is required" })),
         );
     }
     if let Some(image_path) = image.as_deref() {
@@ -2587,6 +2604,21 @@ pub async fn send_message(
                 Json(
                     json!({ "ok": false, "error": format!("image file not found: {image_path}") }),
                 ),
+            );
+        }
+    }
+    if let Some(file_path) = file.as_deref() {
+        let path = FsPath::new(file_path);
+        if !path.is_absolute() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": "file path must be absolute" })),
+            );
+        }
+        if !path.is_file() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": format!("file not found: {file_path}") })),
             );
         }
     }
@@ -2628,6 +2660,13 @@ pub async fn send_message(
             Some(text.clone())
         };
         ChannelOutboundContent::image(image_path, caption)
+    } else if let Some(file_path) = file {
+        let caption = if text.trim().is_empty() {
+            None
+        } else {
+            Some(text.clone())
+        };
+        ChannelOutboundContent::file(file_path, caption)
     } else {
         ChannelOutboundContent::text(text)
     };

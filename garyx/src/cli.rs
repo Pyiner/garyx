@@ -204,7 +204,10 @@ pub(crate) enum Commands {
         /// Local image path to send. Message text is used as the caption.
         #[arg(long)]
         image: Option<PathBuf>,
-        /// Message text. Required unless --image is provided.
+        /// Local file path to send. Message text is used as the caption.
+        #[arg(long)]
+        file: Option<PathBuf>,
+        /// Message text. Required unless --image or --file is provided.
         text: Vec<String>,
     },
 }

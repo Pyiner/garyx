@@ -17,6 +17,11 @@ pub enum ChannelOutboundContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         alt: Option<String>,
     },
+    File {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
     ToolUse {
         message: ProviderMessage,
     },
@@ -34,6 +39,13 @@ impl ChannelOutboundContent {
         Self::Image {
             path: path.into(),
             alt,
+        }
+    }
+
+    pub fn file(path: impl Into<String>, caption: Option<String>) -> Self {
+        Self::File {
+            path: path.into(),
+            caption,
         }
     }
 
@@ -59,10 +71,18 @@ impl ChannelOutboundContent {
         }
     }
 
+    pub fn as_file(&self) -> Option<(&str, Option<&str>)> {
+        match self {
+            Self::File { path, caption } => Some((path, caption.as_deref())),
+            _ => None,
+        }
+    }
+
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Text { .. } => "text",
             Self::Image { .. } => "image",
+            Self::File { .. } => "file",
             Self::ToolUse { .. } => "tool_use",
             Self::ToolResult { .. } => "tool_result",
         }
