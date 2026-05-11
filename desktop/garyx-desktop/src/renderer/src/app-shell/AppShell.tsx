@@ -5681,15 +5681,13 @@ export function AppShell() {
       group,
       onState: setDesktopState,
       onOpenExistingThread: (endpoint) => {
-        handleOpenThreadFromEndpoint(endpoint);
+        void handleOpenThreadFromEndpoint(endpoint);
       },
       onOpenThreadById: (threadId) => {
-        setError(null);
-        setContentView("thread");
-        setNewThreadDraftActive(false);
-        setSelectedThreadId(threadId);
-        setPendingWorkspacePath(null);
-        setPendingBotId(null);
+        void openExistingThread(threadId).then(() => {
+          setPendingWorkspacePath(null);
+          setPendingBotId(null);
+        });
       },
       shouldKeepNewDraft: (groupId, initialWorkspacePath) =>
         newThreadDraftActiveRef.current &&
@@ -5962,6 +5960,11 @@ export function AppShell() {
   async function handleOpenThreadFromEndpoint(
     endpoint: DesktopChannelEndpoint,
   ) {
+    if (endpoint.threadId) {
+      await openExistingThread(endpoint.threadId);
+      return;
+    }
+
     openThreadFromEndpoint({
       endpoint,
       setError,
