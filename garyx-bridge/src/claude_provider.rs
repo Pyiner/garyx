@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use claude_agent_sdk::{
     AssistantMessage, ClaudeAgentDefinition, ClaudeAgentOptions, ClaudeRun, ClaudeRunControl,
-    ContentBlock, McpServerConfig, Message, OutboundUserMessage, PermissionMode, TextBlock,
-    UserInput, run_streaming as sdk_run_streaming,
+    ClaudeSDKError, ContentBlock, McpServerConfig, Message, OutboundUserMessage, PermissionMode,
+    TextBlock, UserInput, run_streaming as sdk_run_streaming,
 };
 use garyx_models::provider::{
     ClaudeCodeConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
@@ -67,7 +67,7 @@ fn is_session_corrupted_error(msg: &str) -> bool {
     patterns.iter().any(|p| lower.contains(p))
 }
 
-fn should_retry_with_fresh_session(msg: &str) -> bool {
+fn should_retry_message_with_fresh_session(msg: &str) -> bool {
     let patterns = [
         "failed to connect to claude",
         "control protocol error",
@@ -76,6 +76,31 @@ fn should_retry_with_fresh_session(msg: &str) -> bool {
     ];
     let lower = msg.to_lowercase();
     is_session_corrupted_error(msg) || patterns.iter().any(|pattern| lower.contains(pattern))
+}
+
+fn should_retry_with_fresh_session(error: &BridgeError) -> bool {
+    match error {
+        BridgeError::SessionParseUnsupportedBlock(_) => false,
+        other => should_retry_message_with_fresh_session(&other.to_string()),
+    }
+}
+
+fn bridge_error_from_sdk_stream_error(error: ClaudeSDKError) -> BridgeError {
+    match error {
+        ClaudeSDKError::MessageParse { message, data } => {
+            if message.starts_with("Unknown content block type:") {
+                let block_type = data
+                    .as_ref()
+                    .and_then(|value| value.get("type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                BridgeError::SessionParseUnsupportedBlock(format!("{message} ({block_type})"))
+            } else {
+                BridgeError::RunFailed(format!("claude SDK message parse error: {message}"))
+            }
+        }
+        other => BridgeError::RunFailed(format!("claude SDK stream error: {other}")),
+    }
 }
 
 fn non_empty_session_id(value: Option<&str>) -> Option<String> {
@@ -225,6 +250,37 @@ async fn read_claude_ai_title_from_transcript(cwd: &Path, session_id: &str) -> O
     read_claude_ai_title_from_transcript_path(&transcript_path, session_id).await
 }
 
+async fn count_claude_transcript_history_messages_at_path(transcript_path: &Path) -> Option<usize> {
+    let content = tokio::fs::read_to_string(transcript_path).await.ok()?;
+    Some(
+        content
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|value| {
+                value
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| matches!(kind, "user" | "assistant"))
+            })
+            .count(),
+    )
+}
+
+async fn count_claude_transcript_history_messages(
+    config: &ClaudeCodeConfig,
+    options: &ProviderRunOptions,
+    session_id: Option<&str>,
+) -> Option<usize> {
+    let session_id = session_id?.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+    let cwd = resolve_claude_cwd(config, options)?;
+    let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    let transcript_path = claude_transcript_path(&claude_config_dir()?, &cwd, session_id);
+    count_claude_transcript_history_messages_at_path(&transcript_path).await
+}
+
 fn push_assistant_text_message(
     text: &str,
     response_text: &mut String,
@@ -330,7 +386,7 @@ fn process_assistant_blocks_streaming(
                     parent_tool_use_id,
                 );
             }
-            ContentBlock::Image(_) | ContentBlock::Thinking(_) => {}
+            ContentBlock::Image(_) | ContentBlock::Document(_) | ContentBlock::Thinking(_) => {}
         }
     }
 
@@ -1035,7 +1091,7 @@ impl ClaudeCliProvider {
 
         let (response_text, result_data) = self
             .process_messages_streaming(run_id, &options.thread_id, &mut run, on_chunk)
-            .await;
+            .await?;
 
         let _ = run.close().await;
         self.unregister_run(run_id).await;
@@ -1095,7 +1151,7 @@ impl ClaudeCliProvider {
         thread_id: &str,
         source: &mut (impl MessageSource + Send),
         on_chunk: &StreamCallback,
-    ) -> (String, Option<ProcessedResult>) {
+    ) -> Result<(String, Option<ProcessedResult>), BridgeError> {
         let mut response_text = String::new();
         let mut result_data: Option<ProcessedResult> = None;
         let mut session_messages: Vec<ProviderMessage> = Vec::new();
@@ -1229,18 +1285,33 @@ impl ClaudeCliProvider {
                     }
                     Ok(Message::StreamEvent(_)) => {}
                     Err(e) => {
-                        tracing::warn!(error = %e, "error receiving message from SDK");
-                        break;
+                        let bridge_error = bridge_error_from_sdk_stream_error(e);
+                        match &bridge_error {
+                            BridgeError::SessionParseUnsupportedBlock(_) => tracing::error!(
+                                run_id = %run_id,
+                                thread_id = %thread_id,
+                                error = %bridge_error,
+                                "unsupported SDK content block while reading Claude stream"
+                            ),
+                            _ => tracing::warn!(
+                                run_id = %run_id,
+                                thread_id = %thread_id,
+                                error = %bridge_error,
+                                "error receiving message from SDK"
+                            ),
+                        }
+                        return Err(bridge_error);
                     }
                 },
             }
         }
 
-        (response_text, result_data)
+        Ok((response_text, result_data))
     }
 }
 
 /// Extracted result data from a `ResultMessage`.
+#[derive(Debug)]
 struct ProcessedResult {
     session_id: String,
     cost_usd: f64,
@@ -1400,23 +1471,35 @@ impl AgentLoopProvider for ClaudeCliProvider {
 
         let should_retry = session_id.is_some()
             && match &attempt_result {
-                Err(error) => should_retry_with_fresh_session(&error.to_string()),
+                Err(error) => should_retry_with_fresh_session(error),
                 Ok(Some(outcome)) if outcome.is_error => {
-                    should_retry_with_fresh_session(&outcome.response_text)
+                    should_retry_message_with_fresh_session(&outcome.response_text)
                 }
                 _ => false,
             };
 
         let mut result = if should_retry {
+            let lost_history_messages = count_claude_transcript_history_messages(
+                &self.config,
+                options,
+                session_id.as_deref(),
+            )
+            .await;
             // Log the original failure reason
             match &attempt_result {
-                Err(e) => tracing::warn!(
+                Err(e) => tracing::error!(
                     thread_id = %options.thread_id,
+                    sdk_session_id = session_id.as_deref().unwrap_or(""),
+                    lost_history_messages = lost_history_messages.map(|count| count as i64).unwrap_or(-1),
+                    lost_history_messages_known = lost_history_messages.is_some(),
                     error = %e,
                     "resume failed, retrying as new session"
                 ),
-                Ok(Some(outcome)) => tracing::warn!(
+                Ok(Some(outcome)) => tracing::error!(
                     thread_id = %options.thread_id,
+                    sdk_session_id = session_id.as_deref().unwrap_or(""),
+                    lost_history_messages = lost_history_messages.map(|count| count as i64).unwrap_or(-1),
+                    lost_history_messages_known = lost_history_messages.is_some(),
                     response = %outcome.response_text,
                     "resume returned error, retrying as new session"
                 ),

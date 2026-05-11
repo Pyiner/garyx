@@ -18,6 +18,10 @@ fn test_bridge_error_variants() {
         ),
         (BridgeError::RunFailed("bad".into()), "run failed: bad"),
         (
+            BridgeError::SessionParseUnsupportedBlock("document".into()),
+            "session parse unsupported block: document",
+        ),
+        (
             BridgeError::SessionError("gone".into()),
             "session error: gone",
         ),

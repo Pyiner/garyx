@@ -13,7 +13,7 @@ pub use run_streaming::{
 };
 pub use types::{
     AssistantMessage, AssistantMessageError, ClaudeAgentDefinition, ClaudeAgentOptions,
-    ContentBlock, McpServerConfig, Message, PermissionMode, ResultMessage, StreamEvent,
-    SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock, UserContent,
-    UserMessage,
+    ContentBlock, DocumentBlock, DocumentSource, McpServerConfig, Message, PermissionMode,
+    ResultMessage, StreamEvent, SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock,
+    ToolUseBlock, UserContent, UserMessage,
 };

@@ -147,6 +147,31 @@ async fn test_read_claude_ai_title_from_transcript_path_uses_latest_title() {
     );
 }
 
+#[tokio::test]
+async fn test_count_claude_transcript_history_messages_at_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session-1.jsonl");
+    fs::write(
+        &transcript,
+        concat!(
+            r#"{"type":"system","subtype":"init","session_id":"session-1"}"#,
+            "\n",
+            r#"{"type":"user","message":{"content":"hello"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+            "\n",
+            r#"{"type":"result","session_id":"session-1"}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(
+        count_claude_transcript_history_messages_at_path(&transcript).await,
+        Some(2)
+    );
+}
+
 #[test]
 fn test_claude_transcript_path_matches_observed_project_dir_shape() {
     let path = claude_transcript_path(
@@ -205,14 +230,23 @@ fn test_session_corruption_detection() {
 
 #[test]
 fn test_fresh_session_retry_detection() {
-    assert!(should_retry_with_fresh_session(
-        "Control protocol error: CLI process exited before responding"
+    assert!(should_retry_with_fresh_session(&BridgeError::RunFailed(
+        "Control protocol error: CLI process exited before responding".to_owned()
+    )));
+    assert!(should_retry_with_fresh_session(&BridgeError::RunFailed(
+        "no result from claude SDK".to_owned()
+    )));
+    assert!(should_retry_with_fresh_session(&BridgeError::RunFailed(
+        "Error: session not found".to_owned()
+    )));
+    assert!(!should_retry_with_fresh_session(&BridgeError::RunFailed(
+        "permission denied".to_owned()
+    )));
+    assert!(!should_retry_with_fresh_session(
+        &BridgeError::SessionParseUnsupportedBlock(
+            "Unknown content block type: document".to_owned()
+        )
     ));
-    assert!(should_retry_with_fresh_session(
-        "run failed: no result from claude SDK"
-    ));
-    assert!(should_retry_with_fresh_session("Error: session not found"));
-    assert!(!should_retry_with_fresh_session("permission denied"));
 }
 
 #[test]
@@ -1024,7 +1058,8 @@ async fn test_process_messages_streaming_emits_user_ack_boundaries() {
     provider.set_pending_inputs("run-1", 1).await;
     let (response_text, result_data) = provider
         .process_messages_streaming("run-1", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "第一段\n\n第二段");
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
@@ -1080,7 +1115,8 @@ async fn test_process_messages_streaming_requires_result_message_for_completion(
     let cb: StreamCallback = Box::new(|_| {});
     let (response_text, result_data) = provider
         .process_messages_streaming("run-no-result", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "partial progress");
     assert!(
@@ -1155,7 +1191,8 @@ async fn test_process_messages_streaming_emits_queued_input_ack_id_after_root_ac
 
     let (_response_text, result_data) = provider
         .process_messages_streaming("run-queued", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
     assert_eq!(
@@ -1258,7 +1295,8 @@ async fn test_process_messages_streaming_suppresses_claude_synthetic_no_response
 
     let (response_text, result_data) = provider
         .process_messages_streaming("run-synthetic", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "真实回复");
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
@@ -1325,7 +1363,8 @@ async fn test_process_messages_streaming_preserves_non_synthetic_no_response_tex
 
     let (response_text, result_data) = provider
         .process_messages_streaming("run-real-text", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "No response requested.");
     assert_eq!(
@@ -1402,7 +1441,8 @@ async fn test_process_messages_streaming_emits_assistant_segment_boundaries() {
 
     let (response_text, _result_data) = provider
         .process_messages_streaming("run-assistant-segment", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "让我先看看。\n\n好了，现在开始修。");
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
@@ -1482,7 +1522,8 @@ async fn test_process_messages_streaming_emits_tool_result_user_echo_without_bou
     provider.set_pending_inputs("run-2", 1).await;
     let (response_text, _result_data) = provider
         .process_messages_streaming("run-2", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "after tool");
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
@@ -1555,7 +1596,8 @@ async fn test_process_messages_streaming_emits_live_tool_events() {
 
     let (response_text, _result_data) = provider
         .process_messages_streaming("run-tools", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "");
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
@@ -1640,7 +1682,8 @@ async fn test_process_messages_streaming_suppresses_subagent_text_but_keeps_tool
 
     let (response_text, result_data) = provider
         .process_messages_streaming("run-subagent", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "最终只保留顶层回复");
 
@@ -1747,7 +1790,8 @@ async fn test_process_messages_streaming_preserves_assistant_block_order() {
 
     let (response_text, result_data) = provider
         .process_messages_streaming("run-order", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "在。先执行 ls。\n结果如下。");
     let emitted = chunks.lock().expect("chunks mutex poisoned").clone();
@@ -1871,7 +1915,8 @@ async fn test_process_messages_streaming_waits_for_all_pending_results() {
     );
     let (response_text, result_data) = provider
         .process_messages_streaming("run-3", "thread::test", &mut rx, &cb)
-        .await;
+        .await
+        .expect("stream should process");
 
     assert_eq!(response_text, "first \n\nsecond");
     let result = result_data.expect("expected final result");
@@ -2051,6 +2096,84 @@ async fn test_run_streaming_retries_with_fresh_session_after_connect_failure() {
             .cloned()
             .as_deref(),
         Some("fresh-session")
+    );
+}
+
+#[tokio::test]
+async fn test_sdk_unsupported_content_block_error_is_not_swallowed_as_no_result() {
+    let provider = make_provider();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    tx.send(Err(claude_agent_sdk::ClaudeSDKError::MessageParse {
+        message: "Unknown content block type: future_block".to_owned(),
+        data: Some(json!({
+            "type": "future_block"
+        })),
+    }))
+    .await
+    .unwrap();
+    drop(tx);
+
+    let cb: StreamCallback = Box::new(|_| {});
+    let err = provider
+        .process_messages_streaming("run-document", "thread::document", &mut rx, &cb)
+        .await
+        .expect_err("unsupported SDK blocks should surface as parse errors");
+
+    assert!(matches!(
+        err,
+        BridgeError::SessionParseUnsupportedBlock(ref message)
+            if message.contains("Unknown content block type: future_block")
+    ));
+    assert!(!should_retry_with_fresh_session(&err));
+}
+
+#[tokio::test]
+async fn test_session_parse_error_does_not_retry_with_fresh_session() {
+    let mut provider = make_provider();
+    provider.ready = true;
+    provider
+        .session_map
+        .lock()
+        .await
+        .insert("thread::document".to_owned(), "stale-session".to_owned());
+    provider
+        .enqueue_test_run_attempt(Err(BridgeError::SessionParseUnsupportedBlock(
+            "Unknown content block type: document".to_owned(),
+        )))
+        .await;
+
+    let err = provider
+        .run_streaming(
+            &ProviderRunOptions {
+                thread_id: "thread::document".to_owned(),
+                message: "hello".to_owned(),
+                workspace_dir: None,
+                images: None,
+                metadata: HashMap::new(),
+            },
+            Box::new(|_| {}),
+        )
+        .await
+        .expect_err("parse errors should not fall back to a new session");
+
+    assert!(matches!(
+        err,
+        BridgeError::SessionParseUnsupportedBlock(ref message)
+            if message.contains("Unknown content block type: document")
+    ));
+    assert_eq!(
+        provider.recorded_test_session_attempts().await,
+        vec![Some("stale-session".to_owned())]
+    );
+    assert_eq!(
+        provider
+            .session_map
+            .lock()
+            .await
+            .get("thread::document")
+            .cloned()
+            .as_deref(),
+        Some("stale-session")
     );
 }
 

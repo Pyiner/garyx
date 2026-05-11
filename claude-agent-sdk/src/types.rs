@@ -76,11 +76,41 @@ pub struct ImageBlock {
     pub source: ImageSource,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DocumentSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DocumentBlock {
+    pub source: DocumentSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub citations: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<Value>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text(TextBlock),
     Image(ImageBlock),
+    Document(DocumentBlock),
     Thinking(ThinkingBlock),
     ToolUse(ToolUseBlock),
     ToolResult(ToolResultBlock),

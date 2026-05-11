@@ -2,9 +2,9 @@ use serde_json::Value;
 
 use crate::error::{ClaudeSDKError, Result};
 use crate::types::{
-    AssistantMessage, ContentBlock, ImageBlock, ImageSource, Message, ResultMessage, StreamEvent,
-    SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock, UserContent,
-    UserMessage,
+    AssistantMessage, ContentBlock, DocumentBlock, DocumentSource, ImageBlock, ImageSource,
+    Message, ResultMessage, StreamEvent, SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock,
+    ToolUseBlock, UserContent, UserMessage,
 };
 
 /// Parse a raw JSON value (from CLI JSONL output) into a typed [`Message`].
@@ -93,6 +93,45 @@ fn parse_content_block(block: &Value) -> Result<ContentBlock> {
                         .unwrap_or("")
                         .to_string(),
                 },
+            }))
+        }
+        "document" => {
+            let source = block.get("source");
+            Ok(ContentBlock::Document(DocumentBlock {
+                source: DocumentSource {
+                    source_type: source
+                        .and_then(|s| s.get("type"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    media_type: source
+                        .and_then(|s| s.get("media_type"))
+                        .and_then(|v| v.as_str())
+                        .map(ToOwned::to_owned),
+                    data: source
+                        .and_then(|s| s.get("data"))
+                        .and_then(|v| v.as_str())
+                        .map(ToOwned::to_owned),
+                    url: source
+                        .and_then(|s| s.get("url"))
+                        .and_then(|v| v.as_str())
+                        .map(ToOwned::to_owned),
+                    file_id: source
+                        .and_then(|s| s.get("file_id"))
+                        .and_then(|v| v.as_str())
+                        .map(ToOwned::to_owned),
+                    content: source.and_then(|s| s.get("content")).cloned(),
+                },
+                title: block
+                    .get("title")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                context: block
+                    .get("context")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
+                citations: block.get("citations").cloned(),
+                cache_control: block.get("cache_control").cloned(),
             }))
         }
         "thinking" => Ok(ContentBlock::Thinking(ThinkingBlock {

@@ -91,6 +91,40 @@ fn test_parse_user_message_blocks_with_image() {
 }
 
 #[test]
+fn test_parse_document_content_block() {
+    let block = json!({
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": "JVBERi0xLjQK"
+        },
+        "title": "sample.pdf",
+        "context": "Synthetic fixture metadata",
+        "citations": { "enabled": true }
+    });
+
+    let parsed = parse_content_block(&block).expect("document block should parse");
+    match parsed {
+        ContentBlock::Document(document) => {
+            assert_eq!(document.source.source_type, "base64");
+            assert_eq!(
+                document.source.media_type.as_deref(),
+                Some("application/pdf")
+            );
+            assert_eq!(document.source.data.as_deref(), Some("JVBERi0xLjQK"));
+            assert_eq!(document.title.as_deref(), Some("sample.pdf"));
+            assert_eq!(
+                document.context.as_deref(),
+                Some("Synthetic fixture metadata")
+            );
+            assert_eq!(document.citations, Some(json!({ "enabled": true })));
+        }
+        other => panic!("Expected Document block, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_parse_assistant_message() {
     let data = json!({
         "type": "assistant",

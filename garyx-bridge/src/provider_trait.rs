@@ -23,6 +23,9 @@ pub enum BridgeError {
     #[error("run failed: {0}")]
     RunFailed(String),
 
+    #[error("session parse unsupported block: {0}")]
+    SessionParseUnsupportedBlock(String),
+
     #[error("session error: {0}")]
     SessionError(String),
 

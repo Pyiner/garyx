@@ -234,3 +234,32 @@ fn test_tool_use_block_serde() {
     let round_trip: ContentBlock = serde_json::from_value(json).unwrap();
     assert_eq!(round_trip, block);
 }
+
+#[test]
+fn test_document_block_serde() {
+    let block = ContentBlock::Document(DocumentBlock {
+        source: DocumentSource {
+            source_type: "content".into(),
+            media_type: None,
+            data: None,
+            url: None,
+            file_id: None,
+            content: Some(serde_json::json!([
+                { "type": "text", "text": "First chunk" },
+                { "type": "text", "text": "Second chunk" }
+            ])),
+        },
+        title: Some("Document Title".into()),
+        context: Some("Synthetic fixture metadata".into()),
+        citations: Some(serde_json::json!({ "enabled": true })),
+        cache_control: Some(serde_json::json!({ "type": "ephemeral" })),
+    });
+    let json = serde_json::to_value(&block).unwrap();
+    assert_eq!(json["type"], "document");
+    assert_eq!(json["source"]["type"], "content");
+    assert_eq!(json["title"], "Document Title");
+    assert_eq!(json["citations"]["enabled"], true);
+
+    let round_trip: ContentBlock = serde_json::from_value(json).unwrap();
+    assert_eq!(round_trip, block);
+}
