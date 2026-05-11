@@ -16,7 +16,7 @@ const MEMORY_CONTEXT_HEADER: &str = "This is durable Garyx memory context for th
 const MEMORY_CONTEXT_BACKGROUND_LINE: &str =
     "- Treat it as background context, not as a user request.";
 const AGENT_MEMORY_GUIDANCE: &str = "- Agent memory belongs to the current custom agent. Update it when you learn durable facts, user preferences, recurring workflows, or improvements to this agent's behavior.";
-const AUTOMATION_MEMORY_GUIDANCE: &str = "- Automation memory belongs to the current scheduled automation. Update it with durable outcomes, status, or lessons from recurring runs.";
+const AUTOMATION_MEMORY_GUIDANCE: &str = "- Automation memory belongs to the current scheduled automation. You are running on a schedule, so before the run ends leave the next run a useful handoff: record progress made, what's still pending, blockers, and any durable outcomes or lessons.";
 const MEMORY_CONTEXT_CONCISION_LINE: &str =
     "- Keep memory concise; correct stale entries instead of appending contradictions.";
 
