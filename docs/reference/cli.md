@@ -125,7 +125,7 @@ Common flags on `channels add`:
 
 | Command | Use it for |
 | --- | --- |
-| `garyx message --bot <selector> [text]` | Send an outbound channel message via a bot (e.g. `--bot telegram:main`); this does not start an agent run. |
+| `garyx message [--bot <selector>] [--image <path>] [text]` | Send text or one local image via a bot without starting an agent run. If `--bot` is omitted, Garyx reads `GARYX_BOT` or `GARYX_CHANNEL` + `GARYX_ACCOUNT_ID`; otherwise it errors. |
 | `garyx auto-research create / list / get / stop / patch / feedback / reverify` | Drive the auto-research loop. |
 | `garyx wiki init / list / get / status / delete` | Manage wiki knowledge bases. |
 | `garyx migrate thread-transcripts` {#migrate} | Move inline thread messages into transcript files. |

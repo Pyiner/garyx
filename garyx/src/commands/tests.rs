@@ -66,6 +66,52 @@ impl Drop for ScopedEnvVar {
     }
 }
 
+#[test]
+fn resolve_cli_message_bot_prefers_explicit_bot() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _bot = ScopedEnvVar::set_string("GARYX_BOT", "telegram:env");
+
+    let bot = resolve_cli_message_bot(Some("telegram:explicit")).unwrap();
+
+    assert_eq!(bot, "telegram:explicit");
+}
+
+#[test]
+fn resolve_cli_message_bot_uses_env_bot() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _bot = ScopedEnvVar::set_string("GARYX_BOT", "telegram:main");
+    let _channel = ScopedEnvVar::remove("GARYX_CHANNEL");
+    let _account = ScopedEnvVar::remove("GARYX_ACCOUNT_ID");
+
+    let bot = resolve_cli_message_bot(None).unwrap();
+
+    assert_eq!(bot, "telegram:main");
+}
+
+#[test]
+fn resolve_cli_message_bot_uses_channel_account_env() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _bot = ScopedEnvVar::remove("GARYX_BOT");
+    let _channel = ScopedEnvVar::set_string("GARYX_CHANNEL", "telegram");
+    let _account = ScopedEnvVar::set_string("GARYX_ACCOUNT_ID", "main");
+
+    let bot = resolve_cli_message_bot(None).unwrap();
+
+    assert_eq!(bot, "telegram:main");
+}
+
+#[test]
+fn resolve_cli_message_bot_requires_bot_context() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    let _bot = ScopedEnvVar::remove("GARYX_BOT");
+    let _channel = ScopedEnvVar::remove("GARYX_CHANNEL");
+    let _account = ScopedEnvVar::remove("GARYX_ACCOUNT_ID");
+
+    let error = resolve_cli_message_bot(None).unwrap_err().to_string();
+
+    assert!(error.contains("bot is required"));
+}
+
 fn write_test_plugin_bundle(root: &Path, plugin_id: &str, required_fields: &[&str]) -> PathBuf {
     let plugin_dir = root.join(plugin_id);
     std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");

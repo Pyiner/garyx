@@ -8,6 +8,7 @@ struct BotSelection {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ThreadBotBinding {
     selection: BotSelection,
     chat_id: String,
@@ -27,6 +28,7 @@ impl BotSelection {
 }
 
 impl GaryMcpServer {
+    #[cfg(test)]
     pub(super) async fn execute_message(
         &self,
         run_ctx: RunContext,
@@ -220,6 +222,7 @@ impl GaryMcpServer {
         );
     }
 
+    #[cfg(test)]
     pub(super) async fn resolve_message_target(
         &self,
         run_ctx: &RunContext,
@@ -506,6 +509,7 @@ impl GaryMcpServer {
         bots
     }
 
+    #[cfg(test)]
     fn resolve_requested_bot(
         &self,
         params: &MessageParams,
@@ -551,6 +555,7 @@ impl GaryMcpServer {
         Ok(Some(selected))
     }
 
+    #[cfg(test)]
     fn parse_bot_selection(
         raw_bot: &str,
         available: &[BotSelection],
@@ -600,6 +605,7 @@ impl GaryMcpServer {
         }
     }
 
+    #[cfg(test)]
     fn format_available_bots(available: &[BotSelection]) -> String {
         if available.is_empty() {
             "none".to_owned()
@@ -638,6 +644,7 @@ impl GaryMcpServer {
         bindings
     }
 
+    #[cfg(test)]
     async fn find_thread_binding_for_bot(
         &self,
         thread_id: &str,
@@ -652,6 +659,7 @@ impl GaryMcpServer {
             })
     }
 
+    #[cfg(test)]
     async fn thread_bot_ids(&self, thread_id: &str) -> Vec<String> {
         self.load_thread_bot_bindings(thread_id)
             .await
@@ -772,6 +780,7 @@ impl GaryMcpServer {
         )
     }
 
+    #[cfg(test)]
     pub(super) async fn send_image_message(
         &self,
         target: &ResolvedMessageTarget,
@@ -788,6 +797,7 @@ impl GaryMcpServer {
             .await
     }
 
+    #[cfg(test)]
     pub(super) async fn send_file_message(
         &self,
         target: &ResolvedMessageTarget,
@@ -804,6 +814,7 @@ impl GaryMcpServer {
             .await
     }
 
+    #[cfg(test)]
     pub(super) async fn send_image_message_via_api_base(
         &self,
         target: &ResolvedMessageTarget,
@@ -1007,6 +1018,7 @@ impl GaryMcpServer {
         ))
     }
 
+    #[cfg(test)]
     pub(super) async fn send_file_message_via_api_base(
         &self,
         target: &ResolvedMessageTarget,
@@ -1205,6 +1217,7 @@ impl GaryMcpServer {
         ))
     }
 
+    #[cfg(test)]
     async fn recover_weixin_context_token_from_thread(
         &self,
         target: &ResolvedMessageTarget,
@@ -1227,6 +1240,7 @@ impl GaryMcpServer {
         Some(token)
     }
 
+    #[cfg(test)]
     pub(super) fn extract_weixin_context_token_from_thread_data(
         thread_data: &Value,
     ) -> Option<String> {
@@ -1254,12 +1268,14 @@ impl GaryMcpServer {
         None
     }
 
+    #[cfg(test)]
     pub(super) fn is_scheduled_thread_key(thread_id: Option<&str>) -> bool {
         thread_id
             .map(garyx_router::MessageRouter::is_scheduled_thread)
             .unwrap_or(false)
     }
 
+    #[cfg(test)]
     pub(super) fn format_scheduled_message(text: &str, thread_id: Option<&str>) -> String {
         let Some(thread_id) = thread_id else {
             return text.to_owned();
@@ -1374,6 +1390,7 @@ impl GaryMcpServer {
             .collect()
     }
 
+    #[cfg(test)]
     pub(super) fn require_auth(
         state: &AppState,
         ctx: &RunContext,

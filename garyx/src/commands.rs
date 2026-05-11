@@ -7700,30 +7700,34 @@ pub(crate) fn which(name: &str) -> bool {
 
 pub(crate) async fn cmd_send_message(
     config_path: &str,
-    bot: &str,
+    bot: Option<&str>,
+    image: Option<&Path>,
     text: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if text.trim().is_empty() {
-        return Err("message text is required".into());
+    let bot = resolve_cli_message_bot(bot)?;
+    let image_path = image.map(|path| {
+        std::fs::canonicalize(path)
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_string()
+    });
+    if text.trim().is_empty() && image_path.is_none() {
+        return Err("message text or --image is required".into());
     }
 
-    let config = load_config_or_default(config_path, ConfigRuntimeOverrides::default())?.config;
-    let port = config.gateway.port;
-    let host = if config.gateway.host == "0.0.0.0" {
-        "127.0.0.1"
-    } else {
-        &config.gateway.host
-    };
-    let url = format!("http://{}:{}/api/send", host, port);
+    let gateway = gateway_endpoint(config_path)?;
+    let url = format!("{}/api/send", gateway.base_url);
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "bot": bot,
         "text": text,
     });
+    if let Some(image_path) = image_path {
+        body["image"] = serde_json::Value::String(image_path);
+    }
 
     let client = reqwest::Client::new();
-    let resp = client
-        .post(&url)
+    let resp = gateway_request(client.post(&url), &gateway)
         .json(&body)
         .timeout(Duration::from_secs(10))
         .send()
@@ -7753,6 +7757,30 @@ pub(crate) async fn cmd_send_message(
     }
 
     Ok(())
+}
+
+fn resolve_cli_message_bot(bot: Option<&str>) -> Result<String, Box<dyn std::error::Error>> {
+    if let Some(bot) = bot.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(bot.to_owned());
+    }
+    if let Ok(bot) = std::env::var("GARYX_BOT") {
+        let bot = bot.trim();
+        if !bot.is_empty() {
+            return Ok(bot.to_owned());
+        }
+    }
+    let channel = std::env::var("GARYX_CHANNEL")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let account_id = std::env::var("GARYX_ACCOUNT_ID")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    if let (Some(channel), Some(account_id)) = (channel, account_id) {
+        return Ok(format!("{channel}:{account_id}"));
+    }
+    Err("bot is required: pass --bot channel:account_id or set GARYX_BOT/GARYX_CHANNEL+GARYX_ACCOUNT_ID".into())
 }
 
 // ---------------------------------------------------------------------------

@@ -499,7 +499,10 @@ fn test_mcp_tool_router_excludes_cron_management() {
         .collect::<Vec<_>>();
 
     assert!(names.iter().any(|name| name == "status"));
-    assert!(names.iter().any(|name| name == "message"));
+    assert!(
+        !names.iter().any(|name| name == "message"),
+        "outbound message sending must stay out of MCP tools: {names:?}"
+    );
     assert!(
         !names.iter().any(|name| name == "cron"),
         "scheduled automation management must stay out of MCP tools: {names:?}"
@@ -533,6 +536,10 @@ fn test_mcp_tool_router_does_not_advertise_image_generation() {
     assert!(
         !instructions.contains("image_gen"),
         "server instructions still mention the removed image_gen tool: {instructions}"
+    );
+    assert!(
+        !instructions.contains("message"),
+        "server instructions still mention the removed message tool: {instructions}"
     );
 }
 

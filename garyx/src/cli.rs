@@ -200,8 +200,11 @@ pub(crate) enum Commands {
     Message {
         /// Bot selector: `channel:account_id`, e.g. `telegram:main`
         #[arg(short, long)]
-        bot: String,
-        /// Message text
+        bot: Option<String>,
+        /// Local image path to send. Message text is used as the caption.
+        #[arg(long)]
+        image: Option<PathBuf>,
+        /// Message text. Required unless --image is provided.
         text: Vec<String>,
     },
 }

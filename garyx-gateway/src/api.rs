@@ -2220,10 +2220,14 @@ pub async fn restart(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
 #[derive(Deserialize)]
 pub struct SendPayload {
     /// Bot selector: `channel:account_id`, e.g. `telegram:main`.
-    pub bot: String,
+    #[serde(default)]
+    pub bot: Option<String>,
     /// Message text.
     #[serde(default)]
     pub text: Option<String>,
+    /// Optional local image path. When text is also provided, it is used as the caption.
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 pub async fn send_message(
@@ -2253,15 +2257,49 @@ pub async fn send_message(
     }
 
     let text = payload.text.unwrap_or_default();
-    if text.trim().is_empty() {
+    let image = payload
+        .image
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if text.trim().is_empty() && image.is_none() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "ok": false, "error": "text is required" })),
+            Json(json!({ "ok": false, "error": "text or image is required" })),
         );
+    }
+    if let Some(image_path) = image.as_deref() {
+        let path = FsPath::new(image_path);
+        if !path.is_absolute() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": "image path must be absolute" })),
+            );
+        }
+        if !path.is_file() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    json!({ "ok": false, "error": format!("image file not found: {image_path}") }),
+                ),
+            );
+        }
     }
 
     // Parse bot selector.
-    let Some((channel, account_id)) = payload.bot.split_once(':') else {
+    let bot = payload
+        .bot
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(bot) = bot else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "ok": false, "error": "bot is required" })),
+        );
+    };
+    let Some((channel, account_id)) = bot.split_once(':') else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "ok": false, "error": "bot must be `channel:account_id`" })),
@@ -2274,13 +2312,21 @@ pub async fn send_message(
     else {
         return (
             StatusCode::NOT_FOUND,
-            Json(
-                json!({ "ok": false, "error": format!("no main endpoint for bot '{}'", payload.bot) }),
-            ),
+            Json(json!({ "ok": false, "error": format!("no main endpoint for bot '{bot}'") })),
         );
     };
 
     // Send.
+    let content = if let Some(image_path) = image {
+        let caption = if text.trim().is_empty() {
+            None
+        } else {
+            Some(text.clone())
+        };
+        ChannelOutboundContent::image(image_path, caption)
+    } else {
+        ChannelOutboundContent::text(text)
+    };
     let dispatcher = state.channel_dispatcher();
     let result = dispatcher
         .send_message(garyx_channels::OutboundMessage {
@@ -2289,7 +2335,7 @@ pub async fn send_message(
             chat_id: endpoint.chat_id.clone(),
             delivery_target_type: endpoint.delivery_target_type.clone(),
             delivery_target_id: endpoint.delivery_target_id.clone(),
-            content: ChannelOutboundContent::text(text),
+            content,
             reply_to: None,
             thread_id: endpoint.delivery_thread_id.clone(),
         })

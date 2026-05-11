@@ -4,10 +4,12 @@
 //! `StreamableHttpService`. Replaces the hand-rolled JSON-RPC dispatch
 //! with proper MCP protocol support.
 
+#[cfg(test)]
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
 use garyx_channels::OutboundMessage;
 use garyx_models::Verdict;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -21,8 +23,10 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
+#[cfg(test)]
 use uuid::Uuid;
 
+#[cfg(test)]
 use crate::delivery_target::resolve_delivery_target_with_recovery;
 use crate::server::AppState;
 
@@ -36,6 +40,7 @@ mod tools;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[cfg(test)]
 pub struct MessageParams {
     /// Message text to send
     #[serde(default)]
@@ -43,10 +48,10 @@ pub struct MessageParams {
     /// Optional local image path. Supported for telegram/weixin/feishu targets.
     #[serde(default)]
     pub image: Option<String>,
-    /// Optional local file path. Supported for telegram/weixin/feishu targets.
+    /// Optional local file path. Deprecated; MCP no longer exposes message sending.
     #[serde(default)]
     pub file: Option<String>,
-    /// Bot selector as `channel:account_id`, e.g. `telegram:main`. If omitted, reply via the current thread.
+    /// Bot selector as `channel:account_id`, e.g. `telegram:main`.
     #[serde(default, alias = "botId")]
     pub bot: Option<String>,
     // -- fields below are accepted but hidden from the schema --
@@ -194,6 +199,7 @@ struct RunContext {
     account_id: Option<String>,
     from_id: Option<String>,
     delivery_thread_id: Option<String>,
+    #[allow(dead_code)]
     auth_token: Option<String>,
     auto_research_role: Option<String>,
 }
@@ -260,6 +266,7 @@ impl RunContext {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(test)]
 struct ResolvedMessageTarget {
     channel: String,
     account_id: String,
@@ -297,17 +304,6 @@ impl GaryMcpServer {
     )]
     async fn status(&self, ctx: RequestContext<RoleServer>) -> Result<String, String> {
         tools::status::run(self, ctx).await
-    }
-
-    #[tool(
-        description = "Send a message to another channel/target, or send a local image/file reply to the current user. Do not use this tool for ordinary text replies to the current user; reply directly in the assistant response by default. Use this tool when you need to reply to the current user with an image/file, or when messaging another bot/channel/target. Provide `bot` (e.g. `telegram:main`) to send to that bot's main endpoint; omit `bot` to reply in the current thread."
-    )]
-    async fn message(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(params): Parameters<MessageParams>,
-    ) -> Result<String, String> {
-        tools::message::run(self, ctx, params).await
     }
 
     #[tool(
@@ -389,7 +385,7 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, message, search, conversation_history, conversation_search, rebind_current_channel, stop_loop."
+                "Garyx MCP server. Tools: status, search, conversation_history, conversation_search, rebind_current_channel, stop_loop."
                     .to_owned(),
             ),
         }
