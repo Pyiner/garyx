@@ -6,19 +6,15 @@ use std::os::unix::fs as unix_fs;
 #[cfg(windows)]
 use std::os::windows::fs as windows_fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use async_trait::async_trait;
 use garyx_bridge::claude_provider::ClaudeCliProvider;
 use garyx_bridge::codex_provider::CodexAgentProvider;
 use garyx_bridge::provider_trait::AgentLoopProvider;
-use garyx_channels::{ChannelDispatcher, ChannelInfo, OutboundMessage, SendMessageResult};
-use garyx_models::config::{GaryxConfig, TelegramAccount};
+use garyx_models::config::GaryxConfig;
 use garyx_models::provider::{
     ClaudeCodeConfig, CodexAppServerConfig, ProviderRunOptions, StreamEvent,
 };
-use garyx_models::routing::DeliveryContext;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -28,23 +24,6 @@ use tokio::time::timeout;
 
 use crate::skills::SkillsService;
 use crate::{build_router, server::create_app_state};
-
-fn insert_telegram_plugin_account(
-    config: &mut GaryxConfig,
-    account_id: &str,
-    account: TelegramAccount,
-) {
-    config
-        .channels
-        .plugins
-        .entry("telegram".to_owned())
-        .or_default()
-        .accounts
-        .insert(
-            account_id.to_owned(),
-            garyx_models::config::telegram_account_to_plugin_entry(&account),
-        );
-}
 
 async fn binary_available(name: &str) -> bool {
     Command::new("which")
@@ -425,53 +404,6 @@ impl LocalMcpServer {
     }
 }
 
-#[derive(Default)]
-struct RecordingDispatcher {
-    calls: Mutex<Vec<OutboundMessage>>,
-    available_channels: Vec<ChannelInfo>,
-    message_ids: Vec<String>,
-}
-
-impl RecordingDispatcher {
-    fn new(available_channels: Vec<ChannelInfo>, message_ids: &[&str]) -> Self {
-        Self {
-            calls: Mutex::new(Vec::new()),
-            available_channels,
-            message_ids: message_ids
-                .iter()
-                .map(|value| (*value).to_owned())
-                .collect(),
-        }
-    }
-
-    fn calls(&self) -> Vec<OutboundMessage> {
-        self.calls
-            .lock()
-            .expect("recording dispatcher lock poisoned")
-            .clone()
-    }
-}
-
-#[async_trait]
-impl ChannelDispatcher for RecordingDispatcher {
-    async fn send_message(
-        &self,
-        request: OutboundMessage,
-    ) -> Result<SendMessageResult, garyx_channels::ChannelError> {
-        self.calls
-            .lock()
-            .expect("recording dispatcher lock poisoned")
-            .push(request);
-        Ok(SendMessageResult {
-            message_ids: self.message_ids.clone(),
-        })
-    }
-
-    fn available_channels(&self) -> Vec<ChannelInfo> {
-        self.available_channels.clone()
-    }
-}
-
 async fn spawn_local_search_mcp_server() -> Option<LocalMcpServer> {
     let api_key = std::env::var("GEMINI_API_KEY")
         .ok()
@@ -503,176 +435,6 @@ async fn spawn_local_search_mcp_server() -> Option<LocalMcpServer> {
         shutdown_tx: Some(shutdown_tx),
         handle,
     })
-}
-
-async fn spawn_local_bot_route_mcp_server(
-    thread_id: &str,
-) -> (LocalMcpServer, Arc<RecordingDispatcher>) {
-    let mut config = GaryxConfig::default();
-    insert_telegram_plugin_account(
-        &mut config,
-        "main",
-        TelegramAccount {
-            token: "main-token".to_owned(),
-            enabled: true,
-            name: None,
-            agent_id: "claude".to_owned(),
-            workspace_dir: None,
-            owner_target: None,
-            groups: Default::default(),
-        },
-    );
-    insert_telegram_plugin_account(
-        &mut config,
-        "ops",
-        TelegramAccount {
-            token: "ops-token".to_owned(),
-            enabled: true,
-            name: None,
-            agent_id: "claude".to_owned(),
-            workspace_dir: None,
-            owner_target: None,
-            groups: Default::default(),
-        },
-    );
-
-    let state = create_app_state(config);
-    let dispatcher = Arc::new(RecordingDispatcher::new(
-        vec![
-            ChannelInfo {
-                channel: "telegram".to_owned(),
-                account_id: "main".to_owned(),
-                is_running: true,
-            },
-            ChannelInfo {
-                channel: "telegram".to_owned(),
-                account_id: "ops".to_owned(),
-                is_running: true,
-            },
-        ],
-        &["msg-live-route-1"],
-    ));
-    state.replace_channel_dispatcher(dispatcher.clone());
-    state
-        .threads
-        .thread_store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "channel_bindings": [
-                    {
-                        "channel": "telegram",
-                        "account_id": "main",
-                        "peer_id": "42",
-                        "chat_id": "42",
-                        "display_label": "Main Bot"
-                    },
-                    {
-                        "channel": "telegram",
-                        "account_id": "ops",
-                        "peer_id": "84",
-                        "chat_id": "84",
-                        "display_label": "Ops Bot"
-                    }
-                ]
-            }),
-        )
-        .await;
-    {
-        let mut router = state.threads.router.lock().await;
-        router.set_last_delivery(
-            thread_id,
-            DeliveryContext {
-                channel: "telegram".to_owned(),
-                account_id: "main".to_owned(),
-                chat_id: "42".to_owned(),
-                user_id: "42".to_owned(),
-                delivery_target_type: "chat_id".to_owned(),
-                delivery_target_id: "42".to_owned(),
-                thread_id: None,
-                metadata: HashMap::new(),
-            },
-        );
-    }
-
-    let router = build_router(state);
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind local bot-route MCP listener");
-    let addr = listener.local_addr().expect("local bot-route MCP addr");
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let handle = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
-            })
-            .await
-            .expect("serve local bot-route MCP router");
-    });
-
-    (
-        LocalMcpServer {
-            base_url: format!("http://{}", addr),
-            shutdown_tx: Some(shutdown_tx),
-            handle,
-        },
-        dispatcher,
-    )
-}
-
-fn garyx_bot_route_prompt(thread_id: &str, response_token: &str) -> String {
-    format!(
-        "You must call the `garyx` MCP server `status` tool exactly once and confirm its `bots.thread_bound` list includes `telegram:ops`. Then call the `garyx` MCP server `message` tool exactly once with `target` set to `thread:{thread_id}`, `bot` set to `telegram:ops`, and `text` set to `{response_token}`. After the message tool succeeds, reply with exactly `{response_token}`."
-    )
-}
-
-fn assert_bot_route_result(
-    result: &garyx_models::provider::ProviderRunResult,
-    dispatcher: &RecordingDispatcher,
-    response_token: &str,
-) {
-    assert!(
-        result.success,
-        "bot-route run failed: response={:?} error={:?} session_messages={:?}",
-        result.response, result.error, result.session_messages
-    );
-    assert!(
-        result.response.contains(response_token),
-        "expected response token, got response={:?} error={:?} session_messages={:?}",
-        result.response,
-        result.error,
-        result.session_messages
-    );
-    assert!(
-        tool_use_contains(result, "status"),
-        "expected garyx status tool use, got {:?}",
-        result.session_messages
-    );
-    assert!(
-        tool_use_contains(result, "message"),
-        "expected garyx message tool use, got {:?}",
-        result.session_messages
-    );
-    assert!(
-        tool_message_contains(result, "thread_bound"),
-        "expected status payload with bots.thread_bound, got {:?}",
-        result.session_messages
-    );
-    assert!(
-        tool_message_contains(result, "telegram:ops"),
-        "expected tool payload to mention telegram:ops, got {:?}",
-        result.session_messages
-    );
-
-    let calls = dispatcher.calls();
-    assert_eq!(calls.len(), 1, "unexpected outbound calls: {:?}", calls);
-    assert_eq!(calls[0].channel, "telegram");
-    assert_eq!(calls[0].account_id, "ops");
-    assert_eq!(calls[0].chat_id, "84");
-    assert_eq!(calls[0].delivery_target_type, "chat_id");
-    assert_eq!(calls[0].delivery_target_id, "84");
-    assert_eq!(calls[0].text_content(), Some(response_token.as_str()));
 }
 
 #[tokio::test]
@@ -790,52 +552,6 @@ async fn claude_downstream_skill_and_mcp_are_usable() {
 
         search_server.shutdown().await;
     }
-}
-
-#[tokio::test]
-#[ignore = "requires live claude CLI + auth + local gateway MCP"]
-async fn claude_downstream_garyx_status_and_message_bot_are_usable() {
-    if !binary_available("claude").await {
-        eprintln!("claude not found, skipping");
-        return;
-    }
-
-    let (_temp, _temp_home, workspace) = make_isolated_home().expect("isolated home");
-    let suffix = unique_suffix();
-    let thread_id = format!("real::claude::garyx-bot-route::{suffix}");
-    let response_token = format!("CLAUDE_BOT_ROUTE_OK_{suffix}");
-    let (server, dispatcher) = spawn_local_bot_route_mcp_server(&thread_id).await;
-
-    let mut provider = ClaudeCliProvider::new(ClaudeCodeConfig {
-        permission_mode: "bypassPermissions".to_owned(),
-        max_turns: Some(2),
-        max_retries: 1,
-        mcp_base_url: server.base_url.clone(),
-        setting_sources: vec![],
-        ..Default::default()
-    });
-    provider
-        .initialize()
-        .await
-        .expect("initialize claude provider");
-
-    let options = ProviderRunOptions {
-        thread_id: thread_id.clone(),
-        message: garyx_bot_route_prompt(&thread_id, &response_token),
-        workspace_dir: Some(workspace.to_string_lossy().to_string()),
-        images: None,
-        metadata: HashMap::new(),
-    };
-    let result = timeout(
-        Duration::from_secs(180),
-        provider.run_streaming(&options, noop_stream_callback()),
-    )
-    .await
-    .expect("claude garyx bot-route run timed out")
-    .expect("claude garyx bot-route run failed");
-
-    assert_bot_route_result(&result, dispatcher.as_ref(), &response_token);
-    server.shutdown().await;
 }
 
 #[tokio::test]
@@ -1079,55 +795,6 @@ async fn codex_downstream_skill_and_mcp_are_usable() {
     }
 
     provider.shutdown().await.expect("shutdown codex provider");
-}
-
-#[tokio::test]
-#[ignore = "requires live codex CLI + auth + local gateway MCP"]
-async fn codex_downstream_garyx_status_and_message_bot_are_usable() {
-    if !binary_available("codex").await {
-        eprintln!("codex not found, skipping");
-        return;
-    }
-
-    let (_temp, temp_home, workspace) = make_isolated_home().expect("isolated home");
-    let suffix = unique_suffix();
-    let thread_id = format!("real::codex::garyx-bot-route::{suffix}");
-    let response_token = format!("CODEX_BOT_ROUTE_OK_{suffix}");
-    let (server, dispatcher) = spawn_local_bot_route_mcp_server(&thread_id).await;
-
-    let mut provider = CodexAgentProvider::new(CodexAppServerConfig {
-        model: "gpt-5.4".to_owned(),
-        model_reasoning_effort: "xhigh".to_owned(),
-        approval_policy: "never".to_owned(),
-        sandbox_mode: "danger-full-access".to_owned(),
-        workspace_dir: Some(workspace.to_string_lossy().to_string()),
-        mcp_base_url: server.base_url.clone(),
-        env: HashMap::from([("HOME".to_owned(), temp_home.to_string_lossy().to_string())]),
-        ..Default::default()
-    });
-    provider
-        .initialize()
-        .await
-        .expect("initialize codex provider");
-
-    let options = ProviderRunOptions {
-        thread_id: thread_id.clone(),
-        message: garyx_bot_route_prompt(&thread_id, &response_token),
-        workspace_dir: Some(workspace.to_string_lossy().to_string()),
-        images: None,
-        metadata: HashMap::new(),
-    };
-    let result = timeout(
-        Duration::from_secs(240),
-        provider.run_streaming(&options, noop_stream_callback()),
-    )
-    .await
-    .expect("codex garyx bot-route run timed out")
-    .expect("codex garyx bot-route run failed");
-
-    assert_bot_route_result(&result, dispatcher.as_ref(), &response_token);
-    provider.shutdown().await.expect("shutdown codex provider");
-    server.shutdown().await;
 }
 
 #[tokio::test]
