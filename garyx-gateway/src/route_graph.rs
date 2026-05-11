@@ -302,6 +302,8 @@ fn observability_routes() -> Router<Arc<AppState>> {
             axum::routing::get(api::thread_diagnostics),
         )
         .route("/api/bot/status", axum::routing::get(api::bot_status))
+        .route("/api/bot/bind", axum::routing::post(api::bot_bind))
+        .route("/api/bot/unbind", axum::routing::post(api::bot_unbind))
         .route(
             "/api/settings",
             axum::routing::get(dashboard::settings).put(api::settings_update),

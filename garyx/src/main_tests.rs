@@ -585,6 +585,44 @@ fn parse_bot_status() {
 }
 
 #[test]
+fn parse_bot_bind() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "bot",
+        "bind",
+        "--bot",
+        "telegram:main",
+        "--thread",
+        "thread::abc",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Bot {
+            action: BotAction::Bind { bot, thread, json },
+        }) => {
+            assert_eq!(bot, "telegram:main");
+            assert_eq!(thread, "thread::abc");
+            assert!(json);
+        }
+        _ => panic!("expected Bot::Bind"),
+    }
+}
+
+#[test]
+fn parse_bot_unbind() {
+    let cli = Cli::parse_from(["garyx", "bot", "unbind", "--bot", "telegram:main"]);
+    match cli.command {
+        Some(Commands::Bot {
+            action: BotAction::Unbind { bot, json },
+        }) => {
+            assert_eq!(bot, "telegram:main");
+            assert!(!json);
+        }
+        _ => panic!("expected Bot::Unbind"),
+    }
+}
+
+#[test]
 fn parse_bot_status_keeps_old_bot_entrypoints_removed() {
     for args in [
         ["garyx", "debug", "bot", "telegram:main"],

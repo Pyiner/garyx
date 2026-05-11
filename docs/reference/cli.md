@@ -114,6 +114,8 @@ Common flags on `channels add`:
 | `garyx logs tail [--lines N]` | Tail the gateway log. |
 | `garyx logs clear` | Truncate the log file. |
 | `garyx bot status <bot_selector>` | Current bot main endpoint and bound thread status. |
+| `garyx bot bind --bot <bot_selector> --thread <thread_id>` | Bind or rebind a bot's main endpoint to an existing thread through the running gateway. |
+| `garyx bot unbind --bot <bot_selector>` | Clear a bot's current main endpoint binding through the running gateway. |
 
 ## Updates
 

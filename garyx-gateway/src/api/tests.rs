@@ -61,6 +61,8 @@ fn api_router(state: Arc<AppState>) -> Router {
             axum::routing::get(thread_diagnostics),
         )
         .route("/api/bot/status", axum::routing::get(bot_status))
+        .route("/api/bot/bind", axum::routing::post(bot_bind))
+        .route("/api/bot/unbind", axum::routing::post(bot_unbind))
         .route(
             "/api/auto-research/runs",
             axum::routing::post(create_auto_research_run),
@@ -411,6 +413,264 @@ async fn test_bot_status_returns_current_bound_thread_only() {
     );
     assert!(json.get("recent_records").is_none());
     assert!(json.get("problem_threads").is_none());
+}
+
+#[tokio::test]
+async fn test_bot_bind_rebinds_main_endpoint_to_existing_thread() {
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(
+                &garyx_models::config::TelegramAccount {
+                    token: "token".to_owned(),
+                    enabled: true,
+                    name: Some("Telegram Main".to_owned()),
+                    agent_id: "codex".to_owned(),
+                    workspace_dir: Some("/tmp/current-workspace".to_owned()),
+                    owner_target: Some(garyx_models::config::OwnerTargetConfig {
+                        target_type: "chat_id".to_owned(),
+                        target_id: "1000000001".to_owned(),
+                    }),
+                    groups: std::collections::HashMap::new(),
+                },
+            ),
+        );
+    let state = test_state_with_config(config);
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::source",
+            json!({
+                "thread_id": "thread::source",
+                "channel": "telegram",
+                "account_id": "main",
+                "from_id": "1000000001",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "1000000001",
+                    "chat_id": "1000000001",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "1000000001",
+                    "display_label": "Telegram Main"
+                }],
+            }),
+        )
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::target",
+            json!({
+                "thread_id": "thread::target",
+                "channel": "telegram",
+                "account_id": "main",
+                "from_id": "1000000001",
+                "channel_bindings": [],
+            }),
+        )
+        .await;
+
+    let router = api_router(state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/bot/bind")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "botId": "telegram:main",
+                "threadId": "thread::target",
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["action"], "bind");
+    assert_eq!(json["current_thread_id"], "thread::target");
+    assert_eq!(json["previous_thread_id"], "thread::source");
+
+    let source = state
+        .threads
+        .thread_store
+        .get("thread::source")
+        .await
+        .unwrap();
+    let target = state
+        .threads
+        .thread_store
+        .get("thread::target")
+        .await
+        .unwrap();
+    assert_eq!(source["channel_bindings"].as_array().unwrap().len(), 0);
+    assert_eq!(target["channel_bindings"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        target["channel_bindings"][0]["account_id"],
+        Value::String("main".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn test_bot_bind_rejects_cross_channel_thread() {
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(
+                &garyx_models::config::TelegramAccount {
+                    token: "token".to_owned(),
+                    enabled: true,
+                    name: Some("Telegram Main".to_owned()),
+                    agent_id: "codex".to_owned(),
+                    workspace_dir: None,
+                    owner_target: Some(garyx_models::config::OwnerTargetConfig {
+                        target_type: "chat_id".to_owned(),
+                        target_id: "1000000001".to_owned(),
+                    }),
+                    groups: std::collections::HashMap::new(),
+                },
+            ),
+        );
+    let state = test_state_with_config(config);
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::feishu",
+            json!({
+                "thread_id": "thread::feishu",
+                "channel": "feishu",
+                "account_id": "main",
+                "from_id": "ou_1000000001",
+                "channel_bindings": [],
+            }),
+        )
+        .await;
+
+    let router = api_router(state);
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/bot/bind")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "botId": "telegram:main",
+                "threadId": "thread::feishu",
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["reason"], "thread-not-compatible");
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("thread belongs to channel 'feishu'")
+    );
+}
+
+#[tokio::test]
+async fn test_bot_unbind_clears_main_endpoint_binding() {
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(
+                &garyx_models::config::TelegramAccount {
+                    token: "token".to_owned(),
+                    enabled: true,
+                    name: Some("Telegram Main".to_owned()),
+                    agent_id: "codex".to_owned(),
+                    workspace_dir: None,
+                    owner_target: Some(garyx_models::config::OwnerTargetConfig {
+                        target_type: "chat_id".to_owned(),
+                        target_id: "1000000001".to_owned(),
+                    }),
+                    groups: std::collections::HashMap::new(),
+                },
+            ),
+        );
+    let state = test_state_with_config(config);
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::current",
+            json!({
+                "thread_id": "thread::current",
+                "channel": "telegram",
+                "account_id": "main",
+                "from_id": "1000000001",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "1000000001",
+                    "chat_id": "1000000001",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "1000000001",
+                    "display_label": "Telegram Main"
+                }],
+            }),
+        )
+        .await;
+
+    let router = api_router(state.clone());
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/bot/unbind")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "botId": "telegram:main",
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["action"], "unbind");
+    assert_eq!(json["previous_thread_id"], "thread::current");
+    assert_eq!(json["current_thread_status"], "unbound");
+    assert!(json["current_thread_id"].is_null());
+
+    let thread = state
+        .threads
+        .thread_store
+        .get("thread::current")
+        .await
+        .unwrap();
+    assert_eq!(thread["channel_bindings"].as_array().unwrap().len(), 0);
 }
 
 #[tokio::test]

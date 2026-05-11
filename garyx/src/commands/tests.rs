@@ -112,6 +112,31 @@ fn resolve_cli_message_bot_requires_bot_context() {
     assert!(error.contains("bot is required"));
 }
 
+#[test]
+fn normalize_bot_selector_arg_accepts_channel_account_selector() {
+    let bot = normalize_bot_selector_arg(" telegram:main ").unwrap();
+
+    assert_eq!(bot, "telegram:main");
+}
+
+#[test]
+fn normalize_bot_selector_arg_rejects_invalid_selector() {
+    let error = normalize_bot_selector_arg("telegram")
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("channel:account_id"));
+}
+
+#[test]
+fn normalize_thread_id_arg_requires_canonical_thread_id() {
+    let error = normalize_thread_id_arg("not-a-thread")
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("thread::"));
+}
+
 fn write_test_plugin_bundle(root: &Path, plugin_id: &str, required_fields: &[&str]) -> PathBuf {
     let plugin_dir = root.join(plugin_id);
     std::fs::create_dir_all(&plugin_dir).expect("create plugin dir");

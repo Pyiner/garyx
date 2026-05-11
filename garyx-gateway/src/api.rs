@@ -21,7 +21,7 @@ use garyx_models::config_loader::{
 };
 use garyx_models::provider::{ProviderMessage, ProviderType};
 use garyx_router::{
-    ThreadHistoryError, bindings_from_value, history_message_count, is_thread_key,
+    ChannelBinding, ThreadHistoryError, bindings_from_value, history_message_count, is_thread_key,
     workspace_dir_from_value,
 };
 use serde::{Deserialize, Serialize};
@@ -362,6 +362,21 @@ pub struct ThreadDiagnosticsParams {
 
 #[derive(Deserialize)]
 pub struct BotStatusParams {
+    pub bot_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotBindBody {
+    #[serde(alias = "bot")]
+    pub bot_id: String,
+    pub thread_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotUnbindBody {
+    #[serde(alias = "bot")]
     pub bot_id: String,
 }
 
@@ -847,6 +862,295 @@ pub async fn bot_status(
     }
 
     Json(build_bot_status_payload(&state, bot_id).await)
+}
+
+pub async fn bot_bind(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BotBindBody>,
+) -> impl IntoResponse {
+    let requested_bot_id = body.bot_id.trim();
+    let (channel, account_id) = match parse_bot_selector(requested_bot_id) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "ok": false,
+                    "bot_id": requested_bot_id,
+                    "reason": "invalid-bot-id",
+                    "error": error,
+                })),
+            );
+        }
+    };
+    let bot_id = format!("{channel}:{account_id}");
+
+    let thread_id = body.thread_id.trim();
+    if thread_id.is_empty() || !is_thread_key(thread_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "bot_id": &bot_id,
+                "thread_id": thread_id,
+                "reason": "thread-not-found",
+                "error": "thread not found",
+            })),
+        );
+    }
+    let Some(thread_data) = state.threads.thread_store.get(thread_id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "bot_id": &bot_id,
+                "thread_id": thread_id,
+                "reason": "thread-not-found",
+                "error": "thread not found",
+            })),
+        );
+    };
+
+    let Some(endpoint) =
+        crate::routes::resolve_main_endpoint_by_bot(&state, channel, account_id).await
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "bot_id": &bot_id,
+                "channel": channel,
+                "account_id": account_id,
+                "reason": "main-endpoint-unresolved",
+                "error": format!("bot '{bot_id}' has no resolved main endpoint"),
+            })),
+        );
+    };
+
+    if let Err(error) =
+        validate_thread_accepts_bot_binding(thread_id, &thread_data, &bot_id, channel, account_id)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "bot_id": &bot_id,
+                "thread_id": thread_id,
+                "reason": "thread-not-compatible",
+                "error": error,
+            })),
+        );
+    }
+
+    let result = match crate::routes::bind_channel_endpoint_key_to_thread(
+        &state,
+        &endpoint.endpoint_key,
+        thread_id,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            return (
+                error.status,
+                Json(json!({
+                    "ok": false,
+                    "bot_id": &bot_id,
+                    "thread_id": thread_id,
+                    "reason": "bind-failed",
+                    "error": error.message,
+                })),
+            );
+        }
+    };
+
+    let mut payload = build_bot_status_payload(&state, &bot_id).await;
+    enrich_bot_binding_payload(
+        &mut payload,
+        "bind",
+        Some(&result.thread_id),
+        result.previous_thread_id.as_deref(),
+        &result.endpoint_key,
+        Some(&result.binding),
+    );
+    (StatusCode::OK, Json(payload))
+}
+
+pub async fn bot_unbind(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BotUnbindBody>,
+) -> impl IntoResponse {
+    let requested_bot_id = body.bot_id.trim();
+    let (channel, account_id) = match parse_bot_selector(requested_bot_id) {
+        Ok(value) => value,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "ok": false,
+                    "bot_id": requested_bot_id,
+                    "reason": "invalid-bot-id",
+                    "error": error,
+                })),
+            );
+        }
+    };
+    let bot_id = format!("{channel}:{account_id}");
+
+    let Some(endpoint) =
+        crate::routes::resolve_main_endpoint_by_bot(&state, channel, account_id).await
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "ok": false,
+                "bot_id": &bot_id,
+                "channel": channel,
+                "account_id": account_id,
+                "reason": "main-endpoint-unresolved",
+                "error": format!("bot '{bot_id}' has no resolved main endpoint"),
+            })),
+        );
+    };
+
+    let result =
+        match crate::routes::detach_channel_endpoint_key(&state, &endpoint.endpoint_key).await {
+            Ok(result) => result,
+            Err(error) => {
+                return (
+                    error.status,
+                    Json(json!({
+                        "ok": false,
+                        "bot_id": &bot_id,
+                        "reason": "unbind-failed",
+                        "error": error.message,
+                    })),
+                );
+            }
+        };
+
+    let mut payload = build_bot_status_payload(&state, &bot_id).await;
+    enrich_bot_binding_payload(
+        &mut payload,
+        "unbind",
+        None,
+        result.previous_thread_id.as_deref(),
+        &result.endpoint_key,
+        result.binding.as_ref(),
+    );
+    (StatusCode::OK, Json(payload))
+}
+
+fn parse_bot_selector(bot_id: &str) -> Result<(&str, &str), String> {
+    let bot_id = bot_id.trim();
+    let Some((channel, account_id)) = bot_id.split_once(':') else {
+        return Err("bot_id must be `channel:account_id`".to_owned());
+    };
+    let channel = channel.trim();
+    let account_id = account_id.trim();
+    if channel.is_empty() || account_id.is_empty() {
+        return Err("bot_id must be `channel:account_id`".to_owned());
+    }
+    Ok((channel, account_id))
+}
+
+fn thread_string_field(thread_data: &Value, primary: &str, fallback: &str) -> Option<String> {
+    thread_data
+        .get(primary)
+        .or_else(|| thread_data.get(fallback))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn is_internal_binding_channel(channel: &str) -> bool {
+    channel.trim().eq_ignore_ascii_case("api")
+}
+
+fn validate_thread_accepts_bot_binding(
+    thread_id: &str,
+    thread_data: &Value,
+    bot_id: &str,
+    channel: &str,
+    account_id: &str,
+) -> Result<(), String> {
+    let thread_channel = thread_string_field(thread_data, "channel", "origin_channel");
+    let thread_account_id = thread_string_field(thread_data, "account_id", "origin_account_id");
+
+    if let Some(owner_channel) = thread_channel.as_deref()
+        && owner_channel != channel
+        && !is_internal_binding_channel(owner_channel)
+    {
+        return Err(format!(
+            "cannot bind bot '{bot_id}' to thread '{thread_id}': thread belongs to channel '{owner_channel}'"
+        ));
+    }
+
+    if thread_channel.as_deref() == Some(channel)
+        && let Some(owner_account_id) = thread_account_id.as_deref()
+        && owner_account_id != account_id
+    {
+        return Err(format!(
+            "cannot bind bot '{bot_id}' to thread '{thread_id}': thread belongs to bot '{channel}:{owner_account_id}'"
+        ));
+    }
+
+    for binding in bindings_from_value(thread_data) {
+        if is_internal_binding_channel(&binding.channel) {
+            continue;
+        }
+        if binding.channel != channel {
+            return Err(format!(
+                "cannot bind bot '{bot_id}' to thread '{thread_id}': thread is already bound to channel '{}'",
+                binding.channel
+            ));
+        }
+        if binding.account_id != account_id {
+            return Err(format!(
+                "cannot bind bot '{bot_id}' to thread '{thread_id}': thread is already bound to bot '{}:{}'",
+                binding.channel, binding.account_id
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn enrich_bot_binding_payload(
+    payload: &mut Value,
+    action: &str,
+    thread_id: Option<&str>,
+    previous_thread_id: Option<&str>,
+    endpoint_key: &str,
+    binding: Option<&ChannelBinding>,
+) {
+    let Some(obj) = payload.as_object_mut() else {
+        return;
+    };
+    obj.insert("action".to_owned(), Value::String(action.to_owned()));
+    obj.insert(
+        "thread_id".to_owned(),
+        thread_id
+            .map(|value| Value::String(value.to_owned()))
+            .unwrap_or(Value::Null),
+    );
+    obj.insert(
+        "previous_thread_id".to_owned(),
+        previous_thread_id
+            .map(|value| Value::String(value.to_owned()))
+            .unwrap_or(Value::Null),
+    );
+    obj.insert(
+        "endpoint_key".to_owned(),
+        Value::String(endpoint_key.to_owned()),
+    );
+    obj.insert(
+        "binding".to_owned(),
+        binding
+            .and_then(|value| serde_json::to_value(value).ok())
+            .unwrap_or(Value::Null),
+    );
 }
 
 async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value {

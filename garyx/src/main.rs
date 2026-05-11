@@ -29,17 +29,18 @@ use commands::{
     cmd_auto_research_reverify, cmd_auto_research_select, cmd_auto_research_stop,
     cmd_automation_activity, cmd_automation_create, cmd_automation_delete, cmd_automation_get,
     cmd_automation_list, cmd_automation_pause, cmd_automation_resume, cmd_automation_run,
-    cmd_automation_update, cmd_bot_status, cmd_channels_add, cmd_channels_enable,
-    cmd_channels_list, cmd_channels_login, cmd_channels_remove, cmd_command_delete,
-    cmd_command_get, cmd_command_list, cmd_command_set, cmd_config_get, cmd_config_init,
-    cmd_config_path, cmd_config_set, cmd_config_show, cmd_config_unset, cmd_config_validate,
-    cmd_doctor, cmd_gateway_install, cmd_gateway_reload_config, cmd_gateway_restart,
-    cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear,
-    cmd_logs_path, cmd_logs_tail, cmd_migrate_thread_transcripts, cmd_onboard, cmd_send_message,
-    cmd_status, cmd_task_assign, cmd_task_claim, cmd_task_create, cmd_task_delete, cmd_task_get,
-    cmd_task_history, cmd_task_list, cmd_task_promote, cmd_task_release, cmd_task_reopen,
-    cmd_task_set_title, cmd_task_stop, cmd_task_unassign, cmd_task_update, cmd_thread_create,
-    cmd_thread_get, cmd_thread_history, cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot,
+    cmd_automation_update, cmd_bot_bind, cmd_bot_status, cmd_bot_unbind, cmd_channels_add,
+    cmd_channels_enable, cmd_channels_list, cmd_channels_login, cmd_channels_remove,
+    cmd_command_delete, cmd_command_get, cmd_command_list, cmd_command_set, cmd_config_get,
+    cmd_config_init, cmd_config_path, cmd_config_set, cmd_config_show, cmd_config_unset,
+    cmd_config_validate, cmd_doctor, cmd_gateway_install, cmd_gateway_reload_config,
+    cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token,
+    cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail,
+    cmd_migrate_thread_transcripts, cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign,
+    cmd_task_claim, cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history,
+    cmd_task_list, cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title,
+    cmd_task_stop, cmd_task_unassign, cmd_task_update, cmd_thread_create, cmd_thread_get,
+    cmd_thread_history, cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot,
     cmd_thread_send_to_task, cmd_tool_image, cmd_tool_search, cmd_update, cmd_wiki_delete,
     cmd_wiki_get, cmd_wiki_init, cmd_wiki_list, cmd_wiki_status, run_gateway,
 };
@@ -457,6 +458,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Some(Commands::Bot { action }) => match action {
             BotAction::Status { bot_id, json } => cmd_bot_status(config_path, &bot_id, json).await,
+            BotAction::Bind { bot, thread, json } => {
+                cmd_bot_bind(config_path, &bot, &thread, json).await
+            }
+            BotAction::Unbind { bot, json } => cmd_bot_unbind(config_path, &bot, json).await,
         },
         Some(Commands::AutoResearch { action }) => match action {
             AutoResearchAction::Create {

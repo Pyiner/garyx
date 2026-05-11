@@ -70,7 +70,10 @@ The binding lookup order:
    bind the endpoint to it.
 
 You can inspect, rebind, or detach bindings from the desktop app or via the
-HTTP API (`/api/channel-bindings/{bind,detach}`).
+HTTP API (`/api/channel-bindings/{bind,detach}`). For a configured bot's main
+endpoint, use `garyx bot bind --bot <channel:account_id> --thread <thread_id>`
+or `garyx bot unbind --bot <channel:account_id>` so the gateway remains the
+single writer for thread binding state.
 
 ## The `api` channel
 

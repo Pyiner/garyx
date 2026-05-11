@@ -553,6 +553,27 @@ pub(crate) enum BotAction {
         #[arg(long)]
         json: bool,
     },
+    /// Bind or rebind a bot's main endpoint to an existing thread
+    Bind {
+        /// Bot selector like telegram:main
+        #[arg(long)]
+        bot: String,
+        /// Canonical thread id like thread::abc
+        #[arg(long)]
+        thread: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Clear a bot's current main endpoint binding
+    Unbind {
+        /// Bot selector like telegram:main
+        #[arg(long)]
+        bot: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]

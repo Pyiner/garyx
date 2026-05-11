@@ -14,9 +14,10 @@ use garyx_models::provider::ProviderType;
 #[cfg(test)]
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
-    ChannelBinding, ThreadEnsureOptions, bindings_from_value, detach_endpoint_from_thread,
-    history_message_count, is_hidden_thread_value, is_thread_key, list_known_channel_endpoints,
-    thread_kind_from_value, update_thread_record, workspace_dir_from_value,
+    ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, bindings_from_value,
+    detach_endpoint_from_thread, history_message_count, is_hidden_thread_value, is_thread_key,
+    list_known_channel_endpoints, thread_kind_from_value, update_thread_record,
+    workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -52,7 +53,7 @@ pub(crate) struct ResolvedMainEndpoint {
 }
 
 impl ResolvedMainEndpoint {
-    fn to_binding(&self) -> ChannelBinding {
+    pub(crate) fn to_binding(&self) -> ChannelBinding {
         ChannelBinding {
             channel: self.channel.clone(),
             account_id: self.account_id.clone(),
@@ -90,6 +91,36 @@ impl ResolvedMainEndpoint {
             "conversation_label": conversation.label,
             "source": self.source,
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChannelEndpointBindResult {
+    pub(crate) thread_id: String,
+    pub(crate) previous_thread_id: Option<String>,
+    pub(crate) endpoint_key: String,
+    pub(crate) binding: ChannelBinding,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChannelEndpointDetachResult {
+    pub(crate) previous_thread_id: Option<String>,
+    pub(crate) endpoint_key: String,
+    pub(crate) binding: Option<ChannelBinding>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChannelEndpointMutationError {
+    pub(crate) status: StatusCode,
+    pub(crate) message: String,
+}
+
+impl ChannelEndpointMutationError {
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
     }
 }
 
@@ -875,6 +906,140 @@ async fn ensure_existing_thread_id(state: &Arc<AppState>, key: &str) -> Option<S
 async fn rebuild_thread_indexes(state: &Arc<AppState>) {
     let mut router = state.threads.router.lock().await;
     router.rebuild_thread_indexes().await;
+}
+
+fn binding_from_known_endpoint(endpoint: &KnownChannelEndpoint) -> ChannelBinding {
+    ChannelBinding {
+        channel: endpoint.channel.clone(),
+        account_id: endpoint.account_id.clone(),
+        binding_key: endpoint.binding_key.clone(),
+        chat_id: endpoint.chat_id.clone(),
+        delivery_target_type: endpoint.delivery_target_type.clone(),
+        delivery_target_id: endpoint.delivery_target_id.clone(),
+        display_label: endpoint.display_label.clone(),
+        last_inbound_at: endpoint.last_inbound_at.clone(),
+        last_delivery_at: endpoint.last_delivery_at.clone(),
+    }
+}
+
+async fn resolve_channel_binding_for_endpoint_key(
+    state: &Arc<AppState>,
+    requested_endpoint_key: &str,
+) -> Option<ChannelBinding> {
+    let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
+    if let Some(binding) = endpoints
+        .into_iter()
+        .find(|endpoint| endpoint_key_matches(&endpoint.endpoint_key, requested_endpoint_key))
+        .map(|endpoint| binding_from_known_endpoint(&endpoint))
+    {
+        return Some(binding);
+    }
+    resolve_main_endpoint_by_key(state, requested_endpoint_key)
+        .await
+        .map(|endpoint| endpoint.to_binding())
+}
+
+pub(crate) async fn bind_channel_endpoint_key_to_thread(
+    state: &Arc<AppState>,
+    endpoint_key: &str,
+    thread_id: &str,
+) -> Result<ChannelEndpointBindResult, ChannelEndpointMutationError> {
+    let requested_endpoint_key = normalize_endpoint_lookup_key(endpoint_key);
+    let Some(thread_id) = ensure_existing_thread_id(state, thread_id).await else {
+        return Err(ChannelEndpointMutationError::new(
+            StatusCode::NOT_FOUND,
+            "target thread not found",
+        ));
+    };
+
+    let Some(binding) =
+        resolve_channel_binding_for_endpoint_key(state, &requested_endpoint_key).await
+    else {
+        return Err(ChannelEndpointMutationError::new(
+            StatusCode::NOT_FOUND,
+            "endpoint not found",
+        ));
+    };
+
+    let bind_result = {
+        let mut router = state.threads.router.lock().await;
+        router
+            .bind_endpoint_runtime(&thread_id, binding.clone())
+            .await
+    };
+
+    match bind_result {
+        Ok(previous_thread_id) => {
+            rebuild_thread_indexes(state).await;
+            Ok(ChannelEndpointBindResult {
+                thread_id,
+                previous_thread_id,
+                endpoint_key: requested_endpoint_key,
+                binding,
+            })
+        }
+        Err(error) if error.contains("thread not found") => Err(ChannelEndpointMutationError::new(
+            StatusCode::NOT_FOUND,
+            error,
+        )),
+        Err(error) => Err(ChannelEndpointMutationError::new(
+            StatusCode::BAD_REQUEST,
+            error,
+        )),
+    }
+}
+
+pub(crate) async fn detach_channel_endpoint_key(
+    state: &Arc<AppState>,
+    endpoint_key: &str,
+) -> Result<ChannelEndpointDetachResult, ChannelEndpointMutationError> {
+    let requested_endpoint_key = normalize_endpoint_lookup_key(endpoint_key);
+    match detach_endpoint_from_thread(&state.threads.thread_store, &requested_endpoint_key).await {
+        Ok(previous_thread_id) => {
+            let detached_endpoint = list_known_channel_endpoints(&state.threads.thread_store)
+                .await
+                .into_iter()
+                .find(|endpoint| {
+                    endpoint_key_matches(&endpoint.endpoint_key, &requested_endpoint_key)
+                });
+            if let (Some(thread_id), Some(endpoint)) =
+                (previous_thread_id.as_deref(), detached_endpoint.as_ref())
+            {
+                let delivery_thread_id =
+                    binding_delivery_thread_id(&endpoint.binding_key, &endpoint.chat_id);
+                let mut router = state.threads.router.lock().await;
+                router
+                    .clear_reply_routing_for_chat_with_persistence(
+                        thread_id,
+                        &endpoint.channel,
+                        &endpoint.account_id,
+                        &endpoint.chat_id,
+                        delivery_thread_id.as_deref(),
+                    )
+                    .await;
+                router
+                    .clear_last_delivery_for_chat_with_persistence(
+                        thread_id,
+                        &endpoint.channel,
+                        &endpoint.account_id,
+                        &endpoint.chat_id,
+                        delivery_thread_id.as_deref(),
+                    )
+                    .await;
+                router.rebuild_routing_index(&endpoint.channel).await;
+            }
+            rebuild_thread_indexes(state).await;
+            Ok(ChannelEndpointDetachResult {
+                previous_thread_id,
+                endpoint_key: requested_endpoint_key,
+                binding: detached_endpoint.as_ref().map(binding_from_known_endpoint),
+            })
+        }
+        Err(error) => Err(ChannelEndpointMutationError::new(
+            StatusCode::BAD_REQUEST,
+            error,
+        )),
+    }
 }
 
 fn summarize_text(value: Option<&str>, limit: usize) -> Option<String> {
@@ -1794,66 +1959,17 @@ pub async fn bind_channel_endpoint(
     State(state): State<Arc<AppState>>,
     Json(body): Json<BindChannelEndpointBody>,
 ) -> impl IntoResponse {
-    let requested_endpoint_key = normalize_endpoint_lookup_key(&body.endpoint_key);
-    let Some(thread_id) = ensure_existing_thread_id(&state, &body.thread_id).await else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "target thread not found" })),
-        );
-    };
-
-    let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
-    let binding = endpoints
-        .into_iter()
-        .find(|endpoint| endpoint_key_matches(&endpoint.endpoint_key, &requested_endpoint_key))
-        .map(|endpoint| ChannelBinding {
-            channel: endpoint.channel.clone(),
-            account_id: endpoint.account_id.clone(),
-            binding_key: endpoint.binding_key.clone(),
-            chat_id: endpoint.chat_id.clone(),
-            delivery_target_type: endpoint.delivery_target_type.clone(),
-            delivery_target_id: endpoint.delivery_target_id.clone(),
-            display_label: endpoint.display_label.clone(),
-            last_inbound_at: endpoint.last_inbound_at,
-            last_delivery_at: endpoint.last_delivery_at,
-        });
-
-    let binding = match binding {
-        Some(binding) => Some(binding),
-        None => resolve_main_endpoint_by_key(&state, &requested_endpoint_key)
-            .await
-            .map(|endpoint| endpoint.to_binding()),
-    };
-
-    let Some(binding) = binding else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "endpoint not found" })),
-        );
-    };
-
-    let bind_result = {
-        let mut router = state.threads.router.lock().await;
-        router.bind_endpoint_runtime(&thread_id, binding).await
-    };
-
-    match bind_result {
-        Ok(previous_thread_id) => {
-            rebuild_thread_indexes(&state).await;
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": true,
-                    "thread_id": thread_id,
-                    "previous_thread_id": previous_thread_id,
-                    "endpoint_key": requested_endpoint_key,
-                })),
-            )
-        }
-        Err(error) if error.contains("thread not found") => {
-            (StatusCode::NOT_FOUND, Json(json!({ "error": error })))
-        }
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))),
+    match bind_channel_endpoint_key_to_thread(&state, &body.endpoint_key, &body.thread_id).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "thread_id": result.thread_id,
+                "previous_thread_id": result.previous_thread_id,
+                "endpoint_key": result.endpoint_key,
+            })),
+        ),
+        Err(error) => (error.status, Json(json!({ "error": error.message }))),
     }
 }
 
@@ -1862,52 +1978,16 @@ pub async fn detach_channel_endpoint(
     State(state): State<Arc<AppState>>,
     Json(body): Json<DetachChannelEndpointBody>,
 ) -> impl IntoResponse {
-    let requested_endpoint_key = normalize_endpoint_lookup_key(&body.endpoint_key);
-    match detach_endpoint_from_thread(&state.threads.thread_store, &requested_endpoint_key).await {
-        Ok(previous_thread_id) => {
-            let detached_endpoint = list_known_channel_endpoints(&state.threads.thread_store)
-                .await
-                .into_iter()
-                .find(|endpoint| {
-                    endpoint_key_matches(&endpoint.endpoint_key, &requested_endpoint_key)
-                });
-            if let (Some(thread_id), Some(endpoint)) =
-                (previous_thread_id.as_deref(), detached_endpoint.as_ref())
-            {
-                let delivery_thread_id =
-                    binding_delivery_thread_id(&endpoint.binding_key, &endpoint.chat_id);
-                let mut router = state.threads.router.lock().await;
-                router
-                    .clear_reply_routing_for_chat_with_persistence(
-                        thread_id,
-                        &endpoint.channel,
-                        &endpoint.account_id,
-                        &endpoint.chat_id,
-                        delivery_thread_id.as_deref(),
-                    )
-                    .await;
-                router
-                    .clear_last_delivery_for_chat_with_persistence(
-                        thread_id,
-                        &endpoint.channel,
-                        &endpoint.account_id,
-                        &endpoint.chat_id,
-                        delivery_thread_id.as_deref(),
-                    )
-                    .await;
-                router.rebuild_routing_index(&endpoint.channel).await;
-            }
-            rebuild_thread_indexes(&state).await;
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "ok": previous_thread_id.is_some(),
-                    "previous_thread_id": previous_thread_id,
-                    "endpoint_key": requested_endpoint_key,
-                })),
-            )
-        }
-        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))),
+    match detach_channel_endpoint_key(&state, &body.endpoint_key).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(json!({
+                "ok": result.previous_thread_id.is_some(),
+                "previous_thread_id": result.previous_thread_id,
+                "endpoint_key": result.endpoint_key,
+            })),
+        ),
+        Err(error) => (error.status, Json(json!({ "error": error.message }))),
     }
 }
 
