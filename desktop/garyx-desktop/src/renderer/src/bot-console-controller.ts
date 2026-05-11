@@ -140,6 +140,7 @@ async function reconcileBotDraftWorkspace(
   const nextGroup = resolveBotGroupById(nextDesktopState, groupId) || input.group;
   const stillCurrentDraft = () =>
     input.shouldKeepNewDraft?.(groupId, initialWorkspacePath) ?? true;
+  let shouldRestoreDraftAfterStaleOpen = false;
 
   if (!stillCurrentDraft()) {
     return;
@@ -148,15 +149,25 @@ async function reconcileBotDraftWorkspace(
   const resolved = resolveMainThreadId(nextGroup);
   if (resolved.mainThreadId) {
     if (input.shouldOpenResolvedThread?.(groupId, initialWorkspacePath)) {
-      input.onOpenThreadById(resolved.mainThreadId);
+      const opened = await input.onOpenThreadById(resolved.mainThreadId);
+      if (opened !== false) {
+        return;
+      }
+      shouldRestoreDraftAfterStaleOpen = true;
+    } else {
+      return;
     }
-    return;
   }
-  if (resolved.primaryEndpoint?.threadId) {
+  if (!shouldRestoreDraftAfterStaleOpen && resolved.primaryEndpoint?.threadId) {
     if (input.shouldOpenResolvedThread?.(groupId, initialWorkspacePath)) {
-      input.onOpenExistingThread(resolved.primaryEndpoint);
+      const opened = await input.onOpenExistingThread(resolved.primaryEndpoint);
+      if (opened !== false) {
+        return;
+      }
+      shouldRestoreDraftAfterStaleOpen = true;
+    } else {
+      return;
     }
-    return;
   }
 
   let workspacePath = resolveBotWorkspacePath(nextDesktopState, nextGroup);
@@ -176,7 +187,9 @@ async function reconcileBotDraftWorkspace(
     }
   }
 
-  if (
+  if (shouldRestoreDraftAfterStaleOpen) {
+    openNewBotDraft(input, nextGroup, workspacePath);
+  } else if (
     workspacePath &&
     workspacePath !== initialWorkspacePath &&
     stillCurrentDraft()
