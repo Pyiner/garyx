@@ -1041,9 +1041,38 @@ function transcriptMessagesSemanticallyMatch(
   return false;
 }
 
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
+function remoteTranscriptMessageCanReuseExisting(
+  existing: UiTranscriptMessage,
+  remote: TranscriptMessage,
+  options?: { ignoreTimestamp?: boolean },
+): boolean {
+  return (
+    existing.localState === "remote_final" &&
+    existing.role === remote.role &&
+    existing.text === remote.text &&
+    jsonValuesEqual(existing.content, remote.content) &&
+    (options?.ignoreTimestamp || existing.timestamp === remote.timestamp) &&
+    existing.toolUseId === remote.toolUseId &&
+    existing.toolName === remote.toolName &&
+    existing.isError === remote.isError &&
+    jsonValuesEqual(existing.metadata, remote.metadata) &&
+    existing.kind === remote.kind &&
+    existing.internal === remote.internal &&
+    existing.internalKind === remote.internalKind &&
+    existing.loopOrigin === remote.loopOrigin &&
+    existing.pending !== true &&
+    existing.error === remote.error
+  );
+}
+
 function materializeRemoteTranscript(
   transcript: TranscriptMessage[],
   existing: UiTranscriptMessage[],
+  options?: { ignoreTimestampForStableMessages?: boolean },
 ): UiTranscriptMessage[] {
   const usedExistingIndexes = new Set<number>();
 
@@ -1067,6 +1096,15 @@ function materializeRemoteTranscript(
     const matchedEntry = matchedIndex >= 0 ? existing[matchedIndex] : null;
     if (matchedIndex >= 0) {
       usedExistingIndexes.add(matchedIndex);
+    }
+
+    if (
+      matchedEntry &&
+      remoteTranscriptMessageCanReuseExisting(matchedEntry, message, {
+        ignoreTimestamp: options?.ignoreTimestampForStableMessages,
+      })
+    ) {
+      return matchedEntry;
     }
 
     return {
@@ -1126,6 +1164,15 @@ function materializeRemoteTranscript(
     const matchedEntry = matchedIndex >= 0 ? existing[matchedIndex] : null;
     if (matchedIndex >= 0) {
       usedExistingIndexes.add(matchedIndex);
+    }
+
+    if (
+      matchedEntry &&
+      remoteTranscriptMessageCanReuseExisting(matchedEntry, synthetic, {
+        ignoreTimestamp: options?.ignoreTimestampForStableMessages,
+      })
+    ) {
+      return matchedEntry;
     }
 
     return {
@@ -5285,6 +5332,7 @@ export function AppShell() {
   function mergeRemoteTranscriptWithLocal(
     transcript: TranscriptMessage[],
     existing: UiTranscriptMessage[],
+    options?: { activeRunSnapshot?: boolean },
   ): UiTranscriptMessage[] {
     if (transcript.length === 0) {
       return existing.length > 0 ? existing : [];
@@ -5293,6 +5341,9 @@ export function AppShell() {
     const materializedRemote = materializeRemoteTranscript(
       transcript,
       existing,
+      {
+        ignoreTimestampForStableMessages: options?.activeRunSnapshot,
+      },
     );
     const preservedLocalEntries = existing.filter((entry, index, entries) => {
       if (entry.localState === "remote_final") {
@@ -5360,12 +5411,22 @@ export function AppShell() {
     startTransition(() => {
       updateMessagesByThread((current) => {
         const existing = current[threadId] || [];
+        const merged = mergeRemoteTranscriptWithLocal(
+          transcript.messages,
+          existing,
+          {
+            activeRunSnapshot: Boolean(transcript.threadInfo?.activeRun),
+          },
+        );
+        if (
+          merged.length === existing.length &&
+          merged.every((entry, index) => entry === existing[index])
+        ) {
+          return current;
+        }
         return {
           ...current,
-          [threadId]: mergeRemoteTranscriptWithLocal(
-            transcript.messages,
-            existing,
-          ),
+          [threadId]: merged,
         };
       });
     });
