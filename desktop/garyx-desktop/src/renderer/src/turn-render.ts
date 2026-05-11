@@ -5,9 +5,9 @@ import type { RenderTranscriptBlock } from './transcript-render';
  * messages + tool groups) so the renderer can collapse them behind a
  * single "已处理 Xs" summary, mirroring Codex's chat layout.
  *
- * The trailing assistant message — when present and not pending — is
- * surfaced as `finalBlock` so it renders OUTSIDE the collapsible (this
- * is the "user-visible answer", which Codex never folds).
+ * Once the run is complete, the trailing assistant message — when present
+ * and not pending — is surfaced as `finalBlock` so it renders OUTSIDE the
+ * collapsible (this is the "user-visible answer", which Codex never folds).
  */
 export interface TurnRow {
   kind: 'turn';
@@ -31,6 +31,11 @@ export interface FlatRow {
 }
 
 export type TurnRenderRow = FlatRow | TurnRow;
+
+export interface BuildTurnRowsOptions {
+  /** Only true once the current run is known to be finished. */
+  surfaceFinalAssistant?: boolean;
+}
 
 function isUserBlock(block: RenderTranscriptBlock): boolean {
   return block.kind === 'message' && block.entry.message.role === 'user';
@@ -56,9 +61,9 @@ function pickFinalBlock(
   steps: RenderTranscriptBlock[],
 ): { steps: RenderTranscriptBlock[]; finalBlock: RenderTranscriptBlock | null } {
   // Only surface the final block when the LAST block is a non-pending
-  // assistant message. While the stream is in flight or the trailing
-  // block is a tool group, leave it inside the collapsible so the user
-  // sees live progress.
+  // assistant message after the caller has confirmed the run is done.
+  // While the stream is in flight or the trailing block is a tool group,
+  // leave it inside the collapsible so the user sees live progress.
   if (steps.length === 0) {
     return { steps, finalBlock: null };
   }
@@ -116,11 +121,13 @@ function summarizeTurn(
  */
 export function buildTurnRows(
   blocks: RenderTranscriptBlock[],
+  options: BuildTurnRowsOptions = {},
 ): TurnRenderRow[] {
   const rows: TurnRenderRow[] = [];
   let currentSteps: RenderTranscriptBlock[] = [];
   let currentKey: string | null = null;
   let precedingUserTs: string | null = null;
+  const surfaceFinalAssistant = options.surfaceFinalAssistant !== false;
 
   const flush = () => {
     if (!currentSteps.length || !currentKey) {
@@ -134,6 +141,7 @@ export function buildTurnRows(
     // no Worked-for header. Detect that case here so we mirror the
     // same UX.
     const isPureTextReply =
+      surfaceFinalAssistant &&
       currentSteps.length === 1 &&
       currentSteps[0]!.kind === 'message' &&
       currentSteps[0]!.entry.message.role === 'assistant' &&
@@ -142,7 +150,9 @@ export function buildTurnRows(
       const only = currentSteps[0]!;
       rows.push({ kind: 'flat', key: only.key, block: only });
     } else {
-      const { steps, finalBlock } = pickFinalBlock(currentSteps);
+      const { steps, finalBlock } = surfaceFinalAssistant
+        ? pickFinalBlock(currentSteps)
+        : { steps: currentSteps, finalBlock: null };
       rows.push(summarizeTurn(steps, finalBlock, currentKey, precedingUserTs));
     }
     currentSteps = [];

@@ -418,8 +418,13 @@ export function ThreadPage({
     ],
   );
   const turnRows = useMemo(
-    () => (teamView.isTeam ? [] : buildTurnRows(activeRenderableBlocks)),
-    [activeRenderableBlocks, teamView.isTeam],
+    () =>
+      teamView.isTeam
+        ? []
+        : buildTurnRows(activeRenderableBlocks, {
+            surfaceFinalAssistant: !isActiveSendingThread,
+          }),
+    [activeRenderableBlocks, isActiveSendingThread, teamView.isTeam],
   );
   const composerSelectedAgentId = selectedThreadId
     ? teamView.isTeam
