@@ -1,0 +1,150 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+
+import * as esbuild from 'esbuild';
+
+const bundled = await esbuild.build({
+  entryPoints: ['src/renderer/src/bot-console-controller.ts'],
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  write: false,
+});
+const controllerModule = await import(
+  `data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`
+);
+const { activateBotDraftThread } = controllerModule;
+
+function makeEndpoint(overrides = {}) {
+  return {
+    endpointKey: 'weixin::test-bot::default',
+    channel: 'weixin',
+    accountId: 'test-bot',
+    peerId: 'peer-1',
+    chatId: 'chat-1',
+    deliveryTargetType: 'chat_id',
+    deliveryTargetId: 'chat-1',
+    displayLabel: 'Test endpoint',
+    threadId: 'thread::stale',
+    ...overrides,
+  };
+}
+
+function makeBotGroup(overrides = {}) {
+  const endpoint = makeEndpoint();
+  return {
+    id: 'weixin::test-bot',
+    channel: 'weixin',
+    accountId: 'test-bot',
+    title: 'Test Bot',
+    subtitle: 'Weixin Bot',
+    rootBehavior: 'open_default',
+    status: 'connected',
+    latestActivity: null,
+    endpointCount: 1,
+    boundEndpointCount: 1,
+    workspaceDir: '/workspace/test-project',
+    mainEndpointStatus: 'unresolved',
+    mainEndpoint: null,
+    mainThreadId: endpoint.threadId,
+    defaultOpenEndpoint: endpoint,
+    defaultOpenThreadId: endpoint.threadId,
+    conversationNodes: [],
+    endpoints: [endpoint],
+    ...overrides,
+  };
+}
+
+function makeDesktopState(group) {
+  return {
+    threads: [],
+    workspaces: [{ path: '/workspace/test-project', exists: true }],
+    endpoints: group.endpoints,
+    configuredBots: [{
+      channel: group.channel,
+      accountId: group.accountId,
+      displayName: group.title,
+      rootBehavior: group.rootBehavior,
+      mainEndpointStatus: group.mainEndpointStatus,
+      mainEndpointThreadId: 'thread::stale',
+      workspaceDir: group.workspaceDir,
+    }],
+    botMainThreads: { [group.id]: 'thread::stale' },
+    botConsoles: [],
+  };
+}
+
+test('falls back to a bound bot draft when a remembered bot thread cannot open', async () => {
+  const group = makeBotGroup();
+  const desktopState = makeDesktopState(group);
+  const calls = [];
+  const values = {
+    error: 'previous error',
+    contentView: null,
+    newThreadDraftActive: false,
+    selectedThreadId: 'thread::previous',
+    pendingWorkspacePath: null,
+    pendingBotId: null,
+    composerCleared: false,
+    composerPhase: 'busy',
+    focusRequested: false,
+  };
+
+  await activateBotDraftThread({
+    platform: {
+      getState: async () => desktopState,
+      addWorkspaceByPath: async () => {
+        throw new Error('unexpected workspace mutation');
+      },
+    },
+    desktopState,
+    group,
+    onState: () => {},
+    onOpenExistingThread: async () => false,
+    onOpenThreadById: async (threadId) => {
+      calls.push(threadId);
+      return false;
+    },
+    shouldKeepNewDraft: () => true,
+    shouldOpenResolvedThread: () => false,
+    setError: (value) => {
+      values.error = value;
+    },
+    setContentView: (view) => {
+      values.contentView = view;
+    },
+    setNewThreadDraftActive: (value) => {
+      values.newThreadDraftActive = value;
+    },
+    setSelectedThreadId: (value) => {
+      values.selectedThreadId = value;
+    },
+    setPendingWorkspacePath: (value) => {
+      values.pendingWorkspacePath = value;
+    },
+    setPendingBotId: (value) => {
+      values.pendingBotId = value;
+    },
+    clearComposerDraft: () => {
+      values.composerCleared = true;
+    },
+    syncComposerPhase: (value) => {
+      values.composerPhase = value;
+    },
+    requestComposerFocus: () => {
+      values.focusRequested = true;
+    },
+  });
+
+  assert.deepEqual(calls, ['thread::stale']);
+  assert.equal(values.error, null);
+  assert.equal(values.contentView, 'thread');
+  assert.equal(values.newThreadDraftActive, true);
+  assert.equal(values.selectedThreadId, null);
+  assert.equal(values.pendingWorkspacePath, '/workspace/test-project');
+  assert.equal(values.pendingBotId, 'weixin::test-bot');
+  assert.equal(values.composerCleared, true);
+  assert.equal(values.composerPhase, '');
+  assert.equal(values.focusRequested, true);
+});

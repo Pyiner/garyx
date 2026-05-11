@@ -2961,7 +2961,7 @@ export function AppShell() {
     resetComposerAttachmentPicker();
   }
 
-  async function openExistingThread(threadId: string): Promise<void> {
+  async function openExistingThread(threadId: string): Promise<boolean> {
     setError(null);
     setContentView("thread");
     setNewThreadDraftActive(false);
@@ -2971,7 +2971,7 @@ export function AppShell() {
         const refreshedState = await refreshDesktopState();
         if (!isKnownThreadId(refreshedState, threadId)) {
           setError(`Thread not found: ${threadId}`);
-          return;
+          return false;
         }
       } catch (error) {
         setError(
@@ -2979,11 +2979,12 @@ export function AppShell() {
             ? error.message
             : `Failed to open thread: ${threadId}`,
         );
-        return;
+        return false;
       }
     }
 
     setSelectedThreadId(threadId);
+    return true;
   }
 
   const applyDesktopRoute = useCallback(
@@ -5681,12 +5682,15 @@ export function AppShell() {
       group,
       onState: setDesktopState,
       onOpenExistingThread: (endpoint) => {
-        void handleOpenThreadFromEndpoint(endpoint);
+        return handleOpenThreadFromEndpoint(endpoint);
       },
       onOpenThreadById: (threadId) => {
-        void openExistingThread(threadId).then(() => {
-          setPendingWorkspacePath(null);
-          setPendingBotId(null);
+        return openExistingThread(threadId).then((opened) => {
+          if (opened) {
+            setPendingWorkspacePath(null);
+            setPendingBotId(null);
+          }
+          return opened;
         });
       },
       shouldKeepNewDraft: (groupId, initialWorkspacePath) =>
@@ -5959,10 +5963,9 @@ export function AppShell() {
 
   async function handleOpenThreadFromEndpoint(
     endpoint: DesktopChannelEndpoint,
-  ) {
+  ): Promise<boolean> {
     if (endpoint.threadId) {
-      await openExistingThread(endpoint.threadId);
-      return;
+      return openExistingThread(endpoint.threadId);
     }
 
     openThreadFromEndpoint({
@@ -5974,6 +5977,7 @@ export function AppShell() {
       setNewThreadDraftActive,
       setSelectedThreadId,
     });
+    return false;
   }
 
   async function handleTakeOverEndpoint(endpointKey: string) {

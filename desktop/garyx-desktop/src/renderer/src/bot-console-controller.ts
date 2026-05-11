@@ -103,7 +103,7 @@ function resolveMainThreadId(group: DesktopBotConsoleSummary): {
   return { mainThreadId, primaryEndpoint: mainEndpoint };
 }
 
-function openNewBotDraft(
+export function openNewBotDraft(
   input: Pick<
     ActivateBotDraftThreadInput,
     | 'setError'
@@ -190,8 +190,10 @@ type ActivateBotDraftThreadInput = {
   desktopState: DesktopState | null;
   group: DesktopBotConsoleSummary;
   onState: (state: DesktopState) => void;
-  onOpenExistingThread: (endpoint: DesktopChannelEndpoint) => void;
-  onOpenThreadById: (threadId: string) => void;
+  onOpenExistingThread: (
+    endpoint: DesktopChannelEndpoint,
+  ) => boolean | Promise<boolean>;
+  onOpenThreadById: (threadId: string) => boolean | Promise<boolean>;
   shouldKeepNewDraft?: (
     groupId: string,
     initialWorkspacePath: string | null,
@@ -220,13 +222,33 @@ export async function activateBotDraftThread(
   const currentGroup = resolveBotGroupById(input.desktopState, input.group.id) || input.group;
   const current = resolveMainThreadId(currentGroup);
   if (current.mainThreadId) {
-    input.onOpenThreadById(current.mainThreadId);
-    void refreshBotState(input.platform, input.onState);
+    const opened = await input.onOpenThreadById(current.mainThreadId);
+    if (opened !== false) {
+      void refreshBotState(input.platform, input.onState);
+      return;
+    }
+    const workspacePath = resolveBotWorkspacePath(input.desktopState, currentGroup);
+    openNewBotDraft(input, currentGroup, workspacePath);
+    void reconcileBotDraftWorkspace(
+      input,
+      currentGroup.id,
+      workspacePath,
+    );
     return;
   }
   if (current.primaryEndpoint?.threadId) {
-    input.onOpenExistingThread(current.primaryEndpoint);
-    void refreshBotState(input.platform, input.onState);
+    const opened = await input.onOpenExistingThread(current.primaryEndpoint);
+    if (opened !== false) {
+      void refreshBotState(input.platform, input.onState);
+      return;
+    }
+    const workspacePath = resolveBotWorkspacePath(input.desktopState, currentGroup);
+    openNewBotDraft(input, currentGroup, workspacePath);
+    void reconcileBotDraftWorkspace(
+      input,
+      currentGroup.id,
+      workspacePath,
+    );
     return;
   }
 
