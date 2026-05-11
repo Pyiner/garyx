@@ -370,6 +370,7 @@ fn spawn_partial_thread_persistence_worker(
     history: Arc<ThreadHistoryRepository>,
     thread_id: String,
     user_message: String,
+    user_timestamp: String,
     user_images: Vec<ImagePayload>,
     provider_key: String,
     provider_type: ProviderType,
@@ -389,6 +390,7 @@ fn spawn_partial_thread_persistence_worker(
             PersistedRun {
                 thread_id: &thread_id,
                 user_message: &user_message,
+                user_timestamp: Some(&user_timestamp),
                 user_images: &user_images,
                 assistant_response: "",
                 sdk_session_id: None,
@@ -475,6 +477,7 @@ fn spawn_partial_thread_persistence_worker(
                     PersistedRun {
                         thread_id: &thread_id,
                         user_message: &user_message,
+                        user_timestamp: Some(&user_timestamp),
                         user_images: &user_images,
                         assistant_response: &snapshot.assistant_response,
                         sdk_session_id: snapshot.sdk_session_id.as_deref(),
@@ -506,6 +509,7 @@ fn spawn_partial_thread_persistence_worker(
                 PersistedRun {
                     thread_id: &thread_id,
                     user_message: &user_message,
+                    user_timestamp: Some(&user_timestamp),
                     user_images: &user_images,
                     assistant_response: &snapshot.assistant_response,
                     sdk_session_id: snapshot.sdk_session_id.as_deref(),
@@ -1157,6 +1161,7 @@ impl MultiProviderBridge {
             }
         }
 
+        let run_started_at = chrono::Utc::now().to_rfc3339();
         let partial_user_images = options.images.clone().unwrap_or_default();
         let partial_metadata = options.metadata.clone();
         let partial_provider_key = provider_key_owned.clone();
@@ -1171,6 +1176,7 @@ impl MultiProviderBridge {
                     history,
                     thread_id.to_owned(),
                     message.to_owned(),
+                    run_started_at.clone(),
                     partial_user_images,
                     partial_provider_key,
                     partial_provider_type,
@@ -1439,6 +1445,7 @@ impl MultiProviderBridge {
                             PersistedRun {
                                 thread_id: &thread_id_owned,
                                 user_message: &user_message,
+                                user_timestamp: Some(&run_started_at),
                                 user_images: &user_images,
                                 assistant_response: persisted_assistant_response,
                                 sdk_session_id: sdk_session_id.as_deref(),
@@ -1653,6 +1660,7 @@ impl MultiProviderBridge {
                             PersistedRun {
                                 thread_id: &thread_id_owned,
                                 user_message: &user_message,
+                                user_timestamp: Some(&run_started_at),
                                 user_images: &user_images,
                                 assistant_response: failed_assistant_response,
                                 sdk_session_id: None,
@@ -1871,6 +1879,7 @@ impl MultiProviderBridge {
             }
         }
 
+        let run_started_at = chrono::Utc::now().to_rfc3339();
         let partial_user_images = options.images.clone().unwrap_or_default();
         let partial_metadata = options.metadata.clone();
         let partial_provider_key = provider_key.clone();
@@ -1885,6 +1894,7 @@ impl MultiProviderBridge {
                     history,
                     thread_id.to_owned(),
                     message.to_owned(),
+                    run_started_at.clone(),
                     partial_user_images,
                     partial_provider_key,
                     partial_provider_type,
@@ -2088,6 +2098,7 @@ impl MultiProviderBridge {
                         PersistedRun {
                             thread_id,
                             user_message: message,
+                            user_timestamp: Some(&run_started_at),
                             user_images: &user_images,
                             assistant_response: persisted_assistant_response,
                             sdk_session_id: sdk_session_id.as_deref(),
@@ -2135,6 +2146,7 @@ impl MultiProviderBridge {
                         PersistedRun {
                             thread_id,
                             user_message: message,
+                            user_timestamp: Some(&run_started_at),
                             user_images: &user_images,
                             assistant_response: failed_assistant_response,
                             sdk_session_id: None,

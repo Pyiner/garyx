@@ -455,6 +455,7 @@ fn parse_agent_team_delta_prefix(text: &str) -> (Option<HashMap<String, Value>>,
 pub(super) struct PersistedRun<'a> {
     pub thread_id: &'a str,
     pub user_message: &'a str,
+    pub user_timestamp: Option<&'a str>,
     pub user_images: &'a [ImagePayload],
     pub assistant_response: &'a str,
     pub sdk_session_id: Option<&'a str>,
@@ -662,11 +663,17 @@ fn update_history_state(
 
 fn build_run_messages(run: &PersistedRun<'_>) -> Vec<Value> {
     let mut messages = Vec::new();
+    let user_timestamp = run
+        .user_timestamp
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
 
     messages.push(Value::Object(build_user_object(
         run.user_message,
         build_user_content(run.user_message, run.user_images, run.metadata),
-        Utc::now().to_rfc3339(),
+        user_timestamp,
         run.metadata,
         None,
     )));

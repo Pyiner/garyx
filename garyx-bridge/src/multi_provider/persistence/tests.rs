@@ -35,6 +35,7 @@ async fn test_save_thread_messages_preserves_provider_message_order() {
         PersistedRun {
             thread_id: "thread::ordered",
             user_message: "和我说话 然后执行 ls",
+            user_timestamp: Some("2026-03-01T00:00:00Z"),
             user_images: &[],
             assistant_response: "在。先执行 ls。\n结果如下。",
             sdk_session_id: Some("sdk-1"),
@@ -67,6 +68,7 @@ async fn test_save_thread_messages_preserves_provider_message_order() {
         vec!["user", "assistant", "tool_use", "tool_result", "assistant"]
     );
     assert_eq!(messages.len(), 5);
+    assert_eq!(messages[0]["timestamp"], "2026-03-01T00:00:00Z");
     assert_eq!(messages[1]["content"], "在。先执行 ls。");
     assert_eq!(messages[4]["content"], "\n结果如下。");
 }
@@ -87,6 +89,7 @@ async fn test_save_thread_messages_persists_user_images_as_blocks() {
         PersistedRun {
             thread_id: "thread::image",
             user_message: "describe this",
+            user_timestamp: None,
             user_images: &user_images,
             assistant_response: "Looks like a diagram.",
             sdk_session_id: None,
@@ -221,6 +224,7 @@ async fn test_save_partial_thread_messages_replaces_existing_snapshot_for_same_r
     let mut metadata = HashMap::new();
     metadata.insert("client_run_id".to_owned(), json!("run-partial"));
     metadata.insert("bridge_run_id".to_owned(), json!("bridge-partial"));
+    let run_started_at = "2026-03-01T00:00:10Z";
 
     let mut snapshot = StreamingRunSnapshot::default();
     snapshot.apply_stream_event(&StreamEvent::Delta {
@@ -232,6 +236,7 @@ async fn test_save_partial_thread_messages_replaces_existing_snapshot_for_same_r
         PersistedRun {
             thread_id: "thread::partial",
             user_message: "hello",
+            user_timestamp: Some(run_started_at),
             user_images: &[],
             assistant_response: &snapshot.assistant_response,
             sdk_session_id: None,
@@ -253,6 +258,7 @@ async fn test_save_partial_thread_messages_replaces_existing_snapshot_for_same_r
         PersistedRun {
             thread_id: "thread::partial",
             user_message: "hello",
+            user_timestamp: Some(run_started_at),
             user_images: &[],
             assistant_response: &snapshot.assistant_response,
             sdk_session_id: None,
@@ -284,6 +290,7 @@ async fn test_save_partial_thread_messages_replaces_existing_snapshot_for_same_r
         .expect("active snapshot messages should be an array");
     assert_eq!(active_messages.len(), 2);
     assert_eq!(active_messages[0]["role"], "user");
+    assert_eq!(active_messages[0]["timestamp"], run_started_at);
     assert_eq!(active_messages[1]["role"], "assistant");
     assert_eq!(active_messages[1]["content"], "hello");
 }
@@ -329,6 +336,7 @@ async fn test_save_partial_thread_messages_clears_abandoned_pending_inputs_for_n
         PersistedRun {
             thread_id: "thread::partial-clear-orphaned",
             user_message: "fresh turn",
+            user_timestamp: None,
             user_images: &[],
             assistant_response: "",
             sdk_session_id: None,
@@ -390,6 +398,7 @@ async fn test_save_partial_thread_messages_keeps_abandoned_pending_inputs_for_in
         PersistedRun {
             thread_id: "thread::partial-keep-orphaned",
             user_message: "continue working",
+            user_timestamp: None,
             user_images: &[],
             assistant_response: "",
             sdk_session_id: None,
@@ -437,6 +446,7 @@ async fn test_save_thread_messages_clears_only_current_provider_sdk_session_id()
         PersistedRun {
             thread_id: "thread::provider-sessions",
             user_message: "clear ordered session",
+            user_timestamp: None,
             user_images: &[],
             assistant_response: "done",
             sdk_session_id: None,
@@ -500,6 +510,7 @@ async fn test_save_thread_messages_synthesizes_message_tool_delivery_as_assistan
         PersistedRun {
             thread_id: "thread::delivery-mirror",
             user_message: "同步到 bot",
+            user_timestamp: None,
             user_images: &[],
             assistant_response: "",
             sdk_session_id: None,
@@ -566,6 +577,7 @@ async fn test_save_thread_messages_does_not_synthesize_delivery_when_assistant_e
         PersistedRun {
             thread_id: "thread::explicit-assistant",
             user_message: "同步到 bot",
+            user_timestamp: None,
             user_images: &[],
             assistant_response: "",
             sdk_session_id: None,
@@ -616,6 +628,7 @@ async fn test_save_thread_messages_marks_loop_continuation_as_internal() {
         PersistedRun {
             thread_id: "thread::loop-internal",
             user_message: "The user wants you to continue working.",
+            user_timestamp: None,
             user_images: &[],
             assistant_response: "当前没有剩余代码任务。",
             sdk_session_id: None,
