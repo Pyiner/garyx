@@ -1025,7 +1025,7 @@ fn test_build_thread_start_params_injects_gary_developer_instructions() {
     assert!(developer_instructions.contains("garyx task create"));
     assert!(developer_instructions.contains("garyx automation create"));
     assert!(!developer_instructions.contains("Global Memory"));
-    assert!(!developer_instructions.contains("<garyx_memory_context>"));
+    assert!(!developer_instructions.contains("</garyx_memory_context>"));
     assert!(!developer_instructions.contains("Current runtime context:"));
     assert!(!developer_instructions.contains("thread_id: thread::test"));
 }

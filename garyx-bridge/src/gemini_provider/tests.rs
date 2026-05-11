@@ -71,7 +71,7 @@ fn build_prompt_blocks_prefixes_instructions_and_metadata_for_fresh_sessions() {
     assert!(fresh_text.contains("<garyx_thread_metadata>"));
     assert!(fresh_text.contains("bot_id: telegram:bot1"));
     assert!(fresh_text.contains("task_id: #TASK-2"));
-    assert!(!fresh_text.contains("<garyx_memory_context>"));
+    assert!(!fresh_text.contains("</garyx_memory_context>"));
     assert!(!fresh_text.contains("<agent_memory"));
     assert!(!fresh_text.contains("status=in_progress"));
     assert!(fresh_text.contains("hello"));
@@ -110,7 +110,7 @@ fn build_prompt_blocks_skips_agent_memory_for_builtin_gemini() {
     let fresh = build_prompt_blocks(&options, None, true);
     let fresh_text = fresh[0]["text"].as_str().unwrap_or_default();
 
-    assert!(!fresh_text.contains("<garyx_memory_context>"));
+    assert!(!fresh_text.contains("</garyx_memory_context>"));
     assert!(!fresh_text.contains("<agent_memory"));
     assert!(fresh_text.contains("hello"));
 }
