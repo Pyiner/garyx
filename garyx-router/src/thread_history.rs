@@ -416,6 +416,38 @@ impl ThreadTranscriptStore {
         Ok((messages, total, start))
     }
 
+    pub async fn page_before_user_queries(
+        &self,
+        thread_id: &str,
+        before_index: Option<usize>,
+        user_query_limit: usize,
+        fallback_message_limit: usize,
+    ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
+        let records = self.read_records(thread_id).await?;
+        let total = records.len();
+        let end = before_index.unwrap_or(total).min(total);
+        let target_user_queries = user_query_limit.max(1);
+        let mut start = end;
+        let mut user_queries = 0usize;
+
+        while start > 0 && user_queries < target_user_queries {
+            start -= 1;
+            if is_user_query_message(&records[start].message) {
+                user_queries += 1;
+            }
+        }
+
+        if user_queries == 0 {
+            start = end.saturating_sub(fallback_message_limit.max(1));
+        }
+
+        let messages = records[start..end]
+            .iter()
+            .map(|record| record.message.clone())
+            .collect();
+        Ok((messages, total, start))
+    }
+
     pub async fn message_count(&self, thread_id: &str) -> Result<usize, ThreadHistoryError> {
         Ok(self.read_records(thread_id).await?.len())
     }
@@ -708,6 +740,95 @@ impl ThreadHistoryRepository {
         })
     }
 
+    pub async fn thread_snapshot_user_query_page(
+        &self,
+        thread_id: &str,
+        fallback_message_limit: usize,
+        before_index: Option<usize>,
+        user_query_limit: usize,
+    ) -> Result<ThreadHistorySnapshot, ThreadHistoryError> {
+        let thread_data = self
+            .thread_store
+            .get(thread_id)
+            .await
+            .ok_or_else(|| ThreadHistoryError::ThreadNotFound(thread_id.to_owned()))?;
+        let overlay_messages = active_run_snapshot_messages(&thread_data);
+        let bounded_fallback_limit = fallback_message_limit.max(1);
+        let bounded_user_query_limit = user_query_limit.max(1);
+
+        if let Some(before_index) = before_index {
+            let (committed_messages, total_committed_messages, committed_start_index) = self
+                .load_committed_messages_before_user_queries(
+                    thread_id,
+                    &thread_data,
+                    Some(before_index),
+                    bounded_user_query_limit,
+                    bounded_fallback_limit,
+                )
+                .await?;
+            let total_overlay_messages = overlay_messages.len();
+            return Ok(ThreadHistorySnapshot {
+                thread_id: thread_id.to_owned(),
+                thread_data,
+                committed_messages,
+                overlay_messages: Vec::new(),
+                total_committed_messages,
+                total_overlay_messages,
+                committed_start_index,
+                overlay_start_index: total_committed_messages,
+            });
+        }
+
+        let total_overlay_messages = overlay_messages.len();
+        let overlay_start_offset =
+            if count_user_query_messages(&overlay_messages) > bounded_user_query_limit {
+                recent_user_query_start_index(
+                    &overlay_messages,
+                    overlay_messages.len(),
+                    bounded_user_query_limit,
+                    bounded_fallback_limit,
+                )
+            } else {
+                0
+            };
+        let overlay_tail = overlay_messages[overlay_start_offset..].to_vec();
+        let overlay_user_queries = count_user_query_messages(&overlay_tail);
+        let committed_user_query_limit =
+            bounded_user_query_limit.saturating_sub(overlay_user_queries);
+        let (committed_messages, total_committed_messages, committed_start_index) =
+            if committed_user_query_limit == 0 {
+                let total_committed_messages = self
+                    .committed_message_count(thread_id, &thread_data)
+                    .await?;
+                (
+                    Vec::new(),
+                    total_committed_messages,
+                    total_committed_messages,
+                )
+            } else {
+                self.load_committed_messages_before_user_queries(
+                    thread_id,
+                    &thread_data,
+                    None,
+                    committed_user_query_limit,
+                    bounded_fallback_limit,
+                )
+                .await?
+            };
+        let overlay_start_index = total_committed_messages + overlay_start_offset;
+
+        Ok(ThreadHistorySnapshot {
+            thread_id: thread_id.to_owned(),
+            thread_data,
+            committed_messages,
+            overlay_messages: overlay_tail,
+            total_committed_messages,
+            total_overlay_messages,
+            committed_start_index,
+            overlay_start_index,
+        })
+    }
+
     pub async fn find_latest_for_run(
         &self,
         thread_id: &str,
@@ -836,6 +957,51 @@ impl ThreadHistoryRepository {
 
         Ok((Vec::new(), 0, 0))
     }
+
+    async fn committed_message_count(
+        &self,
+        thread_id: &str,
+        thread_data: &Value,
+    ) -> Result<usize, ThreadHistoryError> {
+        let has_transcript = self.transcript_store.exists(thread_id).await;
+        let message_count = history_message_count(thread_data);
+        if !has_transcript && message_count > 0 {
+            return Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()));
+        }
+        if has_transcript {
+            return self.transcript_store.message_count(thread_id).await;
+        }
+        Ok(0)
+    }
+
+    async fn load_committed_messages_before_user_queries(
+        &self,
+        thread_id: &str,
+        thread_data: &Value,
+        before_index: Option<usize>,
+        user_query_limit: usize,
+        fallback_message_limit: usize,
+    ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
+        let has_transcript = self.transcript_store.exists(thread_id).await;
+        let message_count = history_message_count(thread_data);
+        if !has_transcript && message_count > 0 {
+            return Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()));
+        }
+
+        if has_transcript {
+            return self
+                .transcript_store
+                .page_before_user_queries(
+                    thread_id,
+                    before_index,
+                    user_query_limit,
+                    fallback_message_limit,
+                )
+                .await;
+        }
+
+        Ok((Vec::new(), 0, 0))
+    }
 }
 
 pub fn history_message_count(thread_data: &Value) -> usize {
@@ -851,6 +1017,44 @@ pub fn history_message_count(thread_data: &Value) -> usize {
                 .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
         })
         .unwrap_or(0)
+}
+
+pub fn count_user_query_messages(messages: &[Value]) -> usize {
+    messages
+        .iter()
+        .filter(|message| is_user_query_message(message))
+        .count()
+}
+
+pub fn is_user_query_message(message: &Value) -> bool {
+    message_role(message) == Some("user")
+        && message
+            .get("internal_kind")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            != Some("loop_continuation")
+}
+
+fn recent_user_query_start_index(
+    messages: &[Value],
+    before_index: usize,
+    user_query_limit: usize,
+    fallback_message_limit: usize,
+) -> usize {
+    let end = before_index.min(messages.len());
+    let mut start = end;
+    let mut user_queries = 0usize;
+    while start > 0 && user_queries < user_query_limit.max(1) {
+        start -= 1;
+        if is_user_query_message(&messages[start]) {
+            user_queries += 1;
+        }
+    }
+    if user_queries == 0 {
+        end.saturating_sub(fallback_message_limit.max(1))
+    } else {
+        start
+    }
 }
 
 pub fn active_run_snapshot_messages(thread_data: &Value) -> Vec<Value> {

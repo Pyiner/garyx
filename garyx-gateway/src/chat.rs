@@ -389,6 +389,7 @@ async fn handle_chat_ws_recover(
         limit,
         request.include_tool_messages,
         None,
+        None,
     )
     .await;
 

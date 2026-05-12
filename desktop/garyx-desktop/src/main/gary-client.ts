@@ -119,8 +119,10 @@ interface ActiveChatSocket {
 }
 
 const activeStreamRequests = new Map<string, ActiveChatSocket>();
-const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 40;
-const MAX_THREAD_HISTORY_PAGE_SIZE = 120;
+const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 100;
+const DEFAULT_THREAD_HISTORY_USER_QUERY_LIMIT = 10;
+const MAX_THREAD_HISTORY_PAGE_SIZE = 500;
+const MAX_THREAD_HISTORY_USER_QUERY_LIMIT = 50;
 const LOCAL_GATEWAY_HOSTS = new Set([
   "127.0.0.1",
   "localhost",
@@ -288,10 +290,12 @@ interface HistoryPayload {
     total_messages_in_thread?: number;
     total_messages_in_session?: number;
     returned_messages?: number;
+    returned_user_queries?: number;
     returned_start_index?: number;
     returned_end_index?: number;
     has_more_before?: boolean;
     next_before_index?: number | null;
+    user_query_limit?: number | null;
   };
   team?: ThreadTeamBlockPayload | null;
   thread_runtime?: ThreadRuntimePayload | null;
@@ -2517,11 +2521,13 @@ function normalizeThreadHistoryInput(
   threadId: string;
   beforeIndex?: number;
   limit: number;
+  userQueryLimit: number;
 } {
   const raw: {
     threadId: string;
     beforeIndex?: number | null;
     limit?: number | null;
+    userQueryLimit?: number | null;
   } =
     typeof input === "string"
       ? { threadId: input }
@@ -2529,6 +2535,7 @@ function normalizeThreadHistoryInput(
           threadId: input.threadId,
           beforeIndex: input.beforeIndex,
           limit: input.limit,
+          userQueryLimit: input.userQueryLimit,
         };
   const limit =
     typeof raw.limit === "number" && Number.isFinite(raw.limit)
@@ -2543,10 +2550,21 @@ function normalizeThreadHistoryInput(
     raw.beforeIndex >= 0
       ? Math.floor(raw.beforeIndex)
       : undefined;
+  const userQueryLimit =
+    typeof raw.userQueryLimit === "number" && Number.isFinite(raw.userQueryLimit)
+      ? Math.max(
+          1,
+          Math.min(
+            MAX_THREAD_HISTORY_USER_QUERY_LIMIT,
+            Math.floor(raw.userQueryLimit),
+          ),
+        )
+      : DEFAULT_THREAD_HISTORY_USER_QUERY_LIMIT;
   return {
     threadId: raw.threadId,
     beforeIndex,
     limit,
+    userQueryLimit,
   };
 }
 
@@ -2563,17 +2581,21 @@ function mapThreadTranscriptPageInfo(
     asFiniteNumber(stats.total_messages_in_session) ??
     0;
   const returnedMessages = asFiniteNumber(stats.returned_messages) ?? 0;
+  const returnedUserQueries = asFiniteNumber(stats.returned_user_queries);
   const startIndex = asFiniteNumber(stats.returned_start_index) ?? 0;
   const endIndex = asFiniteNumber(stats.returned_end_index) ?? startIndex;
   const nextBeforeIndex = asFiniteNumber(stats.next_before_index);
+  const userQueryLimit = asFiniteNumber(stats.user_query_limit);
   return {
     totalMessages,
     returnedMessages,
+    returnedUserQueries: returnedUserQueries ?? null,
     startIndex,
     endIndex,
     hasMoreBefore: Boolean(stats.has_more_before),
     nextBeforeIndex: nextBeforeIndex ?? null,
     limit,
+    userQueryLimit: userQueryLimit ?? null,
   };
 }
 
@@ -2581,10 +2603,12 @@ export async function fetchThreadHistory(
   settings: DesktopSettings,
   input: string | GetThreadHistoryInput,
 ): Promise<ThreadTranscript> {
-  const { threadId, beforeIndex, limit } = normalizeThreadHistoryInput(input);
+  const { threadId, beforeIndex, limit, userQueryLimit } =
+    normalizeThreadHistoryInput(input);
   const query = new URLSearchParams({
     thread_id: threadId,
     limit: String(limit),
+    user_query_limit: String(userQueryLimit),
     include_tool_messages: "true",
   });
   if (beforeIndex !== undefined) {

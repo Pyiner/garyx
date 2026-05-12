@@ -208,8 +208,11 @@ import {
 
 const NEW_THREAD_DRAFT_THREAD_ID = "__garyx_new_thread_draft__";
 const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
-const MESSAGES_TOP_PAGINATION_THRESHOLD_PX = 96;
-const THREAD_HISTORY_PAGE_SIZE = 40;
+const MESSAGES_TOP_PAGINATION_PREFETCH_MIN_PX = 640;
+const MESSAGES_TOP_PAGINATION_PREFETCH_VIEWPORTS = 1.5;
+const THREAD_HISTORY_PAGE_SIZE = 100;
+const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
+const USER_TURN_PREFETCH_THRESHOLD = 3;
 const HIDDEN_TOOL_USE_STATUS_TEXT = "Garyx is thinking through the next step…";
 const HIDDEN_TOOL_RESULT_STATUS_TEXT = "Garyx finished a reasoning step…";
 
@@ -284,6 +287,34 @@ function messagesNearBottom(node: HTMLDivElement | null): boolean {
     node.scrollHeight - node.scrollTop - node.clientHeight <
     MESSAGES_BOTTOM_THRESHOLD_PX
   );
+}
+
+function messagesNearEarlierUserTurnBoundary(
+  node: HTMLDivElement | null,
+): boolean {
+  if (!node) {
+    return false;
+  }
+  const viewportTop = node.getBoundingClientRect().top;
+  const userTurnStarts = node.querySelectorAll<HTMLElement>(
+    "[data-user-turn-start='true']",
+  );
+  if (userTurnStarts.length === 0) {
+    const pixelPrefetchDistance = Math.max(
+      MESSAGES_TOP_PAGINATION_PREFETCH_MIN_PX,
+      node.clientHeight * MESSAGES_TOP_PAGINATION_PREFETCH_VIEWPORTS,
+    );
+    return node.scrollTop <= pixelPrefetchDistance;
+  }
+  let userTurnsBeforeViewport = 0;
+  for (const turnStart of userTurnStarts) {
+    if (turnStart.getBoundingClientRect().bottom <= viewportTop) {
+      userTurnsBeforeViewport += 1;
+      continue;
+    }
+    break;
+  }
+  return userTurnsBeforeViewport <= USER_TURN_PREFETCH_THRESHOLD;
 }
 
 type MemoryDialogTarget =
@@ -5641,6 +5672,7 @@ export function AppShell() {
         threadId,
         beforeIndex: pagination.nextBeforeIndex,
         limit: THREAD_HISTORY_PAGE_SIZE,
+        userQueryLimit: THREAD_HISTORY_USER_QUERY_LIMIT,
       });
       const node = messagesRef.current;
       if (
@@ -7898,7 +7930,7 @@ export function AppShell() {
                   if (
                     selectedThreadId &&
                     node &&
-                    node.scrollTop < MESSAGES_TOP_PAGINATION_THRESHOLD_PX
+                    messagesNearEarlierUserTurnBoundary(node)
                   ) {
                     void loadOlderThreadHistoryPage(selectedThreadId);
                   }

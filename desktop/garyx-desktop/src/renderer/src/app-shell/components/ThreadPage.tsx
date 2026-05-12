@@ -158,12 +158,15 @@ function renderUserMessageBubbleParts({
     text,
   });
 
-  return parts.map((part) => {
+  return parts.map((part, index) => {
+    const userTurnMarker =
+      index === 0 ? { "data-user-turn-start": "true" } : {};
     if (part.kind === "image" || part.kind === "file") {
       return (
         <article
           className={`message-attachment-bubble message-attachment-bubble-${part.kind} user ${pending ? "pending" : ""} ${error ? "error" : ""}`}
           key={`${keyPrefix}:${part.key}`}
+          {...userTurnMarker}
         >
           <RichMessageContent
             altPrefix="user"
@@ -179,6 +182,7 @@ function renderUserMessageBubbleParts({
       <article
         className={`message-bubble user ${pending ? "pending" : ""} ${error ? "error" : ""}`}
         key={`${keyPrefix}:${part.key}`}
+        {...userTurnMarker}
       >
         <RichMessageContent
           altPrefix="user"
@@ -535,7 +539,7 @@ export function ThreadPage({
 
           {showAutomationRunInitialPlaceholder && activePendingAutomationRun ? (
             <>
-              <article className="message-bubble user">
+              <article className="message-bubble user" data-user-turn-start="true">
                 <RichMessageContent
                   altPrefix="user"
                   content={buildOptimisticTranscriptContent(

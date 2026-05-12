@@ -21,8 +21,8 @@ use garyx_models::config_loader::{
 };
 use garyx_models::provider::{ProviderMessage, ProviderType};
 use garyx_router::{
-    ChannelBinding, ThreadHistoryError, bindings_from_value, history_message_count, is_thread_key,
-    workspace_dir_from_value,
+    ChannelBinding, ThreadHistoryError, bindings_from_value, count_user_query_messages,
+    history_message_count, is_thread_key, workspace_dir_from_value,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -341,6 +341,9 @@ pub struct ThreadHistoryParams {
     /// Return messages before this zero-based global message index.
     #[serde(default, alias = "before")]
     pub before_index: Option<usize>,
+    /// Return a page containing this many human user query turns.
+    #[serde(default, alias = "limit_user_queries", alias = "user_turn_limit")]
+    pub user_query_limit: Option<usize>,
     /// Whether detailed history should keep tool-related messages.
     #[serde(default = "default_include_tool_messages")]
     pub include_tool_messages: bool,
@@ -355,6 +358,7 @@ fn default_include_tool_messages() -> bool {
 }
 
 const MAX_THREAD_HISTORY_LIMIT: usize = 500;
+const MAX_THREAD_HISTORY_USER_QUERY_LIMIT: usize = 50;
 
 #[derive(Deserialize)]
 pub struct ThreadDiagnosticsParams {
@@ -732,6 +736,7 @@ pub async fn thread_history(
             params.limit,
             params.include_tool_messages,
             params.before_index,
+            params.user_query_limit,
         )
         .await;
         return Json(payload);
@@ -847,7 +852,7 @@ pub async fn thread_diagnostics(
         "thread": thread_value,
         "thread_runtime": build_thread_runtime_summary(thread_value.as_ref()),
         "bindings": bindings,
-        "history": thread_history_for_key(&state, thread_id, limit, true, None).await,
+        "history": thread_history_for_key(&state, thread_id, limit, true, None, None).await,
         "message_ledger": ledger,
         "transcript_path": transcript_path,
     }))
@@ -1220,6 +1225,7 @@ pub(crate) async fn thread_history_for_key(
     limit: usize,
     include_tool_messages: bool,
     before_index: Option<usize>,
+    user_query_limit: Option<usize>,
 ) -> Value {
     let key = thread_id.trim();
     if key.is_empty() {
@@ -1239,15 +1245,25 @@ pub(crate) async fn thread_history_for_key(
     }
 
     let bounded_limit = limit.clamp(1, MAX_THREAD_HISTORY_LIMIT);
+    let bounded_user_query_limit =
+        user_query_limit.map(|value| value.clamp(1, MAX_THREAD_HISTORY_USER_QUERY_LIMIT));
     if let Some(mut thread_value) = state.threads.thread_store.get(key).await {
         let _ = repair_inactive_active_run_snapshot(state, key, &mut thread_value).await;
     }
-    let snapshot = match state
-        .threads
-        .history
-        .thread_snapshot_page(key, bounded_limit, before_index)
-        .await
-    {
+    let snapshot_result = if let Some(user_query_limit) = bounded_user_query_limit {
+        state
+            .threads
+            .history
+            .thread_snapshot_user_query_page(key, bounded_limit, before_index, user_query_limit)
+            .await
+    } else {
+        state
+            .threads
+            .history
+            .thread_snapshot_page(key, bounded_limit, before_index)
+            .await
+    };
+    let snapshot = match snapshot_result {
         Ok(snapshot) => snapshot,
         Err(ThreadHistoryError::ThreadNotFound(_)) => {
             let thread = json!({ "thread_id": key, "thread_key": key });
@@ -1372,6 +1388,7 @@ pub(crate) async fn thread_history_for_key(
     }
 
     let returned_messages = history_messages.len();
+    let returned_user_queries = count_user_query_messages(&messages);
     let page_start_index = snapshot.first_message_index().unwrap_or(0);
     let page_end_index = messages
         .len()
@@ -1497,10 +1514,12 @@ pub(crate) async fn thread_history_for_key(
             "total_messages_in_thread": total_messages,
             "total_messages_in_session": total_messages,
             "returned_messages": returned_messages,
+            "returned_user_queries": returned_user_queries,
             "returned_start_index": page_start_index,
             "returned_end_index": page_end_index,
             "has_more_before": has_more_before,
             "next_before_index": next_before_index,
+            "user_query_limit": bounded_user_query_limit,
             "tool_related_count": tool_related_count,
             "likely_user_visible_count": likely_user_visible_count,
             "pending_user_input_count": pending_user_inputs.len(),

@@ -1111,17 +1111,20 @@ export interface ThreadTranscript {
 export interface ThreadTranscriptPageInfo {
   totalMessages: number;
   returnedMessages: number;
+  returnedUserQueries?: number | null;
   startIndex: number;
   endIndex: number;
   hasMoreBefore: boolean;
   nextBeforeIndex?: number | null;
   limit: number;
+  userQueryLimit?: number | null;
 }
 
 export interface GetThreadHistoryInput {
   threadId: string;
   beforeIndex?: number | null;
   limit?: number | null;
+  userQueryLimit?: number | null;
 }
 
 export interface PendingThreadInput {
