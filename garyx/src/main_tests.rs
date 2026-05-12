@@ -2329,3 +2329,31 @@ async fn startup_runtime_rebuilds_indexes_and_workspace_bindings_from_canonical_
         Some("/tmp/runtime-assembler-ws")
     );
 }
+
+#[test]
+fn plugins_update_help_lists_new_flags() {
+    let mut cmd = Cli::command();
+    let help = cmd
+        .find_subcommand_mut("plugins")
+        .unwrap()
+        .find_subcommand_mut("update")
+        .unwrap()
+        .render_long_help()
+        .to_string();
+    for flag in ["--version", "--from", "--target", "--check", "--force", "--json"] {
+        assert!(help.contains(flag), "help text missing flag `{flag}`:\n{help}");
+    }
+}
+
+#[test]
+fn plugins_update_accepts_canonical_argv() {
+    let result = Cli::try_parse_from([
+        "garyx",
+        "plugins",
+        "update",
+        "doesnotexist",
+        "--target",
+        "/tmp/garyx-plugins-test",
+    ]);
+    assert!(result.is_ok(), "parse error: {:?}", result.err());
+}

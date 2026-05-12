@@ -1,4 +1,4 @@
-//! `garyx plugins {install,list,uninstall}` subcommand implementations.
+//! `garyx plugins {install,list,uninstall,update}` subcommand implementations.
 //!
 //! Install flow (the friendly path the user asked for):
 //!
@@ -16,6 +16,9 @@
 //! same binary again with `--force` replaces the previous install in
 //! place. Without `--force` we refuse rather than silently overwrite
 //! a manifest the user might have hand-tuned.
+
+mod update;
+pub use update::update;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -44,6 +47,40 @@ pub enum PluginsCliError {
         #[source]
         source: std::io::Error,
     },
+    // Variants for `garyx plugins update`:
+    #[error(
+        "`{id}` is a built-in channel shipped inside the garyx binary.\nPlugin update only applies to subprocess plugins under {root}.\nRun `garyx update` to upgrade the garyx binary (which contains the built-in channels)."
+    )]
+    BuiltinChannelNotPluggable { id: String, root: PathBuf },
+    #[error(
+        "no update source for plugin `{id}`. Re-run `garyx plugins install --force <new-binary>` from a local build, or pass `--from <path-or-url>` to point at a specific bundle."
+    )]
+    NoUpdateSource { id: String },
+    // NOTE: the underlying-error field is named `detail` (not `source`) because
+    // `thiserror` v2 auto-derives `#[source]` for any field literally named
+    // `source`, which then requires that field to implement `std::error::Error`.
+    // We carry just the rendered string here, so we sidestep the auto-detection
+    // with a different field name. The user-facing message is unchanged.
+    #[error("could not discover latest version for `{id}`: {detail}")]
+    VersionDiscoveryFailed { id: String, detail: String },
+    #[error("download failed for {url}: {detail}")]
+    DownloadFailed { url: String, detail: String },
+    #[error("checksum mismatch for {url}: expected {expected}, got {actual}")]
+    ChecksumMismatch {
+        url: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("archive layout problem: {hint}")]
+    ArchiveLayout { hint: String },
+    #[error("bundle id mismatch: expected `{expected}`, bundle reports `{got}`")]
+    BundleIdMismatch { expected: String, got: String },
+    #[error("invalid template `{template}`: {reason}")]
+    InvalidTemplate { template: String, reason: String },
+    // Runtime semantic conflicts that clap can't catch at parse time
+    // (e.g., `--from` is only meaningful with a plugin name).
+    #[error("conflicting flags: {reason}")]
+    ConflictingFlags { reason: String },
 }
 
 fn io_err(context: impl Into<String>, source: std::io::Error) -> PluginsCliError {
@@ -229,6 +266,16 @@ pub fn uninstall(id: &str, target_root: Option<PathBuf>) -> Result<(), PluginsCl
     println!("Uninstalled `{id}` from {}.", dest.display());
     println!("Restart the gateway to stop the plugin's running child process if any.");
     Ok(())
+}
+
+#[derive(Debug, Default)]
+pub struct UpdateOptions {
+    pub version: Option<String>,
+    pub from: Option<String>,
+    pub target: Option<PathBuf>,
+    pub check: bool,
+    pub force: bool,
+    pub json: bool,
 }
 
 // ---------------------------------------------------------------------------

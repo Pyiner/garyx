@@ -1283,4 +1283,38 @@ pub(crate) enum PluginsAction {
         #[arg(long)]
         target: Option<PathBuf>,
     },
+    /// Update an installed subprocess channel plugin.
+    ///
+    /// Resolves a release source from (in order):
+    ///   1. `--from <PATH|URL>` if set,
+    ///   2. the installed manifest's `[update]` block,
+    ///   3. garyx's built-in fallback table (first-party plugins only).
+    ///
+    /// Built-in channels (`telegram`/`feishu`/`weixin`) are not
+    /// plugins; the command rejects them with a redirect to
+    /// `garyx update`. Run with no `<name>` to update every installed
+    /// subprocess plugin (continue-on-error).
+    Update {
+        /// Plugin id. Omit to update every installed subprocess plugin.
+        name: Option<String>,
+        /// Pin to a specific version (default: discover latest via
+        /// the manifest URL).
+        #[arg(long, conflicts_with_all = ["from", "check"])]
+        version: Option<String>,
+        /// Source override: a local file, local directory, or http(s) URL.
+        #[arg(long, value_name = "PATH-OR-URL")]
+        from: Option<String>,
+        /// Install root override. Defaults to `~/.garyx/plugins/`.
+        #[arg(long)]
+        target: Option<PathBuf>,
+        /// Resolve and print current-vs-available without installing.
+        #[arg(long, conflicts_with_all = ["from", "force"])]
+        check: bool,
+        /// Re-install even if already on the resolved version.
+        #[arg(long)]
+        force: bool,
+        /// Machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+    },
 }
