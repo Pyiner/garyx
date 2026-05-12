@@ -37,7 +37,7 @@ pub use discoverer::{DiscoveryError, DiscoveryOutcome, ManifestDiscoverer};
 pub use inspect::{InspectError, InspectReport, inspect, synthesize_manifest_toml};
 pub use manifest::{
     AccountRootBehavior, AuthFlowDescriptor, DeliveryModel, ManifestCapabilities, ManifestError,
-    ManifestRuntime, PluginManifest, PluginUi,
+    ManifestRuntime, PluginManifest, PluginUi, PluginUpdate,
 };
 pub use preflight::{PROTOCOL_VERSION, PreflightFailure, PreflightSummary, preflight};
 pub use protocol::{
