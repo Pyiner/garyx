@@ -108,6 +108,11 @@ pub struct InspectReport {
     /// Bot-console interaction hints that should survive install
     /// into the generated `plugin.toml`.
     pub ui: PluginUiResponse,
+    /// Optional `[update]` block carried over from the bundle's
+    /// `plugin.toml`. Round-tripped verbatim into the synthesized
+    /// manifest so `garyx plugins update` has a source without
+    /// network round-trips.
+    pub update: Option<super::manifest::PluginUpdate>,
 }
 
 /// Install-time handler: the plugin is in dry-run mode, so inbound
@@ -204,6 +209,29 @@ pub async fn inspect(binary_path: &Path) -> Result<InspectReport, InspectError> 
         });
     }
 
+    // Surface the bundle's [update] block, if any. The bundle layout
+    // is "binary + plugin.toml in the same dir" — same convention the
+    // installer relies on for icon files. A malformed bundle manifest
+    // must not block installs, so load failures emit a `warn` trace
+    // (observable from gateway logs) but do not propagate.
+    let update = binary_path.parent().and_then(|dir| {
+        let manifest_path = dir.join("plugin.toml");
+        if !manifest_path.is_file() {
+            return None;
+        }
+        match super::manifest::PluginManifest::load(&manifest_path) {
+            Ok(m) => m.update,
+            Err(err) => {
+                warn!(
+                    path = %manifest_path.display(),
+                    error = %err,
+                    "failed to read bundle plugin.toml; [update] block will be omitted",
+                );
+                None
+            }
+        }
+    });
+
     Ok(InspectReport {
         id: describe.plugin.id,
         version: describe.plugin.version,
@@ -212,6 +240,7 @@ pub async fn inspect(binary_path: &Path) -> Result<InspectReport, InspectError> 
         auth_flows: describe.auth_flows,
         schema: describe.schema,
         ui: describe.ui,
+        update,
     })
 }
 
@@ -291,6 +320,30 @@ pub fn synthesize_manifest_toml(
         })
     ));
 
+    if let Some(update) = &report.update {
+        out.push_str("[update]\n");
+        if let Some(m) = &update.manifest_url {
+            out.push_str(&format!("manifest_url = {}\n", toml_string(m)));
+        }
+        out.push_str(&format!(
+            "url_template = {}\n",
+            toml_string(&update.url_template),
+        ));
+        if let Some(c) = &update.checksum_url_template {
+            out.push_str(&format!(
+                "checksum_url_template = {}\n",
+                toml_string(c),
+            ));
+        }
+        if let Some(b) = &update.binary_in_archive {
+            out.push_str(&format!(
+                "binary_in_archive = {}\n",
+                toml_string(b),
+            ));
+        }
+        out.push('\n');
+    }
+
     // Embed the schema verbatim. Going through serde_json → toml
     // keeps nested objects, arrays, and numeric types intact; a hand-
     // written TOML emitter would drift from what the plugin reports.
@@ -348,6 +401,7 @@ fn minimal_manifest(binary_path: &Path) -> PluginManifest {
         runtime: ManifestRuntime::default(),
         schema: Value::Object(Default::default()),
         auth_flows: Vec::new(),
+        update: None,
         min_host_version: None,
     }
 }

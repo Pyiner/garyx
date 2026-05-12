@@ -30,6 +30,7 @@ fn sample_report() -> InspectReport {
         ui: PluginUiResponse {
             account_root_behavior: AccountRootBehavior::ExpandOnly,
         },
+        update: None,
     }
 }
 
@@ -57,6 +58,63 @@ fn synthesized_manifest_parses_as_pluginmanifest() {
     assert_eq!(manifest.schema["type"], "object");
     assert_eq!(manifest.schema["required"][0], "token");
     assert_eq!(manifest.schema["properties"]["token"]["type"], "string");
+}
+
+#[test]
+fn synthesized_manifest_round_trips_update_block() {
+    use crate::plugin_host::manifest::PluginUpdate;
+
+    let mut report = sample_report();
+    report.update = Some(PluginUpdate {
+        manifest_url: Some("https://example.test/{id}/latest.json".into()),
+        url_template:
+            "https://example.test/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz"
+                .into(),
+        checksum_url_template: Some("{url}.sha256".into()),
+        binary_in_archive: Some("{id}/garyx-plugin-{id}".into()),
+    });
+
+    let toml_out = synthesize_manifest_toml(&report, "garyx-plugin-acmechat", None);
+    assert!(
+        toml_out.contains("[update]"),
+        "expected [update] section:\n{toml_out}",
+    );
+    assert!(
+        toml_out.contains("url_template ="),
+        "expected url_template key:\n{toml_out}",
+    );
+    assert!(
+        toml_out.contains(
+            "https://example.test/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz",
+        ),
+        "expected verbatim url_template value:\n{toml_out}",
+    );
+    assert!(
+        toml_out.contains("manifest_url ="),
+        "expected manifest_url key:\n{toml_out}",
+    );
+
+    // Round-trip: write the synthesized output and reload it via the
+    // real manifest loader to prove the [update] block survives a
+    // disk round-trip with byte-for-byte field values intact.
+    let dir = tempfile::tempdir().unwrap();
+    let manifest_path = dir.path().join("plugin.toml");
+    std::fs::write(&manifest_path, &toml_out).unwrap();
+    let reloaded = PluginManifest::load(&manifest_path).expect("manifest must reload");
+    let update = reloaded.update.expect("update block should round-trip");
+    assert_eq!(
+        update.url_template,
+        "https://example.test/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz",
+    );
+    assert_eq!(
+        update.manifest_url.as_deref(),
+        Some("https://example.test/{id}/latest.json"),
+    );
+    assert_eq!(update.checksum_url_template.as_deref(), Some("{url}.sha256"));
+    assert_eq!(
+        update.binary_in_archive.as_deref(),
+        Some("{id}/garyx-plugin-{id}"),
+    );
 }
 
 #[test]

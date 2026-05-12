@@ -135,6 +135,33 @@ pub struct PluginUi {
     pub account_root_behavior: AccountRootBehavior,
 }
 
+/// Optional `[update]` section in `plugin.toml`. Drives
+/// `garyx plugins update` discovery. Operator-facing — the plugin
+/// protocol (describe RPC) never reads or writes this section.
+///
+/// Templates use `{id}`, `{version}`, `{target}` (e.g. `linux-x86_64`),
+/// and `{url}` (only valid in `checksum_url_template`, expands to the
+/// rendered `url_template`). Unknown placeholders are rejected at
+/// manifest load time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginUpdate {
+    /// JSON document URL that resolves "latest" version. When `None`,
+    /// operators must pass `--version` explicitly.
+    #[serde(default)]
+    pub manifest_url: Option<String>,
+    /// Templated URL of the release archive (`.tar.gz`).
+    pub url_template: String,
+    /// Templated checksum URL. Defaults to `"{url}.sha256"` when not
+    /// set; an explicit empty string disables checksum verification
+    /// (strongly discouraged).
+    #[serde(default)]
+    pub checksum_url_template: Option<String>,
+    /// Path inside the extracted archive where the plugin binary
+    /// lives. Defaults to `"{id}/garyx-plugin-{id}"`.
+    #[serde(default)]
+    pub binary_in_archive: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginManifest {
     /// Absolute path to the directory containing `plugin.toml`. The
@@ -156,6 +183,11 @@ pub struct PluginManifest {
     pub auth_flows: Vec<AuthFlowDescriptor>,
     #[serde(default)]
     pub ui: PluginUi,
+    /// Operator-facing update metadata. Optional — when absent, the
+    /// host falls back to its built-in source table (if any) or
+    /// requires `--from`.
+    #[serde(default)]
+    pub update: Option<PluginUpdate>,
     #[serde(default)]
     pub min_host_version: Option<String>,
 }
@@ -224,6 +256,12 @@ pub enum ManifestError {
     StopGraceTooLarge { path: PathBuf, got: u64 },
     #[error("manifest `{path}`: runtime.shutdown_grace_ms ({got}) exceeds host ceiling of 30000")]
     ShutdownGraceTooLarge { path: PathBuf, got: u64 },
+    #[error("manifest `{path}`: [update] template `{template}` references unknown placeholder `{placeholder}`")]
+    UnknownUpdatePlaceholder {
+        path: PathBuf,
+        template: String,
+        placeholder: String,
+    },
 }
 
 impl PluginManifest {
@@ -266,6 +304,20 @@ impl PluginManifest {
                 got: self.runtime.shutdown_grace_ms,
             });
         }
+        if let Some(update) = &self.update {
+            validate_update_template(&update.url_template, false, path)?;
+            if let Some(m) = &update.manifest_url {
+                validate_update_template(m, false, path)?;
+            }
+            if let Some(c) = &update.checksum_url_template {
+                if !c.is_empty() {
+                    validate_update_template(c, true, path)?;
+                }
+            }
+            if let Some(b) = &update.binary_in_archive {
+                validate_update_template(b, false, path)?;
+            }
+        }
         Ok(())
     }
 
@@ -287,6 +339,48 @@ impl PluginManifest {
         }
         Ok(())
     }
+}
+
+/// Allowed placeholders in `[update]` templates.
+/// `url` is only legal in `checksum_url_template`.
+fn validate_update_template(
+    template: &str,
+    allow_url_placeholder: bool,
+    path: &Path,
+) -> Result<(), ManifestError> {
+    let mut i = 0;
+    let bytes = template.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            // Escaped `{{` is left as-is.
+            if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+                i += 2;
+                continue;
+            }
+            let Some(end_rel) = template[i + 1..].find('}') else {
+                return Err(ManifestError::UnknownUpdatePlaceholder {
+                    path: path.to_path_buf(),
+                    template: template.to_string(),
+                    placeholder: "<unterminated>".to_string(),
+                });
+            };
+            let end = i + 1 + end_rel;
+            let name = &template[i + 1..end];
+            let ok = matches!(name, "id" | "version" | "target")
+                || (allow_url_placeholder && name == "url");
+            if !ok {
+                return Err(ManifestError::UnknownUpdatePlaceholder {
+                    path: path.to_path_buf(),
+                    template: template.to_string(),
+                    placeholder: name.to_string(),
+                });
+            }
+            i = end + 1;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
