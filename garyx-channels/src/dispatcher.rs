@@ -1052,6 +1052,16 @@ impl ChannelDispatcherImpl {
         self.plugin_senders.get(plugin_id).cloned()
     }
 
+    /// Snapshot every currently-registered subprocess plugin sender.
+    /// Used by `apply_runtime_config` to carry the dynamic
+    /// `register_subprocess_plugin` / `respawn_plugin` wiring across a
+    /// `ChannelDispatcherImpl::from_config` rebuild — `from_config`
+    /// only seeds built-in channels declared in `GaryxConfig` and would
+    /// otherwise wipe every plugin sender on each config reload.
+    pub fn plugin_senders_snapshot(&self) -> Vec<PluginSenderHandle> {
+        self.plugin_senders.values().cloned().collect()
+    }
+
     /// Build a forked dispatcher that is identical to `self` except the
     /// plugin-sender entry for `sender.plugin_id()` points at `sender`.
     /// Used by [`crate::plugin::ChannelPluginManager::respawn_plugin`]
