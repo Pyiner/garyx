@@ -97,6 +97,19 @@ needs installed-app validation.
   especially on macOS where probing protected folders can trigger privacy
   prompts.
 
+## Gateway Runtime
+
+- Code changes do not affect the running gateway until the binary is built,
+  installed, and the managed gateway is restarted.
+- On macOS, do not treat a matching hash as sufficient after copying a locally
+  built `garyx` binary into a launchd-managed path such as
+  `/opt/homebrew/bin/garyx`. Clear target-file xattrs such as
+  `com.apple.provenance` and ad-hoc re-sign the installed file before
+  restarting, otherwise launchd/AMFI may kill it with `OS_REASON_CODESIGNING`.
+- Restart through the Garyx CLI with a wake target when working in an agent
+  thread, for example `garyx gateway restart --wake thread <thread_id>
+  --wake-message "continue"`.
+
 ## Validation
 
 Useful commands:
