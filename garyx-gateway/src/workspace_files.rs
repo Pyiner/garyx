@@ -465,7 +465,10 @@ async fn describe_directory_entry(
             size: None,
             modified_at: metadata.modified().ok().map(format_system_time),
             media_type: None,
-            has_children: directory_has_children(&canonical).await?,
+            // Avoid probing child entries during a parent listing. On macOS,
+            // pre-reading protected directories such as Desktop can trigger
+            // privacy prompts even when the user has not expanded that folder.
+            has_children: true,
         }));
     }
 
@@ -478,19 +481,6 @@ async fn describe_directory_entry(
         media_type: Some(detect_media_type(&name)),
         has_children: false,
     }))
-}
-
-async fn directory_has_children(path: &Path) -> Result<bool, WorkspaceFileError> {
-    let mut reader = match fs::read_dir(path).await {
-        Ok(reader) => reader,
-        Err(error) if is_permission_error(&error) => return Ok(false),
-        Err(error) => return Err(WorkspaceFileError::io(StatusCode::BAD_REQUEST, error)),
-    };
-    match reader.next_entry().await {
-        Ok(entry) => Ok(entry.is_some()),
-        Err(error) if is_permission_error(&error) => Ok(false),
-        Err(error) => Err(WorkspaceFileError::io(StatusCode::BAD_REQUEST, error)),
-    }
 }
 
 async fn resolve_workspace_root(workspace_dir: &str) -> Result<PathBuf, WorkspaceFileError> {

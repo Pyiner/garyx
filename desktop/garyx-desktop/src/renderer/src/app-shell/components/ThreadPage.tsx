@@ -35,7 +35,11 @@ import {
   buildRenderTranscriptBlocks,
   type RenderTranscriptBlock,
 } from "../../transcript-render";
-import { buildTurnRows, type TurnRow } from "../../turn-render";
+import {
+  buildTurnRows,
+  type TurnRow,
+  type UserTurnActivityRow,
+} from "../../turn-render";
 import { TurnSummary } from "../../turn-summary";
 import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
@@ -144,6 +148,7 @@ function renderUserMessageBubbleParts({
   pending,
   error,
   onLocalFileLinkClick,
+  markUserTurnStart = true,
 }: {
   keyPrefix: string;
   text: string;
@@ -151,6 +156,7 @@ function renderUserMessageBubbleParts({
   pending?: boolean;
   error?: boolean;
   onLocalFileLinkClick: (path: string) => void;
+  markUserTurnStart?: boolean;
 }): ReactNode {
   const parts = splitRichMessageContentIntoBubbleParts({
     altPrefix: "user",
@@ -160,7 +166,9 @@ function renderUserMessageBubbleParts({
 
   return parts.map((part, index) => {
     const userTurnMarker =
-      index === 0 ? { "data-user-turn-start": "true" } : {};
+      markUserTurnStart && index === 0
+        ? { "data-user-turn-start": "true" }
+        : {};
     if (part.kind === "image" || part.kind === "file") {
       return (
         <article
@@ -428,7 +436,7 @@ export function ThreadPage({
       teamView.isTeam
         ? []
         : buildTurnRows(activeRenderableBlocks, {
-            surfaceFinalAssistant: !isActiveSendingThread,
+            deferTrailingFinalAssistant: isActiveSendingThread,
           }),
     [activeRenderableBlocks, isActiveSendingThread, teamView.isTeam],
   );
@@ -567,6 +575,7 @@ export function ThreadPage({
           {(() => {
             const renderBlockBody = (
               block: RenderTranscriptBlock,
+              options: { markUserTurnStart?: boolean } = {},
             ): ReactNode => {
               if (block.kind === "tool_group") {
                 return (
@@ -593,6 +602,7 @@ export function ThreadPage({
                   pending: entry.message.pending,
                   error: entry.message.error,
                   onLocalFileLinkClick: onLocalWorkspaceFileLinkClick,
+                  markUserTurnStart: options.markUserTurnStart !== false,
                 });
               }
               return (
@@ -706,6 +716,32 @@ export function ThreadPage({
             }
 
             return turnRows.map((row, idx) => {
+              const renderActivityRow = (
+                activityRow: UserTurnActivityRow,
+                forceRunning: boolean,
+              ): ReactNode => {
+                if (activityRow.kind === "flat") {
+                  return (
+                    <Fragment key={activityRow.key}>
+                      {renderBlockBody(activityRow.block)}
+                    </Fragment>
+                  );
+                }
+                const turn: TurnRow = activityRow;
+                return (
+                  <Fragment key={turn.key}>
+                    <TurnSummary turn={turn} forceRunning={forceRunning}>
+                      {turn.steps.map((step) => (
+                        <Fragment key={step.key}>
+                          {renderBlockBody(step)}
+                        </Fragment>
+                      ))}
+                    </TurnSummary>
+                    {turn.finalBlock ? renderBlockBody(turn.finalBlock) : null}
+                  </Fragment>
+                );
+              };
+
               if (row.kind === "flat") {
                 return (
                   <Fragment key={row.key}>
@@ -713,29 +749,34 @@ export function ThreadPage({
                   </Fragment>
                 );
               }
-              const turn: TurnRow = row;
+              if (row.kind === "turn") {
+                return (
+                  <Fragment key={row.key}>
+                    {renderActivityRow(row, false)}
+                  </Fragment>
+                );
+              }
               // Bridge the gap where the assistant message is no longer
               // pending=true but the thread run is still active (e.g.
-              // tool call in flight): force the bottom-most turn to read
-              // as running so the header stays "Working for X" instead
-              // of prematurely flipping to "Worked for X".
-              const isLastRow = idx === turnRows.length - 1;
-              const forceRunning =
-                isLastRow &&
-                isActiveSendingThread &&
-                turn.finalBlock === null;
+              // tool call in flight): force only the bottom-most activity
+              // in the bottom-most user turn to read as running.
+              const isLastUserTurn = idx === turnRows.length - 1;
+              const lastActivityIndex = row.activityRows.length - 1;
               return (
-                <Fragment key={turn.key}>
-                  <TurnSummary turn={turn} forceRunning={forceRunning}>
-                    {turn.steps.map((step) => (
-                      <Fragment key={step.key}>
-                        {renderBlockBody(step)}
-                      </Fragment>
-                    ))}
-                  </TurnSummary>
-                  {turn.finalBlock
-                    ? renderBlockBody(turn.finalBlock)
-                    : null}
+                <Fragment key={row.key}>
+                  {renderBlockBody(row.userBlock, {
+                    markUserTurnStart: true,
+                  })}
+                  {row.activityRows.map((activityRow, activityIndex) =>
+                    renderActivityRow(
+                      activityRow,
+                      isLastUserTurn &&
+                        activityIndex === lastActivityIndex &&
+                        isActiveSendingThread &&
+                        activityRow.kind === "turn" &&
+                        activityRow.finalBlock === null,
+                    ),
+                  )}
                 </Fragment>
               );
             });

@@ -61,6 +61,20 @@ UI iteration because code changes take effect without rebuilding a package.
 Packaging is optional unless the user asks for a packaged app or the change
 needs installed-app validation.
 
+## Desktop Transcript And File Tree Rules
+
+- Treat transcript history as user-turn based: one user message plus the
+  following agent activity until the next user message. Pagination, prefetch,
+  folding, and final-answer visibility should use that unit rather than raw
+  provider messages or tool-call counts.
+- In collapsed desktop transcript turns, keep each completed user turn's final
+  assistant text visible. Collapse only intermediate assistant/tool activity;
+  do not hide older turn answers because the current thread is still running.
+- The workspace file browser should read directories on demand. Do not pre-scan
+  child directories just to decide whether to show expansion affordances,
+  especially on macOS where probing protected folders can trigger privacy
+  prompts.
+
 ## Validation
 
 Useful commands:

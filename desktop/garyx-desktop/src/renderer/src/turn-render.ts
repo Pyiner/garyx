@@ -30,11 +30,22 @@ export interface FlatRow {
   block: RenderTranscriptBlock;
 }
 
-export type TurnRenderRow = FlatRow | TurnRow;
+export type UserTurnActivityRow = FlatRow | TurnRow;
+
+export interface UserTurnRow {
+  kind: 'user_turn';
+  key: string;
+  userBlock: RenderTranscriptBlock;
+  activityRows: UserTurnActivityRow[];
+}
+
+export type TurnRenderRow = FlatRow | TurnRow | UserTurnRow;
 
 export interface BuildTurnRowsOptions {
   /** Only true once the current run is known to be finished. */
   surfaceFinalAssistant?: boolean;
+  /** Keep the trailing assistant message inside the active turn until the run is done. */
+  deferTrailingFinalAssistant?: boolean;
 }
 
 function isUserBlock(block: RenderTranscriptBlock): boolean {
@@ -111,10 +122,48 @@ function summarizeTurn(
   };
 }
 
+function buildUserTurnActivityRows(
+  steps: RenderTranscriptBlock[],
+  key: string | null,
+  precedingUserTs: string | null,
+  options: BuildTurnRowsOptions,
+  isTrailingTurn: boolean,
+): UserTurnActivityRow[] {
+  const surfaceFinalAssistant = options.surfaceFinalAssistant !== false;
+  const deferTrailingFinalAssistant =
+    options.deferTrailingFinalAssistant === true;
+  if (!steps.length || !key) {
+    return [];
+  }
+  // Codex emits its `worked-for` divider only as part of a turn that
+  // had real agent activity (reasoning + tool calls). A pure-text
+  // reply ("1 + 1 = 2") should sit flat under the user message with
+  // no Worked-for header. Detect that case here so we mirror the
+  // same UX.
+  const isPureTextReply =
+    surfaceFinalAssistant &&
+    steps.length === 1 &&
+    steps[0]!.kind === 'message' &&
+    steps[0]!.entry.message.role === 'assistant' &&
+    steps[0]!.entry.message.pending !== true;
+  if (isPureTextReply) {
+    const only = steps[0]!;
+    return [{ kind: 'flat', key: only.key, block: only }];
+  }
+
+  const shouldSurfaceFinalAssistant =
+    surfaceFinalAssistant && !(deferTrailingFinalAssistant && isTrailingTurn);
+  const { steps: summarySteps, finalBlock } = shouldSurfaceFinalAssistant
+    ? pickFinalBlock(steps)
+    : { steps, finalBlock: null };
+  return [summarizeTurn(summarySteps, finalBlock, key, precedingUserTs)];
+}
+
 /**
- * Walks the existing block list and clusters consecutive non-user blocks
- * into `TurnRow`s. User blocks (and any other top-level blocks we don't
- * group) pass through as `FlatRow`s.
+ * Walks the existing block list and builds explicit user turns. A user turn
+ * is the user message plus all following agent activity until the next user
+ * message. This is the shared unit for rendering, folding, and scroll
+ * pagination heuristics.
  *
  * The grouping is stable and idempotent — calling it again on the same
  * input produces the same output, which keeps React keys consistent.
@@ -124,45 +173,46 @@ export function buildTurnRows(
   options: BuildTurnRowsOptions = {},
 ): TurnRenderRow[] {
   const rows: TurnRenderRow[] = [];
+  let currentUserBlock: RenderTranscriptBlock | null = null;
   let currentSteps: RenderTranscriptBlock[] = [];
   let currentKey: string | null = null;
   let precedingUserTs: string | null = null;
-  const surfaceFinalAssistant = options.surfaceFinalAssistant !== false;
 
-  const flush = () => {
-    if (!currentSteps.length || !currentKey) {
-      currentSteps = [];
-      currentKey = null;
-      return;
-    }
-    // Codex emits its `worked-for` divider only as part of a turn that
-    // had real agent activity (reasoning + tool calls). A pure-text
-    // reply ("1 + 1 = 2") should sit flat under the user message with
-    // no Worked-for header. Detect that case here so we mirror the
-    // same UX.
-    const isPureTextReply =
-      surfaceFinalAssistant &&
-      currentSteps.length === 1 &&
-      currentSteps[0]!.kind === 'message' &&
-      currentSteps[0]!.entry.message.role === 'assistant' &&
-      currentSteps[0]!.entry.message.pending !== true;
-    if (isPureTextReply) {
-      const only = currentSteps[0]!;
-      rows.push({ kind: 'flat', key: only.key, block: only });
+  const flush = (isTrailingTurn = false) => {
+    if (!currentUserBlock) {
+      rows.push(
+        ...buildUserTurnActivityRows(
+          currentSteps,
+          currentKey,
+          precedingUserTs,
+          options,
+          isTrailingTurn,
+        ),
+      );
     } else {
-      const { steps, finalBlock } = surfaceFinalAssistant
-        ? pickFinalBlock(currentSteps)
-        : { steps: currentSteps, finalBlock: null };
-      rows.push(summarizeTurn(steps, finalBlock, currentKey, precedingUserTs));
+      rows.push({
+        kind: 'user_turn',
+        key: `user-turn:${currentUserBlock.key}`,
+        userBlock: currentUserBlock,
+        activityRows: buildUserTurnActivityRows(
+          currentSteps,
+          currentKey,
+          precedingUserTs,
+          options,
+          isTrailingTurn,
+        ),
+      });
     }
+    currentUserBlock = null;
     currentSteps = [];
     currentKey = null;
+    precedingUserTs = null;
   };
 
   for (const block of blocks) {
     if (isUserBlock(block)) {
-      flush();
-      rows.push({ kind: 'flat', key: block.key, block });
+      flush(false);
+      currentUserBlock = block;
       if (block.kind === 'message' && block.entry.message.timestamp) {
         precedingUserTs = block.entry.message.timestamp;
       }
@@ -173,6 +223,6 @@ export function buildTurnRows(
     }
     currentSteps.push(block);
   }
-  flush();
+  flush(true);
   return rows;
 }

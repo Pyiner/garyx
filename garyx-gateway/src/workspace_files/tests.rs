@@ -130,7 +130,7 @@ async fn listing_tolerates_unreadable_child_directories() {
         .find(|entry| entry.name == "restricted")
         .expect("restricted directory should still be listed");
     assert_eq!(restricted_entry.entry_type, "directory");
-    assert!(!restricted_entry.has_children);
+    assert!(restricted_entry.has_children);
 }
 
 #[test]

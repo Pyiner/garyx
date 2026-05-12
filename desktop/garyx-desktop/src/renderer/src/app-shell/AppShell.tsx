@@ -425,6 +425,20 @@ function transcriptEntryHistoryIndex(
   return Number(suffix);
 }
 
+function earliestRemoteHistoryIndex(messages: UiTranscriptMessage[]): number | null {
+  let earliest: number | null = null;
+  for (const message of messages) {
+    const historyIndex = transcriptEntryHistoryIndex(message);
+    if (historyIndex === null) {
+      continue;
+    }
+    if (earliest === null || historyIndex < earliest) {
+      earliest = historyIndex;
+    }
+  }
+  return earliest;
+}
+
 function transcriptHasAutomationResponse(
   messages: TranscriptMessage[],
 ): boolean {
@@ -5574,7 +5588,13 @@ export function AppShell() {
         return incoming;
       }
       if (!current.hasMoreBefore) {
-        return { ...current, loadingBefore: false };
+        const earliestLoadedIndex = earliestRemoteHistoryIndex(
+          messagesByThreadRef.current[threadId] || [],
+        );
+        if (earliestLoadedIndex === 0 || !incoming.hasMoreBefore) {
+          return { ...current, loadingBefore: false };
+        }
+        return incoming;
       }
       if (
         current.nextBeforeIndex !== null &&
