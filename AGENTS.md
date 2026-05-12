@@ -70,6 +70,10 @@ needs installed-app validation.
 - In collapsed desktop transcript turns, keep each completed user turn's final
   assistant text visible. Collapse only intermediate assistant/tool activity;
   do not hide older turn answers because the current thread is still running.
+- While a desktop thread is still running, do not treat the trailing assistant
+  text as the final answer. Keep the active user-turn row and its React
+  container stable as tool calls arrive so existing message bubbles do not
+  remount or replay entry animations.
 - The workspace file browser should read directories on demand. Do not pre-scan
   child directories just to decide whether to show expansion affordances,
   especially on macOS where probing protected folders can trigger privacy

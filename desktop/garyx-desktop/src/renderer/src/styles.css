@@ -6523,6 +6523,10 @@ button.team-agent-speaker:focus-visible {
   gap: 0;
 }
 
+.turn-summary .message-bubble {
+  animation: none;
+}
+
 .turn-summary-toggle {
   /* Match Codex's pattern: button sits flush-left so its text aligns
      with the final-answer body content below the divider. No

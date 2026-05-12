@@ -140,8 +140,10 @@ function buildUserTurnActivityRows(
   // reply ("1 + 1 = 2") should sit flat under the user message with
   // no Worked-for header. Detect that case here so we mirror the
   // same UX.
+  const isTrailingDeferredTurn = deferTrailingFinalAssistant && isTrailingTurn;
   const isPureTextReply =
     surfaceFinalAssistant &&
+    !isTrailingDeferredTurn &&
     steps.length === 1 &&
     steps[0]!.kind === 'message' &&
     steps[0]!.entry.message.role === 'assistant' &&

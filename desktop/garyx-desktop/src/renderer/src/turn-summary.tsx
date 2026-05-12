@@ -95,7 +95,7 @@ function TurnSummaryComponent({
   }, [isRunning]);
 
   const elapsed = computeElapsed(turn, isRunning, nowMs, mountStartMs);
-  const elapsedLabel = elapsed >= 1 ? formatElapsed(elapsed) : null;
+  const elapsedLabel = formatElapsed(elapsed);
   // English Codex distinguishes "Working for X" (live) vs "Worked for X"
   // (done); the bundled zh-CN translation collapses both to "已处理 X".
   // Use distinct labels so the running state reads unambiguously.

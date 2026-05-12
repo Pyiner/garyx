@@ -101,3 +101,41 @@ test('keeps pure text replies inside their user turn without a summary row', () 
   assert.equal(rows[0].activityRows[0].kind, 'flat');
   assert.equal(rows[0].activityRows[0].block.key, 'a0');
 });
+
+test('keeps active trailing text inside a stable turn until the run finishes', () => {
+  const rows = buildTurnRows(
+    [
+      messageBlock('u0', 'user', 'question'),
+      messageBlock('a0', 'assistant', 'intermediate answer'),
+    ],
+    { deferTrailingFinalAssistant: true },
+  );
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'user_turn');
+  assert.equal(rows[0].activityRows[0].kind, 'turn');
+  assert.equal(rows[0].activityRows[0].key, 'turn:a0');
+  assert.deepEqual(
+    rows[0].activityRows[0].steps.map((step) => step.key),
+    ['a0'],
+  );
+  assert.equal(rows[0].activityRows[0].finalBlock, null);
+
+  const rowsAfterTool = buildTurnRows(
+    [
+      messageBlock('u0', 'user', 'question'),
+      messageBlock('a0', 'assistant', 'intermediate answer'),
+      toolBlock('t0'),
+    ],
+    { deferTrailingFinalAssistant: true },
+  );
+
+  assert.equal(rowsAfterTool.length, 1);
+  assert.equal(rowsAfterTool[0].kind, 'user_turn');
+  assert.equal(rowsAfterTool[0].activityRows[0].kind, 'turn');
+  assert.equal(rowsAfterTool[0].activityRows[0].key, 'turn:a0');
+  assert.deepEqual(
+    rowsAfterTool[0].activityRows[0].steps.map((step) => step.key),
+    ['a0', 't0'],
+  );
+});
