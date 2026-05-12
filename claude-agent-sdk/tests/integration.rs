@@ -9,8 +9,10 @@
 //! - Valid authentication configured
 
 use claude_agent_sdk::{
-    ClaudeAgentOptions, ContentBlock, Message, OutboundUserMessage, PermissionMode, run_streaming,
+    ClaudeAgentOptions, ClaudeRun, ContentBlock, Message, OutboundUserMessage, PermissionMode,
+    run_streaming,
 };
+use std::path::{Path, PathBuf};
 
 #[tokio::test]
 #[ignore = "requires live claude CLI + auth"]
@@ -65,7 +67,7 @@ async fn test_run_streaming_simple() {
 
     assert!(got_assistant, "Never received assistant message");
     assert!(got_result, "Never received result message");
-    let _ = run.close().await;
+    let _ = run.finish().await;
 }
 
 #[tokio::test]
@@ -108,7 +110,7 @@ async fn test_run_streaming_with_system_prompt() {
     }
 
     assert!(!response_text.is_empty(), "Expected non-empty response");
-    let _ = run.close().await;
+    let _ = run.finish().await;
 }
 
 #[tokio::test]
@@ -137,7 +139,7 @@ async fn test_run_streaming_result_metadata() {
         }
     }
 
-    let _ = run.close().await;
+    let _ = run.finish().await;
 }
 
 #[tokio::test]
@@ -212,7 +214,7 @@ async fn test_run_streaming_multi_turn() {
     }
     assert!(second_result_seen, "Second result was not observed");
 
-    let _ = run.close().await;
+    let _ = run.finish().await;
 }
 
 #[tokio::test]
@@ -265,5 +267,176 @@ async fn test_run_streaming_with_disallowed_tools() {
     }
 
     assert!(!used_tool, "Should not have used disallowed tools");
-    let _ = run.close().await;
+    let _ = run.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires live claude CLI + auth"]
+async fn test_streaming_follow_up_persists_before_resume_live() {
+    let marker = format!(
+        "GARYX_SDK_PERSIST_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let cwd = std::env::temp_dir().join(format!("claude-sdk-live-{}", marker));
+    std::fs::create_dir_all(&cwd).expect("failed to create test cwd");
+
+    let options = ClaudeAgentOptions {
+        cwd: Some(cwd.clone()),
+        permission_mode: Some(PermissionMode::BypassPermissions),
+        max_turns: Some(4),
+        ..Default::default()
+    };
+
+    let mut run = run_streaming(options)
+        .await
+        .expect("Failed to start streaming run");
+    let control = run.control();
+    control
+        .send_user_message(OutboundUserMessage::text(
+            format!(
+                "Automated SDK regression test. First reply exactly READY_{marker}. \
+When a later user message says FOLLOW_REQUEST_{marker}, reply exactly FINAL_{marker} FOLLOW_A FOLLOW_B. \
+Use no other words."
+            ),
+            "",
+        ))
+        .await
+        .expect("Failed to send first message");
+
+    let first = collect_text_until_result(&mut run).await;
+    assert!(
+        first.contains(&format!("READY_{marker}")),
+        "Expected READY marker, got: {first}"
+    );
+
+    control
+        .send_user_message(OutboundUserMessage::text(
+            format!("FOLLOW_REQUEST_{marker}"),
+            "",
+        ))
+        .await
+        .expect("Failed to send follow-up message");
+
+    let final_marker = format!("FINAL_{marker} FOLLOW_A FOLLOW_B");
+    let session_id = collect_text_and_session_until_result(&mut run, &final_marker).await;
+    run.finish().await.expect("finish should succeed");
+
+    let transcript = claude_transcript_path(&cwd, &session_id);
+    let transcript_content = std::fs::read_to_string(&transcript)
+        .unwrap_or_else(|err| panic!("failed to read transcript {}: {err}", transcript.display()));
+    assert!(
+        transcript_content.contains(&final_marker),
+        "transcript should contain final follow-up marker before resume"
+    );
+
+    let resume_options = ClaudeAgentOptions {
+        cwd: Some(cwd.clone()),
+        permission_mode: Some(PermissionMode::BypassPermissions),
+        max_turns: Some(1),
+        resume: Some(session_id),
+        ..Default::default()
+    };
+    let mut resume_run = run_streaming(resume_options)
+        .await
+        .expect("Failed to start resume run");
+    let resume_control = resume_run.control();
+    resume_control
+        .send_user_message(OutboundUserMessage::text(
+            format!(
+                "If the previous assistant message contained '{final_marker}', reply exactly RESUME_SEES_{marker}=yes. Otherwise reply exactly RESUME_SEES_{marker}=no."
+            ),
+            "",
+        ))
+        .await
+        .expect("Failed to send resume verification message");
+
+    let resume_text = collect_text_until_result(&mut resume_run).await;
+    resume_run
+        .finish()
+        .await
+        .expect("resume finish should succeed");
+    assert!(
+        resume_text.contains(&format!("RESUME_SEES_{marker}=yes")),
+        "resume did not see final follow-up marker, got: {resume_text}"
+    );
+
+    let _ = std::fs::remove_dir_all(cwd);
+}
+
+async fn collect_text_until_result(run: &mut ClaudeRun) -> String {
+    let mut text = String::new();
+    while let Some(msg) = run.next_message().await {
+        match msg {
+            Ok(Message::Assistant(a)) => append_assistant_text(&mut text, &a.content),
+            Ok(Message::Result(r)) => {
+                assert!(!r.is_error, "Query returned error: {r:?}");
+                return text;
+            }
+            Ok(_) => {}
+            Err(e) => panic!("Received error: {e}"),
+        }
+    }
+    panic!("stream ended without result");
+}
+
+async fn collect_text_and_session_until_result(run: &mut ClaudeRun, expected: &str) -> String {
+    let mut text = String::new();
+    while let Some(msg) = run.next_message().await {
+        match msg {
+            Ok(Message::Assistant(a)) => append_assistant_text(&mut text, &a.content),
+            Ok(Message::Result(r)) => {
+                assert!(!r.is_error, "Query returned error: {r:?}");
+                assert!(
+                    text.contains(expected),
+                    "Expected final marker {expected}, got: {text}"
+                );
+                assert!(!r.session_id.is_empty(), "Expected non-empty session_id");
+                return r.session_id;
+            }
+            Ok(_) => {}
+            Err(e) => panic!("Received error: {e}"),
+        }
+    }
+    panic!("stream ended without result");
+}
+
+fn append_assistant_text(out: &mut String, blocks: &[ContentBlock]) {
+    for block in blocks {
+        if let ContentBlock::Text(text) = block {
+            out.push_str(&text.text);
+        }
+    }
+}
+
+fn claude_transcript_path(cwd: &Path, session_id: &str) -> PathBuf {
+    claude_config_dir()
+        .join("projects")
+        .join(claude_project_key(cwd))
+        .join(format!("{session_id}.jsonl"))
+}
+
+fn claude_config_dir() -> PathBuf {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
+        .expect("CLAUDE_CONFIG_DIR or HOME must be set")
+}
+
+fn claude_project_key(cwd: &Path) -> String {
+    cwd.canonicalize()
+        .unwrap_or_else(|_| cwd.to_path_buf())
+        .to_string_lossy()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '.' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }

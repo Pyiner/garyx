@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use serde_json::{Map, Value};
 use tokio::sync::{Mutex, mpsc, oneshot};
@@ -43,6 +44,8 @@ impl From<mpsc::Receiver<Value>> for Prompt {
 }
 
 type PendingMap = HashMap<String, oneshot::Sender<std::result::Result<Value, String>>>;
+const FINISH_PROCESS_TIMEOUT: Duration = Duration::from_secs(10);
+const FINISH_READER_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Internal client for bidirectional conversations with Claude Code.
 ///
@@ -311,6 +314,48 @@ impl ClaudeSDKClient {
         Ok(())
     }
 
+    /// Finish a normal streaming run without killing the Claude process.
+    ///
+    /// Claude Code may emit the `result` frame on stdout before it has flushed
+    /// the final assistant entry into its local transcript.  Closing stdin and
+    /// waiting for process exit matches the TypeScript SDK's normal query
+    /// cleanup path and avoids racing that transcript write.  On timeout the
+    /// child is dropped with `kill_on_drop(true)`, then remaining tasks are
+    /// cleaned up.
+    pub async fn finish(&mut self) -> Result<()> {
+        let Some(transport) = self.transport.take() else {
+            self.abort_background_tasks().await;
+            self.pending.lock().await.clear();
+            self.reset_message_channel();
+            return Ok(());
+        };
+
+        if let Some(handle) = self.stream_handle.take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+
+        transport.end_input().await?;
+
+        let wait_result =
+            tokio::time::timeout(FINISH_PROCESS_TIMEOUT, transport.wait_for_exit()).await;
+        let finish_result = match wait_result {
+            Ok(result) => result,
+            Err(_) => Err(ClaudeSDKError::Timeout(format!(
+                "Claude CLI did not exit within {}s after stdin closed",
+                FINISH_PROCESS_TIMEOUT.as_secs()
+            ))),
+        };
+
+        self.wait_for_reader_shutdown().await;
+
+        self.pending.lock().await.clear();
+        self.reset_message_channel();
+        self.closed.store(false, Ordering::SeqCst);
+
+        finish_result
+    }
+
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
@@ -535,6 +580,23 @@ impl ClaudeSDKClient {
         if let Some(handle) = self.reader_handle.take() {
             handle.abort();
             let _ = handle.await;
+        }
+    }
+
+    async fn wait_for_reader_shutdown(&mut self) {
+        let Some(mut handle) = self.reader_handle.take() else {
+            return;
+        };
+
+        let timeout = tokio::time::sleep(FINISH_READER_TIMEOUT);
+        tokio::pin!(timeout);
+
+        tokio::select! {
+            _ = &mut handle => {}
+            _ = &mut timeout => {
+                handle.abort();
+                let _ = handle.await;
+            }
         }
     }
 }

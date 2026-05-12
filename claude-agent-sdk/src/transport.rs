@@ -248,6 +248,19 @@ impl SubprocessTransport {
         Ok(())
     }
 
+    pub async fn wait_for_exit(&self) -> Result<()> {
+        self.ready.store(false, Ordering::SeqCst);
+
+        let mut proc_guard = self.process.lock().await;
+        if let Some(mut proc) = proc_guard.take() {
+            let _ = proc.wait().await.map_err(|e| {
+                ClaudeSDKError::Connection(format!("Failed waiting for Claude CLI to exit: {e}"))
+            })?;
+        }
+
+        Ok(())
+    }
+
     #[cfg(test)]
     pub fn is_ready(&self) -> bool {
         self.ready.load(Ordering::SeqCst)

@@ -128,3 +128,56 @@ async fn test_disconnect_resets_client_state_for_reconnect() {
         .expect("final disconnect should succeed");
     let _ = fs::remove_file(script);
 }
+
+#[tokio::test]
+async fn test_finish_closes_stdin_and_waits_for_process_exit() {
+    let marker = std::env::temp_dir().join(format!(
+        "claude-sdk-client-finish-marker-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let script = write_mock_claude_script(
+        "finish",
+        &format!(
+            "#!/bin/sh\n\
+IFS= read -r line || exit 1\n\
+request_id=$(printf '%s\\n' \"$line\" | sed -E 's/.*\"request_id\":\"([^\"]+)\".*/\\1/')\n\
+printf '%s\\n' \"{{\\\"type\\\":\\\"control_response\\\",\\\"response\\\":{{\\\"subtype\\\":\\\"success\\\",\\\"request_id\\\":\\\"$request_id\\\",\\\"response\\\":{{}}}}}}\"\n\
+while IFS= read -r line; do\n\
+  :\n\
+done\n\
+printf done > '{}'\n",
+            marker.to_string_lossy()
+        ),
+    );
+    let options = ClaudeAgentOptions {
+        cli_path: Some(script.clone()),
+        ..ClaudeAgentOptions::default()
+    };
+
+    let mut client = ClaudeSDKClient::new(options);
+    client
+        .connect(None)
+        .await
+        .expect("streaming connect should succeed");
+
+    client.finish().await.expect("finish should succeed");
+
+    assert!(
+        marker.exists(),
+        "finish should close stdin and let the process exit naturally"
+    );
+    assert!(client.transport.is_none());
+    assert!(client.reader_handle.is_none());
+    assert!(client.stream_handle.is_none());
+    assert!(client.pending.lock().await.is_empty());
+    assert!(client.msg_tx.is_some());
+    assert!(client.msg_rx.is_some());
+    assert!(!client.closed.load(Ordering::SeqCst));
+
+    let _ = fs::remove_file(script);
+    let _ = fs::remove_file(marker);
+}

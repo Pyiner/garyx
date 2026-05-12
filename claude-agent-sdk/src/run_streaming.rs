@@ -167,6 +167,15 @@ impl ClaudeRunControl {
         let mut guard = self.state.client.lock().await;
         guard.disconnect().await
     }
+
+    pub async fn finish(&self) -> Result<()> {
+        if self.state.closed.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        let mut guard = self.state.client.lock().await;
+        guard.finish().await
+    }
 }
 
 /// Running streaming task handle.
@@ -200,6 +209,10 @@ impl ClaudeRun {
 
     pub async fn close(&self) -> Result<()> {
         self.control.close().await
+    }
+
+    pub async fn finish(&self) -> Result<()> {
+        self.control.finish().await
     }
 }
 

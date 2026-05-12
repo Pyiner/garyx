@@ -1093,7 +1093,7 @@ impl ClaudeCliProvider {
             .process_messages_streaming(run_id, &options.thread_id, &mut run, on_chunk)
             .await?;
 
-        let _ = run.close().await;
+        let _ = run.finish().await;
         self.unregister_run(run_id).await;
 
         if let Some(result) = result_data {
