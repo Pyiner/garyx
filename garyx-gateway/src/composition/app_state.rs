@@ -132,13 +132,31 @@ impl AppState {
         // Rebuild the built-in routes from the new config and publish
         // them through the `SwappableDispatcher` so the concrete swap
         // identity is preserved (§9.4: respawning plugins rely on it).
-        // Subprocess-plugin senders that were previously forked into
-        // the swap are dropped by this store; the plugin manager's
-        // hot-reload path is responsible for re-registering them
-        // afterwards. Cron holds a cast-to-trait view of the same swap,
-        // so its visible dispatcher follows this store with no further
-        // plumbing.
-        let rebuilt = ChannelDispatcherImpl::from_config(&config.channels);
+        // `from_config` only seeds built-in channels declared in
+        // `GaryxConfig`, so any subprocess-plugin sender previously
+        // forked into the swap via `register_subprocess_plugin` /
+        // `respawn_plugin` would be silently dropped by the store.
+        // Snapshot them first and re-seed the rebuilt dispatcher before
+        // publishing, so outbound traffic to subprocess plugins keeps
+        // working across config reloads. Cron holds a cast-to-trait
+        // view of the same swap, so its visible dispatcher follows this
+        // store with no further plumbing.
+        let preserved_plugin_senders = self
+            .integration
+            .channel_swap
+            .load()
+            .plugin_senders_snapshot();
+        let mut rebuilt = ChannelDispatcherImpl::from_config(&config.channels);
+        for sender in preserved_plugin_senders {
+            let plugin_id = sender.plugin_id().to_owned();
+            if let Err(error) = rebuilt.register_plugin(sender) {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    error = %error,
+                    "failed to preserve subprocess plugin sender across config reload"
+                );
+            }
+        }
         self.integration.channel_swap.store(Arc::new(rebuilt));
         let dispatcher: Arc<dyn ChannelDispatcher> = self.integration.channel_swap.clone();
         // Push the new account snapshot to every registered plugin
