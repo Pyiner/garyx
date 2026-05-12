@@ -40,6 +40,12 @@ from a real chat captured during local debugging.
 - Normal streaming completion should close stdin and wait for the Claude CLI
   process to exit; force-closing the transport can race Claude's local
   transcript flush and break later `--resume` behavior.
+- Claude SDK approval tests need a `can_use_tool` callback, which adds
+  `--permission-prompt-tool stdio`; changing only `permission_mode` may not
+  make Claude send `can_use_tool` requests to the SDK.
+- The standalone Claude SDK should preserve Claude Code's built-in system
+  prompt by default. Pass `--system-prompt` only when Garyx intentionally
+  replaces it; use `--append-system-prompt` to keep default tool behavior.
 
 ## Working Loop
 

@@ -8,10 +8,26 @@ fn test_default_options_cli_args() {
     assert!(args.contains(&"--output-format".to_string()));
     assert!(args.contains(&"stream-json".to_string()));
     assert!(args.contains(&"--verbose".to_string()));
-    // Default: empty system prompt
-    assert!(args.contains(&"--system-prompt".to_string()));
+    // Default: preserve Claude Code's built-in system prompt.
+    assert!(!args.contains(&"--system-prompt".to_string()));
     // Default: setting-sources with empty string
     assert!(args.contains(&"--setting-sources".to_string()));
+}
+
+#[test]
+fn test_options_with_can_use_tool_sets_stdio_permission_prompt() {
+    let opts = ClaudeAgentOptions {
+        can_use_tool: Some(std::sync::Arc::new(|_| {
+            Box::pin(async { Ok(serde_json::json!({ "behavior": "deny" })) })
+        })),
+        ..Default::default()
+    };
+    let args = opts.to_cli_args();
+    let idx = args
+        .iter()
+        .position(|a| a == "--permission-prompt-tool")
+        .unwrap();
+    assert_eq!(args[idx + 1], "stdio");
 }
 
 #[test]

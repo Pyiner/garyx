@@ -8,6 +8,7 @@ use serde_json::Value;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 fn write_mock_claude_script(name: &str, body: &str) -> PathBuf {
@@ -55,8 +56,8 @@ fn test_build_user_message_payload_includes_non_empty_optional_fields() {
     assert_eq!(payload["parent_tool_use_id"], "tool-1");
 }
 
-#[test]
-fn test_incoming_elicitation_declines_by_default() {
+#[tokio::test]
+async fn test_incoming_elicitation_declines_by_default() {
     let req: IncomingControlRequest = serde_json::from_value(serde_json::json!({
         "type": "control_request",
         "request_id": "req-elicit",
@@ -68,11 +69,42 @@ fn test_incoming_elicitation_declines_by_default() {
     }))
     .unwrap();
 
-    let resp = serde_json::to_value(incoming_control_response(req)).unwrap();
+    let resp = serde_json::to_value(incoming_control_response(req, None).await).unwrap();
     assert_eq!(resp["type"], "control_response");
     assert_eq!(resp["response"]["subtype"], "success");
     assert_eq!(resp["response"]["request_id"], "req-elicit");
     assert_eq!(resp["response"]["response"]["action"], "decline");
+}
+
+#[tokio::test]
+async fn test_incoming_can_use_tool_uses_callback_response() {
+    let req: IncomingControlRequest = serde_json::from_value(serde_json::json!({
+        "type": "control_request",
+        "request_id": "req-permission",
+        "request": {
+            "subtype": "can_use_tool",
+            "tool_name": "Bash",
+            "input": { "command": "rm -rf synthetic-target" },
+            "tool_use_id": "toolu_synthetic"
+        }
+    }))
+    .unwrap();
+    let callback = Arc::new(|request: crate::CanUseToolRequest| {
+        Box::pin(async move {
+            Ok(serde_json::json!({
+                "behavior": "deny",
+                "message": format!("blocked {}", request.tool_name)
+            }))
+        }) as crate::types::CanUseToolFuture
+    });
+
+    let resp = serde_json::to_value(incoming_control_response(req, Some(callback)).await).unwrap();
+
+    assert_eq!(resp["response"]["subtype"], "success");
+    assert_eq!(resp["response"]["request_id"], "req-permission");
+    assert_eq!(resp["response"]["response"]["behavior"], "deny");
+    assert_eq!(resp["response"]["response"]["message"], "blocked Bash");
+    assert_eq!(resp["response"]["response"]["toolUseID"], "toolu_synthetic");
 }
 
 #[test]
@@ -196,6 +228,28 @@ printf '%s\\n' \"$response\" > '{}'\n",
     client.finish().await.expect("finish should succeed");
     let _ = fs::remove_file(script);
     let _ = fs::remove_file(marker);
+}
+
+#[tokio::test]
+async fn test_connect_rejects_can_use_tool_with_explicit_permission_prompt_tool() {
+    let script = write_mock_claude_script("permission-conflict", "#!/bin/sh\nexit 0\n");
+    let options = ClaudeAgentOptions {
+        cli_path: Some(script.clone()),
+        can_use_tool: Some(Arc::new(|_| {
+            Box::pin(async { Ok(serde_json::json!({ "behavior": "deny" })) })
+        })),
+        permission_prompt_tool_name: Some("stdio".to_owned()),
+        ..ClaudeAgentOptions::default()
+    };
+
+    let mut client = ClaudeSDKClient::new(options);
+    let err = client.connect(None).await.unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("can_use_tool callback cannot be used")
+    );
+    let _ = fs::remove_file(script);
 }
 
 #[tokio::test]

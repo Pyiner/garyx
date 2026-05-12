@@ -7,13 +7,14 @@ mod transport;
 pub mod types;
 
 // Re-exports for convenience
+pub use control::CanUseToolRequest;
 pub use error::{ClaudeSDKError, Result};
 pub use run_streaming::{
     ClaudeRun, ClaudeRunControl, OutboundUserMessage, UserInput, run_streaming,
 };
 pub use types::{
-    AssistantMessage, AssistantMessageError, ClaudeAgentDefinition, ClaudeAgentOptions,
-    ContentBlock, DocumentBlock, DocumentSource, McpServerConfig, Message, PermissionMode,
-    ResultMessage, StreamEvent, SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock,
-    ToolUseBlock, UserContent, UserMessage,
+    AssistantMessage, AssistantMessageError, CanUseToolCallback, CanUseToolFuture,
+    ClaudeAgentDefinition, ClaudeAgentOptions, ContentBlock, DocumentBlock, DocumentSource,
+    McpServerConfig, Message, PermissionMode, ResultMessage, StreamEvent, SystemMessage, TextBlock,
+    ThinkingBlock, ToolResultBlock, ToolUseBlock, UnknownContentBlock, UserContent, UserMessage,
 };

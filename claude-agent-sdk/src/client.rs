@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
@@ -15,7 +15,7 @@ use crate::control::{
 use crate::error::{ClaudeSDKError, Result};
 use crate::parse::parse_message;
 use crate::transport::SubprocessTransport;
-use crate::types::{ClaudeAgentOptions, McpServerConfig, Message};
+use crate::types::{CanUseToolCallback, ClaudeAgentOptions, McpServerConfig, Message};
 
 /// Prompt types accepted by the client.
 pub enum Prompt {
@@ -69,6 +69,8 @@ pub struct ClaudeSDKClient {
     stream_handle: Option<JoinHandle<()>>,
     /// Signal to stop background tasks.
     closed: Arc<AtomicBool>,
+    first_result_seen: Arc<AtomicBool>,
+    first_result_notify: Arc<Notify>,
 }
 
 impl ClaudeSDKClient {
@@ -85,6 +87,8 @@ impl ClaudeSDKClient {
             reader_handle: None,
             stream_handle: None,
             closed: Arc::new(AtomicBool::new(false)),
+            first_result_seen: Arc::new(AtomicBool::new(false)),
+            first_result_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -93,7 +97,15 @@ impl ClaudeSDKClient {
     /// For bidirectional streaming, pass `Prompt::Stream(rx)`. For one-shot
     /// queries, pass `Prompt::Text("your question")` or `None`.
     pub async fn connect(&mut self, prompt: Option<Prompt>) -> Result<()> {
+        if self.options.can_use_tool.is_some() && self.options.permission_prompt_tool_name.is_some()
+        {
+            return Err(ClaudeSDKError::Control(
+                "can_use_tool callback cannot be used with permission_prompt_tool_name".into(),
+            ));
+        }
+
         self.closed.store(false, Ordering::SeqCst);
+        self.first_result_seen.store(false, Ordering::SeqCst);
         let is_streaming = matches!(&prompt, Some(Prompt::Stream(_)) | None);
 
         // Build and spawn transport
@@ -439,6 +451,9 @@ impl ClaudeSDKClient {
         };
         let pending = self.pending.clone();
         let closed = self.closed.clone();
+        let can_use_tool = self.options.can_use_tool.clone();
+        let first_result_seen = self.first_result_seen.clone();
+        let first_result_notify = self.first_result_notify.clone();
 
         let handle = tokio::spawn(async move {
             loop {
@@ -451,6 +466,11 @@ impl ClaudeSDKClient {
                 match msg_result {
                     Ok(Some(value)) => {
                         let msg_type = value.get("type").and_then(|v| v.as_str());
+
+                        if msg_type == Some("result") {
+                            first_result_seen.store(true, Ordering::SeqCst);
+                            first_result_notify.notify_waiters();
+                        }
 
                         // Route control responses
                         if msg_type == Some("control_response") {
@@ -477,7 +497,9 @@ impl ClaudeSDKClient {
                             let resp = match serde_json::from_value::<IncomingControlRequest>(
                                 value.clone(),
                             ) {
-                                Ok(req) => Some(incoming_control_response(req)),
+                                Ok(req) => {
+                                    Some(incoming_control_response(req, can_use_tool.clone()).await)
+                                }
                                 Err(err) => {
                                     error!("Incoming control request parse error: {err}");
                                     unsupported_incoming_control_request_response(&value, &err)
@@ -534,9 +556,14 @@ impl ClaudeSDKClient {
         transport: Arc<SubprocessTransport>,
     ) {
         let closed = self.closed.clone();
+        let wait_for_first_result = self.has_bidirectional_needs();
+        let first_result_seen = self.first_result_seen.clone();
+        let first_result_notify = self.first_result_notify.clone();
 
         let handle = tokio::spawn(async move {
+            let mut sent_messages = 0usize;
             while let Some(msg) = rx.recv().await {
+                sent_messages += 1;
                 if closed.load(Ordering::SeqCst) {
                     break;
                 }
@@ -547,10 +574,22 @@ impl ClaudeSDKClient {
                 }
             }
 
+            if sent_messages > 0 && wait_for_first_result {
+                while !closed.load(Ordering::SeqCst) && !first_result_seen.load(Ordering::SeqCst) {
+                    first_result_notify.notified().await;
+                }
+            }
+
             let _ = transport.end_input().await;
         });
 
         self.stream_handle = Some(handle);
+    }
+
+    fn has_bidirectional_needs(&self) -> bool {
+        self.options.can_use_tool.is_some()
+            || !self.options.mcp_servers.is_empty()
+            || self.options.permission_prompt_tool_name.is_some()
     }
 
     async fn abort_background_tasks(&mut self) {
@@ -639,12 +678,27 @@ fn build_user_message_payload(
     Value::Object(root)
 }
 
-fn incoming_control_response(req: IncomingControlRequest) -> ControlResponseMessage {
+async fn incoming_control_response(
+    req: IncomingControlRequest,
+    can_use_tool: Option<CanUseToolCallback>,
+) -> ControlResponseMessage {
     match req.request {
-        IncomingRequestPayload::CanUseTool(_request) => ControlResponseMessage::error(
-            &req.request_id,
-            "Unsupported control request: can_use_tool",
-        ),
+        IncomingRequestPayload::CanUseTool(request) => {
+            let Some(callback) = can_use_tool else {
+                return ControlResponseMessage::error(
+                    &req.request_id,
+                    "Unsupported control request: can_use_tool",
+                );
+            };
+            let tool_use_id = request.tool_use_id.clone();
+            match callback(request).await {
+                Ok(response) => ControlResponseMessage::success(
+                    &req.request_id,
+                    ensure_tool_use_id(response, tool_use_id.as_deref()),
+                ),
+                Err(error) => ControlResponseMessage::error(&req.request_id, error.to_string()),
+            }
+        }
         IncomingRequestPayload::HookCallback(_request) => ControlResponseMessage::error(
             &req.request_id,
             "Unsupported control request: hook_callback",
@@ -658,6 +712,19 @@ fn incoming_control_response(req: IncomingControlRequest) -> ControlResponseMess
             serde_json::json!({ "action": "decline" }),
         ),
     }
+}
+
+fn ensure_tool_use_id(mut response: Value, tool_use_id: Option<&str>) -> Value {
+    let Some(tool_use_id) = tool_use_id.filter(|value| !value.is_empty()) else {
+        return response;
+    };
+
+    if let Some(object) = response.as_object_mut() {
+        object
+            .entry("toolUseID")
+            .or_insert_with(|| Value::String(tool_use_id.to_owned()));
+    }
+    response
 }
 
 fn unsupported_incoming_control_request_response(

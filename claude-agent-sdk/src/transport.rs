@@ -1,5 +1,6 @@
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use crate::error::{ClaudeSDKError, Result};
 use crate::types::ClaudeAgentOptions;
@@ -13,6 +14,7 @@ use tokio::sync::Mutex;
 // ---------------------------------------------------------------------------
 
 const DEFAULT_MAX_BUFFER_SIZE: usize = 1024 * 1024; // 1 MB
+const CLOSE_GRACE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Spawns the `claude` CLI as a child process and communicates via JSONL on
 /// stdin/stdout.
@@ -236,12 +238,20 @@ impl SubprocessTransport {
             *reader_guard = None;
         }
 
-        // Kill process
+        // Give the CLI a short chance to exit after stdin closes before
+        // falling back to a forced kill. This mirrors the TypeScript SDK's
+        // close path closely enough for abort/error cleanup without racing
+        // normal transcript flushes as aggressively as an immediate kill.
         {
             let mut proc_guard = self.process.lock().await;
             if let Some(mut proc) = proc_guard.take() {
-                let _ = proc.kill().await;
-                let _ = proc.wait().await;
+                if tokio::time::timeout(CLOSE_GRACE_TIMEOUT, proc.wait())
+                    .await
+                    .is_err()
+                {
+                    let _ = proc.kill().await;
+                    let _ = proc.wait().await;
+                }
             }
         }
 

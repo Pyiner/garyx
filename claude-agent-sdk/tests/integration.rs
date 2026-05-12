@@ -13,6 +13,8 @@ use claude_agent_sdk::{
     run_streaming,
 };
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[tokio::test]
 #[ignore = "requires live claude CLI + auth"]
@@ -268,6 +270,120 @@ async fn test_run_streaming_with_disallowed_tools() {
 
     assert!(!used_tool, "Should not have used disallowed tools");
     let _ = run.finish().await;
+}
+
+#[tokio::test]
+#[ignore = "requires live claude CLI + auth"]
+async fn test_default_options_preserve_claude_tool_prompt_live() {
+    let marker = format!(
+        "SYNTHETIC_TOOL_PROMPT_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let cwd = std::env::temp_dir().join(format!("claude-sdk-tool-prompt-{marker}"));
+    std::fs::create_dir_all(&cwd).expect("failed to create test cwd");
+    std::fs::write(cwd.join("probe_input.txt"), format!("{marker}\n"))
+        .expect("failed to write probe input");
+
+    let options = ClaudeAgentOptions {
+        cwd: Some(cwd.clone()),
+        permission_mode: Some(PermissionMode::BypassPermissions),
+        setting_sources: Some(vec!["project".to_owned()]),
+        max_turns: Some(3),
+        ..Default::default()
+    };
+
+    let mut run = run_streaming(options)
+        .await
+        .expect("Failed to start streaming run");
+    let control = run.control();
+    control
+        .send_user_message(OutboundUserMessage::text(
+            "Use the Bash tool exactly once to run: cat probe_input.txt . Reply only with the command output.",
+            "",
+        ))
+        .await
+        .expect("Failed to send user message");
+
+    let response_text = collect_text_until_result(&mut run).await;
+    run.finish().await.expect("finish should succeed");
+    assert!(
+        response_text.contains(&marker),
+        "expected Claude to use Bash and read marker {marker}, got: {response_text}"
+    );
+
+    let _ = std::fs::remove_dir_all(cwd);
+}
+
+#[tokio::test]
+#[ignore = "requires live claude CLI + auth"]
+async fn test_can_use_tool_callback_denies_permission_live() {
+    let marker = format!(
+        "SYNTHETIC_PERMISSION_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let cwd = std::env::temp_dir().join(format!("claude-sdk-permission-{marker}"));
+    let delete_dir = cwd.join("delete_me");
+    std::fs::create_dir_all(&delete_dir).expect("failed to create delete target");
+    std::fs::write(delete_dir.join("file.txt"), "synthetic\n")
+        .expect("failed to write delete target");
+
+    let callback_seen = Arc::new(AtomicBool::new(false));
+    let callback_seen_for_handler = callback_seen.clone();
+    let options = ClaudeAgentOptions {
+        cwd: Some(cwd.clone()),
+        permission_mode: Some(PermissionMode::Default),
+        can_use_tool: Some(Arc::new(move |request| {
+            callback_seen_for_handler.store(true, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(serde_json::json!({
+                    "behavior": "deny",
+                    "message": format!("denied synthetic {}", request.tool_name)
+                }))
+            })
+        })),
+        setting_sources: Some(vec!["project".to_owned()]),
+        max_turns: Some(5),
+        ..Default::default()
+    };
+
+    let mut run = run_streaming(options)
+        .await
+        .expect("Failed to start streaming run");
+    let control = run.control();
+    control
+        .send_user_message(OutboundUserMessage::text(
+            "This is a temporary test workspace. Use the Bash tool exactly once to run: rm -rf delete_me . Then reply DONE or report the permission error.",
+            "",
+        ))
+        .await
+        .expect("Failed to send user message");
+
+    let response_text = collect_text_until_result(&mut run).await;
+    run.finish().await.expect("finish should succeed");
+
+    assert!(
+        callback_seen.load(Ordering::SeqCst),
+        "expected real Claude permission request to invoke can_use_tool callback"
+    );
+    assert!(
+        delete_dir.exists(),
+        "deny response should prevent the temporary directory from being removed"
+    );
+    assert!(
+        response_text.to_lowercase().contains("permission")
+            || response_text.to_lowercase().contains("denied"),
+        "expected permission denial text, got: {response_text}"
+    );
+
+    let _ = std::fs::remove_dir_all(cwd);
 }
 
 #[tokio::test]

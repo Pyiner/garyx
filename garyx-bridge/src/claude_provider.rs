@@ -32,6 +32,7 @@ const MAX_SESSION_FAILURES: u32 = 3;
 const MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 const ABORT_TIMEOUT_SECS: u64 = 10;
 const STREAM_IDLE_TIMEOUT_SECS: u64 = 3600; // 1 hour
+const POST_RESULT_DRAIN_TIMEOUT_SECS: u64 = 2;
 const CLAUDE_MISSING_RESULT_ERROR: &str = "claude SDK stream ended without a result message";
 
 // ---------------------------------------------------------------------------
@@ -386,7 +387,10 @@ fn process_assistant_blocks_streaming(
                     parent_tool_use_id,
                 );
             }
-            ContentBlock::Image(_) | ContentBlock::Document(_) | ContentBlock::Thinking(_) => {}
+            ContentBlock::Image(_)
+            | ContentBlock::Document(_)
+            | ContentBlock::Thinking(_)
+            | ContentBlock::Unknown(_) => {}
         }
     }
 
@@ -1158,12 +1162,20 @@ impl ClaudeCliProvider {
         let mut assistant_or_tool_activity_seen = false;
         let mut actual_model: Option<String> = None;
         let mut thread_title: Option<String> = None;
+        let mut finish_requested = false;
 
         let idle_timeout = Duration::from_secs(STREAM_IDLE_TIMEOUT_SECS);
+        let post_result_drain_timeout = Duration::from_secs(POST_RESULT_DRAIN_TIMEOUT_SECS);
 
         loop {
-            let msg = tokio::time::timeout(idle_timeout, source.next_message()).await;
+            let read_timeout = if finish_requested {
+                post_result_drain_timeout
+            } else {
+                idle_timeout
+            };
+            let msg = tokio::time::timeout(read_timeout, source.next_message()).await;
             match msg {
+                Err(_elapsed) if finish_requested => break,
                 Err(_elapsed) => {
                     tracing::warn!(
                         run_id = %run_id,
@@ -1258,8 +1270,16 @@ impl ClaudeCliProvider {
                         // add_streaming_input callers see the run as closed and
                         // fall through to start a new run instead of queuing
                         // into a dying session.
-                        if self.try_close_pending_inputs(run_id).await {
-                            break;
+                        if self.try_close_pending_inputs(run_id).await && !finish_requested {
+                            finish_requested = true;
+                            if let Err(error) = source.finish_input().await {
+                                tracing::warn!(
+                                    run_id = %run_id,
+                                    error = %error,
+                                    "failed to finish claude input after result"
+                                );
+                                break;
+                            }
                         }
                     }
                     Ok(Message::System(sys_msg)) => {
@@ -1340,12 +1360,20 @@ struct SdkRunOutcome {
 #[async_trait]
 trait MessageSource {
     async fn next_message(&mut self) -> Option<claude_agent_sdk::Result<Message>>;
+
+    async fn finish_input(&mut self) -> claude_agent_sdk::Result<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl MessageSource for ClaudeRun {
     async fn next_message(&mut self) -> Option<claude_agent_sdk::Result<Message>> {
         self.next_message().await
+    }
+
+    async fn finish_input(&mut self) -> claude_agent_sdk::Result<()> {
+        self.finish().await
     }
 }
 

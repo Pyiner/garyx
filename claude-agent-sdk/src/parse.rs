@@ -4,7 +4,7 @@ use crate::error::{ClaudeSDKError, Result};
 use crate::types::{
     AssistantMessage, ContentBlock, DocumentBlock, DocumentSource, ImageBlock, ImageSource,
     Message, ResultMessage, StreamEvent, SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock,
-    ToolUseBlock, UserContent, UserMessage,
+    ToolUseBlock, UnknownContentBlock, UserContent, UserMessage,
 };
 
 /// Parse a raw JSON value (from CLI JSONL output) into a typed [`Message`].
@@ -171,10 +171,10 @@ fn parse_content_block(block: &Value) -> Result<ContentBlock> {
             content: block.get("content").cloned(),
             is_error: block.get("is_error").and_then(|v| v.as_bool()),
         })),
-        other => Err(ClaudeSDKError::MessageParse {
-            message: format!("Unknown content block type: {other}"),
-            data: Some(block.clone()),
-        }),
+        other => Ok(ContentBlock::Unknown(UnknownContentBlock {
+            block_type: other.to_owned(),
+            data: block.clone(),
+        })),
     }
 }
 

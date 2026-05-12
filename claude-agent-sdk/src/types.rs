@@ -1,8 +1,17 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
 
+use crate::control::CanUseToolRequest;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+pub type CanUseToolFuture = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'static>>;
+pub type CanUseToolCallback =
+    Arc<dyn Fn(CanUseToolRequest) -> CanUseToolFuture + Send + Sync + 'static>;
 
 // ---------------------------------------------------------------------------
 // Permission modes
@@ -106,6 +115,12 @@ pub struct DocumentBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UnknownContentBlock {
+    pub block_type: String,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text(TextBlock),
@@ -114,6 +129,7 @@ pub enum ContentBlock {
     Thinking(ThinkingBlock),
     ToolUse(ToolUseBlock),
     ToolResult(ToolResultBlock),
+    Unknown(UnknownContentBlock),
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +276,7 @@ pub struct ClaudeAgentDefinition {
     pub prompt: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ClaudeAgentOptions {
     pub agent: Option<String>,
     pub agents: HashMap<String, ClaudeAgentDefinition>,
@@ -288,6 +304,47 @@ pub struct ClaudeAgentOptions {
     pub max_thinking_tokens: Option<i64>,
     pub output_format: Option<Value>,
     pub enable_file_checkpointing: bool,
+    pub can_use_tool: Option<CanUseToolCallback>,
+}
+
+impl std::fmt::Debug for ClaudeAgentOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClaudeAgentOptions")
+            .field("agent", &self.agent)
+            .field("agents", &self.agents)
+            .field("system_prompt", &self.system_prompt)
+            .field("append_system_prompt", &self.append_system_prompt)
+            .field("mcp_servers", &self.mcp_servers)
+            .field("permission_mode", &self.permission_mode)
+            .field("continue_conversation", &self.continue_conversation)
+            .field("resume", &self.resume)
+            .field("max_turns", &self.max_turns)
+            .field("max_budget_usd", &self.max_budget_usd)
+            .field("allowed_tools", &self.allowed_tools)
+            .field("disallowed_tools", &self.disallowed_tools)
+            .field("model", &self.model)
+            .field("fallback_model", &self.fallback_model)
+            .field(
+                "permission_prompt_tool_name",
+                &self.permission_prompt_tool_name,
+            )
+            .field("cwd", &self.cwd)
+            .field("cli_path", &self.cli_path)
+            .field("env", &self.env)
+            .field("extra_args", &self.extra_args)
+            .field("max_buffer_size", &self.max_buffer_size)
+            .field("setting_sources", &self.setting_sources)
+            .field("include_partial_messages", &self.include_partial_messages)
+            .field("fork_session", &self.fork_session)
+            .field("max_thinking_tokens", &self.max_thinking_tokens)
+            .field("output_format", &self.output_format)
+            .field("enable_file_checkpointing", &self.enable_file_checkpointing)
+            .field(
+                "can_use_tool",
+                &self.can_use_tool.as_ref().map(|_| "<handler>"),
+            )
+            .finish()
+    }
 }
 
 impl Default for ClaudeAgentOptions {
@@ -323,6 +380,7 @@ impl Default for ClaudeAgentOptions {
             max_thinking_tokens: None,
             output_format: None,
             enable_file_checkpointing: false,
+            can_use_tool: None,
         }
     }
 }
@@ -363,7 +421,6 @@ impl ClaudeAgentOptions {
             args.push(agent.clone());
         }
 
-        // System prompt
         match (&self.system_prompt, &self.append_system_prompt) {
             (Some(sp), _) => {
                 args.push("--system-prompt".into());
@@ -373,10 +430,7 @@ impl ClaudeAgentOptions {
                 args.push("--append-system-prompt".into());
                 args.push(append.clone());
             }
-            (None, None) => {
-                args.push("--system-prompt".into());
-                args.push(String::new());
-            }
+            (None, None) => {}
         }
 
         if !self.allowed_tools.is_empty() {
@@ -409,7 +463,10 @@ impl ClaudeAgentOptions {
             args.push(fallback.clone());
         }
 
-        if let Some(tool_name) = &self.permission_prompt_tool_name {
+        if self.can_use_tool.is_some() {
+            args.push("--permission-prompt-tool".into());
+            args.push("stdio".into());
+        } else if let Some(tool_name) = &self.permission_prompt_tool_name {
             args.push("--permission-prompt-tool".into());
             args.push(tool_name.clone());
         }

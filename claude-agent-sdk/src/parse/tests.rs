@@ -169,6 +169,32 @@ fn test_parse_assistant_message() {
 }
 
 #[test]
+fn test_parse_unknown_content_block_as_raw_block() {
+    let data = json!({
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "content": [
+                { "type": "future_block", "payload": { "ok": true } }
+            ]
+        }
+    });
+
+    let msg = parse_message(&data).unwrap();
+    match msg {
+        Message::Assistant(a) => match &a.content[0] {
+            ContentBlock::Unknown(block) => {
+                assert_eq!(block.block_type, "future_block");
+                assert_eq!(block.data["payload"]["ok"], true);
+            }
+            other => panic!("Expected Unknown block, got {other:?}"),
+        },
+        other => panic!("Expected Assistant, got {other:?}"),
+    }
+}
+
+#[test]
 fn test_parse_system_message() {
     let data = json!({
         "type": "system",
