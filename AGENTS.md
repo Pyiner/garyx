@@ -74,6 +74,9 @@ needs installed-app validation.
   text as the final answer. Keep the active user-turn row and its React
   container stable as tool calls arrive so existing message bubbles do not
   remount or replay entry animations.
+- If an assistant text segment has streamed but the desktop thread is still
+  running and the tail is not an active tool group, keep a bottom "Thinking"
+  indicator visible until the run is done.
 - The workspace file browser should read directories on demand. Do not pre-scan
   child directories just to decide whether to show expansion affordances,
   especially on macOS where probing protected folders can trigger privacy

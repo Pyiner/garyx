@@ -136,6 +136,53 @@ test('thread activity model treats snapshot active run as source-independent loa
   assert.equal(model.canSteerQueuedPrompt, false);
 });
 
+test('thread activity model keeps bottom thinking visible after streamed text', () => {
+  const model = deriveThreadActivityModel({
+    messages: [
+      message({ id: 'user-1' }),
+      message({
+        id: 'assistant-1',
+        role: 'assistant',
+        text: 'partial answer',
+        kind: 'assistant_reply',
+      }),
+    ],
+    threadInfo: { activeRun: activeRun() },
+    liveStream: null,
+    runtimeBusy: false,
+    pendingAckIntentCount: 0,
+    remoteAwaitingAckInputCount: 0,
+    pendingHistoryIntent: false,
+  });
+
+  assert.equal(model.runActive, true);
+  assert.equal(model.showRunLoading, true);
+});
+
+test('thread activity model avoids duplicate thinking for pending assistant rows', () => {
+  const model = deriveThreadActivityModel({
+    messages: [
+      message({ id: 'user-1' }),
+      message({
+        id: 'assistant-1',
+        role: 'assistant',
+        text: 'Thinking',
+        kind: 'assistant_reply',
+        pending: true,
+      }),
+    ],
+    threadInfo: { activeRun: activeRun() },
+    liveStream: null,
+    runtimeBusy: false,
+    pendingAckIntentCount: 0,
+    remoteAwaitingAckInputCount: 0,
+    pendingHistoryIntent: false,
+  });
+
+  assert.equal(model.runActive, true);
+  assert.equal(model.showRunLoading, false);
+});
+
 test('thread activity model allows steering only for local live streams', () => {
   const model = deriveThreadActivityModel({
     messages: [message({ id: 'local-user-1' })],

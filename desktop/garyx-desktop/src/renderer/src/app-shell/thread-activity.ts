@@ -95,7 +95,6 @@ export function deriveThreadActivityModel(input: {
       input.runtimeBusy ||
       input.threadInfo?.activeRun?.runId,
   );
-  const latestAssistantHasText = latestAssistantResponseHasText(input.messages);
   const hasPendingAssistant = input.messages.some(
     (message) => message.role === "assistant" && Boolean(message.pending),
   );
@@ -106,27 +105,8 @@ export function deriveThreadActivityModel(input: {
     showRunLoading:
       runActive &&
       !showPendingAckLoading &&
-      !hasPendingAssistant &&
-      !latestAssistantHasText,
+      !hasPendingAssistant,
   };
-}
-
-function latestAssistantResponseHasText(messages: UiTranscriptMessage[]): boolean {
-  let latestUserIndex = -1;
-  let latestAssistantTextIndex = -1;
-  messages.forEach((message, index) => {
-    if (message.role === "user" && !isLoopContinuationActivityMessage(message)) {
-      latestUserIndex = index;
-    }
-    if (
-      message.role === "assistant" &&
-      typeof message.text === "string" &&
-      message.text.trim()
-    ) {
-      latestAssistantTextIndex = index;
-    }
-  });
-  return latestAssistantTextIndex >= 0 && latestAssistantTextIndex > latestUserIndex;
 }
 
 export function threadActivitySignature(
