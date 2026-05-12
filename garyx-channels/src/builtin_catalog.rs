@@ -134,6 +134,12 @@ pub fn builtin_capabilities(
         hot_reload_accounts: false,
         requires_public_url: false,
         needs_host_ingress: false,
+        // Built-in channels share the gateway's process — they never
+        // get "respawned" in the subprocess sense, so the field is
+        // moot here. Leaving false keeps the default behavior
+        // consistent with how the auto-updater queries it (it only
+        // ever asks subprocess plugins).
+        survives_respawn: false,
         delivery_model: DeliveryModel::PullExplicitAck,
     }
 }

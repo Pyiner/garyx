@@ -283,10 +283,69 @@ Built-in channels (`telegram`, `feishu`, `weixin`) are compiled into
 the garyx binary; `garyx plugins update <builtin>` errors with a
 redirect to `garyx update`.
 
-Restart the gateway after each update so the new binary is picked up:
+Restart the gateway after each manual update so the new binary is
+picked up:
 
 ```bash
 garyx gateway restart
+```
+
+Plugins that opt in to the silent auto-updater (see below) get this
+restart for free — the gateway hot-swaps the subprocess on the next
+auto-update tick.
+
+### Silent auto-update
+
+When the gateway is running it also runs a background auto-updater
+that mirrors `garyx-desktop`'s built-in app updater: an initial check
+~8 seconds after boot, then a recurring check every 6 hours by
+default. For each installed plugin with a declared `[update]` block,
+it discovers the latest version and — when one is available AND the
+plugin author opted in via `[capabilities].survives_respawn = true`
+— downloads, sha256-verifies, atomically promotes, and hot-replaces
+the running subprocess via the §9.4 respawn path, all without
+restarting the gateway.
+
+Plugins that have not opted into `survives_respawn` still benefit
+from the discovery loop: the host warn-logs a one-line notice when
+a new version becomes available. The auto-updater does **not**
+download or promote the new bundle in that case — both the on-disk
+install and the running subprocess stay on the old version until
+the operator manually runs `garyx plugins update` + `garyx gateway
+restart`. The opt-in is conservative because some plugins keep
+per-account dedup state in memory; respawning them would re-deliver
+historical messages unless they persist that state across restarts.
+Plugin authors set the flag only after they've verified their
+plugin resumes cleanly from a child-process restart.
+
+Configuration knobs in `~/.garyx/garyx.json`:
+
+```json
+{
+  "plugins": {
+    "auto_update": true,
+    "auto_update_check_interval_secs": 21600
+  }
+}
+```
+
+- `auto_update` (bool, default `true`) — master switch. `false`
+  disables the background loop entirely; manual `garyx plugins
+  update` still works.
+- `auto_update_check_interval_secs` (u64, default `21600` = 6 h) —
+  seconds between checks. Clamped at a 60 s floor to keep manifest
+  hosts from being hammered.
+
+Plugin authors opting in:
+
+```toml
+[capabilities]
+delivery_model = "pull_explicit_ack"
+# I (the plugin author) certify that respawning my subprocess does
+# not duplicate inbound messages to the gateway. Typically this
+# requires persisting per-account cursors / dedup state on disk so
+# the new child resumes from the same logical position as the old.
+survives_respawn = true
 ```
 
 ### Declaring an update source in `plugin.toml`

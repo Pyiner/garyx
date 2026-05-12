@@ -879,7 +879,7 @@ fn resolve_local_bundle(from: &str, name: &str) -> Result<std::path::PathBuf, Pl
 /// Build the `reqwest::Client` used for all plugin-update network I/O.
 /// Sets the same `User-Agent` the `garyx update` (self-update) flow uses
 /// so server-side request logs can distinguish the CLI from a browser.
-fn http_client() -> Result<reqwest::Client, PluginsCliError> {
+pub(super) fn http_client() -> Result<reqwest::Client, PluginsCliError> {
     reqwest::Client::builder()
         .user_agent(format!("garyx-cli/{}", crate::commands::VERSION))
         .build()
@@ -891,7 +891,7 @@ fn http_client() -> Result<reqwest::Client, PluginsCliError> {
 
 /// Resolve the current host's plugin-release target alias, surfacing a
 /// readable error for platforms we don't publish artifacts for.
-fn current_target_alias() -> Result<&'static str, PluginsCliError> {
+pub(super) fn current_target_alias() -> Result<&'static str, PluginsCliError> {
     resolve_target_alias(std::env::consts::OS, std::env::consts::ARCH).ok_or_else(|| {
         PluginsCliError::Io {
             context: "resolving plugin release target".to_string(),

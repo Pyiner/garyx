@@ -782,3 +782,98 @@ async fn managed_channel_plugin_dispatch_outbound_routes_by_account() {
         other => panic!("expected Config error for unknown account, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// validate_manifest_compat — gates the host-side respawn-with-fresh-manifest
+// path. Hand-written manifests (no subprocess spawned) exercise every
+// accept / reject arm without paying the subprocess-fixture cost.
+// ---------------------------------------------------------------------------
+
+mod manifest_compat {
+    use super::*;
+    use crate::plugin_host::manifest::{
+        DeliveryModel, ManifestCapabilities, ManifestRuntime, PluginEntry, PluginHeader,
+        PluginManifest, PluginUi,
+    };
+    use std::collections::BTreeMap;
+
+    fn make_manifest(id: &str, version: &str, delivery: DeliveryModel) -> PluginManifest {
+        PluginManifest {
+            manifest_dir: std::path::PathBuf::from("/test"),
+            plugin: PluginHeader {
+                id: id.to_owned(),
+                aliases: Vec::new(),
+                version: version.to_owned(),
+                display_name: id.to_owned(),
+                description: String::new(),
+                icon: None,
+            },
+            entry: PluginEntry {
+                binary: "./test".to_owned(),
+                env: BTreeMap::new(),
+                args: Vec::new(),
+            },
+            capabilities: ManifestCapabilities {
+                outbound: true,
+                inbound: true,
+                streaming: false,
+                images: false,
+                files: false,
+                hot_reload_accounts: false,
+                requires_public_url: false,
+                needs_host_ingress: false,
+                survives_respawn: true,
+                delivery_model: delivery,
+            },
+            runtime: ManifestRuntime::default(),
+            schema: serde_json::Value::Object(Default::default()),
+            auth_flows: Vec::new(),
+            ui: PluginUi::default(),
+            update: None,
+            min_host_version: None,
+        }
+    }
+
+    #[test]
+    fn version_bump_alone_is_compatible() {
+        let old = make_manifest("acme", "0.1.0", DeliveryModel::PullExplicitAck);
+        let new = make_manifest("acme", "0.2.0", DeliveryModel::PullExplicitAck);
+        ChannelPluginManager::validate_manifest_compat("acme", &old, &new)
+            .expect("version bump alone must be accepted");
+    }
+
+    #[test]
+    fn id_change_is_rejected() {
+        // Defends against a publisher mistake: a bundle that ships a
+        // different `plugin.id` would land under the wrong install
+        // directory if we accepted it.
+        let old = make_manifest("acme", "0.1.0", DeliveryModel::PullExplicitAck);
+        let new = make_manifest("other", "0.2.0", DeliveryModel::PullExplicitAck);
+        let err = ChannelPluginManager::validate_manifest_compat("acme", &old, &new)
+            .expect_err("plugin.id change must be rejected");
+        match err {
+            SubprocessPluginError::ManifestIncompatible { reason, .. } => {
+                assert!(reason.contains("plugin.id"), "got reason: {reason}");
+            }
+            other => panic!("expected ManifestIncompatible, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delivery_model_change_is_rejected() {
+        // The delivery model is a wire-protocol contract; changing it
+        // under a running gateway risks both sides disagreeing about
+        // ack semantics. Operators who need to migrate it must
+        // restart the gateway.
+        let old = make_manifest("acme", "0.1.0", DeliveryModel::PullExplicitAck);
+        let new = make_manifest("acme", "0.2.0", DeliveryModel::PushNegativeAck);
+        let err = ChannelPluginManager::validate_manifest_compat("acme", &old, &new)
+            .expect_err("delivery_model change must be rejected");
+        match err {
+            SubprocessPluginError::ManifestIncompatible { reason, .. } => {
+                assert!(reason.contains("delivery_model"), "got reason: {reason}");
+            }
+            other => panic!("expected ManifestIncompatible, got {other:?}"),
+        }
+    }
+}

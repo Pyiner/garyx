@@ -32,8 +32,32 @@ delivery_model = "pull_explicit_ack"
     );
     assert!(m.capabilities.outbound);
     assert!(m.capabilities.inbound);
+    // Default is opt-out: plugins must explicitly assert respawn
+    // safety before the host's auto-updater will hot-replace them.
+    assert!(!m.capabilities.survives_respawn);
     assert_eq!(m.runtime.stop_grace_ms, 5000);
     assert_eq!(m.runtime.max_inflight_inbound, 32);
+}
+
+#[test]
+fn parses_survives_respawn_opt_in() {
+    let (_dir, path) = write_manifest(
+        r#"
+[plugin]
+id = "stateful"
+version = "0.1.0"
+display_name = "Stateful"
+
+[entry]
+binary = "./stateful"
+
+[capabilities]
+delivery_model = "pull_explicit_ack"
+survives_respawn = true
+"#,
+    );
+    let m = PluginManifest::load(&path).unwrap();
+    assert!(m.capabilities.survives_respawn);
 }
 
 #[test]

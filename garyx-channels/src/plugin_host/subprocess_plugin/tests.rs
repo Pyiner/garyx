@@ -103,6 +103,7 @@ fn make_plugin(client: PluginRpcClient) -> SubprocessChannelPlugin {
         hot_reload_accounts: false,
         requires_public_url: false,
         needs_host_ingress: false,
+        survives_respawn: false,
         delivery_model: DeliveryModel::PullExplicitAck,
     };
     let sender = PluginSenderHandle::new(

@@ -65,6 +65,25 @@ pub struct ManifestCapabilities {
     /// v0.2 — plugins with a push model own their own listener.
     #[serde(default)]
     pub needs_host_ingress: bool,
+    /// Plugin author asserts that respawning the child process (e.g.
+    /// because the host atomically promoted a new binary on disk)
+    /// does not cause message loss or duplicate delivery to the
+    /// gateway. Gates the host's background auto-updater:
+    /// plugins WITHOUT this flag are still discoverable through
+    /// `garyx plugins update` and `garyx plugins update --check`,
+    /// but the auto-updater **skips them entirely** — it neither
+    /// downloads nor promotes a new bundle, only emits a warn-log
+    /// noting the new version and the manual command to apply it.
+    /// Plugins WITH this flag get the full silent path: download,
+    /// sha256-verify, atomic-promote, hot-swap via `respawn_plugin_
+    /// with_fresh_manifest`.
+    ///
+    /// Default `false` is conservative: plugins must opt in only
+    /// after the author has verified the respawn behavior (typically:
+    /// persistent per-account cursors / dedup state on disk, so a
+    /// child restart resumes from the same logical position).
+    #[serde(default)]
+    pub survives_respawn: bool,
     pub delivery_model: DeliveryModel,
 }
 

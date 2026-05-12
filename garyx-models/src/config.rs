@@ -877,6 +877,45 @@ impl Default for TasksConfig {
     }
 }
 
+/// Top-level configuration for the host-side plugin auto-updater.
+///
+/// Mirrors the desktop app's electron-updater behavior conceptually:
+/// the gateway periodically checks each installed subprocess plugin
+/// against its declared `[update].manifest_url`, downloads + verifies
+/// + atomically promotes a new bundle when available, then hot-swaps
+/// the live subprocess via the §9.4 respawn path. Plugins must opt
+/// in to the hot-swap via `[capabilities].survives_respawn = true`;
+/// for plugins without that flag the auto-updater still downloads
+/// the new bundle but leaves the running subprocess on the old image
+/// and logs a "restart required" hint.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PluginsConfig {
+    /// Master switch. When `false`, no periodic check fires and no
+    /// download is attempted. Defaults to `true` for parity with
+    /// `garyx-desktop`'s `autoDownload = true`.
+    #[serde(default = "default_true")]
+    pub auto_update: bool,
+    /// Seconds between recurring checks. Default `21600` (6 h)
+    /// matches `RECURRING_CHECK_INTERVAL_MS` in the desktop updater.
+    /// Minimum enforced at 60s — anything lower hammers manifest
+    /// hosts and risks rate-limiting.
+    #[serde(default = "default_auto_update_interval_secs")]
+    pub auto_update_check_interval_secs: u64,
+}
+
+fn default_auto_update_interval_secs() -> u64 {
+    21_600
+}
+
+impl Default for PluginsConfig {
+    fn default() -> Self {
+        Self {
+            auto_update: true,
+            auto_update_check_interval_secs: default_auto_update_interval_secs(),
+        }
+    }
+}
+
 /// Root configuration for Garyx.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct GaryxConfig {
@@ -898,6 +937,8 @@ pub struct GaryxConfig {
     pub commands: Vec<SlashCommand>,
     #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerConfig>,
+    #[serde(default)]
+    pub plugins: PluginsConfig,
 }
 
 impl GaryxConfig {

@@ -1428,6 +1428,18 @@ pub enum SubprocessPluginError {
     },
     #[error("plugin '{plugin_id}' rejected initialize: {message}")]
     InitializeRejected { plugin_id: String, message: String },
+    #[error("plugin '{plugin_id}' manifest reload failed at {path}: {detail}")]
+    ManifestReload {
+        plugin_id: String,
+        path: PathBuf,
+        detail: String,
+    },
+    #[error(
+        "plugin '{plugin_id}' manifest is incompatible with the running plugin: \
+         {reason}. The new bundle is on disk but the running subprocess was not \
+         hot-replaced; restart the gateway to pick it up."
+    )]
+    ManifestIncompatible { plugin_id: String, reason: String },
     #[error(transparent)]
     Dispatcher(#[from] ChannelError),
 }
@@ -1769,6 +1781,23 @@ impl ChannelPluginManager {
                 last_error: entry.last_error.clone(),
             })
             .collect()
+    }
+
+    /// Version reported by the in-memory entry for a subprocess
+    /// plugin (i.e. what's *currently running*), if registered.
+    ///
+    /// Distinct from `<plugin_root>/<id>/plugin.toml`'s version,
+    /// which the host-side auto-updater may have promoted ahead of
+    /// a successful respawn. The auto-update loop uses this to
+    /// detect "bundle on disk is new but subprocess still on old
+    /// image" — that state would otherwise short-circuit on the
+    /// disk version alone and never retry the failed respawn.
+    pub fn subprocess_plugin_version(&self, plugin_id: &str) -> Option<String> {
+        self.plugins
+            .get(plugin_id)?
+            .subprocess
+            .as_ref()
+            .map(|sub| sub.manifest.plugin.version.clone())
     }
 
     /// Refresh every built-in plugin's per-account outbound sender
@@ -2258,13 +2287,22 @@ impl ChannelPluginManager {
         // see the new child on their next call — `replace_client` is
         // the cheaper alternative but the type-erased Arc would need
         // downcast to reach it, so building a fresh adapter is simpler.
+        //
+        // `new_metadata` is derived from the (possibly refreshed)
+        // manifest snapshot taken at the top of this method, NOT from
+        // the OLD `entry.plugin.metadata()` clone. The two only
+        // diverge when a caller (e.g. `respawn_plugin_with_fresh_
+        // manifest`) deliberately swapped `entry.subprocess.manifest`
+        // before invoking respawn — in that path, sourcing metadata
+        // from the OLD plugin would leak stale version / display_name
+        // / description into observers (HTTP `GET /api/channels/
+        // plugins`, desktop UI). For all other call sites the manifest
+        // is unchanged and `manifest_to_metadata(&manifest)` returns
+        // exactly what the OLD adapter held, so this is a no-op for
+        // them.
         let stop_grace = Duration::from_millis(manifest.runtime.stop_grace_ms);
         let new_client = new_plugin.client();
-        let new_metadata = self
-            .plugins
-            .get(plugin_id)
-            .map(|e| e.plugin.metadata().clone())
-            .ok_or_else(|| SubprocessPluginError::UnknownPlugin(plugin_id.to_owned()))?;
+        let new_metadata = manifest_to_metadata(&manifest);
         let new_adapter: Arc<dyn ChannelPlugin> =
             Arc::new(crate::plugin_host::SubprocessChannelPlugin::new(
                 new_metadata,
@@ -2302,6 +2340,111 @@ impl ChannelPluginManager {
         }
 
         info!(plugin_id = %plugin_id, "subprocess plugin respawned");
+        Ok(())
+    }
+
+    /// Re-read `plugin.toml` from the same `manifest_dir` the plugin
+    /// was originally registered with, validate it is binary-compatible
+    /// with the currently running entry, then run the §9.4 respawn
+    /// path with the refreshed manifest in place.
+    ///
+    /// Used by the host-side auto-updater after it has atomically
+    /// promoted a new plugin bundle to disk: the on-disk
+    /// `plugin.toml` may now declare a new version, schema, or
+    /// (non-breaking) capability bits. The respawn picks up those
+    /// changes plus the new binary in one swap.
+    ///
+    /// Compatibility rules (current scope):
+    ///   * `plugin.id` must not change. The directory layout pins it.
+    ///   * `capabilities.delivery_model` must not change. The delivery
+    ///     model is a protocol contract that ripples into how the host
+    ///     dispatches outbound + acks inbound; changing it under a
+    ///     running gateway risks both sides disagreeing about whether
+    ///     a message was delivered. Operators who genuinely need to
+    ///     migrate `delivery_model` should restart the gateway.
+    ///
+    /// On reload / validation / spawn failure the in-memory manifest
+    /// is rolled back to its pre-call state so observers never see a
+    /// "phantom" version number for a plugin that didn't actually
+    /// hot-replace.
+    pub async fn respawn_plugin_with_fresh_manifest(
+        &mut self,
+        plugin_id: &str,
+    ) -> Result<(), SubprocessPluginError> {
+        // Step 1 — re-read + validate + snapshot. Everything in this
+        // block runs without touching live state, so a failure aborts
+        // cleanly with no rollback needed.
+        let (new_manifest, current_accounts, old_manifest_snapshot) = {
+            let entry = self.plugins.get(plugin_id).ok_or_else(|| {
+                SubprocessPluginError::UnknownPlugin(plugin_id.to_owned())
+            })?;
+            let sub = entry.subprocess.as_ref().ok_or_else(|| {
+                SubprocessPluginError::UnknownPlugin(plugin_id.to_owned())
+            })?;
+            let manifest_path = sub.manifest.manifest_dir.join("plugin.toml");
+            let new_manifest = PluginManifest::load(&manifest_path).map_err(|err| {
+                SubprocessPluginError::ManifestReload {
+                    plugin_id: plugin_id.to_owned(),
+                    path: manifest_path.clone(),
+                    detail: err.to_string(),
+                }
+            })?;
+            Self::validate_manifest_compat(plugin_id, &sub.manifest, &new_manifest)?;
+            (new_manifest, sub.accounts.clone(), sub.manifest.clone())
+        };
+
+        // Step 2 — swap the manifest into the entry so the existing
+        // respawn path (which sources `manifest` from `entry.subprocess`)
+        // picks up the new schema / version / capability bits.
+        {
+            let entry = self.plugins.get_mut(plugin_id).ok_or_else(|| {
+                SubprocessPluginError::UnknownPlugin(plugin_id.to_owned())
+            })?;
+            let sub = entry.subprocess.as_mut().ok_or_else(|| {
+                SubprocessPluginError::UnknownPlugin(plugin_id.to_owned())
+            })?;
+            sub.manifest = new_manifest;
+        }
+
+        // Step 3 — run the existing §9.4 respawn. On failure, restore
+        // the previous manifest so observers don't see a version that
+        // doesn't match what's actually running.
+        match self.respawn_plugin(plugin_id, Some(current_accounts)).await {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if let Some(entry) = self.plugins.get_mut(plugin_id) {
+                    if let Some(sub) = entry.subprocess.as_mut() {
+                        sub.manifest = old_manifest_snapshot;
+                    }
+                }
+                Err(err)
+            }
+        }
+    }
+
+    fn validate_manifest_compat(
+        plugin_id: &str,
+        old: &PluginManifest,
+        new: &PluginManifest,
+    ) -> Result<(), SubprocessPluginError> {
+        if old.plugin.id != new.plugin.id {
+            return Err(SubprocessPluginError::ManifestIncompatible {
+                plugin_id: plugin_id.to_owned(),
+                reason: format!(
+                    "plugin.id changed from '{}' to '{}'",
+                    old.plugin.id, new.plugin.id
+                ),
+            });
+        }
+        if old.capabilities.delivery_model != new.capabilities.delivery_model {
+            return Err(SubprocessPluginError::ManifestIncompatible {
+                plugin_id: plugin_id.to_owned(),
+                reason: format!(
+                    "capabilities.delivery_model changed from {:?} to {:?}",
+                    old.capabilities.delivery_model, new.capabilities.delivery_model
+                ),
+            });
+        }
         Ok(())
     }
 

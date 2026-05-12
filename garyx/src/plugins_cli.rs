@@ -17,7 +17,9 @@
 //! place. Without `--force` we refuse rather than silently overwrite
 //! a manifest the user might have hand-tuned.
 
+mod auto_update_loop;
 mod update;
+pub use auto_update_loop::{AutoUpdateConfig, spawn as spawn_auto_update};
 pub use update::update;
 
 use std::io::Write;

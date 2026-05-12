@@ -396,6 +396,7 @@ fn minimal_manifest(binary_path: &Path) -> PluginManifest {
             hot_reload_accounts: false,
             requires_public_url: false,
             needs_host_ingress: false,
+            survives_respawn: false,
             delivery_model: DeliveryModel::PullExplicitAck,
         },
         runtime: ManifestRuntime::default(),
