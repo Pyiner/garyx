@@ -383,9 +383,14 @@ async fn handle_chat_ws_recover(
     };
 
     let limit = request.limit.unwrap_or(200).clamp(1, 500);
-    let snapshot =
-        crate::api::thread_history_for_key(state, &thread_id, limit, request.include_tool_messages)
-            .await;
+    let snapshot = crate::api::thread_history_for_key(
+        state,
+        &thread_id,
+        limit,
+        request.include_tool_messages,
+        None,
+    )
+    .await;
 
     let _ = out_tx.send(json!({
         "type": "snapshot",

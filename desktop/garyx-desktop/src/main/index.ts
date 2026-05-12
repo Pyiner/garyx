@@ -51,6 +51,7 @@ import type {
   DeleteThreadInput,
   DesktopSettings,
   GenerateCustomAgentAvatarInput,
+  GetThreadHistoryInput,
   GetSkillEditorInput,
   GatewayConfigDocument,
   DeleteTaskInput,
@@ -1111,9 +1112,9 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     "garyx:get-thread-history",
-    async (_event, threadId: string) => {
+    async (_event, input: string | GetThreadHistoryInput) => {
       const settings = await resolveSettings();
-      return fetchThreadHistory(settings, threadId);
+      return fetchThreadHistory(settings, input);
     },
   );
   ipcMain.handle(

@@ -1289,6 +1289,49 @@ async fn test_thread_history_detail_with_thread_id_and_tool_messages() {
 }
 
 #[tokio::test]
+async fn test_thread_history_detail_pages_before_global_index() {
+    let state = test_state();
+    seed_transcript_backed_thread(
+        &state,
+        "thread::paged",
+        json!({
+            "messages": [
+                {"role": "user", "content": "m0"},
+                {"role": "assistant", "content": "m1"},
+                {"role": "user", "content": "m2"},
+                {"role": "assistant", "content": "m3"},
+                {"role": "user", "content": "m4"}
+            ]
+        }),
+    )
+    .await;
+
+    let router = api_router(state);
+    let req = Request::builder()
+        .uri("/api/threads/history?thread_id=thread%3A%3Apaged&limit=2&before_index=3")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["message_stats"]["total_messages_in_thread"], 5);
+    assert_eq!(json["message_stats"]["returned_messages"], 2);
+    assert_eq!(json["message_stats"]["returned_start_index"], 1);
+    assert_eq!(json["message_stats"]["returned_end_index"], 3);
+    assert_eq!(json["message_stats"]["has_more_before"], true);
+    assert_eq!(json["message_stats"]["next_before_index"], 1);
+    assert_eq!(json["messages"][0]["index"], 1);
+    assert_eq!(json["messages"][0]["text"], "m1");
+    assert_eq!(json["messages"][1]["index"], 2);
+    assert_eq!(json["messages"][1]["text"], "m2");
+}
+
+#[tokio::test]
 async fn test_thread_history_detail_filters_tool_messages() {
     let state = test_state();
     seed_transcript_backed_thread(
@@ -2228,7 +2271,8 @@ async fn thread_history_emits_null_team_for_standalone_agent_thread() {
     )
     .await;
 
-    let payload = thread_history_for_key(&state, "thread::history-standalone", 10, true).await;
+    let payload =
+        thread_history_for_key(&state, "thread::history-standalone", 10, true, None).await;
     assert_eq!(payload["ok"], true);
     assert_eq!(
         payload["team"],
@@ -2254,7 +2298,8 @@ async fn thread_history_emits_team_with_empty_child_map_when_group_missing() {
     )
     .await;
 
-    let payload = thread_history_for_key(&state, "thread::history-team-fresh", 10, true).await;
+    let payload =
+        thread_history_for_key(&state, "thread::history-team-fresh", 10, true, None).await;
     assert_eq!(payload["ok"], true);
     let team = &payload["team"];
     assert_eq!(team["team_id"], "product-ship");
@@ -2288,7 +2333,8 @@ async fn thread_history_projects_known_child_thread_ids_from_group_store() {
     group.record_child_thread("coder", "th::child-coder-0001");
     state.ops.agent_team_group_store.save(&group).await;
 
-    let payload = thread_history_for_key(&state, "thread::history-team-partial", 10, true).await;
+    let payload =
+        thread_history_for_key(&state, "thread::history-team-partial", 10, true, None).await;
     assert_eq!(payload["ok"], true);
     let child_map = payload["team"]["child_thread_ids"]
         .as_object()

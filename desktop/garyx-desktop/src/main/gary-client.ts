@@ -50,6 +50,7 @@ import type {
   GatewaySettingsPayload,
   GatewaySettingsSaveResult,
   GatewaySettingsSource,
+  GetThreadHistoryInput,
   InterruptResult,
   CandidatesResponse,
   CandidateVerdict,
@@ -118,6 +119,8 @@ interface ActiveChatSocket {
 }
 
 const activeStreamRequests = new Map<string, ActiveChatSocket>();
+const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 40;
+const MAX_THREAD_HISTORY_PAGE_SIZE = 120;
 const LOCAL_GATEWAY_HOSTS = new Set([
   "127.0.0.1",
   "localhost",
@@ -281,6 +284,15 @@ interface HistoryPayload {
     text?: string | null;
     content?: unknown;
   }>;
+  message_stats?: {
+    total_messages_in_thread?: number;
+    total_messages_in_session?: number;
+    returned_messages?: number;
+    returned_start_index?: number;
+    returned_end_index?: number;
+    has_more_before?: boolean;
+    next_before_index?: number | null;
+  };
   team?: ThreadTeamBlockPayload | null;
   thread_runtime?: ThreadRuntimePayload | null;
 }
@@ -2499,15 +2511,85 @@ export async function saveGatewaySettings(
   };
 }
 
+function normalizeThreadHistoryInput(
+  input: string | GetThreadHistoryInput,
+): {
+  threadId: string;
+  beforeIndex?: number;
+  limit: number;
+} {
+  const raw: {
+    threadId: string;
+    beforeIndex?: number | null;
+    limit?: number | null;
+  } =
+    typeof input === "string"
+      ? { threadId: input }
+      : {
+          threadId: input.threadId,
+          beforeIndex: input.beforeIndex,
+          limit: input.limit,
+        };
+  const limit =
+    typeof raw.limit === "number" && Number.isFinite(raw.limit)
+      ? Math.max(
+          1,
+          Math.min(MAX_THREAD_HISTORY_PAGE_SIZE, Math.floor(raw.limit)),
+        )
+      : DEFAULT_THREAD_HISTORY_PAGE_SIZE;
+  const beforeIndex =
+    typeof raw.beforeIndex === "number" &&
+    Number.isFinite(raw.beforeIndex) &&
+    raw.beforeIndex >= 0
+      ? Math.floor(raw.beforeIndex)
+      : undefined;
+  return {
+    threadId: raw.threadId,
+    beforeIndex,
+    limit,
+  };
+}
+
+function mapThreadTranscriptPageInfo(
+  payload: HistoryPayload,
+  limit: number,
+): ThreadTranscript["pageInfo"] {
+  const stats = payload.message_stats;
+  if (!stats) {
+    return null;
+  }
+  const totalMessages =
+    asFiniteNumber(stats.total_messages_in_thread) ??
+    asFiniteNumber(stats.total_messages_in_session) ??
+    0;
+  const returnedMessages = asFiniteNumber(stats.returned_messages) ?? 0;
+  const startIndex = asFiniteNumber(stats.returned_start_index) ?? 0;
+  const endIndex = asFiniteNumber(stats.returned_end_index) ?? startIndex;
+  const nextBeforeIndex = asFiniteNumber(stats.next_before_index);
+  return {
+    totalMessages,
+    returnedMessages,
+    startIndex,
+    endIndex,
+    hasMoreBefore: Boolean(stats.has_more_before),
+    nextBeforeIndex: nextBeforeIndex ?? null,
+    limit,
+  };
+}
+
 export async function fetchThreadHistory(
   settings: DesktopSettings,
-  threadId: string,
+  input: string | GetThreadHistoryInput,
 ): Promise<ThreadTranscript> {
+  const { threadId, beforeIndex, limit } = normalizeThreadHistoryInput(input);
   const query = new URLSearchParams({
     thread_id: threadId,
-    limit: "200",
+    limit: String(limit),
     include_tool_messages: "true",
   });
+  if (beforeIndex !== undefined) {
+    query.set("before_index", String(beforeIndex));
+  }
   const [payload, detail] = await Promise.all([
     requestJson<HistoryPayload>(
       settings,
@@ -2516,13 +2598,15 @@ export async function fetchThreadHistory(
         signal: AbortSignal.timeout(8000),
       },
     ),
-    requestJson<ThreadMetadataPayload>(
-      settings,
-      `/api/threads/${encodeURIComponent(threadId)}`,
-      {
-        signal: AbortSignal.timeout(8000),
-      },
-    ).catch(() => null),
+    beforeIndex === undefined
+      ? requestJson<ThreadMetadataPayload>(
+          settings,
+          `/api/threads/${encodeURIComponent(threadId)}`,
+          {
+            signal: AbortSignal.timeout(8000),
+          },
+        ).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   const messages =
@@ -2547,6 +2631,7 @@ export async function fetchThreadHistory(
     messages,
     pendingInputs,
     threadInfo: mapThreadRuntimeInfo(threadInfoPayload),
+    pageInfo: mapThreadTranscriptPageInfo(payload, limit),
     team: mapThreadTeamBlock(payload.team),
   };
 }

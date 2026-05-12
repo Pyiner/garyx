@@ -1099,12 +1099,29 @@ export interface ThreadTranscript {
   messages: TranscriptMessage[];
   pendingInputs: PendingThreadInput[];
   threadInfo?: ThreadRuntimeInfo | null;
+  pageInfo?: ThreadTranscriptPageInfo | null;
   /**
    * Team block when this thread is bound to an AgentTeam. `null` when the
    * thread isn't a team thread. The gateway's `/api/threads/history`
    * endpoint emits this as a sibling of `thread`/`messages`.
    */
   team?: ThreadTeamBlock | null;
+}
+
+export interface ThreadTranscriptPageInfo {
+  totalMessages: number;
+  returnedMessages: number;
+  startIndex: number;
+  endIndex: number;
+  hasMoreBefore: boolean;
+  nextBeforeIndex?: number | null;
+  limit: number;
+}
+
+export interface GetThreadHistoryInput {
+  threadId: string;
+  beforeIndex?: number | null;
+  limit?: number | null;
 }
 
 export interface PendingThreadInput {
@@ -1589,7 +1606,9 @@ export interface GaryxDesktopApi {
   }>;
   renameThread: (input: RenameThreadInput) => Promise<DesktopState>;
   deleteThread: (input: DeleteThreadInput) => Promise<DesktopState>;
-  getThreadHistory: (threadId: string) => Promise<ThreadTranscript>;
+  getThreadHistory: (
+    input: string | GetThreadHistoryInput,
+  ) => Promise<ThreadTranscript>;
   getThreadLogs: (threadId: string, cursor?: number) => Promise<ThreadLogChunk>;
   openChatStream: (input: SendMessageInput) => Promise<OpenChatStreamResult>;
   sendStreamingInput: (

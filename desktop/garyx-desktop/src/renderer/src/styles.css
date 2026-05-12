@@ -3923,6 +3923,27 @@ code {
   background: var(--color-token-bg-primary);
 }
 
+.message-history-page-loader {
+  display: flex;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 0 2px;
+}
+
+.message-history-page-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid
+    color-mix(in srgb, var(--color-token-text-secondary) 22%, transparent);
+  border-top-color: color-mix(
+    in srgb,
+    var(--color-token-text-secondary) 68%,
+    transparent
+  );
+  border-radius: 999px;
+  animation: message-history-page-spin 0.8s linear infinite;
+}
+
 .bots-page {
   display: grid;
   gap: 16px;
@@ -14116,6 +14137,12 @@ button.codex-list-row {
   40% {
     opacity: 1;
     transform: translateY(-1px);
+  }
+}
+
+@keyframes message-history-page-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

@@ -231,6 +231,7 @@ type ThreadPageProps = {
   draggedQueueIntentId: string | null;
   expandedClientLogEntries: Record<string, boolean>;
   historyLoading: boolean;
+  historyLoadingEarlier: boolean;
   inspectorOpen: boolean;
   isActiveSendingThread: boolean;
   canSteerQueuedPrompt: boolean;
@@ -337,6 +338,7 @@ export function ThreadPage({
   draggedQueueIntentId,
   expandedClientLogEntries,
   historyLoading,
+  historyLoadingEarlier,
   ignoreComposerSubmitUntilRef,
   inspectorOpen,
   isActiveSendingThread,
@@ -483,6 +485,15 @@ export function ThreadPage({
     >
       <div className="thread-main" ref={threadMainRef}>
         <div className="messages" onScroll={onMessagesScroll} ref={messagesRef}>
+          {historyLoadingEarlier ? (
+            <div
+              aria-label={t("Loading earlier messages")}
+              className="message-history-page-loader"
+            >
+              <span aria-hidden="true" className="message-history-page-spinner" />
+            </div>
+          ) : null}
+
           {!activeMessages.length &&
           !historyLoading &&
           !showAutomationRunInitialPlaceholder ? (

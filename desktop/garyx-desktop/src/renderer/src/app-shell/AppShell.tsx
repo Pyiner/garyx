@@ -208,8 +208,16 @@ import {
 
 const NEW_THREAD_DRAFT_THREAD_ID = "__garyx_new_thread_draft__";
 const MESSAGES_BOTTOM_THRESHOLD_PX = 48;
+const MESSAGES_TOP_PAGINATION_THRESHOLD_PX = 96;
+const THREAD_HISTORY_PAGE_SIZE = 40;
 const HIDDEN_TOOL_USE_STATUS_TEXT = "Garyx is thinking through the next step…";
 const HIDDEN_TOOL_RESULT_STATUS_TEXT = "Garyx finished a reasoning step…";
+
+type ThreadHistoryPaginationState = {
+  hasMoreBefore: boolean;
+  nextBeforeIndex: number | null;
+  loadingBefore: boolean;
+};
 
 const GatewaySettingsPanel = lazy(() =>
   import("../GatewaySettingsPanel").then((module) => ({
@@ -368,6 +376,19 @@ function messageTailSignature(messages: UiTranscriptMessage[]): string {
     lastMessage.pending ? "1" : "0",
     lastMessage.localState || "",
   ].join(":");
+}
+
+function transcriptEntryHistoryIndex(
+  message: Pick<UiTranscriptMessage, "id" | "localState">,
+): number | null {
+  if (message.localState !== "remote_final") {
+    return null;
+  }
+  const suffix = message.id.split(":").pop();
+  if (!suffix || !/^\d+$/.test(suffix)) {
+    return null;
+  }
+  return Number(suffix);
 }
 
 function transcriptHasAutomationResponse(
@@ -1539,6 +1560,9 @@ export function AppShell() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPaginationByThread, setHistoryPaginationByThread] = useState<
+    Record<string, ThreadHistoryPaginationState>
+  >({});
   const [savingTitle, setSavingTitle] = useState(false);
   const [editingThreadTitle, setEditingThreadTitle] = useState(false);
   const [deletingThreadId, setDeletingThreadId] = useState<string | null>(null);
@@ -1637,6 +1661,9 @@ export function AppShell() {
   const threadLogsActiveTabRef = useRef<ThreadLogTab>("client");
   const clientLogSequenceRef = useRef(1);
   const messagesByThreadRef = useRef<MessageMap>({});
+  const historyPaginationByThreadRef = useRef<
+    Record<string, ThreadHistoryPaginationState>
+  >({});
   const messageStateRef = useRef(initialMessageMachineState);
   const liveStreamStateRef = useRef<Record<string, LiveStreamState>>({});
   const pendingRemoteInputsRef = useRef<PendingThreadInputMap>({});
@@ -1672,6 +1699,11 @@ export function AppShell() {
     startWidth: number;
   } | null>(null);
   const pendingThreadBottomSnapRef = useRef<string | null>(null);
+  const pendingMessagesPrependAnchorRef = useRef<{
+    threadId: string;
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
   const forceMessagesBottomSnapRef = useRef(false);
   const shouldStickMessagesToBottomRef = useRef(true);
   const messagesStickScrollFrameRef = useRef<number | null>(null);
@@ -2366,6 +2398,9 @@ export function AppShell() {
       ),
     [rawActiveMessages],
   );
+  const activeHistoryPagination = activeThreadMessageKey
+    ? historyPaginationByThread[activeThreadMessageKey] || null
+    : null;
   const activeThreadInfo = selectedThreadId
     ? threadInfoByThread[selectedThreadId] || null
     : null;
@@ -3828,6 +3863,24 @@ export function AppShell() {
     const currentThreadId = activeThreadMessageKey;
     const currentCount = activeMessages.length;
     const currentTailSignature = messageTailSignature(activeMessages);
+    const prependAnchor = pendingMessagesPrependAnchorRef.current;
+    if (prependAnchor) {
+      if (prependAnchor.threadId === currentThreadId) {
+        const node = messagesRef.current;
+        if (node) {
+          node.scrollTop =
+            node.scrollHeight -
+            prependAnchor.scrollHeight +
+            prependAnchor.scrollTop;
+          shouldStickMessagesToBottomRef.current = false;
+        }
+      }
+      pendingMessagesPrependAnchorRef.current = null;
+      lastRenderedMessageThreadRef.current = currentThreadId;
+      lastRenderedMessageCountRef.current = currentCount;
+      lastRenderedMessageTailSignatureRef.current = currentTailSignature;
+      return;
+    }
     const previousThreadId = lastRenderedMessageThreadRef.current;
     const previousTailSignature = lastRenderedMessageTailSignatureRef.current;
     const threadChanged = currentThreadId !== previousThreadId;
@@ -5332,7 +5385,10 @@ export function AppShell() {
   function mergeRemoteTranscriptWithLocal(
     transcript: TranscriptMessage[],
     existing: UiTranscriptMessage[],
-    options?: { activeRunSnapshot?: boolean },
+    options?: {
+      activeRunSnapshot?: boolean;
+      preserveRemoteBeforeIndex?: number | null;
+    },
   ): UiTranscriptMessage[] {
     if (transcript.length === 0) {
       return existing.length > 0 ? existing : [];
@@ -5345,8 +5401,21 @@ export function AppShell() {
         ignoreTimestampForStableMessages: options?.activeRunSnapshot,
       },
     );
+    const materializedRemoteIds = new Set(
+      materializedRemote.map((entry) => entry.id),
+    );
+    const preservedRemoteBeforeEntries: UiTranscriptMessage[] = [];
     const preservedLocalEntries = existing.filter((entry, index, entries) => {
       if (entry.localState === "remote_final") {
+        const historyIndex = transcriptEntryHistoryIndex(entry);
+        if (
+          typeof options?.preserveRemoteBeforeIndex === "number" &&
+          historyIndex !== null &&
+          historyIndex < options.preserveRemoteBeforeIndex &&
+          !materializedRemoteIds.has(entry.id)
+        ) {
+          preservedRemoteBeforeEntries.push(entry);
+        }
         return false;
       }
       if (
@@ -5388,13 +5457,66 @@ export function AppShell() {
       return false;
     });
 
-    return [...materializedRemote, ...preservedLocalEntries];
+    return [
+      ...preservedRemoteBeforeEntries,
+      ...materializedRemote,
+      ...preservedLocalEntries,
+    ];
+  }
+
+  function updateThreadHistoryPagination(
+    threadId: string,
+    updater: (
+      current: ThreadHistoryPaginationState | null,
+    ) => ThreadHistoryPaginationState | null,
+  ) {
+    const previous = historyPaginationByThreadRef.current[threadId] || null;
+    const nextValue = updater(previous);
+    const next = { ...historyPaginationByThreadRef.current };
+    if (nextValue) {
+      next[threadId] = nextValue;
+    } else {
+      delete next[threadId];
+    }
+    historyPaginationByThreadRef.current = next;
+    setHistoryPaginationByThread(next);
+  }
+
+  function paginationStateFromTranscript(
+    transcript: ThreadTranscript,
+    loadingBefore = false,
+  ): ThreadHistoryPaginationState {
+    return {
+      hasMoreBefore: Boolean(transcript.pageInfo?.hasMoreBefore),
+      nextBeforeIndex:
+        typeof transcript.pageInfo?.nextBeforeIndex === "number"
+          ? transcript.pageInfo.nextBeforeIndex
+          : null,
+      loadingBefore,
+    };
   }
 
   function applyRemoteTranscript(
     threadId: string,
     transcript: ThreadTranscript,
   ) {
+    updateThreadHistoryPagination(threadId, (current) => {
+      const incoming = paginationStateFromTranscript(transcript);
+      if (!current) {
+        return incoming;
+      }
+      if (!current.hasMoreBefore) {
+        return { ...current, loadingBefore: false };
+      }
+      if (
+        current.nextBeforeIndex !== null &&
+        incoming.nextBeforeIndex !== null &&
+        current.nextBeforeIndex <= incoming.nextBeforeIndex
+      ) {
+        return { ...current, loadingBefore: false };
+      }
+      return incoming;
+    });
     setThreadInfoByThread((current) => ({
       ...current,
       [threadId]: transcript.threadInfo ?? null,
@@ -5416,6 +5538,7 @@ export function AppShell() {
           existing,
           {
             activeRunSnapshot: Boolean(transcript.threadInfo?.activeRun),
+            preserveRemoteBeforeIndex: transcript.pageInfo?.startIndex ?? null,
           },
         );
         if (
@@ -5467,6 +5590,86 @@ export function AppShell() {
       });
     }
     markIntentsFromHistory(threadId, transcript.messages);
+  }
+
+  function applyOlderRemoteTranscriptPage(
+    threadId: string,
+    transcript: ThreadTranscript,
+  ) {
+    updateThreadHistoryPagination(threadId, () =>
+      paginationStateFromTranscript(transcript),
+    );
+    if (transcript.messages.length === 0) {
+      return;
+    }
+
+    updateMessagesByThread((current) => {
+      const existing = current[threadId] || [];
+      const existingIds = new Set(existing.map((entry) => entry.id));
+      const olderEntries = materializeRemoteTranscript(
+        transcript.messages,
+        [],
+      ).filter((entry) => !existingIds.has(entry.id));
+      if (olderEntries.length === 0) {
+        return current;
+      }
+      return {
+        ...current,
+        [threadId]: [...olderEntries, ...existing],
+      };
+    });
+  }
+
+  async function loadOlderThreadHistoryPage(threadId: string) {
+    const pagination = historyPaginationByThreadRef.current[threadId] || null;
+    if (
+      !pagination?.hasMoreBefore ||
+      pagination.loadingBefore ||
+      pagination.nextBeforeIndex === null
+    ) {
+      return;
+    }
+
+    updateThreadHistoryPagination(threadId, (current) => ({
+      hasMoreBefore: Boolean(current?.hasMoreBefore),
+      nextBeforeIndex: current?.nextBeforeIndex ?? null,
+      loadingBefore: true,
+    }));
+
+    try {
+      const transcript = await window.garyxDesktop.getThreadHistory({
+        threadId,
+        beforeIndex: pagination.nextBeforeIndex,
+        limit: THREAD_HISTORY_PAGE_SIZE,
+      });
+      const node = messagesRef.current;
+      if (
+        transcript.messages.length > 0 &&
+        node &&
+        selectedThreadIdRef.current === threadId
+      ) {
+        pendingMessagesPrependAnchorRef.current = {
+          threadId,
+          scrollHeight: node.scrollHeight,
+          scrollTop: node.scrollTop,
+        };
+      }
+      applyOlderRemoteTranscriptPage(threadId, transcript);
+    } catch (historyError) {
+      pendingMessagesPrependAnchorRef.current = null;
+      setError(
+        historyError instanceof Error
+          ? historyError.message
+          : "Failed to load earlier thread history",
+      );
+    } finally {
+      if (selectedThreadIdRef.current !== threadId) {
+        pendingMessagesPrependAnchorRef.current = null;
+      }
+      updateThreadHistoryPagination(threadId, (current) =>
+        current ? { ...current, loadingBefore: false } : current,
+      );
+    }
   }
 
   async function handleSelectWorkspace(
@@ -7623,6 +7826,9 @@ export function AppShell() {
                 draggedQueueIntentId={draggedQueueIntentId}
                 expandedClientLogEntries={expandedClientLogEntries}
                 historyLoading={historyLoading}
+                historyLoadingEarlier={Boolean(
+                  activeHistoryPagination?.loadingBefore,
+                )}
                 ignoreComposerSubmitUntilRef={ignoreComposerSubmitUntilRef}
                 inspectorOpen={inspectorOpen}
                 isActiveSendingThread={isActiveSendingThread}
@@ -7686,9 +7892,16 @@ export function AppShell() {
                   markIgnoreComposerSubmitWindow
                 }
                 onMessagesScroll={() => {
-                  shouldStickMessagesToBottomRef.current = messagesNearBottom(
-                    messagesRef.current,
-                  );
+                  const node = messagesRef.current;
+                  shouldStickMessagesToBottomRef.current =
+                    messagesNearBottom(node);
+                  if (
+                    selectedThreadId &&
+                    node &&
+                    node.scrollTop < MESSAGES_TOP_PAGINATION_THRESHOLD_PX
+                  ) {
+                    void loadOlderThreadHistoryPage(selectedThreadId);
+                  }
                 }}
                 onQueueDropTargetChange={setQueueDropTarget}
                 onRemoveComposerFile={removeComposerFile}

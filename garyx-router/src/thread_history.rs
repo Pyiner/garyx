@@ -50,6 +50,9 @@ pub struct ThreadHistorySnapshot {
     pub committed_messages: Vec<Value>,
     pub overlay_messages: Vec<Value>,
     pub total_committed_messages: usize,
+    pub total_overlay_messages: usize,
+    pub committed_start_index: usize,
+    pub overlay_start_index: usize,
 }
 
 impl ThreadHistorySnapshot {
@@ -62,7 +65,25 @@ impl ThreadHistorySnapshot {
     }
 
     pub fn total_messages(&self) -> usize {
-        self.total_committed_messages + self.overlay_messages.len()
+        self.total_committed_messages + self.total_overlay_messages
+    }
+
+    pub fn message_index_at(&self, offset: usize) -> usize {
+        if offset < self.committed_messages.len() {
+            self.committed_start_index + offset
+        } else {
+            self.overlay_start_index + offset.saturating_sub(self.committed_messages.len())
+        }
+    }
+
+    pub fn first_message_index(&self) -> Option<usize> {
+        if !self.committed_messages.is_empty() {
+            Some(self.committed_start_index)
+        } else if !self.overlay_messages.is_empty() {
+            Some(self.overlay_start_index)
+        } else {
+            None
+        }
     }
 }
 
@@ -378,6 +399,23 @@ impl ThreadTranscriptStore {
             .collect())
     }
 
+    pub async fn page_before_index(
+        &self,
+        thread_id: &str,
+        before_index: Option<usize>,
+        limit: usize,
+    ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
+        let records = self.read_records(thread_id).await?;
+        let total = records.len();
+        let end = before_index.unwrap_or(total).min(total);
+        let start = end.saturating_sub(limit);
+        let messages = records[start..end]
+            .iter()
+            .map(|record| record.message.clone())
+            .collect();
+        Ok((messages, total, start))
+    }
+
     pub async fn message_count(&self, thread_id: &str) -> Result<usize, ThreadHistoryError> {
         Ok(self.read_records(thread_id).await?.len())
     }
@@ -604,6 +642,15 @@ impl ThreadHistoryRepository {
         thread_id: &str,
         limit: usize,
     ) -> Result<ThreadHistorySnapshot, ThreadHistoryError> {
+        self.thread_snapshot_page(thread_id, limit, None).await
+    }
+
+    pub async fn thread_snapshot_page(
+        &self,
+        thread_id: &str,
+        limit: usize,
+        before_index: Option<usize>,
+    ) -> Result<ThreadHistorySnapshot, ThreadHistoryError> {
         let thread_data = self
             .thread_store
             .get(thread_id)
@@ -612,16 +659,42 @@ impl ThreadHistoryRepository {
         let overlay_messages = active_run_snapshot_messages(&thread_data);
         let bounded_limit = limit.max(1);
 
+        if let Some(before_index) = before_index {
+            let (committed_messages, total_committed_messages, committed_start_index) = self
+                .load_committed_messages_before_index(
+                    thread_id,
+                    &thread_data,
+                    before_index,
+                    bounded_limit,
+                )
+                .await?;
+            let total_overlay_messages = overlay_messages.len();
+            return Ok(ThreadHistorySnapshot {
+                thread_id: thread_id.to_owned(),
+                thread_data,
+                committed_messages,
+                overlay_messages: Vec::new(),
+                total_committed_messages,
+                total_overlay_messages,
+                committed_start_index,
+                overlay_start_index: total_committed_messages,
+            });
+        }
+
+        let total_overlay_messages = overlay_messages.len();
         let overlay_tail = if overlay_messages.len() > bounded_limit {
             overlay_messages[overlay_messages.len() - bounded_limit..].to_vec()
         } else {
             overlay_messages
         };
-
         let committed_limit = bounded_limit.saturating_sub(overlay_tail.len());
         let (committed_messages, total_committed_messages) = self
             .load_committed_messages(thread_id, &thread_data, committed_limit)
             .await?;
+        let committed_start_index =
+            total_committed_messages.saturating_sub(committed_messages.len());
+        let overlay_start_index =
+            total_committed_messages + total_overlay_messages.saturating_sub(overlay_tail.len());
 
         Ok(ThreadHistorySnapshot {
             thread_id: thread_id.to_owned(),
@@ -629,6 +702,9 @@ impl ThreadHistoryRepository {
             committed_messages,
             overlay_messages: overlay_tail,
             total_committed_messages,
+            total_overlay_messages,
+            committed_start_index,
+            overlay_start_index,
         })
     }
 
@@ -732,6 +808,33 @@ impl ThreadHistoryRepository {
         }
 
         Ok((Vec::new(), 0))
+    }
+
+    async fn load_committed_messages_before_index(
+        &self,
+        thread_id: &str,
+        thread_data: &Value,
+        before_index: usize,
+        limit: usize,
+    ) -> Result<(Vec<Value>, usize, usize), ThreadHistoryError> {
+        let has_transcript = self.transcript_store.exists(thread_id).await;
+        let message_count = history_message_count(thread_data);
+        if !has_transcript && message_count > 0 {
+            return Err(ThreadHistoryError::MissingTranscript(thread_id.to_owned()));
+        }
+
+        if has_transcript {
+            if limit == 0 {
+                let total = self.transcript_store.message_count(thread_id).await?;
+                return Ok((Vec::new(), total, before_index.min(total)));
+            }
+            return self
+                .transcript_store
+                .page_before_index(thread_id, Some(before_index), limit)
+                .await;
+        }
+
+        Ok((Vec::new(), 0, 0))
     }
 }
 

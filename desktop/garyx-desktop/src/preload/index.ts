@@ -169,8 +169,8 @@ const api: GaryxDesktopApi = {
   createThread: (input) => ipcRenderer.invoke("garyx:create-thread", input),
   renameThread: (input) => ipcRenderer.invoke("garyx:rename-thread", input),
   deleteThread: (input) => ipcRenderer.invoke("garyx:delete-thread", input),
-  getThreadHistory: (threadId) =>
-    ipcRenderer.invoke("garyx:get-thread-history", threadId),
+  getThreadHistory: (input) =>
+    ipcRenderer.invoke("garyx:get-thread-history", input),
   getThreadLogs: (threadId, cursor) =>
     ipcRenderer.invoke("garyx:get-thread-logs", { threadId, cursor }),
   openChatStream: (input) => ipcRenderer.invoke("garyx:open-chat-stream", input),

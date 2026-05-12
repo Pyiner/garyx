@@ -338,6 +338,9 @@ pub struct ThreadHistoryParams {
     /// Optional single thread lookup for detailed history.
     #[serde(default)]
     pub thread_id: Option<String>,
+    /// Return messages before this zero-based global message index.
+    #[serde(default, alias = "before")]
+    pub before_index: Option<usize>,
     /// Whether detailed history should keep tool-related messages.
     #[serde(default = "default_include_tool_messages")]
     pub include_tool_messages: bool,
@@ -728,6 +731,7 @@ pub async fn thread_history(
             thread_id,
             params.limit,
             params.include_tool_messages,
+            params.before_index,
         )
         .await;
         return Json(payload);
@@ -843,7 +847,7 @@ pub async fn thread_diagnostics(
         "thread": thread_value,
         "thread_runtime": build_thread_runtime_summary(thread_value.as_ref()),
         "bindings": bindings,
-        "history": thread_history_for_key(&state, thread_id, limit, true).await,
+        "history": thread_history_for_key(&state, thread_id, limit, true, None).await,
         "message_ledger": ledger,
         "transcript_path": transcript_path,
     }))
@@ -1215,6 +1219,7 @@ pub(crate) async fn thread_history_for_key(
     thread_id: &str,
     limit: usize,
     include_tool_messages: bool,
+    before_index: Option<usize>,
 ) -> Value {
     let key = thread_id.trim();
     if key.is_empty() {
@@ -1240,7 +1245,7 @@ pub(crate) async fn thread_history_for_key(
     let snapshot = match state
         .threads
         .history
-        .thread_snapshot(key, bounded_limit)
+        .thread_snapshot_page(key, bounded_limit, before_index)
         .await
     {
         Ok(snapshot) => snapshot,
@@ -1292,7 +1297,6 @@ pub(crate) async fn thread_history_for_key(
     };
     let messages = snapshot.combined_messages();
     let total_messages = snapshot.total_messages();
-    let mut data_raw = snapshot.thread_data;
 
     let mut history_messages = Vec::new();
     let mut kind_counts = serde_json::Map::new();
@@ -1304,6 +1308,7 @@ pub(crate) async fn thread_history_for_key(
         let Some(obj) = message.as_object() else {
             continue;
         };
+        let global_index = snapshot.message_index_at(idx);
 
         let role = obj
             .get("role")
@@ -1350,7 +1355,7 @@ pub(crate) async fn thread_history_for_key(
             .and_then(|entry| entry.text.clone())
             .unwrap_or_else(|| stringify_message_content(&content));
         history_messages.push(json!({
-            "index": idx,
+            "index": global_index,
             "role": if role.is_empty() { "unknown" } else { role.as_str() },
             "kind": kind,
             "tool_related": tool_related,
@@ -1365,6 +1370,21 @@ pub(crate) async fn thread_history_for_key(
             "message": message_value,
         }));
     }
+
+    let returned_messages = history_messages.len();
+    let page_start_index = snapshot.first_message_index().unwrap_or(0);
+    let page_end_index = messages
+        .len()
+        .checked_sub(1)
+        .map(|offset| snapshot.message_index_at(offset) + 1)
+        .unwrap_or(page_start_index);
+    let has_more_before = page_start_index > 0;
+    let next_before_index = if has_more_before {
+        Value::Number(serde_json::Number::from(page_start_index as u64))
+    } else {
+        Value::Null
+    };
+    let mut data_raw = snapshot.thread_data;
 
     let outbound_raw = data_raw
         .get("outbound_message_ids")
@@ -1389,7 +1409,6 @@ pub(crate) async fn thread_history_for_key(
         let drop_count = outbound_deliveries.len() - 100;
         outbound_deliveries.drain(0..drop_count);
     }
-    let returned_messages = history_messages.len();
     let outbound_total = outbound_deliveries.len();
     let pending_raw = data_raw
         .get("pending_user_inputs")
@@ -1478,6 +1497,10 @@ pub(crate) async fn thread_history_for_key(
             "total_messages_in_thread": total_messages,
             "total_messages_in_session": total_messages,
             "returned_messages": returned_messages,
+            "returned_start_index": page_start_index,
+            "returned_end_index": page_end_index,
+            "has_more_before": has_more_before,
+            "next_before_index": next_before_index,
             "tool_related_count": tool_related_count,
             "likely_user_visible_count": likely_user_visible_count,
             "pending_user_input_count": pending_user_inputs.len(),
