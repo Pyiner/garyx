@@ -252,6 +252,97 @@ The same reauthorization convention works for plugins with auth flows:
 garyx channels login acmechat --reauthorize main
 ```
 
+### Updating plugins
+
+`garyx plugins update [<name>]` refreshes a subprocess channel
+plugin in place. With no `<name>` it iterates every installed
+subprocess plugin (continue-on-error).
+
+```bash
+# Update a single plugin to the latest version its manifest_url advertises.
+garyx plugins update example-plugin
+
+# Pin to an explicit version.
+garyx plugins update example-plugin --version 0.1.16
+
+# Reinstall the current version (handy after a packaging fix).
+garyx plugins update example-plugin --force
+
+# Dry-run: print "current vs latest" without downloading.
+garyx plugins update example-plugin --check
+
+# Update from a specific bundle on disk (local build) or URL.
+garyx plugins update example-plugin --from ./target/release/garyx-plugin-example-plugin
+garyx plugins update example-plugin --from https://example.test/foo-bundle.tar.gz
+
+# Update every installed plugin.
+garyx plugins update
+```
+
+Built-in channels (`telegram`, `feishu`, `weixin`) are compiled into
+the garyx binary; `garyx plugins update <builtin>` errors with a
+redirect to `garyx update`.
+
+Restart the gateway after each update so the new binary is picked up:
+
+```bash
+garyx gateway restart
+```
+
+### Declaring an update source in `plugin.toml`
+
+Plugin authors who want their bundle to be updatable via `garyx
+plugins update` add an `[update]` section. The host carries the
+section verbatim into `~/.garyx/plugins/<id>/plugin.toml` during
+install, so a single declaration is enough.
+
+```toml
+[update]
+# Required when --version is omitted. See "manifest_url JSON schema"
+# below for the response shape.
+manifest_url = "https://example.com/garyx/plugins/{id}/latest.json"
+
+# Required. Templated archive URL.
+url_template = "https://example.com/garyx/plugins/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz"
+
+# Optional. Defaults to "{url}.sha256". Empty string disables.
+checksum_url_template = "{url}.sha256"
+
+# Optional. Defaults to "{id}/garyx-plugin-{id}".
+binary_in_archive = "{id}/garyx-plugin-{id}"
+```
+
+Placeholders: `{id}`, `{version}`, `{target}` (one of
+`linux-x86_64`, `linux-aarch64`, `mac-x86_64`, `mac-aarch64`), and
+`{url}` (only valid in `checksum_url_template`, expands to the
+rendered `url_template`). Unknown placeholders fail at manifest
+load time, not at HTTP-404 time.
+
+### `manifest_url` JSON schema
+
+The host fetches `manifest_url` (HTTP GET, 30s timeout) and parses
+the response as JSON. The minimum contract:
+
+```json
+{
+  "version": "0.1.16"
+}
+```
+
+- `version` (required, string) — the latest published version. Used
+  to resolve `--version` defaults and `--check` comparisons.
+- Any other top-level field is currently ignored.
+
+Compatibility promise from the host:
+
+1. Future fields are **additive only** — existing fields keep their
+   semantics and types.
+2. Older hosts silently ignore newer fields, so plugin authors can
+   start emitting additional metadata whenever they want without
+   waiting for a coordinated rollout.
+
+A `{"version": "..."}` document will keep working indefinitely.
+
 ## Commands
 
 Garyx exposes one command list with two command kinds:
