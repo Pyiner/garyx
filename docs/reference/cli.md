@@ -68,6 +68,7 @@ Common flags on `channels add`:
 | `garyx plugins install <path>` | Install a subprocess channel plugin from a binary. |
 | `garyx plugins list` | List installed plugins. |
 | `garyx plugins uninstall <id>` | Remove a plugin. |
+| `garyx plugins update [<name>]` | Update one installed subprocess plugin (or all when `<name>` is omitted). Supports `--version`, `--from`, `--target`, `--check`, `--force`, `--json`. Built-in channels (`telegram`, `feishu`, `weixin`) are rejected with a redirect to `garyx update`. |
 
 ## Threads
 
