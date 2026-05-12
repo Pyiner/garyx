@@ -474,35 +474,17 @@ impl ClaudeSDKClient {
 
                         // Route incoming control requests from CLI
                         if msg_type == Some("control_request") {
-                            if let Ok(req) =
-                                serde_json::from_value::<IncomingControlRequest>(value.clone())
-                            {
-                                let resp = match req.request {
-                                    IncomingRequestPayload::CanUseTool(_request) => {
-                                        ControlResponseMessage::error(
-                                            &req.request_id,
-                                            "Unsupported control request: can_use_tool",
-                                        )
-                                    }
-                                    IncomingRequestPayload::HookCallback(_request) => {
-                                        ControlResponseMessage::error(
-                                            &req.request_id,
-                                            "Unsupported control request: hook_callback",
-                                        )
-                                    }
-                                    IncomingRequestPayload::McpMessage(_request) => {
-                                        ControlResponseMessage::error(
-                                            &req.request_id,
-                                            "Unsupported control request: mcp_message",
-                                        )
-                                    }
-                                    IncomingRequestPayload::Elicitation(_request) => {
-                                        ControlResponseMessage::error(
-                                            &req.request_id,
-                                            "Unsupported control request: elicitation",
-                                        )
-                                    }
-                                };
+                            let resp = match serde_json::from_value::<IncomingControlRequest>(
+                                value.clone(),
+                            ) {
+                                Ok(req) => Some(incoming_control_response(req)),
+                                Err(err) => {
+                                    error!("Incoming control request parse error: {err}");
+                                    unsupported_incoming_control_request_response(&value, &err)
+                                }
+                            };
+
+                            if let Some(resp) = resp {
                                 if let Ok(line) = serde_json::to_string(&resp) {
                                     let _ = transport.write(&(line + "\n")).await;
                                 }
@@ -655,6 +637,44 @@ fn build_user_message_payload(
     }
 
     Value::Object(root)
+}
+
+fn incoming_control_response(req: IncomingControlRequest) -> ControlResponseMessage {
+    match req.request {
+        IncomingRequestPayload::CanUseTool(_request) => ControlResponseMessage::error(
+            &req.request_id,
+            "Unsupported control request: can_use_tool",
+        ),
+        IncomingRequestPayload::HookCallback(_request) => ControlResponseMessage::error(
+            &req.request_id,
+            "Unsupported control request: hook_callback",
+        ),
+        IncomingRequestPayload::McpMessage(_request) => ControlResponseMessage::error(
+            &req.request_id,
+            "Unsupported control request: mcp_message",
+        ),
+        IncomingRequestPayload::Elicitation(_request) => ControlResponseMessage::success(
+            &req.request_id,
+            serde_json::json!({ "action": "decline" }),
+        ),
+    }
+}
+
+fn unsupported_incoming_control_request_response(
+    value: &Value,
+    err: &serde_json::Error,
+) -> Option<ControlResponseMessage> {
+    let request_id = value.get("request_id").and_then(Value::as_str)?;
+    let subtype = value
+        .get("request")
+        .and_then(|request| request.get("subtype"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+
+    Some(ControlResponseMessage::error(
+        request_id,
+        format!("Unsupported control request: {subtype} ({err})"),
+    ))
 }
 
 #[cfg(test)]

@@ -32,6 +32,15 @@ from a real chat captured during local debugging.
 - MCP schema and tool behavior: `garyx-gateway/src/mcp.rs`.
 - Provider session behavior: `garyx-bridge`.
 
+## Claude Code SDK Notes
+
+- In bidirectional Claude Code SDK sessions, every CLI `control_request` must
+  receive a `control_response`, even when the subtype is unsupported or newer
+  than this SDK. Dropping one can leave the CLI waiting forever.
+- Normal streaming completion should close stdin and wait for the Claude CLI
+  process to exit; force-closing the transport can race Claude's local
+  transcript flush and break later `--resume` behavior.
+
 ## Working Loop
 
 1. Read the local code around the change before editing.

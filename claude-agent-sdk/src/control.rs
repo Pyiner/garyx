@@ -197,10 +197,28 @@ pub struct ControlResponseMessage {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "subtype", rename_all = "snake_case")]
 pub enum ControlResponseBody {
-    Error { request_id: String, error: String },
+    Success {
+        request_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response: Option<Value>,
+    },
+    Error {
+        request_id: String,
+        error: String,
+    },
 }
 
 impl ControlResponseMessage {
+    pub fn success(request_id: impl Into<String>, response: impl Into<Value>) -> Self {
+        Self {
+            msg_type: "control_response".into(),
+            response: ControlResponseBody::Success {
+                request_id: request_id.into(),
+                response: Some(response.into()),
+            },
+        }
+    }
+
     pub fn error(request_id: impl Into<String>, error: impl Into<String>) -> Self {
         Self {
             msg_type: "control_response".into(),
