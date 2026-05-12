@@ -944,7 +944,7 @@ fn test_has_tool_result_blocks_true() {
         content: Some(Value::String("ok".to_string())),
         is_error: None,
     })];
-    assert!(has_tool_result_blocks(&blocks));
+    assert_eq!(count_tool_result_blocks(&blocks), 1);
 }
 
 #[test]
@@ -952,7 +952,30 @@ fn test_has_tool_result_blocks_false() {
     let blocks = vec![ContentBlock::Text(TextBlock {
         text: "hello".to_string(),
     })];
-    assert!(!has_tool_result_blocks(&blocks));
+    assert_eq!(count_tool_result_blocks(&blocks), 0);
+}
+
+#[test]
+fn test_count_user_tool_result_messages_does_not_double_count_top_level_alias() {
+    let user_msg = UserMessage {
+        content: UserContent::Blocks(vec![ContentBlock::ToolResult(ToolResultBlock {
+            tool_use_id: "tu-1".to_string(),
+            content: Some(Value::String("ok".to_string())),
+            is_error: None,
+        })]),
+        uuid: None,
+        parent_tool_use_id: Some("tu-1".to_string()),
+        tool_use_result: Some(Value::String("ok".to_string())),
+    };
+    assert_eq!(count_user_tool_result_messages(&user_msg), 1);
+
+    let user_msg = UserMessage {
+        content: UserContent::Text("ok".to_string()),
+        uuid: None,
+        parent_tool_use_id: Some("tu-1".to_string()),
+        tool_use_result: Some(Value::String("ok".to_string())),
+    };
+    assert_eq!(count_user_tool_result_messages(&user_msg), 1);
 }
 
 #[test]
@@ -2370,6 +2393,61 @@ async fn test_add_streaming_input_with_run_mapping_but_no_handle() {
             .get("run-1")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn test_streaming_input_defers_until_tool_result_boundary() {
+    let provider = make_provider();
+    provider.run_pending_inputs.lock().await.insert(
+        "run-1".to_owned(),
+        VecDeque::from([
+            PendingAckMarker::RootUserMessage,
+            PendingAckMarker::QueuedInput("queued-1".to_owned()),
+        ]),
+    );
+    provider.run_input_states.lock().await.insert(
+        "run-1".to_owned(),
+        RunInputState {
+            outstanding_tool_uses: 1,
+            queued_inputs: VecDeque::new(),
+        },
+    );
+
+    let outbound = OutboundUserMessage::text("follow-up during tool", "");
+    assert!(
+        provider
+            .send_or_queue_streaming_input("run-1", "queued-1".to_owned(), outbound.clone())
+            .await
+    );
+    assert!(
+        provider.test_sent_streaming_inputs.lock().await.is_empty(),
+        "input must not be written while a tool_result is outstanding"
+    );
+    assert_eq!(
+        provider
+            .run_input_states
+            .lock()
+            .await
+            .get("run-1")
+            .expect("state should exist")
+            .queued_inputs
+            .len(),
+        1
+    );
+
+    provider.note_tool_results_finished("run-1", 1).await;
+    provider
+        .flush_queued_streaming_inputs_if_safe("run-1")
+        .await;
+
+    assert_eq!(
+        provider.test_sent_streaming_inputs.lock().await.as_slice(),
+        &[("run-1".to_owned(), outbound)]
+    );
+    let states = provider.run_input_states.lock().await;
+    let state = states.get("run-1").expect("state should remain");
+    assert_eq!(state.outstanding_tool_uses, 0);
+    assert!(state.queued_inputs.is_empty());
 }
 
 #[tokio::test]
