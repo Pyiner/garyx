@@ -23,6 +23,8 @@ const MAX_TEXT_PREVIEW_BYTES: usize = 512 * 1024;
 const MAX_BINARY_PREVIEW_BYTES: usize = 12 * 1024 * 1024;
 const MAX_UPLOAD_FILE_BYTES: usize = 25 * 1024 * 1024;
 const MAX_UPLOAD_FILES: usize = 24;
+const MACOS_PROTECTED_WORKSPACE_MESSAGE: &str =
+    "macOS protected app-data folders are not shown in the workspace file browser";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -180,6 +182,7 @@ async fn build_listing(
 ) -> Result<WorkspaceFileListing, WorkspaceFileError> {
     let workspace_root = resolve_workspace_root(&workspace_dir).await?;
     let relative = normalize_relative_path(directory_path.as_deref())?;
+    reject_macos_protected_app_data_path(&workspace_root, &relative)?;
     let directory = resolve_existing_path(&workspace_root, &relative, true).await?;
     let canonical_directory = fs::canonicalize(&directory)
         .await
@@ -233,6 +236,7 @@ async fn build_preview(
     if relative.as_os_str().is_empty() {
         return Err(WorkspaceFileError::bad_request("file path is required"));
     }
+    reject_macos_protected_app_data_path(&workspace_root, &relative)?;
 
     let file_path = resolve_existing_path(&workspace_root, &relative, false).await?;
     let canonical_file = fs::canonicalize(&file_path)
@@ -324,6 +328,7 @@ async fn write_uploaded_files(
 
     let workspace_root = resolve_workspace_root(&body.workspace_dir).await?;
     let relative = normalize_relative_path(body.path.as_deref())?;
+    reject_macos_protected_app_data_path(&workspace_root, &relative)?;
     let target_dir = resolve_existing_path(&workspace_root, &relative, true).await?;
     let canonical_target_dir = fs::canonicalize(&target_dir)
         .await
@@ -413,6 +418,10 @@ async fn describe_directory_entry(
     workspace_root: &Path,
     entry_path: &Path,
 ) -> Result<Option<WorkspaceFileEntry>, WorkspaceFileError> {
+    if is_macos_protected_app_data_path(entry_path) {
+        return Ok(None);
+    }
+
     let file_type = match fs::symlink_metadata(entry_path).await {
         Ok(metadata) => metadata.file_type(),
         Err(error) if is_permission_error(&error) => return Ok(None),
@@ -490,9 +499,21 @@ async fn resolve_workspace_root(workspace_dir: &str) -> Result<PathBuf, Workspac
         return Err(WorkspaceFileError::bad_request("workspace_dir is required"));
     }
 
+    let raw_path = PathBuf::from(trimmed);
+    if is_macos_protected_app_data_path(&raw_path) {
+        return Err(WorkspaceFileError::bad_request(
+            MACOS_PROTECTED_WORKSPACE_MESSAGE,
+        ));
+    }
+
     let canonical = fs::canonicalize(trimmed)
         .await
         .map_err(|error| WorkspaceFileError::io(StatusCode::BAD_REQUEST, error))?;
+    if is_macos_protected_app_data_path(&canonical) {
+        return Err(WorkspaceFileError::bad_request(
+            MACOS_PROTECTED_WORKSPACE_MESSAGE,
+        ));
+    }
     let metadata = fs::metadata(&canonical)
         .await
         .map_err(|error| WorkspaceFileError::io(StatusCode::BAD_REQUEST, error))?;
@@ -502,6 +523,71 @@ async fn resolve_workspace_root(workspace_dir: &str) -> Result<PathBuf, Workspac
         ));
     }
     Ok(canonical)
+}
+
+fn reject_macos_protected_app_data_path(
+    workspace_root: &Path,
+    relative: &Path,
+) -> Result<(), WorkspaceFileError> {
+    let candidate = if relative.as_os_str().is_empty() {
+        workspace_root.to_path_buf()
+    } else {
+        workspace_root.join(relative)
+    };
+    if is_macos_protected_app_data_path(&candidate) {
+        return Err(WorkspaceFileError::bad_request(
+            MACOS_PROTECTED_WORKSPACE_MESSAGE,
+        ));
+    }
+    Ok(())
+}
+
+fn is_macos_protected_app_data_path(path: &Path) -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
+    is_macos_protected_app_data_path_for_home(path, &home)
+}
+
+fn is_macos_protected_app_data_path_for_home(path: &Path, home: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(home) else {
+        return false;
+    };
+    let mut components = relative
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        });
+    let Some(first) = components.next() else {
+        return false;
+    };
+    if first != "Library" {
+        return false;
+    }
+    let Some(second) = components.next() else {
+        return true;
+    };
+    matches!(
+        second,
+        "Accounts"
+            | "Application Support"
+            | "Calendars"
+            | "Containers"
+            | "Cookies"
+            | "Group Containers"
+            | "HomeKit"
+            | "Mail"
+            | "Messages"
+            | "Metadata"
+            | "Mobile Documents"
+            | "Photos"
+            | "Reminders"
+            | "Safari"
+    )
 }
 
 fn normalize_relative_path(path: Option<&str>) -> Result<PathBuf, WorkspaceFileError> {

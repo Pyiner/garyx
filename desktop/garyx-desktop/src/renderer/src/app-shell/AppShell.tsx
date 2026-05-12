@@ -295,16 +295,19 @@ function messagesNearEarlierUserTurnBoundary(
   if (!node) {
     return false;
   }
+  const pixelPrefetchDistance = Math.max(
+    MESSAGES_TOP_PAGINATION_PREFETCH_MIN_PX,
+    node.clientHeight * MESSAGES_TOP_PAGINATION_PREFETCH_VIEWPORTS,
+  );
+  if (node.scrollTop <= pixelPrefetchDistance) {
+    return true;
+  }
   const viewportTop = node.getBoundingClientRect().top;
   const userTurnStarts = node.querySelectorAll<HTMLElement>(
     "[data-user-turn-start='true']",
   );
   if (userTurnStarts.length === 0) {
-    const pixelPrefetchDistance = Math.max(
-      MESSAGES_TOP_PAGINATION_PREFETCH_MIN_PX,
-      node.clientHeight * MESSAGES_TOP_PAGINATION_PREFETCH_VIEWPORTS,
-    );
-    return node.scrollTop <= pixelPrefetchDistance;
+    return false;
   }
   let userTurnsBeforeViewport = 0;
   for (const turnStart of userTurnStarts) {
@@ -3952,6 +3955,40 @@ export function AppShell() {
     lastRenderedMessageCountRef.current = currentCount;
     lastRenderedMessageTailSignatureRef.current = currentTailSignature;
   }, [activeThreadMessageKey, activeMessages, historyLoading]);
+
+  useEffect(() => {
+    if (
+      !activeThreadMessageKey ||
+      historyLoading ||
+      !activeHistoryPagination?.hasMoreBefore ||
+      activeHistoryPagination.loadingBefore
+    ) {
+      return;
+    }
+
+    const node = messagesRef.current;
+    if (!messagesNearEarlierUserTurnBoundary(node)) {
+      return;
+    }
+
+    const threadId = activeThreadMessageKey;
+    const timer = window.setTimeout(() => {
+      if (selectedThreadIdRef.current === threadId) {
+        void loadOlderThreadHistoryPage(threadId);
+      }
+    }, 0);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeThreadMessageKey,
+    activeMessages.length,
+    activeHistoryPagination?.hasMoreBefore,
+    activeHistoryPagination?.loadingBefore,
+    activeHistoryPagination?.nextBeforeIndex,
+    historyLoading,
+  ]);
 
   useEffect(() => {
     const node = messagesRef.current;

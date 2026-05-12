@@ -1,6 +1,7 @@
 use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -130,4 +131,30 @@ async fn listing_tolerates_unreadable_child_directories() {
         .expect("restricted directory should still be listed");
     assert_eq!(restricted_entry.entry_type, "directory");
     assert!(!restricted_entry.has_children);
+}
+
+#[test]
+fn macos_protected_app_data_detection_is_limited_to_home_library() {
+    let home = Path::new("/Users/test");
+
+    assert!(is_macos_protected_app_data_path_for_home(
+        Path::new("/Users/test/Library"),
+        home
+    ));
+    assert!(is_macos_protected_app_data_path_for_home(
+        Path::new("/Users/test/Library/Application Support/ExampleApp"),
+        home
+    ));
+    assert!(is_macos_protected_app_data_path_for_home(
+        Path::new("/Users/test/Library/Containers/com.example.App"),
+        home
+    ));
+    assert!(!is_macos_protected_app_data_path_for_home(
+        Path::new("/Users/test/repos/project/Library"),
+        home
+    ));
+    assert!(!is_macos_protected_app_data_path_for_home(
+        Path::new("/Users/test/.garyx"),
+        home
+    ));
 }

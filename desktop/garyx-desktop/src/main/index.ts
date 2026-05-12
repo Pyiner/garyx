@@ -1,5 +1,11 @@
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { appendFileSync, mkdirSync } from "node:fs";
+import {
+  appendFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+} from "node:fs";
 
 import {
   app,
@@ -222,10 +228,44 @@ const pendingDeepLinks: DesktopDeepLinkEvent[] = [];
 const recentDeepLinkTimestamps = new Map<string, number>();
 const startupDeepLinkUrls = extractProtocolUrls(process.argv);
 
+const DEFAULT_USER_DATA_DIR_NAME = "Garyx";
+const LEGACY_USER_DATA_DIR_NAME = "garyx-desktop";
 const userDataOverride = process.env.GARYX_DESKTOP_USER_DATA_PATH;
-if (userDataOverride) {
-  app.setPath("userData", userDataOverride);
+
+function migrateLegacyUserData(legacyPath: string, targetPath: string): void {
+  try {
+    if (existsSync(targetPath) || !existsSync(legacyPath)) {
+      return;
+    }
+    mkdirSync(app.getPath("appData"), { recursive: true });
+    try {
+      renameSync(legacyPath, targetPath);
+    } catch {
+      cpSync(legacyPath, targetPath, {
+        errorOnExist: false,
+        force: false,
+        recursive: true,
+      });
+    }
+  } catch {
+    // Best-effort migration; the app can recreate defaults in the new location.
+  }
 }
+
+function configureUserDataPath(): void {
+  if (userDataOverride) {
+    app.setPath("userData", userDataOverride);
+    return;
+  }
+
+  const appDataPath = app.getPath("appData");
+  const targetPath = join(appDataPath, DEFAULT_USER_DATA_DIR_NAME);
+  const legacyPath = join(appDataPath, LEGACY_USER_DATA_DIR_NAME);
+  app.setPath("userData", targetPath);
+  migrateLegacyUserData(legacyPath, targetPath);
+}
+
+configureUserDataPath();
 
 function pruneRecentDeepLinks(now: number): void {
   for (const [url, seenAt] of recentDeepLinkTimestamps.entries()) {
