@@ -1104,6 +1104,8 @@ code {
 }
 
 .bot-thread-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   font-size: var(--text-sm);
   line-height: 1.2;
@@ -1642,6 +1644,8 @@ code {
 }
 
 .thread-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   font-size: var(--text-sm);
   font-weight: var(--font-weight-normal);
