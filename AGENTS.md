@@ -108,7 +108,7 @@ needs installed-app validation.
 - On macOS, do not treat a matching hash as sufficient after copying a locally
   built `garyx` binary into a launchd-managed path such as
   `/opt/homebrew/bin/garyx`. Clear removable target-file xattrs, ad-hoc re-sign
-  the installed file with the stable identifier `com.garyx.cli` (or use
+  the installed file with the stable identifier `com.garyx.gateway` (or use
   `bash scripts/codesign-macos-cli.sh <path-to-garyx>`), and verify it executes
   before restarting, otherwise launchd/AMFI may kill it with
   `OS_REASON_CODESIGNING`. `com.apple.provenance` can be inherited or protected

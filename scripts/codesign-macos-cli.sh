@@ -14,7 +14,7 @@ if [[ $# -ne 1 ]]; then
 fi
 
 binary="$1"
-identifier="com.garyx.cli"
+identifier="com.garyx.gateway"
 
 if [[ ! -f "$binary" ]]; then
   echo "Error: binary does not exist: $binary" >&2

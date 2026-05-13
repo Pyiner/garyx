@@ -1167,7 +1167,7 @@ fn macos_cli_codesign_args_use_stable_identifier() {
             "--sign",
             "-",
             "--identifier",
-            "com.garyx.cli",
+            "com.garyx.gateway",
             "/tmp/garyx"
         ]
     );
