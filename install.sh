@@ -131,7 +131,7 @@ verify_checksum() {
 
 codesign_macos_cli() {
   local binary="$1"
-  local identifier="com.bytedance.garyx"
+  local identifier="com.garyx.cli"
 
   if [ "$(uname -s)" != "Darwin" ]; then
     return 0

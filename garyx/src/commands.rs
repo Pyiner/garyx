@@ -97,7 +97,7 @@ const CLAUDE_OAUTH_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 const CODEX_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const GITHUB_RELEASE_REPO: &str = "Pyiner/garyx";
 #[cfg(any(target_os = "macos", test))]
-const MACOS_CLI_CODESIGN_IDENTIFIER: &str = "com.bytedance.garyx";
+const MACOS_CLI_CODESIGN_IDENTIFIER: &str = "com.garyx.cli";
 const DEFAULT_CHANNEL_AGENT_ID: &str = "claude";
 
 #[derive(Debug, Deserialize)]
