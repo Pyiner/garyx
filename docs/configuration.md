@@ -590,7 +590,10 @@ garyx logs tail
 `garyx config validate` and `garyx doctor` both check channel account payloads
 beyond basic JSON parsing. They flag stale accounts with `config: null`, invalid
 built-in channel credentials, and missing required fields declared by installed
-channel plugin manifests.
+channel plugin manifests. The gateway settings API applies the structural part
+of this guard before persisting updates, so desktop or HTTP clients cannot
+overwrite an existing account with a missing, `null`, or schema-incomplete
+`config` payload.
 
 ## Testing a Source Checkout
 

@@ -4,7 +4,7 @@
 //! thread history, cron data, settings mutation, and restart
 //! controls.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path as FsPath;
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,6 +15,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::Utc;
+use garyx_channels::builtin_catalog::builtin_channel_descriptor;
 use garyx_models::ChannelOutboundContent;
 use garyx_models::config_loader::{
     ConfigLoadOptions, ConfigWriteOptions, load_config, write_config_value_atomic,
@@ -1996,6 +1997,114 @@ fn deep_merge_json(base: Value, overlay: Value) -> Value {
     }
 }
 
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn collect_channel_account_config_errors(
+    body: &Value,
+    channel_schemas: &HashMap<String, Value>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    let Some(channels) = body.get("channels").and_then(Value::as_object) else {
+        return errors;
+    };
+
+    for (channel_id, channel_value) in channels {
+        if channel_id == "api" {
+            continue;
+        }
+
+        let Some(accounts) = channel_value.get("accounts").and_then(Value::as_object) else {
+            continue;
+        };
+
+        for (account_id, account_value) in accounts {
+            let Some(account) = account_value.as_object() else {
+                continue;
+            };
+            let path = format!("$.channels.{channel_id}.accounts.{account_id}.config");
+            match account.get("config") {
+                None => errors.push(format!("{path} is required for channel accounts")),
+                Some(Value::Object(config)) => {
+                    if let Some(schema) = channel_schemas.get(channel_id) {
+                        collect_required_account_config_errors(
+                            channel_id,
+                            &path,
+                            config,
+                            schema,
+                            &mut errors,
+                        );
+                    }
+                }
+                Some(value) => errors.push(format!(
+                    "{path} must be a JSON object, got {}",
+                    json_type_name(value)
+                )),
+            }
+        }
+    }
+
+    errors
+}
+
+fn collect_required_account_config_errors(
+    channel_id: &str,
+    config_path: &str,
+    config: &serde_json::Map<String, Value>,
+    schema: &Value,
+    errors: &mut Vec<String>,
+) {
+    let Some(required) = schema.get("required").and_then(Value::as_array) else {
+        return;
+    };
+    let properties = schema.get("properties").and_then(Value::as_object);
+
+    for required_field in required.iter().filter_map(Value::as_str) {
+        let field_path = format!("{config_path}.{required_field}");
+        let field_schema = properties.and_then(|props| props.get(required_field));
+        match config.get(required_field) {
+            None => errors.push(format!("{field_path} is required by channel schema")),
+            Some(Value::Null) => errors.push(format!("{field_path} must not be null")),
+            Some(Value::String(value))
+                if required_string_field_rejects_blank(channel_id, field_schema)
+                    && value.trim().is_empty() =>
+            {
+                errors.push(format!("{field_path} must not be blank"));
+            }
+            Some(_) => {}
+        }
+    }
+}
+
+fn required_string_field_rejects_blank(channel_id: &str, field_schema: Option<&Value>) -> bool {
+    if matches!(channel_id, "telegram" | "feishu" | "weixin") {
+        return true;
+    }
+
+    matches!(
+        field_schema.and_then(|schema| schema.get("type")),
+        Some(Value::String(kind)) if kind == "string"
+    )
+}
+
+fn builtin_channel_account_schemas() -> HashMap<String, Value> {
+    ["telegram", "feishu", "weixin"]
+        .into_iter()
+        .filter_map(|plugin_id| {
+            builtin_channel_descriptor(plugin_id)
+                .map(|descriptor| (plugin_id.to_owned(), descriptor.schema()))
+        })
+        .collect()
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct SettingsUpdateQuery {
     /// When false, the incoming body fully replaces the stored config instead
@@ -2039,6 +2148,26 @@ pub async fn settings_update(
     }
 
     garyx_models::config_loader::strip_redundant_config_fields(&mut body);
+
+    let mut channel_schemas = builtin_channel_account_schemas();
+    {
+        let manager = state.channel_plugin_manager();
+        let guard = manager.lock().await;
+        for entry in guard.subprocess_plugin_catalog() {
+            channel_schemas.insert(entry.id, entry.schema);
+        }
+    }
+
+    let account_config_errors = collect_channel_account_config_errors(&body, &channel_schemas);
+    if !account_config_errors.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "ok": false,
+                "errors": account_config_errors,
+            })),
+        );
+    }
 
     // Attempt to deserialize as GaryxConfig for validation.
     let config = match serde_json::from_value::<garyx_models::config::GaryxConfig>(body.clone()) {

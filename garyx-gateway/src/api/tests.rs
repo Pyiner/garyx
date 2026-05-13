@@ -1831,6 +1831,138 @@ async fn test_settings_update_merge_false_deletes_channel_account() {
 }
 
 #[tokio::test]
+async fn test_settings_update_rejects_missing_or_null_channel_account_config() {
+    use garyx_models::config::{PluginAccountEntry, PluginChannelConfig};
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config_path = tmp.path().join("gary.json");
+
+    let mut initial = GaryxConfig::default();
+    let mut plugin_cfg = PluginChannelConfig::default();
+    plugin_cfg.accounts.insert(
+        "bot".to_owned(),
+        PluginAccountEntry {
+            enabled: true,
+            name: Some("Test Bot".to_owned()),
+            agent_id: Some("claude".to_owned()),
+            workspace_dir: None,
+            config: serde_json::json!({ "token": "test-token" }),
+        },
+    );
+    initial
+        .channels
+        .plugins
+        .insert("sample_plugin".to_owned(), plugin_cfg);
+    tokio::fs::write(&config_path, serde_json::to_vec_pretty(&initial).unwrap())
+        .await
+        .unwrap();
+
+    let state = test_state();
+    let mut state_with_path = (*state).clone_for_test();
+    state_with_path.ops.config_path = Some(config_path.clone());
+    state_with_path
+        .apply_runtime_config(initial.clone())
+        .await
+        .unwrap();
+    let state_with_path = Arc::new(state_with_path);
+    let router = api_router(state_with_path.clone());
+
+    let mut missing_config = serde_json::to_value(&initial).unwrap();
+    missing_config["channels"]["sample_plugin"]["accounts"]["bot"]
+        .as_object_mut()
+        .unwrap()
+        .remove("config");
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings?merge=false")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&missing_config).unwrap()))
+        .unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["errors"].as_array().unwrap().iter().any(|error| {
+        error
+            .as_str()
+            .unwrap_or_default()
+            .contains("$.channels.sample_plugin.accounts.bot.config is required")
+    }));
+
+    let mut null_config = serde_json::to_value(&initial).unwrap();
+    null_config["channels"]["sample_plugin"]["accounts"]["bot"]["config"] = Value::Null;
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings?merge=false")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&null_config).unwrap()))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+
+    let file_content = tokio::fs::read_to_string(&config_path).await.unwrap();
+    let persisted: Value = serde_json::from_str(&file_content).unwrap();
+    assert_eq!(
+        persisted["channels"]["sample_plugin"]["accounts"]["bot"]["config"]["token"], "test-token",
+        "rejected settings updates must not overwrite existing account credentials"
+    );
+}
+
+#[tokio::test]
+async fn test_settings_update_rejects_blank_builtin_account_required_config() {
+    let state = test_state();
+    let router = api_router(state);
+
+    let body_val = json!({
+        "channels": {
+            "feishu": {
+                "accounts": {
+                    "main": {
+                        "enabled": true,
+                        "config": {
+                            "app_id": "",
+                            "app_secret": "",
+                            "domain": "feishu"
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings?merge=false")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&body_val).unwrap()))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    let errors = json["errors"].as_array().unwrap();
+    assert!(errors.iter().any(|error| {
+        error
+            .as_str()
+            .unwrap_or_default()
+            .contains("$.channels.feishu.accounts.main.config.app_id must not be blank")
+    }));
+    assert!(errors.iter().any(|error| {
+        error
+            .as_str()
+            .unwrap_or_default()
+            .contains("$.channels.feishu.accounts.main.config.app_secret must not be blank")
+    }));
+}
+
+#[tokio::test]
 async fn test_settings_reload_applies_config_from_disk() {
     let tmp = tempfile::TempDir::new().unwrap();
     let config_path = tmp.path().join("gary.json");
