@@ -16,6 +16,7 @@ import type {
   MessageImageAttachment,
   DesktopThreadSummary,
   DesktopWorkspace,
+  DesktopWorkspaceMode,
   PendingThreadInput,
   SlashCommand,
   TranscriptMessage,
@@ -251,6 +252,7 @@ type ThreadPageProps = {
   mobileThreadLogLines: ThreadLogLine[];
   newThreadSelectedAgentId: string;
   newThreadWorkspaceEntry: DesktopWorkspace | null;
+  newThreadWorkspaceMode: DesktopWorkspaceMode;
   queueDropTarget: QueueDropTarget;
   selectableNewThreadWorkspaces: DesktopWorkspace[];
   selectedThreadId: string | null;
@@ -298,6 +300,7 @@ type ThreadPageProps = {
     position: "before" | "after",
   ) => void;
   onSelectNewThreadAgent: (agentId: string) => void;
+  onSelectNewThreadWorkspaceMode: (mode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (sessionId: string) => Promise<void>;
   onSelectThreadLogsTab: (tab: ThreadLogTab) => void;
   onSelectBotBinding: (botId: string | null) => void;
@@ -360,6 +363,7 @@ export function ThreadPage({
   mobileThreadLogLines,
   newThreadSelectedAgentId,
   newThreadWorkspaceEntry,
+  newThreadWorkspaceMode,
   onAddWorkspace,
   onAppendComposerAttachments,
   onCancelIntent,
@@ -377,6 +381,7 @@ export function ThreadPage({
   onRemoveComposerImage,
   onReorderQueuedIntent,
   onSelectNewThreadAgent,
+  onSelectNewThreadWorkspaceMode,
   onResumeProviderSession,
   onSelectBotBinding,
   onSelectThreadLogsTab,
@@ -448,6 +453,11 @@ export function ThreadPage({
         undefined
       : activeThreadSummary?.agentId?.trim() || undefined
     : newThreadSelectedAgentId;
+  const emptyNewThread =
+    !selectedThreadId &&
+    !activeMessages.length &&
+    !historyLoading &&
+    !showAutomationRunInitialPlaceholder;
 
   useLayoutEffect(() => {
     const threadMain = threadMainRef.current;
@@ -495,7 +505,10 @@ export function ThreadPage({
       ref={threadLayoutRef}
       style={threadLayoutStyle}
     >
-      <div className="thread-main" ref={threadMainRef}>
+      <div
+        className={`thread-main ${emptyNewThread ? "new-thread-centered" : ""}`}
+        ref={threadMainRef}
+      >
         <div className="messages" onScroll={onMessagesScroll} ref={messagesRef}>
           {historyLoadingEarlier ? (
             <div
@@ -522,8 +535,10 @@ export function ThreadPage({
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
                 onAddWorkspace={onAddWorkspace}
                 onSelectWorkspace={onSelectWorkspace}
+                onWorkspaceModeChange={onSelectNewThreadWorkspaceMode}
                 onResumeProviderSession={onResumeProviderSession}
                 selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
+                workspaceMode={newThreadWorkspaceMode}
                 workspaceMutation={workspaceMutation}
               />
             )

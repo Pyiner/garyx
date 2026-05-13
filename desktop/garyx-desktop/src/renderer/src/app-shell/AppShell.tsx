@@ -41,6 +41,7 @@ import {
   type DesktopWorkspaceFileEntry,
   type DesktopWorkspaceFileListing,
   type DesktopWorkspaceFilePreview,
+  type DesktopWorkspaceMode,
   type MessageFileAttachment,
   type MessageImageAttachment,
   type PendingThreadInput,
@@ -1575,6 +1576,8 @@ export function AppShell() {
       ? initialRouteValue.workspacePath || null
       : null,
   );
+  const [pendingWorkspaceMode, setPendingWorkspaceMode] =
+    useState<DesktopWorkspaceMode>("direct");
   const [pendingBotId, setPendingBotId] = useState<string | null>(null);
   const [optimisticThreadBotBinding, setOptimisticThreadBotBinding] = useState<{
     botId: string | null;
@@ -1702,6 +1705,7 @@ export function AppShell() {
   const selectedThreadIdRef = useRef<string | null>(null);
   const newThreadDraftActiveRef = useRef(false);
   const pendingWorkspacePathRef = useRef<string | null>(null);
+  const pendingWorkspaceModeRef = useRef<DesktopWorkspaceMode>("direct");
   const pendingBotIdRef = useRef<string | null>(null);
   const composerHasPayloadRef = useRef(false);
   const newThreadInitialDispatchLockRef = useRef(false);
@@ -3129,6 +3133,7 @@ export function AppShell() {
           setNewThreadDraftActive(true);
           setSelectedThreadId(null);
           setPendingWorkspacePath(route.workspacePath || null);
+          setPendingWorkspaceMode("direct");
           setPendingBotId(null);
           setPendingAgentId(route.agentId || "claude");
           clearComposerDraft();
@@ -3154,6 +3159,7 @@ export function AppShell() {
           setContentView("thread");
           setNewThreadDraftActive(false);
           setPendingWorkspacePath(null);
+          setPendingWorkspaceMode("direct");
           setSelectedThreadId((current) =>
             isKnownThreadId(desktopState, current)
               ? current
@@ -3344,6 +3350,10 @@ export function AppShell() {
   useEffect(() => {
     pendingWorkspacePathRef.current = pendingWorkspacePath;
   }, [pendingWorkspacePath]);
+
+  useEffect(() => {
+    pendingWorkspaceModeRef.current = pendingWorkspaceMode;
+  }, [pendingWorkspaceMode]);
 
   useEffect(() => {
     pendingBotIdRef.current = pendingBotId;
@@ -3678,6 +3688,7 @@ export function AppShell() {
           setNewThreadDraftActive(true);
           setSelectedThreadId(null);
           setPendingWorkspacePath(startupRoute.workspacePath || null);
+          setPendingWorkspaceMode("direct");
           setPendingAgentId(startupRoute.agentId || "claude");
         } else {
           setSelectedThreadId((current) =>
@@ -5786,6 +5797,7 @@ export function AppShell() {
       api: getDesktopApi(),
       selectedThreadId,
       pendingWorkspacePath,
+      pendingWorkspaceMode,
       pendingAgentId,
       preferredWorkspacePath: preferredWorkspaceForNewThread?.available
         ? preferredWorkspaceForNewThread.path
@@ -5802,6 +5814,7 @@ export function AppShell() {
       },
       setNewThreadDraftActive,
       setPendingWorkspacePath,
+      setPendingWorkspaceMode,
       setPendingBotId,
       setPendingAgentId,
       setError,
@@ -5832,6 +5845,7 @@ export function AppShell() {
         [created.thread.id]: current[created.thread.id] || [],
       }));
       setPendingWorkspacePath(null);
+      setPendingWorkspaceMode("direct");
       setPendingBotId(null);
       setPendingAgentId(created.thread.agentId || providerHint || "claude");
       requestComposerFocus();
@@ -6021,6 +6035,7 @@ export function AppShell() {
     setNewThreadDraftActive(true);
     setSelectedThreadId(null);
     setPendingWorkspacePath(nextWorkspace?.path || null);
+    setPendingWorkspaceMode("direct");
     setPendingBotId(null);
     setPendingAgentId(agentId);
     clearComposerDraft();
@@ -6041,6 +6056,7 @@ export function AppShell() {
         return openExistingThread(threadId).then((opened) => {
           if (opened) {
             setPendingWorkspacePath(null);
+            setPendingWorkspaceMode("direct");
             setPendingBotId(null);
           }
           return opened;
@@ -6102,6 +6118,7 @@ export function AppShell() {
       if (result.workspace) {
         setNewThreadDraftActive(true);
         setPendingWorkspacePath(result.workspace.path);
+        setPendingWorkspaceMode("direct");
         requestComposerFocus();
       }
     } catch (workspaceError) {
@@ -7927,6 +7944,7 @@ export function AppShell() {
                 mobileThreadLogLines={mobileThreadLogLines}
                 newThreadSelectedAgentId={pendingAgentId}
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
+                newThreadWorkspaceMode={pendingWorkspaceMode}
                 onAddWorkspace={() => {
                   void handleAddWorkspace();
                 }}
@@ -7999,6 +8017,7 @@ export function AppShell() {
                 onSelectNewThreadAgent={(agentId) => {
                   setPendingAgentId(agentId);
                 }}
+                onSelectNewThreadWorkspaceMode={setPendingWorkspaceMode}
                 onResumeProviderSession={handleResumeProviderSession}
                 onSelectBotBinding={(botId) => {
                   if (selectedThreadId) {
@@ -8021,6 +8040,7 @@ export function AppShell() {
                   void openExistingThread(threadId);
                 }}
                 onSelectWorkspace={(workspacePath) => {
+                  setPendingWorkspaceMode("direct");
                   void handleSelectWorkspace(workspacePath, null);
                 }}
                 onSetDraggedQueueIntentId={setDraggedQueueIntentId}

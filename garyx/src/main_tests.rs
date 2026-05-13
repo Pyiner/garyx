@@ -823,6 +823,7 @@ fn parse_thread_create_with_agent() {
         "create",
         "--workspace-dir",
         "/tmp/garyx",
+        "--worktree",
         "--agent-id",
         "product-ship",
         "--json",
@@ -832,12 +833,14 @@ fn parse_thread_create_with_agent() {
             action:
                 ThreadAction::Create {
                     workspace_dir,
+                    worktree,
                     agent_id,
                     json,
                     ..
                 },
         }) => {
             assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx"));
+            assert!(worktree);
             assert_eq!(agent_id.as_deref(), Some("product-ship"));
             assert!(json);
         }
@@ -865,12 +868,14 @@ fn parse_thread_create_with_team_id_uses_same_flag() {
                     agent_id,
                     workspace_dir,
                     title,
+                    worktree,
                     json,
                 },
         }) => {
             assert_eq!(agent_id.as_deref(), Some("product-ship-team"));
             assert!(workspace_dir.is_none());
             assert!(title.is_none());
+            assert!(!worktree);
             assert!(!json);
         }
         _ => panic!("expected Thread::Create"),
@@ -1055,6 +1060,7 @@ fn parse_task_create_runtime_options() {
         "--start",
         "--workspace-dir",
         "/tmp/garyx-task",
+        "--worktree",
         "--notify",
         "bot",
         "telegram:owner",
@@ -1069,6 +1075,7 @@ fn parse_task_create_runtime_options() {
                     assignee,
                     start,
                     workspace_dir,
+                    worktree,
                     notify,
                     json,
                 },
@@ -1078,6 +1085,7 @@ fn parse_task_create_runtime_options() {
             assert_eq!(assignee.as_deref(), Some("agent:reviewer"));
             assert!(start);
             assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx-task"));
+            assert!(worktree);
             assert_eq!(notify, vec!["bot", "telegram:owner"]);
             assert!(json);
         }
@@ -2340,8 +2348,18 @@ fn plugins_update_help_lists_new_flags() {
         .unwrap()
         .render_long_help()
         .to_string();
-    for flag in ["--version", "--from", "--target", "--check", "--force", "--json"] {
-        assert!(help.contains(flag), "help text missing flag `{flag}`:\n{help}");
+    for flag in [
+        "--version",
+        "--from",
+        "--target",
+        "--check",
+        "--force",
+        "--json",
+    ] {
+        assert!(
+            help.contains(flag),
+            "help text missing flag `{flag}`:\n{help}"
+        );
     }
 }
 

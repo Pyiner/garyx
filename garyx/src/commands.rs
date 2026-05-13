@@ -3064,6 +3064,7 @@ pub(crate) async fn cmd_thread_create(
     title: Option<String>,
     workspace_dir: Option<String>,
     agent_id: Option<String>,
+    worktree: bool,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let workspace_dir = workspace_dir
@@ -3081,6 +3082,7 @@ pub(crate) async fn cmd_thread_create(
         &json!({
             "label": title.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
             "workspaceDir": workspace_dir,
+            "workspaceMode": if worktree { "worktree" } else { "direct" },
             "agentId": agent_id,
         }),
     )
@@ -4163,6 +4165,7 @@ pub(crate) async fn cmd_task_create(
     assignee: Option<&str>,
     start: bool,
     workspace_dir: Option<String>,
+    worktree: bool,
     notify: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -4183,6 +4186,7 @@ pub(crate) async fn cmd_task_create(
         "runtime": {
             "agent_id": runtime_agent_id,
             "workspace_dir": workspace_dir,
+            "workspace_mode": if worktree { "worktree" } else { "direct" },
         },
         "notification_target": notification_target,
         "source": source,

@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{TaskCounterError, TaskCounterStore};
 use crate::{
-    ThreadEnsureOptions, ThreadStore, agent_id_from_value, create_thread_record,
+    ThreadEnsureOptions, ThreadStore, WorkspaceMode, agent_id_from_value, create_thread_record,
     history_message_count, is_thread_key,
 };
 
@@ -90,6 +90,14 @@ pub struct TaskRuntimeInput {
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "is_direct_workspace_mode")]
+    pub workspace_mode: WorkspaceMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_base_dir: Option<std::path::PathBuf>,
+}
+
+fn is_direct_workspace_mode(value: &WorkspaceMode) -> bool {
+    *value == WorkspaceMode::Direct
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,18 +248,33 @@ impl TaskService {
             .as_ref()
             .and_then(|runtime| normalized_nonempty_string(runtime.workspace_dir.as_deref()))
             .or_else(|| normalized_nonempty_string(input.workspace_dir.as_deref()));
+        let workspace_mode = runtime
+            .as_ref()
+            .map(|runtime| runtime.workspace_mode)
+            .unwrap_or_default();
+        let worktree_base_dir = runtime
+            .as_ref()
+            .and_then(|runtime| runtime.worktree_base_dir.clone());
 
         let (thread_id, mut record) = create_thread_record(
             &self.thread_store,
             ThreadEnsureOptions {
                 label: input.title.clone(),
                 workspace_dir,
+                workspace_mode,
+                worktree_base_dir,
                 agent_id: thread_agent_id,
                 ..Default::default()
             },
         )
         .await
-        .map_err(TaskServiceError::Store)?;
+        .map_err(|error| {
+            if error.starts_with("workspace_mode=worktree") {
+                TaskServiceError::BadRequest(error)
+            } else {
+                TaskServiceError::Store(error)
+            }
+        })?;
 
         let body = normalized_limited(input.body, 8_000)?;
         if let Some(body) = body.as_deref() {
@@ -1845,6 +1868,8 @@ mod tests {
                 runtime: Some(TaskRuntimeInput {
                     agent_id: Some("codex".to_owned()),
                     workspace_dir: Some("/tmp/garyx-task".to_owned()),
+                    workspace_mode: WorkspaceMode::Direct,
+                    worktree_base_dir: None,
                 }),
             })
             .await

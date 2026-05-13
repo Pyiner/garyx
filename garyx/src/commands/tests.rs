@@ -503,6 +503,150 @@ async fn spawn_automation_http_test_server(
     (format!("http://{addr}"), handle)
 }
 
+async fn spawn_thread_task_http_test_server(
+    requests: StdArc<Mutex<Vec<RecordedRequest>>>,
+) -> (String, JoinHandle<()>) {
+    let thread_requests = requests.clone();
+    let task_requests = requests.clone();
+    let app = Router::new()
+        .route(
+            "/api/threads",
+            post(move |Json(payload): Json<Value>| {
+                let requests = thread_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "POST".to_owned(),
+                            path: "/api/threads".to_owned(),
+                            body: payload.clone(),
+                        });
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "thread_id": "thread::test",
+                            "thread_key": "thread::test",
+                            "label": payload["label"],
+                            "workspace_dir": payload["workspaceDir"],
+                            "message_count": 0,
+                        })),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/api/tasks",
+            post(move |Json(payload): Json<Value>| {
+                let requests = task_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "POST".to_owned(),
+                            path: "/api/tasks".to_owned(),
+                            body: payload.clone(),
+                        });
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "thread_id": "thread::task",
+                            "task_id": "#TASK-1",
+                            "number": 1,
+                            "status": "todo",
+                            "runtime_agent_id": "claude",
+                            "task": {
+                                "schema_version": "garyx.task.v1",
+                                "number": 1,
+                                "title": payload["title"],
+                                "status": "todo",
+                                "creator": {"kind": "human", "id": "cli"},
+                                "updated_by": {"kind": "human", "id": "cli"},
+                                "created_at": "2030-01-01T00:00:00Z",
+                                "updated_at": "2030-01-01T00:00:00Z",
+                                "events": []
+                            }
+                        })),
+                    )
+                }
+            }),
+        );
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind test listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve test router");
+    });
+    (format!("http://{addr}"), handle)
+}
+
+#[tokio::test]
+async fn cmd_thread_create_posts_worktree_mode() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_thread_create(
+        config_path.to_str().expect("config path"),
+        Some("Worktree thread".to_owned()),
+        Some("/tmp/garyx-repo".to_owned()),
+        Some("claude".to_owned()),
+        true,
+        true,
+    )
+    .await
+    .expect("thread create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "POST");
+    assert_eq!(records[0].path, "/api/threads");
+    assert_eq!(records[0].body["label"], "Worktree thread");
+    assert_eq!(records[0].body["workspaceDir"], "/tmp/garyx-repo");
+    assert_eq!(records[0].body["agentId"], "claude");
+    assert_eq!(records[0].body["workspaceMode"], "worktree");
+}
+
+#[tokio::test]
+async fn cmd_task_create_posts_worktree_runtime_mode() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_task_create(
+        config_path.to_str().expect("config path"),
+        Some("Task worktree".to_owned()),
+        Some("Do the work".to_owned()),
+        Some("agent:claude"),
+        false,
+        Some("/tmp/garyx-repo".to_owned()),
+        true,
+        vec!["none".to_owned()],
+        true,
+    )
+    .await
+    .expect("task create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "POST");
+    assert_eq!(records[0].path, "/api/tasks");
+    assert_eq!(records[0].body["title"], "Task worktree");
+    assert_eq!(
+        records[0].body["runtime"]["workspace_dir"],
+        "/tmp/garyx-repo"
+    );
+    assert_eq!(records[0].body["runtime"]["workspace_mode"], "worktree");
+}
+
 #[tokio::test]
 async fn migrate_thread_transcripts_rewrites_records_and_transcripts() {
     let data_dir = tempdir().expect("data dir");

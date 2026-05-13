@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -11,6 +12,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::{DEFAULT_THREAD_HISTORY_SNAPSHOT_LIMIT, ThreadStore};
+use crate::{WorkspaceMode, prepare_thread_worktree};
 
 pub const THREAD_KEY_PREFIX: &str = "thread::";
 const KNOWN_CHANNEL_ENDPOINTS_KEY: &str = "meta::known_channel_endpoints";
@@ -100,6 +102,8 @@ pub struct KnownChannelEndpoint {
 pub struct ThreadEnsureOptions {
     pub label: Option<String>,
     pub workspace_dir: Option<String>,
+    pub workspace_mode: WorkspaceMode,
+    pub worktree_base_dir: Option<PathBuf>,
     pub agent_id: Option<String>,
     pub metadata: HashMap<String, Value>,
     pub provider_type: Option<ProviderType>,
@@ -491,11 +495,31 @@ pub fn remove_binding(value: &mut Value, endpoint_key_to_remove: &str) -> bool {
 
 pub async fn create_thread_record(
     store: &Arc<dyn ThreadStore>,
-    options: ThreadEnsureOptions,
+    mut options: ThreadEnsureOptions,
 ) -> Result<(String, Value), String> {
     let thread_id = new_thread_key();
+    let worktree = if options.workspace_mode.is_worktree() {
+        let workspace_dir = options.workspace_dir.clone().ok_or_else(|| {
+            "workspace_mode=worktree requires workspace_dir to be a git repository root".to_owned()
+        })?;
+        let prepared = prepare_thread_worktree(
+            &thread_id,
+            &workspace_dir,
+            options.worktree_base_dir.as_deref(),
+        )
+        .await?;
+        options.workspace_dir = Some(prepared.worktree_dir.clone());
+        Some(prepared.metadata)
+    } else {
+        None
+    };
     let mut value = Value::Object(Map::new());
     upsert_thread_fields(&mut value, &thread_id, &options);
+    if let Some(worktree) = worktree
+        && let Some(obj) = value.as_object_mut()
+    {
+        obj.insert("worktree".to_owned(), worktree);
+    }
     store.set(&thread_id, value.clone()).await;
     Ok((thread_id, value))
 }

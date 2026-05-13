@@ -76,6 +76,8 @@ impl MessageRouter {
                         channel,
                         account_id,
                     ),
+                    workspace_mode: Default::default(),
+                    worktree_base_dir: None,
                     agent_id: default_agent_for_channel_account(&self.config, channel, account_id),
                     metadata: HashMap::new(),
                     provider_type: None,

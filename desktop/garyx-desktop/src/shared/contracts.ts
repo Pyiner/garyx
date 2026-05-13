@@ -193,6 +193,7 @@ export interface CreateTaskInput {
   assignee?: string | null;
   start?: boolean;
   workspaceDir?: string | null;
+  workspaceMode?: DesktopWorkspaceMode;
   notificationTarget: DesktopTaskNotificationTarget;
 }
 
@@ -1148,12 +1149,23 @@ export interface ThreadLogChunk {
 export interface CreateThreadInput {
   title?: string;
   workspacePath?: string | null;
+  workspaceMode?: DesktopWorkspaceMode;
   /** Agent or team ID. Backend resolves whether it's a team leader or custom agent. */
   agentId?: string | null;
   /** Optional Claude/Codex/Gemini provider session id to resume from. Garyx resolves the real local provider/workspace from it. */
   sdkSessionId?: string | null;
   /** Optional provider hint for sdkSessionId. Supported values are claude, codex, and gemini. */
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
+}
+
+export type DesktopWorkspaceMode = "direct" | "worktree";
+
+export interface DesktopWorkspaceGitStatus {
+  workspaceDir: string;
+  isGitRepo: boolean;
+  repoRoot?: string | null;
+  currentBranch?: string | null;
+  isDirty: boolean;
 }
 
 export interface RenameThreadInput {
@@ -1479,6 +1491,9 @@ export interface GaryxDesktopApi {
   deleteAutomation: (input: DeleteAutomationInput) => Promise<DesktopState>;
   listTasks: (input?: ListTasksInput) => Promise<DesktopTasksPage>;
   createTask: (input: CreateTaskInput) => Promise<DesktopTaskSummary>;
+  getWorkspaceGitStatus: (input: {
+    workspacePath: string;
+  }) => Promise<DesktopWorkspaceGitStatus>;
   promoteThreadToTask: (input: PromoteTaskInput) => Promise<DesktopTaskSummary>;
   updateTaskStatus: (input: UpdateTaskStatusInput) => Promise<void>;
   assignTask: (input: AssignTaskInput) => Promise<void>;

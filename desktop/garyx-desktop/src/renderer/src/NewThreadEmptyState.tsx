@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  IconGitBranch,
   IconHistory,
   IconPlus,
-  IconSparkles,
 } from "@tabler/icons-react";
 
 import type {
   DesktopSessionProviderHint,
   DesktopWorkspace,
+  DesktopWorkspaceGitStatus,
+  DesktopWorkspaceMode,
 } from "@shared/contracts";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,8 +40,10 @@ type NewThreadEmptyStateProps = {
   newThreadWorkspaceEntry: DesktopWorkspace | null;
   selectableNewThreadWorkspaces: DesktopWorkspace[];
   workspaceMutation: string | null;
+  workspaceMode: DesktopWorkspaceMode;
   onAddWorkspace: () => void;
   onSelectWorkspace: (workspacePath: string) => void;
+  onWorkspaceModeChange: (workspaceMode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (
     sessionId: string,
     providerHint?: DesktopSessionProviderHint | null,
@@ -50,8 +54,10 @@ export function NewThreadEmptyState({
   newThreadWorkspaceEntry,
   selectableNewThreadWorkspaces,
   workspaceMutation,
+  workspaceMode,
   onAddWorkspace,
   onSelectWorkspace,
+  onWorkspaceModeChange,
   onResumeProviderSession,
 }: NewThreadEmptyStateProps) {
   const { t } = useI18n();
@@ -59,6 +65,9 @@ export function NewThreadEmptyState({
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeSessionId, setResumeSessionId] = useState("");
+  const [gitStatus, setGitStatus] = useState<DesktopWorkspaceGitStatus | null>(
+    null,
+  );
 
   useEffect(() => {
     setResumeError(null);
@@ -73,6 +82,34 @@ export function NewThreadEmptyState({
       null,
     [newThreadWorkspaceEntry?.path, selectableNewThreadWorkspaces],
   );
+  const worktreeCapable = Boolean(gitStatus?.isGitRepo);
+
+  useEffect(() => {
+    let cancelled = false;
+    const workspacePath = selectedWorkspace?.path?.trim();
+    setGitStatus(null);
+    if (!workspacePath) {
+      onWorkspaceModeChange("direct");
+      return;
+    }
+    void window.garyxDesktop
+      .getWorkspaceGitStatus({ workspacePath })
+      .then((status) => {
+        if (cancelled) return;
+        setGitStatus(status);
+        if (!status.isGitRepo) {
+          onWorkspaceModeChange("direct");
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setGitStatus(null);
+        onWorkspaceModeChange("direct");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onWorkspaceModeChange, selectedWorkspace?.path]);
 
   function closeResume() {
     setResumeOpen(false);
@@ -103,90 +140,112 @@ export function NewThreadEmptyState({
   return (
     <>
       <div className="new-thread-empty-state">
-        <div className="new-thread-empty-mark" aria-hidden>
-          <IconSparkles size={22} stroke={1.5} />
-        </div>
-        <h3>{t("Start a new thread")}</h3>
+        <div className="new-thread-option-row">
+          {selectableNewThreadWorkspaces.length ? (
+            <Select
+              onValueChange={(value) => {
+                if (value === ADD_WORKSPACE_VALUE) {
+                  onAddWorkspace();
+                  return;
+                }
+                if (value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) {
+                  return;
+                }
+                onWorkspaceModeChange("direct");
+                onSelectWorkspace(value);
+              }}
+              value={selectedWorkspace?.path ?? ""}
+            >
+              <SelectTrigger
+                aria-label={t("Workspace for the new thread")}
+                className="new-thread-workspace-trigger"
+                title={newThreadWorkspaceEntry?.path ?? undefined}
+              >
+                <SelectValue placeholder={t("Select a workspace")} />
+              </SelectTrigger>
+              <SelectContent
+                align="start"
+                className="min-w-[var(--radix-select-trigger-width)]"
+              >
+                <SelectGroup>
+                  <SelectLabel>{t("Folders")}</SelectLabel>
+                  {selectableNewThreadWorkspaces.map((workspace) => {
+                    const value = workspace.path || `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
+                    return (
+                      <SelectItem
+                        disabled={!workspace.available || !workspace.path}
+                        key={workspace.path || workspace.name}
+                        value={value}
+                      >
+                        {workspace.available && workspace.path
+                          ? workspace.name
+                          : t("{name} (Unavailable)", { name: workspace.name })}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectGroup>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectItem
+                    value={ADD_WORKSPACE_VALUE}
+                    disabled={workspaceMutation === "add"}
+                  >
+                    <IconPlus aria-hidden size={13} stroke={1.8} />
+                    {workspaceMutation === "add"
+                      ? t("Opening folder…")
+                      : t("Choose folder…")}
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          ) : (
+            <Button
+              variant="outline"
+              className="new-thread-workspace-trigger justify-center"
+              disabled={workspaceMutation === "add"}
+              onClick={onAddWorkspace}
+            >
+              <IconPlus aria-hidden size={14} stroke={1.8} />
+              {workspaceMutation === "add"
+                ? t("Opening folder…")
+                : t("Choose a folder to begin")}
+            </Button>
+          )}
 
-        {selectableNewThreadWorkspaces.length ? (
-          <Select
-            onValueChange={(value) => {
-              if (value === ADD_WORKSPACE_VALUE) {
-                onAddWorkspace();
-                return;
+          {worktreeCapable ? (
+            <Select
+              onValueChange={(value) =>
+                onWorkspaceModeChange(value as DesktopWorkspaceMode)
               }
-              if (value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) {
-                return;
-              }
-              onSelectWorkspace(value);
-            }}
-            value={selectedWorkspace?.path ?? ""}
-          >
-            <SelectTrigger
-              aria-label={t("Workspace for the new thread")}
-              className="new-thread-workspace-trigger"
-              title={newThreadWorkspaceEntry?.path ?? undefined}
+              value={workspaceMode}
             >
-              <SelectValue placeholder={t("Select a workspace")} />
-            </SelectTrigger>
-            <SelectContent
-              align="start"
-              className="min-w-[var(--radix-select-trigger-width)]"
-            >
-              <SelectGroup>
-                <SelectLabel>{t("Folders")}</SelectLabel>
-                {selectableNewThreadWorkspaces.map((workspace) => {
-                  const value = workspace.path || `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
-                  return (
-                    <SelectItem
-                      disabled={!workspace.available || !workspace.path}
-                      key={workspace.path || workspace.name}
-                      value={value}
-                    >
-                      {workspace.available && workspace.path
-                        ? workspace.name
-                        : t("{name} (Unavailable)", { name: workspace.name })}
-                    </SelectItem>
-                  );
-                })}
-              </SelectGroup>
-              <SelectSeparator />
-              <SelectGroup>
-                <SelectItem
-                  value={ADD_WORKSPACE_VALUE}
-                  disabled={workspaceMutation === "add"}
-                >
-                  <IconPlus aria-hidden size={13} stroke={1.8} />
-                  {workspaceMutation === "add"
-                    ? t("Opening folder…")
-                    : t("Choose folder…")}
-                </SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        ) : (
+              <SelectTrigger
+                aria-label={t("Workspace mode")}
+                className="new-thread-mode-trigger"
+              >
+                <IconGitBranch aria-hidden size={13} stroke={1.8} />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent align="start">
+                <SelectGroup>
+                  <SelectLabel>{t("Workspace mode")}</SelectLabel>
+                  <SelectItem value="direct">{t("Local")}</SelectItem>
+                  <SelectItem value="worktree">{t("New worktree")}</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          ) : null}
+
           <Button
-            variant="outline"
-            className="new-thread-workspace-trigger justify-center"
-            disabled={workspaceMutation === "add"}
-            onClick={onAddWorkspace}
+            variant="ghost"
+            size="sm"
+            className="new-thread-resume-link"
+            onClick={() => setResumeOpen(true)}
           >
-            <IconPlus aria-hidden size={14} stroke={1.8} />
-            {workspaceMutation === "add"
-              ? t("Opening folder…")
-              : t("Choose a folder to begin")}
+            <IconHistory aria-hidden size={13} stroke={1.8} />
+            {t("Resume")}
           </Button>
-        )}
-
-        <Button
-          variant="ghost"
-          size="sm"
-          className="new-thread-resume-link"
-          onClick={() => setResumeOpen(true)}
-        >
-          <IconHistory aria-hidden size={13} stroke={1.8} />
-          {t("Resume existing session")}
-        </Button>
+        </div>
       </div>
 
       <Dialog

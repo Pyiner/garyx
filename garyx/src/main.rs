@@ -823,9 +823,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ThreadAction::Create {
                 title,
                 workspace_dir,
+                worktree,
                 agent_id,
                 json,
-            } => cmd_thread_create(config_path, title, workspace_dir, agent_id, json).await,
+            } => {
+                cmd_thread_create(config_path, title, workspace_dir, agent_id, worktree, json).await
+            }
         },
         Some(Commands::Task { action }) => match action {
             TaskAction::List {
@@ -860,6 +863,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 assignee,
                 start,
                 workspace_dir,
+                worktree,
                 notify,
                 json,
             } => {
@@ -870,6 +874,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     assignee.as_deref(),
                     start,
                     workspace_dir,
+                    worktree,
                     notify,
                     json,
                 )

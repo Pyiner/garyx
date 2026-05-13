@@ -849,6 +849,8 @@ impl CronService {
         ThreadEnsureOptions {
             label: Some(label.to_owned()),
             workspace_dir: Some(workspace_dir.to_owned()),
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
             agent_id: Some(
                 Self::trimmed_non_empty(agent_id).unwrap_or_else(|| "claude".to_owned()),
             ),

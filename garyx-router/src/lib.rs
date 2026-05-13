@@ -11,6 +11,7 @@ pub mod task_counter;
 pub mod tasks;
 pub mod thread_history;
 pub mod threads;
+pub mod worktree;
 
 pub mod inbound {
     pub use crate::router::NATIVE_COMMAND_TEXT_METADATA_KEY;
@@ -100,4 +101,8 @@ pub use threads::{
     loop_iteration_count_from_value, new_thread_key, normalize_workspace_dir,
     thread_kind_from_value, thread_metadata_from_value, update_thread_record, upsert_binding,
     upsert_thread_fields, workspace_dir_from_value,
+};
+pub use worktree::{
+    PreparedWorktree, WorkspaceGitStatus, WorkspaceMode, prepare_thread_worktree,
+    workspace_git_status,
 };

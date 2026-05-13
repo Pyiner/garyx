@@ -118,6 +118,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(routes::list_channel_endpoints),
         )
         .route(
+            "/api/workspaces/git-status",
+            axum::routing::get(routes::workspace_git_status),
+        )
+        .route(
             "/api/configured-bots",
             axum::routing::get(routes::list_configured_bots),
         )

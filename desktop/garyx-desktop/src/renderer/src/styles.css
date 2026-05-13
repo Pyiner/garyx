@@ -3149,6 +3149,21 @@ code {
   background: var(--color-token-bg-primary);
 }
 
+.thread-main.new-thread-centered .messages {
+  height: 100%;
+  padding-bottom: 0;
+}
+
+.thread-main.new-thread-centered .composer-shell-wrap {
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
+
+.thread-main.new-thread-centered .composer-shell-wrap::before {
+  display: none;
+}
+
 .thread-page-tabs {
   display: flex;
   align-items: center;
@@ -4907,19 +4922,21 @@ code {
   margin: 10px 0 6px;
 }
 
-/* Codex-style empty state: icon → title → workspace as text subtitle. */
 .new-thread-empty-state {
+  position: absolute;
+  top: calc(50% + 84px);
+  left: 50%;
   display: flex;
-  flex: 1;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   width: 100%;
   max-width: 480px;
   min-height: 0;
   margin: 0 auto;
-  padding: 24px;
+  padding: 0 24px;
   text-align: center;
+  transform: translateX(-50%);
+  z-index: 11;
 }
 
 .new-thread-empty-mark {
@@ -4937,30 +4954,36 @@ code {
   font-size: 28px;
   font-weight: 400;
   line-height: 1.2;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   color: var(--color-token-text-primary);
 }
 
-/* Workspace trigger — rendered as a 28px muted text button with chevron,
-   not an outlined input. Matches Codex's empty-state subtitle pattern. */
+.new-thread-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: min(100%, 720px);
+  flex-wrap: wrap;
+}
+
 button.new-thread-workspace-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   width: auto;
   min-width: 0;
-  max-width: 100%;
-  height: auto;
-  margin-top: -2px;
-  padding: 2px 6px;
-  border: 0;
+  max-width: min(360px, 100vw - 48px);
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(26, 28, 31, 0.08);
   border-radius: 8px;
-  background: transparent;
-  color: rgba(13, 13, 13, 0.5);
-  font-size: 28px;
-  font-weight: 400;
-  line-height: 1.2;
-  letter-spacing: -0.01em;
+  background: rgba(255, 255, 255, 0.78);
+  color: rgba(13, 13, 13, 0.68);
+  font-size: 13px;
+  font-weight: 450;
+  line-height: 1;
+  letter-spacing: 0;
   box-shadow: none;
   cursor: pointer;
   transition:
@@ -4971,12 +4994,12 @@ button.new-thread-workspace-trigger {
 button.new-thread-workspace-trigger:hover,
 button.new-thread-workspace-trigger[data-state="open"] {
   color: var(--color-token-text-primary);
-  background: rgba(13, 13, 13, 0.04);
+  background: rgba(255, 255, 255, 0.95);
 }
 
 button.new-thread-workspace-trigger > svg:last-child {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   opacity: 0.6;
 }
 
@@ -4999,17 +5022,42 @@ button.new-thread-workspace-trigger[data-state="open"] > svg:last-child {
 }
 
 button.new-thread-resume-link {
-  margin-top: 28px;
-  height: 26px;
-  padding: 0 8px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(26, 28, 31, 0.08);
+  border-radius: 8px;
   color: var(--color-token-description-foreground);
   font-weight: var(--font-weight-normal);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 button.new-thread-resume-link:hover {
   color: var(--color-token-text-secondary);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+button.new-thread-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-width: 132px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(26, 28, 31, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  color: rgba(13, 13, 13, 0.68);
+  font-size: 13px;
+  font-weight: 450;
+  letter-spacing: 0;
+  box-shadow: none;
+}
+
+button.new-thread-mode-trigger:hover,
+button.new-thread-mode-trigger[data-state="open"] {
+  color: var(--color-token-text-primary);
+  background: rgba(255, 255, 255, 0.95);
 }
 
 .new-thread-resume-error {
@@ -5139,7 +5187,8 @@ button.new-thread-resume-link:hover {
 
 @media (max-width: 780px) {
   .new-thread-empty-state {
-    padding: 32px 20px 24px;
+    top: calc(50% + 96px);
+    padding: 0 20px;
   }
 
   .new-thread-workspace-path {

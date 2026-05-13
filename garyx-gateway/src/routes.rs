@@ -14,10 +14,10 @@ use garyx_models::provider::ProviderType;
 #[cfg(test)]
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
-    ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, bindings_from_value,
+    ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode, bindings_from_value,
     detach_endpoint_from_thread, history_message_count, is_hidden_thread_value, is_thread_key,
     list_known_channel_endpoints, thread_kind_from_value, update_thread_record,
-    workspace_dir_from_value,
+    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -29,6 +29,7 @@ use crate::agent_identity::create_thread_for_agent_reference;
 use crate::provider_session_locator::recover_local_provider_session;
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
+use crate::workspace_mode::worktree_base_dir_for_config;
 #[cfg(test)]
 use garyx_router::create_thread_record;
 
@@ -822,6 +823,8 @@ pub struct CreateThreadBody {
     pub label: Option<String>,
     #[serde(default)]
     pub workspace_dir: Option<String>,
+    #[serde(default, alias = "workspace_mode")]
+    pub workspace_mode: WorkspaceMode,
     #[serde(default)]
     pub metadata: HashMap<String, Value>,
     /// Agent or team ID. Backend resolves whether it's a team or custom agent.
@@ -833,6 +836,13 @@ pub struct CreateThreadBody {
     /// Optional provider hint for sdkSessionId. Supported values: claude, codex, gemini.
     #[serde(default)]
     pub sdk_session_provider_hint: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceGitStatusParams {
+    #[serde(default, alias = "workspace_dir")]
+    pub workspace_dir: String,
 }
 
 #[derive(Deserialize)]
@@ -1095,6 +1105,7 @@ fn thread_summary(thread_id: &str, data: &Value) -> Value {
         .unwrap_or_else(|_| Value::Array(Vec::new()));
     let agent_id = data.get("agent_id").cloned().unwrap_or(Value::Null);
     let provider_type = data.get("provider_type").cloned().unwrap_or(Value::Null);
+    let worktree = data.get("worktree").cloned().unwrap_or(Value::Null);
     let recent_run_id = data
         .get("history")
         .and_then(|history| history.get("recent_committed_run_ids"))
@@ -1117,6 +1128,7 @@ fn thread_summary(thread_id: &str, data: &Value) -> Value {
         "last_assistant_message": last_message_preview(data, "assistant"),
         "agent_id": agent_id,
         "provider_type": provider_type,
+        "worktree": worktree,
         "recent_run_id": recent_run_id,
     })
 }
@@ -1360,6 +1372,14 @@ pub async fn create_thread(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    if requested_session_id.is_some() && body.workspace_mode.is_worktree() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "workspaceMode=worktree cannot be combined with sdkSessionId resume"
+            })),
+        );
+    }
     let requested_session_provider_hint =
         match parse_sdk_session_provider_hint(body.sdk_session_provider_hint.as_deref()) {
             Ok(value) => value,
@@ -1400,6 +1420,8 @@ pub async fn create_thread(
             .as_ref()
             .map(|recovered| recovered.binding.workspace_dir.clone())
             .or_else(|| body.workspace_dir.clone()),
+        workspace_mode: body.workspace_mode,
+        worktree_base_dir: Some(worktree_base_dir_for_config(&state.config_snapshot())),
         agent_id: recovered_session
             .as_ref()
             .map(|recovered| recovered.binding.agent_id.clone())
@@ -1456,7 +1478,8 @@ pub async fn create_thread(
         Err(error)
             if error.starts_with("unknown agent_id:")
                 || error.starts_with("agent_id is not standalone:")
-                || error.starts_with("team '") =>
+                || error.starts_with("team '")
+                || error.starts_with("workspace_mode=worktree") =>
         {
             (StatusCode::BAD_REQUEST, Json(json!({ "error": error })))
         }
@@ -1605,6 +1628,23 @@ pub async fn list_channel_endpoints(State(state): State<Arc<AppState>>) -> impl 
             channel_endpoint_response_value(endpoint, feishu_summaries.get(&key))
         }).collect::<Vec<_>>(),
     }))
+}
+
+/// GET /api/workspaces/git-status - report whether a workspace can use worktree mode
+pub async fn workspace_git_status(
+    Query(params): Query<WorkspaceGitStatusParams>,
+) -> impl IntoResponse {
+    let workspace_dir = params.workspace_dir.trim();
+    if workspace_dir.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "workspace_dir is required" })),
+        );
+    }
+    match router_workspace_git_status(workspace_dir).await {
+        Ok(status) => (StatusCode::OK, Json(json!(status))),
+        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))),
+    }
 }
 
 /// GET /api/configured-bots - list all configured channel bot accounts from config

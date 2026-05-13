@@ -2712,6 +2712,7 @@ export async function createRemoteThread(
   input?: {
     title?: string;
     workspacePath?: string | null;
+    workspaceMode?: "direct" | "worktree";
     agentId?: string | null;
     sdkSessionId?: string | null;
     sdkSessionProviderHint?: "claude" | "codex" | "gemini" | null;
@@ -2726,6 +2727,7 @@ export async function createRemoteThread(
       body: JSON.stringify({
         label: input?.title || undefined,
         workspaceDir: input?.workspacePath || undefined,
+        workspaceMode: input?.workspaceMode || undefined,
         agentId: input?.agentId || undefined,
         sdkSessionId: input?.sdkSessionId || undefined,
         sdkSessionProviderHint: input?.sdkSessionProviderHint || undefined,
@@ -2733,6 +2735,42 @@ export async function createRemoteThread(
     },
   );
   return mapThreadSummary(payload);
+}
+
+type WorkspaceGitStatusPayload = {
+  workspace_dir?: string;
+  workspaceDir?: string;
+  is_git_repo?: boolean;
+  isGitRepo?: boolean;
+  repo_root?: string | null;
+  repoRoot?: string | null;
+  current_branch?: string | null;
+  currentBranch?: string | null;
+  is_dirty?: boolean;
+  isDirty?: boolean;
+};
+
+export async function getWorkspaceGitStatus(
+  settings: DesktopSettings,
+  input: { workspacePath: string },
+) {
+  const query = new URLSearchParams({
+    workspace_dir: input.workspacePath,
+  });
+  const payload = await requestJson<WorkspaceGitStatusPayload>(
+    settings,
+    `/api/workspaces/git-status?${query.toString()}`,
+    {
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  return {
+    workspaceDir: payload.workspaceDir || payload.workspace_dir || input.workspacePath,
+    isGitRepo: Boolean(payload.isGitRepo ?? payload.is_git_repo),
+    repoRoot: payload.repoRoot ?? payload.repo_root ?? null,
+    currentBranch: payload.currentBranch ?? payload.current_branch ?? null,
+    isDirty: Boolean(payload.isDirty ?? payload.is_dirty),
+  };
 }
 
 export async function updateRemoteThread(
@@ -3690,6 +3728,7 @@ export async function createTask(
       runtime: {
         agent_id: runtimeAgentId || null,
         workspace_dir: runtimeWorkspaceDir || null,
+        workspace_mode: input.workspaceMode || "direct",
       },
       notification_target: taskNotificationTargetPayload(input.notificationTarget),
     }),

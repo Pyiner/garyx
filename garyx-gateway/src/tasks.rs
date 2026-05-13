@@ -14,7 +14,7 @@ use garyx_models::{
 };
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
-    TaskService, TaskServiceError, UpdateTaskStatusInput, workspace_dir_from_value,
+    TaskService, TaskServiceError, UpdateTaskStatusInput, WorkspaceMode, workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -25,6 +25,7 @@ use crate::agent_identity::{
 };
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
+use crate::workspace_mode::worktree_base_dir_for_config;
 
 const ACTOR_HEADER: &str = "x-garyx-actor";
 
@@ -93,6 +94,8 @@ pub struct TaskRuntimeBody {
     pub agent_id: Option<String>,
     #[serde(default, alias = "workspaceDir")]
     pub workspace_dir: Option<String>,
+    #[serde(default, alias = "workspaceMode")]
+    pub workspace_mode: WorkspaceMode,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -203,11 +206,16 @@ pub async fn create_task(
         Ok(target) => target,
         Err(error) => return task_error_response(error),
     };
-    let runtime =
+    let mut runtime =
         match task_runtime_with_default_workspace(&state, runtime, body.assignee.as_ref()).await {
             Ok(runtime) => runtime,
             Err(error) => return task_error_response(error),
         };
+    if let Some(runtime) = runtime.as_mut()
+        && runtime.workspace_mode.is_worktree()
+    {
+        runtime.worktree_base_dir = Some(worktree_base_dir_for_config(&state.config_snapshot()));
+    }
     let title_for_dispatch = body.title.clone();
     let body_for_dispatch = body.body.clone();
     match service
@@ -306,7 +314,7 @@ pub async fn create_tasks_batch(
         if let Err(error) = validate_task_assignee_agent(&state, item.assignee.as_ref()).await {
             return task_error_response(error);
         }
-        let runtime = match task_runtime_with_default_workspace(
+        let mut runtime = match task_runtime_with_default_workspace(
             &state,
             runtime,
             item.assignee.as_ref(),
@@ -316,6 +324,12 @@ pub async fn create_tasks_batch(
             Ok(runtime) => runtime,
             Err(error) => return task_error_response(error),
         };
+        if let Some(runtime) = runtime.as_mut()
+            && runtime.workspace_mode.is_worktree()
+        {
+            runtime.worktree_base_dir =
+                Some(worktree_base_dir_for_config(&state.config_snapshot()));
+        }
         match service
             .create_task(CreateTaskInput {
                 title: item.title,
@@ -770,6 +784,8 @@ impl From<TaskRuntimeBody> for TaskRuntimeInput {
         Self {
             agent_id: normalized_nonempty(value.agent_id),
             workspace_dir: normalized_nonempty(value.workspace_dir),
+            workspace_mode: value.workspace_mode,
+            worktree_base_dir: None,
         }
     }
 }
@@ -824,6 +840,8 @@ fn task_runtime_input(
         .unwrap_or(TaskRuntimeInput {
             agent_id: None,
             workspace_dir: None,
+            workspace_mode: WorkspaceMode::Direct,
+            worktree_base_dir: None,
         });
     if input.agent_id.is_none() {
         input.agent_id = normalized_nonempty(legacy_agent_id);
@@ -831,7 +849,10 @@ fn task_runtime_input(
     if input.workspace_dir.is_none() {
         input.workspace_dir = normalized_nonempty(legacy_workspace_dir);
     }
-    (input.agent_id.is_some() || input.workspace_dir.is_some()).then_some(input)
+    (input.agent_id.is_some()
+        || input.workspace_dir.is_some()
+        || input.workspace_mode.is_worktree())
+    .then_some(input)
 }
 
 fn task_runtime_has_workspace(runtime: &Option<TaskRuntimeInput>) -> bool {
@@ -889,6 +910,8 @@ async fn task_runtime_with_default_workspace(
     let mut input = runtime.unwrap_or(TaskRuntimeInput {
         agent_id: None,
         workspace_dir: None,
+        workspace_mode: WorkspaceMode::Direct,
+        worktree_base_dir: None,
     });
     input.workspace_dir = Some(default_workspace_dir);
     Ok(Some(input))
@@ -1358,6 +1381,8 @@ mod tests {
             Some(TaskRuntimeInput {
                 agent_id: Some("reviewer".to_owned()),
                 workspace_dir: Some("/tmp/task-explicit".to_owned()),
+                workspace_mode: WorkspaceMode::Direct,
+                worktree_base_dir: None,
             }),
             Some(&Principal::Agent {
                 agent_id: "reviewer".to_owned(),

@@ -167,6 +167,8 @@ const api: GaryxDesktopApi = {
   detachChannelEndpoint: (input) =>
     ipcRenderer.invoke("garyx:detach-channel-endpoint", input),
   createThread: (input) => ipcRenderer.invoke("garyx:create-thread", input),
+  getWorkspaceGitStatus: (input) =>
+    ipcRenderer.invoke("garyx:get-workspace-git-status", input),
   renameThread: (input) => ipcRenderer.invoke("garyx:rename-thread", input),
   deleteThread: (input) => ipcRenderer.invoke("garyx:delete-thread", input),
   getThreadHistory: (input) =>

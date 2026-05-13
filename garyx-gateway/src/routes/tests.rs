@@ -10,6 +10,8 @@ use garyx_models::config::{ApiAccount, GaryxConfig};
 use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent};
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
 use garyx_router::MessageRouter;
+use std::path::Path;
+use std::process::Command;
 use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
 
@@ -23,6 +25,48 @@ fn test_config() -> GaryxConfig {
 
 fn authed_request() -> axum::http::request::Builder {
     crate::test_support::authed_request()
+}
+
+fn run_git(repo: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git -C {} {} failed: {}",
+        repo.display(),
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_output(repo: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git -C {} {} failed: {}",
+        repo.display(),
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+fn init_test_git_repo(repo: &Path) {
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.name", "Test User"]);
+    run_git(repo, &["config", "user.email", "test@example.com"]);
+    std::fs::write(repo.join("README.md"), "test repo\n").expect("write readme");
+    run_git(repo, &["add", "README.md"]);
+    run_git(repo, &["commit", "-m", "initial"]);
 }
 
 struct SlowDeleteProvider {
@@ -359,6 +403,8 @@ async fn thread_logs_route_returns_full_and_delta_chunks() {
         ThreadEnsureOptions {
             label: Some("Logs".to_owned()),
             workspace_dir: None,
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
             agent_id: None,
             metadata: HashMap::new(),
             provider_type: None,
@@ -416,6 +462,8 @@ async fn thread_logs_route_alias_returns_full_chunk() {
         ThreadEnsureOptions {
             label: Some("Logs".to_owned()),
             workspace_dir: None,
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
             agent_id: None,
             metadata: HashMap::new(),
             provider_type: None,
@@ -462,6 +510,8 @@ async fn create_thread_seeds_sdk_session_id() {
         ThreadEnsureOptions {
             label: Some("Resume Claude".to_owned()),
             workspace_dir: Some(workspace_dir),
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
             agent_id: Some("claude".to_owned()),
             metadata: HashMap::new(),
             provider_type: None,
@@ -579,6 +629,8 @@ async fn seed_imported_thread_history_persists_transcript_and_thread_state() {
         ThreadEnsureOptions {
             label: Some("Recovered Session".to_owned()),
             workspace_dir: Some(workspace_dir),
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
             agent_id: Some("claude".to_owned()),
             metadata: HashMap::new(),
             provider_type: None,
@@ -656,6 +708,186 @@ async fn create_thread_rejects_unknown_agent_id() {
 }
 
 #[tokio::test]
+async fn git_status_marks_only_git_root_as_worktree_capable() {
+    let (state, _logger, _dir) = test_state().await;
+    let repo = tempdir().unwrap();
+    init_test_git_repo(repo.path());
+    let nested = repo.path().join("nested");
+    std::fs::create_dir(&nested).expect("nested dir");
+    let router = build_router(state);
+
+    let request = authed_request()
+        .uri(format!(
+            "/api/workspaces/git-status?workspace_dir={}",
+            urlencoding::encode(&repo.path().to_string_lossy())
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["is_git_repo"], true);
+    assert_eq!(
+        payload["repo_root"].as_str(),
+        Some(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(
+        payload["current_branch"].as_str(),
+        Some(git_output(repo.path(), &["branch", "--show-current"]).as_str())
+    );
+
+    let request = authed_request()
+        .uri(format!(
+            "/api/workspaces/git-status?workspace_dir={}",
+            urlencoding::encode(&nested.to_string_lossy())
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["is_git_repo"], false);
+    assert_eq!(
+        payload["repo_root"].as_str(),
+        Some(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+}
+
+#[tokio::test]
+async fn create_thread_with_worktree_creates_managed_git_worktree() {
+    let repo = tempdir().unwrap();
+    init_test_git_repo(repo.path());
+    let data_dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
+    let state = AppStateBuilder::new(config).build();
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/threads")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "label": "Worktree thread",
+                "workspaceDir": repo.path(),
+                "workspaceMode": "worktree"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let thread_id = payload["thread_id"].as_str().expect("thread id");
+    let workspace_dir = payload["workspace_dir"].as_str().expect("workspace dir");
+    assert_ne!(workspace_dir, repo.path().to_string_lossy().as_ref());
+    assert!(Path::new(workspace_dir).exists());
+    assert!(
+        Path::new(workspace_dir).starts_with(data_dir.path().join("worktrees")),
+        "workspace_dir should be inside managed worktree root: {workspace_dir}"
+    );
+    assert_eq!(
+        git_output(Path::new(workspace_dir), &["rev-parse", "--show-toplevel"]),
+        Path::new(workspace_dir)
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread");
+    assert_eq!(stored["workspace_dir"], workspace_dir);
+    assert_eq!(stored["worktree"]["enabled"], true);
+    assert_eq!(
+        stored["worktree"]["source_repo_root"].as_str(),
+        Some(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(stored["worktree"]["worktree_dir"], workspace_dir);
+    assert!(
+        stored["worktree"]["branch"]
+            .as_str()
+            .unwrap()
+            .starts_with("garyx/")
+    );
+    assert_eq!(
+        stored["worktree"]["base_commit"],
+        git_output(repo.path(), &["rev-parse", "HEAD"])
+    );
+}
+
+#[tokio::test]
+async fn create_thread_worktree_rejects_non_git_root_workspace() {
+    let repo = tempdir().unwrap();
+    init_test_git_repo(repo.path());
+    let nested = repo.path().join("nested");
+    std::fs::create_dir(&nested).expect("nested dir");
+    let data_dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
+    let state = AppStateBuilder::new(config).build();
+    let router = build_router(state);
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/threads")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "label": "Bad worktree",
+                "workspaceDir": nested,
+                "workspaceMode": "worktree"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("git repository root")
+    );
+}
+
+#[tokio::test]
 async fn delete_thread_removes_thread_log_file() {
     let (state, logger, _dir) = test_state().await;
     let (thread_id, _) = create_thread_record(
@@ -663,6 +895,8 @@ async fn delete_thread_removes_thread_log_file() {
         ThreadEnsureOptions {
             label: Some("Delete".to_owned()),
             workspace_dir: None,
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
             agent_id: None,
             metadata: HashMap::new(),
             provider_type: None,
@@ -879,6 +1113,8 @@ async fn delete_thread_aborts_active_run_and_prevents_recreation() {
         ThreadEnsureOptions {
             label: Some("Delete Active".to_owned()),
             workspace_dir: None,
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
             agent_id: None,
             metadata: HashMap::new(),
             provider_type: None,
@@ -967,6 +1203,8 @@ async fn delete_thread_drops_local_state_even_when_provider_clear_fails() {
         ThreadEnsureOptions {
             label: Some("Delete Local State".to_owned()),
             workspace_dir: None,
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
             agent_id: None,
             metadata: HashMap::new(),
             provider_type: None,
@@ -1849,6 +2087,67 @@ async fn task_routes_resolve_percent_encoded_ids() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["task_id"], task_id);
     assert_eq!(payload["task"]["title"], "Check task routing");
+}
+
+#[tokio::test]
+async fn task_create_with_worktree_runtime_creates_thread_in_managed_worktree() {
+    let repo = tempdir().unwrap();
+    init_test_git_repo(repo.path());
+    let data_dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.tasks.enabled = true;
+    config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
+    let state = AppStateBuilder::new(config).build();
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/tasks")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "title": "Task worktree",
+                "body": "Use an isolated git worktree.",
+                "notification_target": {"kind": "none"},
+                "runtime": {
+                    "workspace_dir": repo.path(),
+                    "workspace_mode": "worktree"
+                }
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let thread_id = payload["thread_id"].as_str().expect("thread id");
+    let stored = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("stored thread");
+    let workspace_dir = stored["workspace_dir"].as_str().expect("workspace dir");
+    assert_ne!(workspace_dir, repo.path().to_string_lossy().as_ref());
+    assert!(
+        Path::new(workspace_dir).starts_with(data_dir.path().join("worktrees")),
+        "workspace_dir should be inside managed worktree root: {workspace_dir}"
+    );
+    assert_eq!(stored["worktree"]["enabled"], true);
+    assert_eq!(
+        stored["worktree"]["source_repo_root"].as_str(),
+        Some(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert_eq!(stored["worktree"]["worktree_dir"], workspace_dir);
 }
 
 #[tokio::test]

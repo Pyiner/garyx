@@ -35,6 +35,7 @@ pub mod thread_logs;
 mod tool_image;
 mod wikis;
 pub mod workspace_files;
+mod workspace_mode;
 
 #[cfg(all(test, feature = "real-provider-tests"))]
 mod downstream_real_tests;

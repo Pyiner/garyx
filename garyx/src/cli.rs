@@ -1050,6 +1050,9 @@ pub(crate) enum ThreadAction {
         title: Option<String>,
         #[arg(long)]
         workspace_dir: Option<String>,
+        /// Create a managed git worktree for this thread. Requires workspace-dir to be a git repo root.
+        #[arg(long)]
+        worktree: bool,
         /// Agent or team id to bind the new thread to. Team ids and standalone
         /// agent ids share one namespace; passing a team id binds the thread to
         /// the whole team (meta-provider: `agent_team`). Omit for the default
@@ -1103,6 +1106,9 @@ pub(crate) enum TaskAction {
         start: bool,
         #[arg(long)]
         workspace_dir: Option<String>,
+        /// Create the backing thread in a managed git worktree. Requires workspace-dir to be a git repo root.
+        #[arg(long)]
+        worktree: bool,
         /// Required notification target when the task enters review: `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`
         #[arg(long, value_name = "TARGET", num_args = 1..=2)]
         notify: Vec<String>,

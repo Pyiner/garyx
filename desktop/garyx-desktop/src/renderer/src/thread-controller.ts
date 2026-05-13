@@ -3,6 +3,7 @@ import type {
   TranscriptMessage,
   DesktopThreadSummary,
   DesktopWorkspace,
+  DesktopWorkspaceMode,
   DesktopState,
   GaryxDesktopApi,
 } from "@shared/contracts";
@@ -323,6 +324,7 @@ export async function ensureThread(input: {
   api: GaryxDesktopApi;
   selectedThreadId?: string | null;
   pendingWorkspacePath?: string | null;
+  pendingWorkspaceMode?: DesktopWorkspaceMode;
   pendingAgentId?: string | null;
   preferredWorkspacePath?: string | null;
   selectableWorkspaceCount: number;
@@ -334,6 +336,7 @@ export async function ensureThread(input: {
   initializeThreadMessages: (threadId: string) => void;
   setNewThreadDraftActive: (value: boolean) => void;
   setPendingWorkspacePath: (value: string | null) => void;
+  setPendingWorkspaceMode: (value: DesktopWorkspaceMode) => void;
   setPendingBotId: (value: string | null) => void;
   setPendingAgentId: (value: string) => void;
   setError: (value: string | null) => void;
@@ -361,6 +364,7 @@ export async function ensureThread(input: {
   try {
     const created = await input.api.createThread({
       workspacePath,
+      workspaceMode: input.pendingWorkspaceMode || "direct",
       agentId,
     });
     input.setDesktopState(created.state);
@@ -369,6 +373,7 @@ export async function ensureThread(input: {
     threadId = created.thread.id;
     input.setNewThreadDraftActive(false);
     input.setPendingWorkspacePath(null);
+    input.setPendingWorkspaceMode("direct");
     input.setPendingBotId(null);
     input.setPendingAgentId("claude");
     return threadId;

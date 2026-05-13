@@ -167,6 +167,8 @@ pub(crate) async fn payload(
     let options = ThreadEnsureOptions {
         label: Some(label.clone()),
         workspace_dir: Some(requested_workspace_dir.to_owned()),
+        workspace_mode: Default::default(),
+        worktree_base_dir: None,
         agent_id: Some(requested_agent_id.to_owned()),
         metadata: HashMap::new(),
         provider_type: None,

@@ -132,6 +132,7 @@ import {
   fetchGatewaySettings,
   fetchThreadHistory,
   fetchThreadLogs,
+  getWorkspaceGitStatus,
   getAutoResearchRun,
   interruptThread,
   listTasks,
@@ -1130,6 +1131,14 @@ function registerIpcHandlers(): void {
     "garyx:create-thread",
     async (_event, input?: CreateThreadInput) => {
       return createDesktopThread(input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:get-workspace-git-status",
+    async (_event, input: { workspacePath: string }) => {
+      const settings = await resolveSettings();
+      return getWorkspaceGitStatus(settings, input);
     },
   );
 
