@@ -465,6 +465,51 @@ fn builtin_plugin_metadata_comes_from_shared_descriptor_catalog() {
     }
 }
 
+#[test]
+fn recent_private_telegram_chat_id_prefers_latest_private_user_message() {
+    let updates: Vec<crate::telegram::TgUpdate> = serde_json::from_value(serde_json::json!([
+        {
+            "update_id": 10,
+            "message": {
+                "message_id": 1,
+                "date": 1,
+                "chat": {"id": -1000000001, "type": "supergroup"},
+                "from": {"id": 1000000001, "is_bot": false, "first_name": "Test"}
+            }
+        },
+        {
+            "update_id": 11,
+            "message": {
+                "message_id": 2,
+                "date": 2,
+                "chat": {"id": 1000000001, "type": "private"},
+                "from": {"id": 1000000001, "is_bot": false, "first_name": "Test"}
+            }
+        },
+        {
+            "update_id": 12,
+            "message": {
+                "message_id": 3,
+                "date": 3,
+                "chat": {"id": 2000000002, "type": "private"},
+                "from": {"id": 2000000002, "is_bot": true, "first_name": "Bot"}
+            }
+        },
+        {
+            "update_id": 13,
+            "message": {
+                "message_id": 4,
+                "date": 4,
+                "chat": {"id": 1000000003_i64, "type": "private"},
+                "from": {"id": 1000000003_i64, "is_bot": false, "first_name": "Owner"}
+            }
+        }
+    ]))
+    .unwrap();
+
+    assert_eq!(recent_private_telegram_chat_id(&updates), Some(1000000003));
+}
+
 #[tokio::test]
 async fn builtin_discoverer_sets_config_methods_per_channel() {
     // Pin the per-channel `config_methods` contract. The Mac App

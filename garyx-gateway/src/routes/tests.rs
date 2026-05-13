@@ -1753,6 +1753,83 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
 }
 
 #[tokio::test]
+async fn configured_bots_route_resolves_legacy_telegram_private_endpoint_without_valid_agent() {
+    let mut config = test_config();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "legacy".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(
+                &garyx_models::config::TelegramAccount {
+                    token: "token-telegram-legacy".to_owned(),
+                    enabled: true,
+                    name: Some("Legacy Telegram".to_owned()),
+                    agent_id: "missing-agent".to_owned(),
+                    workspace_dir: Some("/tmp/telegram-legacy".to_owned()),
+                    owner_target: None,
+                    groups: std::collections::HashMap::new(),
+                },
+            ),
+        );
+
+    let log_dir = tempdir().unwrap();
+    let logger = Arc::new(ThreadFileLogger::new(log_dir.path()));
+    let state = AppStateBuilder::new(config)
+        .with_thread_log_sink(logger)
+        .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::telegram-legacy",
+            serde_json::json!({
+                "thread_id": "thread::telegram-legacy",
+                "label": "Legacy Telegram",
+                "workspace_dir": "/tmp/telegram-legacy",
+                "updated_at": "2026-03-16T01:00:00Z",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "legacy",
+                    "binding_key": "1000000001",
+                    "chat_id": "",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "",
+                    "display_label": "Test User",
+                    "last_inbound_at": "2026-03-16T01:00:00Z"
+                }]
+            }),
+        )
+        .await;
+
+    let router = build_router(state);
+    let request = authed_request()
+        .uri("/api/configured-bots")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let bots = payload["bots"].as_array().unwrap();
+    let bot = bots
+        .iter()
+        .find(|entry| entry["channel"] == "telegram" && entry["account_id"] == "legacy")
+        .unwrap();
+
+    assert_eq!(bot["agent_id"], "missing-agent");
+    assert_eq!(bot["main_endpoint_status"], "resolved");
+    assert_eq!(bot["main_endpoint"]["thread_id"], "thread::telegram-legacy");
+    assert_eq!(bot["main_endpoint"]["chat_id"], "1000000001");
+    assert_eq!(bot["main_endpoint"]["delivery_target_type"], "chat_id");
+    assert_eq!(bot["main_endpoint"]["delivery_target_id"], "1000000001");
+    assert!(bot["main_endpoint"]["delivery_thread_id"].is_null());
+}
+
+#[tokio::test]
 async fn bot_consoles_route_aggregates_configured_bots_and_endpoints() {
     let mut config = test_config();
     config

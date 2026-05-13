@@ -43,6 +43,37 @@ async fn list_known_channel_endpoints_includes_thread_metadata() {
 }
 
 #[tokio::test]
+async fn list_known_channel_endpoints_backfills_delivery_target_from_binding_key() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::legacy",
+            json!({
+                "thread_id": "thread::legacy",
+                "label": "Legacy",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "main",
+                    "binding_key": "1000000001",
+                    "chat_id": "",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "",
+                    "display_label": "Test User"
+                }]
+            }),
+        )
+        .await;
+
+    let endpoints = list_known_channel_endpoints(&store).await;
+    assert_eq!(endpoints.len(), 1);
+    let endpoint = &endpoints[0];
+    assert_eq!(endpoint.binding_key, "1000000001");
+    assert_eq!(endpoint.chat_id, "");
+    assert_eq!(endpoint.delivery_target_type, "chat_id");
+    assert_eq!(endpoint.delivery_target_id, "1000000001");
+}
+
+#[tokio::test]
 async fn detached_endpoint_remains_known_without_thread_binding() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     store

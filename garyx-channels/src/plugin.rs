@@ -30,6 +30,7 @@ use crate::plugin_host::{
     InitializeResult, PluginErrorCode, PluginManifest, PluginRpcClient, PluginSenderHandle,
     RpcError, SpawnOptions, SubprocessError, SubprocessPlugin,
 };
+use crate::telegram::{TgResponse, TgUpdate};
 use crate::{FeishuChannel, TelegramChannel, WeixinChannel};
 
 // ---------------------------------------------------------------------------
@@ -854,10 +855,23 @@ fn endpoint_scope(endpoint: &KnownChannelEndpoint) -> Option<&str> {
 }
 
 fn is_telegram_private_candidate(endpoint: &KnownChannelEndpoint) -> bool {
-    endpoint.channel == "telegram"
-        && endpoint_scope(endpoint).is_none()
-        && !endpoint.binding_key.trim().is_empty()
-        && endpoint.binding_key.trim() == endpoint.chat_id.trim()
+    if endpoint.channel != "telegram" {
+        return false;
+    }
+    let binding_key = endpoint.binding_key.trim();
+    let chat_id = endpoint.chat_id.trim();
+    if binding_key.is_empty() {
+        return false;
+    }
+    if endpoint_scope(endpoint).is_none() && binding_key == chat_id {
+        return true;
+    }
+    chat_id.is_empty()
+        && endpoint.delivery_target_id.trim() == binding_key
+        && binding_key
+            .parse::<i64>()
+            .ok()
+            .is_some_and(|chat_id| chat_id > 0)
 }
 
 fn is_feishu_private_candidate(endpoint: &KnownChannelEndpoint) -> bool {
@@ -992,15 +1006,29 @@ fn best_private_endpoint(
     });
 
     let endpoint = candidates[0];
+    let chat_id = if endpoint.channel == "telegram"
+        && endpoint.chat_id.trim().is_empty()
+        && is_telegram_private_candidate(endpoint)
+    {
+        endpoint.binding_key.clone()
+    } else {
+        endpoint.chat_id.clone()
+    };
+    let delivery_target_id =
+        if endpoint.delivery_target_id.trim().is_empty() && !chat_id.trim().is_empty() {
+            chat_id.clone()
+        } else {
+            endpoint.delivery_target_id.clone()
+        };
     Some(PluginMainEndpoint {
         endpoint_key: endpoint.endpoint_key.clone(),
         channel: endpoint.channel.clone(),
         account_id: endpoint.account_id.clone(),
         binding_key: endpoint.binding_key.clone(),
-        chat_id: endpoint.chat_id.clone(),
+        chat_id: chat_id.clone(),
         delivery_target_type: endpoint.delivery_target_type.clone(),
-        delivery_target_id: endpoint.delivery_target_id.clone(),
-        delivery_thread_id: binding_delivery_thread_id(&endpoint.binding_key, &endpoint.chat_id),
+        delivery_target_id,
+        delivery_thread_id: binding_delivery_thread_id(&endpoint.binding_key, &chat_id),
         display_label: endpoint.display_label.clone(),
         thread_id: endpoint.thread_id.clone(),
         thread_label: endpoint.thread_label.clone(),
@@ -1061,7 +1089,96 @@ async fn resolve_telegram_main_endpoint(
         return Some(endpoint);
     }
 
+    if let Some(chat_id) = fetch_recent_telegram_private_chat_id(account_id, account).await {
+        let chat_id = chat_id.to_string();
+        return Some(synthetic_main_endpoint(
+            "telegram",
+            account_id,
+            &chat_id,
+            &chat_id,
+            DELIVERY_TARGET_TYPE_CHAT_ID,
+            &chat_id,
+            account.workspace_dir.as_deref(),
+            "recent_private_update",
+        ));
+    }
+
     None
+}
+
+async fn fetch_recent_telegram_private_chat_id(
+    account_id: &str,
+    account: &TelegramAccount,
+) -> Option<i64> {
+    let token = account.token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    if !token.contains(':') {
+        return None;
+    }
+    let http = HttpClient::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(
+            |error| warn!(account_id, error = %error, "failed to build Telegram getUpdates client"),
+        )
+        .ok()?;
+    let url = format!("https://api.telegram.org/bot{token}/getUpdates");
+    let response = http
+        .get(url)
+        .query(&[
+            ("limit", "100"),
+            ("timeout", "0"),
+            ("allowed_updates", "[\"message\"]"),
+        ])
+        .send()
+        .await
+        .map_err(|error| {
+            warn!(account_id, error = %error, "failed to fetch Telegram updates for main endpoint")
+        })
+        .ok()?;
+    if !response.status().is_success() {
+        warn!(
+            account_id,
+            status = %response.status(),
+            "Telegram getUpdates returned non-success while resolving main endpoint"
+        );
+        return None;
+    }
+    let payload = response
+        .json::<TgResponse<Vec<TgUpdate>>>()
+        .await
+        .map_err(|error| {
+            warn!(account_id, error = %error, "failed to parse Telegram updates for main endpoint")
+        })
+        .ok()?;
+    if !payload.ok {
+        warn!(
+            account_id,
+            description = payload.description.as_deref().unwrap_or(""),
+            "Telegram getUpdates rejected main endpoint lookup"
+        );
+        return None;
+    }
+    recent_private_telegram_chat_id(payload.result.as_deref().unwrap_or(&[]))
+}
+
+fn recent_private_telegram_chat_id(updates: &[TgUpdate]) -> Option<i64> {
+    updates
+        .iter()
+        .filter_map(|update| {
+            let message = update.message.as_ref()?;
+            if message.chat.chat_type != "private" || message.chat.id <= 0 {
+                return None;
+            }
+            if message.from.as_ref().is_some_and(|from| from.is_bot) {
+                return None;
+            }
+            Some((update.update_id, message.chat.id))
+        })
+        .max_by_key(|(update_id, _)| *update_id)
+        .map(|(_, chat_id)| chat_id)
 }
 
 async fn resolve_feishu_main_endpoint(

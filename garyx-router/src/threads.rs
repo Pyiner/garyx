@@ -51,7 +51,7 @@ impl ChannelBinding {
             Some(&self.delivery_target_type),
             Some(&self.delivery_target_id),
             &self.chat_id,
-            &self.chat_id,
+            &self.binding_key,
         )
     }
 
@@ -61,7 +61,7 @@ impl ChannelBinding {
             Some(&self.delivery_target_type),
             Some(&self.delivery_target_id),
             &self.chat_id,
-            &self.chat_id,
+            &self.binding_key,
         )
     }
 }
