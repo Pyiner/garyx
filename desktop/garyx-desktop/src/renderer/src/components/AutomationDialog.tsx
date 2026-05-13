@@ -171,12 +171,7 @@ export function AutomationDialog({
                   {agentOptions.map((option) => (
                     <SelectItem key={option.id} value={option.id}>
                       <AgentOptionRow
-                        agentId={option.id}
-                        avatarDataUrl={option.avatarDataUrl}
-                        detail={option.detail}
-                        kind={option.kind}
-                        label={option.label}
-                        providerType={option.providerType}
+                        option={option}
                       />
                     </SelectItem>
                   ))}

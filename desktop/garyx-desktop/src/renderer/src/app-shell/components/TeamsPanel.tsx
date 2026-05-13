@@ -21,6 +21,7 @@ import {
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
+import { buildAgentPickerOptions } from '../agent-options';
 import { AgentOptionRow } from './AgentOptionAvatar';
 
 type TeamsPanelProps = {
@@ -149,6 +150,10 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
     }
     return next;
   }, [agents]);
+  const agentOptions = useMemo(
+    () => buildAgentPickerOptions(agents, { labelStyle: 'display' }),
+    [agents],
+  );
 
   const knownSelectedAgentCount = useMemo(
     () => agents.filter((agent) => draft.memberAgentIds.includes(agent.agentId)).length,
@@ -374,16 +379,11 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                   <SelectContent>
                     <SelectGroup>
                       <SelectLabel>{t('Agents')}</SelectLabel>
-                      {agents.length ? (
-                        agents.map((agent) => (
-                          <SelectItem key={agent.agentId} value={agent.agentId}>
+                      {agentOptions.length ? (
+                        agentOptions.map((option) => (
+                          <SelectItem key={option.id} value={option.id}>
                             <AgentOptionRow
-                              agentId={agent.agentId}
-                              avatarDataUrl={agent.avatarDataUrl}
-                              detail={agent.providerType}
-                              kind={agent.builtIn ? 'builtin' : 'agent'}
-                              label={agent.displayName}
-                              providerType={agent.providerType}
+                              option={option}
                             />
                           </SelectItem>
                         ))
@@ -410,7 +410,7 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                   <div className="codex-inline-hint" style={{ color: '#9b4b4b' }}>{agentsLoadError}</div>
                 ) : null}
                 <div className="codex-list-card" style={{ maxHeight: 280, overflowY: 'auto' }}>
-                  {agents.length ? (
+                  {agentOptions.length ? (
                     <>
                       <div className="codex-list-row" style={{ position: 'sticky', top: 0, zIndex: 10, background: 'var(--color-token-bg-primary, #fcfcfa)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -424,41 +424,37 @@ export function TeamsPanel({ onToast }: TeamsPanelProps) {
                           <span className="codex-list-row-name" style={{ fontSize: 12 }}>{t('Select All')}</span>
                         </div>
                       </div>
-                      {agents.map((agent) => {
-                        const selected = draft.memberAgentIds.includes(agent.agentId);
-                        const leader = draft.leaderAgentId === agent.agentId;
+                      {agentOptions.map((option) => {
+                        const agent = agentMap.get(option.id);
+                        const selected = draft.memberAgentIds.includes(option.id);
+                        const leader = draft.leaderAgentId === option.id;
 
                         return (
                           <div
                             className={`codex-list-row ${selected ? 'codex-list-row-active' : ''}`}
-                            key={agent.agentId}
+                            key={option.id}
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                               <Checkbox
-                                aria-label={t('Select {name}', { name: agent.displayName })}
+                                aria-label={t('Select {name}', { name: option.label })}
                                 checked={selected}
                                 disabled={leader}
                                 onCheckedChange={(checked) => {
                                   const nextChecked = checked === true;
                                   if (nextChecked !== selected) {
-                                    toggleMember(agent.agentId);
+                                    toggleMember(option.id);
                                   }
                                 }}
                               />
                               <AgentOptionRow
-                                agentId={agent.agentId}
-                                avatarDataUrl={agent.avatarDataUrl}
-                                detail={agent.providerType}
-                                kind={agent.builtIn ? 'builtin' : 'agent'}
-                                label={agent.displayName}
-                                providerType={agent.providerType}
+                                option={option}
                               />
                             </div>
                             <div className="codex-list-row-actions">
                               {leader ? (
                                 <span className="codex-sync-pill ok">{t('Leader')}</span>
                               ) : null}
-                              {agent.builtIn ? (
+                              {agent?.builtIn ? (
                                 <span className="codex-sync-pill ok">{t('Built-in')}</span>
                               ) : null}
                             </div>

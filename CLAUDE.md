@@ -100,6 +100,10 @@ needs installed-app validation.
   child directories just to decide whether to show expansion affordances,
   especially on macOS where probing protected folders can trigger privacy
   prompts.
+- Agent selectors should show only the agent or team identity. Do not append
+  provider names such as Claude, Codex, or Gemini to selector labels or details;
+  provider metadata belongs in dedicated settings/details surfaces outside
+  pickers.
 
 ## Gateway Runtime
 

@@ -2,31 +2,164 @@ import type { DesktopApiProviderType, DesktopCustomAgent, DesktopTeam } from "@s
 
 export type AgentOptionKind = "builtin" | "agent" | "team";
 
-export type ComposerAgentOption = {
+export type AgentPickerOption = {
   id: string;
   label: string;
   kind: AgentOptionKind;
-  avatarDataUrl?: string;
+  avatarDataUrl?: string | null;
   detail?: string;
   providerType?: DesktopApiProviderType;
 };
 
-export type AgentTargetOption = {
-  avatarDataUrl?: string;
-  detail?: string;
-  kind: AgentOptionKind;
-  providerType?: DesktopApiProviderType;
+export type ComposerAgentOption = AgentPickerOption;
+
+export type AgentTargetOption = AgentPickerOption & {
   value: string;
-  label: string;
 };
 
-const PROVIDER_LABELS: Record<string, string> = {
-  codex_app_server: "Codex",
-  gemini_cli: "Gemini",
-};
+type AgentLabelStyle = "display" | "target";
+
+type TeamLabelStyle = "display" | "target";
 
 const byDisplayName = <T extends { displayName: string }>(a: T, b: T) =>
   a.displayName.localeCompare(b.displayName);
+
+function sortAgents(agents: DesktopCustomAgent[]): DesktopCustomAgent[] {
+  return [...agents]
+    .sort((left, right) => {
+      if (left.builtIn !== right.builtIn) {
+        return left.builtIn ? -1 : 1;
+      }
+      return left.displayName.localeCompare(right.displayName)
+        || left.agentId.localeCompare(right.agentId);
+    });
+}
+
+function sortStandaloneAgents(agents: DesktopCustomAgent[]): DesktopCustomAgent[] {
+  return sortAgents(agents.filter((agent) => agent.standalone));
+}
+
+function displayAgentName(agent: DesktopCustomAgent): string {
+  return agent.displayName.trim() || agent.agentId;
+}
+
+function displayTeamName(team: DesktopTeam): string {
+  return team.displayName.trim() || team.teamId;
+}
+
+export function formatAgentOptionLabel(
+  agent: DesktopCustomAgent,
+  style: AgentLabelStyle = "target",
+): string {
+  const displayName = displayAgentName(agent);
+  return style === "display" || displayName.trim() === agent.agentId.trim()
+    ? displayName
+    : `${displayName} (${agent.agentId})`;
+}
+
+export function formatTeamOptionLabel(
+  team: DesktopTeam,
+  style: TeamLabelStyle = "target",
+): string {
+  const displayName = displayTeamName(team);
+  if (style === "display") {
+    return displayName;
+  }
+  return displayName.trim() === team.teamId.trim()
+    ? `${displayName} (team)`
+    : `${displayName} (${team.teamId}, team)`;
+}
+
+function toAgentPickerOption(
+  agent: DesktopCustomAgent,
+  labelStyle: AgentLabelStyle,
+): AgentPickerOption {
+  return {
+    id: agent.agentId,
+    label: formatAgentOptionLabel(agent, labelStyle),
+    kind: agent.builtIn ? "builtin" : "agent",
+    avatarDataUrl: agent.avatarDataUrl,
+    providerType: agent.providerType,
+  };
+}
+
+function toTeamPickerOption(
+  team: DesktopTeam,
+  labelStyle: TeamLabelStyle,
+  detail?: string,
+): AgentPickerOption {
+  return {
+    id: team.teamId,
+    label: formatTeamOptionLabel(team, labelStyle),
+    kind: "team",
+    avatarDataUrl: team.avatarDataUrl,
+    detail,
+  };
+}
+
+export function buildAgentPickerOptions(
+  agents: DesktopCustomAgent[],
+  options: {
+    excludeAgentIds?: ReadonlySet<string>;
+    labelStyle?: AgentLabelStyle;
+    standaloneOnly?: boolean;
+  } = {},
+): AgentPickerOption[] {
+  const { excludeAgentIds, labelStyle = "display", standaloneOnly = false } = options;
+  const sortedAgents = standaloneOnly ? sortStandaloneAgents(agents) : sortAgents(agents);
+  return sortedAgents
+    .filter((agent) => !excludeAgentIds?.has(agent.agentId))
+    .map((agent) => toAgentPickerOption(agent, labelStyle));
+}
+
+export function buildStandaloneAgentOptions(
+  agents: DesktopCustomAgent[],
+  options: {
+    excludeAgentIds?: ReadonlySet<string>;
+    labelStyle?: AgentLabelStyle;
+  } = {},
+): AgentPickerOption[] {
+  return buildAgentPickerOptions(agents, { ...options, standaloneOnly: true });
+}
+
+export function buildTeamOptions(
+  teams: DesktopTeam[],
+  options: {
+    detail?: string | ((team: DesktopTeam) => string | undefined);
+    labelStyle?: TeamLabelStyle;
+  } = {},
+): AgentPickerOption[] {
+  const { detail, labelStyle = "display" } = options;
+  return [...teams]
+    .sort(byDisplayName)
+    .map((team) => toTeamPickerOption(
+      team,
+      labelStyle,
+      typeof detail === "function" ? detail(team) : detail,
+    ));
+}
+
+export function buildAgentAndTeamOptions(
+  agents: DesktopCustomAgent[],
+  teams: DesktopTeam[],
+  options: {
+    agentLabelStyle?: AgentLabelStyle;
+    teamDetail?: string;
+    teamLabelStyle?: TeamLabelStyle;
+    teamsFirst?: boolean;
+  } = {},
+): AgentPickerOption[] {
+  const agentOptions = buildStandaloneAgentOptions(agents, {
+    labelStyle: options.agentLabelStyle ?? "display",
+  });
+  const teamOptions = buildTeamOptions(teams, {
+    detail: options.teamDetail,
+    labelStyle: options.teamLabelStyle ?? "display",
+  });
+  return options.teamsFirst
+    ? [...teamOptions, ...agentOptions]
+    : [...agentOptions, ...teamOptions];
+}
 
 /**
  * Build the flat agent-option list shown in new-thread pickers: built-in
@@ -41,48 +174,23 @@ export function buildAgentOptions(
     agents.map((agent) => [agent.agentId, agent.displayName] as const),
   );
 
-  const options: ComposerAgentOption[] = [];
+  const builtInAgents = buildStandaloneAgentOptions(
+    agents.filter((agent) => agent.builtIn),
+    { labelStyle: "display" },
+  );
+  const customAgents = buildStandaloneAgentOptions(
+    agents.filter((agent) => !agent.builtIn),
+    { excludeAgentIds: teamLeaderIds, labelStyle: "display" },
+  );
+  const teamOptions = buildTeamOptions(teams, {
+    detail: (team) => {
+      const leaderLabel = agentNameById.get(team.leaderAgentId) || team.leaderAgentId;
+      return `Lead: ${leaderLabel}`;
+    },
+    labelStyle: "display",
+  });
 
-  for (const agent of agents
-    .filter((a) => a.builtIn && a.standalone)
-    .sort(byDisplayName)) {
-    options.push({
-      id: agent.agentId,
-      label: agent.displayName,
-      kind: "builtin",
-      avatarDataUrl: agent.avatarDataUrl,
-      providerType: agent.providerType,
-    });
-  }
-
-  for (const agent of agents
-    .filter(
-      (a) => !a.builtIn && a.standalone && !teamLeaderIds.has(a.agentId),
-    )
-    .sort(byDisplayName)) {
-    options.push({
-      id: agent.agentId,
-      label: agent.displayName,
-      kind: "agent",
-      avatarDataUrl: agent.avatarDataUrl,
-      detail: PROVIDER_LABELS[agent.providerType],
-      providerType: agent.providerType,
-    });
-  }
-
-  for (const team of [...teams].sort(byDisplayName)) {
-    const leaderLabel =
-      agentNameById.get(team.leaderAgentId) || team.leaderAgentId;
-    options.push({
-      id: team.teamId,
-      label: team.displayName,
-      kind: "team",
-      avatarDataUrl: team.avatarDataUrl,
-      detail: `Lead: ${leaderLabel}`,
-    });
-  }
-
-  return options;
+  return [...builtInAgents, ...customAgents, ...teamOptions];
 }
 
 export function groupAgentOptions(options: ComposerAgentOption[]) {
@@ -93,53 +201,20 @@ export function groupAgentOptions(options: ComposerAgentOption[]) {
   };
 }
 
-function formatAgentTargetLabel(agent: DesktopCustomAgent): string {
-  const core = agent.displayName.trim() === agent.agentId.trim()
-    ? agent.displayName
-    : `${agent.displayName} (${agent.agentId})`;
-  return `${core} · ${PROVIDER_LABELS[agent.providerType] || "Claude"}`;
-}
-
-function formatTeamTargetLabel(team: DesktopTeam): string {
-  return team.displayName.trim() === team.teamId.trim()
-    ? `${team.displayName} (team)`
-    : `${team.displayName} (${team.teamId}, team)`;
-}
-
 export function buildAgentTargetOptions(
   agents: DesktopCustomAgent[],
   teams: DesktopTeam[],
+  options: { teamsFirst?: boolean } = {},
 ): AgentTargetOption[] {
-  const agentOptions = [...agents]
-    .filter((agent) => agent.standalone)
-    .sort((left, right) => {
-      if (left.builtIn !== right.builtIn) {
-        return left.builtIn ? -1 : 1;
-      }
-      return left.displayName.localeCompare(right.displayName)
-        || left.agentId.localeCompare(right.agentId);
-    })
-    .map((agent) => ({
-      avatarDataUrl: agent.avatarDataUrl,
-      detail: PROVIDER_LABELS[agent.providerType] || "Claude",
-      kind: agent.builtIn ? "builtin" as const : "agent" as const,
-      providerType: agent.providerType,
-      value: agent.agentId,
-      label: formatAgentTargetLabel(agent),
-    }));
-
-  const teamOptions = [...teams]
-    .sort((left, right) => {
-      return left.displayName.localeCompare(right.displayName)
-        || left.teamId.localeCompare(right.teamId);
-    })
-    .map((team) => ({
-      avatarDataUrl: team.avatarDataUrl,
-      detail: "Team",
-      kind: "team" as const,
-      value: team.teamId,
-      label: formatTeamTargetLabel(team),
-    }));
-
-  return [...agentOptions, ...teamOptions];
+  const toTarget = (option: AgentPickerOption): AgentTargetOption => ({
+    ...option,
+    value: option.id,
+  });
+  const allOptions = buildAgentAndTeamOptions(agents, teams, {
+    agentLabelStyle: "target",
+    teamDetail: "Team",
+    teamLabelStyle: "target",
+    teamsFirst: options.teamsFirst,
+  });
+  return allOptions.map(toTarget);
 }

@@ -1,5 +1,4 @@
 import type {
-  DesktopApiProviderType,
   DesktopAutomationActivityFeed,
   DesktopAutomationSchedule,
   DesktopBotConsoleSummary,
@@ -12,6 +11,7 @@ import type {
   PendingThreadInput,
   TranscriptMessage,
 } from '@shared/contracts';
+import type { AgentPickerOption } from './agent-options';
 
 export type TranscriptEntryState = 'optimistic' | 'remote_partial' | 'remote_final' | 'error' | 'interrupted';
 
@@ -66,14 +66,7 @@ export type AutomationDraft = {
   schedule: DesktopAutomationSchedule;
 };
 
-export type AutomationAgentOption = {
-  avatarDataUrl?: string;
-  detail?: string;
-  id: string;
-  label: string;
-  kind: 'builtin' | 'agent' | 'team';
-  providerType?: DesktopApiProviderType;
-};
+export type AutomationAgentOption = AgentPickerOption;
 
 export type AutomationDialogState = {
   mode: 'create' | 'edit';

@@ -371,12 +371,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
                         {agentTargets.map((target) => (
                           <SelectItem key={target.value} value={target.value}>
                             <AgentOptionRow
-                              agentId={target.value}
-                              avatarDataUrl={target.avatarDataUrl}
-                              detail={target.detail}
-                              kind={target.kind}
-                              label={target.label}
-                              providerType={target.providerType}
+                              option={target}
                             />
                           </SelectItem>
                         ))}

@@ -10,9 +10,9 @@ import type {
 } from '@shared/contracts';
 
 import { selectedAutomation } from '../thread-model';
+import { buildAgentAndTeamOptions } from './agent-options';
 import type {
   AutomationDraft,
-  AutomationAgentOption,
   AutomationDialogState,
   ContentView,
   PendingAutomationRun,
@@ -47,46 +47,6 @@ function buildAutomationDraft(
     workspacePath: automation?.workspacePath || workspaces[0]?.path || '',
     schedule: automation?.schedule || defaultAutomationSchedule(),
   };
-}
-
-function formatAutomationAgentOptions(
-  agents: DesktopCustomAgent[],
-  teams: DesktopTeam[],
-): AutomationAgentOption[] {
-  const teamOptions = [...teams]
-    .sort((left, right) => {
-      return left.displayName.localeCompare(right.displayName) || left.teamId.localeCompare(right.teamId);
-    })
-    .map((team) => ({
-      avatarDataUrl: team.avatarDataUrl,
-      detail: 'Team',
-      id: team.teamId,
-      label:
-        team.displayName.trim() === team.teamId.trim()
-          ? `${team.displayName} (team)`
-          : `${team.displayName} (${team.teamId}, team)`,
-      kind: 'team' as const,
-    }));
-  const agentOptions = agents
-    .filter((agent) => agent.standalone)
-    .sort((left, right) => {
-      if (left.builtIn !== right.builtIn) {
-        return left.builtIn ? -1 : 1;
-      }
-      return left.displayName.localeCompare(right.displayName) || left.agentId.localeCompare(right.agentId);
-    })
-    .map((agent) => ({
-      avatarDataUrl: agent.avatarDataUrl,
-      detail: agent.providerType,
-      id: agent.agentId,
-      label:
-        agent.displayName.trim() === agent.agentId.trim()
-          ? `${agent.displayName} (agent${agent.builtIn ? ', built-in' : ''})`
-          : `${agent.displayName} (${agent.agentId}, agent${agent.builtIn ? ', built-in' : ''})`,
-      kind: agent.builtIn ? 'builtin' as const : 'agent' as const,
-      providerType: agent.providerType,
-    }));
-  return [...teamOptions, ...agentOptions];
 }
 
 function automationUnreadTimestamp(automation: DesktopAutomationSummary): string | null {
@@ -138,7 +98,12 @@ export function useAutomationController({
   const automations = desktopState?.automations || [];
   const selectedAutomationId = desktopState?.selectedAutomationId || null;
   const activeAutomation = selectedAutomation(desktopState, selectedAutomationId);
-  const automationAgentOptions = formatAutomationAgentOptions(desktopAgents, desktopTeams);
+  const automationAgentOptions = buildAgentAndTeamOptions(desktopAgents, desktopTeams, {
+    agentLabelStyle: 'target',
+    teamDetail: 'Team',
+    teamLabelStyle: 'target',
+    teamsFirst: true,
+  });
   const automationWorkspaces = (desktopState?.workspaces || []).filter((workspace) => {
     return Boolean(workspace.path) && workspace.available;
   });

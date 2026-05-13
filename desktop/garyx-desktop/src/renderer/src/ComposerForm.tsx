@@ -321,11 +321,7 @@ function renderComposerProviderControl({
               onSelect={() => onSelectAgent(option.id)}
             >
               <AgentOptionRow
-                agentId={option.id}
-                avatarDataUrl={option.avatarDataUrl}
-                kind={option.kind}
-                label={option.label}
-                providerType={option.providerType}
+                option={option}
               />
             </FloatingActionMenuItem>
           ))}
@@ -343,12 +339,7 @@ function renderComposerProviderControl({
                     onSelect={() => onSelectAgent(option.id)}
                   >
                     <AgentOptionRow
-                      agentId={option.id}
-                      avatarDataUrl={option.avatarDataUrl}
-                      detail={option.detail}
-                      kind={option.kind}
-                      label={option.label}
-                      providerType={option.providerType}
+                      option={option}
                     />
                   </FloatingActionMenuItem>
                 ))}
@@ -368,12 +359,7 @@ function renderComposerProviderControl({
                     onSelect={() => onSelectAgent(option.id)}
                   >
                     <AgentOptionRow
-                      agentId={option.id}
-                      avatarDataUrl={option.avatarDataUrl}
-                      detail={option.detail}
-                      kind={option.kind}
-                      label={option.label}
-                      providerType={option.providerType}
+                      option={option}
                     />
                   </FloatingActionMenuItem>
                 ))}

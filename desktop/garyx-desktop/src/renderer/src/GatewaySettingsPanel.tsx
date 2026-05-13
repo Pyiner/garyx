@@ -65,6 +65,7 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { buildAgentTargetOptions, type AgentTargetOption } from './app-shell/agent-options';
 import { AddBotDialog } from './app-shell/components/AddBotDialog';
 import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
 import { MoreDotsIcon } from './app-shell/icons';
@@ -148,15 +149,6 @@ type GatewaySettingsPanelProps = {
 type AgentProviderFieldsProps = {
   provider: any;
   onMutate: (mutator: (provider: any) => void) => void;
-};
-
-type AgentTargetOption = {
-  avatarDataUrl?: string;
-  detail?: string;
-  kind: 'builtin' | 'agent' | 'team';
-  providerType?: DesktopApiProviderType;
-  value: string;
-  label: string;
 };
 
 type CommandDraft = UpsertSlashCommandInput;
@@ -318,16 +310,6 @@ function providerTypeLabel(provider: any): string {
   return 'claude';
 }
 
-function agentProviderLabel(providerType: DesktopCustomAgent['providerType']): string {
-  if (providerType === 'codex_app_server') {
-    return 'Codex';
-  }
-  if (providerType === 'gemini_cli') {
-    return 'Gemini';
-  }
-  return 'Claude';
-}
-
 function sortedStandaloneAgents(agents: DesktopCustomAgent[]): DesktopCustomAgent[] {
   return [...agents]
     .filter((agent) => agent.standalone)
@@ -366,18 +348,6 @@ function preferredStandaloneAgentId(
     || '';
 }
 
-function formatAgentOptionLabel(agent: DesktopCustomAgent): string {
-  return agent.displayName.trim() === agent.agentId.trim()
-    ? agent.displayName
-    : `${agent.displayName} (${agent.agentId})`;
-}
-
-function formatTeamOptionLabel(team: DesktopTeam): string {
-  return team.displayName.trim() === team.teamId.trim()
-    ? `${team.displayName} (team)`
-    : `${team.displayName} (${team.teamId}, team)`;
-}
-
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -397,26 +367,7 @@ function sortedAgentTargets(
   agents: DesktopCustomAgent[],
   teams: DesktopTeam[],
 ): AgentTargetOption[] {
-  const teamOptions = [...teams]
-    .sort((left, right) => {
-      return left.displayName.localeCompare(right.displayName) || left.teamId.localeCompare(right.teamId);
-    })
-    .map((team) => ({
-      avatarDataUrl: team.avatarDataUrl,
-      detail: 'Team',
-      kind: 'team' as const,
-      value: team.teamId,
-      label: formatTeamOptionLabel(team),
-    }));
-  const agentOptions = sortedStandaloneAgents(agents).map((agent) => ({
-    avatarDataUrl: agent.avatarDataUrl,
-    detail: agentProviderLabel(agent.providerType),
-    kind: agent.builtIn ? 'builtin' as const : 'agent' as const,
-    providerType: agent.providerType,
-    value: agent.agentId,
-    label: `${formatAgentOptionLabel(agent)} · ${agentProviderLabel(agent.providerType)}`,
-  }));
-  return [...teamOptions, ...agentOptions];
+  return buildAgentTargetOptions(agents, teams, { teamsFirst: true });
 }
 
 function bindingAgentId(binding: any): string | null {

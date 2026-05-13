@@ -17,6 +17,16 @@ import {
 
 type AgentOptionKind = 'builtin' | 'agent' | 'team';
 
+type AgentOptionLike = {
+  avatarDataUrl?: string | null;
+  detail?: string | null;
+  id?: string | null;
+  kind?: AgentOptionKind;
+  label?: string | null;
+  providerType?: DesktopApiProviderType | null;
+  value?: string | null;
+};
+
 type AgentOptionAvatarProps = {
   agentId?: string | null;
   avatarDataUrl?: string | null;
@@ -88,27 +98,35 @@ export function AgentOptionRow({
   avatarDataUrl,
   children,
   detail,
-  kind = 'agent',
+  kind,
   label,
+  option,
   providerType,
 }: AgentOptionAvatarProps & {
   children?: ReactNode;
   detail?: string | null;
+  option?: AgentOptionLike;
 }) {
-  const text = label || agentId || '';
+  const resolvedAgentId = agentId ?? option?.id ?? option?.value ?? null;
+  const resolvedAvatarDataUrl = avatarDataUrl ?? option?.avatarDataUrl;
+  const resolvedDetail = detail ?? option?.detail;
+  const resolvedKind = kind ?? option?.kind ?? 'agent';
+  const resolvedLabel = label ?? option?.label;
+  const resolvedProviderType = providerType ?? option?.providerType;
+  const text = resolvedLabel || resolvedAgentId || '';
 
   return (
     <span className="agent-option-row">
       <AgentOptionAvatar
-        agentId={agentId}
-        avatarDataUrl={avatarDataUrl}
-        kind={kind}
+        agentId={resolvedAgentId}
+        avatarDataUrl={resolvedAvatarDataUrl}
+        kind={resolvedKind}
         label={text}
-        providerType={providerType}
+        providerType={resolvedProviderType}
       />
       <span className="agent-option-copy">
         <span className="agent-option-label">{children || text}</span>
-        {detail ? <span className="agent-option-detail">{detail}</span> : null}
+        {resolvedDetail ? <span className="agent-option-detail">{resolvedDetail}</span> : null}
       </span>
     </span>
   );

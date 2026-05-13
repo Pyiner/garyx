@@ -67,6 +67,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
+import { buildAgentPickerOptions } from '../agent-options';
 import { AgentOptionRow } from './AgentOptionAvatar';
 import { AgentsIcon, MoreDotsIcon } from '../icons';
 
@@ -251,6 +252,10 @@ export function TasksPanel({
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [dropStatus, setDropStatus] = useState<DesktopTaskStatus | null>(null);
   const draggingTaskIdValue = useRef<string | null>(null);
+  const agentOptions = useMemo(
+    () => buildAgentPickerOptions(agents, { labelStyle: 'display' }),
+    [agents],
+  );
 
   const botFilterOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -544,24 +549,18 @@ export function TasksPanel({
                     {t('Assign to')}
                   </FloatingActionMenuSubTrigger>
                   <FloatingActionMenuSubContent sideOffset={6}>
-                    {agents.map((agent) => {
-                      const label = agent.displayName || agent.agentId;
+                    {agentOptions.map((option) => {
                       return (
                         <FloatingActionMenuItem
                           className="tasks-agent-menu-item"
                           disabled={busy}
-                          key={agent.agentId}
+                          key={option.id}
                           onSelect={() => {
-                            void assignTask(task, agent.agentId);
+                            void assignTask(task, option.id);
                           }}
                         >
                           <AgentOptionRow
-                            agentId={agent.agentId}
-                            avatarDataUrl={agent.avatarDataUrl}
-                            detail={agent.providerType}
-                            kind={agent.builtIn ? 'builtin' : 'agent'}
-                            label={label}
-                            providerType={agent.providerType}
+                            option={option}
                           />
                         </FloatingActionMenuItem>
                       );
@@ -818,16 +817,11 @@ export function TasksPanel({
                       <SelectItem value={UNASSIGNED_ASSIGNEE_VALUE}>
                         {t('Unassigned')}
                       </SelectItem>
-                      {agents.map((agent) => {
-                        const label = agent.displayName || agent.agentId;
+                      {agentOptions.map((option) => {
                         return (
-                          <SelectItem key={agent.agentId} value={agent.agentId}>
+                          <SelectItem key={option.id} value={option.id}>
                             <AgentOptionRow
-                              agentId={agent.agentId}
-                              avatarDataUrl={agent.avatarDataUrl}
-                              kind={agent.builtIn ? 'builtin' : 'agent'}
-                              label={label}
-                              providerType={agent.providerType}
+                              option={option}
                             />
                           </SelectItem>
                         );
