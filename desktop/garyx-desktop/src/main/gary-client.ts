@@ -4375,7 +4375,7 @@ export async function sendStreamingInput(
 }
 
 export async function interruptThread(
-  _settings: DesktopSettings,
+  settings: DesktopSettings,
   threadId: string,
 ): Promise<InterruptResult> {
   const active = activeStreamRequests.get(threadId);
@@ -4414,6 +4414,36 @@ export async function interruptThread(
       active.socket.close();
       activeStreamRequests.delete(threadId);
     }
+  }
+  try {
+    const payload = await requestJson<{
+      status?: unknown;
+      threadId?: unknown;
+      thread_id?: unknown;
+      sessionId?: unknown;
+      abortedRuns?: unknown;
+      aborted_runs?: unknown;
+    }>(settings, "/api/chat/interrupt", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ threadId }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const responseThreadId =
+      asString(payload.threadId) || asString(payload.thread_id) || threadId;
+    const abortedRunsPayload = Array.isArray(payload.abortedRuns)
+      ? payload.abortedRuns
+      : Array.isArray(payload.aborted_runs)
+        ? payload.aborted_runs
+        : [];
+    return {
+      status: asString(payload.status) || "not_found",
+      threadId: responseThreadId,
+      sessionId: asString(payload.sessionId) || responseThreadId,
+      abortedRuns: abortedRunsPayload.map((entry) => String(entry)),
+    };
+  } catch {
+    // Preserve local abort behavior when the gateway is unreachable.
   }
   return {
     status: "local_abort_only",

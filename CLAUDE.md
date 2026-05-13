@@ -92,6 +92,10 @@ needs installed-app validation.
 - If an assistant text segment has streamed but the desktop thread is still
   running and the tail is not an active tool group, keep a bottom "Thinking"
   indicator visible until the run is done.
+- Desktop interruption controls must be gateway-backed. The local Mac app
+  process may not own the active WebSocket for runs started elsewhere or after
+  a reload; after trying any local active socket, call the gateway chat
+  interrupt endpoint so the bridge can interrupt or abort the active thread run.
 - The workspace file browser should read directories on demand. Do not pre-scan
   child directories just to decide whether to show expansion affordances,
   especially on macOS where probing protected folders can trigger privacy

@@ -70,6 +70,19 @@ pub async fn chat_ws(
     ws.on_upgrade(move |socket| handle_chat_socket(state, socket))
 }
 
+/// POST /api/chat/interrupt - interrupt an active run for a thread.
+pub async fn chat_interrupt(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<InterruptRequest>,
+) -> impl IntoResponse {
+    let thread_id = match resolve_existing_thread_key(request.thread_id) {
+        Ok(thread_id) => thread_id,
+        Err((status, payload)) => return (status, payload).into_response(),
+    };
+    let payload = execute_chat_interrupt(&state, thread_id).await;
+    Json(payload).into_response()
+}
+
 async fn handle_chat_socket(state: Arc<AppState>, socket: WebSocket) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<serde_json::Value>();
