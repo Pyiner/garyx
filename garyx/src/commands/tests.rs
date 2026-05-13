@@ -1509,6 +1509,94 @@ fn upsert_plugin_account_rejects_missing_required_fields() {
 }
 
 #[test]
+fn validate_channel_account_configs_flags_null_plugin_config() {
+    let mut cfg = GaryxConfig::default();
+    cfg.channels
+        .plugin_channel_mut("test-plugin")
+        .accounts
+        .insert(
+            "test-account".to_owned(),
+            PluginAccountEntry {
+                enabled: true,
+                name: Some("Test Account".to_owned()),
+                agent_id: Some("claude".to_owned()),
+                workspace_dir: None,
+                config: Value::Null,
+            },
+        );
+
+    let issues = validate_channel_account_configs(&cfg, &std::collections::HashMap::new());
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "CONFIG_CHANNEL_ACCOUNT_CONFIG_NULL");
+    assert_eq!(
+        issues[0].path.as_deref(),
+        Some("$.channels.test-plugin.accounts.test-account.config")
+    );
+}
+
+#[test]
+fn validate_channel_account_configs_decodes_builtin_accounts() {
+    let mut cfg = GaryxConfig::default();
+    cfg.channels
+        .plugin_channel_mut(BUILTIN_CHANNEL_PLUGIN_FEISHU)
+        .accounts
+        .insert(
+            "work".to_owned(),
+            PluginAccountEntry {
+                enabled: true,
+                name: None,
+                agent_id: Some("claude".to_owned()),
+                workspace_dir: None,
+                config: json!({}),
+            },
+        );
+
+    let issues = validate_channel_account_configs(&cfg, &std::collections::HashMap::new());
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "CONFIG_CHANNEL_ACCOUNT_INVALID");
+    assert!(issues[0].message.contains("app_id"));
+}
+
+#[test]
+fn validate_channel_account_configs_uses_installed_plugin_required_fields() {
+    let mut cfg = GaryxConfig::default();
+    cfg.channels
+        .plugin_channel_mut("test-acmechat-cli")
+        .accounts
+        .insert(
+            "agent-1".to_owned(),
+            PluginAccountEntry {
+                enabled: true,
+                name: None,
+                agent_id: Some("claude".to_owned()),
+                workspace_dir: None,
+                config: json!({
+                    "base_url": "https://chat.example.invalid"
+                }),
+            },
+        );
+    let schemas = std::collections::HashMap::from([(
+        "test-acmechat-cli".to_owned(),
+        json!({
+            "type": "object",
+            "required": ["token", "base_url"],
+            "properties": {
+                "token": { "type": "string" },
+                "base_url": { "type": "string" }
+            }
+        }),
+    )]);
+
+    let issues = validate_channel_account_configs(&cfg, &schemas);
+
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].code, "CONFIG_CHANNEL_ACCOUNT_REQUIRED");
+    assert!(issues[0].message.contains("token"));
+}
+
+#[test]
 fn task_create_assignee_accepts_bare_agent_id() {
     let payload = task_create_assignee_payload(Some(" plain-claude ")).unwrap();
 

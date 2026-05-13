@@ -578,6 +578,7 @@ new `garyx` binary into the service's PATH first, then restart.
 ```bash
 garyx config show
 garyx config validate
+garyx doctor
 garyx channels list
 garyx channels add telegram main --token "$TELEGRAM_BOT_TOKEN"
 garyx channels login feishu --account main
@@ -585,6 +586,11 @@ garyx plugins list
 garyx gateway restart
 garyx logs tail
 ```
+
+`garyx config validate` and `garyx doctor` both check channel account payloads
+beyond basic JSON parsing. They flag stale accounts with `config: null`, invalid
+built-in channel credentials, and missing required fields declared by installed
+channel plugin manifests.
 
 ## Testing a Source Checkout
 
