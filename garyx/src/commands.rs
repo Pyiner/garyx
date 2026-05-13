@@ -96,6 +96,8 @@ const CODEX_ENV_METADATA_KEY: &str = "desktop_codex_env";
 const CLAUDE_OAUTH_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 const CODEX_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const GITHUB_RELEASE_REPO: &str = "Pyiner/garyx";
+#[cfg(any(target_os = "macos", test))]
+const MACOS_CLI_CODESIGN_IDENTIFIER: &str = "com.bytedance.garyx";
 const DEFAULT_CHANNEL_AGENT_ID: &str = "claude";
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +169,45 @@ fn replacement_binary_path(
         return Ok(path);
     }
     Ok(std::env::current_exe()?)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_cli_codesign_args(binary_path: &Path) -> Vec<std::ffi::OsString> {
+    let mut args = vec![
+        std::ffi::OsString::from("--force"),
+        std::ffi::OsString::from("--sign"),
+        std::ffi::OsString::from("-"),
+        std::ffi::OsString::from("--identifier"),
+        std::ffi::OsString::from(MACOS_CLI_CODESIGN_IDENTIFIER),
+    ];
+    args.push(binary_path.as_os_str().to_os_string());
+    args
+}
+
+#[cfg(target_os = "macos")]
+fn ad_hoc_codesign_macos_binary(binary_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let output = std::process::Command::new("/usr/bin/codesign")
+        .args(macos_cli_codesign_args(binary_path))
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!(
+        "codesign failed for {} with identifier {}: {}{}",
+        binary_path.display(),
+        MACOS_CLI_CODESIGN_IDENTIFIER,
+        stdout,
+        stderr
+    )
+    .into())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ad_hoc_codesign_macos_binary(_binary_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
 }
 
 fn register_plugin_state_logging(plugin_manager: &mut ChannelPluginManager) {
@@ -1223,6 +1264,7 @@ pub(crate) async fn cmd_update(
         perms.set_mode(0o755);
         fs::set_permissions(&staged_path, perms)?;
     }
+    ad_hoc_codesign_macos_binary(&staged_path)?;
     fs::rename(&staged_path, &destination)?;
 
     println!(

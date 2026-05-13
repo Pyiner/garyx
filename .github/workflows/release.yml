@@ -66,6 +66,10 @@ jobs:
         if: contains(matrix.target, 'apple-darwin')
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Ad-hoc sign macOS CLI binary
+        if: contains(matrix.target, 'apple-darwin')
+        run: bash scripts/codesign-macos-cli.sh target/${{ matrix.target }}/release/garyx
+
       - name: Build (Linux — glibc 2.17 floor via cargo-zigbuild)
         if: contains(matrix.target, 'linux')
         run: cargo zigbuild --release --target ${{ matrix.target }}.2.17

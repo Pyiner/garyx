@@ -49,6 +49,7 @@ main() {
   mkdir -p "$INSTALL_DIR"
   cp "${tmpdir}/garyx-${version}-${target}/garyx" "$INSTALL_DIR/"
   chmod +x "$INSTALL_DIR/garyx"
+  codesign_macos_cli "$INSTALL_DIR/garyx"
 
   echo ""
   echo "Installed garyx to ${INSTALL_DIR}/garyx"
@@ -126,6 +127,19 @@ verify_checksum() {
     die "Checksum mismatch!\n  Expected: ${expected}\n  Actual:   ${actual}\nThe download may be corrupted."
   fi
   echo "Checksum OK."
+}
+
+codesign_macos_cli() {
+  local binary="$1"
+  local identifier="com.bytedance.garyx"
+
+  if [ "$(uname -s)" != "Darwin" ]; then
+    return 0
+  fi
+
+  echo "Signing garyx with stable macOS identifier ${identifier}..."
+  /usr/bin/codesign --force --sign - --identifier "$identifier" "$binary"
+  /usr/bin/codesign --verify --verbose=2 "$binary"
 }
 
 die() {

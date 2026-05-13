@@ -104,10 +104,16 @@ needs installed-app validation.
 - On macOS, do not treat a matching hash as sufficient after copying a locally
   built `garyx` binary into a launchd-managed path such as
   `/opt/homebrew/bin/garyx`. Clear removable target-file xattrs, ad-hoc re-sign
-  the installed file, and verify it executes before restarting, otherwise
-  launchd/AMFI may kill it with `OS_REASON_CODESIGNING`. `com.apple.provenance`
-  can be inherited or protected on Homebrew paths even when `xattr -d` returns
-  success, so do not rely on xattr output alone.
+  the installed file with the stable identifier `com.bytedance.garyx` (or use
+  `bash scripts/codesign-macos-cli.sh <path-to-garyx>`), and verify it executes
+  before restarting, otherwise launchd/AMFI may kill it with
+  `OS_REASON_CODESIGNING`. `com.apple.provenance` can be inherited or protected
+  on Homebrew paths even when `xattr -d` returns success, so do not rely on
+  xattr output alone.
+- For local macOS gateway development, prefer `scripts/install-local-cli.sh`
+  after source changes. Release archives, `install.sh`, `garyx update`, and
+  desktop `build:rust` should all preserve the same CLI identifier so directory
+  authorization is not re-requested just because a new binary was installed.
 - Restart through the Garyx CLI with a wake target when working in an agent
   thread, for example `garyx gateway restart --wake thread <thread_id>
   --wake-message "continue"`.

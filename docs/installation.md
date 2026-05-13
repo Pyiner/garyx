@@ -20,8 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
 ```bash [From source]
 git clone https://github.com/Pyiner/garyx
 cd garyx
-cargo build --release
-# binary: target/release/garyx
+scripts/install-local-cli.sh
 ```
 
 :::

@@ -1153,6 +1153,27 @@ fn detect_release_target_for_supported_platforms() {
 }
 
 #[test]
+fn macos_cli_codesign_args_use_stable_identifier() {
+    let args = macos_cli_codesign_args(Path::new("/tmp/garyx"));
+    let args = args
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        args,
+        vec![
+            "--force",
+            "--sign",
+            "-",
+            "--identifier",
+            "com.bytedance.garyx",
+            "/tmp/garyx"
+        ]
+    );
+}
+
+#[test]
 fn parse_sha256_checksum_accepts_standard_release_file() {
     let checksum = parse_sha256_checksum(
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  garyx-0.1.6-aarch64-apple-darwin.tar.gz\n",
