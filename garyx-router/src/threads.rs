@@ -507,7 +507,8 @@ pub async fn create_thread_record(
             &workspace_dir,
             options.worktree_base_dir.as_deref(),
         )
-        .await?;
+        .await
+        .map_err(|error| format!("workspace_mode=worktree failed: {error}"))?;
         options.workspace_dir = Some(prepared.worktree_dir.clone());
         Some(prepared.metadata)
     } else {

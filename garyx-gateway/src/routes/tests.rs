@@ -824,7 +824,18 @@ async fn create_thread_with_worktree_creates_managed_git_worktree() {
         .await
         .expect("stored thread");
     assert_eq!(stored["workspace_dir"], workspace_dir);
+    assert_eq!(stored["worktree"]["mode"], "worktree");
     assert_eq!(stored["worktree"]["enabled"], true);
+    assert_eq!(
+        stored["worktree"]["source_workspace_dir"].as_str(),
+        Some(
+            repo.path()
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
     assert_eq!(
         stored["worktree"]["source_repo_root"].as_str(),
         Some(
@@ -835,7 +846,14 @@ async fn create_thread_with_worktree_creates_managed_git_worktree() {
                 .as_ref()
         )
     );
+    assert_eq!(stored["worktree"]["path"], workspace_dir);
     assert_eq!(stored["worktree"]["worktree_dir"], workspace_dir);
+    assert_eq!(stored["worktree"]["thread_id"], thread_id);
+    assert!(
+        stored["worktree"]["created_at"]
+            .as_str()
+            .is_some_and(|value| !value.trim().is_empty())
+    );
     assert!(
         stored["worktree"]["branch"]
             .as_str()
@@ -844,6 +862,10 @@ async fn create_thread_with_worktree_creates_managed_git_worktree() {
     );
     assert_eq!(
         stored["worktree"]["base_commit"],
+        git_output(repo.path(), &["rev-parse", "HEAD"])
+    );
+    assert_eq!(
+        stored["worktree"]["base_head"],
         git_output(repo.path(), &["rev-parse", "HEAD"])
     );
 }
@@ -884,6 +906,48 @@ async fn create_thread_worktree_rejects_non_git_root_workspace() {
             .as_str()
             .unwrap_or_default()
             .contains("git repository root")
+    );
+}
+
+#[tokio::test]
+async fn create_thread_worktree_rejects_git_repo_without_head_as_bad_request() {
+    let repo = tempdir().unwrap();
+    run_git(repo.path(), &["init"]);
+    let data_dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
+    let state = AppStateBuilder::new(config).build();
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/threads")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "label": "Empty repo worktree",
+                "workspaceDir": repo.path(),
+                "workspaceMode": "worktree"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let error = payload["error"].as_str().unwrap_or_default();
+    assert!(error.starts_with("workspace_mode=worktree failed:"));
+    assert!(error.contains("rev-parse HEAD"));
+    assert!(
+        state
+            .threads
+            .thread_store
+            .list_keys(Some("thread::"))
+            .await
+            .is_empty()
     );
 }
 
@@ -2137,6 +2201,7 @@ async fn task_create_with_worktree_runtime_creates_thread_in_managed_worktree() 
         "workspace_dir should be inside managed worktree root: {workspace_dir}"
     );
     assert_eq!(stored["worktree"]["enabled"], true);
+    assert_eq!(stored["worktree"]["mode"], "worktree");
     assert_eq!(
         stored["worktree"]["source_repo_root"].as_str(),
         Some(
@@ -2147,7 +2212,9 @@ async fn task_create_with_worktree_runtime_creates_thread_in_managed_worktree() 
                 .as_ref()
         )
     );
+    assert_eq!(stored["worktree"]["path"], workspace_dir);
     assert_eq!(stored["worktree"]["worktree_dir"], workspace_dir);
+    assert_eq!(stored["worktree"]["thread_id"], thread_id);
 }
 
 #[tokio::test]

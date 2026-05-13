@@ -33,6 +33,8 @@ working directory and then passes that directory as `cwd` / `workspace_dir`.
 - The selected `workspace_dir` must itself be a git repository root. If the
   selected directory is only a subdirectory inside a git repository, worktree
   mode must fail or be hidden in UI.
+- The selected repository must have at least one commit because worktree mode
+  is based on the repository's current `HEAD`.
 - Dirty source repositories are allowed. The worktree is created from the
   current branch's current `HEAD`; uncommitted changes are not copied into the
   worktree.
@@ -73,7 +75,8 @@ Worktree mode is not supported on `thread send` or other implicit creation
 paths.
 
 If `--worktree` / `workspace_mode=worktree` is used and `workspace_dir` is not
-a git repository root, Garyx returns an error.
+a git repository root, or the repository has no `HEAD` commit, Garyx returns an
+error.
 
 ## Git Repository Detection
 
@@ -149,14 +152,15 @@ No upstream is configured.
 
 Thread creation in worktree mode:
 
-1. Create the thread id / initial thread record.
-2. Validate that the requested `workspace_dir` is a git repository root.
+1. Generate the thread id without persisting the thread record yet.
+2. Validate that the requested `workspace_dir` is a git repository root with a
+   valid `HEAD`.
 3. Compute the managed worktree path and branch name from the thread id.
 4. Run git worktree creation from the selected repository.
-5. Update the thread `workspace_dir` to the created worktree path.
-6. Store top-level thread `worktree` metadata.
-7. If any step after thread creation fails, rollback the thread record where
-   possible and return an error.
+5. Store the thread record with `workspace_dir` set to the created worktree
+   path and top-level `worktree` metadata.
+6. If worktree creation partially creates files and then fails, rollback the
+   partial worktree where possible and return an error.
 
 Task creation in worktree mode:
 

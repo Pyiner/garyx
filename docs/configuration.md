@@ -479,12 +479,13 @@ garyx thread create --workspace-dir /path/to/repo --worktree
 garyx task create --title "Investigate" --workspace-dir /path/to/repo --worktree --notify none
 ```
 
-`--worktree` requires `--workspace-dir` to be the Git repository root. Garyx
-creates the isolated checkout under `~/.garyx/worktrees/<repo-hash>/<thread-id>`
-from the selected repository's current `HEAD`, records the source repo, branch,
-base commit, generated branch, and worktree path on the thread, and then runs
-the provider with the worktree path as `workspace_dir`. Garyx does not
-auto-delete these worktrees when a thread or task is deleted.
+`--worktree` requires `--workspace-dir` to be the Git repository root and the
+repository must have at least one commit. Garyx creates the isolated checkout
+under `~/.garyx/worktrees/<repo-hash>/<thread-id-safe>` from the selected
+repository's current `HEAD`, records the source repo, branch, base commit,
+generated branch, and worktree path on the thread, and then runs the provider
+with the worktree path as `workspace_dir`. Garyx does not auto-delete these
+worktrees when a thread or task is deleted.
 
 Custom agents may include `avatar_data_url`, a small image data URL used by
 desktop surfaces for the agent avatar. Omit it or set it to an empty string to

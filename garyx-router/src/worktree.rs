@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use chrono::Utc;
 use garyx_models::local_paths::gary_home_dir;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -101,6 +102,7 @@ pub async fn prepare_thread_worktree(
     let source_repo_root = status.repo_root.clone().ok_or_else(|| {
         "workspace_mode=worktree requires workspace_dir to be a git repository root".to_owned()
     })?;
+    let source_workspace_dir = status.workspace_dir.clone();
     let source_repo_root_path = PathBuf::from(&source_repo_root);
     let base_commit = git_output(&source_repo_root_path, &["rev-parse", "HEAD"]).await?;
     let repo_hash = short_hash(&source_repo_root);
@@ -132,12 +134,18 @@ pub async fn prepare_thread_worktree(
     Ok(PreparedWorktree {
         worktree_dir: worktree_dir_string.clone(),
         metadata: json!({
+            "mode": "worktree",
             "enabled": true,
+            "source_workspace_dir": source_workspace_dir,
             "source_repo_root": source_repo_root,
             "source_branch": status.current_branch,
+            "base_head": base_commit,
             "base_commit": base_commit,
             "branch": branch,
+            "path": worktree_dir_string,
             "worktree_dir": worktree_dir_string,
+            "thread_id": thread_id,
+            "created_at": Utc::now().to_rfc3339(),
         }),
     })
 }

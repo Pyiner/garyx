@@ -65,9 +65,10 @@ export function NewThreadEmptyState({
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeSessionId, setResumeSessionId] = useState("");
-  const [gitStatus, setGitStatus] = useState<DesktopWorkspaceGitStatus | null>(
-    null,
-  );
+  const [gitStatusResult, setGitStatusResult] = useState<{
+    workspacePath: string;
+    status: DesktopWorkspaceGitStatus;
+  } | null>(null);
 
   useEffect(() => {
     setResumeError(null);
@@ -82,34 +83,37 @@ export function NewThreadEmptyState({
       null,
     [newThreadWorkspaceEntry?.path, selectableNewThreadWorkspaces],
   );
-  const worktreeCapable = Boolean(gitStatus?.isGitRepo);
+  const selectedWorkspacePath = selectedWorkspace?.path?.trim() || "";
+  const worktreeCapable = Boolean(
+    gitStatusResult?.workspacePath === selectedWorkspacePath &&
+      gitStatusResult.status.isGitRepo,
+  );
 
   useEffect(() => {
     let cancelled = false;
-    const workspacePath = selectedWorkspace?.path?.trim();
-    setGitStatus(null);
-    if (!workspacePath) {
+    setGitStatusResult(null);
+    if (!selectedWorkspacePath) {
       onWorkspaceModeChange("direct");
       return;
     }
     void window.garyxDesktop
-      .getWorkspaceGitStatus({ workspacePath })
+      .getWorkspaceGitStatus({ workspacePath: selectedWorkspacePath })
       .then((status) => {
         if (cancelled) return;
-        setGitStatus(status);
+        setGitStatusResult({ workspacePath: selectedWorkspacePath, status });
         if (!status.isGitRepo) {
           onWorkspaceModeChange("direct");
         }
       })
       .catch(() => {
         if (cancelled) return;
-        setGitStatus(null);
+        setGitStatusResult(null);
         onWorkspaceModeChange("direct");
       });
     return () => {
       cancelled = true;
     };
-  }, [onWorkspaceModeChange, selectedWorkspace?.path]);
+  }, [onWorkspaceModeChange, selectedWorkspacePath]);
 
   function closeResume() {
     setResumeOpen(false);
