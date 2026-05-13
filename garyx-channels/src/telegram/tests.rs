@@ -3713,7 +3713,7 @@ mod e2e_tests {
         let api_base = unique_api_base(&server);
         let provider = Arc::new(StreamingInterruptAwareProvider::new());
         let bridge = make_bridge_with(provider.clone()).await;
-        let router = make_router();
+        let router = make_router_with_store(Arc::new(InMemoryThreadStore::new()));
         let http = reqwest::Client::new();
 
         let first = TgUpdateBuilder::dm(
@@ -3768,6 +3768,20 @@ mod e2e_tests {
             provider.pwd_call_count.load(Ordering::Relaxed),
             1,
             "stop message should be visible before second pwd call"
+        );
+
+        let ledger_records = {
+            let router = router.lock().await;
+            router
+                .list_message_ledger_records_for_bot("telegram:bot1", 20)
+                .await
+        };
+        assert!(
+            ledger_records.iter().any(|record| {
+                record.native_message_id.as_deref() == Some("9302")
+                    && record.status == garyx_models::MessageLifecycleStatus::RunStreaming
+            }),
+            "streaming input should be visible in the message ledger: {ledger_records:#?}"
         );
 
         let send_reqs = wait_for_matching_requests_quiet_window(
