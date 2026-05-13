@@ -1,6 +1,26 @@
 use super::*;
 use crate::threads::is_thread_key;
-use crate::{ChannelBinding, ThreadEnsureOptions, bind_endpoint_to_thread, create_thread_record};
+use crate::{
+    ChannelBinding, ThreadCreator, ThreadEnsureOptions, ThreadStore, bind_endpoint_to_thread,
+    bindings_from_value, create_thread_record,
+};
+
+struct FallbackOnlyThreadCreator;
+
+#[async_trait]
+impl ThreadCreator for FallbackOnlyThreadCreator {
+    async fn create_thread(
+        &self,
+        thread_store: Arc<dyn ThreadStore>,
+        options: ThreadEnsureOptions,
+    ) -> Result<(String, Value), String> {
+        match options.agent_id.as_deref() {
+            Some("claude") => create_thread_record(&thread_store, options).await,
+            Some(agent_id) => Err(format!("unknown agent_id: {agent_id}")),
+            None => Err("agent_id is required".to_owned()),
+        }
+    }
+}
 
 async fn seed_bound_dm_thread(
     store: &Arc<InMemoryThreadStore>,
@@ -86,6 +106,74 @@ async fn test_route_and_dispatch_basic() {
         garyx_models::MessageLifecycleStatus::ThreadResolved
     );
     assert_eq!(records[0].run_id.as_deref(), Some("run-1"));
+}
+
+#[tokio::test]
+async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("minolab")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::PluginAccountEntry {
+                enabled: true,
+                agent_id: Some("missing-agent".to_owned()),
+                config: json!({ "token": "test-token" }),
+                ..Default::default()
+            },
+        );
+
+    let mut router = MessageRouter::new(store.clone(), config);
+    router.set_message_ledger_store(Arc::new(crate::message_ledger::MessageLedgerStore::memory()));
+    router.set_thread_creator(Arc::new(FallbackOnlyThreadCreator));
+    let dispatcher = MockDispatcher::new();
+
+    let request = InboundRequest {
+        channel: "minolab".to_owned(),
+        account_id: "main".to_owned(),
+        from_id: "user-1".to_owned(),
+        is_group: false,
+        thread_binding_key: "issue-1".to_owned(),
+        message: "hello".to_owned(),
+        run_id: "run-minolab-invalid-agent".to_owned(),
+        reply_to_message_id: None,
+        images: vec![],
+        extra_metadata: HashMap::from([
+            ("chat_id".to_owned(), Value::String("issue-1".to_owned())),
+            ("issue_id".to_owned(), Value::String("issue-1".to_owned())),
+        ]),
+        file_paths: vec![],
+    };
+
+    let result = router
+        .route_and_dispatch(request, &dispatcher, None)
+        .await
+        .unwrap();
+
+    let saved = store
+        .get(&result.thread_id)
+        .await
+        .expect("fallback thread should be persisted");
+    assert_eq!(saved["agent_id"], "claude");
+    assert_eq!(saved["channel"], "minolab");
+    assert_eq!(saved["account_id"], "main");
+
+    let bindings = bindings_from_value(&saved);
+    assert_eq!(bindings.len(), 1);
+    assert_eq!(bindings[0].channel, "minolab");
+    assert_eq!(bindings[0].account_id, "main");
+    assert_eq!(bindings[0].binding_key, "issue-1");
+
+    assert_eq!(
+        router
+            .resolve_endpoint_thread_id("minolab", "main", "issue-1")
+            .await
+            .as_deref(),
+        Some(result.thread_id.as_str())
+    );
 }
 
 #[tokio::test]

@@ -13,6 +13,8 @@ use crate::threads::{
     label_from_value, list_known_channel_endpoints, new_thread_key,
 };
 
+const INBOUND_FALLBACK_AGENT_ID: &str = "claude";
+
 fn delivery_thread_scope_from_binding(binding: &ChannelBinding) -> Option<String> {
     let binding_key = binding.binding_key.trim();
     if binding_key.is_empty() {
@@ -254,8 +256,52 @@ impl MessageRouter {
             origin_from_id: None,
             is_group: None,
         };
-        let Ok((thread_id, _value)) = self.create_thread_with_options(options).await else {
-            return new_thread_key();
+        let configured_agent_id = options.agent_id.clone();
+        let (thread_id, _value) = match self.create_thread_with_options(options.clone()).await {
+            Ok(created) => created,
+            Err(error) => {
+                let should_fallback = configured_agent_id
+                    .as_deref()
+                    .is_some_and(|agent_id| agent_id != INBOUND_FALLBACK_AGENT_ID);
+                if should_fallback {
+                    let mut fallback_options = options;
+                    fallback_options.agent_id = Some(INBOUND_FALLBACK_AGENT_ID.to_owned());
+                    match self.create_thread_with_options(fallback_options).await {
+                        Ok(created) => {
+                            tracing::warn!(
+                                channel,
+                                account_id,
+                                configured_agent_id = configured_agent_id.as_deref().unwrap_or(""),
+                                fallback_agent_id = INBOUND_FALLBACK_AGENT_ID,
+                                error = %error,
+                                "inbound thread creation failed; using fallback agent"
+                            );
+                            created
+                        }
+                        Err(fallback_error) => {
+                            tracing::warn!(
+                                channel,
+                                account_id,
+                                configured_agent_id = configured_agent_id.as_deref().unwrap_or(""),
+                                fallback_agent_id = INBOUND_FALLBACK_AGENT_ID,
+                                error = %error,
+                                fallback_error = %fallback_error,
+                                "inbound thread creation failed with configured and fallback agents"
+                            );
+                            return new_thread_key();
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        channel,
+                        account_id,
+                        configured_agent_id = configured_agent_id.as_deref().unwrap_or(""),
+                        error = %error,
+                        "inbound thread creation failed"
+                    );
+                    return new_thread_key();
+                }
+            }
         };
 
         let resolved_chat_id =
@@ -283,11 +329,17 @@ impl MessageRouter {
             last_inbound_at: Some(Utc::now().to_rfc3339()),
             last_delivery_at: None,
         };
-        if self
+        if let Err(error) = self
             .bind_endpoint_runtime(&thread_id, binding.clone())
             .await
-            .is_err()
         {
+            tracing::warn!(
+                channel,
+                account_id,
+                thread_id = %thread_id,
+                error = %error,
+                "failed to persist inbound channel binding"
+            );
             return thread_id;
         }
 
