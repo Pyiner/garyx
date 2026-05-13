@@ -467,30 +467,10 @@ fn extract_tool_session_messages(
     }
 }
 
-fn count_tool_use_blocks(blocks: &[ContentBlock]) -> usize {
+fn has_tool_result_blocks(blocks: &[ContentBlock]) -> bool {
     blocks
         .iter()
-        .filter(|block| matches!(block, ContentBlock::ToolUse(_)))
-        .count()
-}
-
-fn count_tool_result_blocks(blocks: &[ContentBlock]) -> usize {
-    blocks
-        .iter()
-        .filter(|block| matches!(block, ContentBlock::ToolResult(_)))
-        .count()
-}
-
-fn count_user_tool_result_messages(user_msg: &claude_agent_sdk::UserMessage) -> usize {
-    let block_count = match user_msg.content {
-        claude_agent_sdk::UserContent::Blocks(ref blocks) => count_tool_result_blocks(blocks),
-        claude_agent_sdk::UserContent::Text(_) => 0,
-    };
-    if block_count > 0 {
-        block_count
-    } else {
-        usize::from(user_msg.tool_use_result.is_some())
-    }
+        .any(|b| matches!(b, ContentBlock::ToolResult(_)))
 }
 
 fn metadata_string_map(
@@ -663,12 +643,8 @@ pub struct ClaudeCliProvider {
     run_session_map: Mutex<HashMap<String, String>>,
     /// User inputs accepted but not yet completed per live run.
     run_pending_inputs: Mutex<HashMap<String, VecDeque<PendingAckMarker>>>,
-    /// User inputs accepted while Claude is between tool_use and tool_result.
-    run_input_states: Mutex<HashMap<String, RunInputState>>,
     /// Last user message per thread, used for auto-recovery replay.
     last_messages: Mutex<HashMap<String, String>>,
-    #[cfg(test)]
-    test_sent_streaming_inputs: Mutex<Vec<(String, OutboundUserMessage)>>,
     #[cfg(test)]
     test_run_attempts: Mutex<VecDeque<Result<Option<SdkRunOutcome>, BridgeError>>>,
     #[cfg(test)]
@@ -682,18 +658,6 @@ enum PendingAckMarker {
     QueuedInput(String),
 }
 
-#[derive(Debug, Clone)]
-struct PendingClaudeInput {
-    pending_input_id: String,
-    outbound: OutboundUserMessage,
-}
-
-#[derive(Debug, Default)]
-struct RunInputState {
-    outstanding_tool_uses: usize,
-    queued_inputs: VecDeque<PendingClaudeInput>,
-}
-
 impl ClaudeCliProvider {
     /// Create a new provider with the given config.
     pub fn new(config: ClaudeCodeConfig) -> Self {
@@ -704,10 +668,7 @@ impl ClaudeCliProvider {
             active_runs: Mutex::new(HashMap::new()),
             run_session_map: Mutex::new(HashMap::new()),
             run_pending_inputs: Mutex::new(HashMap::new()),
-            run_input_states: Mutex::new(HashMap::new()),
             last_messages: Mutex::new(HashMap::new()),
-            #[cfg(test)]
-            test_sent_streaming_inputs: Mutex::new(Vec::new()),
             #[cfg(test)]
             test_run_attempts: Mutex::new(VecDeque::new()),
             #[cfg(test)]
@@ -920,10 +881,6 @@ impl ClaudeCliProvider {
             .lock()
             .await
             .insert(run_id.to_owned(), thread_id.to_owned());
-        self.run_input_states
-            .lock()
-            .await
-            .insert(run_id.to_owned(), RunInputState::default());
     }
 
     /// Unregister a run after completion and return handle for cleanup.
@@ -931,7 +888,6 @@ impl ClaudeCliProvider {
         let run = self.active_runs.lock().await.remove(run_id);
         let thread_id = self.run_session_map.lock().await.remove(run_id);
         self.run_pending_inputs.lock().await.remove(run_id);
-        self.run_input_states.lock().await.remove(run_id);
         (run, thread_id)
     }
 
@@ -939,124 +895,6 @@ impl ClaudeCliProvider {
     async fn cleanup_run_handle(&self, run_id: &str, run: ClaudeRunControl) {
         if let Err(e) = run.close().await {
             tracing::warn!(run_id = %run_id, error = %e, "failed to close claude run");
-        }
-    }
-
-    async fn note_tool_uses_started(&self, run_id: &str, count: usize) {
-        if count == 0 {
-            return;
-        }
-        if let Some(state) = self.run_input_states.lock().await.get_mut(run_id) {
-            state.outstanding_tool_uses = state.outstanding_tool_uses.saturating_add(count);
-        }
-    }
-
-    async fn note_tool_results_finished(&self, run_id: &str, count: usize) {
-        if count == 0 {
-            return;
-        }
-        if let Some(state) = self.run_input_states.lock().await.get_mut(run_id) {
-            state.outstanding_tool_uses = state.outstanding_tool_uses.saturating_sub(count);
-        }
-    }
-
-    async fn send_streaming_input_now(
-        &self,
-        run_id: &str,
-        pending_input_id: &str,
-        outbound: OutboundUserMessage,
-    ) -> bool {
-        let run = { self.active_runs.lock().await.get(run_id).cloned() };
-        if let Some(run) = run {
-            match run.send_user_message(outbound).await {
-                Ok(()) => return true,
-                Err(e) => {
-                    self.rollback_pending_input(run_id, pending_input_id).await;
-                    tracing::warn!(
-                        run_id = %run_id,
-                        pending_input_id = %pending_input_id,
-                        error = %e,
-                        "failed to send queued Claude streaming input"
-                    );
-                    return false;
-                }
-            }
-        }
-
-        #[cfg(test)]
-        {
-            self.test_sent_streaming_inputs
-                .lock()
-                .await
-                .push((run_id.to_owned(), outbound));
-            return true;
-        }
-
-        #[cfg(not(test))]
-        {
-            self.rollback_pending_input(run_id, pending_input_id).await;
-            false
-        }
-    }
-
-    async fn send_or_queue_streaming_input(
-        &self,
-        run_id: &str,
-        pending_input_id: String,
-        outbound: OutboundUserMessage,
-    ) -> bool {
-        let pending = PendingClaudeInput {
-            pending_input_id,
-            outbound,
-        };
-
-        {
-            let mut states = self.run_input_states.lock().await;
-            if let Some(state) = states.get_mut(run_id)
-                && state.outstanding_tool_uses > 0
-            {
-                state.queued_inputs.push_back(pending);
-                tracing::debug!(
-                    run_id = %run_id,
-                    outstanding_tool_uses = state.outstanding_tool_uses,
-                    queued_inputs = state.queued_inputs.len(),
-                    "deferring Claude streaming input until tool results are complete"
-                );
-                return true;
-            }
-        }
-
-        let PendingClaudeInput {
-            pending_input_id,
-            outbound,
-        } = pending;
-        self.send_streaming_input_now(run_id, &pending_input_id, outbound)
-            .await
-    }
-
-    async fn flush_queued_streaming_inputs_if_safe(&self, run_id: &str) {
-        loop {
-            let pending = {
-                let mut states = self.run_input_states.lock().await;
-                let Some(state) = states.get_mut(run_id) else {
-                    return;
-                };
-                if state.outstanding_tool_uses > 0 {
-                    return;
-                }
-                state.queued_inputs.pop_front()
-            };
-
-            let Some(pending) = pending else {
-                return;
-            };
-
-            let sent = self
-                .send_streaming_input_now(run_id, &pending.pending_input_id, pending.outbound)
-                .await;
-            if !sent {
-                return;
-            }
         }
     }
 
@@ -1349,7 +1187,6 @@ impl ClaudeCliProvider {
                 Ok(None) => break, // stream closed normally
                 Ok(Some(msg_result)) => match msg_result {
                     Ok(Message::User(user_msg)) => {
-                        let tool_result_count = count_user_tool_result_messages(&user_msg);
                         if let claude_agent_sdk::UserContent::Blocks(ref blocks) = user_msg.content
                         {
                             extract_tool_session_messages(
@@ -1358,12 +1195,10 @@ impl ClaudeCliProvider {
                                 Some(on_chunk),
                                 user_msg.parent_tool_use_id.as_deref(),
                             );
-                        }
-                        if tool_result_count > 0 {
-                            self.note_tool_results_finished(run_id, tool_result_count)
-                                .await;
-                            self.flush_queued_streaming_inputs_if_safe(run_id).await;
-                            continue;
+                            if has_tool_result_blocks(blocks) || user_msg.tool_use_result.is_some()
+                            {
+                                continue;
+                            }
                         }
                         // Keep Python parity: normal UserMessage echoes are ACKs that
                         // indicate one queued user input has been consumed.
@@ -1380,18 +1215,13 @@ impl ClaudeCliProvider {
                     Ok(Message::Assistant(assistant_msg)) => {
                         if is_synthetic_no_response_message(&assistant_msg) {
                             tracing::debug!(
-                                    run_id = %run_id,
-                                    thread_id = %thread_id,
+                                run_id = %run_id,
+                                thread_id = %thread_id,
                                 "suppressing claude synthetic no-response placeholder"
                             );
                             continue;
                         }
                         assistant_or_tool_activity_seen = true;
-                        self.note_tool_uses_started(
-                            run_id,
-                            count_tool_use_blocks(&assistant_msg.content),
-                        )
-                        .await;
                         if actual_model.is_none() {
                             actual_model = Some(assistant_msg.model.trim().to_owned())
                                 .filter(|value| !value.is_empty());
@@ -1435,7 +1265,6 @@ impl ClaudeCliProvider {
                             thread_title: thread_title.clone(),
                             session_messages: session_messages.clone(),
                         });
-                        self.flush_queued_streaming_inputs_if_safe(run_id).await;
                         // Atomically check-and-close: if no queued inputs remain,
                         // remove the queue entry so that concurrent
                         // add_streaming_input callers see the run as closed and
@@ -1617,7 +1446,6 @@ impl AgentLoopProvider for ClaudeCliProvider {
         };
         self.run_session_map.lock().await.clear();
         self.run_pending_inputs.lock().await.clear();
-        self.run_input_states.lock().await.clear();
 
         for (run_id, run) in runs {
             if let Err(e) = run.interrupt().await {
@@ -1793,8 +1621,8 @@ impl AgentLoopProvider for ClaudeCliProvider {
 
     async fn add_streaming_input(&self, thread_id: &str, input: QueuedUserInput) -> bool {
         if let Some(run_id) = self.resolve_active_run_id_for_session(thread_id).await {
-            let has_run = { self.active_runs.lock().await.contains_key(&run_id) };
-            if has_run {
+            let run = { self.active_runs.lock().await.get(&run_id).cloned() };
+            if let Some(run) = run {
                 let pending_input_id = input.pending_input_id.unwrap_or_default();
                 if pending_input_id.trim().is_empty() {
                     return false;
@@ -1813,14 +1641,21 @@ impl AgentLoopProvider for ClaudeCliProvider {
                     UserInput::Text(text) => OutboundUserMessage::text(text, ""),
                     UserInput::Blocks(blocks) => OutboundUserMessage::blocks(blocks, ""),
                 };
-                if self
-                    .send_or_queue_streaming_input(&run_id, pending_input_id.clone(), outbound)
-                    .await
-                {
-                    tracing::debug!(thread_id = %thread_id, "queued streaming input");
-                    true
-                } else {
-                    false
+                match run.send_user_message(outbound).await {
+                    Ok(()) => {
+                        tracing::debug!(thread_id = %thread_id, "queued streaming input");
+                        true
+                    }
+                    Err(e) => {
+                        self.rollback_pending_input(&run_id, &pending_input_id)
+                            .await;
+                        tracing::warn!(
+                            thread_id = %thread_id,
+                            error = %e,
+                            "failed to queue streaming input"
+                        );
+                        false
+                    }
                 }
             } else {
                 let _ = self.unregister_run(&run_id).await;
