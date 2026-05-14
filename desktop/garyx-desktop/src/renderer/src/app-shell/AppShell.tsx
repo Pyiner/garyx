@@ -1582,8 +1582,6 @@ export function AppShell() {
   );
   const [pendingWorkspaceMode, setPendingWorkspaceMode] =
     useState<DesktopWorkspaceMode>("direct");
-  const [composerBranchByWorkspacePath, setComposerBranchByWorkspacePath] =
-    useState<Record<string, string | null>>({});
   const [pendingBotId, setPendingBotId] = useState<string | null>(null);
   const [optimisticThreadBotBinding, setOptimisticThreadBotBinding] = useState<{
     botId: string | null;
@@ -2467,51 +2465,9 @@ export function AppShell() {
     : false;
   const activeThreadWorktree =
     activeThreadInfo?.worktree || activeThread?.worktree || null;
-  const activeComposerWorkspacePath =
-    activeThreadInfo?.workspacePath?.trim() ||
-    activeThread?.workspacePath?.trim() ||
-    "";
   const composerWorkspaceMode: DesktopWorkspaceMode | null =
-    selectedThreadId && (activeComposerWorkspacePath || activeThreadWorktree)
-      ? activeThreadWorktree
-        ? "worktree"
-        : "direct"
-      : null;
-  const composerWorkspaceBranch =
-    activeThreadWorktree?.branch?.trim() ||
-    (activeComposerWorkspacePath
-      ? composerBranchByWorkspacePath[activeComposerWorkspacePath] || null
-      : null);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (
-      !selectedThreadId ||
-      !activeComposerWorkspacePath ||
-      activeThreadWorktree
-    ) {
-      return;
-    }
-    void window.garyxDesktop
-      .getWorkspaceGitStatus({ workspacePath: activeComposerWorkspacePath })
-      .then((status) => {
-        if (cancelled) return;
-        setComposerBranchByWorkspacePath((current) => ({
-          ...current,
-          [activeComposerWorkspacePath]: status.currentBranch || null,
-        }));
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setComposerBranchByWorkspacePath((current) => ({
-          ...current,
-          [activeComposerWorkspacePath]: null,
-        }));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeComposerWorkspacePath, activeThreadWorktree, selectedThreadId]);
+    selectedThreadId && activeThreadWorktree ? "worktree" : null;
+  const composerWorkspaceBranch = activeThreadWorktree?.branch?.trim() || null;
   const activePendingAutomationRun = selectedThreadId
     ? pendingAutomationRunsByThread[selectedThreadId] || null
     : null;
