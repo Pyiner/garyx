@@ -14834,10 +14834,8 @@ button.codex-list-row {
 }
 
 .tasks-workspace-mode-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  display: grid;
+  gap: 5px;
   min-width: 0;
 }
 
@@ -14850,9 +14848,8 @@ button.codex-list-row {
 }
 
 .tasks-field .tasks-workspace-mode-trigger {
-  flex: 0 0 auto;
-  width: 132px;
-  min-width: 132px;
+  width: 100%;
+  min-width: 0;
 }
 
 .tasks-workspace-trigger [data-slot="select-value"],
