@@ -68,8 +68,7 @@ fn synthesized_manifest_round_trips_update_block() {
     report.update = Some(PluginUpdate {
         manifest_url: Some("https://example.test/{id}/latest.json".into()),
         url_template:
-            "https://example.test/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz"
-                .into(),
+            "https://example.test/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz".into(),
         checksum_url_template: Some("{url}.sha256".into()),
         binary_in_archive: Some("{id}/garyx-plugin-{id}".into()),
     });
@@ -110,7 +109,10 @@ fn synthesized_manifest_round_trips_update_block() {
         update.manifest_url.as_deref(),
         Some("https://example.test/{id}/latest.json"),
     );
-    assert_eq!(update.checksum_url_template.as_deref(), Some("{url}.sha256"));
+    assert_eq!(
+        update.checksum_url_template.as_deref(),
+        Some("{url}.sha256")
+    );
     assert_eq!(
         update.binary_in_archive.as_deref(),
         Some("{id}/garyx-plugin-{id}"),

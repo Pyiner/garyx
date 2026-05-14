@@ -330,16 +330,10 @@ pub fn synthesize_manifest_toml(
             toml_string(&update.url_template),
         ));
         if let Some(c) = &update.checksum_url_template {
-            out.push_str(&format!(
-                "checksum_url_template = {}\n",
-                toml_string(c),
-            ));
+            out.push_str(&format!("checksum_url_template = {}\n", toml_string(c),));
         }
         if let Some(b) = &update.binary_in_archive {
-            out.push_str(&format!(
-                "binary_in_archive = {}\n",
-                toml_string(b),
-            ));
+            out.push_str(&format!("binary_in_archive = {}\n", toml_string(b),));
         }
         out.push('\n');
     }

@@ -219,7 +219,10 @@ binary_in_archive = "{id}/garyx-plugin-{id}"
         update.url_template,
         "https://example.test/plugins/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz",
     );
-    assert_eq!(update.checksum_url_template.as_deref(), Some("{url}.sha256"));
+    assert_eq!(
+        update.checksum_url_template.as_deref(),
+        Some("{url}.sha256")
+    );
     assert_eq!(
         update.binary_in_archive.as_deref(),
         Some("{id}/garyx-plugin-{id}"),
@@ -265,8 +268,7 @@ delivery_model = "pull_explicit_ack"
 url_template = "https://example.test/{id}/{nope}/file.tar.gz"
 "#,
     );
-    let err =
-        PluginManifest::load(&path).expect_err("unknown placeholder should reject");
+    let err = PluginManifest::load(&path).expect_err("unknown placeholder should reject");
     let msg = format!("{err}");
     assert!(
         msg.contains("unknown placeholder"),
@@ -315,12 +317,8 @@ fn update_template_skips_escaped_double_brace() {
 
 #[test]
 fn update_template_rejects_unterminated_brace() {
-    let err = super::validate_update_template(
-        "https://example.test/{id",
-        false,
-        Path::new("test"),
-    )
-    .expect_err("unterminated brace must be rejected");
+    let err = super::validate_update_template("https://example.test/{id", false, Path::new("test"))
+        .expect_err("unterminated brace must be rejected");
     match err {
         ManifestError::UnknownUpdatePlaceholder { placeholder, .. } => {
             assert_eq!(placeholder, "<unterminated>");
@@ -331,12 +329,9 @@ fn update_template_rejects_unterminated_brace() {
 
 #[test]
 fn update_template_rejects_empty_placeholder() {
-    let err = super::validate_update_template(
-        "https://example.test/{}/x",
-        false,
-        Path::new("test"),
-    )
-    .expect_err("empty placeholder must be rejected");
+    let err =
+        super::validate_update_template("https://example.test/{}/x", false, Path::new("test"))
+            .expect_err("empty placeholder must be rejected");
     match err {
         ManifestError::UnknownUpdatePlaceholder { placeholder, .. } => {
             assert_eq!(placeholder, "");

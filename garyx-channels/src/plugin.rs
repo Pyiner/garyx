@@ -2492,12 +2492,14 @@ impl ChannelPluginManager {
         // block runs without touching live state, so a failure aborts
         // cleanly with no rollback needed.
         let (new_manifest, current_accounts, old_manifest_snapshot) = {
-            let entry = self.plugins.get(plugin_id).ok_or_else(|| {
-                SubprocessPluginError::UnknownPlugin(plugin_id.to_owned())
-            })?;
-            let sub = entry.subprocess.as_ref().ok_or_else(|| {
-                SubprocessPluginError::UnknownPlugin(plugin_id.to_owned())
-            })?;
+            let entry = self
+                .plugins
+                .get(plugin_id)
+                .ok_or_else(|| SubprocessPluginError::UnknownPlugin(plugin_id.to_owned()))?;
+            let sub = entry
+                .subprocess
+                .as_ref()
+                .ok_or_else(|| SubprocessPluginError::UnknownPlugin(plugin_id.to_owned()))?;
             let manifest_path = sub.manifest.manifest_dir.join("plugin.toml");
             let new_manifest = PluginManifest::load(&manifest_path).map_err(|err| {
                 SubprocessPluginError::ManifestReload {
@@ -2514,12 +2516,14 @@ impl ChannelPluginManager {
         // respawn path (which sources `manifest` from `entry.subprocess`)
         // picks up the new schema / version / capability bits.
         {
-            let entry = self.plugins.get_mut(plugin_id).ok_or_else(|| {
-                SubprocessPluginError::UnknownPlugin(plugin_id.to_owned())
-            })?;
-            let sub = entry.subprocess.as_mut().ok_or_else(|| {
-                SubprocessPluginError::UnknownPlugin(plugin_id.to_owned())
-            })?;
+            let entry = self
+                .plugins
+                .get_mut(plugin_id)
+                .ok_or_else(|| SubprocessPluginError::UnknownPlugin(plugin_id.to_owned()))?;
+            let sub = entry
+                .subprocess
+                .as_mut()
+                .ok_or_else(|| SubprocessPluginError::UnknownPlugin(plugin_id.to_owned()))?;
             sub.manifest = new_manifest;
         }
 

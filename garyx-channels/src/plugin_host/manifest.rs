@@ -275,7 +275,9 @@ pub enum ManifestError {
     StopGraceTooLarge { path: PathBuf, got: u64 },
     #[error("manifest `{path}`: runtime.shutdown_grace_ms ({got}) exceeds host ceiling of 30000")]
     ShutdownGraceTooLarge { path: PathBuf, got: u64 },
-    #[error("manifest `{path}`: [update] template `{template}` references unknown placeholder `{placeholder}`")]
+    #[error(
+        "manifest `{path}`: [update] template `{template}` references unknown placeholder `{placeholder}`"
+    )]
     UnknownUpdatePlaceholder {
         path: PathBuf,
         template: String,

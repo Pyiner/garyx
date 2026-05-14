@@ -191,8 +191,7 @@ pub(super) const BUILTIN_PLUGIN_UPDATE_SOURCES: &[(&str, UpdateSource)] = &[(
         // Set to `Some("...")` once an upstream `latest.json` is
         // published for this plugin.
         manifest_url: None,
-        url_template:
-            "https://example.com/garyx/plugins/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz",
+        url_template: "https://example.com/garyx/plugins/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz",
         checksum_url_template: "{url}.sha256",
         binary_in_archive: "{id}/garyx-plugin-{id}",
     },
@@ -342,10 +341,12 @@ pub(super) fn resolve_source(
     if !manifest_path.is_file() {
         return Err(PluginsCliError::NotInstalled(target_root.join(id)));
     }
-    let manifest = garyx_channels::plugin_host::PluginManifest::load(&manifest_path)
-        .map_err(|e| PluginsCliError::Io {
-            context: format!("loading {}", manifest_path.display()),
-            source: std::io::Error::other(e.to_string()),
+    let manifest =
+        garyx_channels::plugin_host::PluginManifest::load(&manifest_path).map_err(|e| {
+            PluginsCliError::Io {
+                context: format!("loading {}", manifest_path.display()),
+                source: std::io::Error::other(e.to_string()),
+            }
         })?;
     let installed_version = manifest.plugin.version.clone();
 
@@ -397,10 +398,12 @@ pub(super) async fn discover_latest_version(
             detail: format!("GET {url}: {e}"),
         })?;
     let body: serde_json::Value =
-        resp.json().await.map_err(|e| PluginsCliError::VersionDiscoveryFailed {
-            id: id.to_string(),
-            detail: format!("parsing JSON from {url}: {e}"),
-        })?;
+        resp.json()
+            .await
+            .map_err(|e| PluginsCliError::VersionDiscoveryFailed {
+                id: id.to_string(),
+                detail: format!("parsing JSON from {url}: {e}"),
+            })?;
     body.get("version")
         .and_then(|v| v.as_str())
         .map(|s| s.trim().trim_start_matches('v').to_string())
@@ -507,9 +510,11 @@ pub(super) fn extract_and_locate_binary(
 
     let decoder = GzDecoder::new(std::io::Cursor::new(archive_bytes));
     let mut archive = Archive::new(decoder);
-    archive.unpack(out_dir).map_err(|e| PluginsCliError::ArchiveLayout {
-        hint: format!("unpacking archive into {}: {e}", out_dir.display()),
-    })?;
+    archive
+        .unpack(out_dir)
+        .map_err(|e| PluginsCliError::ArchiveLayout {
+            hint: format!("unpacking archive into {}: {e}", out_dir.display()),
+        })?;
 
     let relative = render_template(binary_in_archive, id, "", "", None).map_err(|e| {
         PluginsCliError::ArchiveLayout {
@@ -545,20 +550,14 @@ pub(super) fn extract_and_locate_binary(
     Ok(bin)
 }
 
-pub async fn update(
-    name: Option<&str>,
-    opts: UpdateOptions,
-) -> Result<(), PluginsCliError> {
+pub async fn update(name: Option<&str>, opts: UpdateOptions) -> Result<(), PluginsCliError> {
     match name {
         Some(id) => update_one(id, opts).await,
         None => update_all(opts).await,
     }
 }
 
-pub(super) async fn update_one(
-    name: &str,
-    opts: UpdateOptions,
-) -> Result<(), PluginsCliError> {
+pub(super) async fn update_one(name: &str, opts: UpdateOptions) -> Result<(), PluginsCliError> {
     let json = opts.json;
     let outcome = compute_update_outcome(name, opts).await?;
     render_outcome(&outcome, json);
@@ -624,13 +623,12 @@ async fn compute_update_outcome(
     let version = match opts.version.as_deref() {
         Some(v) => v.trim().trim_start_matches('v').to_string(),
         None => {
-            let manifest_url = source
-                .manifest_url
-                .clone()
-                .ok_or_else(|| PluginsCliError::VersionDiscoveryFailed {
+            let manifest_url = source.manifest_url.clone().ok_or_else(|| {
+                PluginsCliError::VersionDiscoveryFailed {
                     id: name.to_string(),
                     detail: "no manifest_url declared; pass --version explicitly".to_string(),
-                })?;
+                }
+            })?;
             let target = current_target_alias()?;
             let rendered = render_template(&manifest_url, name, "", target, None)?;
             discover_latest_version(&client, &rendered, name).await?
@@ -910,7 +908,10 @@ pub(super) async fn update_all(opts: UpdateOptions) -> Result<(), PluginsCliErro
             reason: "`--from` requires a plugin name".to_string(),
         });
     }
-    let target_root = opts.target.clone().unwrap_or_else(default_plugin_install_root);
+    let target_root = opts
+        .target
+        .clone()
+        .unwrap_or_else(default_plugin_install_root);
     let ids = list_installed_plugin_ids(&target_root)?;
     if ids.is_empty() {
         if opts.json {
@@ -1017,8 +1018,7 @@ mod tests {
     /// download/extract tests in Tasks 11 and 12 so they don't need
     /// to ship fixture binaries on disk.
     fn make_tarball(contents: &[(&str, &[u8])]) -> Vec<u8> {
-        let mut gz =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         {
             let mut builder = tar::Builder::new(&mut gz);
             for (path, data) in contents {
@@ -1091,7 +1091,14 @@ mod tests {
     fn clap_rejects_from_with_version() {
         let err = expect_clap_err(
             &[
-                "garyx", "plugins", "update", "demo", "--from", "./bundle", "--version", "0.1.0",
+                "garyx",
+                "plugins",
+                "update",
+                "demo",
+                "--from",
+                "./bundle",
+                "--version",
+                "0.1.0",
             ],
             "--from + --version",
         );
@@ -1172,9 +1179,18 @@ mod tests {
 
     #[test]
     fn target_alias_matches_release_format() {
-        assert_eq!(resolve_target_alias("linux", "x86_64"), Some("linux-x86_64"));
-        assert_eq!(resolve_target_alias("linux", "aarch64"), Some("linux-aarch64"));
-        assert_eq!(resolve_target_alias("macos", "aarch64"), Some("mac-aarch64"));
+        assert_eq!(
+            resolve_target_alias("linux", "x86_64"),
+            Some("linux-x86_64")
+        );
+        assert_eq!(
+            resolve_target_alias("linux", "aarch64"),
+            Some("linux-aarch64")
+        );
+        assert_eq!(
+            resolve_target_alias("macos", "aarch64"),
+            Some("mac-aarch64")
+        );
         assert_eq!(resolve_target_alias("macos", "x86_64"), Some("mac-x86_64"));
         assert_eq!(resolve_target_alias("windows", "x86_64"), None);
     }
@@ -1186,7 +1202,10 @@ mod tests {
             .find(|(id, _)| *id == "example-plugin")
             .map(|(_, src)| src)
             .expect("example-plugin present in fallback");
-        assert!(m.manifest_url.is_none(), "manifest_url is None during transitional period");
+        assert!(
+            m.manifest_url.is_none(),
+            "manifest_url is None during transitional period"
+        );
         assert!(m.url_template.contains("{id}"));
         assert!(m.url_template.contains("{version}"));
         assert!(m.url_template.contains("{target}"));
@@ -1303,18 +1322,16 @@ mod tests {
         let plugin_dir = root.path().join("randomplugin");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         write_test_manifest(&plugin_dir, "randomplugin", "0.1.0", None);
-        let err =
-            super::resolve_source("randomplugin", &root.path().to_path_buf(), None)
-                .expect_err("no source");
+        let err = super::resolve_source("randomplugin", &root.path().to_path_buf(), None)
+            .expect_err("no source");
         assert!(matches!(err, PluginsCliError::NoUpdateSource { ref id } if id == "randomplugin"));
     }
 
     #[test]
     fn resolve_source_returns_not_installed_for_missing_dir() {
         let root = tempfile::tempdir().unwrap();
-        let err =
-            super::resolve_source("ghost", &root.path().to_path_buf(), None)
-                .expect_err("not installed");
+        let err = super::resolve_source("ghost", &root.path().to_path_buf(), None)
+            .expect_err("not installed");
         assert!(matches!(err, PluginsCliError::NotInstalled(_)));
     }
 
@@ -1412,15 +1429,15 @@ mod tests {
         let err = super::discover_latest_version(&client, &format!("{base}/latest.json"), "demo")
             .await
             .expect_err("missing version field");
-        assert!(matches!(err, PluginsCliError::VersionDiscoveryFailed { .. }));
+        assert!(matches!(
+            err,
+            PluginsCliError::VersionDiscoveryFailed { .. }
+        ));
     }
 
     #[tokio::test]
     async fn download_archive_verifies_checksum() {
-        let tar = make_tarball(&[(
-            "demo/garyx-plugin-demo",
-            b"#!/bin/sh\nexit 0\n",
-        )]);
+        let tar = make_tarball(&[("demo/garyx-plugin-demo", b"#!/bin/sh\nexit 0\n")]);
         let sha = sha256_hex(&tar);
         let tar_bytes = Arc::new(tar);
         let sha_text = format!("{sha}  demo.tar.gz\n");
@@ -1451,18 +1468,11 @@ mod tests {
 
     #[test]
     fn extract_and_locate_binary_default_layout() {
-        let tar = make_tarball(&[(
-            "demo/garyx-plugin-demo",
-            b"#!/bin/sh\nexit 0\n",
-        )]);
+        let tar = make_tarball(&[("demo/garyx-plugin-demo", b"#!/bin/sh\nexit 0\n")]);
         let dir = tempfile::tempdir().unwrap();
-        let bin = super::extract_and_locate_binary(
-            &tar,
-            dir.path(),
-            "demo",
-            "{id}/garyx-plugin-{id}",
-        )
-        .unwrap();
+        let bin =
+            super::extract_and_locate_binary(&tar, dir.path(), "demo", "{id}/garyx-plugin-{id}")
+                .unwrap();
         assert_eq!(bin, dir.path().join("demo").join("garyx-plugin-demo"));
         assert!(bin.is_file());
         #[cfg(unix)]
@@ -1477,13 +1487,9 @@ mod tests {
     fn extract_and_locate_binary_missing_path_errors() {
         let tar = make_tarball(&[("other/file", b"hello")]);
         let dir = tempfile::tempdir().unwrap();
-        let err = super::extract_and_locate_binary(
-            &tar,
-            dir.path(),
-            "demo",
-            "{id}/garyx-plugin-{id}",
-        )
-        .expect_err("missing binary");
+        let err =
+            super::extract_and_locate_binary(&tar, dir.path(), "demo", "{id}/garyx-plugin-{id}")
+                .expect_err("missing binary");
         assert!(matches!(err, PluginsCliError::ArchiveLayout { .. }));
     }
 
@@ -1511,10 +1517,9 @@ mod tests {
             super::resolve_source("demo", &root.path().to_path_buf(), None).unwrap();
         assert_eq!(installed, "0.1.0");
 
-        let archive_url = super::render_template(
-            &src.url_template, "demo", "0.1.1", "linux-x86_64", None,
-        )
-        .unwrap();
+        let archive_url =
+            super::render_template(&src.url_template, "demo", "0.1.1", "linux-x86_64", None)
+                .unwrap();
         assert_eq!(
             archive_url,
             "https://x.test/demo/0.1.1/garyx-plugin-demo-0.1.1-linux-x86_64.tar.gz",
@@ -1562,14 +1567,9 @@ mod tests {
             super::resolve_source("demo", &root.path().to_path_buf(), None).unwrap();
         assert_eq!(installed, "0.1.0");
 
-        let archive_url = super::render_template(
-            &src.url_template,
-            "demo",
-            "0.1.1",
-            "linux-x86_64",
-            None,
-        )
-        .unwrap();
+        let archive_url =
+            super::render_template(&src.url_template, "demo", "0.1.1", "linux-x86_64", None)
+                .unwrap();
         assert_eq!(
             archive_url,
             "https://x.test/demo/0.1.1/garyx-plugin-demo-0.1.1-linux-x86_64.tar.gz",
@@ -1577,7 +1577,9 @@ mod tests {
         // checksum_url_template was None in the manifest, so the EffectiveSource
         // got the "{url}.sha256" default; render that against `{url}`.
         let checksum_url = super::render_template(
-            src.checksum_url_template.as_deref().unwrap_or("{url}.sha256"),
+            src.checksum_url_template
+                .as_deref()
+                .unwrap_or("{url}.sha256"),
             "demo",
             "0.1.1",
             "linux-x86_64",

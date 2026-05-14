@@ -299,10 +299,9 @@ async fn process_plugin(
 
         // Step 7c — stage into a sibling tempdir under the install
         // root so the final rename is same-filesystem and atomic.
-        std::fs::create_dir_all(target_root)
-            .map_err(|e| format!("creating install root: {e}"))?;
-        let staging: TempDir = tempfile::tempdir_in(target_root)
-            .map_err(|e| format!("creating staging dir: {e}"))?;
+        std::fs::create_dir_all(target_root).map_err(|e| format!("creating install root: {e}"))?;
+        let staging: TempDir =
+            tempfile::tempdir_in(target_root).map_err(|e| format!("creating staging dir: {e}"))?;
         // `extract_and_locate_binary` unpacks the whole tarball into
         // `staging` AND validates that the binary lives at the path
         // the manifest claims. The bundle root is always
@@ -312,8 +311,13 @@ async fn process_plugin(
         // plugins that use a nested `binary_in_archive` such as
         // `{id}/bin/garyx-plugin-{id}` — the rename would lift only
         // the `bin/` directory, dropping `plugin.toml` and `icon.*`.
-        extract_and_locate_binary(&archive_bytes, staging.path(), id, &source.binary_in_archive)
-            .map_err(|e| e.to_string())?;
+        extract_and_locate_binary(
+            &archive_bytes,
+            staging.path(),
+            id,
+            &source.binary_in_archive,
+        )
+        .map_err(|e| e.to_string())?;
         let bundle_dir = staging.path().join(id);
         if !bundle_dir.is_dir() {
             return Err(format!(
@@ -611,8 +615,7 @@ type = "object"
             trigger = trigger_file.display(),
         );
 
-        let mut gz =
-            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
         {
             let mut builder = tar::Builder::new(&mut gz);
             let mut script_hdr = tar::Header::new_gnu();
@@ -850,10 +853,9 @@ type = "object"
 
         // After tick 1 — disk is now v2 (atomic promote landed),
         // running stays v1 (respawn rolled back).
-        let disk_after_tick1 = std::fs::read_to_string(
-            install_root.path().join(PLUGIN_ID).join("plugin.toml"),
-        )
-        .unwrap();
+        let disk_after_tick1 =
+            std::fs::read_to_string(install_root.path().join(PLUGIN_ID).join("plugin.toml"))
+                .unwrap();
         assert!(
             disk_after_tick1.contains(r#"version = "0.2.0""#),
             "tick 1 must have promoted the new bundle to disk:\n{disk_after_tick1}"
@@ -901,4 +903,3 @@ type = "object"
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
-
