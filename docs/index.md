@@ -9,10 +9,10 @@ hero:
     alt: Garyx logo
   actions:
     - theme: brand
-      text: Get started
+      text: Install Garyx
       link: /installation
     - theme: alt
-      text: Your first bot
+      text: Connect Telegram
       link: /first-bot
     - theme: alt
       text: GitHub
@@ -48,13 +48,19 @@ Telegram / Feishu / WeChat / CLI / Desktop / HTTP / WebSocket
 It is not a hosted agent platform. The gateway, config, channel accounts, and
 transcripts live on the machine or server where you run Garyx.
 
-## Up and running
+## Install, then connect Telegram
+
+The release installer only installs the CLI binary. It does not initialize
+Garyx or start the gateway, so the normal first run is: install the CLI,
+create local config, install the managed gateway service, then register a
+Telegram bot.
 
 ::: code-group
 
 ```bash [Install]
-brew tap pyiner/garyx
-brew install pyiner/garyx/garyx
+curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
+export PATH="$HOME/.garyx/bin:$PATH"
+garyx --version
 ```
 
 ```bash [Initialize]
@@ -63,12 +69,7 @@ garyx gateway install
 garyx status
 ```
 
-```bash [First thread]
-TID=$(garyx thread create --workspace-dir "$PWD" --json | jq -r .thread_id)
-garyx thread send thread "$TID" "What does this workspace do?"
-```
-
-```bash [First Telegram bot]
+```bash [Telegram bot]
 export TELEGRAM_BOT_TOKEN="TOKEN_FROM_BOTFATHER"
 garyx channels add telegram main --token "$TELEGRAM_BOT_TOKEN" --agent-id claude
 garyx gateway restart --no-wake

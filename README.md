@@ -23,64 +23,48 @@ control plane.
 | Tasks and automations | Promote threads into reviewable tasks or schedule recurring prompts that deliver through Garyx. |
 | Extensible channels | Install subprocess channel plugins without rebuilding the gateway. |
 
-## Install
+## Install Garyx
 
-### Homebrew
-
-```bash
-brew tap pyiner/garyx
-brew install pyiner/garyx/garyx
-```
-
-### Shell installer
+The shell installer downloads the latest release binary, verifies its checksum,
+and copies `garyx` into `~/.garyx/bin`. It does not initialize config or start
+the gateway.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
+export PATH="$HOME/.garyx/bin:$PATH"
+garyx --version
 ```
 
-### From source
+Other install paths:
 
 ```bash
+# Homebrew
+brew tap pyiner/garyx
+brew install pyiner/garyx/garyx
+
+# From source
 git clone https://github.com/Pyiner/garyx
 cd garyx
 scripts/install-local-cli.sh
 ```
 
-Verify the binary:
-
-```bash
-garyx --version
-garyx doctor
-```
-
-## Up and running in 60 seconds
-
-Initialize a local config:
+Initialize Garyx and install the managed gateway service:
 
 ```bash
 garyx onboard
-```
-
-Install and start the managed gateway:
-
-```bash
 garyx gateway install
 garyx status
 ```
 
-Send a message into a fresh thread:
+`garyx gateway install` writes the launchd plist on macOS or the systemd user
+unit on Linux, then starts the gateway. Re-run it after upgrades or service
+file changes.
 
-```bash
-TID=$(garyx thread create --workspace-dir "$PWD" --json | jq -r .thread_id)
-garyx thread send thread "$TID" "What does this workspace do?"
-```
+## Connect a Telegram bot
 
-If that round-trips, the gateway is running and at least one provider is
-available.
-
-## Add your first bot
-
-Telegram is the shortest channel path:
+The first concrete Garyx flow should be a real channel bot. Create a Telegram
+bot with [@BotFather](https://t.me/BotFather), store the token in an
+environment variable, then register that account with Garyx:
 
 ```bash
 export TELEGRAM_BOT_TOKEN="TOKEN_FROM_BOTFATHER"
@@ -90,8 +74,19 @@ garyx channels add telegram main \
 garyx gateway restart --no-wake
 ```
 
-DM the bot and Garyx will create or resume a thread for that Telegram chat.
-The same account model works for Feishu / Lark, WeChat, and channel plugins.
+DM the bot. Garyx will create or resume a thread for that Telegram chat and
+route messages to the agent bound by `--agent-id`.
+
+The example above uses the built-in `claude` agent. Pick the provider you plan
+to use and make sure its CLI is logged in before expecting the bot to answer:
+
+```bash
+claude auth login
+codex login
+gemini auth login
+```
+
+The same account model works for Feishu / Lark, WeChat, and channel plugins:
 
 ```bash
 garyx channels login feishu --domain feishu
@@ -104,7 +99,7 @@ garyx plugins install ./path/to/garyx-plugin-example
 | Workflow | Command or surface |
 | --- | --- |
 | Chat with a workspace from the terminal | `garyx thread create --workspace-dir "$PWD"` then `garyx thread send ...` |
-| Route a real bot to an agent | `garyx channels add <channel> <account_id> --agent-id <agent_id>` |
+| Route a channel bot to an agent | `garyx channels add <channel> <account_id> --agent-id <agent_id>` |
 | Continue a bot conversation from the CLI | `garyx thread history <thread_id>` and `garyx thread send thread <thread_id> ...` |
 | Promote work into a reviewable task | `garyx task create --title "..." --body "..." --notify current-thread` |
 | Schedule recurring agent work | `garyx automation create --label "Daily triage" --prompt "..." --every-hours 24` |

@@ -1,20 +1,21 @@
 # Installation
 
-Garyx ships as a single CLI binary. The recommended path on macOS and Linux
-is the [Homebrew tap](https://github.com/Pyiner/homebrew-garyx); a shell
-installer and a `cargo build` path are also supported.
+Garyx ships as a single CLI binary. The shell installer downloads the latest
+release, verifies its checksum, copies the binary into `~/.garyx/bin`, and
+signs it on macOS. It does not initialize config or start the gateway.
 
 ## Install the CLI
 
 ::: code-group
 
+```bash [Shell installer]
+curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
+export PATH="$HOME/.garyx/bin:$PATH"
+```
+
 ```bash [Homebrew]
 brew tap pyiner/garyx
 brew install pyiner/garyx/garyx
-```
-
-```bash [Shell installer]
-curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
 ```
 
 ```bash [From source]
@@ -50,14 +51,16 @@ for the full schema.
 
 ## Run the gateway
 
-For day-to-day use, install it as a managed background service:
+For day-to-day use, install it as a managed background service. This command
+writes the launchd plist on macOS or the systemd user unit on Linux, then
+starts the gateway:
 
 ```bash
-garyx gateway install   # writes the launchd plist (macOS) or systemd unit (Linux)
-                        # and starts it; safe to re-run after config changes
-garyx gateway restart --no-wake  # pick up new config
-garyx gateway stop      # stop the managed service
+garyx gateway install
 ```
+
+Use `garyx gateway restart --no-wake` after config changes when no active
+thread needs to be resumed. Use `garyx gateway stop` to stop the service.
 
 For one-off testing, run it in the foreground:
 
@@ -75,7 +78,7 @@ $LOGIN_SHELL -lic …"`, so anything you `export` in `~/.zshenv`,
 recommended place for provider tokens like `CLAUDE_CODE_OAUTH_TOKEN`.
 :::
 
-## Verify
+## Verify the gateway
 
 ```bash
 curl -s http://127.0.0.1:31337/health
@@ -83,15 +86,8 @@ garyx status
 garyx doctor
 ```
 
-Send a message into a fresh thread end-to-end:
-
-```bash
-TID=$(garyx thread create --workspace-dir "$PWD" --json | jq -r .thread_id)
-garyx thread send thread "$TID" "What does this workspace do?"
-```
-
-If that round-trips, the gateway is healthy and at least one provider is
-reachable.
+If those checks pass, the gateway is healthy. The next useful step is adding a
+Telegram bot so real messages can enter Garyx through a channel.
 
 ## Where to go next
 
