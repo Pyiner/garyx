@@ -8,7 +8,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { IconGitBranch, IconTerminal2 } from "@tabler/icons-react";
+import { IconGitBranch } from "@tabler/icons-react";
 
 import type {
   DesktopApiProviderType,
@@ -932,20 +932,17 @@ export function ThreadPage({
                 aria-label={t("Workspace mode")}
                 className="thread-composer-status"
               >
-                <span className="thread-composer-status-pill thread-composer-status-mode">
-                  <IconTerminal2 aria-hidden size={14} stroke={1.65} />
-                  <span>
-                    {composerWorkspaceMode === "worktree"
-                      ? t("New worktree")
-                      : t("Local mode")}
-                  </span>
-                </span>
                 {composerWorkspaceBranch?.trim() ? (
                   <span className="thread-composer-status-pill thread-composer-status-branch">
                     <IconGitBranch aria-hidden size={14} stroke={1.65} />
                     <span>{composerWorkspaceBranch.trim()}</span>
                   </span>
-                ) : null}
+                ) : (
+                  <span className="thread-composer-status-pill thread-composer-status-branch">
+                    <IconGitBranch aria-hidden size={14} stroke={1.65} />
+                    <span>{t("Worktree")}</span>
+                  </span>
+                )}
               </div>
             ) : null}
             {!selectedThreadId &&

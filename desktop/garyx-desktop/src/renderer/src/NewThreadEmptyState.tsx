@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   IconDeviceLaptop,
   IconFolder,
+  IconGitBranch,
   IconHistory,
   IconPlus,
   IconSearch,
@@ -188,9 +189,11 @@ export function NewThreadEmptyState({
                         value={value}
                       >
                         <IconFolder aria-hidden size={16} stroke={1.7} />
-                        {workspace.available && workspace.path
-                          ? workspace.name
-                          : t("{name} (Unavailable)", { name: workspace.name })}
+                        <span className="new-thread-menu-text">
+                          {workspace.available && workspace.path
+                            ? workspace.name
+                            : t("{name} (Unavailable)", { name: workspace.name })}
+                        </span>
                       </SelectItem>
                     );
                   })}
@@ -202,9 +205,11 @@ export function NewThreadEmptyState({
                     disabled={workspaceMutation === "add"}
                   >
                     <IconFolder aria-hidden size={16} stroke={1.7} />
-                    {workspaceMutation === "add"
-                      ? t("Opening folder…")
-                      : t("Choose folder…")}
+                    <span className="new-thread-menu-text">
+                      {workspaceMutation === "add"
+                        ? t("Opening folder…")
+                        : t("Choose folder…")}
+                    </span>
                   </SelectItem>
                 </SelectGroup>
               </SelectContent>
@@ -234,7 +239,6 @@ export function NewThreadEmptyState({
                 aria-label={t("Workspace mode")}
                 className="new-thread-mode-trigger"
               >
-                <IconDeviceLaptop aria-hidden size={18} stroke={1.6} />
                 <SelectValue />
               </SelectTrigger>
               <SelectContent
@@ -246,8 +250,14 @@ export function NewThreadEmptyState({
               >
                 <SelectGroup>
                   <SelectLabel>{t("Workspace mode")}</SelectLabel>
-                  <SelectItem value="direct">{t("Local mode")}</SelectItem>
-                  <SelectItem value="worktree">{t("New worktree")}</SelectItem>
+                  <SelectItem value="direct">
+                    <IconDeviceLaptop aria-hidden size={16} stroke={1.7} />
+                    <span className="new-thread-menu-text">{t("Local mode")}</span>
+                  </SelectItem>
+                  <SelectItem value="worktree">
+                    <IconGitBranch aria-hidden size={16} stroke={1.7} />
+                    <span className="new-thread-menu-text">{t("Worktree")}</span>
+                  </SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>

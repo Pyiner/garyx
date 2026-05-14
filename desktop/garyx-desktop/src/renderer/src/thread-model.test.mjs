@@ -15,7 +15,7 @@ function makeWorkspace(path, overrides = {}) {
   };
 }
 
-function makeThread(id, workspacePath) {
+function makeThread(id, workspacePath, overrides = {}) {
   return {
     id,
     title: `Thread ${id}`,
@@ -23,6 +23,7 @@ function makeThread(id, workspacePath) {
     updatedAt: '2026-01-01T00:00:00.000Z',
     lastMessagePreview: '',
     workspacePath,
+    ...overrides,
   };
 }
 
@@ -47,17 +48,38 @@ function makeState(overrides = {}) {
   };
 }
 
-test('workspace sidebar groups only include manually added workspaces', () => {
+test('workspace sidebar groups exclude only worktree directories', () => {
   const manualEmpty = makeWorkspace('/Users/test/manual-empty');
   const manualWithThread = makeWorkspace('/Users/test/manual-with-thread');
   const inferredWithThread = makeWorkspace('/Users/test/inferred-with-thread', {
     managed: true,
   });
+  const worktreeWorkspace = makeWorkspace('/Users/test/thread-worktree', {
+    managed: true,
+  });
+  const garyxWorktreeStorage = makeWorkspace('/Users/test/.garyx/worktrees/abc123/garyx', {
+    managed: true,
+  });
+  const codexWorktreeStorage = makeWorkspace('/Users/test/.codex/worktrees/def456/garyx', {
+    managed: true,
+  });
   const state = makeState({
-    workspaces: [manualEmpty, inferredWithThread, manualWithThread],
+    workspaces: [
+      manualEmpty,
+      inferredWithThread,
+      manualWithThread,
+      worktreeWorkspace,
+      garyxWorktreeStorage,
+      codexWorktreeStorage,
+    ],
     threads: [
       makeThread('thread-manual', manualWithThread.path),
       makeThread('thread-inferred', inferredWithThread.path),
+      makeThread('thread-worktree', worktreeWorkspace.path, {
+        worktree: {
+          worktreeDir: worktreeWorkspace.path,
+        },
+      }),
     ],
   });
 
@@ -70,10 +92,17 @@ test('workspace sidebar groups only include manually added workspaces', () => {
 
   assert.deepEqual(
     groups.map((group) => group.workspace.path),
-    [manualEmpty.path, manualWithThread.path],
+    [manualEmpty.path, inferredWithThread.path, manualWithThread.path],
   );
-  assert.equal(groups[0].threads.length, 0);
-  assert.deepEqual(groups[1].threads.map((thread) => thread.id), ['thread-manual']);
+  assert.equal(groups.find((group) => group.workspace.path === manualEmpty.path)?.threads.length, 0);
+  assert.deepEqual(
+    groups.find((group) => group.workspace.path === inferredWithThread.path)?.threads.map((thread) => thread.id),
+    ['thread-inferred'],
+  );
+  assert.deepEqual(
+    groups.find((group) => group.workspace.path === manualWithThread.path)?.threads.map((thread) => thread.id),
+    ['thread-manual'],
+  );
   assert.equal(groups[0].canManageWorkspace, true);
   assert.equal(groups[1].canManageWorkspace, true);
 });

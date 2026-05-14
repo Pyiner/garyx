@@ -14945,6 +14945,14 @@ button.codex-list-row {
   gap: 7px;
 }
 
+.tasks-workspace-select-content [data-slot="select-item"] > span:last-child,
+.tasks-workspace-mode-content [data-slot="select-item"] > span:last-child {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
 .tasks-field [data-slot="textarea"] {
   min-height: 120px;
   resize: vertical;
@@ -18040,7 +18048,9 @@ button.new-thread-resume-link:hover {
 }
 
 [data-slot="select-content"].new-thread-workspace-menu {
+  width: min(360px, calc(100vw - 32px));
   min-width: 260px;
+  max-width: min(360px, calc(100vw - 32px));
 }
 
 [data-slot="select-content"].new-thread-mode-menu {
@@ -18084,6 +18094,21 @@ button.new-thread-resume-link:hover {
 [data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"] [data-slot="select-item-indicator"],
 [data-slot="select-content"].new-thread-mode-menu [data-slot="select-item"] [data-slot="select-item-indicator"] {
   right: 8px;
+}
+
+[data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"] > span:last-child,
+[data-slot="select-content"].new-thread-mode-menu [data-slot="select-item"] > span:last-child {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.new-thread-menu-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 [data-slot="select-content"].new-thread-workspace-menu [data-slot="select-item"] svg,

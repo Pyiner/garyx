@@ -125,6 +125,7 @@ import {
   selectedThread,
   selectedWorkspace,
   teamBlocksEqual,
+  visibleWorkspaceList,
   workspaceForThread,
 } from "../thread-model";
 import {
@@ -2575,8 +2576,11 @@ export function AppShell() {
         isActiveStreamingThread),
   );
   const activeThreadId = selectGlobalActiveThreadId(messageState);
-  const realWorkspaces = desktopState?.workspaces || [];
-  const selectableNewThreadWorkspaces = realWorkspaces.filter(
+  const workspacePickerWorkspaces = useMemo(
+    () => visibleWorkspaceList(desktopState),
+    [desktopState],
+  );
+  const selectableNewThreadWorkspaces = workspacePickerWorkspaces.filter(
     isSelectableNewThreadWorkspace,
   );
   const availableWorkspaceCount = selectableNewThreadWorkspaces.length;
@@ -7910,7 +7914,7 @@ export function AppShell() {
                   void openExistingThread(threadId);
                 }}
                 onToast={pushToast}
-                workspaces={realWorkspaces}
+                workspaces={workspacePickerWorkspaces}
                 workspaceMutation={workspaceMutation}
               />
             ) : isBotsView ? (

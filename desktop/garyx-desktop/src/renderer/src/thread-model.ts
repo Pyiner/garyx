@@ -180,7 +180,54 @@ export function isAvailableWorkspace(
 export function isSelectableNewThreadWorkspace(
   workspace: DesktopWorkspace | null | undefined,
 ): workspace is DesktopWorkspace {
-  return Boolean(workspace?.available && workspace?.path);
+  return Boolean(workspace?.available && workspace?.path && workspace.kind === 'local');
+}
+
+function workspacePathKey(path?: string | null): string {
+  return path?.trim().toLowerCase() || '';
+}
+
+function isManagedWorktreePath(path?: string | null): boolean {
+  const normalized = workspacePathKey(path).replace(/\\/g, '/');
+  return normalized.includes('/.garyx/worktrees/') ||
+    normalized.includes('/.codex/worktrees/');
+}
+
+function worktreeWorkspacePathKeys(threads: DesktopThreadSummary[]): Set<string> {
+  const keys = new Set<string>();
+  for (const thread of threads) {
+    if (!thread.worktree) {
+      continue;
+    }
+    for (const path of [
+      thread.workspacePath,
+      thread.worktree.worktreeDir,
+      thread.worktree.path,
+    ]) {
+      const key = workspacePathKey(path);
+      if (key) {
+        keys.add(key);
+      }
+    }
+  }
+  return keys;
+}
+
+export function visibleWorkspaceList(state: DesktopState | null): DesktopWorkspace[] {
+  if (!state) {
+    return [];
+  }
+
+  const worktreeKeys = worktreeWorkspacePathKeys(state.threads);
+  return state.workspaces.filter((workspace) => {
+    const key = workspacePathKey(workspace.path);
+    return Boolean(
+      workspace.kind === 'local' &&
+        key &&
+        !isManagedWorktreePath(workspace.path) &&
+        !worktreeKeys.has(key),
+    );
+  });
 }
 
 export function pickPreferredWorkspace(
@@ -204,9 +251,7 @@ export function buildWorkspaceThreadGroups(input: {
     return [];
   }
 
-  return input.state.workspaces.filter((workspace) => {
-    return workspace.kind === 'local' && !workspace.managed && Boolean(workspace.path?.trim());
-  }).map((workspace) => {
+  return visibleWorkspaceList(input.state).map((workspace) => {
     const workspacePath = workspace.path || '';
     const workspacePathKey = workspacePath.trim().toLowerCase();
     const threads = input.state!.threads.filter((thread) => {

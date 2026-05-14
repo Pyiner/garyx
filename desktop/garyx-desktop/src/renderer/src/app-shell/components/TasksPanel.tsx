@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   Columns3,
   Folder,
+  GitBranch,
   Laptop,
   List,
   MessageSquare,
@@ -309,7 +310,13 @@ export function TasksPanel({
     ? botFilterOptions.find((option) => option.value === botFilter) || null
     : null;
   const selectableWorkspaces = useMemo(
-    () => workspaces.filter((workspace) => workspace.available && workspace.path),
+    () =>
+      workspaces.filter(
+        (workspace) =>
+          workspace.available &&
+          workspace.path &&
+          workspace.kind === 'local',
+      ),
     [workspaces],
   );
   const draftWorktreeCapable = Boolean(
@@ -989,7 +996,6 @@ export function TasksPanel({
                           aria-label={t('Workspace mode')}
                           className="tasks-workspace-mode-trigger"
                         >
-                          <Laptop aria-hidden size={15} strokeWidth={1.8} />
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent
@@ -1000,8 +1006,14 @@ export function TasksPanel({
                         >
                           <SelectGroup>
                             <SelectLabel>{t('Workspace mode')}</SelectLabel>
-                            <SelectItem value="direct">{t('Local mode')}</SelectItem>
-                            <SelectItem value="worktree">{t('New worktree')}</SelectItem>
+                            <SelectItem value="direct">
+                              <Laptop aria-hidden size={15} strokeWidth={1.8} />
+                              {t('Local mode')}
+                            </SelectItem>
+                            <SelectItem value="worktree">
+                              <GitBranch aria-hidden size={15} strokeWidth={1.8} />
+                              {t('Worktree')}
+                            </SelectItem>
                           </SelectGroup>
                         </SelectContent>
                       </Select>
