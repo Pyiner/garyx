@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  IconGitBranch,
+  IconDeviceLaptop,
+  IconFolder,
   IconHistory,
   IconPlus,
+  IconSearch,
 } from "@tabler/icons-react";
 
 import type {
@@ -88,7 +90,6 @@ export function NewThreadEmptyState({
     gitStatusResult?.workspacePath === selectedWorkspacePath &&
       gitStatusResult.status.isGitRepo,
   );
-
   useEffect(() => {
     let cancelled = false;
     setGitStatusResult(null);
@@ -169,10 +170,16 @@ export function NewThreadEmptyState({
               </SelectTrigger>
               <SelectContent
                 align="start"
-                className="min-w-[var(--radix-select-trigger-width)]"
+                className="new-thread-workspace-menu min-w-[var(--radix-select-trigger-width)]"
+                position="popper"
+                side="bottom"
+                sideOffset={-1}
               >
                 <SelectGroup>
-                  <SelectLabel>{t("Folders")}</SelectLabel>
+                  <SelectLabel>
+                    <IconSearch aria-hidden size={16} stroke={1.7} />
+                    {t("Search projects")}
+                  </SelectLabel>
                   {selectableNewThreadWorkspaces.map((workspace) => {
                     const value = workspace.path || `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
                     return (
@@ -181,6 +188,7 @@ export function NewThreadEmptyState({
                         key={workspace.path || workspace.name}
                         value={value}
                       >
+                        <IconFolder aria-hidden size={16} stroke={1.7} />
                         {workspace.available && workspace.path
                           ? workspace.name
                           : t("{name} (Unavailable)", { name: workspace.name })}
@@ -194,7 +202,7 @@ export function NewThreadEmptyState({
                     value={ADD_WORKSPACE_VALUE}
                     disabled={workspaceMutation === "add"}
                   >
-                    <IconPlus aria-hidden size={13} stroke={1.8} />
+                    <IconFolder aria-hidden size={16} stroke={1.7} />
                     {workspaceMutation === "add"
                       ? t("Opening folder…")
                       : t("Choose folder…")}
@@ -227,13 +235,19 @@ export function NewThreadEmptyState({
                 aria-label={t("Workspace mode")}
                 className="new-thread-mode-trigger"
               >
-                <IconGitBranch aria-hidden size={13} stroke={1.8} />
+                <IconDeviceLaptop aria-hidden size={18} stroke={1.6} />
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent align="start">
+              <SelectContent
+                align="start"
+                className="new-thread-mode-menu"
+                position="popper"
+                side="bottom"
+                sideOffset={-1}
+              >
                 <SelectGroup>
                   <SelectLabel>{t("Workspace mode")}</SelectLabel>
-                  <SelectItem value="direct">{t("Local")}</SelectItem>
+                  <SelectItem value="direct">{t("Local mode")}</SelectItem>
                   <SelectItem value="worktree">{t("New worktree")}</SelectItem>
                 </SelectGroup>
               </SelectContent>

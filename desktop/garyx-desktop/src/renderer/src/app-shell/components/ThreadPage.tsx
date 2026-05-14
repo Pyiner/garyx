@@ -530,18 +530,7 @@ export function ThreadPage({
                   {t("Every thread is replayable from gateway history and can continue on this Mac.")}
                 </p>
               </div>
-            ) : (
-              <NewThreadEmptyState
-                newThreadWorkspaceEntry={newThreadWorkspaceEntry}
-                onAddWorkspace={onAddWorkspace}
-                onSelectWorkspace={onSelectWorkspace}
-                onWorkspaceModeChange={onSelectNewThreadWorkspaceMode}
-                onResumeProviderSession={onResumeProviderSession}
-                selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
-                workspaceMode={newThreadWorkspaceMode}
-                workspaceMutation={workspaceMutation}
-              />
-            )
+            ) : null
           ) : null}
 
           {showHistoryLoadingPlaceholder ? (
@@ -924,6 +913,21 @@ export function ThreadPage({
               slashCommandsLoaded={slashCommandsLoaded}
               slashCommandsLoading={slashCommandsLoading}
             />
+            {!selectedThreadId &&
+            !activeMessages.length &&
+            !historyLoading &&
+            !showAutomationRunInitialPlaceholder ? (
+              <NewThreadEmptyState
+                newThreadWorkspaceEntry={newThreadWorkspaceEntry}
+                onAddWorkspace={onAddWorkspace}
+                onSelectWorkspace={onSelectWorkspace}
+                onWorkspaceModeChange={onSelectNewThreadWorkspaceMode}
+                onResumeProviderSession={onResumeProviderSession}
+                selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
+                workspaceMode={newThreadWorkspaceMode}
+                workspaceMutation={workspaceMutation}
+              />
+            ) : null}
           </div>
         </div>
       </div>
