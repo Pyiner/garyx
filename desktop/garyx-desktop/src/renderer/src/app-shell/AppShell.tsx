@@ -1869,6 +1869,7 @@ export function AppShell() {
     loadGatewaySettings,
     loadSlashCommands,
     localSettingsDirty,
+    localSettingsStatus,
     mcpServers,
     mcpServersLoading,
     mcpServersSaving,
@@ -1877,6 +1878,7 @@ export function AppShell() {
     refreshSettingsTabResources,
     savingSettings,
     setGatewaySettingsStatus,
+    setLocalSettingsStatus,
     setSettingsDraft,
     settingsActiveTab,
     settingsDraft,
@@ -2003,6 +2005,7 @@ export function AppShell() {
   ]);
 
   async function handleOpenGatewaySetup() {
+    setLocalSettingsStatus(null);
     const savedSettings = desktopState?.settings;
     const savedConnection = isConnectionValidForSettings(connection, savedSettings)
       ? connection
@@ -2055,6 +2058,7 @@ export function AppShell() {
     setConnection(savedConnection);
     setError(null);
     setGatewaySettingsStatus(null);
+    setLocalSettingsStatus(null);
     setGatewaySetupForced(false);
     setGatewaySetupCanCancel(false);
     gatewaySetupSavedConnectionRef.current = null;
@@ -7412,14 +7416,16 @@ export function AppShell() {
   const gatewayAuthSetupMessage = gatewaySetupMessageForAuthError(
     connection?.error,
   );
-  const gatewaySetupMessage = gatewayAuthSetupMessage;
+  const gatewaySetupMessage = gatewayAuthSetupMessage || localSettingsStatus;
   const requiresGatewaySetup =
     gatewaySetupForced || !persistedGatewayUrl || Boolean(gatewaySetupMessage);
 
   if (requiresGatewaySetup) {
-    const setupMessage =
-      gatewaySetupMessage ||
-      t("Set the gateway address and token, then save. Saving verifies the gateway before continuing.");
+    const setupMessage = gatewayAuthSetupMessage
+      ? t(gatewayAuthSetupMessage)
+      : localSettingsStatus
+        ? t("Save failed: {message}", { message: t(localSettingsStatus) })
+        : t("Set the gateway address and token, then save. Saving verifies the gateway before continuing.");
     const canCancelGatewaySetup = gatewaySetupForced && gatewaySetupCanCancel;
 
     return (
@@ -7451,6 +7457,7 @@ export function AppShell() {
                     type="text"
                     value={settingsDraft.gatewayUrl}
                     onChange={(event) => {
+                      setLocalSettingsStatus(null);
                       setSettingsDraft((current) => ({
                         ...current,
                         gatewayUrl: event.target.value,
@@ -7460,6 +7467,7 @@ export function AppShell() {
                   <GatewayProfileHistoryButton
                     profiles={gatewayProfiles}
                     onSelect={(profile) => {
+                      setLocalSettingsStatus(null);
                       setSettingsDraft((current) => ({
                         ...current,
                         gatewayUrl: profile.gatewayUrl,
@@ -7481,6 +7489,7 @@ export function AppShell() {
                   type="password"
                   value={settingsDraft.gatewayAuthToken}
                   onChange={(event) => {
+                    setLocalSettingsStatus(null);
                     setSettingsDraft((current) => ({
                       ...current,
                       gatewayAuthToken: event.target.value,

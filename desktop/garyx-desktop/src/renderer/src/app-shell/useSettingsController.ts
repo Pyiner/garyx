@@ -86,6 +86,7 @@ export function useSettingsController({
   const [mcpServersLoading, setMcpServersLoading] = useState(false);
   const [mcpServersSaving, setMcpServersSaving] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [localSettingsStatus, setLocalSettingsStatus] = useState<string | null>(null);
   const [settingsActiveTab, setSettingsActiveTab] = useState<SettingsTabId>(() =>
     normalizeSettingsTab(initialSettingsTab),
   );
@@ -421,6 +422,7 @@ export function useSettingsController({
 
     setSavingSettings(true);
     setError(null);
+    setLocalSettingsStatus(null);
     try {
       if (options?.requireGatewayConnection) {
         const status = await window.garyxDesktop.checkConnection({
@@ -429,7 +431,9 @@ export function useSettingsController({
         });
         setConnection(status);
         if (!status.ok) {
-          setError(status.error || 'Unable to verify gateway connection');
+          const message = status.error || 'Unable to verify gateway connection';
+          setLocalSettingsStatus(message);
+          setError(message);
           return false;
         }
       }
@@ -450,7 +454,9 @@ export function useSettingsController({
       }
       return true;
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Failed to save local settings');
+      const message = saveError instanceof Error ? saveError.message : 'Failed to save local settings';
+      setLocalSettingsStatus(message);
+      setError(message);
       return false;
     } finally {
       setSavingSettings(false);
@@ -622,6 +628,7 @@ export function useSettingsController({
     loadGatewaySettings,
     loadSlashCommands,
     localSettingsDirty,
+    localSettingsStatus,
     mcpServers,
     mcpServersLoading,
     mcpServersSaving,
@@ -629,6 +636,7 @@ export function useSettingsController({
     persistLocalSettings,
     refreshSettingsTabResources,
     savingSettings,
+    setLocalSettingsStatus,
     setSettingsDraft,
     setGatewaySettingsStatus,
     settingsActiveTab,
