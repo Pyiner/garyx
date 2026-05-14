@@ -41,7 +41,6 @@ import {
 import type {
   DesktopBotConsoleSummary,
   DesktopApiProviderType,
-  DesktopWorkspaceMode,
   MessageFileAttachment,
   MessageImageAttachment,
   SlashCommand,
@@ -89,8 +88,6 @@ type ComposerFormProps = {
   activeThreadBotId?: string | null;
   botBindingDisabled?: boolean;
   botGroups?: DesktopBotConsoleSummary[];
-  composerWorkspaceMode?: DesktopWorkspaceMode | null;
-  composerWorkspaceBranch?: string | null;
   /** Display name of the selected agent, shown in the provider pill. */
   agentLabel?: string | null;
   /** When provided, the provider pill becomes a dropdown to change the agent. */
@@ -490,8 +487,6 @@ export function ComposerForm({
   activeThreadBotId,
   botBindingDisabled = false,
   botGroups,
-  composerWorkspaceMode,
-  composerWorkspaceBranch,
   agentLabel,
   agentOptions,
   selectedAgentId,
@@ -779,13 +774,6 @@ export function ComposerForm({
       </div>
     </div>
   ) : null;
-  const workspaceModeLabel = composerWorkspaceMode
-    ? composerWorkspaceMode === 'worktree'
-      ? t('New worktree')
-      : t('Local mode')
-    : null;
-  const workspaceBranchLabel = composerWorkspaceBranch?.trim() || null;
-
   return (
     <form
       className="composer"
@@ -885,58 +873,42 @@ export function ComposerForm({
         placeholder={composerPlaceholder}
       />
       <div className="composer-actions composer-footer">
-        <div className="composer-footer-left">
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              aria-label={t('Composer actions')}
-              className="ghost-button composer-plus-trigger"
-              disabled={composerLocked && botBindingDisabled}
-              type="button"
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={t('Composer actions')}
+            className="ghost-button composer-plus-trigger"
+            disabled={composerLocked && botBindingDisabled}
+            type="button"
+          >
+            <IconPlus aria-hidden size={18} stroke={1.8} />
+          </DropdownMenuTrigger>
+          <FloatingActionMenuContent
+            align="start"
+            side="top"
+          >
+            <FloatingActionMenuItem
+              className="composer-menu-item"
+              disabled={composerLocked}
+              onSelect={() => {
+                composerAttachmentInputRef.current?.click();
+              }}
             >
-              <IconPlus aria-hidden size={18} stroke={1.8} />
-            </DropdownMenuTrigger>
-            <FloatingActionMenuContent
-              align="start"
-              side="top"
-            >
-              <FloatingActionMenuItem
-                className="composer-menu-item"
-                disabled={composerLocked}
-                onSelect={() => {
-                  composerAttachmentInputRef.current?.click();
-                }}
-              >
-                <IconPaperclip aria-hidden size={16} stroke={1.75} />
-                <span className="composer-menu-label">
-                  {t('Add photos and files')}
-                </span>
-              </FloatingActionMenuItem>
-              {onSelectBotBinding ? <DropdownMenuSeparator /> : null}
-              {renderComposerBotBindingSubmenu({
-                activeThreadBot,
-                activeThreadBotId,
-                botGroups,
-                iconDataUrlByChannel,
-                onSelectBotBinding,
-                t,
-              })}
-            </FloatingActionMenuContent>
-          </DropdownMenu>
-          {workspaceModeLabel ? (
-            <div className="composer-thread-status" aria-label={t('Workspace mode')}>
-              <span className="composer-thread-status-pill composer-thread-status-mode">
-                <IconTerminal2 aria-hidden size={14} stroke={1.65} />
-                <span>{workspaceModeLabel}</span>
+              <IconPaperclip aria-hidden size={16} stroke={1.75} />
+              <span className="composer-menu-label">
+                {t('Add photos and files')}
               </span>
-              {workspaceBranchLabel ? (
-                <span className="composer-thread-status-pill composer-thread-status-branch">
-                  <IconGitBranch aria-hidden size={14} stroke={1.65} />
-                  <span>{workspaceBranchLabel}</span>
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+            </FloatingActionMenuItem>
+            {onSelectBotBinding ? <DropdownMenuSeparator /> : null}
+            {renderComposerBotBindingSubmenu({
+              activeThreadBot,
+              activeThreadBotId,
+              botGroups,
+              iconDataUrlByChannel,
+              onSelectBotBinding,
+              t,
+            })}
+          </FloatingActionMenuContent>
+        </DropdownMenu>
         <div className="composer-buttons">
           {renderComposerProviderControl({
             composerProviderType,

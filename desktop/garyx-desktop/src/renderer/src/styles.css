@@ -8231,22 +8231,16 @@ button.team-agent-speaker:focus-visible {
   padding: 0 8px;
 }
 
-.composer-footer-left {
+.thread-composer-status {
   display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 6px;
-}
-
-.composer-thread-status {
-  display: inline-flex;
   min-width: 0;
   align-items: center;
   gap: 4px;
+  min-height: 28px;
+  padding: 0 8px;
 }
 
-.composer-thread-status-pill {
+.thread-composer-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -8263,24 +8257,24 @@ button.team-agent-speaker:focus-visible {
   white-space: nowrap;
 }
 
-.composer-thread-status-pill svg {
+.thread-composer-status-pill svg {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
   color: currentColor;
 }
 
-.composer-thread-status-pill span {
+.thread-composer-status-pill span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.composer-thread-status-mode {
+.thread-composer-status-mode {
   min-width: 104px;
 }
 
-.composer-thread-status-branch {
+.thread-composer-status-branch {
   min-width: 0;
 }
 
