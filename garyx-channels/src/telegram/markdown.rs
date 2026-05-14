@@ -162,14 +162,14 @@ fn parse_link(text: &str) -> Option<(&str, &str, usize)> {
     let rest = text.strip_prefix('[')?;
     let label_end = rest.find("](")?;
     let label = &rest[..label_end];
-    if label.is_empty() {
+    if label.is_empty() || label.contains(['\n', '\r', '[', ']']) {
         return None;
     }
     let url_start = label_end + 2;
     let url_rest = &rest[url_start..];
     let url_end = url_rest.find(')')?;
     let url = &url_rest[..url_end];
-    if url.trim().is_empty() {
+    if url.trim().is_empty() || url.contains(['\n', '\r']) {
         return None;
     }
     let next_pos = 1 + url_start + url_end + 1;
@@ -211,4 +211,25 @@ fn escape_markdown_v2_url(text: &str) -> String {
         output.push(ch);
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_markdown_v2;
+
+    #[test]
+    fn literal_bracket_does_not_consume_later_link() {
+        let rendered = render_markdown_v2(
+            "Special characters:\n\n\
+             _ * [ ] ( ) ~ ` > # + - = | { } . !\n\n\
+             Mixed inline markdown:\n\n\
+             This is **bold**, this is _italic_, this is `code`, link: [Telegram](https://telegram.org).",
+        );
+
+        assert!(rendered.contains(r"\_ \* \[ \] \( \) \~ \` \> \# \+ \- \= \| \{ \} \. \!"));
+        assert!(rendered.contains(
+            "This is *bold*, this is _italic_, this is `code`, link: [Telegram](https://telegram.org)\\."
+        ));
+        assert!(!rendered.contains(r"This is \*\*bold\*\*"));
+    }
 }

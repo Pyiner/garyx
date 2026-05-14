@@ -995,6 +995,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn telegram_outbox_retries_markdown_v2_on_next_streaming_edit_after_plain_fallback() {
+        let server = MockServer::start().await;
+        let token = "outbox-markdown-streaming-retry-token";
+
+        Mock::given(method("POST"))
+            .and(path_regex(format!(r"/bot{token}/editMessageText")))
+            .respond_with(|req: &wiremock::Request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&req.body).expect("valid editMessageText body");
+                if body["parse_mode"].as_str() == Some(MARKDOWN_V2_PARSE_MODE)
+                    && body["text"].as_str() == Some("partial markdown")
+                {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "ok": false,
+                        "description": "Bad Request: can't parse entities: Can't find end of the entity"
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(ok_message(1000, "edited"))
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let http = Client::new();
+        let api_base = server.uri();
+        let key = TelegramOutboxKey {
+            api_base: api_base.clone(),
+            token: token.to_owned(),
+            chat_id: 42,
+        };
+        let mut queue = VecDeque::new();
+
+        let partial = TelegramOutboxCommand::EditMessageText {
+            http: http.clone(),
+            api_base: api_base.clone(),
+            token: token.to_owned(),
+            body: EditMessageTextBody {
+                chat_id: 42,
+                message_id: 1000,
+                text: "partial markdown".to_owned(),
+                parse_mode: Some(MARKDOWN_V2_PARSE_MODE.to_owned()),
+            },
+            plain_text_fallback: Some("partial **markdown".to_owned()),
+            attempt: 0,
+            queued_at: Instant::now(),
+            coalesced_count: 0,
+        };
+
+        assert!(
+            execute_outbox_command(&key, partial, &mut queue)
+                .await
+                .is_none()
+        );
+
+        let fallback = queue.pop_front().expect("plain fallback command");
+        assert!(
+            execute_outbox_command(&key, fallback, &mut queue)
+                .await
+                .is_none()
+        );
+
+        let completed = TelegramOutboxCommand::EditMessageText {
+            http: http.clone(),
+            api_base: api_base.clone(),
+            token: token.to_owned(),
+            body: EditMessageTextBody {
+                chat_id: 42,
+                message_id: 1000,
+                text: "*complete markdown*".to_owned(),
+                parse_mode: Some(MARKDOWN_V2_PARSE_MODE.to_owned()),
+            },
+            plain_text_fallback: Some("**complete markdown**".to_owned()),
+            attempt: 0,
+            queued_at: Instant::now(),
+            coalesced_count: 0,
+        };
+
+        assert!(
+            execute_outbox_command(&key, completed, &mut queue)
+                .await
+                .is_none()
+        );
+        assert!(queue.is_empty());
+
+        let requests = server.received_requests().await.unwrap();
+        let edit_bodies = requests
+            .iter()
+            .filter(|request| request.url.path() == format!("/bot{token}/editMessageText"))
+            .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(edit_bodies.len(), 3);
+        assert_eq!(edit_bodies[0]["parse_mode"], "MarkdownV2");
+        assert_eq!(edit_bodies[0]["text"], "partial markdown");
+        assert!(
+            edit_bodies[1].get("parse_mode").is_none(),
+            "only the failed streaming edit should fall back to plain text"
+        );
+        assert_eq!(edit_bodies[1]["text"], "partial **markdown");
+        assert_eq!(
+            edit_bodies[2]["parse_mode"], "MarkdownV2",
+            "the next streaming edit should try MarkdownV2 again"
+        );
+        assert_eq!(edit_bodies[2]["text"], "*complete markdown*");
+    }
+
+    #[tokio::test]
     async fn telegram_outbox_serializes_text_sends_per_chat() {
         let server = MockServer::start().await;
         let token = "outbox-send-token";
