@@ -38,8 +38,8 @@ This is the path most users take. Two recommended modes:
 ### Long-lived OAuth token (best for headless / launchd)
 
 ```bash
-claude setup-token   # opens a browser, returns sk-ant-oat01-…
-echo 'export CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-…"' >> ~/.zshrc
+claude setup-token   # opens a browser and returns a token value
+echo 'export CLAUDE_CODE_OAUTH_TOKEN="CLAUDE_CODE_OAUTH_TOKEN_VALUE"' >> ~/.zshrc
 chmod 600 ~/.zshrc
 ```
 

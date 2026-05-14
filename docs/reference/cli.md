@@ -62,6 +62,17 @@ Common flags on `channels add`:
 - `--uin <uin> --base-url <url>` — WeChat
 - `--agent-id <id>` — bind the channel to a specific agent
 
+## Commands and shortcuts
+
+| Command | Use it for |
+| --- | --- |
+| `garyx commands list` | List command definitions for a surface such as router, desktop composer, Telegram, API chat, or plugin. |
+| `garyx commands get <name>` | Show one prompt shortcut. |
+| `garyx commands set <name> [--prompt <text>] [--description <text>]` | Create or update a global prompt shortcut. Reads stdin when `--prompt` is omitted. |
+| `garyx commands delete <name>` | Delete a prompt shortcut. |
+
+`garyx shortcuts` and `garyx shortcut` are aliases for the same command group.
+
 ## Plugins
 
 | Command | Use it for |
@@ -103,7 +114,40 @@ Common flags on `channels add`:
 | --- | --- |
 | `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. `create/update/upsert` accept `--default-workspace-dir <path>` for the Agent fallback used by new bot/task threads. |
 | `garyx team list / get / create / update / delete` | CRUD on agent teams. |
-| `garyx shortcuts list / get / set / delete` | Manage prompt shortcuts (a.k.a. commands). |
+
+## Tools
+
+| Command | Use it for |
+| --- | --- |
+| `garyx tool search <query...>` | Search the web through the Gemini provider-native search path. |
+| `garyx tool image <prompt> --output <path>` | Generate one image through the configured Codex provider. |
+
+## Automations
+
+| Command | Use it for |
+| --- | --- |
+| `garyx automation list` | List scheduled automations. |
+| `garyx automation get <automation_id>` | Show one automation. |
+| `garyx automation create --label <label> [--prompt <text>] [schedule flags]` | Create a scheduled prompt. Reads stdin when `--prompt` is omitted. |
+| `garyx automation update <automation_id> [--label <label>] [--prompt <text>] [schedule flags]` | Update prompt, agent, workspace, schedule, or enabled state. |
+| `garyx automation run <automation_id>` | Run an automation immediately. |
+| `garyx automation pause / resume <automation_id>` | Disable or enable an automation. |
+| `garyx automation activity <automation_id>` | Show recent automation runs. |
+| `garyx automation delete <automation_id>` | Delete an automation. |
+
+Schedule flags include `--every-hours <N>`, `--daily-time HH:MM`,
+`--weekday mon`, `--timezone <tz>`, `--once-at <time>`, and
+`--schedule-json <json>`.
+
+## Auto Research
+
+| Command | Use it for |
+| --- | --- |
+| `garyx auto-research create --goal <goal>` | Start an Auto Research run. |
+| `garyx auto-research list / get / iterations / candidates` | Inspect runs, iterations, and candidate outputs. |
+| `garyx auto-research stop / patch / feedback / reverify / select` | Steer or finish an active run. |
+
+`garyx ar` is a short alias for `garyx auto-research`.
 
 ## Diagnostics
 
@@ -129,7 +173,6 @@ Common flags on `channels add`:
 | Command | Use it for |
 | --- | --- |
 | `garyx message [--bot <selector>] [--image <path> \| --file <path>] [text]` | Send text, one local image, or one local file via a bot without starting an agent run. Text is used as the attachment caption. If `--bot` is omitted, Garyx reads `GARYX_BOT` or `GARYX_CHANNEL` + `GARYX_ACCOUNT_ID`; otherwise it errors. File attachments are currently supported for Telegram bots. |
-| `garyx auto-research create / list / get / stop / patch / feedback / reverify` | Drive the auto-research loop. |
 
 ## Where to go next
 

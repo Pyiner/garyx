@@ -1,152 +1,148 @@
 # Garyx
 
-Garyx is a local-first AI gateway for running provider-backed agents from one
-runtime. It connects a CLI, HTTP/WebSocket API, MCP tools, channel accounts, and
-a macOS desktop app to shared thread history.
+Garyx is a local-first AI agent gateway. It connects provider-backed agents
+to the places where work arrives: Telegram, Feishu / Lark, WeChat, the CLI,
+HTTP / WebSocket clients, MCP tools, scheduled automations, and the macOS
+desktop app. Every entry point shares the same thread history, workspace
+binding, provider sessions, and task state.
+
+Use Garyx when you want an agent to keep working across chat apps, terminals,
+desktop sessions, and API calls without moving the conversation into a hosted
+control plane.
+
+## Why Garyx
+
+| Capability | What it means |
+| --- | --- |
+| Local-first gateway | The gateway runs on your machine or server; config and transcripts live under `~/.garyx/`. |
+| Multi-channel agents | Built-in Telegram, Feishu / Lark, WeChat, and local API channels share one routing model. |
+| Provider choice | Route threads to Claude Code, Codex, Gemini, or custom agent definitions without changing channel setup. |
+| Persistent threads | A chat, desktop tab, task, or CLI send can resume the same thread and provider session. |
+| Workspace-aware runs | Each thread records the directory the agent should operate in, with optional isolated Git worktrees. |
+| MCP integration | Each run gets a scoped Garyx MCP endpoint plus any upstream MCP servers from your config. |
+| Tasks and automations | Promote threads into reviewable tasks or schedule recurring prompts that deliver through Garyx. |
+| Extensible channels | Install subprocess channel plugins without rebuilding the gateway. |
 
 ## Install
 
-### Homebrew (recommended on macOS / Linux)
+### Homebrew
 
 ```bash
 brew tap pyiner/garyx
 brew install pyiner/garyx/garyx
 ```
 
-### Shell Script
+### Shell installer
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
 ```
 
-### From Source
+### From source
 
 ```bash
 git clone https://github.com/Pyiner/garyx
 cd garyx
-cargo build --release
+scripts/install-local-cli.sh
 ```
 
-The built binary is `target/release/garyx`.
+Verify the binary:
 
-## Getting Started
+```bash
+garyx --version
+garyx doctor
+```
 
-### 1. Initialize the config
+## Up and running in 60 seconds
 
-`garyx.json` lives at `~/.garyx/garyx.json`. Generate a minimal one with:
+Initialize a local config:
 
 ```bash
 garyx onboard
 ```
 
-That seeds an `api` channel account, default agents, and the gateway block.
-You can also hand-write `~/.garyx/garyx.json`:
-
-```json
-{
-  "gateway": {
-    "host": "127.0.0.1",
-    "port": 31337
-  },
-  "channels": {
-    "api": { "accounts": { "main": { "enabled": true } } }
-  }
-}
-```
-
-> Strings support `${VAR}` and `${VAR:-default}` env-var expansion at load
-> time, so secrets can stay out of the file.
-
-### 2. Start the gateway
-
-For day-to-day use, install it as a managed background service:
+Install and start the managed gateway:
 
 ```bash
-garyx gateway install   # writes ~/Library/LaunchAgents/com.garyx.agent.plist (macOS)
-                        #     or ~/.config/systemd/user/garyx.service (Linux)
-                        # and starts it; safe to re-run after config changes
-garyx gateway restart   # pick up new config
-garyx gateway stop      # stop the managed service
-```
-
-For one-off testing, run it in the foreground:
-
-```bash
-garyx gateway run
-```
-
-Logs land in `~/.garyx/logs/{stdout,stderr}.log`.
-
-### 3. Verify
-
-```bash
-curl -s http://127.0.0.1:31337/health
+garyx gateway install
 garyx status
-garyx doctor
 ```
 
-Send a message into a fresh thread end-to-end:
+Send a message into a fresh thread:
 
 ```bash
 TID=$(garyx thread create --workspace-dir "$PWD" --json | jq -r .thread_id)
 garyx thread send thread "$TID" "What does this workspace do?"
 ```
 
-### 4. Add your first channel bot
+If that round-trips, the gateway is running and at least one provider is
+available.
 
-Pick the platform you want Garyx to talk to:
+## Add your first bot
 
-#### Telegram
-
-1. Talk to [@BotFather](https://t.me/BotFather), `/newbot`, copy the token.
-2. Register the account with Garyx:
-
-   ```bash
-   garyx channels add telegram main \
-     --token "123456:ABC-DEF…" \
-     --agent-id claude
-   garyx gateway restart
-   ```
-
-3. DM your bot. The gateway picks up updates via long-polling and routes them
-   through the agent you bound.
-
-#### Feishu / Lark
-
-1. Run the device-flow login (auto-fetches App ID / Secret):
-
-   ```bash
-   garyx channels login feishu --domain feishu   # use --domain lark for海外
-   garyx gateway restart
-   ```
-
-   Or, if you already have credentials:
-
-   ```bash
-   garyx channels add feishu gary \
-     --app-id cli_xxxxxxxx \
-     --app-secret xxxxxxxxxxxx \
-     --domain feishu \
-     --agent-id claude
-   ```
-
-2. The gateway opens a Feishu WebSocket and you can @-mention the bot in any
-   chat it has been added to.
-
-#### WeChat (企业微信 / 个人号 via ilinkai)
+Telegram is the shortest channel path:
 
 ```bash
-garyx channels login weixin
-garyx gateway restart
+export TELEGRAM_BOT_TOKEN="TOKEN_FROM_BOTFATHER"
+garyx channels add telegram main \
+  --token "$TELEGRAM_BOT_TOKEN" \
+  --agent-id claude
+garyx gateway restart --no-wake
 ```
 
-The login flow scans a QR code in your terminal and writes the resulting
-`token` and `uin` back into `~/.garyx/garyx.json`.
+DM the bot and Garyx will create or resume a thread for that Telegram chat.
+The same account model works for Feishu / Lark, WeChat, and channel plugins.
 
-#### What the resulting config looks like
+```bash
+garyx channels login feishu --domain feishu
+garyx channels login weixin
+garyx plugins install ./path/to/garyx-plugin-example
+```
 
-After adding the Telegram example above, the relevant slice of `garyx.json`
-will look like this:
+## Common workflows
+
+| Workflow | Command or surface |
+| --- | --- |
+| Chat with a workspace from the terminal | `garyx thread create --workspace-dir "$PWD"` then `garyx thread send ...` |
+| Route a real bot to an agent | `garyx channels add <channel> <account_id> --agent-id <agent_id>` |
+| Continue a bot conversation from the CLI | `garyx thread history <thread_id>` and `garyx thread send thread <thread_id> ...` |
+| Promote work into a reviewable task | `garyx task create --title "..." --body "..." --notify current-thread` |
+| Schedule recurring agent work | `garyx automation create --label "Daily triage" --prompt "..." --every-hours 24` |
+| Inspect gateway issues | `garyx status`, `garyx doctor`, `garyx logs tail` |
+| Update the CLI | `garyx update` |
+| Update channel plugins | `garyx plugins update [<plugin_id>]` |
+
+## Architecture
+
+```text
+Humans and systems
+  -> Telegram / Feishu / WeChat / CLI / Desktop / HTTP / WebSocket
+  -> Garyx gateway
+  -> Router, transcripts, endpoint bindings, tasks, automations
+  -> Provider bridge: Claude Code / Codex / Gemini / agent teams
+  -> Scoped MCP endpoint and configured upstream MCP servers
+```
+
+Important runtime boundaries:
+
+- The gateway is the single writer for channel endpoint bindings and task
+  state.
+- A thread's `workspace_dir` is fixed once the thread starts; create a new
+  thread for a different execution directory.
+- Code changes do not affect a managed gateway until the binary is installed
+  and the service is restarted.
+- The macOS app connects to the gateway API. It does not need a separate
+  bundled web dashboard served by the gateway.
+
+## Configuration
+
+Garyx reads its main config from:
+
+```text
+~/.garyx/garyx.json
+```
+
+Keep secrets in environment variables and reference them from config:
 
 ```json
 {
@@ -166,31 +162,47 @@ will look like this:
 }
 ```
 
-Built-in channels (`telegram`, `feishu`, `weixin`, `api`) sit directly under
-`channels.<channel_id>`. Each account has an envelope (`enabled`, `name`,
-`agent_id`, `workspace_dir`) plus a channel-specific `config` blob.
+Strings support `${VAR}` and `${VAR:-default}` expansion at load time.
 
-## Common Commands
+Read the full configuration reference at
+[docs/configuration.md](docs/configuration.md).
 
-```bash
-garyx gateway install           # install + start the managed service
-garyx gateway restart           # restart after editing the config
-garyx gateway run               # run in foreground (testing)
-garyx config show               # dump effective config
-garyx doctor                    # local environment health check
-garyx status                    # show running gateway summary
-garyx channels list             # list configured channel accounts
-garyx channels add telegram main --token "$TELEGRAM_BOT_TOKEN" --agent-id claude
-garyx channels login feishu     # device-flow login, writes credentials
-garyx plugins install ./path/to/garyx-plugin-acmechat
-garyx logs tail                 # tail gateway logs
-garyx update                    # download latest release binary
-```
+## Security and privacy
 
-## Desktop App
+Garyx is local-first, but it is not a sandbox. Provider CLIs run with the
+permissions of the gateway process, and a workspace directory is a development
+context rather than a security boundary.
+
+For public issues, tests, docs, and commits:
+
+- Use placeholders such as `TOKEN_FROM_BOTFATHER`, `/path/to/repo`, and
+  `thread::<id>`.
+- Do not paste real chat ids, user ids, bot ids, email addresses, tokens,
+  provider OAuth strings, or local personal paths.
+- Prefer environment variables over literal secrets in `garyx.json`.
+- Use `garyx logs tail` for diagnostics and redact provider or channel
+  credentials before sharing logs.
+
+See [docs/security.md](docs/security.md) for the longer checklist.
+
+## Documentation
+
+| Page | Covers |
+| --- | --- |
+| [Introduction](docs/index.md) | Product overview and quickstart |
+| [Installation](docs/installation.md) | Install paths, gateway service, verification |
+| [Your first bot](docs/first-bot.md) | Telegram, Feishu / Lark, and WeChat setup |
+| [Threads & workspaces](docs/concepts/threads-and-workspaces.md) | Thread routing, workspace inheritance, provider sessions |
+| [Channels](docs/concepts/channels.md) | Built-in channels, plugin channels, endpoint bindings |
+| [Providers](docs/concepts/providers.md) | Claude Code, Codex, Gemini, auth, fallback behavior |
+| [MCP integration](docs/concepts/mcp.md) | Garyx MCP tools and upstream MCP server config |
+| [CLI commands](docs/reference/cli.md) | Every supported `garyx` command group |
+| [Security](docs/security.md) | Secret handling, logs, local runtime boundaries |
+
+## Desktop app
 
 The macOS desktop app lives in `desktop/garyx-desktop`. Pre-built `.dmg` and
-`.zip` bundles are attached to every GitHub release; for local hacking:
+`.zip` bundles are attached to GitHub releases. For local development:
 
 ```bash
 cd desktop/garyx-desktop
@@ -200,14 +212,6 @@ npm run dist:dir
 ```
 
 `npm run dist:dir` builds and installs `Garyx.app` into `/Applications`.
-
-## Configuration
-
-The main configuration file is `~/.garyx/garyx.json`.
-
-Read [docs/configuration.md](docs/configuration.md) for the full configuration
-reference: channels, plugins, providers, managed MCP servers, automations,
-and desktop behavior.
 
 ## Development
 
@@ -219,7 +223,7 @@ cd desktop/garyx-desktop && npm run build:ui
 cd desktop/garyx-desktop && npm run test:smoke
 ```
 
-## Project Layout
+Project layout:
 
 ```text
 garyx/                  CLI binary and gateway runtime assembly

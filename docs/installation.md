@@ -55,7 +55,7 @@ For day-to-day use, install it as a managed background service:
 ```bash
 garyx gateway install   # writes the launchd plist (macOS) or systemd unit (Linux)
                         # and starts it; safe to re-run after config changes
-garyx gateway restart   # pick up new config
+garyx gateway restart --no-wake  # pick up new config
 garyx gateway stop      # stop the managed service
 ```
 
@@ -65,7 +65,8 @@ For one-off testing, run it in the foreground:
 garyx gateway run
 ```
 
-Logs land in `~/.garyx/logs/{stdout,stderr}.log`.
+Runtime warnings and provider/channel errors land in
+`~/.garyx/logs/stderr.log`, which is what `garyx logs tail` reads by default.
 
 ::: info
 On macOS the launchd plist re-enters your login shell with `sh -c "exec
@@ -96,5 +97,6 @@ reachable.
 
 - [Your first bot](/first-bot) — wire up Telegram, Feishu, or WeChat
 - [Providers](/concepts/providers) — log in to Claude Code, Codex, or Gemini
+- [Security](/security) — secret handling and local runtime boundaries
 - [Service manager](/reference/service-manager) — what `gateway install`
   actually writes

@@ -16,14 +16,15 @@ You should already have:
 The fastest path. You only need a bot token from [@BotFather](https://t.me/BotFather).
 
 1. Talk to [@BotFather](https://t.me/BotFather), `/newbot`, follow prompts,
-   copy the token (looks like `123456789:ABC-DEF…`).
+   and store the token in your shell environment.
 2. Register the account with Garyx and bind it to an agent:
 
    ```bash
+   export TELEGRAM_BOT_TOKEN="TOKEN_FROM_BOTFATHER"
    garyx channels add telegram main \
-     --token "123456789:ABC-DEF…" \
+     --token "$TELEGRAM_BOT_TOKEN" \
      --agent-id claude
-   garyx gateway restart
+   garyx gateway restart --no-wake
    ```
 
 3. DM your bot. Garyx pulls updates with long-polling and routes them through
@@ -42,7 +43,7 @@ Use the device-flow login if you do not have an app yet:
 
 ```bash
 garyx channels login feishu --domain feishu   # use --domain lark for 海外
-garyx gateway restart
+garyx gateway restart --no-wake
 ```
 
 The login flow walks you through creating an app and writes the resulting
@@ -65,7 +66,7 @@ been added to.
 
 ```bash
 garyx channels login weixin
-garyx gateway restart
+garyx gateway restart --no-wake
 ```
 
 The login flow scans a QR code in your terminal and writes the resulting
@@ -105,3 +106,4 @@ Built-in channels (`telegram`, `feishu`, `weixin`, `api`) sit directly under
   built-in vs plugin
 - [Configuration](/configuration) — the full per-channel schema
 - [CLI commands](/reference/cli) — every `garyx channels` subcommand
+- [Security](/security) — what not to paste into docs, logs, or issues

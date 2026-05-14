@@ -7,7 +7,7 @@ Garyx reads its main configuration from:
 ```
 
 The file is JSON. Values can reference environment variables with
-`${NAME}` or `${NAME:default}`.
+`${NAME}` or `${NAME:-default}`.
 
 ## Minimal Config
 
@@ -217,7 +217,7 @@ Build or obtain a plugin binary, then install it:
 
 ```bash
 garyx plugins install ./path/to/garyx-plugin-acmechat
-garyx gateway restart
+garyx gateway restart --no-wake
 ```
 
 After installation, configure it like any built-in channel:
@@ -293,7 +293,7 @@ Restart the gateway after each manual update so the new binary is
 picked up:
 
 ```bash
-garyx gateway restart
+garyx gateway restart --no-wake
 ```
 
 Plugins that opt in to the silent auto-updater (see below) get this
@@ -609,14 +609,13 @@ garyx channels list
 garyx channels add telegram main --token "$TELEGRAM_BOT_TOKEN"
 garyx channels login feishu --account main
 garyx plugins list
-garyx gateway restart
+garyx gateway restart --no-wake
 garyx logs tail
 ```
 
 By default `garyx logs path` and `garyx logs tail` read the managed gateway's
 stderr log at `~/.garyx/logs/stderr.log`, which is where runtime warnings and
-provider/channel errors are written. Set `GARYX_LOG_FILE` or pass
-`garyx logs tail --path <file>` to inspect a different log file.
+provider/channel errors are written.
 
 `garyx config validate` and `garyx doctor` both check channel account payloads
 beyond basic JSON parsing. They flag stale accounts with `config: null`, invalid

@@ -8,7 +8,7 @@ export default defineConfig({
   lang: "en-US",
   title: "Garyx",
   description:
-    "Local-first AI gateway: connects CLI, HTTP/WS API, MCP tools, and channel bots to provider agents (Claude / Codex / Gemini) with shared thread history.",
+    "Local-first AI agent gateway connecting Telegram, Feishu / Lark, WeChat, CLI, HTTP/WS API, MCP, automations, and the macOS app to Claude Code, Codex, and Gemini.",
   cleanUrls: true,
   lastUpdated: true,
 
@@ -19,7 +19,7 @@ export default defineConfig({
       {
         name: "og:description",
         content:
-          "Local-first AI gateway connecting Telegram, Feishu, WeChat, and a desktop app to Claude / Codex / Gemini agents.",
+          "Local-first AI agent gateway connecting channel bots, CLI, API, MCP, automations, and the macOS app to provider-backed agents.",
       },
     ],
   ],
@@ -31,7 +31,7 @@ export default defineConfig({
     nav: [
       { text: "Docs", link: "/", activeMatch: "^/(?!architecture)" },
       {
-        text: "v0.1.10",
+        text: "v0.1.23",
         items: [
           { text: "Releases", link: "https://github.com/Pyiner/garyx/releases" },
           { text: "Changelog", link: "https://github.com/Pyiner/garyx/commits/main" },
@@ -64,6 +64,7 @@ export default defineConfig({
             { text: "Configuration", link: "/configuration" },
             { text: "CLI commands", link: "/reference/cli" },
             { text: "Service manager", link: "/reference/service-manager" },
+            { text: "Security", link: "/security" },
             {
               text: "Architecture: command list",
               link: "/architecture/command-list-design",

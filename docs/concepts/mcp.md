@@ -32,17 +32,22 @@ trusting client-supplied identifiers.
 
 ## What lives behind the endpoint
 
-Behind `/mcp/<thread>/<run>` Garyx exposes tools for:
+Behind `/mcp/<thread>/<run>` Garyx exposes the Garyx-owned tools that are safe
+for an in-flight provider run:
 
-- **Cross-channel messaging** — send a message to another bot or thread,
-  optionally with images / files.
-- **Thread management** — fork a new thread, rebind the current endpoint to
-  a new agent, list recent threads.
-- **Channel control** — pause / resume polling, lookup endpoint metadata.
-- **Persistent storage** — wiki / knowledge-base CRUD when a wiki is
-  attached.
-- **Outbound search** — when a search backend is configured under
-  `gateway.search`.
+- `status` — gateway uptime, active threads, provider and channel info.
+- `search` — web search through the configured Gemini grounding backend.
+- `conversation_history` — stored user/assistant transcript lines, with
+  filters for thread, workspace, and time window.
+- `conversation_search` — semantic recall over stored conversation snippets.
+- `rebind_current_channel` — create a new thread for the current channel
+  endpoint and bind it to the requested agent/workspace.
+- `stop_loop` — stop auto-continuation for the current thread.
+- `auto_research_verdict` — internal verifier-only tool for AutoResearch
+  runs.
+
+The MCP surface intentionally does not expose outbound message sending,
+automation management, or image generation tools.
 
 The exact tool set evolves; the source of truth is the gateway's
 [MCP module](https://github.com/Pyiner/garyx/tree/main/garyx-gateway/src/mcp).

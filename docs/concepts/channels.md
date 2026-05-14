@@ -36,7 +36,7 @@ and have a fixed envelope plus a channel-specific `config` blob:
           "workspace_dir": "/path/to/garyx-work",
           "config": {
             "token": "${TELEGRAM_BOT_TOKEN}",
-            "groups": { "-100123456789": { "enabled": true } }
+            "groups": { "<telegram_group_id>": { "enabled": true } }
           }
         }
       }

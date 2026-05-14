@@ -29,8 +29,8 @@ Concretely, the macOS plist looks like:
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><true/>
 <key>LimitLoadToSessionType</key><string>Aqua</string>
-<key>StandardOutPath</key><string>/Users/<you>/.garyx/logs/stdout.log</string>
-<key>StandardErrorPath</key><string>/Users/<you>/.garyx/logs/stderr.log</string>
+<key>StandardOutPath</key><string>/path/to/home/.garyx/logs/stdout.log</string>
+<key>StandardErrorPath</key><string>/path/to/home/.garyx/logs/stderr.log</string>
 ```
 
 The Linux unit follows the same pattern and writes its journal to systemd.
@@ -46,7 +46,7 @@ the same environment your interactive shell sees.
 
 ```bash
 # good — sourced by the gateway via -lic
-echo 'export CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-…"' >> ~/.zshrc
+echo 'export CLAUDE_CODE_OAUTH_TOKEN="CLAUDE_CODE_OAUTH_TOKEN_VALUE"' >> ~/.zshrc
 chmod 600 ~/.zshrc
 ```
 
