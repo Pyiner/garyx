@@ -47,6 +47,13 @@ fn migrate_moves_legacy_garyx_state_into_gary() {
 }
 
 #[test]
+fn default_log_file_path_points_to_managed_gateway_stderr_log() {
+    let path = super::default_log_file_path();
+
+    assert!(path.ends_with(".garyx/logs/stderr.log"));
+}
+
+#[test]
 fn agent_memory_key_is_stable_and_safe() {
     let key = agent_memory_key("Spec Reviewer");
     assert_eq!(key, agent_memory_key("Spec Reviewer"));

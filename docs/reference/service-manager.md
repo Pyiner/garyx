@@ -57,7 +57,7 @@ Terminal.
 ## Logs
 
 ```bash
-garyx logs path           # absolute path
+garyx logs path           # ~/.garyx/logs/stderr.log by default
 garyx logs tail --lines 200
 tail -f ~/.garyx/logs/stderr.log
 ```

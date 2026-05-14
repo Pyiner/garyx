@@ -111,8 +111,8 @@ Common flags on `channels add`:
 | `garyx status` | Show running gateway + channel summary. |
 | `garyx doctor` | Run health checks (CLIs found, ports open, config valid). |
 | `garyx audit` | Local environment / config audit. |
-| `garyx logs path` | Print the log file path. |
-| `garyx logs tail [--lines N]` | Tail the gateway log. |
+| `garyx logs path` | Print the gateway stderr log path. |
+| `garyx logs tail [--lines N]` | Tail the gateway stderr log. |
 | `garyx logs clear` | Truncate the log file. |
 | `garyx bot status <bot_selector>` | Current bot main endpoint and bound thread status. |
 | `garyx bot bind --bot <bot_selector> --thread <thread_id>` | Bind or rebind a bot's main endpoint to an existing thread through the running gateway. |

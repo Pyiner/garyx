@@ -110,7 +110,7 @@ pub fn default_skills_dir() -> PathBuf {
 }
 
 pub fn default_log_file_path() -> PathBuf {
-    gary_home_dir().join("logs").join("gary.log")
+    gary_home_dir().join("logs").join("stderr.log")
 }
 
 pub fn default_mcp_sync_state_path() -> PathBuf {

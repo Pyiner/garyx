@@ -613,6 +613,11 @@ garyx gateway restart
 garyx logs tail
 ```
 
+By default `garyx logs path` and `garyx logs tail` read the managed gateway's
+stderr log at `~/.garyx/logs/stderr.log`, which is where runtime warnings and
+provider/channel errors are written. Set `GARYX_LOG_FILE` or pass
+`garyx logs tail --path <file>` to inspect a different log file.
+
 `garyx config validate` and `garyx doctor` both check channel account payloads
 beyond basic JSON parsing. They flag stale accounts with `config: null`, invalid
 built-in channel credentials, and missing required fields declared by installed
