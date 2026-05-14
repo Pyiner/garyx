@@ -17766,6 +17766,21 @@ button.codex-list-row {
   width: min(728px, 100%);
 }
 
+.new-thread-prompt-title {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 44px);
+  left: 0;
+  margin: 0;
+  color: rgb(26, 28, 31);
+  font-size: 28px;
+  font-weight: 400;
+  line-height: 33.6px;
+  text-align: center;
+  white-space: nowrap;
+  user-select: none;
+}
+
 .composer-shell:has(.new-thread-empty-state) .composer {
   min-height: 94px;
   padding-bottom: 5px;

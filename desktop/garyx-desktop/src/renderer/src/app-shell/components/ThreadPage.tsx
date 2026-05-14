@@ -458,6 +458,10 @@ export function ThreadPage({
     !activeMessages.length &&
     !historyLoading &&
     !showAutomationRunInitialPlaceholder;
+  const newThreadWorkspaceName = newThreadWorkspaceEntry?.name?.trim() || "";
+  const newThreadPromptTitle = newThreadWorkspaceName
+    ? `What do you want Garyx to build in ${newThreadWorkspaceName}?`
+    : "What do you want Garyx to build?";
 
   useLayoutEffect(() => {
     const threadMain = threadMainRef.current;
@@ -836,6 +840,11 @@ export function ThreadPage({
         </div>
 
         <div className="composer-shell-wrap" ref={composerShellWrapRef}>
+          {emptyNewThread ? (
+            <h1 className="new-thread-prompt-title">
+              {newThreadPromptTitle}
+            </h1>
+          ) : null}
           <div
             className={`composer-shell ${activeQueue.length ? "has-queue" : ""}`}
           >
