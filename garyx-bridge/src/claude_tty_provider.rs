@@ -30,6 +30,9 @@ const TTY_STARTUP_TIMEOUT_SECS: u64 = 20;
 const TTY_READY_SETTLE_MS: u64 = 250;
 const ABORT_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_RUN_TIMEOUT_SECS: u64 = 3600;
+const INITIAL_USER_ACK_RETRY_MS: u64 = 3_000;
+const INITIAL_USER_ACK_TIMEOUT_MS: u64 = 20_000;
+const INITIAL_USER_ACK_ERROR: &str = "claude tty did not acknowledge submitted prompt";
 const PTY_OUTPUT_BUFFER_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +98,8 @@ pub struct ClaudeTtyProvider {
     ready: bool,
     completion_idle: Duration,
     poll_interval: Duration,
+    initial_user_ack_retry: Duration,
+    initial_user_ack_timeout: Duration,
 }
 
 impl ClaudeTtyProvider {
@@ -115,6 +120,8 @@ impl ClaudeTtyProvider {
             ready: false,
             completion_idle: Duration::from_millis(DEFAULT_COMPLETION_IDLE_MS),
             poll_interval: Duration::from_millis(TRANSCRIPT_POLL_MS),
+            initial_user_ack_retry: Duration::from_millis(INITIAL_USER_ACK_RETRY_MS),
+            initial_user_ack_timeout: Duration::from_millis(INITIAL_USER_ACK_TIMEOUT_MS),
         }
     }
 
@@ -127,6 +134,8 @@ impl ClaudeTtyProvider {
         Self {
             completion_idle,
             poll_interval: Duration::from_millis(10),
+            initial_user_ack_retry: Duration::from_millis(30),
+            initial_user_ack_timeout: Duration::from_millis(80),
             ..Self::with_backend(config, backend)
         }
     }
@@ -405,6 +414,16 @@ impl ClaudeTtyProvider {
         })
     }
 
+    async fn retry_submit_prompt(
+        &self,
+        session: &Arc<Mutex<ClaudeTtySession>>,
+    ) -> Result<(), BridgeError> {
+        let mut guard = session.lock().await;
+        guard.process.write_all(b"\r").map_err(|error| {
+            BridgeError::RunFailed(format!("failed to retry claude tty submit: {error}"))
+        })
+    }
+
     async fn initialize_pending_inputs(&self, run_id: &str) {
         self.run_pending_inputs.lock().await.insert(
             run_id.to_owned(),
@@ -526,6 +545,7 @@ impl ClaudeTtyProvider {
         let timeout = self.run_timeout();
         let mut state = TranscriptRunState::default();
         let mut last_activity = Instant::now();
+        let mut submit_retry_sent = false;
 
         loop {
             if self.take_aborted_run(run_id).await {
@@ -556,6 +576,21 @@ impl ClaudeTtyProvider {
                     return Err(BridgeError::RunFailed(format!(
                         "failed to read claude transcript: {error}"
                     )));
+                }
+            }
+
+            if !state.user_seen {
+                let elapsed = started.elapsed();
+                if !submit_retry_sent && elapsed >= self.initial_user_ack_retry {
+                    self.retry_submit_prompt(session).await?;
+                    submit_retry_sent = true;
+                    tracing::warn!(
+                        run_id = %run_id,
+                        "claude tty prompt not acknowledged yet; sent submit retry"
+                    );
+                }
+                if elapsed >= self.initial_user_ack_timeout {
+                    return Err(BridgeError::RunFailed(INITIAL_USER_ACK_ERROR.to_owned()));
                 }
             }
 
@@ -675,8 +710,12 @@ impl AgentLoopProvider for ClaudeTtyProvider {
         let outcome = match self.tail_run_until_idle(&run_id, &session, &on_chunk).await {
             Ok(outcome) => outcome,
             Err(error) => {
-                self.active_runs.lock().await.remove(&run_id);
-                self.run_pending_inputs.lock().await.remove(&run_id);
+                if is_initial_user_ack_error(&error) {
+                    self.clear_session(&options.thread_id).await;
+                } else {
+                    self.active_runs.lock().await.remove(&run_id);
+                    self.run_pending_inputs.lock().await.remove(&run_id);
+                }
                 return Err(error);
             }
         };
@@ -826,6 +865,7 @@ struct TranscriptRunState {
     response_text: String,
     session_messages: Vec<ProviderMessage>,
     assistant_seen: bool,
+    user_seen: bool,
     awaiting_assistant_after_user: bool,
     result_seen: bool,
     is_error: bool,
@@ -910,6 +950,7 @@ async fn apply_transcript_line(
                 return true;
             }
             if transcript_user_content_has_text(content) {
+                state.user_seen = true;
                 on_chunk(StreamEvent::Boundary {
                     kind: StreamBoundaryKind::UserAck,
                     pending_input_id: provider.acknowledge_next_pending_input(run_id).await,
@@ -1109,6 +1150,10 @@ fn resolve_run_id(metadata: &HashMap<String, Value>) -> String {
         .or_else(|| metadata.get("run_id").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("run_{}", Uuid::new_v4()))
+}
+
+fn is_initial_user_ack_error(error: &BridgeError) -> bool {
+    matches!(error, BridgeError::RunFailed(message) if message == INITIAL_USER_ACK_ERROR)
 }
 
 fn resolve_requested_model(
@@ -1720,6 +1765,49 @@ mod tests {
         assert!(matches!(result, Err(BridgeError::Timeout)));
         assert!(provider.active_runs.lock().await.is_empty());
         assert!(provider.run_pending_inputs.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_streaming_retries_submit_then_fails_when_initial_prompt_is_not_acknowledged() {
+        let temp = tempfile::tempdir().unwrap();
+        let writes = Arc::new(StdMutex::new(Vec::new()));
+        let mut provider = ClaudeTtyProvider::with_backend_and_config_dir_for_test(
+            ClaudeCodeConfig {
+                mcp_base_url: String::new(),
+                timeout_seconds: 10.0,
+                ..Default::default()
+            },
+            Arc::new(SilentTtyBackend {
+                writes: writes.clone(),
+            }),
+            Duration::from_millis(20),
+            temp.path().join(".claude"),
+        );
+        provider.ready = true;
+
+        let result = provider
+            .run_streaming(&options(&temp), Box::new(|_| {}))
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(BridgeError::RunFailed(message))
+                if message.contains("did not acknowledge submitted prompt")
+        ));
+        let writes = writes.lock().unwrap();
+        assert!(
+            writes
+                .iter()
+                .any(|bytes| String::from_utf8(bytes.clone()).unwrap().contains("hello"))
+        );
+        assert!(
+            writes.iter().any(|bytes| bytes.as_slice() == b"\r"),
+            "expected a submit retry write, got {writes:?}"
+        );
+        assert!(provider.active_runs.lock().await.is_empty());
+        assert!(provider.run_pending_inputs.lock().await.is_empty());
+        assert!(provider.sessions.lock().await.is_empty());
+        assert!(provider.session_ids.lock().await.is_empty());
     }
 
     #[test]
