@@ -17839,8 +17839,21 @@ button.new-thread-workspace-trigger {
 }
 
 button.new-thread-mode-trigger {
-  width: 104px;
-  min-width: 0;
+  width: auto;
+  min-width: 112px;
+  max-width: 160px;
+}
+
+button.new-thread-mode-trigger [data-slot="select-value"] {
+  flex: 0 0 auto;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+button.new-thread-mode-trigger [data-slot="select-value"] > span {
+  overflow: visible;
+  text-overflow: clip;
 }
 
 button.new-thread-workspace-trigger > svg:first-child,
