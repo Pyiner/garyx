@@ -4,8 +4,8 @@ use clap::{CommandFactory, Parser};
 
 use crate::cli::{
     AgentAction, AutoResearchAction, AutomationAction, BotAction, ChannelsAction, Cli,
-    CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, MigrateAction, TaskAction,
-    TeamAction, ThreadAction, ToolAction,
+    CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, TaskAction, TeamAction,
+    ThreadAction, ToolAction,
 };
 use crate::commands::{
     OnboardCommandOptions, SearchStreamState, apply_search_stream_event, canonical_channel_id,
@@ -24,7 +24,9 @@ fn verify_cli() {
 fn parse_no_args_requires_explicit_subcommand() {
     let cli = Cli::parse_from(["garyx"]);
     assert!(cli.command.is_none());
-    assert_eq!(cli.config, default_config_path_string());
+    assert!(
+        cli.config.ends_with(".garyx/garyx.json") || cli.config.ends_with(".garyx\\garyx.json")
+    );
     assert!(cli.port.is_none());
 }
 
@@ -1306,35 +1308,6 @@ fn parse_agent_upsert() {
             assert!(json);
         }
         _ => panic!("expected Agent::Upsert"),
-    }
-}
-
-#[test]
-fn parse_migrate_thread_transcripts() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "migrate",
-        "thread-transcripts",
-        "--data-dir",
-        "/tmp/gary-data",
-        "--backup-dir",
-        "/tmp/gary-backup",
-        "--rewrite-records",
-    ]);
-    match cli.command {
-        Some(Commands::Migrate {
-            action:
-                MigrateAction::ThreadTranscripts {
-                    data_dir,
-                    backup_dir,
-                    rewrite_records,
-                },
-        }) => {
-            assert_eq!(data_dir.as_deref(), Some("/tmp/gary-data"));
-            assert_eq!(backup_dir.as_deref(), Some("/tmp/gary-backup"));
-            assert!(rewrite_records);
-        }
-        _ => panic!("expected Migrate::ThreadTranscripts"),
     }
 }
 

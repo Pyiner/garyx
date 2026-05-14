@@ -7,7 +7,6 @@ use axum::{
     http::StatusCode,
     routing::{get, post, put},
 };
-use garyx_router::file_store::thread_storage_file_name;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::sync::{Arc as StdArc, Mutex};
@@ -645,81 +644,6 @@ async fn cmd_task_create_posts_worktree_runtime_mode() {
         "/tmp/garyx-repo"
     );
     assert_eq!(records[0].body["runtime"]["workspace_mode"], "worktree");
-}
-
-#[tokio::test]
-async fn migrate_thread_transcripts_rewrites_records_and_transcripts() {
-    let data_dir = tempdir().expect("data dir");
-    let backup_dir = tempdir().expect("backup dir");
-    let store = FileThreadStore::new(data_dir.path())
-        .await
-        .expect("thread store");
-    let store: Arc<dyn ThreadStore> = Arc::new(store);
-    let thread_id = "thread::migrate-cli";
-    store
-        .set(
-            thread_id,
-            json!({
-                "thread_id": thread_id,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "hello",
-                        "run_id": "run-1",
-                        "timestamp": "2026-03-20T10:00:00Z"
-                    },
-                    {
-                        "role": "assistant",
-                        "content": "world",
-                        "run_id": "run-1",
-                        "timestamp": "2026-03-20T10:00:01Z"
-                    }
-                ]
-            }),
-        )
-        .await;
-
-    cmd_migrate_thread_transcripts(
-        "/tmp/unused-gary-config.json",
-        Some(data_dir.path().to_str().expect("data dir str")),
-        Some(backup_dir.path().to_str().expect("backup dir str")),
-        true,
-    )
-    .await
-    .expect("migration should succeed");
-
-    let rewritten = store.get(thread_id).await.expect("rewritten record");
-    assert_eq!(rewritten["message_count"], 2);
-    assert_eq!(rewritten["messages"].as_array().map(Vec::len), Some(2));
-    assert_eq!(rewritten["history"]["source"], "transcript_v1");
-    assert_eq!(rewritten["history"]["message_count"], 2);
-    assert_eq!(rewritten["history"]["recent_committed_run_ids"][0], "run-1");
-
-    let transcript_dir = thread_transcripts_dir_for_data_dir(data_dir.path());
-    let transcript_path = transcript_dir.join(thread_storage_file_name(thread_id, "jsonl"));
-    assert!(
-        transcript_path.exists(),
-        "expected transcript file to be written"
-    );
-
-    let transcript_store = ThreadTranscriptStore::file(&transcript_dir)
-        .await
-        .expect("transcript store");
-    assert_eq!(
-        transcript_store
-            .message_count(thread_id)
-            .await
-            .expect("message count"),
-        2
-    );
-    let tail = transcript_store.tail(thread_id, 2).await.expect("tail");
-    assert_eq!(tail[0]["content"], "hello");
-    assert_eq!(tail[1]["content"], "world");
-
-    let backup_path = backup_dir
-        .path()
-        .join(format!("{}.json", encode_thread_backup_key(thread_id)));
-    assert!(backup_path.exists(), "expected original thread JSON backup");
 }
 
 #[test]

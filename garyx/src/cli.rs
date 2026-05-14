@@ -184,17 +184,6 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: TaskAction,
     },
-    /// Data migrations
-    Migrate {
-        #[command(subcommand)]
-        action: MigrateAction,
-    },
-    /// Wiki knowledge base management
-    #[command(name = "wiki")]
-    Wiki {
-        #[command(subcommand)]
-        action: WikiAction,
-    },
     /// Send an outbound channel message via a bot
     #[command(alias = "send", alias = "msg")]
     Message {
@@ -1197,59 +1186,6 @@ pub(crate) enum TaskAction {
         task_id: String,
         #[arg(long, default_value_t = 50)]
         limit: usize,
-        #[arg(long)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum MigrateAction {
-    /// Migrate inline thread messages into transcript files
-    ThreadTranscripts {
-        /// Optional session data directory override
-        #[arg(long)]
-        data_dir: Option<String>,
-        /// Optional backup directory for original thread JSON records
-        #[arg(long)]
-        backup_dir: Option<String>,
-        /// Rewrite thread records to transcript-backed history metadata
-        #[arg(long)]
-        rewrite_records: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub(crate) enum WikiAction {
-    /// Initialize a new wiki knowledge base
-    Init {
-        /// Directory path for the wiki
-        path: String,
-        /// Topic or subject of the wiki
-        #[arg(long)]
-        topic: String,
-        /// Wiki identifier (auto-generated from topic if omitted)
-        #[arg(long)]
-        id: Option<String>,
-        /// Agent to bind (default: wiki-curator)
-        #[arg(long, default_value = "wiki-curator")]
-        agent: String,
-    },
-    /// List registered wikis
-    List {
-        #[arg(long)]
-        json: bool,
-    },
-    /// Get wiki details
-    Get {
-        wiki_id: String,
-        #[arg(long)]
-        json: bool,
-    },
-    /// Delete a wiki registration (does NOT delete files)
-    Delete { wiki_id: String },
-    /// Show wiki status (page counts, recent activity)
-    Status {
-        wiki_id: String,
         #[arg(long)]
         json: bool,
     },

@@ -19,8 +19,7 @@ Each thread carries:
 | `recent_run_id` | The last agent run dispatched to this thread; useful for live debugging. |
 
 Threads are persisted under `~/.garyx/data/threads/`. Transcripts live in
-per-thread files and are migrated on upgrade — see
-[`garyx migrate thread-transcripts`](/reference/cli#migrate).
+per-thread files.
 
 ## How a chat becomes a thread
 

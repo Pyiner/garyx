@@ -17,8 +17,8 @@ mod main_tests;
 
 use cli::{
     AgentAction, AutoResearchAction, AutomationAction, BotAction, ChannelsAction, Cli,
-    CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, MigrateAction, PluginsAction,
-    TaskAction, TeamAction, ThreadAction, ToolAction, WikiAction,
+    CommandAction, Commands, ConfigAction, GatewayAction, LogsAction, PluginsAction, TaskAction,
+    TeamAction, ThreadAction, ToolAction,
 };
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
@@ -35,14 +35,13 @@ use commands::{
     cmd_config_init, cmd_config_path, cmd_config_set, cmd_config_show, cmd_config_unset,
     cmd_config_validate, cmd_doctor, cmd_gateway_install, cmd_gateway_reload_config,
     cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token,
-    cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail,
-    cmd_migrate_thread_transcripts, cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign,
-    cmd_task_claim, cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history,
-    cmd_task_list, cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title,
-    cmd_task_stop, cmd_task_unassign, cmd_task_update, cmd_thread_create, cmd_thread_get,
-    cmd_thread_history, cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot,
-    cmd_thread_send_to_task, cmd_tool_image, cmd_tool_search, cmd_update, cmd_wiki_delete,
-    cmd_wiki_get, cmd_wiki_init, cmd_wiki_list, cmd_wiki_status, run_gateway,
+    cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail, cmd_onboard,
+    cmd_send_message, cmd_status, cmd_task_assign, cmd_task_claim, cmd_task_create,
+    cmd_task_delete, cmd_task_get, cmd_task_history, cmd_task_list, cmd_task_promote,
+    cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_stop, cmd_task_unassign,
+    cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history, cmd_thread_list,
+    cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_tool_image,
+    cmd_tool_search, cmd_update, run_gateway,
 };
 
 struct ThreadSendDestination {
@@ -937,36 +936,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 limit,
                 json,
             } => cmd_task_history(config_path, &task_id, limit, json).await,
-        },
-        Some(Commands::Migrate { action }) => match action {
-            MigrateAction::ThreadTranscripts {
-                data_dir,
-                backup_dir,
-                rewrite_records,
-            } => {
-                init_tracing();
-                cmd_migrate_thread_transcripts(
-                    config_path,
-                    data_dir.as_deref(),
-                    backup_dir.as_deref(),
-                    rewrite_records,
-                )
-                .await
-            }
-        },
-        Some(Commands::Wiki { action }) => match action {
-            WikiAction::Init {
-                path,
-                topic,
-                id,
-                agent,
-            } => cmd_wiki_init(config_path, path, topic, id, agent).await,
-            WikiAction::List { json } => cmd_wiki_list(config_path, json).await,
-            WikiAction::Get { wiki_id, json } => cmd_wiki_get(config_path, &wiki_id, json).await,
-            WikiAction::Delete { wiki_id } => cmd_wiki_delete(config_path, &wiki_id).await,
-            WikiAction::Status { wiki_id, json } => {
-                cmd_wiki_status(config_path, &wiki_id, json).await
-            }
         },
         Some(Commands::Message {
             bot,

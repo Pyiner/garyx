@@ -130,8 +130,6 @@ Common flags on `channels add`:
 | --- | --- |
 | `garyx message [--bot <selector>] [--image <path> \| --file <path>] [text]` | Send text, one local image, or one local file via a bot without starting an agent run. Text is used as the attachment caption. If `--bot` is omitted, Garyx reads `GARYX_BOT` or `GARYX_CHANNEL` + `GARYX_ACCOUNT_ID`; otherwise it errors. File attachments are currently supported for Telegram bots. |
 | `garyx auto-research create / list / get / stop / patch / feedback / reverify` | Drive the auto-research loop. |
-| `garyx wiki init / list / get / status / delete` | Manage wiki knowledge bases. |
-| `garyx migrate thread-transcripts` {#migrate} | Move inline thread messages into transcript files. |
 
 ## Where to go next
 
