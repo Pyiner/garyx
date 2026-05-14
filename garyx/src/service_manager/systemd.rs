@@ -273,6 +273,7 @@ Type=simple
 ExecStart=/bin/sh -c 'exec \"$(getent passwd %u | cut -d: -f7)\" -lic \"exec {binary_arg} gateway run --host {host} --port {port}\"'
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=10
 {workspace_line}EnvironmentFile=-{env_file}
 StandardOutput=append:{log_dir}/stdout.log
 StandardError=append:{log_dir}/stderr.log

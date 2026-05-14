@@ -68,7 +68,7 @@ use crate::config_support::{
     default_config_path_buf, load_config_or_default, prepare_config_path_for_io_buf,
     print_diagnostics, print_errors,
 };
-use crate::runtime_assembler::RuntimeAssembler;
+use crate::runtime_assembler::{RuntimeAssembler, RuntimeAssembly};
 
 #[derive(Debug, Clone)]
 pub(crate) struct OnboardCommandOptions {
@@ -305,12 +305,13 @@ pub(crate) async fn run_gateway(
     let host = config.gateway.host.clone();
     let port = config.gateway.port;
 
-    let assembly = RuntimeAssembler::new(&config_path, config.clone())
+    let RuntimeAssembly {
+        state,
+        bridge,
+        cron_service,
+    } = RuntimeAssembler::new(&config_path, config.clone())
         .assemble()
         .await?;
-    let state = assembly.state.clone();
-    let bridge = assembly.bridge.clone();
-    let cron_service = assembly.cron_service;
 
     // 3.0 Share the channel plugin manager with AppState so HTTP
     // endpoints (`GET /api/channels/plugins`) see the same
@@ -420,6 +421,16 @@ pub(crate) async fn run_gateway(
     }
     .await;
 
+    let metrics = hot_reloader.metrics();
+    tracing::info!(
+        attempts = metrics.attempts,
+        successes = metrics.successes,
+        failures = metrics.failures,
+        callback_notifications = metrics.callback_notifications,
+        "config hot-reload metrics"
+    );
+    drop(hot_reloader);
+
     // Always run shutdown sequence, even when startup/serve fails.
     //
     // Abort the auto-updater FIRST so it can't enter a new tick
@@ -444,18 +455,8 @@ pub(crate) async fn run_gateway(
 
     match Arc::try_unwrap(cron_service) {
         Ok(mut svc) => svc.stop().await,
-        Err(_) => tracing::warn!("Cron service still has outstanding references on shutdown"),
+        Err(_) => tracing::debug!("Cron service still has outstanding references on shutdown"),
     }
-
-    let metrics = hot_reloader.metrics();
-    tracing::info!(
-        attempts = metrics.attempts,
-        successes = metrics.successes,
-        failures = metrics.failures,
-        callback_notifications = metrics.callback_notifications,
-        "config hot-reload metrics"
-    );
-    hot_reloader.stop();
     run_result
 }
 

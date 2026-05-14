@@ -70,9 +70,9 @@ impl MultiProviderBridge {
                 Some(key)
             }
             Err(error) => {
-                tracing::warn!(
+                tracing::debug!(
                     error = %error,
-                    "failed to register claude tty provider"
+                    "optional claude tty provider unavailable"
                 );
                 None
             }
@@ -106,7 +106,7 @@ impl MultiProviderBridge {
                 Some(key)
             }
             Err(error) => {
-                tracing::warn!(error = %error, "failed to register tertiary default provider");
+                tracing::debug!(error = %error, "optional gemini provider unavailable");
                 None
             }
         };

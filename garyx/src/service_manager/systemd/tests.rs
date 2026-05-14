@@ -17,6 +17,7 @@ fn render_unit_file_contains_exec_start_and_logs() {
     assert!(unit.contains("append:/home/alice/.garyx/logs/stdout.log"));
     assert!(unit.contains("append:/home/alice/.garyx/logs/stderr.log"));
     assert!(unit.contains("EnvironmentFile=-/home/alice/.garyx/env"));
+    assert!(unit.contains("TimeoutStopSec=10"));
     assert!(unit.contains("WantedBy=default.target"));
     assert!(!unit.contains("GARYX_WORKSPACE_ROOT"));
 }
