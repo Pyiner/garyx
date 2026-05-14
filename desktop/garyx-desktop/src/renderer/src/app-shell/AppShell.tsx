@@ -6136,6 +6136,25 @@ export function AppShell() {
     }
   }
 
+  async function handleAddWorkspaceForTask(): Promise<DesktopWorkspace | null> {
+    setError(null);
+    setWorkspaceMutation("add");
+    try {
+      const result = await window.garyxDesktop.addWorkspace();
+      setDesktopState(result.state);
+      return result.workspace || null;
+    } catch (workspaceError) {
+      setError(
+        workspaceError instanceof Error
+          ? workspaceError.message
+          : "Failed to add workspace",
+      );
+      throw workspaceError;
+    } finally {
+      setWorkspaceMutation(null);
+    }
+  }
+
   async function handleRelinkWorkspace(workspacePath: string) {
     setError(null);
     setWorkspaceMutation("relink");
@@ -7872,10 +7891,13 @@ export function AppShell() {
               <TasksPanel
                 agents={desktopAgents}
                 botGroups={botGroups}
+                onAddWorkspace={handleAddWorkspaceForTask}
                 onOpenThread={(threadId) => {
                   void openExistingThread(threadId);
                 }}
                 onToast={pushToast}
+                workspaces={realWorkspaces}
+                workspaceMutation={workspaceMutation}
               />
             ) : isBotsView ? (
               <BotConsolePage

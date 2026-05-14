@@ -11,6 +11,8 @@ import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
   Columns3,
+  Folder,
+  Laptop,
   List,
   MessageSquare,
   Plus,
@@ -18,6 +20,7 @@ import {
   RefreshCcw,
   RotateCcw,
   Send,
+  Search,
   StopCircle,
   Trash,
   UserPlus,
@@ -31,6 +34,8 @@ import type {
   DesktopTaskPrincipal,
   DesktopTaskStatus,
   DesktopTaskSummary,
+  DesktopWorkspace,
+  DesktopWorkspaceMode,
 } from '@shared/contracts';
 
 import { useI18n, type Translate } from '../../i18n';
@@ -74,6 +79,9 @@ import { AgentsIcon, MoreDotsIcon } from '../icons';
 type TasksPanelProps = {
   agents: DesktopCustomAgent[];
   botGroups: DesktopBotConsoleSummary[];
+  workspaces: DesktopWorkspace[];
+  workspaceMutation: string | null;
+  onAddWorkspace: () => Promise<DesktopWorkspace | null>;
   onOpenThread: (threadId: string) => void;
   onToast: (message: string, tone?: ToastTone) => void;
 };
@@ -102,6 +110,9 @@ const TASK_DRAG_MIME = 'application/x-garyx-task-id';
 const ALL_BOTS_FILTER_VALUE = '__all_bots__';
 const UNASSIGNED_ASSIGNEE_VALUE = '__unassigned__';
 const CHOOSE_NOTIFICATION_VALUE = '__choose_notification__';
+const ADD_WORKSPACE_VALUE = '__add_workspace__';
+const NO_WORKSPACE_VALUE = '__no_workspace__';
+const MISSING_WORKSPACE_VALUE_PREFIX = '__missing_workspace__:';
 
 function formatPrincipal(principal: DesktopTaskPrincipal | null | undefined, t: Translate): string {
   if (!principal) {
@@ -230,6 +241,9 @@ function taskNotificationTargetFromSelection(
 export function TasksPanel({
   agents,
   botGroups,
+  workspaces,
+  workspaceMutation,
+  onAddWorkspace,
   onOpenThread,
   onToast,
 }: TasksPanelProps) {
@@ -247,6 +261,12 @@ export function TasksPanel({
   const [draftBody, setDraftBody] = useState('');
   const [draftAssignee, setDraftAssignee] = useState('');
   const [draftWorkspaceDir, setDraftWorkspaceDir] = useState('');
+  const [draftWorkspaceMode, setDraftWorkspaceMode] =
+    useState<DesktopWorkspaceMode>('direct');
+  const [draftWorkspaceGitStatus, setDraftWorkspaceGitStatus] = useState<{
+    workspacePath: string;
+    isGitRepo: boolean;
+  } | null>(null);
   const [draftNotificationTarget, setDraftNotificationTarget] = useState('');
   const [creating, setCreating] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
@@ -288,6 +308,43 @@ export function TasksPanel({
   const selectedBotFilterOption = botFilter
     ? botFilterOptions.find((option) => option.value === botFilter) || null
     : null;
+  const selectableWorkspaces = useMemo(
+    () => workspaces.filter((workspace) => workspace.available && workspace.path),
+    [workspaces],
+  );
+  const draftWorktreeCapable = Boolean(
+    draftWorkspaceGitStatus?.workspacePath === draftWorkspaceDir &&
+      draftWorkspaceGitStatus.isGitRepo,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    setDraftWorkspaceGitStatus(null);
+    if (!draftWorkspaceDir.trim()) {
+      setDraftWorkspaceMode('direct');
+      return;
+    }
+    void window.garyxDesktop
+      .getWorkspaceGitStatus({ workspacePath: draftWorkspaceDir })
+      .then((status) => {
+        if (cancelled) return;
+        setDraftWorkspaceGitStatus({
+          workspacePath: draftWorkspaceDir,
+          isGitRepo: status.isGitRepo,
+        });
+        if (!status.isGitRepo) {
+          setDraftWorkspaceMode('direct');
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setDraftWorkspaceGitStatus(null);
+        setDraftWorkspaceMode('direct');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draftWorkspaceDir]);
 
   const loadTasks = useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
@@ -491,6 +548,7 @@ export function TasksPanel({
         assignee: assignee || null,
         start: Boolean(assignee),
         workspaceDir: draftWorkspaceDir.trim() || null,
+        workspaceMode: draftWorkspaceMode,
         notificationTarget,
       });
       setDraftOpen(false);
@@ -498,6 +556,7 @@ export function TasksPanel({
       setDraftBody('');
       setDraftAssignee('');
       setDraftWorkspaceDir('');
+      setDraftWorkspaceMode('direct');
       setDraftNotificationTarget('');
       await loadTasks({ silent: true });
       onToast(t('Task created.'), 'success');
@@ -509,6 +568,33 @@ export function TasksPanel({
     } finally {
       setCreating(false);
     }
+  }
+
+  async function handleDraftWorkspaceChange(value: string) {
+    if (value === ADD_WORKSPACE_VALUE) {
+      try {
+        const workspace = await onAddWorkspace();
+        if (workspace?.path) {
+          setDraftWorkspaceDir(workspace.path);
+          setDraftWorkspaceMode('direct');
+        }
+      } catch (workspaceError) {
+        onToast(
+          workspaceError instanceof Error
+            ? workspaceError.message
+            : t('Failed to add workspace'),
+          'error',
+        );
+      }
+      return;
+    }
+    if (value === NO_WORKSPACE_VALUE || value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) {
+      setDraftWorkspaceDir('');
+      setDraftWorkspaceMode('direct');
+      return;
+    }
+    setDraftWorkspaceDir(value);
+    setDraftWorkspaceMode('direct');
   }
 
   const disabled = isTasksDisabled(error);
@@ -832,11 +918,96 @@ export function TasksPanel({
               </Field>
               <Field className="tasks-field tasks-field-full">
                 <FieldLabel>{t('Workspace')}</FieldLabel>
-                <Input
-                  onChange={(event) => setDraftWorkspaceDir(event.target.value)}
-                  placeholder={t('Optional workspace directory')}
-                  value={draftWorkspaceDir}
-                />
+                <div className="tasks-workspace-controls">
+                  <Select
+                    value={draftWorkspaceDir || NO_WORKSPACE_VALUE}
+                    onValueChange={(value) => {
+                      void handleDraftWorkspaceChange(value);
+                    }}
+                  >
+                    <SelectTrigger className="tasks-workspace-trigger">
+                      <SelectValue placeholder={t('Select a workspace')} />
+                    </SelectTrigger>
+                    <SelectContent
+                      align="start"
+                      className="tasks-workspace-select-content"
+                      position="popper"
+                      sideOffset={4}
+                    >
+                      <SelectGroup>
+                        <SelectLabel>
+                          <Search aria-hidden size={14} strokeWidth={1.8} />
+                          {t('Search projects')}
+                        </SelectLabel>
+                        <SelectItem value={NO_WORKSPACE_VALUE}>
+                          {t('No workspace')}
+                        </SelectItem>
+                        {selectableWorkspaces.map((workspace) => {
+                          const value = workspace.path || `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
+                          return (
+                            <SelectItem
+                              disabled={!workspace.path}
+                              key={workspace.path || workspace.name}
+                              value={value}
+                            >
+                              <Folder aria-hidden size={15} strokeWidth={1.8} />
+                              {workspace.name}
+                            </SelectItem>
+                          );
+                        })}
+                        {!selectableWorkspaces.length ? (
+                          <SelectItem disabled value="no-workspaces">
+                            {t('No workspaces available')}
+                          </SelectItem>
+                        ) : null}
+                      </SelectGroup>
+                      <SelectGroup>
+                        <SelectItem
+                          disabled={workspaceMutation === 'add'}
+                          value={ADD_WORKSPACE_VALUE}
+                        >
+                          <Folder aria-hidden size={15} strokeWidth={1.8} />
+                          {workspaceMutation === 'add'
+                            ? t('Opening folder…')
+                            : t('Choose folder…')}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  {draftWorktreeCapable ? (
+                    <div className="tasks-workspace-mode-row">
+                      <span className="tasks-workspace-mode-label">
+                        {t('Workspace mode')}
+                      </span>
+                      <Select
+                        value={draftWorkspaceMode}
+                        onValueChange={(value) => {
+                          setDraftWorkspaceMode(value as DesktopWorkspaceMode);
+                        }}
+                      >
+                        <SelectTrigger
+                          aria-label={t('Workspace mode')}
+                          className="tasks-workspace-mode-trigger"
+                        >
+                          <Laptop aria-hidden size={15} strokeWidth={1.8} />
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent
+                          align="start"
+                          className="tasks-workspace-mode-content"
+                          position="popper"
+                          sideOffset={4}
+                        >
+                          <SelectGroup>
+                            <SelectLabel>{t('Workspace mode')}</SelectLabel>
+                            <SelectItem value="direct">{t('Local mode')}</SelectItem>
+                            <SelectItem value="worktree">{t('New worktree')}</SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
+                </div>
               </Field>
               <Field className="tasks-field tasks-field-full">
                 <FieldLabel>{t('Notification')}</FieldLabel>

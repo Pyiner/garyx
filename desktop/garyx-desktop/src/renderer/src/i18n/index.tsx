@@ -627,6 +627,7 @@ const zhCN: Record<string, string> = {
   'No verifier feedback has landed yet.': '还没有验证器反馈。',
   'No verifier result yet': '还没有验证结果',
   'No workspaces available': '没有可用工作区',
+  'No workspace': '不使用工作区',
   'Not bound': '未绑定',
   'Not configured': '未配置',
   'Once': '一次',
