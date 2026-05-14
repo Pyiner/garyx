@@ -17792,7 +17792,7 @@ button.codex-list-row {
   width: calc(100% + 2px);
   max-width: none;
   min-height: 61px;
-  margin: -26px -1px 0;
+  margin: -18px -1px 0;
   padding: 25px 8px 8px;
   border: 0;
   border-radius: 0 0 20px 20px;
@@ -17821,7 +17821,7 @@ button.new-thread-resume-link {
   border: 0;
   border-radius: 9999px;
   background: transparent;
-  color: rgba(13, 13, 13, 0.56);
+  color: rgba(26, 28, 31, 0.494);
   font-size: 13px;
   font-weight: 400;
   line-height: 18px;
@@ -17829,8 +17829,9 @@ button.new-thread-resume-link {
 }
 
 button.new-thread-workspace-trigger,
-button.new-thread-mode-trigger {
-  gap: 6px;
+button.new-thread-mode-trigger,
+button.new-thread-resume-link {
+  gap: 4px;
 }
 
 button.new-thread-workspace-trigger {
@@ -17839,9 +17840,9 @@ button.new-thread-workspace-trigger {
 }
 
 button.new-thread-mode-trigger {
-  width: auto;
-  min-width: 112px;
-  max-width: 160px;
+  width: 104px;
+  min-width: 0;
+  max-width: none;
 }
 
 button.new-thread-mode-trigger [data-slot="select-value"] {
@@ -17858,8 +17859,20 @@ button.new-thread-mode-trigger [data-slot="select-value"] > span {
 
 button.new-thread-workspace-trigger > svg:first-child,
 button.new-thread-mode-trigger > svg:first-child {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
+}
+
+button.new-thread-workspace-trigger > svg:last-child,
+button.new-thread-mode-trigger > svg:last-child {
+  width: 14px;
+  height: 14px;
+}
+
+button.new-thread-workspace-trigger svg,
+button.new-thread-mode-trigger svg,
+button.new-thread-resume-link svg {
+  color: currentColor !important;
 }
 
 button.new-thread-workspace-trigger:hover,
@@ -17867,7 +17880,7 @@ button.new-thread-workspace-trigger[data-state="open"],
 button.new-thread-mode-trigger:hover,
 button.new-thread-mode-trigger[data-state="open"],
 button.new-thread-resume-link:hover {
-  color: rgba(13, 13, 13, 0.78);
+  color: rgba(26, 28, 31, 0.78);
   background: rgba(26, 28, 31, 0.053);
 }
 

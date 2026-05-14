@@ -164,7 +164,6 @@ export function NewThreadEmptyState({
               <SelectTrigger
                 aria-label={t("Workspace for the new thread")}
                 className="new-thread-workspace-trigger"
-                title={newThreadWorkspaceEntry?.path ?? undefined}
               >
                 <SelectValue placeholder={t("Select a workspace")} />
               </SelectTrigger>
