@@ -50,7 +50,8 @@ writes to disk.
 | --- | --- |
 | `garyx channels list` | List configured channel accounts. |
 | `garyx channels add <channel> <account_id>` | Add a new account (Telegram, Feishu, WeChat, plugin id). |
-| `garyx channels enable <channel> <account_id>` | Enable / disable an existing account. |
+| `garyx channels enable <channel> <account_id>` | Enable an existing account. |
+| `garyx channels disable <channel> <account_id>` | Disable an existing account. |
 | `garyx channels remove <channel> <account_id>` | Delete an account from config. |
 | `garyx channels login <channel>` | Channel-specific login flow (device-flow Feishu, QR-code WeChat, etc.). |
 

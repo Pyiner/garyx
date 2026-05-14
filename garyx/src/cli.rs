@@ -391,15 +391,19 @@ pub(crate) enum ChannelsAction {
         #[arg(long)]
         json: bool,
     },
-    /// Enable or disable an existing account
+    /// Enable an existing account
     Enable {
         /// Channel type: telegram | feishu | weixin | api | <plugin_id>
         channel: String,
         /// Account id
         account: String,
-        /// Enabled flag
-        #[arg(action = clap::ArgAction::Set)]
-        enabled: bool,
+    },
+    /// Disable an existing account
+    Disable {
+        /// Channel type: telegram | feishu | weixin | api | <plugin_id>
+        channel: String,
+        /// Account id
+        account: String,
     },
     /// Remove an existing account
     Remove {

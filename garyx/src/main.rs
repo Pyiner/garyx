@@ -353,11 +353,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ChannelsAction::List { json } | ChannelsAction::Status { json } => {
                 cmd_channels_list(config_path, json)
             }
-            ChannelsAction::Enable {
-                channel,
-                account,
-                enabled,
-            } => cmd_channels_enable(config_path, &channel, &account, enabled).await,
+            ChannelsAction::Enable { channel, account } => {
+                cmd_channels_enable(config_path, &channel, &account, true).await
+            }
+            ChannelsAction::Disable { channel, account } => {
+                cmd_channels_enable(config_path, &channel, &account, false).await
+            }
             ChannelsAction::Remove { channel, account } => {
                 cmd_channels_remove(config_path, &channel, &account).await
             }

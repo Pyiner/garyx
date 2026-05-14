@@ -507,22 +507,37 @@ fn parse_config_set() {
 
 #[test]
 fn parse_channels_enable() {
-    let cli = Cli::parse_from(["garyx", "channels", "enable", "telegram", "main", "true"]);
+    let cli = Cli::parse_from(["garyx", "channels", "enable", "telegram", "main"]);
     match cli.command {
         Some(Commands::Channels {
-            action:
-                ChannelsAction::Enable {
-                    channel,
-                    account,
-                    enabled,
-                },
+            action: ChannelsAction::Enable { channel, account },
         }) => {
             assert_eq!(channel, "telegram");
             assert_eq!(account, "main");
-            assert!(enabled);
         }
         _ => panic!("expected Channels::Enable"),
     }
+}
+
+#[test]
+fn parse_channels_disable() {
+    let cli = Cli::parse_from(["garyx", "channels", "disable", "telegram", "main"]);
+    match cli.command {
+        Some(Commands::Channels {
+            action: ChannelsAction::Disable { channel, account },
+        }) => {
+            assert_eq!(channel, "telegram");
+            assert_eq!(account, "main");
+        }
+        _ => panic!("expected Channels::Disable"),
+    }
+}
+
+#[test]
+fn parse_channels_enable_rejects_legacy_bool_argument() {
+    assert!(
+        Cli::try_parse_from(["garyx", "channels", "enable", "telegram", "main", "false"]).is_err()
+    );
 }
 
 #[test]
