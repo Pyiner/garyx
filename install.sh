@@ -34,7 +34,7 @@ main() {
 
   local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' EXIT
+  trap 'rm -rf "${tmpdir:-}"' EXIT
 
   echo "Downloading ${archive}..."
   curl -fsSL "${base_url}/${archive}" -o "${tmpdir}/${archive}"
