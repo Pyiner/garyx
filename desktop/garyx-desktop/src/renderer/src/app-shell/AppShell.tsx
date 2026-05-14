@@ -1582,6 +1582,8 @@ export function AppShell() {
   );
   const [pendingWorkspaceMode, setPendingWorkspaceMode] =
     useState<DesktopWorkspaceMode>("direct");
+  const [composerBranchByWorkspacePath, setComposerBranchByWorkspacePath] =
+    useState<Record<string, string | null>>({});
   const [pendingBotId, setPendingBotId] = useState<string | null>(null);
   const [optimisticThreadBotBinding, setOptimisticThreadBotBinding] = useState<{
     botId: string | null;
@@ -2463,6 +2465,53 @@ export function AppShell() {
   const activeThreadInfoLoaded = selectedThreadId
     ? Object.prototype.hasOwnProperty.call(threadInfoByThread, selectedThreadId)
     : false;
+  const activeThreadWorktree =
+    activeThreadInfo?.worktree || activeThread?.worktree || null;
+  const activeComposerWorkspacePath =
+    activeThreadInfo?.workspacePath?.trim() ||
+    activeThread?.workspacePath?.trim() ||
+    "";
+  const composerWorkspaceMode: DesktopWorkspaceMode | null =
+    selectedThreadId && (activeComposerWorkspacePath || activeThreadWorktree)
+      ? activeThreadWorktree
+        ? "worktree"
+        : "direct"
+      : null;
+  const composerWorkspaceBranch =
+    activeThreadWorktree?.branch?.trim() ||
+    (activeComposerWorkspacePath
+      ? composerBranchByWorkspacePath[activeComposerWorkspacePath] || null
+      : null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (
+      !selectedThreadId ||
+      !activeComposerWorkspacePath ||
+      activeThreadWorktree
+    ) {
+      return;
+    }
+    void window.garyxDesktop
+      .getWorkspaceGitStatus({ workspacePath: activeComposerWorkspacePath })
+      .then((status) => {
+        if (cancelled) return;
+        setComposerBranchByWorkspacePath((current) => ({
+          ...current,
+          [activeComposerWorkspacePath]: status.currentBranch || null,
+        }));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setComposerBranchByWorkspacePath((current) => ({
+          ...current,
+          [activeComposerWorkspacePath]: null,
+        }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeComposerWorkspacePath, activeThreadWorktree, selectedThreadId]);
   const activePendingAutomationRun = selectedThreadId
     ? pendingAutomationRunsByThread[selectedThreadId] || null
     : null;
@@ -7947,6 +7996,8 @@ export function AppShell() {
                 composerPlaceholder={composerPlaceholder}
                 composerProviderType={composerProviderType}
                 composerResetKey={composerResetKey}
+                composerWorkspaceBranch={composerWorkspaceBranch}
+                composerWorkspaceMode={composerWorkspaceMode}
                 activeThreadBot={activeThreadBot}
                 activeThreadBotId={activeThreadBotId}
                 botBindingDisabled={bindingMutation === "bot-binding"}

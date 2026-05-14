@@ -233,6 +233,8 @@ type ThreadPageProps = {
   composerLocked: boolean;
   composerPlaceholder: string;
   composerProviderType: DesktopApiProviderType;
+  composerWorkspaceBranch: string | null;
+  composerWorkspaceMode: DesktopWorkspaceMode | null;
   composerResetKey: number;
   activeThreadBot: DesktopBotConsoleSummary | null;
   activeThreadBotId: string | null;
@@ -341,6 +343,8 @@ export function ThreadPage({
   composerLocked,
   composerPlaceholder,
   composerProviderType,
+  composerWorkspaceBranch,
+  composerWorkspaceMode,
   composerResetKey,
   activeThreadBot,
   activeThreadBotId,
@@ -877,6 +881,8 @@ export function ThreadPage({
               activeThreadBotId={activeThreadBotId}
               botBindingDisabled={botBindingDisabled}
               botGroups={botGroups}
+              composerWorkspaceBranch={composerWorkspaceBranch}
+              composerWorkspaceMode={composerWorkspaceMode}
               agentLabel={agentLabel}
               agentOptions={composerAgentOptions}
               selectedAgentId={composerSelectedAgentId}

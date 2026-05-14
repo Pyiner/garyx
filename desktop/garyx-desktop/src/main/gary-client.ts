@@ -315,6 +315,28 @@ interface ThreadRuntimePayload {
   active_run?: ThreadActiveRunPayload | null;
 }
 
+function mapThreadWorktreeInfo(value: unknown) {
+  const record = parseRecord(value);
+  if (!Object.keys(record).length) {
+    return null;
+  }
+  return {
+    mode: asString(record.mode) || null,
+    enabled: asBoolean(record.enabled) ?? null,
+    branch: asString(record.branch) || null,
+    sourceBranch:
+      asString(record.source_branch) || asString(record.sourceBranch) || null,
+    path: asString(record.path) || null,
+    worktreeDir: asString(record.worktree_dir) || asString(record.worktreeDir) || null,
+    sourceWorkspaceDir:
+      asString(record.source_workspace_dir) ||
+      asString(record.sourceWorkspaceDir) ||
+      null,
+    sourceRepoRoot:
+      asString(record.source_repo_root) || asString(record.sourceRepoRoot) || null,
+  };
+}
+
 interface ThreadActiveRunPayload {
   run_id?: string | null;
   provider_type?: string | null;
@@ -373,6 +395,7 @@ interface ThreadSummaryPayload {
   team?: ThreadTeamBlockPayload | null;
   recent_run_id?: string | null;
   sdk_session_id?: string | null;
+  worktree?: unknown;
 }
 
 interface ThreadsPayload {
@@ -1415,6 +1438,7 @@ function mapThreadRuntimeInfo(
         : asString(runtime.sdk_session_id) || null,
     workspacePath:
       typeof value.workspace_dir === "string" ? value.workspace_dir : null,
+    worktree: mapThreadWorktreeInfo(value.worktree),
     activeRun,
     channelBindings,
   };
@@ -1504,6 +1528,7 @@ function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
       typeof (value as { recent_run_id?: unknown }).recent_run_id === "string"
         ? ((value as { recent_run_id?: string }).recent_run_id ?? null)
         : null,
+    worktree: mapThreadWorktreeInfo(value.worktree),
   };
 }
 

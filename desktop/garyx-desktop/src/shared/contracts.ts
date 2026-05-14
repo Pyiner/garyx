@@ -586,6 +586,7 @@ export interface DesktopThreadSummary {
   teamId?: string | null;
   teamName?: string | null;
   recentRunId?: string | null;
+  worktree?: ThreadWorktreeInfo | null;
   /**
    * Full team block when this thread is bound to a Team. The gateway's list
    * endpoint (`/api/threads`) and thread metadata endpoints both supply it for
@@ -593,6 +594,17 @@ export interface DesktopThreadSummary {
    * it, hence the optional typing.
    */
   team?: ThreadTeamBlock | null;
+}
+
+export interface ThreadWorktreeInfo {
+  mode?: string | null;
+  enabled?: boolean | null;
+  branch?: string | null;
+  sourceBranch?: string | null;
+  path?: string | null;
+  worktreeDir?: string | null;
+  sourceWorkspaceDir?: string | null;
+  sourceRepoRoot?: string | null;
 }
 
 export interface ThreadChannelBindingInfo {
@@ -613,6 +625,7 @@ export interface ThreadRuntimeInfo {
   providerLabel?: string | null;
   sdkSessionId?: string | null;
   workspacePath?: string | null;
+  worktree?: ThreadWorktreeInfo | null;
   activeRun?: ThreadActiveRunInfo | null;
   channelBindings: ThreadChannelBindingInfo[];
 }

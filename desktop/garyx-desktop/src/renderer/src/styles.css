@@ -8231,6 +8231,59 @@ button.team-agent-speaker:focus-visible {
   padding: 0 8px;
 }
 
+.composer-footer-left {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.composer-thread-status {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer-thread-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  max-width: 160px;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 9999px;
+  color: rgba(26, 28, 31, 0.494);
+  font-size: 13px;
+  font-weight: var(--font-weight-normal);
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.composer-thread-status-pill svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.composer-thread-status-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-thread-status-mode {
+  min-width: 104px;
+}
+
+.composer-thread-status-branch {
+  min-width: 0;
+}
+
 .composer-provider-control {
   display: inline-flex;
   align-items: center;
