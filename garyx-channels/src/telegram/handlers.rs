@@ -695,42 +695,11 @@ impl TelegramChannel {
                     Some(image_attachments.clone()),
                 )
                 .await;
-            if let Some(queued) = queued {
-                {
-                    let router_guard = context.router.lock().await;
-                    router_guard
-                        .record_message_ledger_event(MessageLedgerEvent {
-                            ledger_id: format!(
-                                "telegram:{}:{chat_id}:{}",
-                                context.account_id, msg.message_id
-                            ),
-                            bot_id: format!("telegram:{}", context.account_id),
-                            status: MessageLifecycleStatus::RunStreaming,
-                            created_at: chrono::Utc::now().to_rfc3339(),
-                            thread_id: Some(thread_id.to_owned()),
-                            run_id: Some(queued.run_id.clone()),
-                            channel: Some("telegram".to_owned()),
-                            account_id: Some(context.account_id.clone()),
-                            chat_id: Some(chat_id.to_string()),
-                            from_id: Some(from_id.clone()),
-                            native_message_id: Some(msg.message_id.to_string()),
-                            text_excerpt: Some(dispatch_message.chars().take(200).collect()),
-                            terminal_reason: None,
-                            reply_message_id: None,
-                            metadata: serde_json::json!({
-                                "source": "telegram_streaming_input",
-                                "is_group": is_group,
-                                "pending_input_id": queued.pending_input_id.clone(),
-                            }),
-                        })
-                        .await;
-                }
-                info!(
+            if queued.is_some() {
+                debug!(
                     context.account_id,
                     chat_id,
                     thread_id,
-                    run_id = %queued.run_id,
-                    pending_input_id = %queued.pending_input_id,
                     "telegram message queued as streaming input into active session"
                 );
                 return;

@@ -2199,16 +2199,6 @@ impl MultiProviderBridge {
                 .await
                 .get(thread_id)
                 .cloned();
-            let persistence_required = self.inner.thread_store.read().await.is_some()
-                && self.inner.thread_history.read().await.is_some();
-            if persistence_required && persistence_handle.is_none() {
-                tracing::warn!(
-                    thread_id = %thread_id,
-                    provider_key = %key,
-                    "refusing to queue streaming input without active persistence handle"
-                );
-                return None;
-            }
             let run_id = persistence_handle
                 .as_ref()
                 .map(|handle| handle.run_id.clone())

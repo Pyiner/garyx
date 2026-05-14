@@ -2541,41 +2541,6 @@ async fn test_add_streaming_input_retries_until_provider_ready() {
 }
 
 #[tokio::test]
-async fn test_add_streaming_input_requires_persistence_when_store_configured() {
-    let bridge = MultiProviderBridge::new();
-    let provider = Arc::new(QueuedInputProvider::new());
-    bridge.register_provider("p1", provider).await;
-    bridge.set_default_provider_key("p1").await;
-    bridge
-        .set_thread_affinity("sess::tg::stale-persistence", "p1")
-        .await;
-
-    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
-    bridge.set_thread_store(store.clone()).await;
-    bridge.set_thread_history(make_history(store));
-
-    {
-        let mut run_index = bridge.inner.run_index.write().await;
-        run_index
-            .active_runs
-            .insert("run-stale".to_owned(), "p1".to_owned());
-        run_index.run_sessions.insert(
-            "run-stale".to_owned(),
-            "sess::tg::stale-persistence".to_owned(),
-        );
-    }
-
-    let queued = bridge
-        .add_streaming_input("sess::tg::stale-persistence", "follow-up", None, None, None)
-        .await;
-
-    assert!(
-        queued.is_none(),
-        "persistent runs must not accept invisible queued inputs when their active persistence handle is missing"
-    );
-}
-
-#[tokio::test]
 async fn test_start_agent_run_retries_follow_up_into_active_stream() {
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(DelayedQueuedInputProvider::new());
