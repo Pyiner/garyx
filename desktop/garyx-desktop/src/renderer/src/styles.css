@@ -17886,7 +17886,6 @@ button.new-thread-resume-link:hover {
 
 [data-slot="select-content"].new-thread-workspace-menu,
 [data-slot="select-content"].new-thread-mode-menu {
-  min-width: 260px;
   height: auto !important;
   max-height: 254px !important;
   overflow-y: auto;
@@ -17900,6 +17899,16 @@ button.new-thread-resume-link:hover {
     0 8px 16px -4px rgba(0, 0, 0, 0.12);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
   backdrop-filter: blur(16px) saturate(140%);
+}
+
+[data-slot="select-content"].new-thread-workspace-menu {
+  min-width: 260px;
+}
+
+[data-slot="select-content"].new-thread-mode-menu {
+  width: max-content;
+  min-width: var(--radix-select-trigger-width);
+  max-width: 260px;
 }
 
 [data-slot="select-content"].new-thread-workspace-menu > div,

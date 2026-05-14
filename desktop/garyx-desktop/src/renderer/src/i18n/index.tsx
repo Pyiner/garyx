@@ -121,7 +121,7 @@ const zhCN: Record<string, string> = {
   'Rename {name}': '重命名 {name}',
   'Resolving memory path…': '正在解析记忆路径…',
   'Resize logs panel': '调整日志面板大小',
-  'Resume': '恢复',
+  'Resume': 'Resume',
   'Resume existing session': '恢复已有 session',
   'Resume failed.': '恢复失败。',
   'Resume session': '恢复 session',
