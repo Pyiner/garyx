@@ -2,7 +2,7 @@ use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Redirect},
+    response::IntoResponse,
 };
 use chrono::Utc;
 use garyx_channels::plugin::{PluginAccountUi, PluginConversationEndpoint, PluginMainEndpoint};
@@ -629,26 +629,6 @@ pub async fn runtime_info(State(state): State<Arc<AppState>>) -> impl IntoRespon
             "port": cfg.gateway.port,
         },
     }))
-}
-
-pub async fn redirect_legacy_status() -> impl IntoResponse {
-    Redirect::temporary("/?view=status")
-}
-
-pub async fn redirect_legacy_settings() -> impl IntoResponse {
-    Redirect::temporary("/?view=settings")
-}
-
-pub async fn redirect_legacy_logs() -> impl IntoResponse {
-    Redirect::temporary("/?view=logs")
-}
-
-pub async fn redirect_legacy_cron() -> impl IntoResponse {
-    Redirect::temporary("/?view=cron")
-}
-
-pub async fn redirect_legacy_threads() -> impl IntoResponse {
-    Redirect::temporary("/?view=threads")
 }
 
 // ---------------------------------------------------------------------------

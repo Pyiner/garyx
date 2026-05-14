@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing;
 
-use crate::server_frontend::mount_frontend_routes;
 use crate::server_lifecycle::start_gateway_runtime;
 
 pub use crate::app_bootstrap::{AppStateBuilder, create_app_state, create_app_state_with_bridge};
@@ -24,7 +23,7 @@ pub struct Gateway {
 impl Gateway {
     /// Create a new gateway from application state.
     pub fn new(state: Arc<AppState>) -> Self {
-        let router = mount_frontend_routes(route_graph::build_router(state.clone()));
+        let router = route_graph::build_router(state.clone());
 
         Self { state, router }
     }

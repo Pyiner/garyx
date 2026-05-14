@@ -24,6 +24,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .merge(public_runtime_routes())
         .merge(protected)
+        .fallback(routes::fallback)
         .with_state(state)
 }
 
@@ -37,23 +38,7 @@ fn public_runtime_routes() -> Router<Arc<AppState>> {
 }
 
 fn protected_runtime_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/agent", axum::routing::get(routes::redirect_legacy_status))
-        .route(
-            "/status",
-            axum::routing::get(routes::redirect_legacy_status),
-        )
-        .route(
-            "/settings",
-            axum::routing::get(routes::redirect_legacy_settings),
-        )
-        .route("/logs", axum::routing::get(routes::redirect_legacy_logs))
-        .route("/cron", axum::routing::get(routes::redirect_legacy_cron))
-        .route(
-            "/threads",
-            axum::routing::get(routes::redirect_legacy_threads),
-        )
-        .route("/runtime", axum::routing::get(routes::runtime_info))
+    Router::new().route("/runtime", axum::routing::get(routes::runtime_info))
 }
 
 fn thread_routes() -> Router<Arc<AppState>> {

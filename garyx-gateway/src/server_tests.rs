@@ -1,12 +1,10 @@
 use super::*;
 use axum::body::Body;
 use axum::extract::ConnectInfo;
-use axum::handler::HandlerWithoutStateExt;
 use axum::http::Request;
 use garyx_models::config::GaryxConfig;
 use std::net::SocketAddr;
 use tower::ServiceExt;
-use tower_http::services::ServeDir;
 
 fn test_config() -> GaryxConfig {
     crate::test_support::with_gateway_auth(GaryxConfig::default())
@@ -1052,122 +1050,39 @@ async fn test_detach_topic_endpoint_preserves_primary_reply_routing_in_same_chat
     assert!(outbound[0]["thread_scope"].is_null());
 }
 
-// -- Frontend static serving tests --
-// These tests verify the ServeDir fallback serves frontend pages
-// when the static directory exists. We use a temp dir with test HTML.
-
-fn gateway_with_static_dir(static_dir: &std::path::Path) -> Router {
+async fn assert_gateway_not_found(path: &str) {
     let state = test_state();
-    let router = Router::new()
-        .route("/health", axum::routing::get(crate::routes::health))
-        .route(
-            "/api/status",
-            axum::routing::get(crate::routes::system_status),
-        )
-        .with_state(state);
-
-    router.fallback_service(
-        ServeDir::new(static_dir)
-            .append_index_html_on_directories(true)
-            .not_found_service(crate::routes::fallback.into_service()),
-    )
-}
-
-#[tokio::test]
-async fn test_frontend_root_serves_index_html() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("index.html"), "<html>root</html>").unwrap();
-
-    let router = gateway_with_static_dir(dir.path());
-    let req = authed_request().uri("/").body(Body::empty()).unwrap();
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    assert!(String::from_utf8_lossy(&body).contains("root"));
-}
-
-#[tokio::test]
-async fn test_web_shell_route_serves_index_html() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("index.html"), "<html>web-shell</html>").unwrap();
-
-    let state = test_state();
-    let router = Router::new()
-        .route("/health", axum::routing::get(crate::routes::health))
-        .with_state(state)
-        .nest_service(
-            "/web",
-            ServeDir::new(dir.path()).append_index_html_on_directories(true),
-        );
-
-    let req = authed_request()
-        .uri("/web/?view=threads")
-        .body(Body::empty())
-        .unwrap();
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    assert!(String::from_utf8_lossy(&body).contains("web-shell"));
-}
-
-#[tokio::test]
-async fn test_frontend_static_asset_served() {
-    let dir = tempfile::tempdir().unwrap();
-    let next_dir = dir.path().join("_next").join("static");
-    std::fs::create_dir_all(&next_dir).unwrap();
-    std::fs::write(next_dir.join("chunk.js"), "console.log('ok')").unwrap();
-
-    let router = gateway_with_static_dir(dir.path());
-    let req = authed_request()
-        .uri("/_next/static/chunk.js")
-        .body(Body::empty())
-        .unwrap();
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
-
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    assert!(String::from_utf8_lossy(&body).contains("console.log"));
-}
-
-#[tokio::test]
-async fn test_frontend_missing_path_returns_404_json() {
-    let dir = tempfile::tempdir().unwrap();
-    // Empty dir — no files at all
-
-    let router = gateway_with_static_dir(dir.path());
-    let req = authed_request()
-        .uri("/nonexistent-page")
-        .body(Body::empty())
-        .unwrap();
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 404);
-}
-
-#[tokio::test]
-async fn test_api_routes_take_priority_over_static() {
-    let dir = tempfile::tempdir().unwrap();
-    // Even if there's a health file in static dir, API route wins
-    std::fs::write(dir.path().join("health"), "wrong").unwrap();
-
-    let router = gateway_with_static_dir(dir.path());
-    let req = authed_request().uri("/health").body(Body::empty()).unwrap();
-    let resp = router.oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), 200);
+    let gw = Gateway::new(state);
+    let req = authed_request().uri(path).body(Body::empty()).unwrap();
+    let resp = gw.router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 404, "expected {path} to be unserved");
 
     let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
         .await
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    // API handler returns JSON, not the static file
-    assert_eq!(json["status"], "ok");
+    assert_eq!(json["error"], "not found");
+}
+
+#[tokio::test]
+async fn test_gateway_does_not_serve_web_frontend() {
+    for path in ["/", "/web/", "/web/?view=threads", "/_next/static/chunk.js"] {
+        assert_gateway_not_found(path).await;
+    }
+}
+
+#[tokio::test]
+async fn test_legacy_web_page_routes_are_removed() {
+    for path in [
+        "/agent",
+        "/status",
+        "/settings",
+        "/logs",
+        "/cron",
+        "/threads",
+    ] {
+        assert_gateway_not_found(path).await;
+    }
 }
 
 #[tokio::test]

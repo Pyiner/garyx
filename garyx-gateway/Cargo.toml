@@ -28,7 +28,6 @@ uuid = { workspace = true }
 reqwest = { workspace = true }
 cron = "0.12"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 regex = { workspace = true }
 base64 = "0.22"
