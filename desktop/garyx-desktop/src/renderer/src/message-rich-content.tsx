@@ -7,6 +7,13 @@ import type {
 } from "@shared/contracts";
 
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
   RichMessageText,
   type LocalFileLinkHandler,
 } from "./message-rich-text";
@@ -465,6 +472,55 @@ function MessageFileAttachmentCard({
   );
 }
 
+function MessageImageAttachmentFrame({
+  compact,
+  segment,
+}: {
+  compact: boolean;
+  segment: Extract<TranscriptSegment, { kind: "image" }>;
+}) {
+  const { t } = useI18n();
+  const frameClassName = `message-image-frame ${
+    compact ? "message-image-frame-compact" : ""
+  }`;
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          aria-label={t("Open image preview")}
+          className={frameClassName}
+          title={t("Open image preview")}
+          type="button"
+        >
+          <img
+            alt={segment.alt}
+            className="message-image"
+            loading="lazy"
+            src={segment.src}
+          />
+        </button>
+      </DialogTrigger>
+      <DialogContent
+        className="message-image-preview-dialog"
+        size="viewer"
+      >
+        <DialogTitle className="sr-only">{t("Image preview")}</DialogTitle>
+        <DialogDescription className="sr-only">
+          {t("Full-size image preview")}
+        </DialogDescription>
+        <div className="message-image-preview-stage">
+          <img
+            alt={segment.alt}
+            className="message-image-preview"
+            src={segment.src}
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function buildOptimisticTranscriptContent(
   text: string,
   images: MessageImageAttachment[],
@@ -599,17 +655,11 @@ export const RichMessageContent = memo(function RichMessageContent({
 
     if (segment.kind === "image") {
       return (
-        <div
+        <MessageImageAttachmentFrame
+          compact={layout === "media_above"}
           key={segment.key}
-          className={`message-image-frame ${layout === "media_above" ? "message-image-frame-compact" : ""}`}
-        >
-          <img
-            alt={segment.alt}
-            className="message-image"
-            loading="lazy"
-            src={segment.src}
-          />
-        </div>
+          segment={segment}
+        />
       );
     }
 
