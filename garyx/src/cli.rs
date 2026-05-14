@@ -102,12 +102,6 @@ pub(crate) enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Run local environment/config audit
-    Audit {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
     /// Download and replace the current garyx binary from GitHub Releases
     #[command(visible_alias = "upgrade")]
     Update {

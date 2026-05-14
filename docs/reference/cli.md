@@ -110,7 +110,6 @@ Common flags on `channels add`:
 | --- | --- |
 | `garyx status` | Show running gateway + channel summary. |
 | `garyx doctor` | Run health checks (CLIs found, ports open, config valid). |
-| `garyx audit` | Local environment / config audit. |
 | `garyx logs path` | Print the gateway stderr log path. |
 | `garyx logs tail [--lines N]` | Tail the gateway stderr log. |
 | `garyx logs clear` | Truncate the log file. |

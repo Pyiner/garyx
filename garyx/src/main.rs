@@ -23,25 +23,24 @@ use cli::{
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
     cmd_agent_team_delete, cmd_agent_team_get, cmd_agent_team_list, cmd_agent_team_update,
-    cmd_agent_update, cmd_agent_upsert, cmd_audit, cmd_auto_research_candidates,
-    cmd_auto_research_create, cmd_auto_research_feedback, cmd_auto_research_get,
-    cmd_auto_research_iterations, cmd_auto_research_list, cmd_auto_research_patch,
-    cmd_auto_research_reverify, cmd_auto_research_select, cmd_auto_research_stop,
-    cmd_automation_activity, cmd_automation_create, cmd_automation_delete, cmd_automation_get,
-    cmd_automation_list, cmd_automation_pause, cmd_automation_resume, cmd_automation_run,
-    cmd_automation_update, cmd_bot_bind, cmd_bot_status, cmd_bot_unbind, cmd_channels_add,
-    cmd_channels_enable, cmd_channels_list, cmd_channels_login, cmd_channels_remove,
-    cmd_command_delete, cmd_command_get, cmd_command_list, cmd_command_set, cmd_config_get,
-    cmd_config_init, cmd_config_path, cmd_config_set, cmd_config_show, cmd_config_unset,
-    cmd_config_validate, cmd_doctor, cmd_gateway_install, cmd_gateway_reload_config,
-    cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token,
-    cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail, cmd_onboard,
-    cmd_send_message, cmd_status, cmd_task_assign, cmd_task_claim, cmd_task_create,
-    cmd_task_delete, cmd_task_get, cmd_task_history, cmd_task_list, cmd_task_promote,
-    cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_stop, cmd_task_unassign,
-    cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history, cmd_thread_list,
-    cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_tool_image,
-    cmd_tool_search, cmd_update, run_gateway,
+    cmd_agent_update, cmd_agent_upsert, cmd_auto_research_candidates, cmd_auto_research_create,
+    cmd_auto_research_feedback, cmd_auto_research_get, cmd_auto_research_iterations,
+    cmd_auto_research_list, cmd_auto_research_patch, cmd_auto_research_reverify,
+    cmd_auto_research_select, cmd_auto_research_stop, cmd_automation_activity,
+    cmd_automation_create, cmd_automation_delete, cmd_automation_get, cmd_automation_list,
+    cmd_automation_pause, cmd_automation_resume, cmd_automation_run, cmd_automation_update,
+    cmd_bot_bind, cmd_bot_status, cmd_bot_unbind, cmd_channels_add, cmd_channels_enable,
+    cmd_channels_list, cmd_channels_login, cmd_channels_remove, cmd_command_delete,
+    cmd_command_get, cmd_command_list, cmd_command_set, cmd_config_get, cmd_config_init,
+    cmd_config_path, cmd_config_set, cmd_config_show, cmd_config_unset, cmd_config_validate,
+    cmd_doctor, cmd_gateway_install, cmd_gateway_reload_config, cmd_gateway_restart,
+    cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear,
+    cmd_logs_path, cmd_logs_tail, cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign,
+    cmd_task_claim, cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history,
+    cmd_task_list, cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title,
+    cmd_task_stop, cmd_task_unassign, cmd_task_update, cmd_thread_create, cmd_thread_get,
+    cmd_thread_history, cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot,
+    cmd_thread_send_to_task, cmd_tool_image, cmd_tool_search, cmd_update, run_gateway,
 };
 
 struct ThreadSendDestination {
@@ -349,7 +348,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await
         }
-        Some(Commands::Audit { json }) => cmd_audit(config_path, json).await,
         Some(Commands::Update { version, path }) => cmd_update(version, path).await,
         Some(Commands::Channels { action }) => match action {
             ChannelsAction::List { json } | ChannelsAction::Status { json } => {
