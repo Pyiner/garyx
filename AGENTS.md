@@ -122,6 +122,8 @@ needs installed-app validation.
   after source changes. Release archives, `install.sh`, `garyx update`, and
   desktop `build:rust` should all preserve the same CLI identifier so directory
   authorization is not re-requested just because a new binary was installed.
+  `install.sh` installs the signed release binary as-is and must not re-sign it
+  after download.
 - Restart through the Garyx CLI with a wake target when working in an agent
   thread, for example `garyx gateway restart --wake thread <thread_id>
   --wake-message "continue"`.

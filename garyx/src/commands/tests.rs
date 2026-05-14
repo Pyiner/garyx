@@ -1160,6 +1160,14 @@ fn next_onboard_steps_suggests_channel_bind_when_empty() {
         steps.iter().any(|s| s.contains("garyx channels add")),
         "expected channel-add hint in fresh config, got {steps:?}"
     );
+    assert!(
+        steps.iter().any(|s| s == "garyx status"),
+        "expected status check after onboarding, got {steps:?}"
+    );
+    assert!(
+        !steps.iter().any(|s| s.contains("gateway install")),
+        "onboarding should assume the gateway service is already installed, got {steps:?}"
+    );
 }
 
 #[test]

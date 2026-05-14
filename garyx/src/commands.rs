@@ -1100,6 +1100,23 @@ async fn notify_gateway_reload_quiet(config_path: &Path) {
     notify_gateway_reload_with_output(config_path, false).await;
 }
 
+async fn gateway_is_reachable(config_path: &Path) -> bool {
+    let path_str = config_path.to_string_lossy();
+    let Ok(gateway) = gateway_endpoint(&path_str) else {
+        return false;
+    };
+    let url = format!("{}/health", gateway.base_url);
+    let response = gateway_request(
+        reqwest::Client::new()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5)),
+        &gateway,
+    )
+    .send()
+    .await;
+    matches!(response, Ok(r) if r.status().is_success())
+}
+
 async fn notify_gateway_reload_with_output(config_path: &Path, print_success: bool) {
     let path_str = config_path.to_string_lossy();
     let Ok(gateway) = gateway_endpoint(&path_str) else {
@@ -5777,9 +5794,9 @@ fn next_onboard_steps(cfg: &GaryxConfig) -> Vec<String> {
     if user_channel_account_count(cfg) == 0 {
         steps.push("garyx channels add  # 绑定至少一个聊天渠道".to_owned());
     }
+    steps.push("garyx status".to_owned());
     steps.push("garyx config show".to_owned());
     steps.push("garyx doctor".to_owned());
-    steps.push("garyx gateway install  # 安装并启动后台 gateway".to_owned());
     steps
 }
 
@@ -5977,6 +5994,8 @@ pub(crate) async fn cmd_onboard(
     }
 
     save_config_struct(&config_path, &cfg)?;
+    notify_gateway_reload_quiet(&config_path).await;
+    let gateway_running = gateway_is_reachable(&config_path).await;
 
     let summary = OnboardSummary {
         ok: true,
@@ -6006,7 +6025,12 @@ pub(crate) async fn cmd_onboard(
         print_onboard_summary(&summary);
     }
 
-    let should_run_gateway = if options.run_gateway {
+    let should_run_gateway = if gateway_running {
+        if options.run_gateway && !options.json {
+            println!("Gateway is already running.");
+        }
+        false
+    } else if options.run_gateway {
         true
     } else if interactive {
         prompt_yes_no("Start gateway now?", true)?

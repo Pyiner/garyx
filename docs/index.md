@@ -50,22 +50,22 @@ transcripts live on the machine or server where you run Garyx.
 
 ## Install, then connect Telegram
 
-The release installer only installs the CLI binary. It does not initialize
-Garyx or start the gateway, so the normal first run is: install the CLI,
-create local config, install the managed gateway service, then register a
-Telegram bot.
+The release installer only installs the CLI binary. It downloads the latest
+release, verifies its checksum, and installs `garyx` to `/usr/local/bin` by
+default. It does not initialize Garyx, start the gateway, or re-sign the
+release binary. The normal first run is: install the CLI, start the managed
+gateway service, run onboarding, then register a Telegram bot.
 
 ::: code-group
 
 ```bash [Install]
 curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
-export PATH="$HOME/.garyx/bin:$PATH"
 garyx --version
 ```
 
-```bash [Initialize]
-garyx onboard
+```bash [Start gateway]
 garyx gateway install
+garyx onboard
 garyx status
 ```
 

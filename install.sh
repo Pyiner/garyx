@@ -6,12 +6,13 @@
 #
 # Options (env vars):
 #   GARYX_VERSION   — specific version to install (default: latest)
-#   GARYX_INSTALL   — installation directory (default: ~/.garyx/bin)
+#   GARYX_INSTALL   — installation directory (default: /usr/local/bin)
 
 set -euo pipefail
 
 REPO="Pyiner/garyx"
-INSTALL_DIR="${GARYX_INSTALL:-$HOME/.garyx/bin}"
+DEFAULT_INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${GARYX_INSTALL:-$DEFAULT_INSTALL_DIR}"
 
 main() {
   check_deps
@@ -46,16 +47,13 @@ main() {
 
   tar xzf "${tmpdir}/${archive}" -C "$tmpdir"
 
-  mkdir -p "$INSTALL_DIR"
-  cp "${tmpdir}/garyx-${version}-${target}/garyx" "$INSTALL_DIR/"
-  chmod +x "$INSTALL_DIR/garyx"
-  codesign_macos_cli "$INSTALL_DIR/garyx"
+  install_binary "${tmpdir}/garyx-${version}-${target}/garyx" "${INSTALL_DIR}/garyx"
 
   echo ""
   echo "Installed garyx to ${INSTALL_DIR}/garyx"
   echo ""
 
-  if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
+  if ! path_contains "$INSTALL_DIR"; then
     echo "Add to your PATH:"
     echo ""
     echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
@@ -129,17 +127,42 @@ verify_checksum() {
   echo "Checksum OK."
 }
 
-codesign_macos_cli() {
-  local binary="$1"
-  local identifier="com.garyx.cli"
+path_contains() {
+  local dir="$1"
+  echo "$PATH" | tr ':' '\n' | grep -qx "$dir"
+}
 
-  if [ "$(uname -s)" != "Darwin" ]; then
-    return 0
+can_write_install_dir() {
+  local dir="$1"
+  if [ -d "$dir" ]; then
+    [ -w "$dir" ]
+    return
+  fi
+  local parent
+  parent="$(dirname "$dir")"
+  [ -d "$parent" ] && [ -w "$parent" ]
+}
+
+install_binary() {
+  local source="$1" destination="$2" dir
+  dir="$(dirname "$destination")"
+
+  if can_write_install_dir "$dir" && { [ ! -e "$destination" ] || [ -w "$destination" ]; }; then
+    mkdir -p "$dir"
+    cp "$source" "$destination"
+    chmod +x "$destination"
+    return
   fi
 
-  echo "Signing garyx with stable macOS identifier ${identifier}..."
-  /usr/bin/codesign --force --sign - --identifier "$identifier" "$binary"
-  /usr/bin/codesign --verify --verbose=2 "$binary"
+  if command -v sudo >/dev/null 2>&1; then
+    echo "Installing to ${dir} requires elevated permissions."
+    sudo mkdir -p "$dir"
+    sudo cp "$source" "$destination"
+    sudo chmod +x "$destination"
+    return
+  fi
+
+  die "Install directory is not writable: ${dir}. Set GARYX_INSTALL to a writable directory on your PATH."
 }
 
 die() {

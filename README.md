@@ -26,14 +26,16 @@ control plane.
 ## Install Garyx
 
 The shell installer downloads the latest release binary, verifies its checksum,
-and copies `garyx` into `~/.garyx/bin`. It does not initialize config or start
-the gateway.
+and installs `garyx` to `/usr/local/bin` by default, using `sudo` if that
+directory is not writable. It does not initialize config, start the gateway, or
+re-sign the release binary.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
-export PATH="$HOME/.garyx/bin:$PATH"
 garyx --version
 ```
+
+Set `GARYX_INSTALL=/some/path` if you need a different install directory.
 
 Other install paths:
 
@@ -48,11 +50,12 @@ cd garyx
 scripts/install-local-cli.sh
 ```
 
-Initialize Garyx and install the managed gateway service:
+Install and start the managed gateway service, then run onboarding against the
+running gateway:
 
 ```bash
-garyx onboard
 garyx gateway install
+garyx onboard
 garyx status
 ```
 

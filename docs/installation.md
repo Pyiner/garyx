@@ -1,8 +1,9 @@
 # Installation
 
 Garyx ships as a single CLI binary. The shell installer downloads the latest
-release, verifies its checksum, copies the binary into `~/.garyx/bin`, and
-signs it on macOS. It does not initialize config or start the gateway.
+release, verifies its checksum, and installs `garyx` to `/usr/local/bin` by
+default. It does not initialize config, start the gateway, or re-sign the
+release binary.
 
 ## Install the CLI
 
@@ -10,8 +11,10 @@ signs it on macOS. It does not initialize config or start the gateway.
 
 ```bash [Shell installer]
 curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
-export PATH="$HOME/.garyx/bin:$PATH"
 ```
+
+Set `GARYX_INSTALL=/some/path` to override the install directory. If the
+selected directory is not writable, the installer uses `sudo`.
 
 ```bash [Homebrew]
 brew tap pyiner/garyx
@@ -33,7 +36,17 @@ garyx --version
 garyx doctor
 ```
 
-## Initialize the config
+## Start the gateway
+
+Start the managed background service before onboarding. This command writes
+the launchd plist on macOS or the systemd user unit on Linux, then starts the
+gateway:
+
+```bash
+garyx gateway install
+```
+
+## Onboard Garyx
 
 `garyx.json` lives at `~/.garyx/garyx.json`. Generate a minimal one with:
 
@@ -42,22 +55,14 @@ garyx onboard
 ```
 
 That seeds an `api` channel account, default agents, and the gateway block.
+When the gateway is already running, onboarding asks it to reload the updated
+config after saving.
 
 ::: tip
 Strings support `${VAR}` and `${VAR:-default}` env-var expansion at load
 time, so secrets can stay out of the file. See [Configuration](/configuration)
 for the full schema.
 :::
-
-## Run the gateway
-
-For day-to-day use, install it as a managed background service. This command
-writes the launchd plist on macOS or the systemd user unit on Linux, then
-starts the gateway:
-
-```bash
-garyx gateway install
-```
 
 Use `garyx gateway restart --no-wake` after config changes when no active
 thread needs to be resumed. Use `garyx gateway stop` to stop the service.
