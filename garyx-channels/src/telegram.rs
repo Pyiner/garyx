@@ -27,6 +27,7 @@ mod api;
 mod dedup;
 mod handlers;
 mod helpers;
+mod markdown;
 mod media;
 mod outbox;
 mod streaming;

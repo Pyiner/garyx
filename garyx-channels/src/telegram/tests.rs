@@ -1464,7 +1464,29 @@ mod e2e_tests {
     }
 
     fn body_text(body: &Value) -> String {
-        body["text"].as_str().unwrap_or_default().to_owned()
+        let text = body["text"].as_str().unwrap_or_default();
+        if body["parse_mode"].as_str() == Some("MarkdownV2") {
+            markdown_v2_request_visible_text(text)
+        } else {
+            text.to_owned()
+        }
+    }
+
+    fn markdown_v2_request_visible_text(text: &str) -> String {
+        let mut output = String::with_capacity(text.len());
+        let mut chars = text.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                if let Some(next) = chars.next() {
+                    output.push(next);
+                } else {
+                    output.push(ch);
+                }
+            } else {
+                output.push(ch);
+            }
+        }
+        output
     }
 
     fn looks_like_loading_indicator(text: &str) -> bool {
@@ -2785,7 +2807,7 @@ mod e2e_tests {
     }
 
     #[tokio::test]
-    async fn test_e2e_streaming_first_chunk_replies_and_final_keeps_plain_text() {
+    async fn test_e2e_streaming_first_chunk_replies_and_final_uses_markdown_v2() {
         let (server, capture) = setup_tg_capture_mock(false).await;
         let api_base = unique_api_base(&server);
         let provider = Arc::new(StreamingFirstChunkProvider::new());
@@ -2829,6 +2851,7 @@ mod e2e_tests {
             .find(|body| body["text"].as_str().unwrap_or_default().contains("你好"))
             .expect("first streaming send should contain the first chunk");
         assert_eq!(send_body["reply_to_message_id"], 100);
+        assert_eq!(send_body["parse_mode"], "MarkdownV2");
         let final_body =
             wait_for_telegram_render_body(&capture, std::time::Duration::from_secs(5), |body| {
                 body["text"].as_str().unwrap_or_default() == "你好！👋"
@@ -2836,7 +2859,7 @@ mod e2e_tests {
             .await;
         let final_text = final_body["text"].as_str().unwrap();
         assert_eq!(final_text, "你好！👋");
-        assert!(final_body["parse_mode"].is_null());
+        assert_eq!(final_body["parse_mode"], "MarkdownV2");
     }
 
     #[tokio::test]
@@ -2879,7 +2902,7 @@ mod e2e_tests {
             .send_bodies()
             .into_iter()
             .chain(capture.edit_bodies().into_iter())
-            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .map(|body| body_text(&body))
             .collect::<Vec<_>>();
         assert_no_loading_indicator(&all_texts);
         assert!(
@@ -2934,7 +2957,7 @@ mod e2e_tests {
             .send_bodies()
             .into_iter()
             .chain(capture.edit_bodies().into_iter())
-            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .map(|body| body_text(&body))
             .collect::<Vec<_>>();
         assert!(
             all_texts.iter().any(|text| text == "🔧 #1 Bash"),
@@ -3022,7 +3045,7 @@ mod e2e_tests {
             .send_bodies()
             .into_iter()
             .chain(capture.edit_bodies().into_iter())
-            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .map(|body| body_text(&body))
             .collect::<Vec<_>>();
         assert!(
             all_texts.iter().all(|text| !text.contains("🔧")),
@@ -3095,7 +3118,7 @@ mod e2e_tests {
             .send_bodies()
             .into_iter()
             .chain(capture.edit_bodies().into_iter())
-            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .map(|body| body_text(&body))
             .collect::<Vec<_>>();
         assert!(
             all_texts.iter().all(|text| {
@@ -3168,7 +3191,7 @@ mod e2e_tests {
             .send_bodies()
             .into_iter()
             .chain(capture.edit_bodies().into_iter())
-            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .map(|body| body_text(&body))
             .collect::<Vec<_>>();
         assert!(
             all_texts.iter().any(|text| text == "🔧 #1 imageGeneration"),
@@ -3222,7 +3245,7 @@ mod e2e_tests {
             .send_bodies()
             .into_iter()
             .chain(capture.edit_bodies().into_iter())
-            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .map(|body| body_text(&body))
             .collect::<Vec<_>>();
         assert!(
             all_texts.iter().any(|text| text == "🔧 #1 Read"),
@@ -3313,8 +3336,8 @@ mod e2e_tests {
         .await;
         let runtime_or_after_sends = send_bodies
             .iter()
-            .filter_map(|body| body["text"].as_str())
-            .filter(|text| text.contains("🔧") || *text == "after")
+            .map(body_text)
+            .filter(|text| text.contains("🔧") || text.as_str() == "after")
             .collect::<Vec<_>>();
         assert_eq!(
             runtime_or_after_sends.len(),
@@ -3400,7 +3423,7 @@ mod e2e_tests {
             .send_bodies()
             .into_iter()
             .chain(capture.edit_bodies().into_iter())
-            .filter_map(|body| body["text"].as_str().map(ToOwned::to_owned))
+            .map(|body| body_text(&body))
             .collect::<Vec<_>>();
         assert!(final_texts.iter().any(|text| text == "第一段"));
         assert!(final_texts.iter().any(|text| text == "第二段"));
@@ -4880,7 +4903,7 @@ mod e2e_tests {
         let text = send_bodies
             .iter()
             .find_map(|body| {
-                let text = body["text"].as_str().unwrap_or_default();
+                let text = body_text(body);
                 text.starts_with("Created and switched to new thread: thread-")
                     .then_some(text)
             })
@@ -5248,7 +5271,7 @@ mod e2e_tests {
         let text = send_bodies
             .iter()
             .find_map(|body| {
-                let text = body["text"].as_str().unwrap_or_default();
+                let text = body_text(body);
                 text.contains("Your Threads:").then_some(text)
             })
             .unwrap_or_default();
@@ -5317,10 +5340,12 @@ mod e2e_tests {
 
         assert_eq!(provider.call_count.load(Ordering::Relaxed), 0);
         let switched_notice = command_reqs.iter().find(|r| {
-            r.url.path().contains("sendMessage")
-                && std::str::from_utf8(&r.body)
-                    .map(|body| body.contains("Switched to previous thread: bot1::main::42_b"))
-                    .unwrap_or(false)
+            if !r.url.path().contains("sendMessage") {
+                return false;
+            }
+            let body: serde_json::Value =
+                serde_json::from_slice(&r.body).expect("sendMessage body json");
+            body_text(&body).contains("Switched to previous thread: bot1::main::42_b")
         });
         assert!(
             switched_notice.is_some(),
@@ -5599,6 +5624,151 @@ mod e2e_tests {
             .filter(|r| r.url.path() == format!("/bot{token}/sendMessage"))
             .count();
         assert_eq!(send_count, OUTBOUND_MAX_RETRIES);
+    }
+
+    #[tokio::test]
+    async fn test_send_response_uses_markdown_v2_with_translated_text() {
+        let server = MockServer::start().await;
+        let token = "markdown-token-test";
+
+        Mock::given(method("POST"))
+            .and(path_regex(r"/bot.+/sendMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {
+                    "message_id": 999,
+                    "chat": {"id": 42, "type": "private"},
+                    "date": 1700000000,
+                    "text": "markdown ok"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let result = send_response(
+            TelegramSendTarget::new(&http, token, 42, None, &server.uri()),
+            "Hello **bold** and [docs](https://example.com/docs?q=1) - done.",
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok(), "MarkdownV2 send should succeed");
+        let requests = server.received_requests().await.unwrap();
+        let send_request = requests
+            .iter()
+            .find(|r| r.url.path() == format!("/bot{token}/sendMessage"))
+            .expect("sendMessage request");
+        let body: serde_json::Value =
+            serde_json::from_slice(&send_request.body).expect("send body json");
+        assert_eq!(body["parse_mode"], "MarkdownV2");
+        assert_eq!(
+            body["text"],
+            "Hello *bold* and [docs](https://example.com/docs?q=1) \\- done\\."
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_response_translates_code_blocks_and_italic_markdown_v2() {
+        let server = MockServer::start().await;
+        let token = "markdown-code-token-test";
+
+        Mock::given(method("POST"))
+            .and(path_regex(r"/bot.+/sendMessage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true,
+                "result": {
+                    "message_id": 999,
+                    "chat": {"id": 42, "type": "private"},
+                    "date": 1700000000,
+                    "text": "markdown code ok"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let result = send_response(
+            TelegramSendTarget::new(&http, token, 42, None, &server.uri()),
+            "## Plan\n- run `cargo test`\n\n```rust\nfn main() { println!(\"hi\"); }\n```\n_italic_ and *emphasis*",
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok(), "MarkdownV2 send should succeed");
+        let requests = server.received_requests().await.unwrap();
+        let send_request = requests
+            .iter()
+            .find(|r| r.url.path() == format!("/bot{token}/sendMessage"))
+            .expect("sendMessage request");
+        let body: serde_json::Value =
+            serde_json::from_slice(&send_request.body).expect("send body json");
+        assert_eq!(body["parse_mode"], "MarkdownV2");
+        assert_eq!(
+            body["text"],
+            "\\#\\# Plan\n\\- run `cargo test`\n\n```rust\nfn main() { println!(\"hi\"); }\n```\n_italic_ and _emphasis_"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_send_response_falls_back_to_plain_text_when_markdown_v2_is_rejected() {
+        let server = MockServer::start().await;
+        let token = "markdown-fallback-token-test";
+
+        Mock::given(method("POST"))
+            .and(path_regex(r"/bot.+/sendMessage"))
+            .respond_with(|req: &wiremock::Request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&req.body).expect("valid sendMessage body");
+                if body.get("parse_mode").is_some() {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "ok": false,
+                        "description": "Bad Request: can't parse entities: Character '-' is reserved"
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "ok": true,
+                        "result": {
+                            "message_id": 999,
+                            "chat": {"id": 42, "type": "private"},
+                            "date": 1700000000,
+                            "text": "plain fallback ok"
+                        }
+                    }))
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let result = send_response(
+            TelegramSendTarget::new(&http, token, 42, None, &server.uri()),
+            "**bold** - still delivered",
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Markdown parse failure should fall back");
+        let requests = server.received_requests().await.unwrap();
+        let send_requests: Vec<_> = requests
+            .iter()
+            .filter(|r| r.url.path() == format!("/bot{token}/sendMessage"))
+            .collect();
+        assert_eq!(
+            send_requests.len(),
+            2,
+            "should send MarkdownV2 once, then plain text once"
+        );
+
+        let first_body: serde_json::Value =
+            serde_json::from_slice(&send_requests[0].body).expect("first body json");
+        assert_eq!(first_body["parse_mode"], "MarkdownV2");
+        assert_eq!(first_body["text"], "*bold* \\- still delivered");
+
+        let second_body: serde_json::Value =
+            serde_json::from_slice(&send_requests[1].body).expect("second body json");
+        assert!(second_body.get("parse_mode").is_none());
+        assert_eq!(second_body["text"], "**bold** - still delivered");
     }
 
     #[tokio::test]

@@ -119,6 +119,12 @@ Channels without a safe probe explicitly report the validation as skipped.
 }
 ```
 
+Outbound Telegram text is sent with Bot API `parse_mode=MarkdownV2`. Garyx
+translates common assistant Markdown, including bold, italic, inline code,
+fenced code blocks, links, and reserved-character escaping. If Telegram rejects
+the MarkdownV2 entity parsing for a send or edit, Garyx logs the failure and
+retries that same message as plain text without `parse_mode`.
+
 ### Feishu / Lark
 
 ```json

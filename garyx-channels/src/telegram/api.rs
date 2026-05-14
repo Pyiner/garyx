@@ -2,12 +2,14 @@ use std::path::Path;
 
 use reqwest::Client;
 use serde::Serialize;
+use tracing::warn;
 
 use crate::channel_trait::ChannelError;
 
+use super::markdown::{MARKDOWN_V2_PARSE_MODE, is_markdown_parse_error, render_markdown_v2};
 use super::outbox::{
     DeleteMessageBody, EditMessageTextBody, SendMessageBody, enqueue_delete_message,
-    enqueue_edit_message_text, enqueue_send_message, retry_backoff_duration,
+    enqueue_edit_message_text_with_fallback, enqueue_send_message, retry_backoff_duration,
     wait_for_outbound_slot,
 };
 use super::text::split_message;
@@ -75,13 +77,14 @@ pub(super) async fn send_message_chunks(
     for (i, chunk) in chunks.iter().enumerate() {
         // Only reply to the original message for the first chunk
         let reply_to = if i == 0 { reply_to_message_id } else { None };
+        let plain_text = chunk.clone();
 
         let mut body = SendMessageBody {
             chat_id: target.chat_id,
-            text: chunk.clone(),
+            text: render_markdown_v2(chunk),
             reply_to_message_id: reply_to,
             message_thread_id: target.message_thread_id,
-            parse_mode: None,
+            parse_mode: Some(MARKDOWN_V2_PARSE_MODE.to_owned()),
         };
 
         let mut last_error: Option<String> = None;
@@ -100,6 +103,18 @@ pub(super) async fn send_message_chunks(
                         && is_invalid_reply_target_error(&error.message)
                     {
                         body.reply_to_message_id = None;
+                        last_error = None;
+                        continue;
+                    }
+                    if body.parse_mode.as_deref() == Some(MARKDOWN_V2_PARSE_MODE)
+                        && is_markdown_parse_error(&error.message)
+                    {
+                        warn!(
+                            error = %error.message,
+                            "Telegram MarkdownV2 formatting failed; retrying without parse_mode"
+                        );
+                        body.text = plain_text.clone();
+                        body.parse_mode = None;
                         last_error = None;
                         continue;
                     }
@@ -270,14 +285,24 @@ pub(super) async fn edit_message_text(
     parse_mode: Option<&str>,
     api_base: &str,
 ) -> Result<(), ChannelError> {
+    let plain_text_fallback = if parse_mode == Some(MARKDOWN_V2_PARSE_MODE) {
+        Some(text.to_owned())
+    } else {
+        None
+    };
+    let text = if parse_mode == Some(MARKDOWN_V2_PARSE_MODE) {
+        render_markdown_v2(text)
+    } else {
+        text.to_owned()
+    };
     let body = EditMessageTextBody {
         chat_id,
         message_id,
-        text: text.to_owned(),
+        text,
         parse_mode: parse_mode.map(String::from),
     };
 
-    enqueue_edit_message_text(http, api_base, token, body).await
+    enqueue_edit_message_text_with_fallback(http, api_base, token, body, plain_text_fallback).await
 }
 
 /// Delete an existing message.

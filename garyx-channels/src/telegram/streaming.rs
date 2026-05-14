@@ -15,6 +15,7 @@ use garyx_router::MessageRouter;
 use super::api::{
     TelegramSendTarget, delete_message, edit_message_text, send_message_chunks, send_photo,
 };
+use super::markdown::MARKDOWN_V2_PARSE_MODE;
 use super::text::split_message;
 use super::{MAX_MESSAGE_LENGTH, resolve_reply_to, send_response};
 
@@ -191,7 +192,7 @@ impl StreamingCallbackShared {
                 self.cfg.chat_id,
                 msg_id,
                 &display_text,
-                None,
+                Some(MARKDOWN_V2_PARSE_MODE),
                 &self.cfg.api_base,
             )
             .await
@@ -295,7 +296,7 @@ impl StreamingCallbackShared {
                     self.cfg.chat_id,
                     msg_id,
                     &boundary_text,
-                    None,
+                    Some(MARKDOWN_V2_PARSE_MODE),
                     &self.cfg.api_base,
                 )
                 .await
@@ -400,7 +401,7 @@ impl StreamingCallbackShared {
                 self.cfg.chat_id,
                 msg_id,
                 &display_text,
-                None,
+                Some(MARKDOWN_V2_PARSE_MODE),
                 &self.cfg.api_base,
             )
             .await
@@ -507,7 +508,7 @@ impl StreamingCallbackShared {
             self.cfg.chat_id,
             msg_id,
             &display_text,
-            None,
+            Some(MARKDOWN_V2_PARSE_MODE),
             &self.cfg.api_base,
         )
         .await
@@ -611,7 +612,7 @@ impl StreamingCallbackShared {
                 self.cfg.chat_id,
                 msg_id,
                 &chunks[0],
-                None,
+                Some(MARKDOWN_V2_PARSE_MODE),
                 &self.cfg.api_base,
             )
             .await
@@ -772,7 +773,7 @@ impl StreamingCallbackShared {
                     self.cfg.chat_id,
                     msg_id,
                     &pending_text,
-                    None,
+                    Some(MARKDOWN_V2_PARSE_MODE),
                     &self.cfg.api_base,
                 )
                 .await
@@ -850,7 +851,7 @@ impl StreamingCallbackShared {
                 self.cfg.chat_id,
                 msg_id,
                 &display_text,
-                None,
+                Some(MARKDOWN_V2_PARSE_MODE),
                 &self.cfg.api_base,
             )
             .await

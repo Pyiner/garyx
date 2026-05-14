@@ -11,6 +11,7 @@ use tracing::{info, warn};
 
 use crate::channel_trait::ChannelError;
 
+use super::markdown::{MARKDOWN_V2_PARSE_MODE, is_markdown_parse_error};
 use super::{OUTBOUND_MAX_RETRIES, TgMessage, TgResponse};
 
 const TELEGRAM_CHAT_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
@@ -89,6 +90,7 @@ enum TelegramOutboxCommand {
         api_base: String,
         token: String,
         body: EditMessageTextBody,
+        plain_text_fallback: Option<String>,
         attempt: usize,
         queued_at: Instant,
         coalesced_count: usize,
@@ -139,11 +141,22 @@ pub(super) async fn enqueue_send_message(
         .map_err(|_| TelegramApiCallError::new("Telegram outbox response dropped", None, true))?
 }
 
+#[cfg(test)]
 pub(super) async fn enqueue_edit_message_text(
     http: &Client,
     api_base: &str,
     token: &str,
     body: EditMessageTextBody,
+) -> Result<(), ChannelError> {
+    enqueue_edit_message_text_with_fallback(http, api_base, token, body, None).await
+}
+
+pub(super) async fn enqueue_edit_message_text_with_fallback(
+    http: &Client,
+    api_base: &str,
+    token: &str,
+    body: EditMessageTextBody,
+    plain_text_fallback: Option<String>,
 ) -> Result<(), ChannelError> {
     let sender = telegram_outbox_sender(api_base, token, body.chat_id).await;
     sender
@@ -152,6 +165,7 @@ pub(super) async fn enqueue_edit_message_text(
             api_base: api_base.to_owned(),
             token: token.to_owned(),
             body,
+            plain_text_fallback,
             attempt: 0,
             queued_at: Instant::now(),
             coalesced_count: 0,
@@ -279,6 +293,7 @@ fn insert_outbox_command(
             api_base,
             token,
             body,
+            plain_text_fallback,
             attempt,
             queued_at,
             coalesced_count,
@@ -331,6 +346,7 @@ fn insert_outbox_command(
                         api_base,
                         token,
                         body,
+                        plain_text_fallback,
                         attempt,
                         queued_at,
                         coalesced_count,
@@ -344,6 +360,7 @@ fn insert_outbox_command(
                 api_base,
                 token,
                 body,
+                plain_text_fallback,
                 attempt,
                 queued_at,
                 coalesced_count,
@@ -441,6 +458,7 @@ async fn execute_outbox_command(
             api_base,
             token,
             body,
+            plain_text_fallback,
             attempt,
             queued_at,
             coalesced_count,
@@ -461,7 +479,60 @@ async fn execute_outbox_command(
             }
             Err(error) => {
                 let retry_after = error.retry_after;
-                if error.retryable && attempt + 1 < OUTBOUND_MAX_RETRIES {
+                if body.parse_mode.as_deref() == Some(MARKDOWN_V2_PARSE_MODE)
+                    && is_markdown_parse_error(&error.message)
+                    && let Some(fallback_text) = plain_text_fallback
+                {
+                    if queue.iter().any(|queued| {
+                        matches!(
+                            queued,
+                            TelegramOutboxCommand::EditMessageText { body: queued_body, .. }
+                                if queued_body.message_id == body.message_id
+                        )
+                    }) {
+                        info!(
+                            api_base = %key.api_base,
+                            chat_id = key.chat_id,
+                            kind = "editMessageText",
+                            wait_ms = duration_ms(queued_at.elapsed()),
+                            message_id = body.message_id,
+                            attempt,
+                            coalesced_count,
+                            queue_len = queue.len(),
+                            error = %error,
+                            "Telegram MarkdownV2 edit fallback skipped because a newer edit is queued"
+                        );
+                        return retry_after;
+                    }
+                    warn!(
+                        api_base = %key.api_base,
+                        chat_id = key.chat_id,
+                        kind = "editMessageText",
+                        wait_ms = duration_ms(queued_at.elapsed()),
+                        message_id = body.message_id,
+                        attempt,
+                        coalesced_count,
+                        queue_len = queue.len(),
+                        error = %error,
+                        "Telegram MarkdownV2 edit failed; retrying without parse_mode"
+                    );
+                    queue.push_front(TelegramOutboxCommand::EditMessageText {
+                        http,
+                        api_base,
+                        token,
+                        body: EditMessageTextBody {
+                            chat_id: body.chat_id,
+                            message_id: body.message_id,
+                            text: fallback_text,
+                            parse_mode: None,
+                        },
+                        plain_text_fallback: None,
+                        attempt: 0,
+                        queued_at: Instant::now(),
+                        coalesced_count,
+                    });
+                    None
+                } else if error.retryable && attempt + 1 < OUTBOUND_MAX_RETRIES {
                     if queue.iter().any(|queued| {
                         matches!(
                             queued,
@@ -505,6 +576,7 @@ async fn execute_outbox_command(
                         api_base,
                         token,
                         body,
+                        plain_text_fallback,
                         attempt: attempt + 1,
                         queued_at,
                         coalesced_count,
@@ -845,6 +917,81 @@ mod tests {
 
         assert_eq!(edit_count, 0, "delete should clear stale queued edits");
         assert_eq!(delete_count, 1);
+    }
+
+    #[tokio::test]
+    async fn telegram_outbox_requeues_plain_edit_when_markdown_v2_is_rejected() {
+        let server = MockServer::start().await;
+        let token = "outbox-markdown-edit-fallback-token";
+
+        Mock::given(method("POST"))
+            .and(path_regex(format!(r"/bot{token}/editMessageText")))
+            .respond_with(|req: &wiremock::Request| {
+                let body: serde_json::Value =
+                    serde_json::from_slice(&req.body).expect("valid editMessageText body");
+                if body.get("parse_mode").is_some() {
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "ok": false,
+                        "description": "Bad Request: can't parse entities: Character '-' is reserved"
+                    }))
+                } else {
+                    ResponseTemplate::new(200).set_body_json(ok_message(1000, "edited plain"))
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let http = Client::new();
+        let api_base = server.uri();
+        let key = TelegramOutboxKey {
+            api_base: api_base.clone(),
+            token: token.to_owned(),
+            chat_id: 42,
+        };
+        let mut queue = VecDeque::new();
+
+        let command = TelegramOutboxCommand::EditMessageText {
+            http: http.clone(),
+            api_base: api_base.clone(),
+            token: token.to_owned(),
+            body: EditMessageTextBody {
+                chat_id: 42,
+                message_id: 1000,
+                text: "*bold* \\- edited".to_owned(),
+                parse_mode: Some(MARKDOWN_V2_PARSE_MODE.to_owned()),
+            },
+            plain_text_fallback: Some("**bold** - edited".to_owned()),
+            attempt: 0,
+            queued_at: Instant::now(),
+            coalesced_count: 0,
+        };
+
+        assert!(
+            execute_outbox_command(&key, command, &mut queue)
+                .await
+                .is_none()
+        );
+        assert_eq!(queue.len(), 1, "plain edit fallback should be queued");
+
+        let fallback = queue.pop_front().expect("fallback command");
+        assert!(
+            execute_outbox_command(&key, fallback, &mut queue)
+                .await
+                .is_none()
+        );
+        assert!(queue.is_empty());
+
+        let requests = server.received_requests().await.unwrap();
+        let edit_bodies = requests
+            .iter()
+            .filter(|request| request.url.path() == format!("/bot{token}/editMessageText"))
+            .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(edit_bodies.len(), 2);
+        assert_eq!(edit_bodies[0]["parse_mode"], "MarkdownV2");
+        assert_eq!(edit_bodies[0]["text"], "*bold* \\- edited");
+        assert!(edit_bodies[1].get("parse_mode").is_none());
+        assert_eq!(edit_bodies[1]["text"], "**bold** - edited");
     }
 
     #[tokio::test]
