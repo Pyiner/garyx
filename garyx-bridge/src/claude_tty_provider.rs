@@ -3,7 +3,7 @@ use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -25,8 +25,12 @@ use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
 const DEFAULT_COMPLETION_IDLE_MS: u64 = 1_500;
 const TRANSCRIPT_POLL_MS: u64 = 120;
+const TRUST_PROMPT_SETTLE_MS: u64 = 800;
+const TTY_STARTUP_TIMEOUT_SECS: u64 = 20;
+const TTY_READY_SETTLE_MS: u64 = 250;
 const ABORT_TIMEOUT_SECS: u64 = 5;
 const DEFAULT_RUN_TIMEOUT_SECS: u64 = 3600;
+const PTY_OUTPUT_BUFFER_LIMIT: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClaudeTtyLaunchMode {
@@ -47,6 +51,12 @@ trait TtyProcess: Send {
     fn interrupt(&mut self) -> io::Result<()> {
         self.write_all(b"\x03")
     }
+    fn captures_output(&self) -> bool {
+        false
+    }
+    fn recent_output(&self) -> String {
+        String::new()
+    }
     fn kill(&mut self);
 }
 
@@ -64,6 +74,7 @@ struct ClaudeTtySession {
     session_id: String,
     transcript_path: PathBuf,
     transcript_offset: u64,
+    trust_prompt_ack_sent: bool,
     process: Box<dyn TtyProcess>,
 }
 
@@ -175,6 +186,7 @@ impl ClaudeTtyProvider {
             session_id,
             transcript_path,
             transcript_offset: 0,
+            trust_prompt_ack_sent: false,
             process,
         }));
         self.sessions
@@ -430,6 +442,52 @@ impl ClaudeTtyProvider {
             })
     }
 
+    async fn prepare_tty_for_prompt(
+        &self,
+        session: &Arc<Mutex<ClaudeTtySession>>,
+    ) -> Result<(), BridgeError> {
+        if !session.lock().await.process.captures_output() {
+            return Ok(());
+        }
+
+        let started = Instant::now();
+        loop {
+            let output = session.lock().await.process.recent_output();
+            if tty_output_has_workspace_trust_prompt(&output) {
+                let mut should_wait = false;
+                {
+                    let mut guard = session.lock().await;
+                    if !guard.trust_prompt_ack_sent {
+                        guard.process.write_all(b"\r").map_err(|error| {
+                            BridgeError::RunFailed(format!(
+                                "failed to acknowledge claude tty trust prompt: {error}"
+                            ))
+                        })?;
+                        guard.trust_prompt_ack_sent = true;
+                        should_wait = true;
+                    }
+                }
+                if should_wait {
+                    tokio::time::sleep(Duration::from_millis(TRUST_PROMPT_SETTLE_MS)).await;
+                    continue;
+                }
+            }
+
+            if tty_output_accepts_prompt(&output) {
+                tokio::time::sleep(Duration::from_millis(TTY_READY_SETTLE_MS)).await;
+                return Ok(());
+            }
+
+            if started.elapsed() > Duration::from_secs(TTY_STARTUP_TIMEOUT_SECS) {
+                return Err(BridgeError::RunFailed(
+                    "claude tty timed out waiting for prompt".to_owned(),
+                ));
+            }
+
+            tokio::time::sleep(self.poll_interval).await;
+        }
+    }
+
     async fn resolve_active_run_id_for_session(&self, thread_id: &str) -> Option<String> {
         self.active_runs
             .lock()
@@ -573,6 +631,12 @@ impl AgentLoopProvider for ClaudeTtyProvider {
             .await
             .insert(run_id.clone(), options.thread_id.clone());
         self.initialize_pending_inputs(&run_id).await;
+
+        if let Err(error) = self.prepare_tty_for_prompt(&session).await {
+            self.active_runs.lock().await.remove(&run_id);
+            self.run_pending_inputs.lock().await.remove(&run_id);
+            return Err(error);
+        }
 
         let prompt = build_tty_user_prompt(options, include_context);
         let send_result = self.write_prompt_to_session(&session, &prompt).await;
@@ -948,6 +1012,63 @@ fn bracketed_paste_input(prompt: &str) -> Vec<u8> {
     bytes
 }
 
+fn tty_output_has_workspace_trust_prompt(output: &str) -> bool {
+    let output = plain_tty_output(output);
+    output.contains("Quick safety check") && output.contains("Yes, I trust this folder")
+}
+
+fn tty_output_accepts_prompt(output: &str) -> bool {
+    let output = plain_tty_output(output);
+    output.contains("Context")
+        && (output.contains("permissions")
+            || output.contains("Remote Control failed")
+            || output.contains("/mcp"))
+}
+
+fn plain_tty_output(output: &str) -> String {
+    let mut plain = String::with_capacity(output.len());
+    let mut chars = output.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            strip_ansi_sequence(&mut chars);
+            plain.push(' ');
+        } else if ch.is_control() {
+            plain.push(' ');
+        } else {
+            plain.push(ch);
+        }
+    }
+    plain.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn strip_ansi_sequence<I>(chars: &mut std::iter::Peekable<I>)
+where
+    I: Iterator<Item = char>,
+{
+    match chars.peek().copied() {
+        Some('[') => {
+            chars.next();
+            for ch in chars.by_ref() {
+                if ('@'..='~').contains(&ch) {
+                    break;
+                }
+            }
+        }
+        Some(']') => {
+            chars.next();
+            for ch in chars.by_ref() {
+                if ch == '\u{7}' {
+                    break;
+                }
+            }
+        }
+        Some(_) => {
+            chars.next();
+        }
+        None => {}
+    }
+}
+
 fn resolve_run_id(metadata: &HashMap<String, Value>) -> String {
     metadata
         .get("bridge_run_id")
@@ -1013,7 +1134,7 @@ fn claude_project_dir_name(cwd: &Path) -> String {
     let mapped = cwd
         .to_string_lossy()
         .chars()
-        .map(|ch| if ch == '/' { '-' } else { ch })
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect::<String>();
     if mapped.is_empty() {
         "-".to_owned()
@@ -1180,6 +1301,7 @@ struct UnixPtyBackend;
 struct UnixPtyProcess {
     pid: libc::pid_t,
     writer: File,
+    output: Arc<StdMutex<Vec<u8>>>,
     _reader: std::thread::JoinHandle<()>,
 }
 
@@ -1195,6 +1317,17 @@ impl TtyProcess for UnixPtyProcess {
     fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.writer.write_all(bytes)?;
         self.writer.flush()
+    }
+
+    fn captures_output(&self) -> bool {
+        true
+    }
+
+    fn recent_output(&self) -> String {
+        self.output
+            .lock()
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default()
     }
 
     fn kill(&mut self) {
@@ -1275,12 +1408,22 @@ fn spawn_unix_pty(spec: &TtySpawnSpec) -> Result<UnixPtyProcess, BridgeError> {
     let mut reader = master
         .try_clone()
         .map_err(|error| BridgeError::Internal(format!("failed to clone pty master: {error}")))?;
+    let output = Arc::new(StdMutex::new(Vec::new()));
+    let reader_output = output.clone();
     let reader_thread = std::thread::spawn(move || {
         let mut buf = [0_u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
-                Ok(_) => {}
+                Ok(len) => {
+                    if let Ok(mut output) = reader_output.lock() {
+                        output.extend_from_slice(&buf[..len]);
+                        if output.len() > PTY_OUTPUT_BUFFER_LIMIT {
+                            let drain_len = output.len() - PTY_OUTPUT_BUFFER_LIMIT;
+                            output.drain(..drain_len);
+                        }
+                    }
+                }
                 Err(_) => break,
             }
         }
@@ -1288,6 +1431,7 @@ fn spawn_unix_pty(spec: &TtySpawnSpec) -> Result<UnixPtyProcess, BridgeError> {
     Ok(UnixPtyProcess {
         pid,
         writer: master,
+        output,
         _reader: reader_thread,
     })
 }
@@ -1414,6 +1558,14 @@ mod tests {
     }
 
     #[test]
+    fn claude_project_dir_name_matches_claude_path_sanitization() {
+        assert_eq!(
+            claude_project_dir_name(Path::new("/tmp/.garyx-tty/smoke.test")),
+            "-tmp--garyx-tty-smoke-test"
+        );
+    }
+
+    #[test]
     fn transcript_parser_extracts_assistant_text_and_tool_use() {
         let mut state = TranscriptRunState::default();
         let line = r#"{"type":"assistant","message":{"model":"claude-test","content":[{"type":"tool_use","id":"tool-1","name":"Read","input":{"file_path":"README.md"}},{"type":"text","text":"done"}]}}"#;
@@ -1491,10 +1643,11 @@ mod tests {
 
         assert_eq!(result.response, "hi from tty");
         assert_eq!(result.sdk_session_id.as_deref(), Some("session-1"));
+        let writes = writes.lock().unwrap();
         assert!(
-            String::from_utf8(writes.lock().unwrap()[0].clone())
-                .unwrap()
-                .contains("hello")
+            writes
+                .iter()
+                .any(|bytes| String::from_utf8(bytes.clone()).unwrap().contains("hello"))
         );
         let events = events.lock().unwrap();
         assert!(events.iter().any(|event| matches!(
