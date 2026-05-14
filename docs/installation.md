@@ -13,9 +13,6 @@ release binary.
 curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
 ```
 
-Set `GARYX_INSTALL=/some/path` to override the install directory. If the
-selected directory is not writable, the installer uses `sudo`.
-
 ```bash [Homebrew]
 brew tap pyiner/garyx
 brew install pyiner/garyx/garyx

@@ -35,8 +35,6 @@ curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash
 garyx --version
 ```
 
-Set `GARYX_INSTALL=/some/path` if you need a different install directory.
-
 Other install paths:
 
 ```bash

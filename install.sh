@@ -6,13 +6,11 @@
 #
 # Options (env vars):
 #   GARYX_VERSION   — specific version to install (default: latest)
-#   GARYX_INSTALL   — installation directory (default: /usr/local/bin)
 
 set -euo pipefail
 
 REPO="Pyiner/garyx"
-DEFAULT_INSTALL_DIR="/usr/local/bin"
-INSTALL_DIR="${GARYX_INSTALL:-$DEFAULT_INSTALL_DIR}"
+INSTALL_DIR="/usr/local/bin"
 
 main() {
   check_deps
@@ -162,7 +160,7 @@ install_binary() {
     return
   fi
 
-  die "Install directory is not writable: ${dir}. Set GARYX_INSTALL to a writable directory on your PATH."
+  die "Install directory is not writable and sudo is unavailable: ${dir}"
 }
 
 die() {

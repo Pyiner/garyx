@@ -4,7 +4,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALL_DIR="${GARYX_INSTALL:-$HOME/.cargo/bin}"
+INSTALL_DIR="$HOME/.cargo/bin"
 DESTINATION="${INSTALL_DIR}/garyx"
 
 cd "$REPO_ROOT"
