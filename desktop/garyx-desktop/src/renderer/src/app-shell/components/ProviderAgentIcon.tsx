@@ -17,7 +17,7 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
   if (!normalized) {
     return null;
   }
-  if (normalized === 'claude' || normalized === 'claude_code') {
+  if (normalized === 'claude' || normalized === 'claude_code' || normalized === 'claude_tty') {
     return 'claude';
   }
   if (normalized === 'codex' || normalized === 'codex_app_server') {

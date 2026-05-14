@@ -4,6 +4,7 @@ use garyx_models::config::AgentProviderConfig;
 use garyx_models::provider::{ClaudeCodeConfig, CodexAppServerConfig, GeminiCliConfig};
 
 use crate::claude_provider::ClaudeCliProvider;
+use crate::claude_tty_provider::ClaudeTtyProvider;
 use crate::codex_provider::CodexAgentProvider;
 use crate::gemini_provider::GeminiCliProvider;
 use crate::provider_trait::{AgentLoopProvider, BridgeError};
@@ -90,6 +91,7 @@ pub(super) fn compute_provider_key(
     _default_workspace: &Option<String>,
 ) -> String {
     match agent_cfg.provider_type.as_str() {
+        "claude_tty" => "claude_tty".to_owned(),
         "codex_app_server" => "codex_app_server".to_owned(),
         "gemini_cli" => "gemini_cli".to_owned(),
         _ => "claude_code".to_owned(),
@@ -102,6 +104,12 @@ pub(super) async fn create_provider(
     default_workspace: &Option<String>,
 ) -> Result<Arc<dyn AgentLoopProvider>, BridgeError> {
     match agent_cfg.provider_type.as_str() {
+        "claude_tty" => {
+            let config = build_claude_config(agent_cfg, default_workspace);
+            let mut provider = ClaudeTtyProvider::new(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
         "codex_app_server" => {
             let config = build_codex_config(agent_cfg, default_workspace);
             let mut provider = CodexAgentProvider::new(config);

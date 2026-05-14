@@ -55,7 +55,7 @@ import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
-type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli';
+type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli';
 type HubTab = 'agents' | 'teams';
 type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 type TeamDialogMode = 'create' | 'edit' | 'view' | null;
@@ -165,6 +165,9 @@ function providerLabel(value: ProviderType): string {
   }
   if (value === 'gemini_cli') {
     return 'Gemini';
+  }
+  if (value === 'claude_tty') {
+    return 'Claude TTY';
   }
   return 'Claude';
 }
@@ -1281,6 +1284,7 @@ export function AgentsHubPanel({
                   <SelectContent>
                     <SelectGroup>
                       <SelectItem value="claude_code">Claude</SelectItem>
+                      <SelectItem value="claude_tty">Claude TTY</SelectItem>
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="gemini_cli">Gemini</SelectItem>
                     </SelectGroup>

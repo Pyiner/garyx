@@ -745,9 +745,10 @@ function baseUrl(settings: DesktopSettings): string {
   return normalizeGatewayUrl(settings.gatewayUrl);
 }
 
-function normalizeDesktopProviderType(
-  value: unknown,
-): "claude_code" | "codex_app_server" | "gemini_cli" {
+function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
+  if (value === "claude_tty") {
+    return "claude_tty";
+  }
   if (value === "codex_app_server") {
     return "codex_app_server";
   }
@@ -762,6 +763,7 @@ function parseThreadProviderType(
 ): DesktopThreadProviderType | null {
   if (
     value === "claude_code" ||
+    value === "claude_tty" ||
     value === "codex_app_server" ||
     value === "gemini_cli" ||
     value === "agent_team"
@@ -777,6 +779,8 @@ function providerLabelForThread(
   switch (value) {
     case "claude_code":
       return "Claude";
+    case "claude_tty":
+      return "Claude TTY";
     case "codex_app_server":
       return "Codex";
     case "gemini_cli":

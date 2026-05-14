@@ -8,6 +8,12 @@ fn test_provider_type_serde() {
     let back: ProviderType = serde_json::from_str(&json).unwrap();
     assert_eq!(back, ProviderType::ClaudeCode);
 
+    let pt = ProviderType::ClaudeTty;
+    let json = serde_json::to_string(&pt).unwrap();
+    assert_eq!(json, "\"claude_tty\"");
+    let back: ProviderType = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ProviderType::ClaudeTty);
+
     let pt = ProviderType::GeminiCli;
     let json = serde_json::to_string(&pt).unwrap();
     assert_eq!(json, "\"gemini_cli\"");

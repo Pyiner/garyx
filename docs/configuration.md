@@ -461,6 +461,11 @@ Use a built-in provider agent:
 { "agent_id": "claude" }
 ```
 
+Custom agents can set `provider_type` to `claude_code`, `claude_tty`,
+`codex_app_server`, or `gemini_cli`. `claude_tty` uses the local Claude CLI's
+interactive terminal mode inside the gateway and keeps the same thread/session
+model as the regular Claude provider.
+
 Use a custom agent or an agent team by setting the same `agent_id` used in your
 Garyx agent/team configuration. The CLI account setup flow can also prompt for
 an agent when `--agent-id` is omitted.

@@ -1118,7 +1118,17 @@ async fn test_provider_type_for_team_returns_agent_team_meta_provider() {
     // team's.
     let bridge = MultiProviderBridge::new();
     bridge
-        .replace_agent_profiles(builtin_provider_agent_profiles())
+        .replace_agent_profiles({
+            let mut profiles = builtin_provider_agent_profiles();
+            profiles.push(custom_agent(
+                "interactive-claude",
+                "Interactive Claude",
+                ProviderType::ClaudeTty,
+                "",
+                "Use Claude interactive mode.",
+            ));
+            profiles
+        })
         .await;
     bridge
         .replace_team_profiles(vec![AgentTeamProfile {
@@ -1140,6 +1150,14 @@ async fn test_provider_type_for_team_returns_agent_team_meta_provider() {
     assert_eq!(
         bridge.provider_type_for_agent("codex").await,
         Some(ProviderType::CodexAppServer)
+    );
+    assert_eq!(
+        bridge.provider_type_for_agent("interactive-claude").await,
+        Some(ProviderType::ClaudeTty)
+    );
+    assert_eq!(
+        bridge.provider_type_for_agent("claude-tty").await,
+        Some(ProviderType::ClaudeTty)
     );
 }
 

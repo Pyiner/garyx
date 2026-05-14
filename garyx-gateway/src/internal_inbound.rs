@@ -132,6 +132,7 @@ pub(crate) async fn dispatch_internal_message_to_thread(
     if let Some(requested_provider) = requested_provider.as_ref() {
         let provider_value = match requested_provider {
             ProviderType::ClaudeCode => "claude_code",
+            ProviderType::ClaudeTty => "claude_tty",
             ProviderType::CodexAppServer => "codex_app_server",
             ProviderType::GeminiCli => "gemini_cli",
             ProviderType::AgentTeam => "agent_team",

@@ -64,9 +64,10 @@ pub(crate) fn locate_local_provider_session_with_roots(
     let mut matches = Vec::new();
     let provider_hint = provider_hint.as_ref();
 
-    if matches_provider_hint(provider_hint, ProviderType::ClaudeCode)
+    if let Some(claude_provider_type) = claude_session_provider_type(provider_hint)
         && let Some(claude_projects_dir) = roots.claude_projects_dir.as_deref()
-        && let Some(binding) = locate_claude_session_binding(session_id, claude_projects_dir)
+        && let Some(binding) =
+            locate_claude_session_binding(session_id, claude_projects_dir, claude_provider_type)
     {
         matches.push(binding);
     }
@@ -106,9 +107,10 @@ pub(crate) fn recover_local_provider_session_with_roots(
     let mut matches = Vec::new();
     let provider_hint = provider_hint.as_ref();
 
-    if matches_provider_hint(provider_hint, ProviderType::ClaudeCode)
+    if let Some(claude_provider_type) = claude_session_provider_type(provider_hint)
         && let Some(claude_projects_dir) = roots.claude_projects_dir.as_deref()
-        && let Some(recovered) = recover_claude_session(session_id, claude_projects_dir)
+        && let Some(recovered) =
+            recover_claude_session(session_id, claude_projects_dir, claude_provider_type)
     {
         matches.push(recovered);
     }
@@ -142,6 +144,14 @@ fn matches_provider_hint(
     match provider_hint {
         None => true,
         Some(value) => value == &provider_type,
+    }
+}
+
+fn claude_session_provider_type(provider_hint: Option<&ProviderType>) -> Option<ProviderType> {
+    match provider_hint {
+        None | Some(ProviderType::ClaudeCode) => Some(ProviderType::ClaudeCode),
+        Some(ProviderType::ClaudeTty) => Some(ProviderType::ClaudeTty),
+        Some(_) => None,
     }
 }
 
@@ -235,6 +245,7 @@ fn normalized_existing_path(raw: &str) -> Option<String> {
 fn recover_claude_session(
     session_id: &str,
     projects_dir: &Path,
+    provider_type: ProviderType,
 ) -> Option<RecoveredLocalProviderSession> {
     let session_file_name = format!("{session_id}.jsonl");
     for entry in fs::read_dir(projects_dir).ok()?.flatten() {
@@ -264,17 +275,21 @@ fn recover_claude_session(
 
         return Some(RecoveredLocalProviderSession {
             binding: LocalProviderSessionBinding {
-                provider_type: ProviderType::ClaudeCode,
+                provider_type: provider_type.clone(),
                 agent_id: "claude".to_owned(),
                 workspace_dir,
             },
-            messages: read_claude_transcript_messages(&session_file, session_id),
+            messages: read_claude_transcript_messages(&session_file, session_id, &provider_type),
         });
     }
     None
 }
 
-fn read_claude_transcript_messages(session_file: &Path, session_id: &str) -> Vec<Value> {
+fn read_claude_transcript_messages(
+    session_file: &Path,
+    session_id: &str,
+    provider_type: &ProviderType,
+) -> Vec<Value> {
     let Ok(file) = fs::File::open(session_file) else {
         return Vec::new();
     };
@@ -306,7 +321,7 @@ fn read_claude_transcript_messages(session_file: &Path, session_id: &str) -> Vec
                     "user",
                     text,
                     timestamp,
-                    &ProviderType::ClaudeCode,
+                    provider_type,
                     session_id,
                 ));
             }
@@ -326,7 +341,7 @@ fn read_claude_transcript_messages(session_file: &Path, session_id: &str) -> Vec
                     "assistant",
                     text,
                     timestamp,
-                    &ProviderType::ClaudeCode,
+                    provider_type,
                     session_id,
                 ));
             }
@@ -535,6 +550,7 @@ fn read_gemini_transcript_messages(chat_file: &Path, session_id: &str) -> Vec<Va
 fn locate_claude_session_binding(
     session_id: &str,
     projects_dir: &Path,
+    provider_type: ProviderType,
 ) -> Option<LocalProviderSessionBinding> {
     let session_file_name = format!("{session_id}.jsonl");
     for entry in fs::read_dir(projects_dir).ok()?.flatten() {
@@ -563,7 +579,7 @@ fn locate_claude_session_binding(
         };
 
         return Some(LocalProviderSessionBinding {
-            provider_type: ProviderType::ClaudeCode,
+            provider_type,
             agent_id: "claude".to_owned(),
             workspace_dir,
         });

@@ -14,6 +14,7 @@ fn default_provider_config(provider_type: ProviderType) -> AgentProviderConfig {
         provider_type: match provider_type {
             ProviderType::CodexAppServer => "codex_app_server".to_owned(),
             ProviderType::ClaudeCode => "claude_code".to_owned(),
+            ProviderType::ClaudeTty => "claude_tty".to_owned(),
             ProviderType::GeminiCli => "gemini_cli".to_owned(),
             // Meta-provider with no backing CLI config.
             ProviderType::AgentTeam => "agent_team".to_owned(),
@@ -58,6 +59,24 @@ impl MultiProviderBridge {
             .get_or_create_provider(&default_agent_cfg, &default_workspace)
             .await?;
         tracing::info!(provider_key = %default_key, "registered default provider");
+
+        let claude_tty_default_agent_cfg = default_provider_config(ProviderType::ClaudeTty);
+        let claude_tty_default_key = match self
+            .get_or_create_provider(&claude_tty_default_agent_cfg, &default_workspace)
+            .await
+        {
+            Ok(key) => {
+                tracing::info!(provider_key = %key, "registered claude tty provider");
+                Some(key)
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "failed to register claude tty provider"
+                );
+                None
+            }
+        };
 
         let codex_default_agent_cfg = default_provider_config(ProviderType::CodexAppServer);
         let codex_default_key = match self
@@ -132,6 +151,9 @@ impl MultiProviderBridge {
 
         let mut desired_provider_keys: HashSet<String> = desired_routes.values().cloned().collect();
         desired_provider_keys.insert(default_key.clone());
+        if let Some(ref key) = claude_tty_default_key {
+            desired_provider_keys.insert(key.clone());
+        }
         if let Some(ref key) = codex_default_key {
             desired_provider_keys.insert(key.clone());
         }
@@ -307,6 +329,7 @@ impl MultiProviderBridge {
         match normalized {
             "codex" => Some(ProviderType::CodexAppServer),
             "claude" => Some(ProviderType::ClaudeCode),
+            "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeTty),
             "gemini" => Some(ProviderType::GeminiCli),
             _ => None,
         }

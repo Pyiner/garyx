@@ -820,6 +820,7 @@ dependencies = [
  "codex-sdk",
  "garyx-models",
  "garyx-router",
+ "libc",
  "serde",
  "serde_json",
  "shellexpand",

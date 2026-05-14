@@ -53,6 +53,7 @@ pub(crate) fn default_workspace_dir_from_agent_reference(
 pub(crate) fn provider_type_label(provider_type: &garyx_models::ProviderType) -> &'static str {
     match provider_type {
         garyx_models::ProviderType::ClaudeCode => "claude_code",
+        garyx_models::ProviderType::ClaudeTty => "claude_tty",
         garyx_models::ProviderType::CodexAppServer => "codex_app_server",
         garyx_models::ProviderType::GeminiCli => "gemini_cli",
         garyx_models::ProviderType::AgentTeam => "agent_team",

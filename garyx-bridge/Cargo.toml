@@ -23,6 +23,7 @@ shellexpand = "3"
 urlencoding = "2"
 chrono = { workspace = true }
 toml = "0.8"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

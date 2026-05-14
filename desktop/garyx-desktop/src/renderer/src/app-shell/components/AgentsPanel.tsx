@@ -20,7 +20,7 @@ import {
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 
-type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli';
+type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli';
 type EditorMode = 'inspect' | 'create' | 'edit';
 
 type AgentsPanelProps = {
@@ -64,6 +64,9 @@ function providerLabel(value: ProviderType): string {
   }
   if (value === 'gemini_cli') {
     return 'Gemini';
+  }
+  if (value === 'claude_tty') {
+    return 'Claude TTY';
   }
   return 'Claude';
 }
@@ -368,6 +371,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                   <SelectContent>
                     <SelectGroup>
                       <SelectItem value="claude_code">Claude</SelectItem>
+                      <SelectItem value="claude_tty">Claude TTY</SelectItem>
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="gemini_cli">Gemini</SelectItem>
                     </SelectGroup>

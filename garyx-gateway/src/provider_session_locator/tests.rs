@@ -18,7 +18,9 @@ fn locate_claude_session_binding_reads_project_cwd_from_transcript() {
     )
     .unwrap();
 
-    let binding = locate_claude_session_binding(session_id, &projects_dir).expect("binding");
+    let binding =
+        locate_claude_session_binding(session_id, &projects_dir, ProviderType::ClaudeCode)
+            .expect("binding");
     assert_eq!(binding.provider_type, ProviderType::ClaudeCode);
     assert_eq!(binding.agent_id, "claude");
     assert_eq!(
@@ -28,6 +30,38 @@ fn locate_claude_session_binding_reads_project_cwd_from_transcript() {
             .to_string_lossy()
             .to_string()
     );
+}
+
+#[test]
+fn locate_claude_session_binding_preserves_tty_provider_hint() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    fs::create_dir_all(&workspace).unwrap();
+    let projects_dir = temp.path().join(".claude").join("projects");
+    let project_dir = projects_dir.join("-home-user-projects-workspace");
+    fs::create_dir_all(&project_dir).unwrap();
+    let session_id = "04b3eff5-fea5-4339-a682-afd3774b7cc9";
+    fs::write(
+        project_dir.join(format!("{session_id}.jsonl")),
+        format!(
+            "{{\"sessionId\":\"{session_id}\",\"cwd\":\"{}\"}}\n",
+            workspace.display()
+        ),
+    )
+    .unwrap();
+
+    let roots = ProviderSessionSearchRoots {
+        claude_projects_dir: Some(projects_dir),
+        codex_session_roots: Vec::new(),
+        gemini_tmp_dir: None,
+    };
+    let binding =
+        locate_local_provider_session_with_roots(session_id, Some(ProviderType::ClaudeTty), &roots)
+            .expect("lookup")
+            .expect("binding");
+
+    assert_eq!(binding.provider_type, ProviderType::ClaudeTty);
+    assert_eq!(binding.agent_id, "claude");
 }
 
 #[test]

@@ -689,11 +689,12 @@ fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<Provide
     };
 
     match value.to_ascii_lowercase().as_str() {
-        "claude" => Ok(Some(ProviderType::ClaudeCode)),
+        "claude" | "claude_code" => Ok(Some(ProviderType::ClaudeCode)),
+        "claude-tty" | "claude_tty" => Ok(Some(ProviderType::ClaudeTty)),
         "codex" => Ok(Some(ProviderType::CodexAppServer)),
         "gemini" => Ok(Some(ProviderType::GeminiCli)),
         _ => Err(format!(
-            "Unsupported sdkSessionProviderHint '{value}'. Use claude, codex, or gemini."
+            "Unsupported sdkSessionProviderHint '{value}'. Use claude, claude_tty, codex, or gemini."
         )),
     }
 }
@@ -701,6 +702,7 @@ fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<Provide
 fn provider_hint_label(value: &ProviderType) -> &'static str {
     match value {
         ProviderType::ClaudeCode => "Claude",
+        ProviderType::ClaudeTty => "Claude TTY",
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::AgentTeam => "Team",

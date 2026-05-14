@@ -68,7 +68,7 @@ pub(crate) async fn list_provider_models(
             ),
             Err(error) => unsupported(provider_type, "gemini_acp", Some(error)),
         },
-        ProviderType::ClaudeCode | ProviderType::CodexAppServer => {
+        ProviderType::ClaudeCode | ProviderType::ClaudeTty | ProviderType::CodexAppServer => {
             unsupported(provider_type, "provider", None)
         }
         ProviderType::AgentTeam => unsupported(provider_type, "provider", None),

@@ -78,6 +78,7 @@ fn provider_type_from_key(value: &str) -> Option<ProviderType> {
     let prefix = value.trim().split(':').next().unwrap_or_default();
     match prefix {
         "claude_code" => Some(ProviderType::ClaudeCode),
+        "claude_tty" => Some(ProviderType::ClaudeTty),
         "codex_app_server" => Some(ProviderType::CodexAppServer),
         "gemini_cli" => Some(ProviderType::GeminiCli),
         _ => None,
@@ -93,6 +94,7 @@ fn provider_type_value(thread_value: &Value) -> Option<ProviderType> {
 fn provider_label(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::ClaudeCode => "Claude",
+        ProviderType::ClaudeTty => "Claude TTY",
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::AgentTeam => "Team",

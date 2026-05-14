@@ -14,6 +14,8 @@ use uuid::Uuid;
 #[serde(rename_all = "snake_case")]
 pub enum ProviderType {
     ClaudeCode,
+    /// Claude Code interactive terminal mode driven through a PTY.
+    ClaudeTty,
     CodexAppServer,
     GeminiCli,
     /// Meta-provider that orchestrates a Team as a group chat over regular

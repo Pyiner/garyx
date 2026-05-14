@@ -301,6 +301,9 @@ function providerTypeValue(provider: any): string {
 
 function providerTypeLabel(provider: any): string {
   const value = providerTypeValue(provider);
+  if (value === 'claude_tty') {
+    return 'claude tty';
+  }
   if (value === 'codex_app_server') {
     return 'codex';
   }
@@ -329,18 +332,21 @@ function preferredStandaloneAgentId(
     return '';
   }
 
-  const normalizedProviderType =
-    providerType === 'codex_app_server'
-      ? 'codex_app_server'
-      : providerType === 'gemini_cli'
-        ? 'gemini_cli'
-        : 'claude_code';
-  const builtInId =
-    normalizedProviderType === 'codex_app_server'
-      ? 'codex'
-      : normalizedProviderType === 'gemini_cli'
-        ? 'gemini'
-        : 'claude';
+  let normalizedProviderType: DesktopCustomAgent['providerType'] = 'claude_code';
+  if (providerType === 'claude_tty') {
+    normalizedProviderType = 'claude_tty';
+  } else if (providerType === 'codex_app_server') {
+    normalizedProviderType = 'codex_app_server';
+  } else if (providerType === 'gemini_cli') {
+    normalizedProviderType = 'gemini_cli';
+  }
+
+  let builtInId = 'claude';
+  if (normalizedProviderType === 'codex_app_server') {
+    builtInId = 'codex';
+  } else if (normalizedProviderType === 'gemini_cli') {
+    builtInId = 'gemini';
+  }
 
   return agents.find((agent) => agent.agentId === builtInId)?.agentId
     || agents.find((agent) => agent.providerType === normalizedProviderType)?.agentId
@@ -815,6 +821,7 @@ function AgentProviderFields({
               <SelectContent className="rounded-[14px] border-[#e7e7e5] bg-white shadow-[0_12px_32px_rgba(0,0,0,0.08)]">
                 <SelectGroup>
                   <SelectItem value="claude_code">claude_code</SelectItem>
+                  <SelectItem value="claude_tty">claude_tty</SelectItem>
                   <SelectItem value="codex_app_server">codex_app_server</SelectItem>
                   <SelectItem value="gemini_cli">gemini_cli</SelectItem>
                 </SelectGroup>

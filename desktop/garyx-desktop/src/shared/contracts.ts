@@ -23,6 +23,7 @@ export interface DesktopGatewayProfile {
 
 export type DesktopApiProviderType =
   | "claude_code"
+  | "claude_tty"
   | "codex_app_server"
   | "gemini_cli";
 
