@@ -109,6 +109,38 @@ async fn test_route_and_dispatch_basic() {
 }
 
 #[tokio::test]
+async fn test_route_and_dispatch_forwards_claude_tty_requested_provider() {
+    let mut router = make_router();
+    let dispatcher = MockDispatcher::new();
+
+    let request = InboundRequest {
+        channel: "telegram".to_owned(),
+        account_id: "bot1".to_owned(),
+        from_id: "user42".to_owned(),
+        is_group: false,
+        thread_binding_key: "user42".to_owned(),
+        message: "hello interactive claude".to_owned(),
+        run_id: "run-claude-tty".to_owned(),
+        reply_to_message_id: None,
+        images: vec![],
+        extra_metadata: HashMap::from([(
+            "requested_provider_type".to_owned(),
+            json!("claude_tty"),
+        )]),
+        file_paths: vec![],
+    };
+
+    router
+        .route_and_dispatch(request, &dispatcher, None)
+        .await
+        .unwrap();
+
+    let requested = dispatcher.requested_providers.lock().await;
+    assert_eq!(requested.len(), 1);
+    assert_eq!(requested[0], Some(ProviderType::ClaudeTty));
+}
+
+#[tokio::test]
 async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent() {
     let store = Arc::new(InMemoryThreadStore::new());
     let mut config = GaryxConfig::default();

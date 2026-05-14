@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -90,6 +90,7 @@ pub struct ClaudeTtyProvider {
     sessions: Mutex<HashMap<String, Arc<Mutex<ClaudeTtySession>>>>,
     session_ids: Mutex<HashMap<String, String>>,
     active_runs: Mutex<HashMap<String, String>>,
+    aborted_runs: Mutex<HashSet<String>>,
     run_pending_inputs: Mutex<HashMap<String, VecDeque<PendingAckMarker>>>,
     ready: bool,
     completion_idle: Duration,
@@ -109,6 +110,7 @@ impl ClaudeTtyProvider {
             sessions: Mutex::new(HashMap::new()),
             session_ids: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
+            aborted_runs: Mutex::new(HashSet::new()),
             run_pending_inputs: Mutex::new(HashMap::new()),
             ready: false,
             completion_idle: Duration::from_millis(DEFAULT_COMPLETION_IDLE_MS),
@@ -160,7 +162,7 @@ impl ClaudeTtyProvider {
             return Ok(existing);
         }
 
-        let (session_id, had_session_id) = self.resolve_or_create_session_id(options).await;
+        let session_id = self.resolve_or_create_session_id(options).await;
         let cwd = resolve_tty_cwd(&self.config, options)?;
         let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
         let env = self.build_env(options);
@@ -169,7 +171,7 @@ impl ClaudeTtyProvider {
             None => claude_config_dir(&env)?,
         };
         let transcript_path = claude_transcript_path(&config_dir, &cwd, &session_id);
-        let launch_mode = if had_session_id || transcript_path.exists() {
+        let launch_mode = if transcript_path.exists() {
             ClaudeTtyLaunchMode::Resume
         } else {
             ClaudeTtyLaunchMode::NewSession
@@ -196,7 +198,7 @@ impl ClaudeTtyProvider {
         Ok(session)
     }
 
-    async fn resolve_or_create_session_id(&self, options: &ProviderRunOptions) -> (String, bool) {
+    async fn resolve_or_create_session_id(&self, options: &ProviderRunOptions) -> String {
         if let Some(existing) = self
             .session_ids
             .lock()
@@ -204,7 +206,7 @@ impl ClaudeTtyProvider {
             .get(&options.thread_id)
             .cloned()
         {
-            return (existing, true);
+            return existing;
         }
         if let Some(from_metadata) = options
             .metadata
@@ -218,14 +220,14 @@ impl ClaudeTtyProvider {
                 .lock()
                 .await
                 .insert(options.thread_id.clone(), session_id.clone());
-            return (session_id, true);
+            return session_id;
         }
         let session_id = Uuid::new_v4().to_string();
         self.session_ids
             .lock()
             .await
             .insert(options.thread_id.clone(), session_id.clone());
-        (session_id, false)
+        session_id
     }
 
     fn build_claude_args(
@@ -442,6 +444,22 @@ impl ClaudeTtyProvider {
             })
     }
 
+    async fn has_queued_pending_input(&self, run_id: &str) -> bool {
+        self.run_pending_inputs
+            .lock()
+            .await
+            .get(run_id)
+            .is_some_and(|queue| {
+                queue
+                    .iter()
+                    .any(|marker| matches!(marker, PendingAckMarker::QueuedInput(_)))
+            })
+    }
+
+    async fn take_aborted_run(&self, run_id: &str) -> bool {
+        self.aborted_runs.lock().await.remove(run_id)
+    }
+
     async fn prepare_tty_for_prompt(
         &self,
         session: &Arc<Mutex<ClaudeTtySession>>,
@@ -510,6 +528,9 @@ impl ClaudeTtyProvider {
         let mut last_activity = Instant::now();
 
         loop {
+            if self.take_aborted_run(run_id).await {
+                return Err(BridgeError::RunFailed("claude tty run aborted".to_owned()));
+            }
             if started.elapsed() > timeout {
                 return Err(BridgeError::Timeout);
             }
@@ -538,10 +559,18 @@ impl ClaudeTtyProvider {
                 }
             }
 
-            if state.result_seen {
+            let has_queued_pending_input = self.has_queued_pending_input(run_id).await;
+            if state.result_seen
+                && !has_queued_pending_input
+                && !state.awaiting_assistant_after_user
+            {
                 break;
             }
-            if state.assistant_seen && last_activity.elapsed() >= self.completion_idle {
+            if state.assistant_seen
+                && !has_queued_pending_input
+                && !state.awaiting_assistant_after_user
+                && last_activity.elapsed() >= self.completion_idle
+            {
                 break;
             }
             tokio::time::sleep(self.poll_interval).await;
@@ -596,6 +625,7 @@ impl AgentLoopProvider for ClaudeTtyProvider {
         }
         self.session_ids.lock().await.clear();
         self.active_runs.lock().await.clear();
+        self.aborted_runs.lock().await.clear();
         self.run_pending_inputs.lock().await.clear();
         self.ready = false;
         Ok(())
@@ -625,26 +655,22 @@ impl AgentLoopProvider for ClaudeTtyProvider {
             sdk_session_id: sdk_session_id.clone(),
         });
 
+        if let Err(error) = self.prepare_tty_for_prompt(&session).await {
+            return Err(error);
+        }
+
         self.prepare_transcript_offset(&session).await;
+        self.initialize_pending_inputs(&run_id).await;
+        let prompt = build_tty_user_prompt(options, include_context);
+        let send_result = self.write_prompt_to_session(&session, &prompt).await;
+        if let Err(error) = send_result {
+            self.run_pending_inputs.lock().await.remove(&run_id);
+            return Err(error);
+        }
         self.active_runs
             .lock()
             .await
             .insert(run_id.clone(), options.thread_id.clone());
-        self.initialize_pending_inputs(&run_id).await;
-
-        if let Err(error) = self.prepare_tty_for_prompt(&session).await {
-            self.active_runs.lock().await.remove(&run_id);
-            self.run_pending_inputs.lock().await.remove(&run_id);
-            return Err(error);
-        }
-
-        let prompt = build_tty_user_prompt(options, include_context);
-        let send_result = self.write_prompt_to_session(&session, &prompt).await;
-        if let Err(error) = send_result {
-            self.active_runs.lock().await.remove(&run_id);
-            self.run_pending_inputs.lock().await.remove(&run_id);
-            return Err(error);
-        }
 
         let outcome = match self.tail_run_until_idle(&run_id, &session, &on_chunk).await {
             Ok(outcome) => outcome,
@@ -690,8 +716,10 @@ impl AgentLoopProvider for ClaudeTtyProvider {
         let Some(thread_id) = thread_id else {
             return false;
         };
+        self.aborted_runs.lock().await.insert(run_id.to_owned());
         let session = self.sessions.lock().await.get(&thread_id).cloned();
         let Some(session) = session else {
+            self.aborted_runs.lock().await.remove(run_id);
             return false;
         };
         let interrupt = async {
@@ -785,6 +813,7 @@ impl AgentLoopProvider for ClaudeTtyProvider {
             .collect::<Vec<_>>();
         for run_id in stale_run_ids {
             self.active_runs.lock().await.remove(&run_id);
+            self.aborted_runs.lock().await.remove(&run_id);
             self.run_pending_inputs.lock().await.remove(&run_id);
         }
         removed_id.is_some() || removed_session.is_some()
@@ -797,6 +826,7 @@ struct TranscriptRunState {
     response_text: String,
     session_messages: Vec<ProviderMessage>,
     assistant_seen: bool,
+    awaiting_assistant_after_user: bool,
     result_seen: bool,
     is_error: bool,
     error_message: Option<String>,
@@ -884,6 +914,7 @@ async fn apply_transcript_line(
                     kind: StreamBoundaryKind::UserAck,
                     pending_input_id: provider.acknowledge_next_pending_input(run_id).await,
                 });
+                state.awaiting_assistant_after_user = true;
             }
             true
         }
@@ -907,6 +938,7 @@ async fn apply_transcript_line(
             let text = transcript_content_text(content);
             if !text.is_empty() {
                 state.assistant_seen = true;
+                state.awaiting_assistant_after_user = false;
                 state.response_text.push_str(&text);
                 let entry = ProviderMessage::assistant_text(text.clone())
                     .with_timestamp(chrono::Utc::now().to_rfc3339())

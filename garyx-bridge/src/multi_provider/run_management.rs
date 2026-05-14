@@ -56,13 +56,7 @@ fn requested_provider_from_metadata(metadata: &HashMap<String, Value>) -> Option
     metadata
         .get("requested_provider_type")
         .and_then(Value::as_str)
-        .and_then(|value| match value {
-            "claude_code" => Some(ProviderType::ClaudeCode),
-            "codex_app_server" => Some(ProviderType::CodexAppServer),
-            "gemini_cli" => Some(ProviderType::GeminiCli),
-            "agent_team" => Some(ProviderType::AgentTeam),
-            _ => None,
-        })
+        .and_then(ProviderType::from_slug)
 }
 
 fn summarize_text(value: &str, limit: usize) -> String {
@@ -582,6 +576,15 @@ fn persisted_provider_type(session_data: &Value) -> Option<ProviderType> {
         .ok()
 }
 
+fn provider_types_share_native_session(left: &ProviderType, right: &ProviderType) -> bool {
+    left == right
+        || matches!(
+            (left, right),
+            (ProviderType::ClaudeCode, ProviderType::ClaudeTty)
+                | (ProviderType::ClaudeTty, ProviderType::ClaudeCode)
+        )
+}
+
 fn resolve_persisted_sdk_session_id_for_provider(
     session_data: &Value,
     provider_key: &str,
@@ -590,7 +593,11 @@ fn resolve_persisted_sdk_session_id_for_provider(
     let object = session_data.as_object()?;
 
     if let Some(expected_provider_type) = provider_type
-        && persisted_provider_type(session_data).as_ref() == Some(expected_provider_type)
+        && persisted_provider_type(session_data)
+            .as_ref()
+            .is_some_and(|persisted| {
+                provider_types_share_native_session(persisted, expected_provider_type)
+            })
         && let Some(sdk_session_id) = non_empty_value_string(object.get("sdk_session_id"))
     {
         return Some(sdk_session_id);

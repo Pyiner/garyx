@@ -204,7 +204,7 @@ fn claude_project_dir_name(cwd: &Path) -> String {
     let text = cwd.to_string_lossy();
     let mapped = text
         .chars()
-        .map(|ch| if ch == '/' { '-' } else { ch })
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect::<String>();
     if mapped.is_empty() {
         "-".to_owned()

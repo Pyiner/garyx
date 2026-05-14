@@ -2,7 +2,7 @@ use super::*;
 use crate::memory_store::InMemoryThreadStore;
 use async_trait::async_trait;
 use garyx_models::config::SlashCommand;
-use garyx_models::provider::AgentRunRequest;
+use garyx_models::provider::{AgentRunRequest, ProviderType};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,6 +16,7 @@ struct MockDispatcher {
     dispatched: tokio::sync::Mutex<Vec<DispatchedRun>>,
     metadata: tokio::sync::Mutex<Vec<HashMap<String, Value>>>,
     workspace_dirs: tokio::sync::Mutex<Vec<Option<String>>>,
+    requested_providers: tokio::sync::Mutex<Vec<Option<ProviderType>>>,
     should_fail: bool,
 }
 
@@ -25,6 +26,7 @@ impl MockDispatcher {
             dispatched: tokio::sync::Mutex::new(Vec::new()),
             metadata: tokio::sync::Mutex::new(Vec::new()),
             workspace_dirs: tokio::sync::Mutex::new(Vec::new()),
+            requested_providers: tokio::sync::Mutex::new(Vec::new()),
             should_fail: false,
         }
     }
@@ -34,6 +36,7 @@ impl MockDispatcher {
             dispatched: tokio::sync::Mutex::new(Vec::new()),
             metadata: tokio::sync::Mutex::new(Vec::new()),
             workspace_dirs: tokio::sync::Mutex::new(Vec::new()),
+            requested_providers: tokio::sync::Mutex::new(Vec::new()),
             should_fail: true,
         }
     }
@@ -55,6 +58,10 @@ impl AgentDispatcher for MockDispatcher {
             .push((request.thread_id, request.message, request.images));
         self.metadata.lock().await.push(request.metadata);
         self.workspace_dirs.lock().await.push(request.workspace_dir);
+        self.requested_providers
+            .lock()
+            .await
+            .push(request.requested_provider);
         Ok(())
     }
 }

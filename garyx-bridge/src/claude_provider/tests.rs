@@ -187,6 +187,20 @@ fn test_claude_transcript_path_matches_observed_project_dir_shape() {
 }
 
 #[test]
+fn test_claude_transcript_path_sanitizes_hidden_temp_dirs() {
+    let path = claude_transcript_path(
+        Path::new("/Users/test/.claude"),
+        Path::new("/tmp/.garyx-tty/smoke.test"),
+        "session-1",
+    );
+
+    assert_eq!(
+        path,
+        PathBuf::from("/Users/test/.claude/projects/-tmp--garyx-tty-smoke-test/session-1.jsonl")
+    );
+}
+
+#[test]
 fn test_resolve_run_id_generates_unique_default_ids() {
     let first = resolve_run_id(&HashMap::new());
     let second = resolve_run_id(&HashMap::new());

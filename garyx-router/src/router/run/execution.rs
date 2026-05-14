@@ -225,13 +225,7 @@ impl MessageRouter {
         let requested_provider = dispatch_metadata
             .get("requested_provider_type")
             .and_then(Value::as_str)
-            .and_then(|value| match value {
-                "claude_code" => Some(ProviderType::ClaudeCode),
-                "codex_app_server" => Some(ProviderType::CodexAppServer),
-                "gemini_cli" => Some(ProviderType::GeminiCli),
-                "agent_team" => Some(ProviderType::AgentTeam),
-                _ => None,
-            });
+            .and_then(ProviderType::from_slug);
 
         self.set_last_delivery_with_persistence(&thread_id, delivery_context)
             .await;

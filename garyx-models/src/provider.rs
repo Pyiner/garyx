@@ -24,6 +24,29 @@ pub enum ProviderType {
     AgentTeam,
 }
 
+impl ProviderType {
+    pub fn as_slug(&self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude_code",
+            Self::ClaudeTty => "claude_tty",
+            Self::CodexAppServer => "codex_app_server",
+            Self::GeminiCli => "gemini_cli",
+            Self::AgentTeam => "agent_team",
+        }
+    }
+
+    pub fn from_slug(value: &str) -> Option<Self> {
+        match value.trim() {
+            "claude" | "claude_code" => Some(Self::ClaudeCode),
+            "claude-tty" | "claude_tty" => Some(Self::ClaudeTty),
+            "codex" | "codex_app_server" => Some(Self::CodexAppServer),
+            "gemini" | "gemini_cli" => Some(Self::GeminiCli),
+            "agent_team" => Some(Self::AgentTeam),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentRunRequest {
     pub thread_id: String,

@@ -28,6 +28,36 @@ fn test_provider_type_serde() {
 }
 
 #[test]
+fn test_provider_type_slug_round_trip() {
+    for provider_type in [
+        ProviderType::ClaudeCode,
+        ProviderType::ClaudeTty,
+        ProviderType::CodexAppServer,
+        ProviderType::GeminiCli,
+        ProviderType::AgentTeam,
+    ] {
+        assert_eq!(
+            ProviderType::from_slug(provider_type.as_slug()),
+            Some(provider_type)
+        );
+    }
+
+    assert_eq!(
+        ProviderType::from_slug("claude"),
+        Some(ProviderType::ClaudeCode)
+    );
+    assert_eq!(
+        ProviderType::from_slug("claude-tty"),
+        Some(ProviderType::ClaudeTty)
+    );
+    assert_eq!(
+        ProviderType::from_slug(" claude_tty "),
+        Some(ProviderType::ClaudeTty)
+    );
+    assert_eq!(ProviderType::from_slug("unknown-provider"), None);
+}
+
+#[test]
 fn test_stream_boundary_kind_serde() {
     let kind = StreamBoundaryKind::UserAck;
     let json = serde_json::to_string(&kind).unwrap();
