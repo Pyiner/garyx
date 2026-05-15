@@ -10,6 +10,22 @@ import type {
 
 import { pickPreferredWorkspace } from "./thread-model";
 
+type DesktopStateSetter = (
+  value:
+    | DesktopState
+    | ((current: DesktopState | null) => DesktopState | null),
+) => void;
+
+const WORKSPACE_SELECTION_PERSIST_DELAY_MS = 80;
+
+let workspaceSelectionPersistGeneration = 0;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
+  });
+}
+
 export function startNewThreadDraft(input: {
   selectableNewThreadWorkspaces: DesktopWorkspace[];
   pendingNewThreadWorkspaceEntry?: DesktopWorkspace | null;
@@ -55,7 +71,7 @@ export async function selectWorkspaceForThread(input: {
   threadId?: string | null;
   setError: (value: string | null) => void;
   setContentView: (view: "thread") => void;
-  setDesktopState: (value: DesktopState) => void;
+  setDesktopState: DesktopStateSetter;
   setSelectedThreadId: (value: string | null) => void;
   setNewThreadDraftActive: (value: boolean) => void;
   setPendingWorkspacePath: (value: string | null) => void;
@@ -63,20 +79,46 @@ export async function selectWorkspaceForThread(input: {
 }): Promise<void> {
   input.setError(null);
   input.setContentView("thread");
+
+  let previousWorkspacePath: string | null = null;
+  input.setDesktopState((current) => {
+    previousWorkspacePath = current?.selectedWorkspacePath ?? null;
+    if (!current || current.selectedWorkspacePath === input.workspacePath) {
+      return current;
+    }
+    return {
+      ...current,
+      selectedWorkspacePath: input.workspacePath,
+    };
+  });
+  if (input.threadId !== undefined) {
+    input.setSelectedThreadId(input.threadId);
+    input.setNewThreadDraftActive(!input.threadId);
+    input.setPendingWorkspacePath(input.threadId ? null : input.workspacePath);
+    if (!input.threadId) {
+      input.requestComposerFocus();
+    }
+  }
+
+  const persistGeneration = ++workspaceSelectionPersistGeneration;
   try {
-    const nextState = await input.api.selectWorkspace({
+    await delay(WORKSPACE_SELECTION_PERSIST_DELAY_MS);
+    if (persistGeneration !== workspaceSelectionPersistGeneration) {
+      return;
+    }
+    await input.api.selectWorkspace({
       workspacePath: input.workspacePath,
     });
-    input.setDesktopState(nextState);
-    if (input.threadId !== undefined) {
-      input.setSelectedThreadId(input.threadId);
-      input.setNewThreadDraftActive(!input.threadId);
-      input.setPendingWorkspacePath(input.threadId ? null : input.workspacePath);
-      if (!input.threadId) {
-        input.requestComposerFocus();
-      }
-    }
   } catch (selectionError) {
+    input.setDesktopState((current) => {
+      if (!current || current.selectedWorkspacePath !== input.workspacePath) {
+        return current;
+      }
+      return {
+        ...current,
+        selectedWorkspacePath: previousWorkspacePath,
+      };
+    });
     input.setError(
       selectionError instanceof Error
         ? selectionError.message

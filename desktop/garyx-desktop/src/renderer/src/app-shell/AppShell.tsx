@@ -2580,8 +2580,9 @@ export function AppShell() {
     () => visibleWorkspaceList(desktopState),
     [desktopState],
   );
-  const selectableNewThreadWorkspaces = workspacePickerWorkspaces.filter(
-    isSelectableNewThreadWorkspace,
+  const selectableNewThreadWorkspaces = useMemo(
+    () => workspacePickerWorkspaces.filter(isSelectableNewThreadWorkspace),
+    [workspacePickerWorkspaces],
   );
   const availableWorkspaceCount = selectableNewThreadWorkspaces.length;
   const activeAutomationThread = automationForLatestThread(
@@ -2615,12 +2616,16 @@ export function AppShell() {
     activeThreadWorkspace || pendingWorkspaceEntry || selectedWorkspaceEntry;
   const workspaceSelectionEntry =
     activeThreadWorkspace || pendingWorkspaceEntry || selectedWorkspaceEntry;
-  const workspaceThreadGroups = buildWorkspaceThreadGroups({
-    state: desktopState,
-    activeThread,
-    selectedThreadId,
-    workspaceSelectionEntry,
-  });
+  const workspaceThreadGroups = useMemo(
+    () =>
+      buildWorkspaceThreadGroups({
+        state: desktopState,
+        activeThread,
+        selectedThreadId,
+        workspaceSelectionEntry,
+      }),
+    [activeThread, desktopState, selectedThreadId, workspaceSelectionEntry],
+  );
   const activeWorkspacePath =
     activeWorkspace?.available && activeWorkspace?.path
       ? activeWorkspace.path
@@ -2767,7 +2772,7 @@ export function AppShell() {
     isActiveSendingThread || isDraftSendingThread || activeQueue.length > 0
       ? "Queue another follow-up for Garyx..."
       : preferredWorkspaceForNewThread
-        ? `Ask Garyx to inspect code in ${preferredWorkspaceForNewThread.name}...`
+        ? "Describe what you want Garyx to build..."
         : "Choose a folder to start a Garyx thread.";
   const showAutomationRunInitialPlaceholder = Boolean(
     activePendingAutomationRun &&

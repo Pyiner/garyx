@@ -463,10 +463,7 @@ export function ThreadPage({
     !activeMessages.length &&
     !historyLoading &&
     !showAutomationRunInitialPlaceholder;
-  const newThreadWorkspaceName = newThreadWorkspaceEntry?.name?.trim() || "";
-  const newThreadPromptTitle = newThreadWorkspaceName
-    ? `What do you want Garyx to build in ${newThreadWorkspaceName}?`
-    : "What do you want Garyx to build?";
+  const newThreadPromptTitle = "What do you want Garyx to build?";
 
   useLayoutEffect(() => {
     const threadMain = threadMainRef.current;

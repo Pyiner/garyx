@@ -922,7 +922,7 @@ export async function selectDesktopWorkspace(workspacePath: string | null): Prom
     selectedWorkspacePath: workspacePath,
   }, { preserveMissingSelectedWorkspace: true });
   await writeState(next);
-  return getDesktopState();
+  return next;
 }
 
 export async function selectDesktopAutomation(automationId: string | null): Promise<DesktopState> {

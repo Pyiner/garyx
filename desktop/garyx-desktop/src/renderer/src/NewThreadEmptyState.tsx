@@ -38,6 +38,8 @@ import { useI18n } from "./i18n";
 
 const ADD_WORKSPACE_VALUE = "__add_workspace__";
 const MISSING_WORKSPACE_VALUE_PREFIX = "__missing_workspace__:";
+const GIT_STATUS_CHECK_DELAY_MS = 120;
+const workspaceGitStatusCache = new Map<string, DesktopWorkspaceGitStatus>();
 
 type NewThreadEmptyStateProps = {
   newThreadWorkspaceEntry: DesktopWorkspace | null;
@@ -98,22 +100,38 @@ export function NewThreadEmptyState({
       onWorkspaceModeChange("direct");
       return;
     }
-    void window.garyxDesktop
-      .getWorkspaceGitStatus({ workspacePath: selectedWorkspacePath })
-      .then((status) => {
-        if (cancelled) return;
-        setGitStatusResult({ workspacePath: selectedWorkspacePath, status });
-        if (!status.isGitRepo) {
-          onWorkspaceModeChange("direct");
-        }
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setGitStatusResult(null);
-        onWorkspaceModeChange("direct");
+    const cachedStatus = workspaceGitStatusCache.get(selectedWorkspacePath);
+    if (cachedStatus) {
+      setGitStatusResult({
+        workspacePath: selectedWorkspacePath,
+        status: cachedStatus,
       });
+      if (!cachedStatus.isGitRepo) {
+        onWorkspaceModeChange("direct");
+      }
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void window.garyxDesktop
+        .getWorkspaceGitStatus({ workspacePath: selectedWorkspacePath })
+        .then((status) => {
+          if (cancelled) return;
+          workspaceGitStatusCache.set(selectedWorkspacePath, status);
+          setGitStatusResult({ workspacePath: selectedWorkspacePath, status });
+          if (!status.isGitRepo) {
+            onWorkspaceModeChange("direct");
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setGitStatusResult(null);
+          onWorkspaceModeChange("direct");
+        });
+    }, GIT_STATUS_CHECK_DELAY_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(timeout);
     };
   }, [onWorkspaceModeChange, selectedWorkspacePath]);
 

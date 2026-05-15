@@ -251,15 +251,37 @@ export function buildWorkspaceThreadGroups(input: {
     return [];
   }
 
+  const threadsByWorkspacePath = new Map<string, DesktopThreadSummary[]>();
+  for (const thread of input.state.threads) {
+    const key = workspacePathKey(thread.workspacePath);
+    if (!key) {
+      continue;
+    }
+    const threads = threadsByWorkspacePath.get(key);
+    if (threads) {
+      threads.push(thread);
+    } else {
+      threadsByWorkspacePath.set(key, [thread]);
+    }
+  }
+
+  const automationCountByWorkspacePath = new Map<string, number>();
+  for (const automation of input.state.automations) {
+    const key = workspacePathKey(automation.workspacePath);
+    if (!key) {
+      continue;
+    }
+    automationCountByWorkspacePath.set(
+      key,
+      (automationCountByWorkspacePath.get(key) || 0) + 1,
+    );
+  }
+
   return visibleWorkspaceList(input.state).map((workspace) => {
     const workspacePath = workspace.path || '';
     const workspacePathKey = workspacePath.trim().toLowerCase();
-    const threads = input.state!.threads.filter((thread) => {
-      return (thread.workspacePath || '').trim().toLowerCase() === workspacePathKey;
-    });
-    const automationCount = input.state!.automations.filter((automation) => {
-      return automation.workspacePath.trim().toLowerCase() === workspacePathKey;
-    }).length;
+    const threads = threadsByWorkspacePath.get(workspacePathKey) || [];
+    const automationCount = automationCountByWorkspacePath.get(workspacePathKey) || 0;
 
     return {
       workspace,
