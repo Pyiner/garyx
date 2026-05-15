@@ -1,4 +1,4 @@
-import { IconFolder, IconPlugConnected } from '@tabler/icons-react';
+import { IconFolder, IconPin, IconPlugConnected } from '@tabler/icons-react';
 
 import {
   ConversationTeamMembers,
@@ -16,6 +16,7 @@ type ConversationHeaderActionsProps = {
   isAutomationView: boolean;
   isBotsView: boolean;
   isSkillsView: boolean;
+  isThreadPinned: boolean;
   selectedThreadId: string | null;
   teamSummary: ConversationTeamSummary | null;
   threadInfo: ThreadRuntimeInfo | null;
@@ -25,6 +26,7 @@ type ConversationHeaderActionsProps = {
   onCreateAutomation: () => void;
   onOpenThread: (threadId: string) => void;
   onOpenThreads: () => void;
+  onTogglePinnedThread: () => void;
   onToggleInspector: () => void;
   onToggleThreadLogs: () => void;
 };
@@ -45,6 +47,7 @@ export function ConversationHeaderActions({
   isAutomationView,
   isBotsView,
   isSkillsView,
+  isThreadPinned,
   selectedThreadId,
   teamSummary,
   threadInfo,
@@ -54,6 +57,7 @@ export function ConversationHeaderActions({
   onCreateAutomation,
   onOpenThread,
   onOpenThreads,
+  onTogglePinnedThread,
   onToggleInspector,
   onToggleThreadLogs,
 }: ConversationHeaderActionsProps) {
@@ -100,6 +104,18 @@ export function ConversationHeaderActions({
             threadInfo={threadInfo}
             threadInfoLoaded={threadInfoLoaded}
           />
+          {selectedThreadId ? (
+            <button
+              aria-label={isThreadPinned ? t('Unpin thread') : t('Pin thread')}
+              aria-pressed={isThreadPinned}
+              className={`conversation-header-action-button conversation-header-action-icon ${isThreadPinned ? 'is-open' : ''}`}
+              onClick={onTogglePinnedThread}
+              title={isThreadPinned ? t('Unpin thread') : t('Pin thread')}
+              type="button"
+            >
+              <IconPin aria-hidden className="icon" size={15} stroke={1.7} />
+            </button>
+          ) : null}
           <button
             aria-expanded={threadLogsOpen}
             className={`conversation-header-action-button conversation-header-action-logs ${threadLogsHasUnread ? 'conversation-header-action-button-unread' : ''} ${threadLogsOpen ? 'is-open' : ''}`}

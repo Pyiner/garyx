@@ -37,6 +37,7 @@ import {
   type DesktopSettings,
   type DesktopSessionProviderHint,
   type DesktopState,
+  type DesktopThreadSummary,
   type DesktopWorkspace,
   type DesktopWorkspaceFileEntry,
   type DesktopWorkspaceFileListing,
@@ -217,6 +218,12 @@ const THREAD_HISTORY_USER_QUERY_LIMIT = 10;
 const USER_TURN_PREFETCH_THRESHOLD = 3;
 const HIDDEN_TOOL_USE_STATUS_TEXT = "Garyx is thinking through the next step…";
 const HIDDEN_TOOL_RESULT_STATUS_TEXT = "Garyx finished a reasoning step…";
+
+type ThreadEntrySelectionSource =
+  | "pinned"
+  | "bot-root"
+  | "bot-conversation"
+  | "workspace-conversation";
 
 type ThreadHistoryPaginationState = {
   hasMoreBefore: boolean;
@@ -471,6 +478,50 @@ function formatThreadTimestamp(value?: string | null): string {
   if (diffDay < 30) return `${diffDay}d`;
   if (diffMon < 12) return `${diffMon}mo`;
   return `${Math.floor(diffDay / 365)}y`;
+}
+
+const PINNED_THREAD_IDS_STORAGE_KEY = "garyx.desktop.pinnedThreadIds";
+
+function normalizePinnedThreadIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const id = entry.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function readPinnedThreadIds(): string[] {
+  try {
+    return normalizePinnedThreadIds(
+      JSON.parse(window.localStorage.getItem(PINNED_THREAD_IDS_STORAGE_KEY) || "[]"),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writePinnedThreadIds(ids: string[]) {
+  try {
+    window.localStorage.setItem(
+      PINNED_THREAD_IDS_STORAGE_KEY,
+      JSON.stringify(normalizePinnedThreadIds(ids)),
+    );
+  } catch {
+    // Local storage may be unavailable in constrained renderer contexts.
+  }
 }
 
 function botLabel(channel: string, accountId: string): string {
@@ -1573,6 +1624,8 @@ export function AppShell() {
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() =>
     initialRouteValue.kind === "thread" ? initialRouteValue.threadId : null,
   );
+  const [threadEntrySelectionSource, setThreadEntrySelectionSource] =
+    useState<ThreadEntrySelectionSource | null>(null);
   const [newThreadDraftActive, setNewThreadDraftActive] = useState(
     initialRouteValue.kind === "new-thread",
   );
@@ -1649,6 +1702,9 @@ export function AppShell() {
   const [botConversationGroupId, setBotConversationGroupId] = useState<string | null>(null);
   const [workspaceConversationPath, setWorkspaceConversationPath] =
     useState<string | null>(null);
+  const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>(() =>
+    readPinnedThreadIds(),
+  );
   const sidebarResizeStateRef = useRef<{
     startX: number;
     startWidth: number;
@@ -1664,6 +1720,14 @@ export function AppShell() {
   const [contentView, setContentViewRaw] = useState<ContentView>(() =>
     initialContentView(initialRouteValue),
   );
+  useEffect(() => {
+    writePinnedThreadIds(pinnedThreadIds);
+  }, [pinnedThreadIds]);
+  useEffect(() => {
+    if (contentView !== "thread" || !selectedThreadId) {
+      setThreadEntrySelectionSource(null);
+    }
+  }, [contentView, selectedThreadId]);
   const setContentView: typeof setContentViewRaw = (action) => {
     setContentViewRaw((prev) => {
       const next = typeof action === "function" ? action(prev) : action;
@@ -2274,6 +2338,35 @@ export function AppShell() {
   }
 
   const activeThread = selectedThread(desktopState, selectedThreadId);
+  const threadSummaryById = useMemo(() => {
+    const summaries = new Map<string, DesktopThreadSummary>();
+    for (const thread of desktopState?.threads || []) {
+      summaries.set(thread.id, thread);
+    }
+    for (const session of desktopState?.sessions || []) {
+      summaries.set(session.id, session);
+    }
+    if (activeThread) {
+      summaries.set(activeThread.id, activeThread);
+    }
+    return summaries;
+  }, [activeThread, desktopState]);
+  const pinnedThreadIdSet = useMemo(
+    () => new Set(pinnedThreadIds),
+    [pinnedThreadIds],
+  );
+  const selectedThreadPinned = selectedThreadId
+    ? pinnedThreadIdSet.has(selectedThreadId)
+    : false;
+  useEffect(() => {
+    if (!desktopState) {
+      return;
+    }
+    setPinnedThreadIds((current) => {
+      const next = current.filter((threadId) => threadSummaryById.has(threadId));
+      return next.length === current.length ? current : next;
+    });
+  }, [desktopState, threadSummaryById]);
   const activeThreadTeamView = deriveThreadTeamView(activeThread);
   const desktopAgentMap = new Map(
     desktopAgents.map((agent) => [agent.agentId, agent] as const),
@@ -2773,6 +2866,48 @@ export function AppShell() {
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
   const shouldShowConversationRail = contentView === "thread";
+  const visibleSelectedThreadId = shouldShowConversationRail ? selectedThreadId : null;
+  const visibleThreadEntrySelectionSource = shouldShowConversationRail
+    ? threadEntrySelectionSource
+    : null;
+  const botRootSelectedThreadId =
+    visibleThreadEntrySelectionSource === "bot-root" ? visibleSelectedThreadId : null;
+  const botConversationSelectedThreadId =
+    visibleThreadEntrySelectionSource === "bot-conversation"
+      ? visibleSelectedThreadId
+      : null;
+  const workspaceConversationSelectedThreadId =
+    visibleThreadEntrySelectionSource === "workspace-conversation"
+      ? visibleSelectedThreadId
+      : null;
+  const pinnedThreadRows = useMemo(
+    () =>
+      pinnedThreadIds
+        .map((threadId) => threadSummaryById.get(threadId) || null)
+        .filter((thread): thread is DesktopThreadSummary => Boolean(thread))
+        .map((thread) => ({
+          thread,
+          isActive:
+            visibleThreadEntrySelectionSource === "pinned" &&
+            visibleSelectedThreadId === thread.id,
+          isBusy: isRuntimeBusy(selectThreadRuntime(messageState, thread.id)?.state),
+        })),
+    [
+      messageState,
+      pinnedThreadIds,
+      threadSummaryById,
+      visibleSelectedThreadId,
+      visibleThreadEntrySelectionSource,
+    ],
+  );
+  function togglePinnedThread(threadId: string) {
+    setPinnedThreadIds((current) => {
+      if (current.includes(threadId)) {
+        return current.filter((id) => id !== threadId);
+      }
+      return [threadId, ...current];
+    });
+  }
   useEffect(() => {
     if (shouldShowConversationRail) {
       return;
@@ -3224,7 +3359,10 @@ export function AppShell() {
     resetComposerAttachmentPicker();
   }
 
-  async function openExistingThread(threadId: string): Promise<boolean> {
+  async function openExistingThread(
+    threadId: string,
+    entrySource: ThreadEntrySelectionSource | null = null,
+  ): Promise<boolean> {
     setError(null);
     setContentView("thread");
     setNewThreadDraftActive(false);
@@ -3247,6 +3385,7 @@ export function AppShell() {
     }
 
     setSelectedThreadId(threadId);
+    setThreadEntrySelectionSource(entrySource);
     return true;
   }
 
@@ -6179,10 +6318,10 @@ export function AppShell() {
       group,
       onState: setDesktopState,
       onOpenExistingThread: (endpoint) => {
-        return handleOpenThreadFromEndpoint(endpoint);
+        return handleOpenThreadFromEndpoint(endpoint, "bot-root");
       },
       onOpenThreadById: (threadId) => {
-        return openExistingThread(threadId).then((opened) => {
+        return openExistingThread(threadId, "bot-root").then((opened) => {
           if (opened) {
             setPendingWorkspacePath(null);
             setPendingWorkspaceMode("direct");
@@ -6207,7 +6346,10 @@ export function AppShell() {
         setContentView("thread");
       },
       setNewThreadDraftActive,
-      setSelectedThreadId,
+      setSelectedThreadId: (value) => {
+        setSelectedThreadId(value);
+        setThreadEntrySelectionSource(value ? "bot-root" : null);
+      },
       setPendingWorkspacePath,
       setPendingBotId,
       clearComposerDraft,
@@ -6550,9 +6692,10 @@ export function AppShell() {
 
   async function handleOpenThreadFromEndpoint(
     endpoint: DesktopChannelEndpoint,
+    entrySource: ThreadEntrySelectionSource | null = null,
   ): Promise<boolean> {
     if (endpoint.threadId) {
-      return openExistingThread(endpoint.threadId);
+      return openExistingThread(endpoint.threadId, entrySource);
     }
 
     openThreadFromEndpoint({
@@ -6562,7 +6705,10 @@ export function AppShell() {
         setContentView("thread");
       },
       setNewThreadDraftActive,
-      setSelectedThreadId,
+      setSelectedThreadId: (value) => {
+        setSelectedThreadId(value);
+        setThreadEntrySelectionSource(value ? entrySource : null);
+      },
     });
     return false;
   }
@@ -7746,6 +7892,7 @@ export function AppShell() {
           shouldShowConversationRail ? workspaceConversationPath : null
         }
         botGroups={visibleBotGroups}
+        formatThreadTimestamp={formatThreadTimestamp}
         isAutomationView={isAutomationView}
         isAutoResearchView={isAutoResearchView}
         showAutoResearch={showAutoResearchLab}
@@ -7769,6 +7916,14 @@ export function AppShell() {
         onOpenBot={(group) => {
           setWorkspaceConversationPath(null);
           void handleBotClick(group);
+        }}
+        onOpenPinnedThread={(threadId) => {
+          setBotConversationGroupId(null);
+          setWorkspaceConversationPath(null);
+          void openExistingThread(threadId, "pinned");
+        }}
+        onUnpinThread={(threadId) => {
+          togglePinnedThread(threadId);
         }}
         onToggleBotConversationGroup={(group) => {
           setWorkspaceConversationPath(null);
@@ -7823,8 +7978,9 @@ export function AppShell() {
           void handleSubmitRenameWorkspace(workspacePath);
         }}
         renamingWorkspacePath={renamingWorkspacePath}
+        pinnedThreadRows={pinnedThreadRows}
         selectedAutomationId={selectedAutomationId}
-        selectedThreadId={selectedThreadId}
+        selectedThreadId={botRootSelectedThreadId}
         setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
         setWorkspaceNameDraft={setWorkspaceNameDraft}
         settingsActiveTab={settingsActiveTab}
@@ -7850,9 +8006,9 @@ export function AppShell() {
             setBotConversationGroupId(null);
           }}
           onOpenEndpoint={(endpoint) => {
-            void handleOpenThreadFromEndpoint(endpoint);
+            void handleOpenThreadFromEndpoint(endpoint, "bot-conversation");
           }}
-          selectedThreadId={selectedThreadId}
+          selectedThreadId={botConversationSelectedThreadId}
         />
       ) : activeWorkspaceThreadGroup ? (
         <WorkspaceConversationSidebar
@@ -7872,9 +8028,9 @@ export function AppShell() {
             void handleDeleteThread(threadId);
           }}
           onOpenThread={(threadId) => {
-            void openExistingThread(threadId);
+            void openExistingThread(threadId, "workspace-conversation");
           }}
-          selectedThreadId={selectedThreadId}
+          selectedThreadId={workspaceConversationSelectedThreadId}
         />
       ) : null}
       <AddBotDialog
@@ -7937,6 +8093,7 @@ export function AppShell() {
                 isAutomationView={isAutomationView}
                 isBotsView={isBotsView}
                 isSkillsView={isSkillsView}
+                isThreadPinned={selectedThreadPinned}
                 selectedThreadId={selectedThreadId}
                 teamSummary={activeTeamSummary}
                 threadInfo={activeThreadInfo}
@@ -7951,6 +8108,11 @@ export function AppShell() {
                 }}
                 onOpenThreads={() => {
                   setContentView("thread");
+                }}
+                onTogglePinnedThread={() => {
+                  if (selectedThreadId) {
+                    togglePinnedThread(selectedThreadId);
+                  }
                 }}
                 onToggleInspector={() => {
                   setThreadLogsOpen(false);

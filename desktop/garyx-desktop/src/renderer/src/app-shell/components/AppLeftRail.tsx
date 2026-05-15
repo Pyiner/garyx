@@ -4,6 +4,7 @@ import type { DesktopWorkspace } from '@shared/contracts';
 
 import { SETTINGS_TABS, type SettingsTabId } from '../../settings-tabs';
 import { BotSidebar } from '../../BotSidebar';
+import { PinnedThreadsSidebar, type PinnedThreadRow } from '../../PinnedThreadsSidebar';
 import { WorkspaceThreadSidebar } from '../../WorkspaceThreadSidebar';
 import { UpdatePill } from './UpdatePill';
 import { buildBotGroups } from '../../bot-console-model';
@@ -37,6 +38,7 @@ type AppLeftRailProps = {
   activeBotConversationGroupId: string | null;
   activeWorkspaceThreadGroupPath: string | null;
   botGroups: ReturnType<typeof buildBotGroups>;
+  pinnedThreadRows: PinnedThreadRow[];
   workspaceThreadGroups: ReturnType<typeof buildWorkspaceThreadGroups>;
   renamingWorkspacePath: string | null;
   selectedThreadId: string | null;
@@ -53,6 +55,8 @@ type AppLeftRailProps = {
   onOpenSkills: () => void;
   onOpenTasks: () => void;
   onOpenBot: (group: ReturnType<typeof buildBotGroups>[number]) => void;
+  onOpenPinnedThread: (threadId: string) => void;
+  onUnpinThread: (threadId: string) => void;
   onToggleBotConversationGroup: (group: ReturnType<typeof buildBotGroups>[number]) => void;
   onToggleWorkspaceThreadGroup: (workspacePath: string) => void;
   onAddBot: () => void;
@@ -67,6 +71,7 @@ type AppLeftRailProps = {
   onOpenSettings: () => void;
   onSidebarResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
   sidebarResizing: boolean;
+  formatThreadTimestamp: (value?: string | null) => string;
 };
 
 export function AppLeftRail({
@@ -84,6 +89,7 @@ export function AppLeftRail({
   activeBotConversationGroupId,
   activeWorkspaceThreadGroupPath,
   botGroups,
+  pinnedThreadRows,
   workspaceThreadGroups,
   renamingWorkspacePath,
   selectedThreadId,
@@ -100,6 +106,8 @@ export function AppLeftRail({
   onOpenSkills,
   onOpenTasks,
   onOpenBot,
+  onOpenPinnedThread,
+  onUnpinThread,
   onToggleBotConversationGroup,
   onToggleWorkspaceThreadGroup,
   onAddBot,
@@ -114,6 +122,7 @@ export function AppLeftRail({
   onOpenSettings,
   onSidebarResizeStart,
   sidebarResizing,
+  formatThreadTimestamp,
 }: AppLeftRailProps) {
   const { t } = useI18n();
   const isThreadView = !isSettingsView && !isAutomationView && !isAutoResearchView && !isAgentsView && !isTeamsView && !isSkillsView && !isTasksView && !isBrowserView;
@@ -222,6 +231,13 @@ export function AppLeftRail({
               <span>{t('Skills')}</span>
             </button>
           </nav>
+
+          <PinnedThreadsSidebar
+            formatThreadTimestamp={formatThreadTimestamp}
+            onOpenThread={onOpenPinnedThread}
+            onUnpinThread={onUnpinThread}
+            rows={pinnedThreadRows}
+          />
 
           <BotSidebar
             activeConversationGroupId={activeBotConversationGroupId}
