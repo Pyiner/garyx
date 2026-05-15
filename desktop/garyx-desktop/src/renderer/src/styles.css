@@ -115,7 +115,7 @@
   --text-display-xl: 24px;
   --text-display-2xl: 30px;
   --container-2xl: 42rem;
-  --spacing-token-sidebar: 300px;
+  --spacing-token-sidebar: 240px;
   --app-sidebar-width: var(--spacing-token-sidebar);
   --app-modal-gutter: 24px;
   --app-modal-backdrop-bg: rgba(13, 13, 13, 0.16);
@@ -675,7 +675,7 @@ code {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
-  padding: var(--inset-toolbar) 6px 10px;
+  padding: var(--inset-toolbar) 8px 10px;
   background: transparent;
   border-right: none;
   box-shadow: none;
@@ -817,14 +817,15 @@ code {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 30px;
-  padding: 0 var(--padding-row-x);
-  border-radius: var(--radius-lg);
+  min-height: 31px;
+  padding: 5px 8px;
+  border-radius: 12.5px;
   background: transparent;
   color: color-mix(in oklab, var(--color-token-text-primary) 85%, transparent);
   font-size: var(--text-base);
-  font-weight: var(--font-weight-normal);
-  letter-spacing: -0.01em;
+  font-weight: 430;
+  line-height: 18.5714px;
+  letter-spacing: 0;
   text-align: left;
 }
 
@@ -941,7 +942,7 @@ code {
 }
 
 .workspace-thread-block .workspace-list {
-  gap: 2px;
+  gap: 0;
 }
 
 .workspace-thread-block .workspace-group {
@@ -990,7 +991,7 @@ code {
 
 .sidebar-bot-list {
   flex: 0 1 auto;
-  gap: 4px;
+  gap: 0;
   max-height: min(280px, 34vh);
 }
 
@@ -2132,14 +2133,37 @@ code {
 
 .left-rail .sidebar-nav,
 .left-rail .settings-rail-list {
-  gap: 4px;
+  gap: 1px;
 }
 
 .left-rail
   :is(.sidebar-action, .workspace-row, .thread-item, .settings-rail-item) {
-  border-radius: 10px;
+  border-radius: 12.5px;
   color: var(--color-token-text-primary);
   opacity: 0.82;
+}
+
+.left-rail .workspace-row {
+  min-height: 31px;
+  padding: 0 8px;
+  font-size: var(--text-base);
+  font-weight: 430;
+  line-height: 18.5714px;
+}
+
+.left-rail .workspace-row-main {
+  min-height: 29px;
+}
+
+.left-rail .workspace-name {
+  font-size: var(--text-base);
+  line-height: 18.5714px;
+}
+
+.left-rail .workspace-row-copy .icon:not(.sidebar-section-chevron),
+.left-rail .bot-row-logo {
+  width: 16px;
+  height: 16px;
 }
 
 .left-rail
@@ -14087,10 +14111,10 @@ button.codex-list-row {
 }
 
 .sidebar-footer .sidebar-action {
-  min-height: 34px;
+  min-height: 31px;
   color: var(--color-token-text-primary);
-  font-size: var(--text-sm);
-  font-weight: 400;
+  font-size: var(--text-base);
+  font-weight: 430;
 }
 
 .sidebar-footer .sidebar-action .icon {

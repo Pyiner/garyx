@@ -1644,7 +1644,7 @@ export function AppShell() {
     DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth,
   );
   const [threadLogsResizing, setThreadLogsResizing] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(300);
+  const [sidebarWidth, setSidebarWidth] = useState(240);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [botConversationGroupId, setBotConversationGroupId] = useState<string | null>(null);
   const [workspaceConversationPath, setWorkspaceConversationPath] =
@@ -3584,8 +3584,8 @@ export function AppShell() {
       const state = sidebarResizeStateRef.current;
       if (!state) return;
       const next = Math.max(
-        200,
-        Math.min(480, state.startWidth + (event.clientX - state.startX)),
+        240,
+        Math.min(520, state.startWidth + (event.clientX - state.startX)),
       );
       setSidebarWidth(next);
     };
