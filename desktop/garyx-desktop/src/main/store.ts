@@ -546,6 +546,16 @@ async function canonicalizeWorkspacePath(path: string): Promise<string> {
   return realpath(resolved);
 }
 
+function removeHiddenWorkspacePath(
+  hiddenWorkspacePaths: string[],
+  workspacePath: string,
+): string[] {
+  const workspaceKey = normalizeWorkspacePathKey(workspacePath);
+  return hiddenWorkspacePaths.filter((entry) => (
+    normalizeWorkspacePathKey(entry) !== workspaceKey
+  ));
+}
+
 async function resolveWorkspaceAvailability(workspace: DesktopWorkspace): Promise<DesktopWorkspace> {
   if (!workspace.path) {
     return {
@@ -1014,9 +1024,10 @@ export async function addDesktopWorkspace(path: string): Promise<{
           ? workspace
           : entry;
       }),
-      hiddenWorkspacePaths: (current.hiddenWorkspacePaths || []).filter((entry) => (
-        normalizeWorkspacePathKey(entry) !== normalizeWorkspacePathKey(canonicalPath)
-      )),
+      hiddenWorkspacePaths: removeHiddenWorkspacePath(
+        current.hiddenWorkspacePaths || [],
+        canonicalPath,
+      ),
       selectedWorkspacePath: workspace.path,
     });
     await writeState(selectedState);
@@ -1039,7 +1050,10 @@ export async function addDesktopWorkspace(path: string): Promise<{
   const next = withSortedEntities({
     ...current,
     workspaces: [...current.workspaces, workspace],
-    hiddenWorkspacePaths: (current.hiddenWorkspacePaths || []).filter((entry) => entry !== canonicalPath),
+    hiddenWorkspacePaths: removeHiddenWorkspacePath(
+      current.hiddenWorkspacePaths || [],
+      canonicalPath,
+    ),
     selectedWorkspacePath: workspace.path,
   });
   await writeState(next);
