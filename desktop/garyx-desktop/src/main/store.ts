@@ -1068,13 +1068,17 @@ export async function removeDesktopWorkspace(workspacePath: string): Promise<Des
   const current = await getDesktopState();
   const workspace = requireWorkspace(current, workspacePath);
   const workspaceKey = normalizeWorkspacePathKey(workspace.path || workspacePath);
+  const hiddenWorkspacePath = workspace.path?.trim() || workspacePath.trim();
 
   const local = await getLocalDesktopState();
-  if (!local.workspaces.some((entry) => normalizeWorkspacePathKey(entry.path || '') === workspaceKey)) {
+  const hasLocalWorkspace = local.workspaces.some((entry) => (
+    normalizeWorkspacePathKey(entry.path || '') === workspaceKey
+  ));
+  if (!hasLocalWorkspace && !workspace.managed) {
     throw new Error('Only local folders can be removed.');
   }
-  const nextHiddenWorkspacePaths = workspace.path?.trim()
-    ? Array.from(new Set([...(local.hiddenWorkspacePaths || []), workspace.path.trim()]))
+  const nextHiddenWorkspacePaths = hiddenWorkspacePath
+    ? Array.from(new Set([...(local.hiddenWorkspacePaths || []), hiddenWorkspacePath]))
     : local.hiddenWorkspacePaths || [];
 
   const next = withSortedEntities({
