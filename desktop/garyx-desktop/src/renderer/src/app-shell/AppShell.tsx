@@ -73,13 +73,13 @@ import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
 import { AddBotDialog } from "./components/AddBotDialog";
-import { BotSidebar } from "../BotSidebar";
+import { BotConversationSidebar } from "../BotConversationSidebar";
+import { WorkspaceConversationSidebar } from "../WorkspaceConversationSidebar";
 import { ComposerForm } from "../ComposerForm";
 import { ComposerQueue } from "../ComposerQueue";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
 import { ConversationHeaderTitle } from "../ConversationHeaderTitle";
 import { NewThreadEmptyState } from "../NewThreadEmptyState";
-import { WorkspaceThreadSidebar } from "../WorkspaceThreadSidebar";
 import { ToastViewport, type ToastItem, type ToastTone } from "../toast";
 import { ToolTraceGroup, shouldRenderToolTraceMessage } from "../tool-trace";
 import {
@@ -1646,6 +1646,9 @@ export function AppShell() {
   const [threadLogsResizing, setThreadLogsResizing] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [botConversationGroupId, setBotConversationGroupId] = useState<string | null>(null);
+  const [workspaceConversationPath, setWorkspaceConversationPath] =
+    useState<string | null>(null);
   const sidebarResizeStateRef = useRef<{
     startX: number;
     startWidth: number;
@@ -2678,6 +2681,31 @@ export function AppShell() {
       desktopState?.endpoints,
     ],
   );
+  const visibleBotGroups = useMemo(() => {
+    if (!desktopState) {
+      return botGroups;
+    }
+    const visibleThreadIds = new Set(
+      [...(desktopState.threads || []), ...(desktopState.sessions || [])].map(
+        (thread) => thread.id,
+      ),
+    );
+    return botGroups.map((group) => {
+      const conversationNodes = (group.conversationNodes || []).filter(
+        (entry) => {
+          const threadId = entry.endpoint.threadId;
+          return Boolean(
+            threadId &&
+              threadId !== deletingThreadId &&
+              visibleThreadIds.has(threadId),
+          );
+        },
+      );
+      return conversationNodes.length === (group.conversationNodes || []).length
+        ? group
+        : { ...group, conversationNodes };
+    });
+  }, [botGroups, deletingThreadId, desktopState]);
   const activeThreadEndpoints =
     activeThread && !activeAutomationThread
       ? (desktopState?.endpoints || []).filter(
@@ -2744,6 +2772,92 @@ export function AppShell() {
   const isTeamsView = contentView === "teams";
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
+  useEffect(() => {
+    if (!selectedThreadId) {
+      return;
+    }
+    const selectedConversationGroup = visibleBotGroups.find((group) =>
+      (group.conversationNodes || []).some(
+        (entry) => entry.endpoint.threadId === selectedThreadId,
+      ),
+    );
+    if (!selectedConversationGroup) {
+      return;
+    }
+    setBotConversationGroupId((current) =>
+      current === selectedConversationGroup.id
+        ? current
+        : selectedConversationGroup.id,
+    );
+    setWorkspaceConversationPath(null);
+  }, [selectedThreadId, visibleBotGroups]);
+  useEffect(() => {
+    if (!botConversationGroupId) {
+      return;
+    }
+    const groupExists = visibleBotGroups.some(
+      (group) =>
+        group.id === botConversationGroupId &&
+        (group.conversationNodes || []).length > 0,
+    );
+    if (!groupExists) {
+      setBotConversationGroupId(null);
+    }
+  }, [botConversationGroupId, visibleBotGroups]);
+  const activeBotConversationGroup = useMemo(() => {
+    if (isSettingsView || !botConversationGroupId) {
+      return null;
+    }
+    return (
+      visibleBotGroups.find(
+        (group) =>
+          group.id === botConversationGroupId &&
+          (group.conversationNodes || []).length > 0,
+      ) || null
+    );
+  }, [botConversationGroupId, isSettingsView, visibleBotGroups]);
+  useEffect(() => {
+    if (!workspaceConversationPath) {
+      return;
+    }
+    const workspaceExists = workspaceThreadGroups.some((group) => {
+      const workspacePath = group.workspace.path || group.workspace.name;
+      return (
+        workspacePath.trim().toLowerCase() ===
+        workspaceConversationPath.trim().toLowerCase()
+      );
+    });
+    if (!workspaceExists) {
+      setWorkspaceConversationPath(null);
+    }
+  }, [workspaceConversationPath, workspaceThreadGroups]);
+  const activeWorkspaceThreadGroup = useMemo(() => {
+    if (isSettingsView || activeBotConversationGroup || !workspaceConversationPath) {
+      return null;
+    }
+    return (
+      workspaceThreadGroups.find((group) => {
+        const workspacePath = group.workspace.path || group.workspace.name;
+        return (
+          workspacePath.trim().toLowerCase() ===
+          workspaceConversationPath.trim().toLowerCase()
+        );
+      }) || null
+    );
+  }, [
+    activeBotConversationGroup,
+    isSettingsView,
+    workspaceConversationPath,
+    workspaceThreadGroups,
+  ]);
+  const appShellClassName = [
+    "app-shell",
+    activeBotConversationGroup || activeWorkspaceThreadGroup
+      ? "with-bot-conversation-rail"
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const conversationClassName = [
     "conversation",
     isSettingsView ? "settings-view" : null,
@@ -6372,6 +6486,75 @@ export function AppShell() {
     });
   }
 
+  async function handleArchiveBotConversationEndpoint(endpoint: DesktopChannelEndpoint) {
+    const targetThreadId = endpoint.threadId || null;
+    if (!targetThreadId || !desktopState) {
+      return;
+    }
+    const targetRuntime = selectThreadRuntime(
+      messageStateRef.current,
+      targetThreadId,
+    );
+    const targetIsBusy =
+      targetThreadId === activeThread?.id
+        ? isRuntimeBusy(activeRuntime?.state)
+        : isRuntimeBusy(targetRuntime?.state);
+    if (targetIsBusy) {
+      return;
+    }
+    if (automationForLatestThread(desktopState, targetThreadId)) {
+      setError("Delete this automation from the Automation view.");
+      return;
+    }
+
+    const endpointKeys = new Set(
+      (desktopState.endpoints || [])
+        .filter((candidate) => candidate.threadId === targetThreadId)
+        .map((candidate) => candidate.endpointKey)
+        .filter((value): value is string => Boolean(value)),
+    );
+    if (endpoint.endpointKey) {
+      endpointKeys.add(endpoint.endpointKey);
+    }
+
+    setDeletingThreadId(targetThreadId);
+    setError(null);
+    try {
+      const api = getDesktopApi();
+      let nextState: DesktopState | null = null;
+      for (const endpointKey of endpointKeys) {
+        nextState = await api.detachChannelEndpoint({ endpointKey });
+      }
+      if (nextState) {
+        setDesktopState(nextState);
+      }
+
+      const deletedState = await api.deleteThread({ threadId: targetThreadId });
+      const deletingSelected = targetThreadId === selectedThreadId;
+      const fallbackThread = deletingSelected
+        ? deletedState.threads[0] || null
+        : null;
+      setDesktopState(deletedState);
+      if (deletingSelected) {
+        setSelectedThreadId(fallbackThread?.id || null);
+      }
+      dispatchMessageState({
+        type: "thread/delete",
+        threadId: targetThreadId,
+      });
+    } catch (archiveError) {
+      setError(
+        archiveError instanceof Error
+          ? archiveError.message
+          : "Failed to delete the thread",
+      );
+    } finally {
+      setDeletingThreadId((current) =>
+        current === targetThreadId ? null : current,
+      );
+    }
+  }
+
   async function handleOpenThreadFromEndpoint(
     endpoint: DesktopChannelEndpoint,
   ): Promise<boolean> {
@@ -7554,7 +7737,7 @@ export function AppShell() {
   return (
     <I18nProvider languagePreference={settingsDraft.languagePreference}>
     <div
-      className="app-shell"
+      className={appShellClassName}
       style={
         {
           "--spacing-token-sidebar": `${sidebarWidth}px`,
@@ -7563,10 +7746,9 @@ export function AppShell() {
     >
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
       <AppLeftRail
-        botGroups={botGroups}
-        deletingThreadId={deletingThreadId}
-        desktopState={desktopState}
-        formatThreadTimestamp={formatThreadTimestamp}
+        activeBotConversationGroupId={botConversationGroupId}
+        activeWorkspaceThreadGroupPath={workspaceConversationPath}
+        botGroups={visibleBotGroups}
         isAutomationView={isAutomationView}
         isAutoResearchView={isAutoResearchView}
         showAutoResearch={showAutoResearchLab}
@@ -7576,11 +7758,6 @@ export function AppShell() {
         isSettingsView={isSettingsView}
         isSkillsView={isSkillsView}
         isTasksView={isTasksView}
-        isThreadRuntimeBusy={(threadId) => {
-          return isRuntimeBusy(
-            selectThreadRuntime(messageState, threadId)?.state,
-          );
-        }}
         onBackToThreads={() => {
           setContentView("thread");
         }}
@@ -7589,20 +7766,26 @@ export function AppShell() {
         onCreateThreadForWorkspace={(workspacePath) => {
           void handleCreateThreadForWorkspace(workspacePath);
         }}
-        onDeleteThread={(threadId) => {
-          void handleDeleteThread(threadId);
-        }}
         onNewThread={() => {
           void handleNewThread();
         }}
-        onOpenThread={(threadId) => {
-          void openExistingThread(threadId);
-        }}
         onOpenBot={(group) => {
+          setWorkspaceConversationPath(null);
           void handleBotClick(group);
         }}
-        onOpenBotEndpoint={(endpoint) => {
-          void handleOpenThreadFromEndpoint(endpoint);
+        onToggleBotConversationGroup={(group) => {
+          setWorkspaceConversationPath(null);
+          setBotConversationGroupId((current) =>
+            current === group.id ? null : group.id,
+          );
+        }}
+        onToggleWorkspaceThreadGroup={(workspacePath) => {
+          setBotConversationGroupId(null);
+          setWorkspaceConversationPath((current) => {
+            const currentKey = current?.trim().toLowerCase() || "";
+            const nextKey = workspacePath.trim().toLowerCase();
+            return currentKey === nextKey ? null : workspacePath;
+          });
         }}
         onAddBot={() => {
           void openAddBotDialog();
@@ -7639,16 +7822,12 @@ export function AppShell() {
         onSelectSettingsTab={(tabId) => {
           void handleSelectSettingsTab(tabId);
         }}
-        onSelectWorkspace={(workspacePath, preferredThreadId) => {
-          void handleSelectWorkspace(workspacePath, preferredThreadId);
-        }}
         onSubmitRenameWorkspace={(workspacePath) => {
           void handleSubmitRenameWorkspace(workspacePath);
         }}
         renamingWorkspacePath={renamingWorkspacePath}
         selectedAutomationId={selectedAutomationId}
         selectedThreadId={selectedThreadId}
-        setContentView={setContentView}
         setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
         setWorkspaceNameDraft={setWorkspaceNameDraft}
         settingsActiveTab={settingsActiveTab}
@@ -7657,6 +7836,50 @@ export function AppShell() {
         workspaceNameDraft={workspaceNameDraft}
         workspaceThreadGroups={workspaceThreadGroups}
       />
+      {activeBotConversationGroup ? (
+        <BotConversationSidebar
+          deletingThreadId={deletingThreadId}
+          formatThreadTimestamp={formatThreadTimestamp}
+          group={activeBotConversationGroup}
+          isThreadRuntimeBusy={(threadId) => {
+            return isRuntimeBusy(
+              selectThreadRuntime(messageState, threadId)?.state,
+            );
+          }}
+          onArchiveEndpoint={(endpoint) => {
+            void handleArchiveBotConversationEndpoint(endpoint);
+          }}
+          onClose={() => {
+            setBotConversationGroupId(null);
+          }}
+          onOpenEndpoint={(endpoint) => {
+            void handleOpenThreadFromEndpoint(endpoint);
+          }}
+          selectedThreadId={selectedThreadId}
+        />
+      ) : activeWorkspaceThreadGroup ? (
+        <WorkspaceConversationSidebar
+          deletingThreadId={deletingThreadId}
+          desktopState={desktopState}
+          formatThreadTimestamp={formatThreadTimestamp}
+          group={activeWorkspaceThreadGroup}
+          isThreadRuntimeBusy={(threadId) => {
+            return isRuntimeBusy(
+              selectThreadRuntime(messageState, threadId)?.state,
+            );
+          }}
+          onClose={() => {
+            setWorkspaceConversationPath(null);
+          }}
+          onDeleteThread={(threadId) => {
+            void handleDeleteThread(threadId);
+          }}
+          onOpenThread={(threadId) => {
+            void openExistingThread(threadId);
+          }}
+          selectedThreadId={selectedThreadId}
+        />
+      ) : null}
       <AddBotDialog
         onClose={() => {
           setAddBotDialogOpen(false);

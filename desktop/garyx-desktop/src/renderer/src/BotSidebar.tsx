@@ -1,24 +1,12 @@
-import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 
-import type { DesktopBotConsoleSummary, DesktopChannelEndpoint } from '@shared/contracts';
+import type { DesktopBotConsoleSummary } from '@shared/contracts';
 
 import { botRootBoundThreadId } from './bot-console-model';
-import { ChevronDownIcon } from './app-shell/icons';
+import { ChevronDownIcon, ForwardIcon } from './app-shell/icons';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
 import { ChannelLogo } from './channel-logo';
 import { useI18n } from './i18n';
-
-function setsEqual(left: Set<string>, right: Set<string>): boolean {
-  if (left.size !== right.size) {
-    return false;
-  }
-  for (const value of left) {
-    if (!right.has(value)) {
-      return false;
-    }
-  }
-  return true;
-}
 
 function botRootThreadIds(group: DesktopBotConsoleSummary): Set<string> {
   const ids = [
@@ -33,41 +21,25 @@ function botRootCanOpen(group: DesktopBotConsoleSummary): boolean {
   return group.rootBehavior !== 'expand_only' || botRootThreadIds(group).size > 0;
 }
 
-function toggleGroupExpanded(
-  groupId: string,
-  setExpandedGroupIds: Dispatch<SetStateAction<Set<string>>>,
-): void {
-  setExpandedGroupIds((current) => {
-    const next = new Set(current);
-    if (next.has(groupId)) {
-      next.delete(groupId);
-    } else {
-      next.add(groupId);
-    }
-    return next;
-  });
-}
-
 type BotSidebarProps = {
   groups: DesktopBotConsoleSummary[];
   selectedThreadId: string | null;
-  formatThreadTimestamp: (value?: string | null) => string;
+  activeConversationGroupId: string | null;
   onOpenBot: (group: DesktopBotConsoleSummary) => void;
-  onOpenEndpoint: (endpoint: DesktopChannelEndpoint) => void;
+  onToggleConversationGroup: (group: DesktopBotConsoleSummary) => void;
   onAddBot: () => void;
 };
 
 export function BotSidebar({
   groups,
   selectedThreadId,
-  formatThreadTimestamp,
+  activeConversationGroupId,
   onOpenBot,
-  onOpenEndpoint,
+  onToggleConversationGroup,
   onAddBot,
 }: BotSidebarProps) {
   const { t } = useI18n();
   const [sectionCollapsed, setSectionCollapsed] = useState(false);
-  const [expandedGroupIds, setExpandedGroupIds] = useState<Set<string>>(new Set());
   const { entries: pluginCatalog } = useChannelPluginCatalog();
 
   const iconDataUrlByChannel = useMemo(
@@ -80,22 +52,6 @@ export function BotSidebar({
       ),
     [pluginCatalog],
   );
-
-  useEffect(() => {
-    setExpandedGroupIds((current) => {
-      const next = new Set<string>();
-      for (const group of groups) {
-        const childEntries = group.conversationNodes || [];
-        if (!childEntries.length) {
-          continue;
-        }
-        if (current.has(group.id) || childEntries.some((entry) => entry.endpoint.threadId === selectedThreadId)) {
-          next.add(group.id);
-        }
-      }
-      return setsEqual(current, next) ? current : next;
-    });
-  }, [groups, selectedThreadId]);
 
   return (
     <div className="sidebar-thread-block sidebar-bot-block">
@@ -138,26 +94,34 @@ export function BotSidebar({
         <div className="sidebar-collapsible-inner workspace-list sidebar-bot-list">
           {groups.map((group) => {
             const childEntries = group.conversationNodes || [];
-            const isExpanded = expandedGroupIds.has(group.id);
+            const isConversationRailOpen = activeConversationGroupId === group.id;
             const rootThreadIds = botRootThreadIds(group);
             const rootCanOpen = botRootCanOpen(group);
+            const rowCanOpen = rootCanOpen || childEntries.length > 0;
             const rootIsSelected = selectedThreadId ? rootThreadIds.has(selectedThreadId) : false;
+            const rowIsSelected = rootIsSelected;
+            const rowActionLabel = rootCanOpen
+              ? t('Open {name} thread', { name: group.title })
+              : t('Show conversations');
 
             return (
               <section className="workspace-group" key={group.id}>
                 <div
-                  className={`workspace-row workspace-row-shell bot-group-shell ${rootIsSelected ? 'active' : ''}`}
+                  className={`workspace-row workspace-row-shell bot-group-shell ${rowIsSelected ? 'active' : ''}`}
                 >
                   <button
                     aria-current={rootIsSelected ? 'page' : undefined}
-                    aria-label={t('Open {name} thread', { name: group.title })}
+                    aria-label={rowActionLabel}
                     className="workspace-row-main bot-group-main"
-                    disabled={!rootCanOpen}
+                    disabled={!rowCanOpen}
                     onClick={() => {
-                      if (!rootCanOpen) {
+                      if (rootCanOpen) {
+                        onOpenBot(group);
                         return;
                       }
-                      onOpenBot(group);
+                      if (childEntries.length) {
+                        onToggleConversationGroup(group);
+                      }
                     }}
                     tabIndex={-1}
                     type="button"
@@ -175,60 +139,24 @@ export function BotSidebar({
                     </div>
                   </button>
                   {childEntries.length ? (
-                    <button
-                      aria-expanded={isExpanded}
-                      aria-label={isExpanded ? t('Collapse') : t('Expand')}
-                      className="bot-group-expand-button"
-                      onClick={() => {
-                        toggleGroupExpanded(group.id, setExpandedGroupIds);
-                      }}
-                      tabIndex={-1}
-                      title={isExpanded ? t('Collapse') : t('Expand')}
-                      type="button"
-                    >
-                      <ChevronDownIcon
-                        size={16}
-                        className={`icon sidebar-section-chevron ${isExpanded ? '' : 'collapsed'}`}
-                      />
-                    </button>
+                    <div className="bot-group-conversation-tools">
+                      <button
+                        aria-expanded={isConversationRailOpen}
+                        aria-label={isConversationRailOpen ? t('Hide conversations') : t('Show conversations')}
+                        className={`bot-group-expand-button ${isConversationRailOpen ? 'active' : ''}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onToggleConversationGroup(group);
+                        }}
+                        tabIndex={-1}
+                        title={isConversationRailOpen ? t('Hide conversations') : t('Show conversations')}
+                        type="button"
+                      >
+                        <ForwardIcon />
+                      </button>
+                    </div>
                   ) : null}
                 </div>
-                {childEntries.length ? (
-                  <div
-                    aria-hidden={!isExpanded}
-                    className={`bot-thread-list sidebar-collapsible ${isExpanded ? '' : 'is-collapsed'}`}
-                    inert={!isExpanded ? true : undefined}
-                  >
-                    <div className="sidebar-collapsible-inner bot-thread-list-inner">
-                      {childEntries.map((entry) => {
-                        const isSelected = selectedThreadId === entry.endpoint.threadId;
-                        return (
-                          <button
-                            className={`workspace-row bot-thread-row ${isSelected ? 'active' : ''}`}
-                            key={entry.id}
-                            onClick={() => {
-                              onOpenEndpoint(entry.endpoint);
-                            }}
-                            tabIndex={-1}
-                            type="button"
-                          >
-                            <div className="workspace-row-copy bot-thread-copy">
-                              <span className="bot-thread-title" title={entry.title}>
-                                {entry.title}
-                              </span>
-                              {entry.badge ? (
-                                <span className="bot-thread-badge">{entry.badge}</span>
-                              ) : null}
-                            </div>
-                            <span className="workspace-status">
-                              {formatThreadTimestamp(entry.latestActivity)}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ) : null}
               </section>
             );
           })}

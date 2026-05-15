@@ -629,6 +629,13 @@ code {
   background: transparent;
 }
 
+.app-shell.with-bot-conversation-rail {
+  grid-template-columns:
+    var(--spacing-token-sidebar)
+    minmax(236px, 280px)
+    minmax(0, 1fr);
+}
+
 .sidebar-resizer {
   position: absolute;
   top: 0;
@@ -1031,10 +1038,141 @@ code {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 24px;
+  width: 26px;
   height: 24px;
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: color-mix(in srgb, var(--color-token-text-primary) 48%, transparent);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.bot-group-expand-button:hover {
+  background: color-mix(in oklab, var(--color-token-text-primary) 6%, transparent);
+  color: var(--color-token-text-primary);
+}
+
+.bot-group-expand-button.active {
+  background: transparent;
+  color: var(--color-token-text-primary);
+}
+
+.bot-group-expand-button .sidebar-section-chevron {
+  opacity: 1;
+}
+
+.bot-group-expand-button .icon {
+  width: 15px;
+  height: 15px;
+  opacity: 1;
+}
+
+.bot-group-conversation-tools {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.workspace-row:hover .sidebar-section-chevron {
+  opacity: 1;
+}
+
+.bot-conversation-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100vh;
+  max-height: 100vh;
+  padding: 14px 8px 10px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--color-token-bg-primary) 94%, var(--color-token-bg-tertiary)) 0%,
+      color-mix(in oklab, var(--color-token-bg-secondary) 88%, #ffffff) 100%
+    );
+  border-left: 1px solid color-mix(in oklab, var(--color-token-foreground) 9%, transparent);
+  border-right: 1px solid color-mix(in oklab, var(--color-token-foreground) 11%, transparent);
+  box-shadow:
+    inset 8px 0 14px -16px color-mix(in oklab, var(--color-token-foreground) 28%, transparent),
+    inset 1px 0 0 color-mix(in oklab, #ffffff 74%, transparent),
+    inset -1px 0 0 color-mix(in oklab, var(--color-token-foreground) 5%, transparent);
+  -webkit-app-region: drag;
+}
+
+.bot-conversation-rail::after {
+  display: none;
+}
+
+.bot-conversation-rail button,
+.bot-conversation-list {
+  -webkit-app-region: no-drag;
+}
+
+.bot-conversation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
+  min-height: 38px;
+  padding: 0 2px 10px 6px;
+}
+
+.bot-conversation-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bot-conversation-logo {
+  width: 18px;
+  height: 18px;
+}
+
+.workspace-conversation-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  color: color-mix(in oklab, var(--color-token-text-primary) 74%, transparent);
+}
+
+.workspace-conversation-logo .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.bot-conversation-title-copy {
+  min-width: 0;
+}
+
+.bot-conversation-title {
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bot-conversation-collapse {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-lg);
   background: transparent;
   color: color-mix(in srgb, var(--color-token-text-primary) 58%, transparent);
   cursor: pointer;
@@ -1043,21 +1181,97 @@ code {
     color var(--duration-fast) var(--ease-standard);
 }
 
-.bot-group-expand-button:hover {
-  background: color-mix(
-    in oklab,
-    var(--color-token-text-primary) 8%,
-    transparent
-  );
+.bot-conversation-collapse:hover {
+  background: var(--color-token-row-hover);
   color: var(--color-token-text-primary);
 }
 
-.bot-group-expand-button .sidebar-section-chevron {
-  opacity: 1;
+.bot-conversation-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+  scrollbar-width: none;
 }
 
-.workspace-row:hover .sidebar-section-chevron {
+.bot-conversation-list::-webkit-scrollbar {
+  display: none;
+}
+
+.bot-conversation-row-shell {
+  position: relative;
+  border-radius: var(--radius-lg);
+}
+
+.bot-conversation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: color-mix(in oklab, var(--color-token-text-primary) 86%, transparent);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.bot-conversation-row-shell:hover .bot-conversation-row {
+  background: var(--color-token-row-hover);
+  color: var(--color-token-text-primary);
+}
+
+.bot-conversation-row-shell.active .bot-conversation-row,
+.bot-conversation-row-shell.active:hover .bot-conversation-row {
+  background: var(--color-token-row-selected);
+  color: var(--color-token-text-primary);
+}
+
+.bot-conversation-row-shell:hover:not(.no-delete) .bot-conversation-row-time {
+  opacity: 0;
+}
+
+.bot-conversation-row-shell:hover .thread-delete-button {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.bot-conversation-row:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.bot-conversation-row-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.bot-conversation-row-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bot-conversation-row-time {
+  flex-shrink: 0;
+  color: color-mix(in srgb, var(--color-token-text-primary) 48%, transparent);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .workspace-folder-icon {
@@ -14381,6 +14595,18 @@ button.codex-list-row {
     min-height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--color-token-border);
+  }
+
+  .bot-conversation-rail {
+    height: auto;
+    max-height: 42vh;
+    padding-top: 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-token-border);
+  }
+
+  .bot-conversation-rail::after {
+    display: none;
   }
 
   .conversation {

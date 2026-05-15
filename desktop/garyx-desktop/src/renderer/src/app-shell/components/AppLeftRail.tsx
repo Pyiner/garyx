@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from 'react';
 
-import type { DesktopChannelEndpoint, DesktopState, DesktopWorkspace } from '@shared/contracts';
+import type { DesktopWorkspace } from '@shared/contracts';
 
 import { SETTINGS_TABS, type SettingsTabId } from '../../settings-tabs';
 import { BotSidebar } from '../../BotSidebar';
@@ -8,7 +8,6 @@ import { WorkspaceThreadSidebar } from '../../WorkspaceThreadSidebar';
 import { UpdatePill } from './UpdatePill';
 import { buildBotGroups } from '../../bot-console-model';
 import { buildWorkspaceThreadGroups } from '../../thread-model';
-import type { ContentView } from '../types';
 import {
   AgentsIcon,
   AutomationIcon,
@@ -35,11 +34,9 @@ type AppLeftRailProps = {
   showAutoResearch: boolean;
   settingsActiveTab: SettingsTabId;
   selectedAutomationId: string | null;
+  activeBotConversationGroupId: string | null;
+  activeWorkspaceThreadGroupPath: string | null;
   botGroups: ReturnType<typeof buildBotGroups>;
-  desktopState: DesktopState | null;
-  deletingThreadId: string | null;
-  formatThreadTimestamp: (value?: string | null) => string;
-  isThreadRuntimeBusy: (threadId: string) => boolean;
   workspaceThreadGroups: ReturnType<typeof buildWorkspaceThreadGroups>;
   renamingWorkspacePath: string | null;
   selectedThreadId: string | null;
@@ -56,18 +53,15 @@ type AppLeftRailProps = {
   onOpenSkills: () => void;
   onOpenTasks: () => void;
   onOpenBot: (group: ReturnType<typeof buildBotGroups>[number]) => void;
-  onOpenBotEndpoint: (endpoint: DesktopChannelEndpoint) => void;
+  onToggleBotConversationGroup: (group: ReturnType<typeof buildBotGroups>[number]) => void;
+  onToggleWorkspaceThreadGroup: (workspacePath: string) => void;
   onAddBot: () => void;
   onAddWorkspace: () => void;
   onBeginRenameWorkspace: (workspace: DesktopWorkspace) => void;
   onCancelRenameWorkspace: () => void;
   onCreateThreadForWorkspace: (workspacePath: string) => void;
-  onDeleteThread: (threadId: string) => void;
-  onOpenThread: (threadId: string) => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
-  onSelectWorkspace: (workspacePath: string, preferredThreadId?: string | null) => void;
   onSubmitRenameWorkspace: (workspacePath: string) => void;
-  setContentView: Dispatch<SetStateAction<ContentView>>;
   setWorkspaceMenuOpenPath: Dispatch<SetStateAction<string | null>>;
   setWorkspaceNameDraft: Dispatch<SetStateAction<string>>;
   onOpenSettings: () => void;
@@ -87,11 +81,9 @@ export function AppLeftRail({
   showAutoResearch,
   settingsActiveTab,
   selectedAutomationId,
+  activeBotConversationGroupId,
+  activeWorkspaceThreadGroupPath,
   botGroups,
-  desktopState,
-  deletingThreadId,
-  formatThreadTimestamp,
-  isThreadRuntimeBusy,
   workspaceThreadGroups,
   renamingWorkspacePath,
   selectedThreadId,
@@ -108,18 +100,15 @@ export function AppLeftRail({
   onOpenSkills,
   onOpenTasks,
   onOpenBot,
-  onOpenBotEndpoint,
+  onToggleBotConversationGroup,
+  onToggleWorkspaceThreadGroup,
   onAddBot,
   onAddWorkspace,
   onBeginRenameWorkspace,
   onCancelRenameWorkspace,
   onCreateThreadForWorkspace,
-  onDeleteThread,
-  onOpenThread,
   onRequestRemoveWorkspace,
-  onSelectWorkspace,
   onSubmitRenameWorkspace,
-  setContentView,
   setWorkspaceMenuOpenPath,
   setWorkspaceNameDraft,
   onOpenSettings,
@@ -235,31 +224,24 @@ export function AppLeftRail({
           </nav>
 
           <BotSidebar
-            formatThreadTimestamp={formatThreadTimestamp}
+            activeConversationGroupId={activeBotConversationGroupId}
             groups={botGroups}
             onAddBot={onAddBot}
             onOpenBot={onOpenBot}
-            onOpenEndpoint={onOpenBotEndpoint}
+            onToggleConversationGroup={onToggleBotConversationGroup}
             selectedThreadId={visibleSelectedThreadId}
           />
 
           <WorkspaceThreadSidebar
-            deletingThreadId={deletingThreadId}
-            desktopState={desktopState}
-            formatThreadTimestamp={formatThreadTimestamp}
-            isThreadRuntimeBusy={isThreadRuntimeBusy}
+            activeWorkspacePath={activeWorkspaceThreadGroupPath}
             onAddWorkspace={onAddWorkspace}
             onBeginRenameWorkspace={onBeginRenameWorkspace}
             onCancelRenameWorkspace={onCancelRenameWorkspace}
             onCreateThreadForWorkspace={onCreateThreadForWorkspace}
-            onDeleteThread={onDeleteThread}
-            onOpenThread={onOpenThread}
             onRequestRemoveWorkspace={onRequestRemoveWorkspace}
-            onSelectWorkspace={onSelectWorkspace}
             onSubmitRenameWorkspace={onSubmitRenameWorkspace}
+            onToggleWorkspaceThreads={onToggleWorkspaceThreadGroup}
             renamingWorkspacePath={renamingWorkspacePath}
-            selectedThreadId={visibleSelectedThreadId}
-            setContentView={setContentView}
             setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
             setWorkspaceNameDraft={setWorkspaceNameDraft}
             workspaceMenuOpenPath={workspaceMenuOpenPath}
