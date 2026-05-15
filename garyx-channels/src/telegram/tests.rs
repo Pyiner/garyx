@@ -2922,6 +2922,26 @@ mod e2e_tests {
         });
         callback(StreamEvent::Done);
 
+        let send_bodies = wait_for_json_capture_quiet_window(
+            &capture.send_messages,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_secs(5),
+            1,
+        )
+        .await;
+        let sent_text = send_bodies
+            .iter()
+            .find_map(|body| body["text"].as_str())
+            .expect("stream text message");
+        assert!(
+            sent_text.contains("截图在这里："),
+            "text message should keep surrounding prose: {sent_text}"
+        );
+        assert!(
+            !sent_text.contains("![") && !sent_text.contains("shot.png"),
+            "text message should not expose local markdown image syntax: {sent_text}"
+        );
+
         let photo_bodies =
             wait_for_photo_capture_len(&capture, 1, std::time::Duration::from_secs(5)).await;
         let body = String::from_utf8_lossy(&photo_bodies[0]);

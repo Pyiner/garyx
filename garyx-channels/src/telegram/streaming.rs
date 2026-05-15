@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -150,13 +151,10 @@ fn render_stream_content_text(state: &StreamState) -> String {
     }
 }
 
-fn render_stream_display_text(state: &StreamState) -> String {
-    render_stream_content_text(state)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MarkdownImageRef {
     path: PathBuf,
+    source_range: Range<usize>,
 }
 
 fn supported_markdown_image_extension(path: &Path) -> bool {
@@ -202,9 +200,8 @@ fn markdown_image_target_path(raw_target: &str) -> Option<PathBuf> {
         .filter(|path| path.is_file())
 }
 
-fn extract_markdown_image_refs(text: &str) -> Vec<MarkdownImageRef> {
+fn scan_markdown_image_refs(text: &str) -> Vec<MarkdownImageRef> {
     let mut refs = Vec::new();
-    let mut seen = HashSet::new();
     let mut offset = 0;
 
     while let Some(relative_start) = text[offset..].find("![") {
@@ -224,16 +221,59 @@ fn extract_markdown_image_refs(text: &str) -> Vec<MarkdownImageRef> {
         let target = &text[target_start..target_end];
 
         if let Some(path) = markdown_image_target_path(target) {
-            let key = path.to_string_lossy().to_string();
-            if seen.insert(key) {
-                refs.push(MarkdownImageRef { path });
-            }
+            refs.push(MarkdownImageRef {
+                path,
+                source_range: start..target_end + 1,
+            });
         }
 
         offset = target_end + 1;
     }
 
     refs
+}
+
+fn extract_markdown_image_refs(text: &str) -> Vec<MarkdownImageRef> {
+    let mut refs = Vec::new();
+    let mut seen = HashSet::new();
+
+    for image_ref in scan_markdown_image_refs(text) {
+        let key = image_ref.path.to_string_lossy().to_string();
+        if seen.insert(key) {
+            refs.push(image_ref);
+        }
+    }
+
+    refs
+}
+
+fn strip_deliverable_markdown_images(text: &str) -> String {
+    let image_refs = scan_markdown_image_refs(text);
+    if image_refs.is_empty() {
+        return text.to_owned();
+    }
+
+    let mut stripped = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for image_ref in image_refs {
+        if image_ref.source_range.start > cursor {
+            stripped.push_str(&text[cursor..image_ref.source_range.start]);
+        }
+        cursor = image_ref.source_range.end;
+    }
+    if cursor < text.len() {
+        stripped.push_str(&text[cursor..]);
+    }
+
+    while stripped.contains("\n\n\n") {
+        stripped = stripped.replace("\n\n\n", "\n\n");
+    }
+
+    stripped.trim().to_owned()
+}
+
+fn render_stream_display_text(state: &StreamState) -> String {
+    strip_deliverable_markdown_images(&render_stream_content_text(state))
 }
 
 impl StreamingCallbackShared {
@@ -264,6 +304,9 @@ impl StreamingCallbackShared {
             return;
         }
         let display_text = render_stream_display_text(&state);
+        if display_text.trim().is_empty() {
+            return;
+        }
         if display_text.trim() == state.last_rendered_text.trim() {
             return;
         }
@@ -415,10 +458,18 @@ impl StreamingCallbackShared {
         let _ = self
             .roll_stream_segment_if_needed(thread_id, state, &pending_boundary_text)
             .await;
-        let boundary_text = state.accumulated_text.trim().to_owned();
+        let boundary_content_text = state.accumulated_text.trim().to_owned();
+        let boundary_text = strip_deliverable_markdown_images(&boundary_content_text);
+
+        if boundary_content_text.is_empty() {
+            self.delete_runtime_only_message(state).await;
+            Self::reset_for_fresh_message(state);
+            return;
+        }
 
         if boundary_text.is_empty() {
             self.delete_runtime_only_message(state).await;
+            self.send_markdown_images_from_state(thread_id, state).await;
             Self::reset_for_fresh_message(state);
             return;
         }
@@ -605,7 +656,7 @@ impl StreamingCallbackShared {
         state.active_tool_name = None;
         state.flush_scheduled = false;
 
-        let display_text = state.accumulated_text.clone();
+        let display_text = strip_deliverable_markdown_images(&state.accumulated_text);
         let Some(msg_id) = state.message_id else {
             state.last_rendered_text.clear();
             return;
@@ -736,7 +787,12 @@ impl StreamingCallbackShared {
         state: &mut StreamState,
         display_text: &str,
     ) -> bool {
-        let chunks = split_message(display_text, MAX_MESSAGE_LENGTH);
+        let display_text = strip_deliverable_markdown_images(display_text);
+        if display_text.trim().is_empty() {
+            return false;
+        }
+
+        let chunks = split_message(&display_text, MAX_MESSAGE_LENGTH);
         if chunks.len() <= 1 {
             return false;
         }
@@ -906,8 +962,9 @@ impl StreamingCallbackShared {
 
         if is_final && state.flush_scheduled {
             let pending_text = render_stream_content_text(&state);
-            if !pending_text.trim().is_empty()
-                && pending_text.trim() != state.last_rendered_text.trim()
+            let pending_display_text = strip_deliverable_markdown_images(&pending_text);
+            if !pending_display_text.trim().is_empty()
+                && pending_display_text.trim() != state.last_rendered_text.trim()
                 && !self
                     .roll_stream_segment_if_needed(thread_id, &mut state, &pending_text)
                     .await
@@ -918,14 +975,14 @@ impl StreamingCallbackShared {
                     &self.cfg.token,
                     self.cfg.chat_id,
                     msg_id,
-                    &pending_text,
+                    &pending_display_text,
                     Some(MARKDOWN_V2_PARSE_MODE),
                     &self.cfg.api_base,
                 )
                 .await
                 {
                     Ok(()) => {
-                        state.last_rendered_text = pending_text;
+                        state.last_rendered_text = pending_display_text;
                         state.last_edit_time = Instant::now();
                     }
                     Err(e) => {
@@ -969,6 +1026,17 @@ impl StreamingCallbackShared {
         }
 
         let display_text = render_stream_display_text(&state);
+        if display_text.trim().is_empty() {
+            if is_final {
+                self.delete_runtime_only_message(&mut state).await;
+                state.finalized = true;
+                state.flush_scheduled = false;
+                self.send_markdown_images_from_state(thread_id, &mut state)
+                    .await;
+            }
+            return;
+        }
+
         if let Some(msg_id) = state.message_id {
             if !is_final {
                 let now = Instant::now();
