@@ -42,7 +42,7 @@ function getWorkspaceLabel(
   return (
     selectedWorkspace(state, automation.workspacePath)?.name
     || compactPathLabel(automation.workspacePath)
-    || t('Workspace unavailable')
+    || t('Workspace not set')
   );
 }
 
@@ -200,7 +200,7 @@ export function AutomationListPage({
                     <span className={`codex-sync-pill ${status.pillClass}`}>{t(status.label)}</span>
                     <span className="codex-sync-pill">{agentLabel}</span>
                     <span className="codex-sync-pill ok">{formatSchedule(automation.schedule, t)}</span>
-                    {!workspace?.available && (
+                    {workspace && !workspace.available && (
                       <span className="codex-sync-pill fail">{t('Workspace unavailable')}</span>
                     )}
                     <span className="codex-command-row-desc">
