@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,6 +25,8 @@ use super::{MAX_MESSAGE_LENGTH, resolve_reply_to, send_response};
 struct StreamState {
     message_id: Option<i64>,
     accumulated_text: String,
+    markdown_image_scan_text: String,
+    sent_markdown_image_paths: HashSet<String>,
     last_rendered_text: String,
     last_edit_time: Instant,
     flush_scheduled: bool,
@@ -37,6 +41,8 @@ impl Default for StreamState {
         Self {
             message_id: None,
             accumulated_text: String::new(),
+            markdown_image_scan_text: String::new(),
+            sent_markdown_image_paths: HashSet::new(),
             last_rendered_text: String::new(),
             last_edit_time: Instant::now(),
             flush_scheduled: false,
@@ -148,10 +154,94 @@ fn render_stream_display_text(state: &StreamState) -> String {
     render_stream_content_text(state)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MarkdownImageRef {
+    path: PathBuf,
+}
+
+fn supported_markdown_image_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp")
+    )
+}
+
+fn markdown_image_target_path(raw_target: &str) -> Option<PathBuf> {
+    let mut target = raw_target.trim();
+    if target.is_empty() {
+        return None;
+    }
+
+    if let Some(stripped) = target
+        .strip_prefix('<')
+        .and_then(|value| value.strip_suffix('>'))
+    {
+        target = stripped.trim();
+    } else if let Some(index) = target.find(char::is_whitespace) {
+        target = target[..index].trim();
+    }
+
+    let target = target.trim_matches(|value| value == '"' || value == '\'');
+    if target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with("data:")
+    {
+        return None;
+    }
+
+    let path = target
+        .strip_prefix("file://")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(target));
+    path.is_absolute()
+        .then_some(path)
+        .filter(|path| supported_markdown_image_extension(path))
+        .filter(|path| path.is_file())
+}
+
+fn extract_markdown_image_refs(text: &str) -> Vec<MarkdownImageRef> {
+    let mut refs = Vec::new();
+    let mut seen = HashSet::new();
+    let mut offset = 0;
+
+    while let Some(relative_start) = text[offset..].find("![") {
+        let start = offset + relative_start;
+        let alt_start = start + 2;
+        let Some(alt_end_relative) = text[alt_start..].find("](") else {
+            offset = alt_start;
+            continue;
+        };
+        let alt_end = alt_start + alt_end_relative;
+        let target_start = alt_end + 2;
+        let Some(target_end_relative) = text[target_start..].find(')') else {
+            offset = target_start;
+            continue;
+        };
+        let target_end = target_start + target_end_relative;
+        let target = &text[target_start..target_end];
+
+        if let Some(path) = markdown_image_target_path(target) {
+            let key = path.to_string_lossy().to_string();
+            if seen.insert(key) {
+                refs.push(MarkdownImageRef { path });
+            }
+        }
+
+        offset = target_end + 1;
+    }
+
+    refs
+}
+
 impl StreamingCallbackShared {
     fn reset_for_fresh_message(state: &mut StreamState) {
         state.message_id = None;
         state.accumulated_text.clear();
+        state.markdown_image_scan_text.clear();
+        state.sent_markdown_image_paths.clear();
         state.last_rendered_text.clear();
         state.last_edit_time = Instant::now();
         state.flush_scheduled = false;
@@ -271,6 +361,53 @@ impl StreamingCallbackShared {
         }
     }
 
+    async fn send_markdown_images_from_state(&self, thread_id: &str, state: &mut StreamState) {
+        let image_refs = extract_markdown_image_refs(&state.markdown_image_scan_text);
+        if image_refs.is_empty() {
+            return;
+        }
+
+        let mut delivered_msg_ids = Vec::new();
+        for image_ref in image_refs {
+            let key = image_ref.path.to_string_lossy().to_string();
+            if state.sent_markdown_image_paths.contains(&key) {
+                continue;
+            }
+
+            match send_photo(
+                TelegramSendTarget::new(
+                    &self.cfg.http,
+                    &self.cfg.token,
+                    self.cfg.chat_id,
+                    self.cfg.outbound_thread_id,
+                    &self.cfg.api_base,
+                ),
+                &image_ref.path,
+                None,
+                self.effective_reply_to(),
+            )
+            .await
+            {
+                Ok(message_id) => {
+                    state.sent_markdown_image_paths.insert(key);
+                    delivered_msg_ids.push(message_id);
+                }
+                Err(error) => {
+                    warn!(
+                        account_id = %self.cfg.account_id,
+                        chat_id = self.cfg.chat_id,
+                        path = %image_ref.path.display(),
+                        error = %error,
+                        "failed to send Telegram markdown image"
+                    );
+                }
+            }
+        }
+
+        self.record_outbound_messages(thread_id, &delivered_msg_ids)
+            .await;
+    }
+
     async fn process_boundary(&self, thread_id: &str, state: &mut StreamState) {
         let mut delivered_msg_ids: Vec<i64> = Vec::new();
 
@@ -354,6 +491,8 @@ impl StreamingCallbackShared {
 
         self.record_outbound_messages(thread_id, &delivered_msg_ids)
             .await;
+
+        self.send_markdown_images_from_state(thread_id, state).await;
 
         Self::reset_for_fresh_message(state);
     }
@@ -715,6 +854,10 @@ impl StreamingCallbackShared {
                         &mut state.accumulated_text,
                         StreamBoundaryKind::AssistantSegment,
                     );
+                    crate::streaming_core::apply_stream_boundary_text(
+                        &mut state.markdown_image_scan_text,
+                        StreamBoundaryKind::AssistantSegment,
+                    );
                     false
                 }
             },
@@ -727,6 +870,7 @@ impl StreamingCallbackShared {
                     state.active_tool_name = None;
                 }
                 state.tool_call_index = 0;
+                state.markdown_image_scan_text.push_str(&text);
                 state.accumulated_text =
                     crate::streaming_core::merge_stream_text(&state.accumulated_text, &text);
                 state.finalized = false;
@@ -755,6 +899,8 @@ impl StreamingCallbackShared {
             if let Some(msg_id) = state.message_id {
                 self.record_outbound_messages(thread_id, &[msg_id]).await;
             }
+            self.send_markdown_images_from_state(thread_id, &mut state)
+                .await;
             return;
         }
 
@@ -797,6 +943,10 @@ impl StreamingCallbackShared {
         let content_text = render_stream_content_text(&state);
 
         if content_text.trim().is_empty() {
+            if is_final {
+                self.send_markdown_images_from_state(thread_id, &mut state)
+                    .await;
+            }
             return;
         }
 
@@ -810,6 +960,10 @@ impl StreamingCallbackShared {
             }
             if is_final && let Some(msg_id) = state.message_id {
                 self.record_outbound_messages(thread_id, &[msg_id]).await;
+            }
+            if is_final {
+                self.send_markdown_images_from_state(thread_id, &mut state)
+                    .await;
             }
             return;
         }
@@ -841,6 +995,8 @@ impl StreamingCallbackShared {
                     if let Some(msg_id) = state.message_id {
                         self.record_outbound_messages(thread_id, &[msg_id]).await;
                     }
+                    self.send_markdown_images_from_state(thread_id, &mut state)
+                        .await;
                 }
                 return;
             }
@@ -910,6 +1066,10 @@ impl StreamingCallbackShared {
 
         if is_final && let Some(msg_id) = state.message_id {
             self.record_outbound_messages(thread_id, &[msg_id]).await;
+        }
+        if is_final {
+            self.send_markdown_images_from_state(thread_id, &mut state)
+                .await;
         }
     }
 }

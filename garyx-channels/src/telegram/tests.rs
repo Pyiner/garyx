@@ -1328,6 +1328,7 @@ mod e2e_tests {
     struct TelegramRequestCapture {
         send_messages: Arc<StdMutex<Vec<Value>>>,
         edit_messages: Arc<StdMutex<Vec<Value>>>,
+        photo_messages: Arc<StdMutex<Vec<Vec<u8>>>>,
         delete_messages: Arc<StdMutex<Vec<Value>>>,
         chat_actions: Arc<StdMutex<Vec<Value>>>,
     }
@@ -1341,6 +1342,10 @@ mod e2e_tests {
         fn push_edit(&self, req: &Request) {
             let body = serde_json::from_slice(&req.body).expect("valid editMessageText body");
             self.edit_messages.lock().unwrap().push(body);
+        }
+
+        fn push_photo(&self, req: &Request) {
+            self.photo_messages.lock().unwrap().push(req.body.clone());
         }
 
         fn push_delete(&self, req: &Request) {
@@ -1359,6 +1364,10 @@ mod e2e_tests {
 
         fn edit_bodies(&self) -> Vec<Value> {
             self.edit_messages.lock().unwrap().clone()
+        }
+
+        fn photo_bodies(&self) -> Vec<Vec<u8>> {
+            self.photo_messages.lock().unwrap().clone()
         }
 
         fn delete_bodies(&self) -> Vec<Value> {
@@ -1382,6 +1391,26 @@ mod e2e_tests {
                 "timed out waiting for captured requests: expected >= {expected_min}, got {}; captured={:?}",
                 captured_snapshot.len(),
                 captured_snapshot
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
+    async fn wait_for_photo_capture_len(
+        capture: &TelegramRequestCapture,
+        expected_min: usize,
+        timeout: std::time::Duration,
+    ) -> Vec<Vec<u8>> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let captured_snapshot = capture.photo_bodies();
+            if captured_snapshot.len() >= expected_min {
+                return captured_snapshot;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for captured photo requests: expected >= {expected_min}, got {}",
+                captured_snapshot.len()
             );
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
@@ -1553,8 +1582,10 @@ mod e2e_tests {
         Mock::given(method("POST"))
             .and(path_regex(format!(r"{api_prefix}/bot.+/sendPhoto")))
             .respond_with({
+                let capture = capture.clone();
                 let next_message_id = next_message_id.clone();
-                move |_req: &Request| {
+                move |req: &Request| {
+                    capture.push_photo(req);
                     let message_id = next_message_id.fetch_add(1, Ordering::Relaxed) as i64;
                     ResponseTemplate::new(200).set_body_json(serde_json::json!({
                         "ok": true,
@@ -2860,6 +2891,48 @@ mod e2e_tests {
         let final_text = final_body["text"].as_str().unwrap();
         assert_eq!(final_text, "你好！👋");
         assert_eq!(final_body["parse_mode"], "MarkdownV2");
+    }
+
+    #[tokio::test]
+    async fn test_streaming_markdown_local_image_sends_photo_on_done() {
+        let (server, capture) = setup_tg_capture_mock(false).await;
+        let api_base = unique_api_base(&server);
+        let http = reqwest::Client::new();
+        let temp = tempfile::tempdir().expect("temp dir");
+        let image_path = temp.path().join("shot.png");
+        std::fs::write(&image_path, b"fake image bytes").expect("image");
+
+        let (callback, thread_id_tx) =
+            super::streaming::build_response_callback(StreamingCallbackConfig {
+                http,
+                token: "fake-token".to_owned(),
+                router: make_router(),
+                account_id: "bot1".to_owned(),
+                chat_id: 42,
+                api_base,
+                reply_to_mode: garyx_models::config::ReplyToMode::Off,
+                reply_to: None,
+                outbound_thread_id: None,
+                outbound_thread_scope: None,
+            });
+        let _ = thread_id_tx.send("thread::test-markdown-image".to_owned());
+
+        callback(StreamEvent::Delta {
+            text: format!("截图在这里：\n\n![Demo shot]({})", image_path.display()),
+        });
+        callback(StreamEvent::Done);
+
+        let photo_bodies =
+            wait_for_photo_capture_len(&capture, 1, std::time::Duration::from_secs(5)).await;
+        let body = String::from_utf8_lossy(&photo_bodies[0]);
+        assert!(
+            body.contains("shot.png"),
+            "multipart photo upload should include the image filename: {body}"
+        );
+        assert!(
+            body.contains("fake image bytes"),
+            "multipart photo upload should include the image bytes"
+        );
     }
 
     #[tokio::test]
