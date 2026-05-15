@@ -2773,25 +2773,6 @@ export function AppShell() {
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
   useEffect(() => {
-    if (!selectedThreadId) {
-      return;
-    }
-    const selectedConversationGroup = visibleBotGroups.find((group) =>
-      (group.conversationNodes || []).some(
-        (entry) => entry.endpoint.threadId === selectedThreadId,
-      ),
-    );
-    if (!selectedConversationGroup) {
-      return;
-    }
-    setBotConversationGroupId((current) =>
-      current === selectedConversationGroup.id
-        ? current
-        : selectedConversationGroup.id,
-    );
-    setWorkspaceConversationPath(null);
-  }, [selectedThreadId, visibleBotGroups]);
-  useEffect(() => {
     if (!botConversationGroupId) {
       return;
     }

@@ -940,6 +940,54 @@ code {
   display: none;
 }
 
+.workspace-thread-block .workspace-list {
+  gap: 2px;
+}
+
+.workspace-thread-block .workspace-group {
+  gap: 0;
+}
+
+.workspace-thread-block .workspace-row {
+  min-height: 28px;
+  padding: 0 6px 0 8px;
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.workspace-thread-block .workspace-row-main {
+  min-height: 26px;
+}
+
+.workspace-thread-block .workspace-row-copy {
+  gap: 7px;
+}
+
+.workspace-thread-block .workspace-row-copy .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.workspace-thread-block .workspace-name {
+  font-size: var(--text-sm);
+  line-height: 1.15;
+}
+
+.workspace-thread-block .workspace-status {
+  font-size: var(--text-xs);
+}
+
+.workspace-thread-block .workspace-action-icon-button {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+}
+
+.workspace-thread-block .workspace-action-icon-button .icon {
+  width: 15px;
+  height: 15px;
+}
+
 .sidebar-bot-list {
   flex: 0 1 auto;
   gap: 4px;
