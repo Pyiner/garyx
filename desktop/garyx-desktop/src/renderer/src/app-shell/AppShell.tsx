@@ -2772,6 +2772,14 @@ export function AppShell() {
   const isTeamsView = contentView === "teams";
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
+  const shouldShowConversationRail = contentView === "thread";
+  useEffect(() => {
+    if (shouldShowConversationRail) {
+      return;
+    }
+    setBotConversationGroupId((current) => (current ? null : current));
+    setWorkspaceConversationPath((current) => (current ? null : current));
+  }, [shouldShowConversationRail]);
   useEffect(() => {
     if (!botConversationGroupId) {
       return;
@@ -2786,7 +2794,7 @@ export function AppShell() {
     }
   }, [botConversationGroupId, visibleBotGroups]);
   const activeBotConversationGroup = useMemo(() => {
-    if (isSettingsView || !botConversationGroupId) {
+    if (!shouldShowConversationRail || !botConversationGroupId) {
       return null;
     }
     return (
@@ -2796,7 +2804,7 @@ export function AppShell() {
           (group.conversationNodes || []).length > 0,
       ) || null
     );
-  }, [botConversationGroupId, isSettingsView, visibleBotGroups]);
+  }, [botConversationGroupId, shouldShowConversationRail, visibleBotGroups]);
   useEffect(() => {
     if (!workspaceConversationPath) {
       return;
@@ -2813,7 +2821,11 @@ export function AppShell() {
     }
   }, [workspaceConversationPath, workspaceThreadGroups]);
   const activeWorkspaceThreadGroup = useMemo(() => {
-    if (isSettingsView || activeBotConversationGroup || !workspaceConversationPath) {
+    if (
+      !shouldShowConversationRail ||
+      activeBotConversationGroup ||
+      !workspaceConversationPath
+    ) {
       return null;
     }
     return (
@@ -2827,7 +2839,7 @@ export function AppShell() {
     );
   }, [
     activeBotConversationGroup,
-    isSettingsView,
+    shouldShowConversationRail,
     workspaceConversationPath,
     workspaceThreadGroups,
   ]);
@@ -7727,8 +7739,12 @@ export function AppShell() {
     >
       <ToastViewport onDismiss={dismissToast} toasts={toasts} />
       <AppLeftRail
-        activeBotConversationGroupId={botConversationGroupId}
-        activeWorkspaceThreadGroupPath={workspaceConversationPath}
+        activeBotConversationGroupId={
+          shouldShowConversationRail ? botConversationGroupId : null
+        }
+        activeWorkspaceThreadGroupPath={
+          shouldShowConversationRail ? workspaceConversationPath : null
+        }
         botGroups={visibleBotGroups}
         isAutomationView={isAutomationView}
         isAutoResearchView={isAutoResearchView}
