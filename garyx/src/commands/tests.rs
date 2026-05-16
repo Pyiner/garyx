@@ -531,10 +531,11 @@ async fn spawn_automation_http_test_server(
                     (
                         StatusCode::CREATED,
                         Json(json!({
-                            "trigger": {
-                                "id": "autodata_test",
-                                "tableName": payload["tableName"],
-                                "eventType": payload["eventType"],
+                                "trigger": {
+                                    "id": "autodata_test",
+                                    "label": payload["label"],
+                                    "tableName": payload["tableName"],
+                                    "eventType": payload["eventType"],
                                 "titleTemplate": payload["titleTemplate"],
                                 "bodyTemplate": payload["bodyTemplate"],
                                 "agentId": payload.get("agentId").cloned().unwrap_or(Value::Null),
@@ -567,6 +568,7 @@ async fn spawn_automation_http_test_server(
                                     "id": trigger_id,
                                     "tableName": "contacts",
                                     "eventType": "record.created",
+                                    "label": "Contact review",
                                     "titleTemplate": "New record {record_id}",
                                     "bodyTemplate": "Review {table_name}",
                                     "enabled": payload["enabled"],
@@ -1120,6 +1122,7 @@ async fn cmd_automation_data_trigger_create_posts_automation_payload() {
         config_path.to_str().expect("config path"),
         "contacts",
         "record.created",
+        "Contact review",
         "New record {record_id}",
         "Review {table_name}",
         Some("codex".to_owned()),
@@ -1138,6 +1141,7 @@ async fn cmd_automation_data_trigger_create_posts_automation_payload() {
     assert_eq!(records[0].path, "/api/automations/triggers/data");
     assert_eq!(records[0].body["tableName"], "contacts");
     assert_eq!(records[0].body["eventType"], "record.created");
+    assert_eq!(records[0].body["label"], "Contact review");
     assert_eq!(records[0].body["titleTemplate"], "New record {record_id}");
     assert_eq!(records[0].body["bodyTemplate"], "Review {table_name}");
     assert_eq!(records[0].body["agentId"], "codex");

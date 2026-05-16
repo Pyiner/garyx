@@ -121,6 +121,7 @@ pub struct AppDbEvent {
 #[serde(rename_all = "camelCase")]
 pub struct AutomationDataTrigger {
     pub id: String,
+    pub label: String,
     pub table_name: String,
     pub event_type: String,
     pub title_template: String,
@@ -185,6 +186,7 @@ pub struct SqlQueryBody {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateDataTriggerBody {
+    pub label: String,
     pub table_name: String,
     pub event_type: String,
     pub title_template: String,
@@ -732,6 +734,7 @@ impl AppDbService {
             validate_agent_id(agent_id)?;
         }
         let workspace_dir = normalize_optional_string(body.workspace_dir);
+        let label = trim_required(&body.label, "label")?;
         let title_template = trim_required(&body.title_template, "title_template")?;
         let body_template = trim_required(&body.body_template, "body_template")?;
         let id = format!("autodata_{}", Uuid::new_v4().simple());
@@ -740,10 +743,11 @@ impl AppDbService {
             let conn = self.conn()?;
             conn.execute(
                 "INSERT INTO gx_automation_data_triggers
-                 (id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+                 (id, label, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
                 params![
                     id,
+                    label,
                     table_name,
                     body.event_type,
                     title_template,
@@ -770,7 +774,7 @@ impl AppDbService {
             .map(|value| validate_event_type(&value).map(|_| value))
             .transpose()?;
         let conn = self.conn()?;
-        let mut sql = "SELECT id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at FROM gx_automation_data_triggers".to_owned();
+        let mut sql = "SELECT id, label, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at FROM gx_automation_data_triggers".to_owned();
         let mut clauses = Vec::new();
         let mut bind_values = Vec::new();
         if let Some(table_name) = table_name {
@@ -916,7 +920,7 @@ impl AppDbService {
     fn data_trigger_by_id(&self, trigger_id: &str) -> AppDbResult<AutomationDataTrigger> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at
+            "SELECT id, label, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at
              FROM gx_automation_data_triggers WHERE id = ?1",
             params![trigger_id],
             data_trigger_from_row,
@@ -1070,6 +1074,7 @@ fn initialize_connection(conn: &Connection) -> AppDbResult<()> {
 
         CREATE TABLE IF NOT EXISTS gx_automation_data_triggers (
             id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
             table_name TEXT NOT NULL,
             event_type TEXT NOT NULL,
             title_template TEXT NOT NULL,
@@ -1082,6 +1087,29 @@ fn initialize_connection(conn: &Connection) -> AppDbResult<()> {
         ) STRICT;
         "#,
     )?;
+    ensure_column(
+        conn,
+        "gx_automation_data_triggers",
+        "label",
+        "ALTER TABLE gx_automation_data_triggers ADD COLUMN label TEXT NOT NULL DEFAULT ''",
+    )?;
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+    alter_sql: &str,
+) -> AppDbResult<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", quote_ident(table_name)))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column_name {
+            return Ok(());
+        }
+    }
+    conn.execute(alter_sql, [])?;
     Ok(())
 }
 
@@ -1158,15 +1186,16 @@ fn event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AppDbEvent> {
 fn data_trigger_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AutomationDataTrigger> {
     Ok(AutomationDataTrigger {
         id: row.get(0)?,
-        table_name: row.get(1)?,
-        event_type: row.get(2)?,
-        title_template: row.get(3)?,
-        body_template: row.get(4)?,
-        agent_id: row.get(5)?,
-        workspace_dir: row.get(6)?,
-        enabled: row.get::<_, i64>(7)? != 0,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
+        label: row.get(1)?,
+        table_name: row.get(2)?,
+        event_type: row.get(3)?,
+        title_template: row.get(4)?,
+        body_template: row.get(5)?,
+        agent_id: row.get(6)?,
+        workspace_dir: row.get(7)?,
+        enabled: row.get::<_, i64>(8)? != 0,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
     })
 }
 
@@ -1999,6 +2028,7 @@ mod tests {
             .unwrap();
         service
             .create_data_trigger(CreateDataTriggerBody {
+                label: "Inbox review".to_owned(),
                 table_name: "inbox".to_owned(),
                 event_type: "record.created".to_owned(),
                 title_template: "New {record_id}".to_owned(),
@@ -2008,13 +2038,11 @@ mod tests {
                 enabled: true,
             })
             .unwrap();
-        assert_eq!(
-            service
-                .list_data_triggers(Some("inbox".to_owned()), None)
-                .unwrap()
-                .len(),
-            1
-        );
+        let triggers = service
+            .list_data_triggers(Some("inbox".to_owned()), None)
+            .unwrap();
+        assert_eq!(triggers.len(), 1);
+        assert_eq!(triggers[0].label, "Inbox review");
         service.drop_table("inbox", None).unwrap();
         assert!(
             service

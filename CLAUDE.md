@@ -57,8 +57,11 @@ from a real chat captured during local debugging.
    client and use it for user-facing previews unless the user explicitly asks
    for a packaged app or the change affects packaging, install, release, or
    startup behavior.
-6. Update [docs/configuration.md](docs/configuration.md) when user-facing configuration or behavior changes.
-7. Commit every completed code change before handoff. Stage only the files changed
+6. For CLI/runtime features that depend on the managed gateway, install the new
+   binary and run a synthetic end-to-end CLI smoke test against the running
+   gateway after unit tests pass.
+7. Update [docs/configuration.md](docs/configuration.md) when user-facing configuration or behavior changes.
+8. Commit every completed code change before handoff. Stage only the files changed
    for the current task, and leave unrelated user work untouched.
 
 ## Desktop Dev Mode

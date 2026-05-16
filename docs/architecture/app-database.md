@@ -56,6 +56,7 @@ Both mechanisms create Garyx tasks as the execution unit.
 The first data-trigger implementation supports table/event triggers. The
 definition contains:
 
+- `label`
 - `table_name`
 - `event_type`
 - `title_template`
@@ -89,6 +90,7 @@ garyx db record insert contacts --data '{"name":"Test User","score":9.5}'
 garyx db sql "select id, name, score from contacts order by created_at desc"
 
 garyx automation trigger data create contacts record.created \
+  --label "Contact review" \
   --title "New contact: {record_id}" \
   --body "Review {table_name} record {record_id}" \
   --agent-id codex

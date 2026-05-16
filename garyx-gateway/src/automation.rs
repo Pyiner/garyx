@@ -976,11 +976,14 @@ async fn create_data_trigger_task(
         workspace_mode: WorkspaceMode::Direct,
         worktree_base_dir: None,
     };
+    let assignee = trigger.agent_id.as_ref().map(|agent_id| Principal::Agent {
+        agent_id: agent_id.clone(),
+    });
     match task_service
         .create_task(CreateTaskInput {
-            title: Some(title),
-            body: Some(body),
-            assignee: None,
+            title: Some(title.clone()),
+            body: Some(body.clone()),
+            assignee,
             notification_target: Some(TaskNotificationTarget::None),
             source: None,
             start: false,
@@ -996,11 +999,34 @@ async fn create_data_trigger_task(
         Ok((thread_id, task)) => {
             let task_id = garyx_router::tasks::canonical_task_id(&task);
             let _ = app_db.attach_task_to_event(&event.id, &task_id, &thread_id);
+            let mut dispatch = None;
+            if let Err(error) = crate::tasks::ensure_created_task_thread_provider_from_bound_agent(
+                state, &thread_id,
+            )
+            .await
+            {
+                return Some(json!({
+                    "triggerId": trigger.id,
+                    "status": "error",
+                    "error": error.to_string(),
+                }));
+            }
+            if let Some(value) = crate::tasks::spawn_task_auto_dispatch(
+                state.clone(),
+                thread_id.clone(),
+                json!(task),
+                "automation_data_trigger",
+                Some(&title),
+                Some(&body),
+            ) {
+                dispatch = Some(value);
+            }
             Some(json!({
                 "triggerId": trigger.id,
                 "status": "created",
                 "threadId": thread_id,
                 "taskId": task_id,
+                "dispatch": dispatch,
             }))
         }
         Err(error) => Some(json!({

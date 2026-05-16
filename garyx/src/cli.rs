@@ -1006,6 +1006,9 @@ pub(crate) enum AutomationDataTriggerAction {
     Create {
         table: String,
         event_type: String,
+        /// Human-readable trigger name
+        #[arg(long)]
+        label: String,
         #[arg(long)]
         title: String,
         #[arg(long)]

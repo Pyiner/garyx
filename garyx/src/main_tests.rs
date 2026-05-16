@@ -818,6 +818,8 @@ fn parse_automation_data_trigger_create() {
         "create",
         "contacts",
         "record.created",
+        "--label",
+        "Contact review",
         "--title",
         "New record {record_id}",
         "--body",
@@ -835,6 +837,7 @@ fn parse_automation_data_trigger_create() {
                                 AutomationDataTriggerAction::Create {
                                     table,
                                     event_type,
+                                    label,
                                     title,
                                     body,
                                     agent_id,
@@ -845,6 +848,7 @@ fn parse_automation_data_trigger_create() {
         }) => {
             assert_eq!(table, "contacts");
             assert_eq!(event_type, "record.created");
+            assert_eq!(label, "Contact review");
             assert_eq!(title, "New record {record_id}");
             assert_eq!(body, "Review {table_name}");
             assert_eq!(agent_id.as_deref(), Some("codex"));

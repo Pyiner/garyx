@@ -2546,7 +2546,7 @@ fn automation_print_data_triggers(payload: &Value) {
         return;
     }
     println!(
-        "{:<38}  {:<7}  {:<20}  {:<15}  TITLE",
+        "{:<38}  {:<7}  {:<20}  {:<15}  LABEL",
         "ID", "ENABLED", "TABLE", "EVENT"
     );
     println!("{}", "-".repeat(110));
@@ -2557,7 +2557,9 @@ fn automation_print_data_triggers(payload: &Value) {
             trigger["enabled"].as_bool().unwrap_or(false),
             trigger["tableName"].as_str().unwrap_or("-"),
             trigger["eventType"].as_str().unwrap_or("-"),
-            trigger["titleTemplate"].as_str().unwrap_or("-"),
+            trigger["label"]
+                .as_str()
+                .unwrap_or_else(|| { trigger["titleTemplate"].as_str().unwrap_or("-") }),
         );
     }
 }
@@ -2893,6 +2895,7 @@ pub(crate) async fn cmd_automation_data_trigger_create(
     config_path: &str,
     table: &str,
     event_type: &str,
+    label: &str,
     title: &str,
     body_text: &str,
     agent_id: Option<String>,
@@ -2903,6 +2906,7 @@ pub(crate) async fn cmd_automation_data_trigger_create(
     let mut body = json!({
         "tableName": trim_required_cli(table, "table")?,
         "eventType": trim_required_cli(event_type, "event_type")?,
+        "label": trim_required_cli(label, "label")?,
         "titleTemplate": trim_required_cli(title, "title")?,
         "bodyTemplate": trim_required_cli(body_text, "body")?,
         "enabled": !disabled,

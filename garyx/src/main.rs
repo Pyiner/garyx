@@ -641,6 +641,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     AutomationDataTriggerAction::Create {
                         table,
                         event_type,
+                        label,
                         title,
                         body,
                         agent_id,
@@ -652,6 +653,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             config_path,
                             &table,
                             &event_type,
+                            &label,
                             &title,
                             &body,
                             agent_id,
