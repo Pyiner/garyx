@@ -148,6 +148,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: AutomationAction,
     },
+    /// Agent-friendly application database
+    #[command(name = "db", visible_alias = "database")]
+    Db {
+        #[command(subcommand)]
+        action: DbAction,
+    },
     /// Custom agent management
     #[command(name = "agent", alias = "agents", visible_alias = "custom-agent")]
     Agent {
@@ -803,6 +809,225 @@ pub(crate) enum AutomationAction {
         /// Offset for pagination
         #[arg(long, default_value_t = 0)]
         offset: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DbAction {
+    /// Dynamic table management
+    Table {
+        #[command(subcommand)]
+        action: DbTableAction,
+    },
+    /// Dynamic field management
+    Field {
+        #[command(subcommand)]
+        action: DbFieldAction,
+    },
+    /// Record CRUD
+    Record {
+        #[command(subcommand)]
+        action: DbRecordAction,
+    },
+    /// Run read-only SQL
+    Sql {
+        /// SQL query. Quote it as one argument or pass words and Garyx will join them with spaces.
+        sql: Vec<String>,
+        /// Maximum rows returned
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show database events
+    Events {
+        /// Filter by table
+        #[arg(long)]
+        table: Option<String>,
+        /// Filter by event type: record.created, record.updated, record.deleted, schema.changed
+        #[arg(long = "event-type")]
+        event_type: Option<String>,
+        /// Number of events to fetch
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        /// Offset for pagination
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Data trigger management
+    Trigger {
+        #[command(subcommand)]
+        action: DbTriggerAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DbTableAction {
+    /// List dynamic tables
+    List {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a dynamic table
+    Create {
+        table: String,
+        /// Human display name; actual table name remains snake_case
+        #[arg(long = "display-name")]
+        display_name: Option<String>,
+        /// Field spec in name:TYPE form. TYPE is TEXT, INTEGER, REAL, BLOB, or ANY.
+        #[arg(long = "field")]
+        fields: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show table schema
+    Schema {
+        table: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop a dynamic table
+    Drop {
+        table: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DbFieldAction {
+    /// Add a field to an existing table
+    Add {
+        table: String,
+        field: String,
+        #[arg(name = "type")]
+        field_type: String,
+        #[arg(long)]
+        not_null: bool,
+        #[arg(long)]
+        unique: bool,
+        #[arg(long)]
+        index: bool,
+        #[arg(long = "display-name")]
+        display_name: Option<String>,
+        /// JSON default value
+        #[arg(long = "default")]
+        default_value: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop a field from an existing table
+    Drop {
+        table: String,
+        field: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DbRecordAction {
+    /// Insert a record from JSON object data
+    Insert {
+        table: String,
+        /// JSON object, e.g. '{"name":"Test User"}'
+        #[arg(long)]
+        data: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get a record by id
+    Get {
+        table: String,
+        id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update a record from JSON object data
+    Update {
+        table: String,
+        id: String,
+        /// JSON object, e.g. '{"score":10}'
+        #[arg(long)]
+        data: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a record by id
+    Delete {
+        table: String,
+        id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DbTriggerAction {
+    /// List data triggers
+    List {
+        /// Filter by table
+        #[arg(long)]
+        table: Option<String>,
+        /// Filter by event type
+        #[arg(long = "event-type")]
+        event_type: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a data trigger that creates a Garyx task
+    Create {
+        table: String,
+        event_type: String,
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        body: String,
+        #[arg(long = "agent-id")]
+        agent_id: Option<String>,
+        #[arg(long = "workspace-dir")]
+        workspace_dir: Option<String>,
+        #[arg(long)]
+        disabled: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Enable a data trigger
+    Enable {
+        trigger_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Disable a data trigger
+    Disable {
+        trigger_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a data trigger
+    Delete {
+        trigger_id: String,
         /// Output as JSON
         #[arg(long)]
         json: bool,

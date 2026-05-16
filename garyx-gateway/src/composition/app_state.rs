@@ -16,6 +16,7 @@ use tracing::warn;
 
 use crate::agent_teams::AgentTeamStore;
 use crate::api::RestartTracker;
+use crate::app_db::AppDbService;
 use crate::auto_research::AutoResearchStore;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
@@ -58,6 +59,7 @@ pub struct OpsState {
     /// `child_thread_ids` the provider is updating.
     pub agent_team_group_store: Arc<dyn garyx_bridge::providers::agent_team::GroupStore>,
     pub wikis: Arc<WikiStore>,
+    pub app_db: Arc<AppDbService>,
 }
 
 pub struct IntegrationState {
@@ -246,6 +248,7 @@ impl AppState {
                 agent_teams: self.ops.agent_teams.clone(),
                 agent_team_group_store: self.ops.agent_team_group_store.clone(),
                 wikis: self.ops.wikis.clone(),
+                app_db: self.ops.app_db.clone(),
             },
             integration: IntegrationState {
                 bridge: self.integration.bridge.clone(),

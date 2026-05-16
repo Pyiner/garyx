@@ -11,6 +11,7 @@ use garyx_channels::{
 use garyx_models::config::GaryxConfig;
 use garyx_models::local_paths::default_agent_team_groups_dir;
 use garyx_models::local_paths::default_agent_teams_state_path;
+use garyx_models::local_paths::default_app_database_path;
 use garyx_models::local_paths::default_auto_research_state_path;
 use garyx_models::local_paths::default_custom_agents_state_path;
 use garyx_models::local_paths::default_wikis_state_path;
@@ -32,6 +33,7 @@ use crate::agent_team_provider::{
 };
 use crate::agent_teams::AgentTeamStore;
 use crate::api::RestartTracker;
+use crate::app_db::AppDbService;
 use crate::app_state::{AppState, IntegrationState, OpsState, RuntimeState, ThreadState};
 use crate::auto_research::AutoResearchStore;
 use crate::cron::CronService;
@@ -92,6 +94,7 @@ pub struct AppStateBuilder {
     custom_agents: Arc<CustomAgentStore>,
     agent_teams: Arc<AgentTeamStore>,
     wikis: Arc<WikiStore>,
+    app_db: Arc<AppDbService>,
 }
 
 impl AppStateBuilder {
@@ -165,6 +168,10 @@ impl AppStateBuilder {
                 WikiStore::file,
                 WikiStore::new,
             )),
+            app_db: Arc::new(
+                AppDbService::open(default_app_database_path())
+                    .unwrap_or_else(|error| panic!("failed to open app database: {error}")),
+            ),
         }
     }
 
@@ -270,6 +277,11 @@ impl AppStateBuilder {
 
     pub fn with_wiki_store(mut self, wikis: Arc<WikiStore>) -> Self {
         self.wikis = wikis;
+        self
+    }
+
+    pub fn with_app_db(mut self, app_db: Arc<AppDbService>) -> Self {
+        self.app_db = app_db;
         self
     }
 
@@ -442,6 +454,7 @@ impl AppStateBuilder {
                 agent_teams: self.agent_teams,
                 agent_team_group_store: group_store,
                 wikis: self.wikis,
+                app_db: self.app_db,
             },
             integration: IntegrationState {
                 bridge: self.bridge,

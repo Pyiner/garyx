@@ -139,6 +139,24 @@ Schedule flags include `--every-hours <N>`, `--daily-time HH:MM`,
 `--weekday mon`, `--timezone <tz>`, `--once-at <time>`, and
 `--schedule-json <json>`.
 
+## App Database
+
+| Command | Use it for |
+| --- | --- |
+| `garyx db table list / schema <table>` | List dynamic SQLite tables or inspect one schema. |
+| `garyx db table create <table> --field name:TEXT` | Create a STRICT SQLite table. Names are real SQL identifiers and must be snake_case. |
+| `garyx db table drop <table>` | Drop a dynamic table. |
+| `garyx db field add <table> <field> <TYPE>` | Add a column. Types are `TEXT`, `INTEGER`, `REAL`, `BLOB`, and `ANY`. |
+| `garyx db field drop <table> <field>` | Drop a column. |
+| `garyx db record insert <table> --data '<json>'` | Insert one record through the write API. |
+| `garyx db record get / update / delete` | Read, mutate, or delete one record by `id`. |
+| `garyx db sql "select ..."` | Run read-only SQL. Write SQL is rejected by the gateway. |
+| `garyx db events` | Inspect schema and record mutation events. |
+| `garyx db trigger list / create / enable / disable / delete` | Manage data triggers that create Garyx tasks. |
+
+The database is global for the Garyx installation and is stored at
+`~/.garyx/data/app-database.sqlite3` by default.
+
 ## Auto Research
 
 | Command | Use it for |

@@ -4,8 +4,8 @@ use axum::Router;
 
 use crate::server::AppState;
 use crate::{
-    api, automation, chat, commands, dashboard, gateway_auth, mcp, mcp_config, routes, tasks,
-    tool_image, workspace_files,
+    api, app_db, automation, chat, commands, dashboard, gateway_auth, mcp, mcp_config, routes,
+    tasks, tool_image, workspace_files,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -139,6 +139,42 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/automations/{id}/activity",
             axum::routing::get(automation::automation_activity),
+        )
+        .route(
+            "/api/db/tables",
+            axum::routing::get(app_db::list_tables).post(app_db::create_table),
+        )
+        .route(
+            "/api/db/tables/{table}",
+            axum::routing::get(app_db::get_schema).delete(app_db::drop_table),
+        )
+        .route(
+            "/api/db/tables/{table}/fields",
+            axum::routing::post(app_db::add_field),
+        )
+        .route(
+            "/api/db/tables/{table}/fields/{field}",
+            axum::routing::delete(app_db::drop_field),
+        )
+        .route(
+            "/api/db/tables/{table}/records",
+            axum::routing::post(app_db::insert_record),
+        )
+        .route(
+            "/api/db/tables/{table}/records/{id}",
+            axum::routing::get(app_db::get_record)
+                .patch(app_db::update_record)
+                .delete(app_db::delete_record),
+        )
+        .route("/api/db/sql", axum::routing::post(app_db::sql_query))
+        .route("/api/db/events", axum::routing::get(app_db::list_events))
+        .route(
+            "/api/db/triggers",
+            axum::routing::get(app_db::list_triggers).post(app_db::create_trigger),
+        )
+        .route(
+            "/api/db/triggers/{id}",
+            axum::routing::patch(app_db::patch_trigger).delete(app_db::delete_trigger),
         )
         .route(
             "/api/auto-research/runs",

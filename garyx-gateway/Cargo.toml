@@ -31,6 +31,8 @@ tower = "0.5"
 tokio-stream = { version = "0.1", features = ["sync"] }
 regex = { workspace = true }
 base64 = "0.22"
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = { workspace = true }
 rmcp = { version = "0.17", features = [
     "server",
     "macros",

@@ -78,6 +78,14 @@ pub fn default_wikis_state_path() -> PathBuf {
     wikis_state_path_for_data_dir(&default_session_data_dir())
 }
 
+pub fn app_database_path_for_data_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("app-database.sqlite3")
+}
+
+pub fn default_app_database_path() -> PathBuf {
+    app_database_path_for_data_dir(&default_session_data_dir())
+}
+
 /// Directory holding one JSON file per `AgentTeam` group — orchestrator
 /// state owned by the AgentTeam provider (sub-agent thread mappings and
 /// per-member catch-up offsets, keyed by the group's thread_id).
