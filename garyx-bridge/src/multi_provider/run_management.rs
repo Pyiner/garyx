@@ -5,14 +5,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use garyx_models::Principal;
 use garyx_models::provider::{
     AgentRunRequest, FilePayload, ImagePayload, PromptAttachment, PromptAttachmentKind,
-    ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput, StreamEvent,
-    attachments_from_metadata, build_user_content_from_parts, stage_file_payloads_for_prompt,
-    stage_image_payloads_for_prompt,
+    ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, QueuedUserInput,
+    StreamEvent, attachments_from_metadata, build_user_content_from_parts,
+    stage_file_payloads_for_prompt, stage_image_payloads_for_prompt,
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_router::{
-    ThreadHistoryRepository, ThreadStore, loop_enabled_from_value, loop_iteration_count_from_value,
-    mark_thread_task_in_review_if_in_progress, thread_metadata_from_value,
+    ThreadHistoryRepository, ThreadStore, active_run_snapshot_messages, loop_enabled_from_value,
+    loop_iteration_count_from_value, mark_thread_task_in_review_if_in_progress,
+    thread_metadata_from_value,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -29,6 +30,7 @@ use super::persistence::{
     save_thread_messages,
 };
 use super::state::ActiveThreadPersistence;
+use crate::garyx_native_provider::SESSION_MESSAGES_METADATA_KEY;
 
 const STREAMING_INPUT_QUEUE_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const STREAMING_INPUT_QUEUE_RETRY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -532,10 +534,68 @@ fn has_tool_activity(messages: &[garyx_models::provider::ProviderMessage]) -> bo
         .any(|message| matches!(message.role_str(), "tool_use" | "tool_result"))
 }
 
+fn metadata_has_active_goal(metadata: &HashMap<String, Value>) -> bool {
+    metadata
+        .get("goal")
+        .and_then(Value::as_object)
+        .is_some_and(|goal| {
+            goal.get("objective")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty())
+                && goal
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("active")
+                    == "active"
+        })
+}
+
+fn result_marks_goal_completed(result: &garyx_models::provider::ProviderRunResult) -> bool {
+    result.session_messages.iter().any(|message| {
+        message.role_str() == "tool_result"
+            && message.tool_name.as_deref() == Some("update_goal")
+            && message
+                .content
+                .get("status")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|status| status == "completed")
+    })
+}
+
+fn mark_thread_goal_completed(session_data: &mut Value) -> bool {
+    let Some(obj) = session_data.as_object_mut() else {
+        return false;
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut changed = false;
+    if let Some(goal) = obj.get_mut("goal").and_then(Value::as_object_mut) {
+        goal.insert("status".to_owned(), Value::String("completed".to_owned()));
+        goal.insert("updated_at".to_owned(), Value::String(now.clone()));
+        changed = true;
+    }
+    if let Some(goal) = obj
+        .get_mut("metadata")
+        .and_then(Value::as_object_mut)
+        .and_then(|metadata| metadata.get_mut("goal"))
+        .and_then(Value::as_object_mut)
+    {
+        goal.insert("status".to_owned(), Value::String("completed".to_owned()));
+        goal.insert("updated_at".to_owned(), Value::String(now));
+        changed = true;
+    }
+    changed
+}
+
 fn should_auto_disable_loop(
-    _metadata: &HashMap<String, Value>,
+    metadata: &HashMap<String, Value>,
     result: &garyx_models::provider::ProviderRunResult,
 ) -> bool {
+    if metadata_has_active_goal(metadata) {
+        return result_marks_goal_completed(result);
+    }
     result.success
         && !has_tool_activity(&result.session_messages)
         && !result.response.trim().is_empty()
@@ -625,6 +685,41 @@ fn resolve_persisted_sdk_session_id_for_provider(
     }
 
     non_empty_value_string(object.get("sdk_session_id"))
+}
+
+fn persisted_provider_messages_from_thread(session_data: &Value) -> Vec<ProviderMessage> {
+    let active_messages = active_run_snapshot_messages(session_data);
+    let messages = if active_messages.is_empty() {
+        session_data
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    } else {
+        active_messages
+    };
+    messages
+        .iter()
+        .filter_map(ProviderMessage::from_value)
+        .collect()
+}
+
+fn attach_native_session_messages(
+    options: &mut ProviderRunOptions,
+    session_data: &Value,
+    provider_type: &ProviderType,
+) {
+    if provider_type != &ProviderType::GaryxNative {
+        return;
+    }
+    let messages = persisted_provider_messages_from_thread(session_data);
+    if messages.is_empty() {
+        return;
+    }
+    options.metadata.insert(
+        SESSION_MESSAGES_METADATA_KEY.to_owned(),
+        serde_json::to_value(messages).unwrap_or(Value::Array(Vec::new())),
+    );
 }
 
 async fn active_run_id_for_thread(inner: &super::state::Inner, thread_id: &str) -> Option<String> {
@@ -1157,6 +1252,7 @@ impl MultiProviderBridge {
             && let Some(session_data) = store.get(&thread_id).await
         {
             let resolved_provider_type = provider.provider_type();
+            attach_native_session_messages(&mut options, &session_data, &resolved_provider_type);
             if let Some(sid) = resolve_persisted_sdk_session_id_for_provider(
                 &session_data,
                 &provider_key_owned,
@@ -1527,6 +1623,11 @@ impl MultiProviderBridge {
                         && let Some(store) = &*inner.thread_store.read().await
                         && let Some(mut session_data) = store.get(&thread_id_owned).await
                     {
+                        let goal_status_changed = if result_marks_goal_completed(res) {
+                            mark_thread_goal_completed(&mut session_data)
+                        } else {
+                            false
+                        };
                         let loop_enabled = loop_enabled_from_value(&session_data);
                         let iteration_count = loop_iteration_count_from_value(&session_data);
 
@@ -1601,6 +1702,8 @@ impl MultiProviderBridge {
                                 )
                                 .await;
                             }
+                        } else if goal_status_changed {
+                            store.set(&thread_id_owned, session_data).await;
                         }
                     }
 
@@ -1875,6 +1978,7 @@ impl MultiProviderBridge {
             && let Some(session_data) = store.get(thread_id).await
         {
             let resolved_provider_type = provider.provider_type();
+            attach_native_session_messages(&mut options, &session_data, &resolved_provider_type);
             if let Some(sid) = resolve_persisted_sdk_session_id_for_provider(
                 &session_data,
                 &provider_key,

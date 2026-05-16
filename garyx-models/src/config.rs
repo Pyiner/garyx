@@ -172,6 +172,18 @@ pub struct AgentProviderConfig {
     pub gemini_bin: String,
     #[serde(default = "default_gemini_approval_mode")]
     pub approval_mode: String,
+
+    // Garyx native provider specific
+    #[serde(default = "default_garyx_native_auth_source")]
+    pub auth_source: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub codex_home: String,
+    #[serde(default = "default_garyx_native_max_tool_iterations")]
+    pub max_tool_iterations: u32,
+    #[serde(default = "default_native_request_timeout")]
+    pub request_timeout_seconds: f64,
 }
 
 fn default_provider_type() -> String {
@@ -185,6 +197,15 @@ pub fn default_mcp_base_url() -> String {
 }
 pub fn default_gemini_approval_mode() -> String {
     "yolo".to_owned()
+}
+pub fn default_garyx_native_auth_source() -> String {
+    "codex".to_owned()
+}
+pub fn default_garyx_native_max_tool_iterations() -> u32 {
+    32
+}
+pub fn default_native_request_timeout() -> f64 {
+    300.0
 }
 
 impl Default for AgentProviderConfig {
@@ -203,6 +224,11 @@ impl Default for AgentProviderConfig {
             experimental_api: false,
             gemini_bin: String::new(),
             approval_mode: default_gemini_approval_mode(),
+            auth_source: default_garyx_native_auth_source(),
+            base_url: String::new(),
+            codex_home: String::new(),
+            max_tool_iterations: default_garyx_native_max_tool_iterations(),
+            request_timeout_seconds: default_native_request_timeout(),
         }
     }
 }

@@ -20,6 +20,12 @@ fn test_provider_type_serde() {
     let back: ProviderType = serde_json::from_str(&json).unwrap();
     assert_eq!(back, ProviderType::GeminiCli);
 
+    let pt = ProviderType::GaryxNative;
+    let json = serde_json::to_string(&pt).unwrap();
+    assert_eq!(json, "\"garyx_native\"");
+    let back: ProviderType = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ProviderType::GaryxNative);
+
     let pt = ProviderType::AgentTeam;
     let json = serde_json::to_string(&pt).unwrap();
     assert_eq!(json, "\"agent_team\"");
@@ -34,6 +40,7 @@ fn test_provider_type_slug_round_trip() {
         ProviderType::ClaudeTty,
         ProviderType::CodexAppServer,
         ProviderType::GeminiCli,
+        ProviderType::GaryxNative,
         ProviderType::AgentTeam,
     ] {
         assert_eq!(
@@ -55,6 +62,10 @@ fn test_provider_type_slug_round_trip() {
         Some(ProviderType::ClaudeTty)
     );
     assert_eq!(ProviderType::from_slug("unknown-provider"), None);
+    assert_eq!(
+        ProviderType::from_slug("garyx"),
+        Some(ProviderType::GaryxNative)
+    );
 }
 
 #[test]
@@ -196,6 +207,17 @@ fn test_gemini_config_defaults() {
     assert_eq!(cfg.default_model, "");
     assert_eq!(cfg.model, "");
     assert_eq!(cfg.mcp_base_url, "http://127.0.0.1:31337");
+}
+
+#[test]
+fn test_garyx_native_config_defaults() {
+    let cfg = GaryxNativeConfig::default();
+    assert_eq!(cfg.provider_type, ProviderType::GaryxNative);
+    assert_eq!(cfg.default_model, "gpt-5.2");
+    assert_eq!(cfg.model, "");
+    assert_eq!(cfg.auth_source, "codex");
+    assert_eq!(cfg.max_tool_iterations, 32);
+    assert!((cfg.request_timeout_seconds - 300.0).abs() < f64::EPSILON);
 }
 
 #[test]

@@ -141,9 +141,115 @@ fn keeps_loop_when_tools_were_used() {
 }
 
 #[test]
+fn native_session_messages_are_attached_from_committed_thread_messages() {
+    let session_data = json!({
+        "messages": [
+            ProviderMessage::user_text("previous question").to_json_value(),
+            ProviderMessage::assistant_text("previous answer").to_json_value()
+        ]
+    });
+    let mut options = ProviderRunOptions {
+        thread_id: "thread::native".to_owned(),
+        message: "next".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+
+    attach_native_session_messages(&mut options, &session_data, &ProviderType::GaryxNative);
+
+    let messages: Vec<ProviderMessage> = serde_json::from_value(
+        options
+            .metadata
+            .get(SESSION_MESSAGES_METADATA_KEY)
+            .cloned()
+            .expect("session messages metadata"),
+    )
+    .unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].text.as_deref(), Some("previous question"));
+    assert_eq!(messages[1].text.as_deref(), Some("previous answer"));
+}
+
+#[test]
+fn native_session_messages_are_not_attached_for_other_providers() {
+    let session_data = json!({
+        "messages": [ProviderMessage::assistant_text("previous answer").to_json_value()]
+    });
+    let mut options = ProviderRunOptions {
+        thread_id: "thread::claude".to_owned(),
+        message: "next".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+
+    attach_native_session_messages(&mut options, &session_data, &ProviderType::ClaudeCode);
+
+    assert!(!options.metadata.contains_key(SESSION_MESSAGES_METADATA_KEY));
+}
+
+#[test]
 fn auto_disables_loop_for_first_run_without_tools() {
     let result = run_result("任务已完成。", vec![]);
     assert!(should_auto_disable_loop(&HashMap::new(), &result));
+}
+
+#[test]
+fn keeps_goal_loop_for_text_only_reply_until_goal_completed_tool_runs() {
+    let result = run_result("I will continue.", vec![]);
+    let metadata = HashMap::from([(
+        "goal".to_owned(),
+        json!({
+            "objective": "Finish the feature",
+            "status": "active"
+        }),
+    )]);
+
+    assert!(!should_auto_disable_loop(&metadata, &result));
+}
+
+#[test]
+fn auto_disables_goal_loop_when_update_goal_marks_completed() {
+    let result = run_result(
+        "Goal completed.",
+        vec![ProviderMessage::tool_result(
+            json!({ "status": "completed", "note": "done" }),
+            Some("tool-1".to_owned()),
+            Some("update_goal".to_owned()),
+            Some(false),
+        )],
+    );
+    let metadata = HashMap::from([(
+        "goal".to_owned(),
+        json!({
+            "objective": "Finish the feature",
+            "status": "active"
+        }),
+    )]);
+
+    assert!(should_auto_disable_loop(&metadata, &result));
+}
+
+#[test]
+fn mark_thread_goal_completed_updates_top_level_and_metadata_goal() {
+    let mut session_data = json!({
+        "goal": {
+            "objective": "Finish the feature",
+            "status": "active"
+        },
+        "metadata": {
+            "goal": {
+                "objective": "Finish the feature",
+                "status": "active"
+            }
+        }
+    });
+
+    assert!(mark_thread_goal_completed(&mut session_data));
+
+    assert_eq!(session_data["goal"]["status"], "completed");
+    assert_eq!(session_data["metadata"]["goal"]["status"], "completed");
 }
 
 #[test]

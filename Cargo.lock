@@ -821,6 +821,7 @@ dependencies = [
  "garyx-models",
  "garyx-router",
  "libc",
+ "reqwest",
  "serde",
  "serde_json",
  "shellexpand",

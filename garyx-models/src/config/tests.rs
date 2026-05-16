@@ -24,6 +24,9 @@ fn test_agent_provider_defaults() {
     assert_eq!(ap.permission_mode, "bypassPermissions");
     assert_eq!(ap.default_model, "");
     assert_eq!(ap.model, "");
+    assert_eq!(ap.auth_source, "codex");
+    assert_eq!(ap.max_tool_iterations, 32);
+    assert!((ap.request_timeout_seconds - 300.0).abs() < f64::EPSILON);
 }
 
 #[test]

@@ -889,6 +889,28 @@ async fn test_provider_models_reports_claude_unsupported() {
 }
 
 #[tokio::test]
+async fn test_provider_models_reports_garyx_native_default() {
+    let state = test_state();
+    let router = api_router(state);
+    let req = Request::builder()
+        .method("GET")
+        .uri("/api/provider-models/garyx_native")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["provider_type"], "garyx_native");
+    assert_eq!(json["supports_model_selection"], true);
+    assert_eq!(json["default_model"], "gpt-5.2");
+    assert_eq!(json["models"][0]["id"], "gpt-5.2");
+}
+
+#[tokio::test]
 async fn test_provider_models_rejects_unknown_provider() {
     let state = test_state();
     let router = api_router(state);

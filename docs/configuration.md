@@ -489,9 +489,47 @@ Use a built-in provider agent:
 ```
 
 Custom agents can set `provider_type` to `claude_code`, `claude_tty`,
-`codex_app_server`, or `gemini_cli`. `claude_tty` uses the local Claude CLI's
-interactive terminal mode inside the gateway and keeps the same thread/session
-model as the regular Claude provider.
+`codex_app_server`, `gemini_cli`, or `garyx_native`. `claude_tty` uses the local
+Claude CLI's interactive terminal mode inside the gateway and keeps the same
+thread/session model as the regular Claude provider.
+
+`garyx_native` is Garyx's in-process agent loop. Use the built-in agent id
+`garyx` to select it:
+
+```json
+{ "agent_id": "garyx" }
+```
+
+The native provider uses Codex-compatible auth by default. It checks
+`CODEX_API_KEY`, then `OPENAI_API_KEY`, then Codex auth at
+`$CODEX_HOME/auth.json` or `~/.codex/auth.json`. Codex auth files with
+`OPENAI_API_KEY` use the OpenAI Responses API; auth files with
+`tokens.access_token` use the ChatGPT Codex backend and forward the stored
+ChatGPT account id when present. Codex `agent_identity`-only auth is not
+duplicated by Garyx native.
+
+Optional native-provider fields on an agent/provider config:
+
+```json
+{
+  "provider_type": "garyx_native",
+  "default_model": "gpt-5.2",
+  "model": "",
+  "model_reasoning_effort": "",
+  "auth_source": "codex",
+  "base_url": "",
+  "codex_home": "",
+  "max_tool_iterations": 32,
+  "request_timeout_seconds": 300
+}
+```
+
+The `/goal <objective>` native command sets a durable thread goal and enables
+loop mode. `/goal` shows the current goal; `/goal pause` pauses it; `/goal
+resume` resumes it; `/goal clear` clears it and disables loop mode. While a
+goal is active, Garyx keeps loop mode running until the provider marks the goal
+completed with its `update_goal` tool, the goal is paused/cleared, the run is
+interrupted, or the loop hits its safety limit.
 
 Use a custom agent or an agent team by setting the same `agent_id` used in your
 Garyx agent/team configuration. The CLI account setup flow can also prompt for

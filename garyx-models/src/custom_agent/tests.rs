@@ -49,7 +49,20 @@ fn builtin_provider_agent_id_detection_is_limited_to_builtin_profiles() {
     assert!(is_builtin_provider_agent_id("claude"));
     assert!(is_builtin_provider_agent_id(" codex "));
     assert!(is_builtin_provider_agent_id("gemini"));
+    assert!(is_builtin_provider_agent_id("garyx"));
     assert!(!is_builtin_provider_agent_id("plain-claude"));
     assert!(!is_builtin_provider_agent_id("codex-reviewer"));
     assert!(!is_builtin_provider_agent_id("reviewer"));
+}
+
+#[test]
+fn builtin_provider_profiles_include_garyx_native_agent() {
+    let profiles = builtin_provider_agent_profiles();
+    let profile = profiles
+        .iter()
+        .find(|profile| profile.agent_id == "garyx")
+        .expect("garyx native profile should exist");
+    assert_eq!(profile.display_name, "Garyx");
+    assert_eq!(profile.provider_type, ProviderType::GaryxNative);
+    assert!(profile.built_in);
 }

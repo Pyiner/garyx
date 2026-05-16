@@ -71,6 +71,19 @@ pub(crate) async fn list_provider_models(
         ProviderType::ClaudeCode | ProviderType::ClaudeTty | ProviderType::CodexAppServer => {
             unsupported(provider_type, "provider", None)
         }
+        ProviderType::GaryxNative => ProviderModelsResponse {
+            provider_type,
+            supports_model_selection: true,
+            models: vec![ProviderModelOption {
+                id: "gpt-5.2".to_owned(),
+                label: "GPT-5.2".to_owned(),
+                description: Some("Garyx native default model".to_owned()),
+                recommended: true,
+            }],
+            default_model: Some("gpt-5.2".to_owned()),
+            source: "provider",
+            error: None,
+        },
         ProviderType::AgentTeam => unsupported(provider_type, "provider", None),
     }
 }

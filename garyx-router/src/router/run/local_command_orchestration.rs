@@ -45,6 +45,26 @@ impl MessageRouter {
                     switched_thread: Some(switched),
                 }
             }
+            NativeCommand::Goal => {
+                let current_thread = self
+                    .resolve_or_create_inbound_thread(
+                        &request.channel,
+                        &request.account_id,
+                        thread_binding_key,
+                        &request.extra_metadata,
+                    )
+                    .await;
+
+                let command_text =
+                    crate::router::inbound::InboundCommandClassifier::command_text(request)
+                        .unwrap_or(request.message.as_str());
+                let (reply_text, switched) =
+                    self.update_goal_mode(&current_thread, command_text).await;
+                NativeThreadResult {
+                    reply_text,
+                    switched_thread: Some(switched),
+                }
+            }
         };
 
         let thread_id = if let Some(switched_thread) = local.switched_thread {

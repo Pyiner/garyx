@@ -13,6 +13,7 @@ fn test_is_native_command_text_recognizes_thread_commands() {
     assert!(is_native_command_text("/threadprev", "telegram"));
     assert!(is_native_command_text("/threadnext", "telegram"));
     assert!(is_native_command_text("/loop", "telegram"));
+    assert!(is_native_command_text("/goal ship the feature", "telegram"));
 }
 
 #[test]
@@ -68,7 +69,14 @@ fn test_channel_native_catalog_exposes_telegram_menu_commands() {
         .collect::<Vec<_>>();
     assert_eq!(
         names,
-        vec!["newthread", "threads", "threadprev", "threadnext", "loop"]
+        vec![
+            "newthread",
+            "threads",
+            "threadprev",
+            "threadnext",
+            "loop",
+            "goal"
+        ]
     );
     assert!(
         catalog

@@ -16,6 +16,7 @@ fn default_provider_config(provider_type: ProviderType) -> AgentProviderConfig {
             ProviderType::ClaudeCode => "claude_code".to_owned(),
             ProviderType::ClaudeTty => "claude_tty".to_owned(),
             ProviderType::GeminiCli => "gemini_cli".to_owned(),
+            ProviderType::GaryxNative => "garyx_native".to_owned(),
             // Meta-provider with no backing CLI config.
             ProviderType::AgentTeam => "agent_team".to_owned(),
         },
@@ -111,6 +112,21 @@ impl MultiProviderBridge {
             }
         };
 
+        let garyx_native_default_agent_cfg = default_provider_config(ProviderType::GaryxNative);
+        let garyx_native_default_key = match self
+            .get_or_create_provider(&garyx_native_default_agent_cfg, &default_workspace)
+            .await
+        {
+            Ok(key) => {
+                tracing::info!(provider_key = %key, "registered Garyx native provider");
+                Some(key)
+            }
+            Err(error) => {
+                tracing::debug!(error = %error, "optional Garyx native provider unavailable");
+                None
+            }
+        };
+
         let mut desired_routes: HashMap<(String, String), String> = HashMap::new();
 
         // 4. Pre-create providers for API channel accounts and build desired routes.
@@ -158,6 +174,9 @@ impl MultiProviderBridge {
             desired_provider_keys.insert(key.clone());
         }
         if let Some(ref key) = gemini_default_key {
+            desired_provider_keys.insert(key.clone());
+        }
+        if let Some(ref key) = garyx_native_default_key {
             desired_provider_keys.insert(key.clone());
         }
         // Preserve the AgentTeam meta-provider across reloads: it is not owned
@@ -331,6 +350,7 @@ impl MultiProviderBridge {
             "claude" => Some(ProviderType::ClaudeCode),
             "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeTty),
             "gemini" => Some(ProviderType::GeminiCli),
+            "garyx" | "garyx-native" | "garyx_native" | "native" => Some(ProviderType::GaryxNative),
             _ => None,
         }
     }

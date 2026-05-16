@@ -15,6 +15,7 @@ pub(super) enum NativeThreadCommand {
 pub(super) enum NativeCommand {
     Thread(NativeThreadCommand),
     Loop,
+    Goal,
 }
 
 pub(super) struct InboundCommandClassifier;

@@ -673,8 +673,9 @@ fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<Provide
         "claude-tty" | "claude_tty" => Ok(Some(ProviderType::ClaudeTty)),
         "codex" => Ok(Some(ProviderType::CodexAppServer)),
         "gemini" => Ok(Some(ProviderType::GeminiCli)),
+        "garyx" | "garyx_native" | "native" => Ok(Some(ProviderType::GaryxNative)),
         _ => Err(format!(
-            "Unsupported sdkSessionProviderHint '{value}'. Use claude, claude_tty, codex, or gemini."
+            "Unsupported sdkSessionProviderHint '{value}'. Use claude, claude_tty, codex, gemini, or garyx."
         )),
     }
 }
@@ -685,6 +686,7 @@ fn provider_hint_label(value: &ProviderType) -> &'static str {
         ProviderType::ClaudeTty => "Claude TTY",
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
+        ProviderType::GaryxNative => "Garyx",
         ProviderType::AgentTeam => "Team",
     }
 }

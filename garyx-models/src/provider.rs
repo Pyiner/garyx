@@ -18,6 +18,7 @@ pub enum ProviderType {
     ClaudeTty,
     CodexAppServer,
     GeminiCli,
+    GaryxNative,
     /// Meta-provider that orchestrates a Team as a group chat over regular
     /// per-sub-agent threads. Selected when a thread's `agent_id` resolves to
     /// an `AgentTeamProfile` rather than a `CustomAgentProfile`.
@@ -31,6 +32,7 @@ impl ProviderType {
             Self::ClaudeTty => "claude_tty",
             Self::CodexAppServer => "codex_app_server",
             Self::GeminiCli => "gemini_cli",
+            Self::GaryxNative => "garyx_native",
             Self::AgentTeam => "agent_team",
         }
     }
@@ -41,6 +43,7 @@ impl ProviderType {
             "claude-tty" | "claude_tty" => Some(Self::ClaudeTty),
             "codex" | "codex_app_server" => Some(Self::CodexAppServer),
             "gemini" | "gemini_cli" => Some(Self::GeminiCli),
+            "garyx" | "garyx_native" | "native" => Some(Self::GaryxNative),
             "agent_team" => Some(Self::AgentTeam),
             _ => None,
         }
@@ -522,6 +525,76 @@ impl Default for GeminiCliConfig {
             approval_mode: default_gemini_approval_mode(),
             model: String::new(),
             env: HashMap::new(),
+        }
+    }
+}
+
+/// Configuration for the Garyx-native in-process agent loop.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GaryxNativeConfig {
+    #[serde(default = "default_garyx_native_provider_type")]
+    pub provider_type: ProviderType,
+
+    #[serde(default = "default_garyx_native_model")]
+    pub default_model: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub model_reasoning_effort: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<i64>,
+    #[serde(default)]
+    pub timeout_seconds: f64,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub env: HashMap<String, String>,
+
+    #[serde(default = "default_garyx_native_auth_source")]
+    pub auth_source: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub codex_home: String,
+    #[serde(default = "default_garyx_native_max_tool_iterations")]
+    pub max_tool_iterations: u32,
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout_seconds: f64,
+}
+
+fn default_garyx_native_provider_type() -> ProviderType {
+    ProviderType::GaryxNative
+}
+
+fn default_garyx_native_model() -> String {
+    "gpt-5.2".to_owned()
+}
+
+fn default_garyx_native_auth_source() -> String {
+    "codex".to_owned()
+}
+
+fn default_garyx_native_max_tool_iterations() -> u32 {
+    32
+}
+
+impl Default for GaryxNativeConfig {
+    fn default() -> Self {
+        Self {
+            provider_type: ProviderType::GaryxNative,
+            default_model: default_garyx_native_model(),
+            model: String::new(),
+            model_reasoning_effort: String::new(),
+            max_turns: None,
+            timeout_seconds: 0.0,
+            workspace_dir: None,
+            env: HashMap::new(),
+            auth_source: default_garyx_native_auth_source(),
+            base_url: String::new(),
+            codex_home: String::new(),
+            max_tool_iterations: default_garyx_native_max_tool_iterations(),
+            request_timeout_seconds: default_request_timeout(),
         }
     }
 }
