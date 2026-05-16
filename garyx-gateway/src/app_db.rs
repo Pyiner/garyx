@@ -1082,23 +1082,6 @@ fn initialize_connection(conn: &Connection) -> AppDbResult<()> {
         ) STRICT;
         "#,
     )?;
-    let has_legacy_db_triggers = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'gx_db_triggers'",
-            [],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    if has_legacy_db_triggers {
-        conn.execute(
-            "INSERT OR IGNORE INTO gx_automation_data_triggers
-             (id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at)
-             SELECT id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at
-             FROM gx_db_triggers",
-            [],
-        )?;
-    }
     Ok(())
 }
 
@@ -1479,7 +1462,7 @@ fn validate_record_id(value: &str) -> AppDbResult<()> {
 
 fn validate_data_trigger_id(value: &str) -> AppDbResult<()> {
     let value = value.trim();
-    if (value.starts_with("autodata_") || value.starts_with("dbtrg_")) && value.len() <= 80 {
+    if value.starts_with("autodata_") && value.len() <= 80 {
         Ok(())
     } else {
         Err(AppDbError::BadRequest(format!(
