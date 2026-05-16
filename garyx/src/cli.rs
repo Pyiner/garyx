@@ -142,7 +142,7 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: AutoResearchAction,
     },
-    /// Scheduled automation management
+    /// Automation management
     #[command(name = "automation")]
     Automation {
         #[command(subcommand)]
@@ -813,6 +813,20 @@ pub(crate) enum AutomationAction {
         #[arg(long)]
         json: bool,
     },
+    /// Automation trigger management
+    Trigger {
+        #[command(subcommand)]
+        action: AutomationTriggerAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AutomationTriggerAction {
+    /// Data-change triggers backed by the app database event stream
+    Data {
+        #[command(subcommand)]
+        action: AutomationDataTriggerAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -860,11 +874,6 @@ pub(crate) enum DbAction {
         /// Output as JSON
         #[arg(long)]
         json: bool,
-    },
-    /// Data trigger management
-    Trigger {
-        #[command(subcommand)]
-        action: DbTriggerAction,
     },
 }
 
@@ -980,7 +989,7 @@ pub(crate) enum DbRecordAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum DbTriggerAction {
+pub(crate) enum AutomationDataTriggerAction {
     /// List data triggers
     List {
         /// Filter by table

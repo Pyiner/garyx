@@ -3,9 +3,10 @@ use std::sync::Arc;
 use clap::{CommandFactory, Parser};
 
 use crate::cli::{
-    AgentAction, AutoResearchAction, AutomationAction, BotAction, ChannelsAction, Cli,
-    CommandAction, Commands, ConfigAction, DbAction, DbRecordAction, DbTableAction,
-    DbTriggerAction, GatewayAction, LogsAction, TaskAction, TeamAction, ThreadAction, ToolAction,
+    AgentAction, AutoResearchAction, AutomationAction, AutomationDataTriggerAction,
+    AutomationTriggerAction, BotAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction,
+    DbAction, DbRecordAction, DbTableAction, GatewayAction, LogsAction, TaskAction, TeamAction,
+    ThreadAction, ToolAction,
 };
 use crate::commands::{
     OnboardCommandOptions, SearchStreamState, apply_search_stream_event, canonical_channel_id,
@@ -808,11 +809,12 @@ fn parse_db_record_insert() {
 }
 
 #[test]
-fn parse_db_trigger_create() {
+fn parse_automation_data_trigger_create() {
     let cli = Cli::parse_from([
         "garyx",
-        "db",
+        "automation",
         "trigger",
+        "data",
         "create",
         "contacts",
         "record.created",
@@ -824,17 +826,20 @@ fn parse_db_trigger_create() {
         "codex",
     ]);
     match cli.command {
-        Some(Commands::Db {
+        Some(Commands::Automation {
             action:
-                DbAction::Trigger {
+                AutomationAction::Trigger {
                     action:
-                        DbTriggerAction::Create {
-                            table,
-                            event_type,
-                            title,
-                            body,
-                            agent_id,
-                            ..
+                        AutomationTriggerAction::Data {
+                            action:
+                                AutomationDataTriggerAction::Create {
+                                    table,
+                                    event_type,
+                                    title,
+                                    body,
+                                    agent_id,
+                                    ..
+                                },
                         },
                 },
         }) => {
@@ -844,8 +849,17 @@ fn parse_db_trigger_create() {
             assert_eq!(body, "Review {table_name}");
             assert_eq!(agent_id.as_deref(), Some("codex"));
         }
-        _ => panic!("expected Db trigger create"),
+        _ => panic!("expected Automation data trigger create"),
     }
+}
+
+#[test]
+fn parse_db_trigger_is_not_a_cli_domain() {
+    let error = match Cli::try_parse_from(["garyx", "db", "trigger", "list"]) {
+        Ok(_) => panic!("db trigger should not parse"),
+        Err(error) => error,
+    };
+    assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
 }
 
 #[test]

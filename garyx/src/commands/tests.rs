@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
     extract::Path as AxumPath,
     http::StatusCode,
-    routing::{get, post, put},
+    routing::{get, patch, post, put},
 };
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -306,6 +306,10 @@ async fn spawn_automation_http_test_server(
     let delete_requests = requests.clone();
     let run_requests = requests.clone();
     let activity_requests = requests.clone();
+    let trigger_list_requests = requests.clone();
+    let trigger_create_requests = requests.clone();
+    let trigger_patch_requests = requests.clone();
+    let trigger_delete_requests = requests.clone();
 
     let app = Router::new()
         .route(
@@ -487,6 +491,107 @@ async fn spawn_automation_http_test_server(
                             "items": [],
                             "threadId": null,
                             "count": 0,
+                        })),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/api/automations/triggers/data",
+            get(move || {
+                let requests = trigger_list_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "GET".to_owned(),
+                            path: "/api/automations/triggers/data".to_owned(),
+                            body: Value::Null,
+                        });
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "triggers": []
+                        })),
+                    )
+                }
+            })
+            .post(move |Json(payload): Json<Value>| {
+                let requests = trigger_create_requests.clone();
+                async move {
+                    requests
+                        .lock()
+                        .expect("request lock")
+                        .push(RecordedRequest {
+                            method: "POST".to_owned(),
+                            path: "/api/automations/triggers/data".to_owned(),
+                            body: payload.clone(),
+                        });
+                    (
+                        StatusCode::CREATED,
+                        Json(json!({
+                            "trigger": {
+                                "id": "autodata_test",
+                                "tableName": payload["tableName"],
+                                "eventType": payload["eventType"],
+                                "titleTemplate": payload["titleTemplate"],
+                                "bodyTemplate": payload["bodyTemplate"],
+                                "agentId": payload.get("agentId").cloned().unwrap_or(Value::Null),
+                                "workspaceDir": payload.get("workspaceDir").cloned().unwrap_or(Value::Null),
+                                "enabled": payload.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+                                "createdAt": "2030-05-01T08:30:00Z",
+                                "updatedAt": "2030-05-01T08:30:00Z"
+                            }
+                        })),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/api/automations/triggers/data/{trigger_id}",
+            patch(
+                move |AxumPath(trigger_id): AxumPath<String>, Json(payload): Json<Value>| {
+                    let requests = trigger_patch_requests.clone();
+                    async move {
+                        let path = format!("/api/automations/triggers/data/{trigger_id}");
+                        requests.lock().expect("request lock").push(RecordedRequest {
+                            method: "PATCH".to_owned(),
+                            path,
+                            body: payload.clone(),
+                        });
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "trigger": {
+                                    "id": trigger_id,
+                                    "tableName": "contacts",
+                                    "eventType": "record.created",
+                                    "titleTemplate": "New record {record_id}",
+                                    "bodyTemplate": "Review {table_name}",
+                                    "enabled": payload["enabled"],
+                                    "createdAt": "2030-05-01T08:30:00Z",
+                                    "updatedAt": "2030-05-01T08:31:00Z"
+                                }
+                            })),
+                        )
+                    }
+                },
+            )
+            .delete(move |AxumPath(trigger_id): AxumPath<String>| {
+                let requests = trigger_delete_requests.clone();
+                async move {
+                    let path = format!("/api/automations/triggers/data/{trigger_id}");
+                    requests.lock().expect("request lock").push(RecordedRequest {
+                        method: "DELETE".to_owned(),
+                        path,
+                        body: Value::Null,
+                    });
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "deleted": true,
+                            "id": trigger_id,
                         })),
                     )
                 }
@@ -1002,6 +1107,42 @@ async fn cmd_automation_create_posts_disabled_interval_payload() {
     assert_eq!(records[0].body["enabled"], false);
     assert_eq!(records[0].body["schedule"]["kind"], "interval");
     assert_eq!(records[0].body["schedule"]["hours"], 6);
+}
+
+#[tokio::test]
+async fn cmd_automation_data_trigger_create_posts_automation_payload() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_automation_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_automation_data_trigger_create(
+        config_path.to_str().expect("config path"),
+        "contacts",
+        "record.created",
+        "New record {record_id}",
+        "Review {table_name}",
+        Some("codex".to_owned()),
+        Some("/tmp/work".to_owned()),
+        true,
+        false,
+    )
+    .await
+    .expect("automation data trigger create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "POST");
+    assert_eq!(records[0].path, "/api/automations/triggers/data");
+    assert_eq!(records[0].body["tableName"], "contacts");
+    assert_eq!(records[0].body["eventType"], "record.created");
+    assert_eq!(records[0].body["titleTemplate"], "New record {record_id}");
+    assert_eq!(records[0].body["bodyTemplate"], "Review {table_name}");
+    assert_eq!(records[0].body["agentId"], "codex");
+    assert_eq!(records[0].body["workspaceDir"], "/tmp/work");
+    assert_eq!(records[0].body["enabled"], false);
 }
 
 #[tokio::test]

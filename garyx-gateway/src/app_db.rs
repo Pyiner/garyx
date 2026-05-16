@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use axum::{
@@ -10,17 +10,13 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose};
 use chrono::{SecondsFormat, Utc};
-use garyx_models::local_paths::default_session_data_dir;
-use garyx_models::{Principal, TaskNotificationTarget};
-use garyx_router::{
-    CreateTaskInput, FileTaskCounterStore, TaskRuntimeInput, TaskService, WorkspaceMode,
-};
 use rusqlite::types::{Value as SqlValue, ValueRef};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::automation;
 use crate::server::AppState;
 
 const SYSTEM_PREFIX: &str = "gx_db_";
@@ -122,7 +118,8 @@ pub struct AppDbEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppDbTrigger {
+#[serde(rename_all = "camelCase")]
+pub struct AutomationDataTrigger {
     pub id: String,
     pub table_name: String,
     pub event_type: String,
@@ -186,7 +183,8 @@ pub struct SqlQueryBody {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct CreateTriggerBody {
+#[serde(rename_all = "camelCase")]
+pub struct CreateDataTriggerBody {
     pub table_name: String,
     pub event_type: String,
     pub title_template: String,
@@ -200,7 +198,8 @@ pub struct CreateTriggerBody {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct PatchTriggerBody {
+#[serde(rename_all = "camelCase")]
+pub struct PatchDataTriggerBody {
     #[serde(default)]
     pub enabled: Option<bool>,
 }
@@ -218,7 +217,7 @@ pub struct ListEventsQuery {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ListTriggersQuery {
+pub struct ListDataTriggersQuery {
     #[serde(default)]
     pub table: Option<String>,
     #[serde(default, alias = "eventType")]
@@ -354,7 +353,7 @@ impl AppDbService {
                 params![table_name],
             )?;
             tx.execute(
-                "DELETE FROM gx_db_triggers WHERE table_name = ?1",
+                "DELETE FROM gx_automation_data_triggers WHERE table_name = ?1",
                 params![table_name],
             )?;
             tx.commit()?;
@@ -721,7 +720,10 @@ impl AppDbService {
         collect_rows(rows)
     }
 
-    pub fn create_trigger(&self, body: CreateTriggerBody) -> AppDbResult<AppDbTrigger> {
+    pub fn create_data_trigger(
+        &self,
+        body: CreateDataTriggerBody,
+    ) -> AppDbResult<AutomationDataTrigger> {
         let table_name = validate_identifier(&body.table_name, "table_name")?;
         self.ensure_table(&table_name)?;
         validate_event_type(&body.event_type)?;
@@ -732,12 +734,12 @@ impl AppDbService {
         let workspace_dir = normalize_optional_string(body.workspace_dir);
         let title_template = trim_required(&body.title_template, "title_template")?;
         let body_template = trim_required(&body.body_template, "body_template")?;
-        let id = format!("dbtrg_{}", Uuid::new_v4().simple());
+        let id = format!("autodata_{}", Uuid::new_v4().simple());
         let now = now_string();
         {
             let conn = self.conn()?;
             conn.execute(
-                "INSERT INTO gx_db_triggers
+                "INSERT INTO gx_automation_data_triggers
                  (id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
                 params![
@@ -753,14 +755,14 @@ impl AppDbService {
                 ],
             )?;
         }
-        self.trigger_by_id(&id)
+        self.data_trigger_by_id(&id)
     }
 
-    pub fn list_triggers(
+    pub fn list_data_triggers(
         &self,
         table_name: Option<String>,
         event_type: Option<String>,
-    ) -> AppDbResult<Vec<AppDbTrigger>> {
+    ) -> AppDbResult<Vec<AutomationDataTrigger>> {
         let table_name = table_name
             .map(|value| validate_identifier(&value, "table"))
             .transpose()?;
@@ -768,7 +770,7 @@ impl AppDbService {
             .map(|value| validate_event_type(&value).map(|_| value))
             .transpose()?;
         let conn = self.conn()?;
-        let mut sql = "SELECT id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at FROM gx_db_triggers".to_owned();
+        let mut sql = "SELECT id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at FROM gx_automation_data_triggers".to_owned();
         let mut clauses = Vec::new();
         let mut bind_values = Vec::new();
         if let Some(table_name) = table_name {
@@ -785,16 +787,16 @@ impl AppDbService {
         }
         sql.push_str(" ORDER BY created_at DESC");
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params_from_iter(bind_values), trigger_from_row)?;
+        let rows = stmt.query_map(params_from_iter(bind_values), data_trigger_from_row)?;
         collect_rows(rows)
     }
 
-    pub fn patch_trigger(
+    pub fn patch_data_trigger(
         &self,
         trigger_id: &str,
-        body: PatchTriggerBody,
-    ) -> AppDbResult<AppDbTrigger> {
-        validate_trigger_id(trigger_id)?;
+        body: PatchDataTriggerBody,
+    ) -> AppDbResult<AutomationDataTrigger> {
+        validate_data_trigger_id(trigger_id)?;
         let Some(enabled) = body.enabled else {
             return Err(AppDbError::BadRequest(
                 "trigger patch requires enabled".to_owned(),
@@ -804,7 +806,7 @@ impl AppDbService {
         {
             let conn = self.conn()?;
             let changed = conn.execute(
-                "UPDATE gx_db_triggers SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
+                "UPDATE gx_automation_data_triggers SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
                 params![trigger_id, if enabled { 1 } else { 0 }, now],
             )?;
             if changed == 0 {
@@ -813,14 +815,14 @@ impl AppDbService {
                 )));
             }
         }
-        self.trigger_by_id(trigger_id)
+        self.data_trigger_by_id(trigger_id)
     }
 
-    pub fn delete_trigger(&self, trigger_id: &str) -> AppDbResult<()> {
-        validate_trigger_id(trigger_id)?;
+    pub fn delete_data_trigger(&self, trigger_id: &str) -> AppDbResult<()> {
+        validate_data_trigger_id(trigger_id)?;
         let conn = self.conn()?;
         let changed = conn.execute(
-            "DELETE FROM gx_db_triggers WHERE id = ?1",
+            "DELETE FROM gx_automation_data_triggers WHERE id = ?1",
             params![trigger_id],
         )?;
         if changed == 0 {
@@ -911,13 +913,13 @@ impl AppDbService {
         row.ok_or_else(|| AppDbError::NotFound(format!("record not found: {record_id}")))
     }
 
-    fn trigger_by_id(&self, trigger_id: &str) -> AppDbResult<AppDbTrigger> {
+    fn data_trigger_by_id(&self, trigger_id: &str) -> AppDbResult<AutomationDataTrigger> {
         let conn = self.conn()?;
         conn.query_row(
             "SELECT id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at
-             FROM gx_db_triggers WHERE id = ?1",
+             FROM gx_automation_data_triggers WHERE id = ?1",
             params![trigger_id],
-            trigger_from_row,
+            data_trigger_from_row,
         )
         .optional()?
         .ok_or_else(|| AppDbError::NotFound(format!("trigger not found: {trigger_id}")))
@@ -1066,7 +1068,7 @@ fn initialize_connection(conn: &Connection) -> AppDbResult<()> {
             created_at TEXT NOT NULL
         ) STRICT;
 
-        CREATE TABLE IF NOT EXISTS gx_db_triggers (
+        CREATE TABLE IF NOT EXISTS gx_automation_data_triggers (
             id TEXT PRIMARY KEY,
             table_name TEXT NOT NULL,
             event_type TEXT NOT NULL,
@@ -1080,6 +1082,23 @@ fn initialize_connection(conn: &Connection) -> AppDbResult<()> {
         ) STRICT;
         "#,
     )?;
+    let has_legacy_db_triggers = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'gx_db_triggers'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if has_legacy_db_triggers {
+        conn.execute(
+            "INSERT OR IGNORE INTO gx_automation_data_triggers
+             (id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at)
+             SELECT id, table_name, event_type, title_template, body_template, agent_id, workspace_dir, enabled, created_at, updated_at
+             FROM gx_db_triggers",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -1153,8 +1172,8 @@ fn event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AppDbEvent> {
     })
 }
 
-fn trigger_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AppDbTrigger> {
-    Ok(AppDbTrigger {
+fn data_trigger_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AutomationDataTrigger> {
+    Ok(AutomationDataTrigger {
         id: row.get(0)?,
         table_name: row.get(1)?,
         event_type: row.get(2)?,
@@ -1458,9 +1477,9 @@ fn validate_record_id(value: &str) -> AppDbResult<()> {
     Ok(())
 }
 
-fn validate_trigger_id(value: &str) -> AppDbResult<()> {
+fn validate_data_trigger_id(value: &str) -> AppDbResult<()> {
     let value = value.trim();
-    if value.starts_with("dbtrg_") && value.len() <= 80 {
+    if (value.starts_with("autodata_") || value.starts_with("dbtrg_")) && value.len() <= 80 {
         Ok(())
     } else {
         Err(AppDbError::BadRequest(format!(
@@ -1619,7 +1638,7 @@ pub async fn create_table(
     let service = db_service(&state);
     match service.create_table(body, actor_from_header(&headers)) {
         Ok(event) => {
-            let trigger_results = run_event_triggers(state, &event).await;
+            let trigger_results = automation::run_data_triggers_for_db_event(state, &event).await;
             (
                 StatusCode::CREATED,
                 Json(json!({ "event": event, "triggeredTasks": trigger_results })),
@@ -1644,7 +1663,7 @@ pub async fn drop_table(
     let service = db_service(&state);
     match service.drop_table(&table, actor_from_header(&headers)) {
         Ok(event) => {
-            let trigger_results = run_event_triggers(state, &event).await;
+            let trigger_results = automation::run_data_triggers_for_db_event(state, &event).await;
             (
                 StatusCode::OK,
                 Json(json!({ "event": event, "triggeredTasks": trigger_results })),
@@ -1663,7 +1682,7 @@ pub async fn add_field(
     let service = db_service(&state);
     match service.add_field(&table, body, actor_from_header(&headers)) {
         Ok(event) => {
-            let trigger_results = run_event_triggers(state, &event).await;
+            let trigger_results = automation::run_data_triggers_for_db_event(state, &event).await;
             (
                 StatusCode::CREATED,
                 Json(json!({ "event": event, "triggeredTasks": trigger_results })),
@@ -1681,7 +1700,7 @@ pub async fn drop_field(
     let service = db_service(&state);
     match service.drop_field(&table, &field, actor_from_header(&headers)) {
         Ok(event) => {
-            let trigger_results = run_event_triggers(state, &event).await;
+            let trigger_results = automation::run_data_triggers_for_db_event(state, &event).await;
             (
                 StatusCode::OK,
                 Json(json!({ "event": event, "triggeredTasks": trigger_results })),
@@ -1700,7 +1719,7 @@ pub async fn insert_record(
     let service = db_service(&state);
     match service.insert_record(&table, body, actor_from_header(&headers)) {
         Ok((record, event)) => {
-            let trigger_results = run_event_triggers(state, &event).await;
+            let trigger_results = automation::run_data_triggers_for_db_event(state, &event).await;
             (
                 StatusCode::CREATED,
                 Json(
@@ -1731,7 +1750,7 @@ pub async fn update_record(
     let service = db_service(&state);
     match service.update_record(&table, &id, body, actor_from_header(&headers)) {
         Ok((record, event)) => {
-            let trigger_results = run_event_triggers(state, &event).await;
+            let trigger_results = automation::run_data_triggers_for_db_event(state, &event).await;
             (
                 StatusCode::OK,
                 Json(
@@ -1751,7 +1770,7 @@ pub async fn delete_record(
     let service = db_service(&state);
     match service.delete_record(&table, &id, actor_from_header(&headers)) {
         Ok(event) => {
-            let trigger_results = run_event_triggers(state, &event).await;
+            let trigger_results = automation::run_data_triggers_for_db_event(state, &event).await;
             (
                 StatusCode::OK,
                 Json(json!({ "event": event, "triggeredTasks": trigger_results })),
@@ -1779,148 +1798,6 @@ pub async fn list_events(
         db_service(&state).list_events(query.table, query.event_type, query.limit, query.offset),
         |events| json!({ "events": events }),
     )
-}
-
-pub async fn create_trigger(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<CreateTriggerBody>,
-) -> (StatusCode, Json<Value>) {
-    db_result_status(
-        StatusCode::CREATED,
-        db_service(&state).create_trigger(body),
-        |trigger| json!({ "trigger": trigger }),
-    )
-}
-
-pub async fn list_triggers(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<ListTriggersQuery>,
-) -> (StatusCode, Json<Value>) {
-    db_result(
-        db_service(&state).list_triggers(query.table, query.event_type),
-        |triggers| json!({ "triggers": triggers }),
-    )
-}
-
-pub async fn patch_trigger(
-    State(state): State<Arc<AppState>>,
-    AxumPath(trigger_id): AxumPath<String>,
-    Json(body): Json<PatchTriggerBody>,
-) -> (StatusCode, Json<Value>) {
-    db_result(
-        db_service(&state).patch_trigger(&trigger_id, body),
-        |trigger| json!({ "trigger": trigger }),
-    )
-}
-
-pub async fn delete_trigger(
-    State(state): State<Arc<AppState>>,
-    AxumPath(trigger_id): AxumPath<String>,
-) -> (StatusCode, Json<Value>) {
-    match db_service(&state).delete_trigger(&trigger_id) {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({ "deleted": true, "id": trigger_id })),
-        ),
-        Err(error) => db_error_response(error),
-    }
-}
-
-async fn run_event_triggers(state: Arc<AppState>, event: &AppDbEvent) -> Vec<Value> {
-    let service = db_service(&state);
-    let triggers = match service.list_triggers(
-        Some(event.table_name.clone()),
-        Some(event.event_type.clone()),
-    ) {
-        Ok(triggers) => triggers
-            .into_iter()
-            .filter(|trigger| trigger.enabled)
-            .collect::<Vec<_>>(),
-        Err(error) => return vec![json!({ "status": "error", "error": error.to_string() })],
-    };
-    let mut results = Vec::new();
-    for trigger in triggers {
-        let Some(result) = create_trigger_task(&state, &service, &trigger, event).await else {
-            continue;
-        };
-        results.push(result);
-    }
-    results
-}
-
-async fn create_trigger_task(
-    state: &Arc<AppState>,
-    app_db: &Arc<AppDbService>,
-    trigger: &AppDbTrigger,
-    event: &AppDbEvent,
-) -> Option<Value> {
-    let config = state.config_snapshot();
-    if !config.tasks.enabled {
-        return Some(json!({
-            "triggerId": trigger.id,
-            "status": "skipped",
-            "reason": "tasks disabled"
-        }));
-    }
-    let data_dir = config
-        .sessions
-        .data_dir
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(default_session_data_dir);
-    let task_service = TaskService::new(
-        state.threads.thread_store.clone(),
-        Arc::new(FileTaskCounterStore::new(data_dir)),
-    );
-    let title = render_trigger_template(&trigger.title_template, event);
-    let body = render_trigger_template(&trigger.body_template, event);
-    let runtime = TaskRuntimeInput {
-        agent_id: trigger.agent_id.clone(),
-        workspace_dir: trigger.workspace_dir.clone(),
-        workspace_mode: WorkspaceMode::Direct,
-        worktree_base_dir: None,
-    };
-    match task_service
-        .create_task(CreateTaskInput {
-            title: Some(title),
-            body: Some(body),
-            assignee: None,
-            notification_target: Some(TaskNotificationTarget::None),
-            source: None,
-            start: false,
-            actor: Some(Principal::Human {
-                user_id: "garyx-db".to_owned(),
-            }),
-            agent_id: None,
-            workspace_dir: None,
-            runtime: Some(runtime),
-        })
-        .await
-    {
-        Ok((thread_id, task)) => {
-            let task_id = garyx_router::tasks::canonical_task_id(&task);
-            let _ = app_db.attach_task_to_event(&event.id, &task_id, &thread_id);
-            Some(json!({
-                "triggerId": trigger.id,
-                "status": "created",
-                "threadId": thread_id,
-                "taskId": task_id,
-            }))
-        }
-        Err(error) => Some(json!({
-            "triggerId": trigger.id,
-            "status": "error",
-            "error": error.to_string(),
-        })),
-    }
-}
-
-fn render_trigger_template(template: &str, event: &AppDbEvent) -> String {
-    template
-        .replace("{event_type}", &event.event_type)
-        .replace("{table_name}", &event.table_name)
-        .replace("{record_id}", event.record_id.as_deref().unwrap_or(""))
-        .replace("{event_id}", &event.id)
 }
 
 fn db_result<T>(result: AppDbResult<T>, ok: impl FnOnce(T) -> Value) -> (StatusCode, Json<Value>) {
@@ -2138,7 +2015,7 @@ mod tests {
             )
             .unwrap();
         service
-            .create_trigger(CreateTriggerBody {
+            .create_data_trigger(CreateDataTriggerBody {
                 table_name: "inbox".to_owned(),
                 event_type: "record.created".to_owned(),
                 title_template: "New {record_id}".to_owned(),
@@ -2150,7 +2027,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             service
-                .list_triggers(Some("inbox".to_owned()), None)
+                .list_data_triggers(Some("inbox".to_owned()), None)
                 .unwrap()
                 .len(),
             1
@@ -2158,7 +2035,7 @@ mod tests {
         service.drop_table("inbox", None).unwrap();
         assert!(
             service
-                .list_triggers(Some("inbox".to_owned()), None)
+                .list_data_triggers(Some("inbox".to_owned()), None)
                 .unwrap()
                 .is_empty()
         );

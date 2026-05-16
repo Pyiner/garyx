@@ -133,6 +133,7 @@ Common flags on `channels add`:
 | `garyx automation run <automation_id>` | Run an automation immediately. |
 | `garyx automation pause / resume <automation_id>` | Disable or enable an automation. |
 | `garyx automation activity <automation_id>` | Show recent automation runs. |
+| `garyx automation trigger data list / create / enable / disable / delete` | Manage data-change triggers that create Garyx tasks. |
 | `garyx automation delete <automation_id>` | Delete an automation. |
 
 Schedule flags include `--every-hours <N>`, `--daily-time HH:MM`,
@@ -152,7 +153,6 @@ Schedule flags include `--every-hours <N>`, `--daily-time HH:MM`,
 | `garyx db record get / update / delete` | Read, mutate, or delete one record by `id`. |
 | `garyx db sql "select ..."` | Run read-only SQL. Write SQL is rejected by the gateway. |
 | `garyx db events` | Inspect schema and record mutation events. |
-| `garyx db trigger list / create / enable / disable / delete` | Manage data triggers that create Garyx tasks. |
 
 The database is global for the Garyx installation and is stored at
 `~/.garyx/data/app-database.sqlite3` by default.

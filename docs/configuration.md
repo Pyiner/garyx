@@ -473,8 +473,10 @@ garyx db sql "select id, name, score from contacts"
 
 Read queries use SQL and the gateway rejects write SQL. Schema and record
 writes go through the `garyx db table`, `garyx db field`, and `garyx db record`
-commands. Data triggers can be managed with `garyx db trigger ...`; a trigger
-creates a Garyx task when the configured table event fires.
+commands. Data-change triggers live under Automation and can be managed with
+`garyx automation trigger data ...`; a trigger creates a Garyx task when the
+configured table event fires. Scheduled automations and data-change
+automations are two trigger mechanisms under the same Automation domain.
 
 ## Agents and Teams
 

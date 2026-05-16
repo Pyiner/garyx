@@ -141,6 +141,16 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(automation::automation_activity),
         )
         .route(
+            "/api/automations/triggers/data",
+            axum::routing::get(automation::list_data_triggers)
+                .post(automation::create_data_trigger),
+        )
+        .route(
+            "/api/automations/triggers/data/{id}",
+            axum::routing::patch(automation::patch_data_trigger)
+                .delete(automation::delete_data_trigger),
+        )
+        .route(
             "/api/db/tables",
             axum::routing::get(app_db::list_tables).post(app_db::create_table),
         )
@@ -168,14 +178,6 @@ fn thread_routes() -> Router<Arc<AppState>> {
         )
         .route("/api/db/sql", axum::routing::post(app_db::sql_query))
         .route("/api/db/events", axum::routing::get(app_db::list_events))
-        .route(
-            "/api/db/triggers",
-            axum::routing::get(app_db::list_triggers).post(app_db::create_trigger),
-        )
-        .route(
-            "/api/db/triggers/{id}",
-            axum::routing::patch(app_db::patch_trigger).delete(app_db::delete_trigger),
-        )
         .route(
             "/api/auto-research/runs",
             axum::routing::get(api::list_auto_research_runs).post(api::create_auto_research_run),

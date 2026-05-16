@@ -2539,7 +2539,7 @@ fn db_print_events(payload: &Value) {
     }
 }
 
-fn db_print_triggers(payload: &Value) {
+fn automation_print_data_triggers(payload: &Value) {
     let triggers = payload["triggers"].as_array().cloned().unwrap_or_default();
     if triggers.is_empty() {
         println!("Triggers: (none)");
@@ -2555,9 +2555,9 @@ fn db_print_triggers(payload: &Value) {
             "{:<38}  {:<7}  {:<20}  {:<15}  {}",
             trigger["id"].as_str().unwrap_or("-"),
             trigger["enabled"].as_bool().unwrap_or(false),
-            trigger["table_name"].as_str().unwrap_or("-"),
-            trigger["event_type"].as_str().unwrap_or("-"),
-            trigger["title_template"].as_str().unwrap_or("-"),
+            trigger["tableName"].as_str().unwrap_or("-"),
+            trigger["eventType"].as_str().unwrap_or("-"),
+            trigger["titleTemplate"].as_str().unwrap_or("-"),
         );
     }
 }
@@ -2861,7 +2861,7 @@ pub(crate) async fn cmd_db_events(
     Ok(())
 }
 
-pub(crate) async fn cmd_db_trigger_list(
+pub(crate) async fn cmd_automation_data_trigger_list(
     config_path: &str,
     table: Option<String>,
     event_type: Option<String>,
@@ -2875,21 +2875,21 @@ pub(crate) async fn cmd_db_trigger_list(
         query.push(format!("eventType={}", urlencoding::encode(&event_type)));
     }
     let path = if query.is_empty() {
-        "/api/db/triggers".to_owned()
+        "/api/automations/triggers/data".to_owned()
     } else {
-        format!("/api/db/triggers?{}", query.join("&"))
+        format!("/api/automations/triggers/data?{}", query.join("&"))
     };
     let gateway = gateway_endpoint(config_path)?;
     let payload = fetch_gateway_json(&gateway, &path).await?;
     if json {
         return print_pretty_json(&payload);
     }
-    db_print_triggers(&payload);
+    automation_print_data_triggers(&payload);
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn cmd_db_trigger_create(
+pub(crate) async fn cmd_automation_data_trigger_create(
     config_path: &str,
     table: &str,
     event_type: &str,
@@ -2901,31 +2901,31 @@ pub(crate) async fn cmd_db_trigger_create(
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut body = json!({
-        "table_name": trim_required_cli(table, "table")?,
-        "event_type": trim_required_cli(event_type, "event_type")?,
-        "title_template": trim_required_cli(title, "title")?,
-        "body_template": trim_required_cli(body_text, "body")?,
+        "tableName": trim_required_cli(table, "table")?,
+        "eventType": trim_required_cli(event_type, "event_type")?,
+        "titleTemplate": trim_required_cli(title, "title")?,
+        "bodyTemplate": trim_required_cli(body_text, "body")?,
         "enabled": !disabled,
     });
     if let Some(agent_id) = trim_optional_cli(agent_id) {
-        body["agent_id"] = json!(agent_id);
+        body["agentId"] = json!(agent_id);
     }
     if let Some(workspace_dir) = trim_optional_cli(workspace_dir) {
-        body["workspace_dir"] = json!(workspace_dir);
+        body["workspaceDir"] = json!(workspace_dir);
     }
     let gateway = gateway_endpoint(config_path)?;
-    let payload = post_gateway_json(&gateway, "/api/db/triggers", &body).await?;
+    let payload = post_gateway_json(&gateway, "/api/automations/triggers/data", &body).await?;
     if json {
         return print_pretty_json(&payload);
     }
     println!(
-        "Created trigger: {}",
+        "Created data trigger: {}",
         payload["trigger"]["id"].as_str().unwrap_or("-")
     );
     Ok(())
 }
 
-pub(crate) async fn cmd_db_trigger_set_enabled(
+pub(crate) async fn cmd_automation_data_trigger_set_enabled(
     config_path: &str,
     trigger_id: &str,
     enabled: bool,
@@ -2935,7 +2935,10 @@ pub(crate) async fn cmd_db_trigger_set_enabled(
     let gateway = gateway_endpoint(config_path)?;
     let payload = patch_gateway_json(
         &gateway,
-        &format!("/api/db/triggers/{}", urlencoding::encode(&trigger_id)),
+        &format!(
+            "/api/automations/triggers/data/{}",
+            urlencoding::encode(&trigger_id)
+        ),
         &json!({ "enabled": enabled }),
     )
     .await?;
@@ -2943,14 +2946,14 @@ pub(crate) async fn cmd_db_trigger_set_enabled(
         return print_pretty_json(&payload);
     }
     println!(
-        "{} trigger: {}",
+        "{} data trigger: {}",
         if enabled { "Enabled" } else { "Disabled" },
         trigger_id
     );
     Ok(())
 }
 
-pub(crate) async fn cmd_db_trigger_delete(
+pub(crate) async fn cmd_automation_data_trigger_delete(
     config_path: &str,
     trigger_id: &str,
     json: bool,
@@ -2959,13 +2962,16 @@ pub(crate) async fn cmd_db_trigger_delete(
     let gateway = gateway_endpoint(config_path)?;
     let payload = delete_gateway_json(
         &gateway,
-        &format!("/api/db/triggers/{}", urlencoding::encode(&trigger_id)),
+        &format!(
+            "/api/automations/triggers/data/{}",
+            urlencoding::encode(&trigger_id)
+        ),
     )
     .await?;
     if json {
         return print_pretty_json(&payload);
     }
-    println!("Deleted trigger: {trigger_id}");
+    println!("Deleted data trigger: {trigger_id}");
     Ok(())
 }
 

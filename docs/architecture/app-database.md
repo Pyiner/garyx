@@ -21,7 +21,8 @@ Mac app can manage the same state later through the HTTP API.
   SQLite statements. Write SQL is rejected by the gateway.
 - Writes go through narrow API/CLI operations: create/drop table, add/drop
   field, insert/update/delete record.
-- Triggers are application-level Garyx triggers, not SQLite triggers.
+- Data-change triggers are Automation triggers, not SQLite triggers and not
+  database-owned behavior.
 
 ## System Tables
 
@@ -32,7 +33,7 @@ that prefix.
 - `gx_db_fields`: user column metadata.
 - `gx_db_schema_versions`: schema snapshots for audit and recovery.
 - `gx_db_events`: append-only data and schema event log.
-- `gx_db_triggers`: event trigger definitions.
+- `gx_automation_data_triggers`: Automation data-trigger definitions.
 
 ## Event Model
 
@@ -46,10 +47,14 @@ Every schema and record mutation writes an event:
 Record events store `before` and `after` JSON snapshots where available.
 Schema events store the schema snapshot in `after`.
 
-## Trigger Model
+## Automation Trigger Model
 
-The first implementation supports table/event triggers that create Garyx tasks.
-The trigger definition contains:
+Garyx Automation has multiple trigger mechanisms. Scheduled automations are
+time-triggered. App Database automations are data-triggered from `gx_db_events`.
+Both mechanisms create Garyx tasks as the execution unit.
+
+The first data-trigger implementation supports table/event triggers. The
+definition contains:
 
 - `table_name`
 - `event_type`
@@ -65,11 +70,9 @@ Template placeholders are deliberately simple:
 - `{record_id}`
 - `{event_id}`
 
-This is the database-trigger half of the future Automation model. Scheduled
-automations should eventually use the same behavior: a trigger fires, Garyx
-creates a task, and the task runtime handles execution. The first version
-creates a `todo` task with the chosen runtime agent/workspace attached; dispatch
-can be unified with the Automation runtime in the next pass.
+The App Database module only records events. The Automation module owns trigger
+definition management, matching data events, template rendering, and task
+creation.
 
 ## CLI Shape
 
@@ -85,7 +88,7 @@ garyx db table create contacts \
 garyx db record insert contacts --data '{"name":"Test User","score":9.5}'
 garyx db sql "select id, name, score from contacts order by created_at desc"
 
-garyx db trigger create contacts record.created \
+garyx automation trigger data create contacts record.created \
   --title "New contact: {record_id}" \
   --body "Review {table_name} record {record_id}" \
   --agent-id codex

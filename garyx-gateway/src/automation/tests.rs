@@ -1,7 +1,8 @@
 use super::{
     automation_agent_id, build_automation_job, compile_schedule, infer_schedule_view,
-    parse_time_hm, resolve_automation_agent_id, to_summary,
+    parse_time_hm, render_data_trigger_template, resolve_automation_agent_id, to_summary,
 };
+use crate::app_db::AppDbEvent;
 use crate::cron::{CronJob, JobRunStatus};
 use crate::server::create_app_state;
 use chrono::Utc;
@@ -165,4 +166,30 @@ async fn resolve_automation_agent_id_preserves_raw_team_id() {
         .expect("team id should validate");
 
     assert_eq!(resolved, "product-ship");
+}
+
+#[test]
+fn data_trigger_template_renders_db_event_fields() {
+    let event = AppDbEvent {
+        id: "evt_test".to_owned(),
+        event_type: "record.created".to_owned(),
+        table_name: "contacts".to_owned(),
+        record_id: Some("rec_test".to_owned()),
+        actor_type: None,
+        actor_id: None,
+        thread_id: None,
+        task_id: None,
+        schema_version: None,
+        before: None,
+        after: None,
+        created_at: "2030-05-01T08:30:00Z".to_owned(),
+    };
+
+    assert_eq!(
+        render_data_trigger_template(
+            "Handle {event_type} on {table_name}/{record_id} ({event_id})",
+            &event
+        ),
+        "Handle record.created on contacts/rec_test (evt_test)"
+    );
 }

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
@@ -10,12 +11,21 @@ use chrono::{DateTime, Local, Utc};
 use garyx_models::config::{
     AutomationScheduleView, CronAction, CronJobConfig, CronJobKind, CronSchedule,
 };
+use garyx_models::local_paths::default_session_data_dir;
+use garyx_models::{Principal, TaskNotificationTarget};
 use garyx_router::is_thread_key;
+use garyx_router::{
+    CreateTaskInput, FileTaskCounterStore, TaskRuntimeInput, TaskService, WorkspaceMode,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::agent_identity::{resolve_agent_reference_from_stores, selected_agent_reference_id};
+use crate::app_db::{
+    AppDbError, AppDbEvent, AppDbService, AutomationDataTrigger, CreateDataTriggerBody,
+    ListDataTriggersQuery, PatchDataTriggerBody,
+};
 use crate::cron::{CronJob, JobRunStatus, RunRecord};
 use crate::server::AppState;
 
@@ -854,6 +864,193 @@ pub async fn automation_activity(
             "items": items,
             "threadId": latest_thread_id,
             "count": items.len(),
+        })),
+    )
+}
+
+pub async fn list_data_triggers(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ListDataTriggersQuery>,
+) -> impl IntoResponse {
+    app_db_result(
+        state
+            .ops
+            .app_db
+            .list_data_triggers(query.table, query.event_type),
+        |triggers| json!({ "triggers": triggers }),
+    )
+}
+
+pub async fn create_data_trigger(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateDataTriggerBody>,
+) -> impl IntoResponse {
+    app_db_result_status(
+        StatusCode::CREATED,
+        state.ops.app_db.create_data_trigger(body),
+        |trigger| json!({ "trigger": trigger }),
+    )
+}
+
+pub async fn patch_data_trigger(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<PatchDataTriggerBody>,
+) -> impl IntoResponse {
+    app_db_result(
+        state.ops.app_db.patch_data_trigger(&id, body),
+        |trigger| json!({ "trigger": trigger }),
+    )
+}
+
+pub async fn delete_data_trigger(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match state.ops.app_db.delete_data_trigger(&id) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "deleted": true,
+                "id": id,
+            })),
+        ),
+        Err(error) => app_db_error_response(error),
+    }
+}
+
+pub(crate) async fn run_data_triggers_for_db_event(
+    state: Arc<AppState>,
+    event: &AppDbEvent,
+) -> Vec<Value> {
+    let app_db = state.ops.app_db.clone();
+    let triggers = match app_db.list_data_triggers(
+        Some(event.table_name.clone()),
+        Some(event.event_type.clone()),
+    ) {
+        Ok(triggers) => triggers
+            .into_iter()
+            .filter(|trigger| trigger.enabled)
+            .collect::<Vec<_>>(),
+        Err(error) => return vec![json!({ "status": "error", "error": error.to_string() })],
+    };
+    let mut results = Vec::new();
+    for trigger in triggers {
+        let Some(result) = create_data_trigger_task(&state, &app_db, &trigger, event).await else {
+            continue;
+        };
+        results.push(result);
+    }
+    results
+}
+
+async fn create_data_trigger_task(
+    state: &Arc<AppState>,
+    app_db: &Arc<AppDbService>,
+    trigger: &AutomationDataTrigger,
+    event: &AppDbEvent,
+) -> Option<Value> {
+    let config = state.config_snapshot();
+    if !config.tasks.enabled {
+        return Some(json!({
+            "triggerId": trigger.id,
+            "status": "skipped",
+            "reason": "tasks disabled"
+        }));
+    }
+    let data_dir = config
+        .sessions
+        .data_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(default_session_data_dir);
+    let task_service = TaskService::new(
+        state.threads.thread_store.clone(),
+        Arc::new(FileTaskCounterStore::new(data_dir)),
+    );
+    let title = render_data_trigger_template(&trigger.title_template, event);
+    let body = render_data_trigger_template(&trigger.body_template, event);
+    let runtime = TaskRuntimeInput {
+        agent_id: trigger.agent_id.clone(),
+        workspace_dir: trigger.workspace_dir.clone(),
+        workspace_mode: WorkspaceMode::Direct,
+        worktree_base_dir: None,
+    };
+    match task_service
+        .create_task(CreateTaskInput {
+            title: Some(title),
+            body: Some(body),
+            assignee: None,
+            notification_target: Some(TaskNotificationTarget::None),
+            source: None,
+            start: false,
+            actor: Some(Principal::Agent {
+                agent_id: "garyx-automation".to_owned(),
+            }),
+            agent_id: None,
+            workspace_dir: None,
+            runtime: Some(runtime),
+        })
+        .await
+    {
+        Ok((thread_id, task)) => {
+            let task_id = garyx_router::tasks::canonical_task_id(&task);
+            let _ = app_db.attach_task_to_event(&event.id, &task_id, &thread_id);
+            Some(json!({
+                "triggerId": trigger.id,
+                "status": "created",
+                "threadId": thread_id,
+                "taskId": task_id,
+            }))
+        }
+        Err(error) => Some(json!({
+            "triggerId": trigger.id,
+            "status": "error",
+            "error": error.to_string(),
+        })),
+    }
+}
+
+fn render_data_trigger_template(template: &str, event: &AppDbEvent) -> String {
+    template
+        .replace("{event_type}", &event.event_type)
+        .replace("{table_name}", &event.table_name)
+        .replace("{record_id}", event.record_id.as_deref().unwrap_or(""))
+        .replace("{event_id}", &event.id)
+}
+
+fn app_db_result<T>(
+    result: Result<T, AppDbError>,
+    ok: impl FnOnce(T) -> Value,
+) -> (StatusCode, Json<Value>) {
+    app_db_result_status(StatusCode::OK, result, ok)
+}
+
+fn app_db_result_status<T>(
+    status: StatusCode,
+    result: Result<T, AppDbError>,
+    ok: impl FnOnce(T) -> Value,
+) -> (StatusCode, Json<Value>) {
+    match result {
+        Ok(value) => (status, Json(ok(value))),
+        Err(error) => app_db_error_response(error),
+    }
+}
+
+fn app_db_error_response(error: AppDbError) -> (StatusCode, Json<Value>) {
+    let status = match &error {
+        AppDbError::BadRequest(_) => StatusCode::BAD_REQUEST,
+        AppDbError::NotFound(_) => StatusCode::NOT_FOUND,
+        AppDbError::Conflict(_) => StatusCode::CONFLICT,
+        AppDbError::LockPoisoned
+        | AppDbError::Io(_)
+        | AppDbError::Sqlite(_)
+        | AppDbError::Serde(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(json!({
+            "error": error.to_string(),
         })),
     )
 }
