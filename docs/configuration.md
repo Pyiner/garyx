@@ -148,9 +148,13 @@ retries that same message as plain text without `parse_mode`.
 ```
 
 Discord connects through the Gateway API and sends replies through the REST
-Create Message API. Direct messages are accepted without a mention. Server
-channels require a bot mention by default; set `require_mention` to `false` to
-allow free-response server channels. Outbound messages use safe
+message APIs. Direct messages are accepted without a mention. Server channels
+require a bot mention by default; set `require_mention` to `false` to allow
+free-response server channels. Assistant responses stream by creating the first
+reply message and editing it until the run finishes. Local and remote Markdown
+image references are sent as Discord attachments, generated image results are
+sent as files, and inbound Discord image/file attachments are downloaded to
+local temp files before the agent run. Outbound messages use safe
 `allowed_mentions` defaults: user pings and reply pings are allowed, while
 `@everyone`, `@here`, and role pings are blocked.
 
@@ -321,6 +325,10 @@ garyx auto-update status
 garyx auto-update disable --plugin    # host refuses request_self_replace
 garyx auto-update enable --plugin     # host accepts again
 ```
+
+Built-in channels (`telegram`, `discord`, `feishu`, `weixin`) are compiled into
+the garyx binary; `garyx plugins update <builtin>` errors with a
+redirect to `garyx update`.
 
 #### Decision taxonomy
 

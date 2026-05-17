@@ -254,7 +254,7 @@ impl TelegramSender {
 // Discord sender handle
 // ---------------------------------------------------------------------------
 
-const DISCORD_MAX_MESSAGE_LENGTH: usize = 2000;
+pub(crate) const DISCORD_MAX_MESSAGE_LENGTH: usize = 2000;
 
 #[derive(Debug)]
 struct DiscordApiError {
@@ -378,6 +378,17 @@ impl DiscordSender {
         }
     }
 
+    pub async fn edit_text(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        text: &str,
+    ) -> Result<String, ChannelError> {
+        self.patch_message_json(channel_id, message_id, text)
+            .await
+            .map_err(discord_send_error)
+    }
+
     async fn post_message_json(
         &self,
         channel_id: &str,
@@ -449,6 +460,28 @@ impl DiscordSender {
             })?;
         parse_discord_message_response(response).await
     }
+
+    async fn patch_message_json(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        content: &str,
+    ) -> Result<String, DiscordApiError> {
+        let body = discord_edit_message_payload(content);
+        let response = self
+            .http
+            .patch(discord_message_url(&self.api_base, channel_id, message_id))
+            .header("Authorization", format!("Bot {}", self.token))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| DiscordApiError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: None,
+                message: error.to_string(),
+            })?;
+        parse_discord_message_response(response).await
+    }
 }
 
 fn discord_target_channel_id(request: &OutboundMessage) -> String {
@@ -474,6 +507,15 @@ fn discord_channel_messages_url(api_base: &str, channel_id: &str) -> String {
         "{}/channels/{}/messages",
         api_base.trim_end_matches('/'),
         channel_id
+    )
+}
+
+fn discord_message_url(api_base: &str, channel_id: &str, message_id: &str) -> String {
+    format!(
+        "{}/channels/{}/messages/{}",
+        api_base.trim_end_matches('/'),
+        channel_id,
+        message_id
     )
 }
 
@@ -509,7 +551,17 @@ fn discord_message_payload(
     body
 }
 
-fn split_discord_message(text: &str) -> Vec<String> {
+fn discord_edit_message_payload(content: &str) -> Value {
+    serde_json::json!({
+        "content": content,
+        "allowed_mentions": {
+            "parse": ["users"],
+            "replied_user": true
+        }
+    })
+}
+
+pub(crate) fn split_discord_message(text: &str) -> Vec<String> {
     if text.is_empty() {
         return Vec::new();
     }
