@@ -148,6 +148,20 @@ pub(crate) async fn list_provider_models(
                 }
             }
         },
+        ProviderType::ClaudeLlm => native_model_catalog_response(
+            provider_type,
+            "native_builtin",
+            native_claude_models(),
+            "claude-sonnet-4-6",
+            native_reasoning_efforts("medium", true),
+        ),
+        ProviderType::GeminiLlm => native_model_catalog_response(
+            provider_type,
+            "native_builtin",
+            native_gemini_models(),
+            "gemini-3-flash-preview",
+            native_reasoning_efforts("medium", false),
+        ),
         ProviderType::AgentTeam => unsupported(provider_type, "provider", None),
     }
 }
@@ -312,6 +326,154 @@ fn provider_service_tier_options(tiers: &[CodexModelServiceTier]) -> Vec<Provide
             })
         })
         .collect()
+}
+
+fn native_model_catalog_response(
+    provider_type: ProviderType,
+    source: &'static str,
+    models: Vec<ProviderModelOption>,
+    default_model: &str,
+    reasoning_efforts: Vec<ProviderReasoningEffortOption>,
+) -> ProviderModelsResponse {
+    ProviderModelsResponse {
+        provider_type,
+        supports_model_selection: true,
+        models,
+        supports_reasoning_effort_selection: true,
+        reasoning_efforts,
+        supports_service_tier_selection: false,
+        service_tiers: Vec::new(),
+        default_model: Some(default_model.to_owned()),
+        source,
+        error: None,
+    }
+}
+
+fn native_reasoning_efforts(
+    default: &str,
+    include_xhigh: bool,
+) -> Vec<ProviderReasoningEffortOption> {
+    let mut efforts = vec![
+        ("off", "Off", "Disable explicit thinking controls."),
+        (
+            "low",
+            "Low",
+            "Prefer lower latency and lower reasoning budget.",
+        ),
+        (
+            "medium",
+            "Medium",
+            "Balanced reasoning budget for normal coding tasks.",
+        ),
+        (
+            "high",
+            "High",
+            "Use a larger reasoning budget for harder tasks.",
+        ),
+    ];
+    if include_xhigh {
+        efforts.push((
+            "xhigh",
+            "Extra High",
+            "Use the highest supported adaptive reasoning effort.",
+        ));
+    }
+    efforts
+        .into_iter()
+        .map(|(id, label, description)| ProviderReasoningEffortOption {
+            id: id.to_owned(),
+            label: label.to_owned(),
+            description: Some(description.to_owned()),
+            recommended: id == default,
+        })
+        .collect()
+}
+
+fn native_model_option(
+    id: &str,
+    label: &str,
+    description: &str,
+    recommended: bool,
+    default_reasoning_effort: &str,
+    reasoning_efforts: Vec<ProviderReasoningEffortOption>,
+) -> ProviderModelOption {
+    ProviderModelOption {
+        id: id.to_owned(),
+        label: label.to_owned(),
+        description: Some(description.to_owned()),
+        recommended,
+        default_reasoning_effort: Some(default_reasoning_effort.to_owned()),
+        supported_reasoning_efforts: reasoning_efforts,
+        service_tiers: Vec::new(),
+    }
+}
+
+fn native_claude_models() -> Vec<ProviderModelOption> {
+    let efforts = native_reasoning_efforts("medium", true);
+    vec![
+        native_model_option(
+            "claude-sonnet-4-6",
+            "Claude Sonnet 4.6",
+            "Default Claude model backend for Garyx's native agent loop.",
+            true,
+            "medium",
+            efforts.clone(),
+        ),
+        native_model_option(
+            "claude-opus-4-7",
+            "Claude Opus 4.7",
+            "Highest-depth Claude model option.",
+            false,
+            "high",
+            efforts.clone(),
+        ),
+        native_model_option(
+            "claude-haiku-4-5",
+            "Claude Haiku 4.5",
+            "Lower-latency Claude model option.",
+            false,
+            "low",
+            efforts,
+        ),
+    ]
+}
+
+fn native_gemini_models() -> Vec<ProviderModelOption> {
+    let efforts = native_reasoning_efforts("medium", false);
+    vec![
+        native_model_option(
+            "gemini-3-flash-preview",
+            "Gemini 3 Flash Preview",
+            "Default Gemini model backend for Garyx's native agent loop.",
+            true,
+            "medium",
+            efforts.clone(),
+        ),
+        native_model_option(
+            "gemini-3.1-pro-preview",
+            "Gemini 3.1 Pro Preview",
+            "Higher-depth Gemini model option.",
+            false,
+            "high",
+            efforts.clone(),
+        ),
+        native_model_option(
+            "gemini-2.5-pro",
+            "Gemini 2.5 Pro",
+            "Stable pro Gemini model option.",
+            false,
+            "high",
+            efforts.clone(),
+        ),
+        native_model_option(
+            "gemini-2.5-flash",
+            "Gemini 2.5 Flash",
+            "Lower-latency Gemini model option.",
+            false,
+            "low",
+            efforts,
+        ),
+    ]
 }
 
 async fn resolve_codex_models_client_version() -> String {
@@ -729,6 +891,45 @@ mod tests {
         assert_eq!(discovery.service_tiers[0].id, "priority");
         assert_eq!(discovery.reasoning_efforts[1].id, "medium");
         assert!(discovery.reasoning_efforts[1].recommended);
+    }
+
+    #[tokio::test]
+    async fn native_claude_model_catalog_supports_selection_and_reasoning() {
+        let response = list_provider_models(&GaryxConfig::default(), ProviderType::ClaudeLlm).await;
+
+        assert_eq!(response.provider_type, ProviderType::ClaudeLlm);
+        assert!(response.supports_model_selection);
+        assert!(response.supports_reasoning_effort_selection);
+        assert_eq!(response.default_model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(response.models[0].id, "claude-sonnet-4-6");
+        assert!(response.models[0].recommended);
+        assert!(
+            response
+                .reasoning_efforts
+                .iter()
+                .any(|effort| effort.id == "xhigh")
+        );
+    }
+
+    #[tokio::test]
+    async fn native_gemini_model_catalog_supports_selection_and_reasoning() {
+        let response = list_provider_models(&GaryxConfig::default(), ProviderType::GeminiLlm).await;
+
+        assert_eq!(response.provider_type, ProviderType::GeminiLlm);
+        assert!(response.supports_model_selection);
+        assert!(response.supports_reasoning_effort_selection);
+        assert_eq!(
+            response.default_model.as_deref(),
+            Some("gemini-3-flash-preview")
+        );
+        assert_eq!(response.models[0].id, "gemini-3-flash-preview");
+        assert!(response.models[0].recommended);
+        assert!(
+            response
+                .reasoning_efforts
+                .iter()
+                .all(|effort| effort.id != "xhigh")
+        );
     }
 
     #[test]

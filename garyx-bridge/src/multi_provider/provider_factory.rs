@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use garyx_models::config::AgentProviderConfig;
 use garyx_models::provider::{
-    ClaudeCodeConfig, CodexAppServerConfig, GaryxNativeConfig, GeminiCliConfig,
+    ClaudeCodeConfig, CodexAppServerConfig, GaryxNativeConfig, GeminiCliConfig, ProviderType,
 };
 
 use crate::claude_provider::ClaudeCliProvider;
@@ -89,16 +89,19 @@ fn build_garyx_native_config(
     agent_cfg: &AgentProviderConfig,
     default_workspace: &Option<String>,
 ) -> GaryxNativeConfig {
+    let provider_type = garyx_native_provider_type(agent_cfg);
+    let default_model = if agent_cfg.default_model.trim().is_empty() {
+        garyx_native_default_model(&provider_type).to_owned()
+    } else {
+        agent_cfg.default_model.clone()
+    };
     GaryxNativeConfig {
+        provider_type,
         workspace_dir: agent_cfg
             .workspace_dir
             .clone()
             .or_else(|| default_workspace.clone()),
-        default_model: if agent_cfg.default_model.trim().is_empty() {
-            GaryxNativeConfig::default().default_model
-        } else {
-            agent_cfg.default_model.clone()
-        },
+        default_model,
         model: if agent_cfg.model.is_empty() {
             agent_cfg.default_model.clone()
         } else {
@@ -118,6 +121,22 @@ fn build_garyx_native_config(
     }
 }
 
+fn garyx_native_provider_type(agent_cfg: &AgentProviderConfig) -> ProviderType {
+    match ProviderType::from_slug(&agent_cfg.provider_type) {
+        Some(ProviderType::ClaudeLlm) => ProviderType::ClaudeLlm,
+        Some(ProviderType::GeminiLlm) => ProviderType::GeminiLlm,
+        _ => ProviderType::Gpt,
+    }
+}
+
+fn garyx_native_default_model(provider_type: &ProviderType) -> &'static str {
+    match provider_type {
+        ProviderType::ClaudeLlm => "claude-sonnet-4-6",
+        ProviderType::GeminiLlm => "gemini-3-flash-preview",
+        _ => "gpt-5.5",
+    }
+}
+
 /// Compute a stable provider key for the configured local provider type.
 ///
 /// Garyx threads bind to a single provider type for their lifetime. Keep the
@@ -132,6 +151,8 @@ pub(super) fn compute_provider_key(
         "codex_app_server" => "codex_app_server".to_owned(),
         "gemini_cli" => "gemini_cli".to_owned(),
         "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native" => "gpt".to_owned(),
+        "claude_llm" | "anthropic" | "claude_model" => "claude_llm".to_owned(),
+        "gemini_llm" | "google" | "google_gemini" | "gemini_model" => "gemini_llm".to_owned(),
         _ => "claude_code".to_owned(),
     }
 }
@@ -162,7 +183,19 @@ pub(super) async fn create_provider(
         }
         "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native" => {
             let config = build_garyx_native_config(agent_cfg, default_workspace);
-            let mut provider = GaryxNativeProvider::new(config);
+            let mut provider = GaryxNativeProvider::new_gpt(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        "claude_llm" | "anthropic" | "claude_model" => {
+            let config = build_garyx_native_config(agent_cfg, default_workspace);
+            let mut provider = GaryxNativeProvider::new_claude(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        "gemini_llm" | "google" | "google_gemini" | "gemini_model" => {
+            let config = build_garyx_native_config(agent_cfg, default_workspace);
+            let mut provider = GaryxNativeProvider::new_gemini(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }

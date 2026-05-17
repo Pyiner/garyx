@@ -156,7 +156,7 @@ fn native_session_messages_are_attached_from_committed_thread_messages() {
         metadata: HashMap::new(),
     };
 
-    attach_native_session_messages(&mut options, &session_data, &ProviderType::Gpt);
+    attach_native_session_messages(&mut options, &session_data, &ProviderType::ClaudeLlm);
 
     let messages: Vec<ProviderMessage> = serde_json::from_value(
         options
@@ -169,6 +169,34 @@ fn native_session_messages_are_attached_from_committed_thread_messages() {
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[0].text.as_deref(), Some("previous question"));
     assert_eq!(messages[1].text.as_deref(), Some("previous answer"));
+}
+
+#[test]
+fn native_session_messages_are_attached_for_all_native_model_backends() {
+    let session_data = json!({
+        "messages": [ProviderMessage::assistant_text("previous answer").to_json_value()]
+    });
+
+    for provider_type in [
+        ProviderType::Gpt,
+        ProviderType::ClaudeLlm,
+        ProviderType::GeminiLlm,
+    ] {
+        let mut options = ProviderRunOptions {
+            thread_id: "thread::native".to_owned(),
+            message: "next".to_owned(),
+            workspace_dir: None,
+            images: None,
+            metadata: HashMap::new(),
+        };
+
+        attach_native_session_messages(&mut options, &session_data, &provider_type);
+
+        assert!(
+            options.metadata.contains_key(SESSION_MESSAGES_METADATA_KEY),
+            "missing native session replay for {provider_type:?}"
+        );
+    }
 }
 
 #[test]

@@ -28,6 +28,22 @@ fn test_provider_type_serde() {
     let legacy: ProviderType = serde_json::from_str("\"garyx_native\"").unwrap();
     assert_eq!(legacy, ProviderType::Gpt);
 
+    let pt = ProviderType::ClaudeLlm;
+    let json = serde_json::to_string(&pt).unwrap();
+    assert_eq!(json, "\"claude_llm\"");
+    let back: ProviderType = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ProviderType::ClaudeLlm);
+    let alias: ProviderType = serde_json::from_str("\"anthropic\"").unwrap();
+    assert_eq!(alias, ProviderType::ClaudeLlm);
+
+    let pt = ProviderType::GeminiLlm;
+    let json = serde_json::to_string(&pt).unwrap();
+    assert_eq!(json, "\"gemini_llm\"");
+    let back: ProviderType = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ProviderType::GeminiLlm);
+    let alias: ProviderType = serde_json::from_str("\"google\"").unwrap();
+    assert_eq!(alias, ProviderType::GeminiLlm);
+
     let pt = ProviderType::AgentTeam;
     let json = serde_json::to_string(&pt).unwrap();
     assert_eq!(json, "\"agent_team\"");
@@ -43,6 +59,8 @@ fn test_provider_type_slug_round_trip() {
         ProviderType::CodexAppServer,
         ProviderType::GeminiCli,
         ProviderType::Gpt,
+        ProviderType::ClaudeLlm,
+        ProviderType::GeminiLlm,
         ProviderType::AgentTeam,
     ] {
         assert_eq!(
@@ -68,6 +86,14 @@ fn test_provider_type_slug_round_trip() {
     assert_eq!(
         ProviderType::from_slug("garyx_native"),
         Some(ProviderType::Gpt)
+    );
+    assert_eq!(
+        ProviderType::from_slug("anthropic"),
+        Some(ProviderType::ClaudeLlm)
+    );
+    assert_eq!(
+        ProviderType::from_slug("google_gemini"),
+        Some(ProviderType::GeminiLlm)
     );
 }
 

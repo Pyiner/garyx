@@ -21,6 +21,12 @@ pub enum ProviderType {
     /// OpenAI GPT model backend served through Garyx's in-process agent loop.
     #[serde(alias = "garyx_native", alias = "garyx", alias = "native")]
     Gpt,
+    /// Anthropic Claude model backend served through Garyx's in-process agent loop.
+    #[serde(alias = "anthropic", alias = "claude_model")]
+    ClaudeLlm,
+    /// Google Gemini model backend served through Garyx's in-process agent loop.
+    #[serde(alias = "google", alias = "google_gemini", alias = "gemini_model")]
+    GeminiLlm,
     /// Meta-provider that orchestrates a Team as a group chat over regular
     /// per-sub-agent threads. Selected when a thread's `agent_id` resolves to
     /// an `AgentTeamProfile` rather than a `CustomAgentProfile`.
@@ -35,6 +41,8 @@ impl ProviderType {
             Self::CodexAppServer => "codex_app_server",
             Self::GeminiCli => "gemini_cli",
             Self::Gpt => "gpt",
+            Self::ClaudeLlm => "claude_llm",
+            Self::GeminiLlm => "gemini_llm",
             Self::AgentTeam => "agent_team",
         }
     }
@@ -48,6 +56,8 @@ impl ProviderType {
             "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx_native" | "native" => {
                 Some(Self::Gpt)
             }
+            "claude_llm" | "anthropic" | "claude_model" => Some(Self::ClaudeLlm),
+            "gemini_llm" | "google" | "google_gemini" | "gemini_model" => Some(Self::GeminiLlm),
             "agent_team" => Some(Self::AgentTeam),
             _ => None,
         }

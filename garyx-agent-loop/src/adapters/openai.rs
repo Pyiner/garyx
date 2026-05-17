@@ -248,6 +248,7 @@ impl OpenAiResponsesAdapter {
                             id,
                             name,
                             arguments,
+                            metadata: Default::default(),
                         }));
                     }
                     _ => {}

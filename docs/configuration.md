@@ -482,18 +482,18 @@ Use a built-in provider agent:
 ```
 
 Custom agents can set `provider_type` to `claude_code`, `claude_tty`,
-`codex_app_server`, `gemini_cli`, or `gpt`. `claude_tty` uses the local Claude
-CLI's interactive terminal mode inside the gateway and keeps the same
-thread/session model as the regular Claude provider.
+`codex_app_server`, `gemini_cli`, `gpt`, `claude_llm`, or `gemini_llm`.
+`claude_tty` uses the local Claude CLI's interactive terminal mode inside the
+gateway and keeps the same thread/session model as the regular Claude provider.
 
 Custom agents may also set `model`, `model_reasoning_effort`, and
 `model_service_tier`. These values are injected into the thread runtime metadata
 when the agent is selected, so provider-specific defaults can be overridden per
 agent.
 
-`gpt` is the OpenAI GPT model backend running on Garyx's in-process agent loop.
-It is not exposed as a built-in agent. Create a custom agent with
-`provider_type: "gpt"` to select it:
+`gpt`, `claude_llm`, and `gemini_llm` are model backends running on Garyx's
+in-process agent loop. They are not exposed as built-in agents. Create a custom
+agent with the model backend provider type to select one:
 
 ```json
 {
@@ -501,6 +501,24 @@ It is not exposed as a built-in agent. Create a custom agent with
   "display_name": "GPT Reviewer",
   "provider_type": "gpt",
   "model": "gpt-5.5"
+}
+```
+
+```json
+{
+  "agent_id": "claude-model-reviewer",
+  "display_name": "Claude Model Reviewer",
+  "provider_type": "claude_llm",
+  "model": "claude-sonnet-4-6"
+}
+```
+
+```json
+{
+  "agent_id": "gemini-model-reviewer",
+  "display_name": "Gemini Model Reviewer",
+  "provider_type": "gemini_llm",
+  "model": "gemini-3-flash-preview"
 }
 ```
 
@@ -542,6 +560,36 @@ levels advertised by the selected Codex model, for example `low`, `medium`,
 spend more reasoning time. `model_service_tier` accepts the selected model's
 advertised service tier ids, for example `priority` for Codex's Fast tier; leave
 it empty to use the backend default.
+
+`claude_llm` uses Anthropic Messages API-compatible auth from
+`ANTHROPIC_API_KEY` or `CLAUDE_API_KEY`. It can also use
+`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_OAUTH_TOKEN` as a
+bearer token. `ANTHROPIC_BASE_URL` or `CLAUDE_BASE_URL` can override the
+endpoint, and `ANTHROPIC_VERSION` / `ANTHROPIC_BETA` can override request
+headers. `anthropic` and `claude_model` are accepted as provider slug aliases.
+
+`gemini_llm` uses Google Gemini API auth from `GEMINI_API_KEY` or
+`GOOGLE_API_KEY`. It can also reuse Gemini CLI OAuth by reading
+`GEMINI_OAUTH_ACCESS_TOKEN` / `GOOGLE_OAUTH_ACCESS_TOKEN`, or a Gemini CLI OAuth
+cache at `$GEMINI_CLI_HOME/oauth_creds.json` or `~/.gemini/oauth_creds.json`.
+If the cached token is expired, Garyx can refresh it when
+`GEMINI_OAUTH_CLIENT_SECRET` or `GOOGLE_OAUTH_CLIENT_SECRET` is configured;
+otherwise refresh the Gemini CLI login first. OAuth requests use the Gemini Code
+Assist transport and resolve the Code Assist project with `loadCodeAssist`. Set
+`GEMINI_CODE_ASSIST_PROJECT`, `GOOGLE_CLOUD_PROJECT`, or
+`GOOGLE_CLOUD_PROJECT_ID` to force a project id. `GEMINI_BASE_URL`,
+`GOOGLE_GENERATIVE_AI_BASE_URL`, or `GOOGLE_API_BASE_URL` can override the API
+key endpoint; `GEMINI_CODE_ASSIST_BASE_URL`, `GOOGLE_CODE_ASSIST_BASE_URL`,
+`CODE_ASSIST_BASE_URL`, or `CODE_ASSIST_ENDPOINT` plus
+`CODE_ASSIST_API_VERSION` can override the OAuth endpoint. If a direct
+Generative Language bearer token is required, set `GOOGLE_GENERATIVE_AI_ACCESS_TOKEN`.
+`google`, `google_gemini`, and `gemini_model` are accepted as provider slug
+aliases.
+
+The gateway exposes built-in picker catalogs for `/api/provider-models/claude_llm`
+and `/api/provider-models/gemini_llm`, including reasoning effort choices.
+These two providers ignore `model_service_tier`; use `model_reasoning_effort`
+for lower-latency or higher-depth model behavior.
 
 The `/goal <objective>` native command sets a durable thread goal and enables
 loop mode. `/goal` shows the current goal; `/goal pause` pauses it; `/goal

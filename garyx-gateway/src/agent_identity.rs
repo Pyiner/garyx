@@ -57,6 +57,8 @@ pub(crate) fn provider_type_label(provider_type: &garyx_models::ProviderType) ->
         garyx_models::ProviderType::CodexAppServer => "codex_app_server",
         garyx_models::ProviderType::GeminiCli => "gemini_cli",
         garyx_models::ProviderType::Gpt => "gpt",
+        garyx_models::ProviderType::ClaudeLlm => "claude_llm",
+        garyx_models::ProviderType::GeminiLlm => "gemini_llm",
         garyx_models::ProviderType::AgentTeam => "agent_team",
     }
 }

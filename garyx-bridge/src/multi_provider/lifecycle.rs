@@ -17,6 +17,8 @@ fn default_provider_config(provider_type: ProviderType) -> AgentProviderConfig {
             ProviderType::ClaudeTty => "claude_tty".to_owned(),
             ProviderType::GeminiCli => "gemini_cli".to_owned(),
             ProviderType::Gpt => "gpt".to_owned(),
+            ProviderType::ClaudeLlm => "claude_llm".to_owned(),
+            ProviderType::GeminiLlm => "gemini_llm".to_owned(),
             // Meta-provider with no backing CLI config.
             ProviderType::AgentTeam => "agent_team".to_owned(),
         },
@@ -127,6 +129,36 @@ impl MultiProviderBridge {
             }
         };
 
+        let claude_llm_default_agent_cfg = default_provider_config(ProviderType::ClaudeLlm);
+        let claude_llm_default_key = match self
+            .get_or_create_provider(&claude_llm_default_agent_cfg, &default_workspace)
+            .await
+        {
+            Ok(key) => {
+                tracing::info!(provider_key = %key, "registered Claude model provider");
+                Some(key)
+            }
+            Err(error) => {
+                tracing::debug!(error = %error, "optional Claude model provider unavailable");
+                None
+            }
+        };
+
+        let gemini_llm_default_agent_cfg = default_provider_config(ProviderType::GeminiLlm);
+        let gemini_llm_default_key = match self
+            .get_or_create_provider(&gemini_llm_default_agent_cfg, &default_workspace)
+            .await
+        {
+            Ok(key) => {
+                tracing::info!(provider_key = %key, "registered Gemini model provider");
+                Some(key)
+            }
+            Err(error) => {
+                tracing::debug!(error = %error, "optional Gemini model provider unavailable");
+                None
+            }
+        };
+
         let mut desired_routes: HashMap<(String, String), String> = HashMap::new();
 
         // 4. Pre-create providers for API channel accounts and build desired routes.
@@ -177,6 +209,12 @@ impl MultiProviderBridge {
             desired_provider_keys.insert(key.clone());
         }
         if let Some(ref key) = gpt_default_key {
+            desired_provider_keys.insert(key.clone());
+        }
+        if let Some(ref key) = claude_llm_default_key {
+            desired_provider_keys.insert(key.clone());
+        }
+        if let Some(ref key) = gemini_llm_default_key {
             desired_provider_keys.insert(key.clone());
         }
         // Preserve the AgentTeam meta-provider across reloads: it is not owned
@@ -349,7 +387,11 @@ impl MultiProviderBridge {
             "codex" => Some(ProviderType::CodexAppServer),
             "claude" => Some(ProviderType::ClaudeCode),
             "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeTty),
+            "claude_llm" | "anthropic" | "claude_model" => Some(ProviderType::ClaudeLlm),
             "gemini" => Some(ProviderType::GeminiCli),
+            "gemini_llm" | "google" | "google_gemini" | "gemini_model" => {
+                Some(ProviderType::GeminiLlm)
+            }
             "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx-native" | "garyx_native"
             | "native" => Some(ProviderType::Gpt),
             _ => None,

@@ -7922,6 +7922,8 @@ fn provider_type_label(provider_type: &ProviderType) -> &'static str {
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::Gpt => "GPT",
+        ProviderType::ClaudeLlm => "Claude",
+        ProviderType::GeminiLlm => "Gemini",
         ProviderType::AgentTeam => "Team",
         ProviderType::ClaudeTty => "Claude TTY",
         ProviderType::ClaudeCode => "Claude",

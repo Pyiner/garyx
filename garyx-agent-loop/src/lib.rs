@@ -55,6 +55,7 @@ pub struct LlmToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
+    pub metadata: HashMap<String, Value>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -469,7 +470,7 @@ pub async fn run_agent_loop_with_hooks(
                             "agent loop exceeded max_tool_iterations={max_iterations}"
                         )));
                     }
-                    let tool_use = ConversationMessage::tool_use(
+                    let mut tool_use = ConversationMessage::tool_use(
                         json!({
                             "name": call.name,
                             "arguments": call.arguments,
@@ -477,6 +478,7 @@ pub async fn run_agent_loop_with_hooks(
                         Some(call.id.clone()),
                         Some(call.name.clone()),
                     );
+                    tool_use.metadata = call.metadata.clone();
                     emit(AgentLoopEvent::ToolUse {
                         message: tool_use.clone(),
                     });
@@ -863,6 +865,7 @@ mod tests {
                     id: "call-1".to_owned(),
                     name: "read_file".to_owned(),
                     arguments: json!({ "path": "README.md" }),
+                    metadata: Default::default(),
                 })],
                 ..Default::default()
             },
@@ -1013,6 +1016,7 @@ mod tests {
                 id: "call-1".to_owned(),
                 name: "read_file".to_owned(),
                 arguments: json!({ "path": "README.md" }),
+                metadata: Default::default(),
             })],
             ..Default::default()
         }]);
@@ -1388,6 +1392,7 @@ mod tests {
                 id: "call-1".to_owned(),
                 name: "read_file".to_owned(),
                 arguments: json!({ "path": "README.md" }),
+                metadata: Default::default(),
             })],
             ..Default::default()
         }]);
@@ -1422,6 +1427,7 @@ mod tests {
                     id: "call-1".to_owned(),
                     name: "read_file".to_owned(),
                     arguments: json!({ "path": "README.md" }),
+                    metadata: Default::default(),
                 })],
                 ..Default::default()
             },
@@ -1430,6 +1436,7 @@ mod tests {
                     id: "call-2".to_owned(),
                     name: "read_file".to_owned(),
                     arguments: json!({ "path": "Cargo.toml" }),
+                    metadata: Default::default(),
                 })],
                 ..Default::default()
             },

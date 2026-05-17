@@ -136,6 +136,8 @@ pub(crate) async fn dispatch_internal_message_to_thread(
             ProviderType::CodexAppServer => "codex_app_server",
             ProviderType::GeminiCli => "gemini_cli",
             ProviderType::Gpt => "gpt",
+            ProviderType::ClaudeLlm => "claude_llm",
+            ProviderType::GeminiLlm => "gemini_llm",
             ProviderType::AgentTeam => "agent_team",
         };
         extra_metadata.insert(

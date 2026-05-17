@@ -2,11 +2,19 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 #[cfg(test)]
 use garyx_agent_loop::LlmOutput as NativeModelOutput;
+use garyx_agent_loop::adapters::anthropic::{
+    ANTHROPIC_MESSAGES_BASE_URL, ANTHROPIC_VERSION, AnthropicAuth, AnthropicAuthProvider,
+    AnthropicCredential, AnthropicMessagesAdapter,
+};
+use garyx_agent_loop::adapters::google::{
+    GOOGLE_CODE_ASSIST_BASE_URL, GOOGLE_GENERATIVE_AI_BASE_URL, GoogleAuth, GoogleAuthProvider,
+    GoogleCredential, GoogleGenerativeAiAdapter,
+};
 #[cfg(test)]
 use garyx_agent_loop::adapters::openai::OpenAiResponsesAdapter as GptResponsesModelBackend;
 #[cfg(test)]
@@ -41,6 +49,12 @@ use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 pub(crate) const SESSION_MESSAGES_METADATA_KEY: &str = "garyx_session_messages";
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
 const MAX_TOOL_OUTPUT_CHARS: usize = 20_000;
+const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const GEMINI_CLI_OAUTH_CLIENT_ID: &str =
+    "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+const DEFAULT_GPT_MODEL: &str = "gpt-5.5";
+const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
+const DEFAULT_GEMINI_MODEL: &str = "gemini-3-flash-preview";
 
 fn resolve_run_id(metadata: &HashMap<String, Value>) -> String {
     metadata
@@ -70,11 +84,15 @@ fn request_timeout(config: &GaryxNativeConfig) -> Duration {
     Duration::from_secs_f64(timeout)
 }
 
-fn model_id(config: &GaryxNativeConfig, metadata: &HashMap<String, Value>) -> String {
+fn model_id(
+    config: &GaryxNativeConfig,
+    metadata: &HashMap<String, Value>,
+    fallback: &str,
+) -> String {
     normalize_non_empty(metadata.get("model").and_then(Value::as_str))
         .or_else(|| normalize_non_empty(Some(config.model.as_str())))
         .or_else(|| normalize_non_empty(Some(config.default_model.as_str())))
-        .unwrap_or_else(|| "gpt-5.5".to_owned())
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 fn metadata_string_map(metadata: &HashMap<String, Value>, key: &str) -> HashMap<String, String> {
@@ -100,6 +118,10 @@ fn resolve_runtime_env(
     env.extend(task_cli_env(metadata));
     env.extend(metadata_string_map(metadata, "desktop_codex_env"));
     env.extend(metadata_string_map(metadata, "desktop_gpt_env"));
+    env.extend(metadata_string_map(metadata, "desktop_claude_env"));
+    env.extend(metadata_string_map(metadata, "desktop_anthropic_env"));
+    env.extend(metadata_string_map(metadata, "desktop_gemini_env"));
+    env.extend(metadata_string_map(metadata, "desktop_google_env"));
     env.extend(metadata_string_map(metadata, "desktop_garyx_native_env"));
     env
 }
@@ -223,8 +245,350 @@ impl OpenAiAuthProvider for GaryxOpenAiAuthProvider {
     }
 }
 
+struct GaryxAnthropicAuthProvider {
+    config: GaryxNativeConfig,
+}
+
+#[async_trait]
+impl AnthropicAuthProvider for GaryxAnthropicAuthProvider {
+    async fn resolve_auth(
+        &self,
+        runtime: &LlmRuntimeContext,
+    ) -> Result<AnthropicAuth, AgentLoopError> {
+        let credential = resolve_env_value(runtime, &["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"])
+            .map(AnthropicCredential::ApiKey)
+            .or_else(|| {
+                resolve_env_value(
+                    runtime,
+                    &[
+                        "CLAUDE_CODE_OAUTH_TOKEN",
+                        "ANTHROPIC_AUTH_TOKEN",
+                        "CLAUDE_OAUTH_TOKEN",
+                    ],
+                )
+                .map(AnthropicCredential::BearerToken)
+            })
+            .ok_or_else(|| {
+                AgentLoopError::failed(
+                    "missing ANTHROPIC_API_KEY, CLAUDE_API_KEY, or CLAUDE_CODE_OAUTH_TOKEN for Claude model provider",
+                )
+            })?;
+        let base_url = normalize_non_empty(Some(self.config.base_url.as_str()))
+            .or_else(|| resolve_env_value(runtime, &["ANTHROPIC_BASE_URL", "CLAUDE_BASE_URL"]))
+            .unwrap_or_else(|| ANTHROPIC_MESSAGES_BASE_URL.to_owned());
+        let version = resolve_env_value(runtime, &["ANTHROPIC_VERSION"])
+            .unwrap_or_else(|| ANTHROPIC_VERSION.to_owned());
+        let beta = resolve_env_value(runtime, &["ANTHROPIC_BETA"]);
+        Ok(AnthropicAuth {
+            credential,
+            base_url,
+            version,
+            beta,
+        })
+    }
+}
+
+struct GaryxGoogleAuthProvider {
+    config: GaryxNativeConfig,
+}
+
+#[async_trait]
+impl GoogleAuthProvider for GaryxGoogleAuthProvider {
+    async fn resolve_auth(
+        &self,
+        runtime: &LlmRuntimeContext,
+    ) -> Result<GoogleAuth, AgentLoopError> {
+        let credential = if let Some(api_key) =
+            resolve_env_value(runtime, &["GEMINI_API_KEY", "GOOGLE_API_KEY"])
+        {
+            GoogleCredential::ApiKey(api_key)
+        } else if let Some(access_token) =
+            resolve_env_value(runtime, &["GOOGLE_GENERATIVE_AI_ACCESS_TOKEN"])
+        {
+            GoogleCredential::BearerToken(access_token)
+        } else if let Some(access_token) = resolve_gemini_oauth_token(runtime).await? {
+            GoogleCredential::CodeAssistOAuth(access_token)
+        } else {
+            return Err(AgentLoopError::failed(
+                "missing GEMINI_API_KEY, GOOGLE_API_KEY, or valid Gemini OAuth token for Gemini model provider",
+            ));
+        };
+        let base_url = match &credential {
+            GoogleCredential::CodeAssistOAuth(_) => {
+                normalize_non_empty(Some(self.config.base_url.as_str()))
+                    .or_else(|| {
+                        resolve_env_value(
+                            runtime,
+                            &[
+                                "GEMINI_CODE_ASSIST_BASE_URL",
+                                "GOOGLE_CODE_ASSIST_BASE_URL",
+                                "CODE_ASSIST_BASE_URL",
+                            ],
+                        )
+                    })
+                    .or_else(|| code_assist_base_url(runtime))
+                    .unwrap_or_else(|| GOOGLE_CODE_ASSIST_BASE_URL.to_owned())
+            }
+            _ => normalize_non_empty(Some(self.config.base_url.as_str()))
+                .or_else(|| {
+                    resolve_env_value(
+                        runtime,
+                        &[
+                            "GEMINI_BASE_URL",
+                            "GOOGLE_GENERATIVE_AI_BASE_URL",
+                            "GOOGLE_API_BASE_URL",
+                        ],
+                    )
+                })
+                .unwrap_or_else(|| GOOGLE_GENERATIVE_AI_BASE_URL.to_owned()),
+        };
+        Ok(GoogleAuth {
+            credential,
+            base_url,
+        })
+    }
+}
+
+fn code_assist_base_url(runtime: &LlmRuntimeContext) -> Option<String> {
+    let endpoint = resolve_env_value(runtime, &["CODE_ASSIST_ENDPOINT"])?;
+    let version = resolve_env_value(runtime, &["CODE_ASSIST_API_VERSION"])
+        .unwrap_or_else(|| "v1internal".to_owned());
+    Some(format!(
+        "{}/{}",
+        endpoint.trim().trim_end_matches('/'),
+        version.trim().trim_start_matches('/')
+    ))
+}
+
+fn resolve_env_value(runtime: &LlmRuntimeContext, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = runtime
+            .env
+            .get(*key)
+            .map(String::as_str)
+            .and_then(|value| normalize_non_empty(Some(value)))
+        {
+            return Some(value);
+        }
+        if let Ok(value) = std::env::var(key)
+            && let Some(value) = normalize_non_empty(Some(value.as_str()))
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+async fn resolve_gemini_oauth_token(
+    runtime: &LlmRuntimeContext,
+) -> Result<Option<String>, AgentLoopError> {
+    if let Some(access_token) = resolve_env_value(
+        runtime,
+        &["GEMINI_OAUTH_ACCESS_TOKEN", "GOOGLE_OAUTH_ACCESS_TOKEN"],
+    ) {
+        return Ok(Some(access_token));
+    }
+    refresh_or_read_gemini_oauth_cache(runtime).await
+}
+
+async fn refresh_or_read_gemini_oauth_cache(
+    runtime: &LlmRuntimeContext,
+) -> Result<Option<String>, AgentLoopError> {
+    let Some(path) = gemini_oauth_cache_path(runtime) else {
+        return Ok(None);
+    };
+    let value = match std::fs::read_to_string(&path) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let mut value = serde_json::from_str::<Value>(&value).map_err(|error| {
+        AgentLoopError::failed(format!("Gemini OAuth cache is invalid JSON: {error}"))
+    })?;
+    if let Some(access_token) = valid_access_token(&value) {
+        return Ok(Some(access_token));
+    }
+    let Some(refresh_token) = value
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .and_then(|value| normalize_non_empty(Some(value)))
+    else {
+        return Ok(None);
+    };
+    let refreshed = refresh_gemini_oauth_token(runtime, refresh_token).await?;
+    merge_gemini_oauth_refresh(&mut value, &refreshed)?;
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&value).map_err(|error| {
+            AgentLoopError::failed(format!("failed to serialize Gemini OAuth cache: {error}"))
+        })?,
+    )
+    .map_err(|error| {
+        AgentLoopError::failed(format!("failed to write Gemini OAuth cache: {error}"))
+    })?;
+    Ok(Some(refreshed.access_token))
+}
+
+fn gemini_oauth_cache_path(runtime: &LlmRuntimeContext) -> Option<PathBuf> {
+    resolve_env_value(runtime, &["GEMINI_CLI_HOME"])
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .map(|home| PathBuf::from(home).join(".gemini"))
+        })
+        .map(|home| home.join("oauth_creds.json"))
+}
+
+fn valid_access_token(value: &Value) -> Option<String> {
+    let access_token = value
+        .get("access_token")
+        .and_then(Value::as_str)
+        .and_then(|value| normalize_non_empty(Some(value)))?;
+    let expiry_date = value.get("expiry_date").and_then(Value::as_i64)?;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())?;
+    (expiry_date > now_ms + 60_000).then_some(access_token)
+}
+
+#[derive(Debug)]
+struct GeminiOauthRefresh {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: Option<i64>,
+    id_token: Option<String>,
+    scope: Option<String>,
+    token_type: Option<String>,
+}
+
+async fn refresh_gemini_oauth_token(
+    runtime: &LlmRuntimeContext,
+    refresh_token: String,
+) -> Result<GeminiOauthRefresh, AgentLoopError> {
+    let token_url = resolve_env_value(
+        runtime,
+        &["GEMINI_OAUTH_TOKEN_URL", "GOOGLE_OAUTH_TOKEN_URL"],
+    )
+    .unwrap_or_else(|| GOOGLE_OAUTH_TOKEN_URL.to_owned());
+    let client_id = resolve_env_value(
+        runtime,
+        &["GEMINI_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID"],
+    )
+    .unwrap_or_else(|| GEMINI_CLI_OAUTH_CLIENT_ID.to_owned());
+    let client_secret = resolve_env_value(
+        runtime,
+        &["GEMINI_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET"],
+    )
+    .ok_or_else(|| {
+        AgentLoopError::failed(
+            "Gemini OAuth cache is expired; set GEMINI_OAUTH_CLIENT_SECRET or refresh the Gemini CLI login",
+        )
+    })?;
+
+    let response = reqwest::Client::new()
+        .post(token_url)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token.as_str()),
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+        ])
+        .send()
+        .await
+        .map_err(|error| AgentLoopError::failed(format!("Gemini OAuth refresh failed: {error}")))?;
+    let status = response.status();
+    let text = response.text().await.map_err(|error| {
+        AgentLoopError::failed(format!(
+            "Gemini OAuth refresh response read failed: {error}"
+        ))
+    })?;
+    if !status.is_success() {
+        return Err(AgentLoopError::failed(format!(
+            "Gemini OAuth refresh failed with {status}: {text}"
+        )));
+    }
+    let value = serde_json::from_str::<Value>(&text).map_err(|error| {
+        AgentLoopError::failed(format!(
+            "Gemini OAuth refresh response was invalid JSON: {error}; body={text}"
+        ))
+    })?;
+    let access_token = value
+        .get("access_token")
+        .and_then(Value::as_str)
+        .and_then(|value| normalize_non_empty(Some(value)))
+        .ok_or_else(|| {
+            AgentLoopError::failed("Gemini OAuth refresh response did not include access_token")
+        })?;
+    Ok(GeminiOauthRefresh {
+        access_token,
+        refresh_token: value
+            .get("refresh_token")
+            .and_then(Value::as_str)
+            .and_then(|value| normalize_non_empty(Some(value))),
+        expires_in: value.get("expires_in").and_then(Value::as_i64),
+        id_token: value
+            .get("id_token")
+            .and_then(Value::as_str)
+            .and_then(|value| normalize_non_empty(Some(value))),
+        scope: value
+            .get("scope")
+            .and_then(Value::as_str)
+            .and_then(|value| normalize_non_empty(Some(value))),
+        token_type: value
+            .get("token_type")
+            .and_then(Value::as_str)
+            .and_then(|value| normalize_non_empty(Some(value))),
+    })
+}
+
+fn merge_gemini_oauth_refresh(
+    value: &mut Value,
+    refreshed: &GeminiOauthRefresh,
+) -> Result<(), AgentLoopError> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| AgentLoopError::failed("Gemini OAuth cache root must be an object"))?;
+    object.insert(
+        "access_token".to_owned(),
+        Value::String(refreshed.access_token.clone()),
+    );
+    if let Some(refresh_token) = &refreshed.refresh_token {
+        object.insert(
+            "refresh_token".to_owned(),
+            Value::String(refresh_token.clone()),
+        );
+    }
+    if let Some(expires_in) = refreshed.expires_in {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| AgentLoopError::failed(format!("system clock error: {error}")))
+            .and_then(|duration| {
+                i64::try_from(duration.as_millis()).map_err(|error| {
+                    AgentLoopError::failed(format!("system clock value overflow: {error}"))
+                })
+            })?;
+        object.insert(
+            "expiry_date".to_owned(),
+            Value::Number(serde_json::Number::from(now_ms + expires_in * 1000)),
+        );
+    }
+    if let Some(id_token) = &refreshed.id_token {
+        object.insert("id_token".to_owned(), Value::String(id_token.clone()));
+    }
+    if let Some(scope) = &refreshed.scope {
+        object.insert("scope".to_owned(), Value::String(scope.clone()));
+    }
+    if let Some(token_type) = &refreshed.token_type {
+        object.insert("token_type".to_owned(), Value::String(token_type.clone()));
+    }
+    Ok(())
+}
+
 pub struct GaryxNativeProvider {
     config: GaryxNativeConfig,
+    provider_type: ProviderType,
+    default_model: &'static str,
     ready: Mutex<bool>,
     sessions: Mutex<HashMap<String, Arc<Mutex<AgentLoopSession>>>>,
     active_runs: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -233,19 +597,61 @@ pub struct GaryxNativeProvider {
 
 impl GaryxNativeProvider {
     pub fn new(config: GaryxNativeConfig) -> Self {
+        Self::new_gpt(config)
+    }
+
+    pub fn new_gpt(config: GaryxNativeConfig) -> Self {
         let auth_provider = Arc::new(GaryxOpenAiAuthProvider {
             config: config.clone(),
         });
         let model_adapter = Arc::new(OpenAiResponsesAdapter::new(auth_provider));
-        Self::with_model_adapter(config, model_adapter)
+        Self::with_model_adapter_for(ProviderType::Gpt, DEFAULT_GPT_MODEL, config, model_adapter)
     }
 
+    pub fn new_claude(config: GaryxNativeConfig) -> Self {
+        let auth_provider = Arc::new(GaryxAnthropicAuthProvider {
+            config: config.clone(),
+        });
+        let model_adapter = Arc::new(AnthropicMessagesAdapter::new(auth_provider));
+        Self::with_model_adapter_for(
+            ProviderType::ClaudeLlm,
+            DEFAULT_CLAUDE_MODEL,
+            config,
+            model_adapter,
+        )
+    }
+
+    pub fn new_gemini(config: GaryxNativeConfig) -> Self {
+        let auth_provider = Arc::new(GaryxGoogleAuthProvider {
+            config: config.clone(),
+        });
+        let model_adapter = Arc::new(GoogleGenerativeAiAdapter::new(auth_provider));
+        Self::with_model_adapter_for(
+            ProviderType::GeminiLlm,
+            DEFAULT_GEMINI_MODEL,
+            config,
+            model_adapter,
+        )
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_model_adapter(
+        config: GaryxNativeConfig,
+        model_adapter: Arc<dyn LlmAdapter>,
+    ) -> Self {
+        Self::with_model_adapter_for(ProviderType::Gpt, DEFAULT_GPT_MODEL, config, model_adapter)
+    }
+
+    pub(crate) fn with_model_adapter_for(
+        provider_type: ProviderType,
+        default_model: &'static str,
         config: GaryxNativeConfig,
         model_adapter: Arc<dyn LlmAdapter>,
     ) -> Self {
         Self {
             config,
+            provider_type,
+            default_model,
             ready: Mutex::new(false),
             sessions: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
@@ -571,7 +977,7 @@ impl AgentLoopProvider for GaryxNativeProvider {
     fn provider_type(&self) -> ProviderType {
         // The provider type is the selected model backend. The in-process
         // native loop is the execution engine behind this backend.
-        ProviderType::Gpt
+        self.provider_type.clone()
     }
 
     fn is_ready(&self) -> bool {
@@ -618,7 +1024,7 @@ impl AgentLoopProvider for GaryxNativeProvider {
             state.sdk_session_id.clone()
         };
         let request = AgentLoopRunRequest {
-            model: model_id(&self.config, &options.metadata),
+            model: model_id(&self.config, &options.metadata, self.default_model),
             instructions: self.instructions(options),
             tools: Self::tool_schemas(),
             options: LlmRequestOptions {

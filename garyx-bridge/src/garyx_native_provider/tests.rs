@@ -70,6 +70,19 @@ async fn initialized_provider(
     provider
 }
 
+async fn initialized_provider_for(
+    provider_type: ProviderType,
+    default_model: &'static str,
+    mut config: GaryxNativeConfig,
+    client: Arc<FakeModelAdapter>,
+) -> GaryxNativeProvider {
+    config.provider_type = provider_type.clone();
+    let mut provider =
+        GaryxNativeProvider::with_model_adapter_for(provider_type, default_model, config, client);
+    provider.initialize().await.unwrap();
+    provider
+}
+
 #[test]
 fn http_response_body_enables_streaming_and_reasoning_effort() {
     let request = NativeModelRequest {
@@ -247,6 +260,326 @@ async fn assistant_only_turn_streams_delta_and_persists_assistant_message() {
 }
 
 #[tokio::test]
+async fn claude_model_backend_uses_backend_type_and_default_model() {
+    let client = Arc::new(FakeModelAdapter::new(vec![NativeModelResponse {
+        outputs: vec![NativeModelOutput::Text("done".to_owned())],
+        ..Default::default()
+    }]));
+    let provider = initialized_provider_for(
+        ProviderType::ClaudeLlm,
+        DEFAULT_CLAUDE_MODEL,
+        GaryxNativeConfig {
+            provider_type: ProviderType::ClaudeLlm,
+            default_model: String::new(),
+            ..Default::default()
+        },
+        client.clone(),
+    )
+    .await;
+
+    assert_eq!(provider.provider_type(), ProviderType::ClaudeLlm);
+    provider
+        .run_streaming(&options(None), Box::new(|_| {}))
+        .await
+        .unwrap();
+
+    let requests = client.requests();
+    assert_eq!(requests[0].model, DEFAULT_CLAUDE_MODEL);
+}
+
+#[tokio::test]
+async fn gemini_model_backend_uses_backend_type_and_default_model() {
+    let client = Arc::new(FakeModelAdapter::new(vec![NativeModelResponse {
+        outputs: vec![NativeModelOutput::Text("done".to_owned())],
+        ..Default::default()
+    }]));
+    let provider = initialized_provider_for(
+        ProviderType::GeminiLlm,
+        DEFAULT_GEMINI_MODEL,
+        GaryxNativeConfig {
+            provider_type: ProviderType::GeminiLlm,
+            default_model: String::new(),
+            ..Default::default()
+        },
+        client.clone(),
+    )
+    .await;
+
+    assert_eq!(provider.provider_type(), ProviderType::GeminiLlm);
+    provider
+        .run_streaming(&options(None), Box::new(|_| {}))
+        .await
+        .unwrap();
+
+    let requests = client.requests();
+    assert_eq!(requests[0].model, DEFAULT_GEMINI_MODEL);
+}
+
+#[tokio::test]
+async fn claude_auth_reads_runtime_env_and_config_base_url() {
+    let provider = GaryxAnthropicAuthProvider {
+        config: GaryxNativeConfig {
+            base_url: "https://anthropic.example.test/v1".to_owned(),
+            ..Default::default()
+        },
+    };
+    let runtime = LlmRuntimeContext {
+        env: HashMap::from([
+            (
+                "ANTHROPIC_API_KEY".to_owned(),
+                "test-anthropic-key".to_owned(),
+            ),
+            ("ANTHROPIC_VERSION".to_owned(), "2099-01-01".to_owned()),
+            ("ANTHROPIC_BETA".to_owned(), "test-beta".to_owned()),
+        ]),
+        metadata: HashMap::new(),
+    };
+
+    let auth = provider.resolve_auth(&runtime).await.unwrap();
+
+    assert_eq!(
+        auth.credential,
+        AnthropicCredential::ApiKey("test-anthropic-key".to_owned())
+    );
+    assert_eq!(auth.base_url, "https://anthropic.example.test/v1");
+    assert_eq!(auth.version, "2099-01-01");
+    assert_eq!(auth.beta.as_deref(), Some("test-beta"));
+}
+
+#[tokio::test]
+async fn claude_auth_can_use_claude_code_oauth_token() {
+    let provider = GaryxAnthropicAuthProvider {
+        config: GaryxNativeConfig::default(),
+    };
+    let runtime = LlmRuntimeContext {
+        env: HashMap::from([(
+            "CLAUDE_CODE_OAUTH_TOKEN".to_owned(),
+            "test-oauth-token".to_owned(),
+        )]),
+        metadata: HashMap::new(),
+    };
+
+    let auth = provider.resolve_auth(&runtime).await.unwrap();
+
+    assert_eq!(
+        auth.credential,
+        AnthropicCredential::BearerToken("test-oauth-token".to_owned())
+    );
+    assert_eq!(auth.base_url, ANTHROPIC_MESSAGES_BASE_URL);
+}
+
+#[tokio::test]
+async fn gemini_auth_reads_runtime_env_and_config_base_url() {
+    let provider = GaryxGoogleAuthProvider {
+        config: GaryxNativeConfig {
+            base_url: "https://gemini.example.test/v1beta".to_owned(),
+            ..Default::default()
+        },
+    };
+    let runtime = LlmRuntimeContext {
+        env: HashMap::from([("GEMINI_API_KEY".to_owned(), "test-gemini-key".to_owned())]),
+        metadata: HashMap::new(),
+    };
+
+    let auth = provider.resolve_auth(&runtime).await.unwrap();
+
+    assert_eq!(
+        auth.credential,
+        GoogleCredential::ApiKey("test-gemini-key".to_owned())
+    );
+    assert_eq!(auth.base_url, "https://gemini.example.test/v1beta");
+}
+
+#[tokio::test]
+async fn gemini_auth_can_use_runtime_oauth_token() {
+    let provider = GaryxGoogleAuthProvider {
+        config: GaryxNativeConfig::default(),
+    };
+    let runtime = LlmRuntimeContext {
+        env: HashMap::from([(
+            "GEMINI_OAUTH_ACCESS_TOKEN".to_owned(),
+            "test-google-oauth-token".to_owned(),
+        )]),
+        metadata: HashMap::new(),
+    };
+
+    let auth = provider.resolve_auth(&runtime).await.unwrap();
+
+    assert_eq!(
+        auth.credential,
+        GoogleCredential::CodeAssistOAuth("test-google-oauth-token".to_owned())
+    );
+    assert_eq!(auth.base_url, GOOGLE_CODE_ASSIST_BASE_URL);
+}
+
+#[tokio::test]
+async fn gemini_auth_can_use_direct_generative_ai_bearer_token() {
+    let provider = GaryxGoogleAuthProvider {
+        config: GaryxNativeConfig::default(),
+    };
+    let runtime = LlmRuntimeContext {
+        env: HashMap::from([(
+            "GOOGLE_GENERATIVE_AI_ACCESS_TOKEN".to_owned(),
+            "test-google-access-token".to_owned(),
+        )]),
+        metadata: HashMap::new(),
+    };
+
+    let auth = provider.resolve_auth(&runtime).await.unwrap();
+
+    assert_eq!(
+        auth.credential,
+        GoogleCredential::BearerToken("test-google-access-token".to_owned())
+    );
+    assert_eq!(auth.base_url, GOOGLE_GENERATIVE_AI_BASE_URL);
+}
+
+#[tokio::test]
+async fn gemini_oauth_auth_can_use_code_assist_endpoint_parts() {
+    let provider = GaryxGoogleAuthProvider {
+        config: GaryxNativeConfig::default(),
+    };
+    let runtime = LlmRuntimeContext {
+        env: HashMap::from([
+            (
+                "GEMINI_OAUTH_ACCESS_TOKEN".to_owned(),
+                "test-google-oauth-token".to_owned(),
+            ),
+            (
+                "CODE_ASSIST_ENDPOINT".to_owned(),
+                "https://codeassist.example.test".to_owned(),
+            ),
+            ("CODE_ASSIST_API_VERSION".to_owned(), "v1test".to_owned()),
+        ]),
+        metadata: HashMap::new(),
+    };
+
+    let auth = provider.resolve_auth(&runtime).await.unwrap();
+
+    assert_eq!(
+        auth.credential,
+        GoogleCredential::CodeAssistOAuth("test-google-oauth-token".to_owned())
+    );
+    assert_eq!(auth.base_url, "https://codeassist.example.test/v1test");
+}
+
+#[tokio::test]
+async fn gemini_auth_refreshes_expired_cli_oauth_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp.path().join("oauth_creds.json"),
+        serde_json::to_string(&json!({
+            "access_token": "expired-access-token",
+            "expiry_date": 1,
+            "refresh_token": "test-refresh-token",
+            "token_type": "Bearer"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let (token_url, captured_request) = oauth_token_test_server(
+        json!({
+            "access_token": "fresh-access-token",
+            "expires_in": 3600,
+            "token_type": "Bearer",
+            "scope": "test-scope"
+        })
+        .to_string(),
+    )
+    .await;
+    let provider = GaryxGoogleAuthProvider {
+        config: GaryxNativeConfig::default(),
+    };
+    let runtime = LlmRuntimeContext {
+        env: HashMap::from([
+            (
+                "GEMINI_CLI_HOME".to_owned(),
+                temp.path().display().to_string(),
+            ),
+            ("GEMINI_OAUTH_TOKEN_URL".to_owned(), token_url),
+            (
+                "GEMINI_OAUTH_CLIENT_ID".to_owned(),
+                "test-client-id".to_owned(),
+            ),
+            (
+                "GEMINI_OAUTH_CLIENT_SECRET".to_owned(),
+                "test-client-secret".to_owned(),
+            ),
+        ]),
+        metadata: HashMap::new(),
+    };
+
+    let auth = provider.resolve_auth(&runtime).await.unwrap();
+
+    assert_eq!(
+        auth.credential,
+        GoogleCredential::CodeAssistOAuth("fresh-access-token".to_owned())
+    );
+    let request = captured_request.lock().unwrap().clone();
+    assert!(request.contains("grant_type=refresh_token"));
+    assert!(request.contains("refresh_token=test-refresh-token"));
+    assert!(request.contains("client_id=test-client-id"));
+    assert!(request.contains("client_secret=test-client-secret"));
+    let cache = serde_json::from_str::<serde_json::Value>(
+        &std::fs::read_to_string(temp.path().join("oauth_creds.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(cache["access_token"], "fresh-access-token");
+    assert_eq!(cache["refresh_token"], "test-refresh-token");
+    assert_eq!(cache["scope"], "test-scope");
+    assert!(cache["expiry_date"].as_i64().unwrap() > 1);
+}
+
+async fn oauth_token_test_server(body: String) -> (String, Arc<StdMutex<String>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let captured_request = Arc::new(StdMutex::new(String::new()));
+    let captured = Arc::clone(&captured_request);
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = Vec::new();
+        let mut chunk = [0; 1024];
+        loop {
+            let read = socket.read(&mut chunk).await.unwrap();
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            if http_request_is_complete(&buffer) {
+                break;
+            }
+        }
+        *captured.lock().unwrap() = String::from_utf8_lossy(&buffer).into_owned();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        socket.write_all(response.as_bytes()).await.unwrap();
+    });
+    (format!("http://{address}/token"), captured_request)
+}
+
+fn http_request_is_complete(buffer: &[u8]) -> bool {
+    let Some(header_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return false;
+    };
+    let headers = String::from_utf8_lossy(&buffer[..header_end]);
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0);
+    buffer.len() >= header_end + 4 + content_length
+}
+
+#[tokio::test]
 async fn tool_call_runs_and_follow_up_request_sees_tool_result() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("demo.txt");
@@ -259,6 +592,7 @@ async fn tool_call_runs_and_follow_up_request_sees_tool_result() {
                     "path": "demo.txt",
                     "content": "created by test"
                 }),
+                metadata: Default::default(),
             })],
             ..Default::default()
         },

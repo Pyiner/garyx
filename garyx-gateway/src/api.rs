@@ -84,6 +84,8 @@ fn provider_type_from_key(value: &str) -> Option<ProviderType> {
         "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native" => {
             Some(ProviderType::Gpt)
         }
+        "claude_llm" | "anthropic" | "claude_model" => Some(ProviderType::ClaudeLlm),
+        "gemini_llm" | "google" | "google_gemini" | "gemini_model" => Some(ProviderType::GeminiLlm),
         _ => None,
     }
 }
@@ -101,6 +103,8 @@ fn provider_label(provider_type: &ProviderType) -> &'static str {
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::Gpt => "GPT",
+        ProviderType::ClaudeLlm => "Claude",
+        ProviderType::GeminiLlm => "Gemini",
         ProviderType::AgentTeam => "Team",
     }
 }
