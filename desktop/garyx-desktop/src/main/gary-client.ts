@@ -701,6 +701,8 @@ interface CustomAgentPayload {
   provider_type?: string;
   providerType?: string;
   model?: string | null;
+  model_reasoning_effort?: string | null;
+  modelReasoningEffort?: string | null;
   default_workspace_dir?: string | null;
   defaultWorkspaceDir?: string | null;
   avatar_data_url?: string | null;
@@ -735,6 +737,10 @@ interface ProviderModelsPayload {
   supports_model_selection?: unknown;
   supportsModelSelection?: unknown;
   models?: unknown;
+  supports_reasoning_effort_selection?: unknown;
+  supportsReasoningEffortSelection?: unknown;
+  reasoning_efforts?: unknown;
+  reasoningEfforts?: unknown;
   default_model?: unknown;
   defaultModel?: unknown;
   source?: unknown;
@@ -778,6 +784,9 @@ function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
   if (value === "gemini_cli") {
     return "gemini_cli";
   }
+  if (value === "garyx_native") {
+    return "garyx_native";
+  }
   return "claude_code";
 }
 
@@ -789,6 +798,7 @@ function parseThreadProviderType(
     value === "claude_tty" ||
     value === "codex_app_server" ||
     value === "gemini_cli" ||
+    value === "garyx_native" ||
     value === "agent_team"
   ) {
     return value;
@@ -808,6 +818,8 @@ function providerLabelForThread(
       return "Codex";
     case "gemini_cli":
       return "Gemini";
+    case "garyx_native":
+      return "Garyx";
     case "agent_team":
       return "Team";
     default:
@@ -2205,6 +2217,8 @@ function mapCustomAgent(value: CustomAgentPayload): DesktopCustomAgent {
     displayName: value.display_name || value.displayName || "",
     providerType: provider,
     model: value.model || "",
+    modelReasoningEffort:
+      value.model_reasoning_effort || value.modelReasoningEffort || "",
     defaultWorkspaceDir:
       value.default_workspace_dir ??
       value.defaultWorkspaceDir ??
@@ -2256,6 +2270,20 @@ function mapProviderModels(value: ProviderModelsPayload): DesktopProviderModels 
       }
     }
   }
+  const reasoningEfforts: DesktopProviderModelOption[] = [];
+  const rawReasoningEfforts = value.reasoning_efforts || value.reasoningEfforts;
+  if (Array.isArray(rawReasoningEfforts)) {
+    for (const item of rawReasoningEfforts) {
+      if (item && typeof item === "object") {
+        const option = mapProviderModelOption(
+          item as ProviderModelOptionPayload,
+        );
+        if (option) {
+          reasoningEfforts.push(option);
+        }
+      }
+    }
+  }
 
   return {
     providerType: normalizeDesktopProviderType(
@@ -2265,6 +2293,10 @@ function mapProviderModels(value: ProviderModelsPayload): DesktopProviderModels 
       value.supports_model_selection === true ||
       value.supportsModelSelection === true,
     models,
+    supportsReasoningEffortSelection:
+      value.supports_reasoning_effort_selection === true ||
+      value.supportsReasoningEffortSelection === true,
+    reasoningEfforts,
     defaultModel:
       typeof value.default_model === "string"
         ? value.default_model
@@ -3445,6 +3477,7 @@ export async function createCustomAgent(
         display_name: input.displayName,
         provider_type: input.providerType,
         model: input.model,
+        model_reasoning_effort: input.modelReasoningEffort,
         default_workspace_dir: input.defaultWorkspaceDir,
         avatar_data_url: input.avatarDataUrl ?? null,
         system_prompt: input.systemPrompt,
@@ -3470,6 +3503,7 @@ export async function updateCustomAgent(
         display_name: input.displayName,
         provider_type: input.providerType,
         model: input.model,
+        model_reasoning_effort: input.modelReasoningEffort,
         default_workspace_dir: input.defaultWorkspaceDir,
         avatar_data_url: input.avatarDataUrl ?? null,
         system_prompt: input.systemPrompt,

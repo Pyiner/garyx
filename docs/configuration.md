@@ -493,6 +493,10 @@ Custom agents can set `provider_type` to `claude_code`, `claude_tty`,
 Claude CLI's interactive terminal mode inside the gateway and keeps the same
 thread/session model as the regular Claude provider.
 
+Custom agents may also set `model` and `model_reasoning_effort`. These values
+are injected into the thread runtime metadata when the agent is selected, so
+provider-specific defaults can be overridden per agent.
+
 `garyx_native` is Garyx's in-process agent loop. Use the built-in agent id
 `garyx` to select it:
 
@@ -513,9 +517,9 @@ Optional native-provider fields on an agent/provider config:
 ```json
 {
   "provider_type": "garyx_native",
-  "default_model": "gpt-5.2",
+  "default_model": "gpt-5.5",
   "model": "",
-  "model_reasoning_effort": "",
+  "model_reasoning_effort": "medium",
   "auth_source": "codex",
   "base_url": "",
   "codex_home": "",
@@ -523,6 +527,13 @@ Optional native-provider fields on an agent/provider config:
   "request_timeout_seconds": 300
 }
 ```
+
+`model` can be left empty to use the provider default. The gateway exposes
+Garyx native model choices through `/api/provider-models/garyx_native`,
+including `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`,
+`gpt-5.3-codex-spark`, and `gpt-5.2`. `model_reasoning_effort` accepts
+`low`, `medium`, `high`, or `xhigh`; lower values favor faster responses, while
+higher values spend more reasoning time.
 
 The `/goal <objective>` native command sets a durable thread goal and enables
 loop mode. `/goal` shows the current goal; `/goal pause` pauses it; `/goal

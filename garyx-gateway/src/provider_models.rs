@@ -31,10 +31,24 @@ pub(crate) struct ProviderModelOption {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct ProviderReasoningEffortOption {
+    pub id: String,
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recommended: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct ProviderModelsResponse {
     pub provider_type: ProviderType,
     pub supports_model_selection: bool,
     pub models: Vec<ProviderModelOption>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supports_reasoning_effort_selection: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_efforts: Vec<ProviderReasoningEffortOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
     pub source: &'static str,
@@ -57,6 +71,8 @@ pub(crate) async fn list_provider_models(
                 provider_type,
                 supports_model_selection: true,
                 models: discovery.models,
+                supports_reasoning_effort_selection: false,
+                reasoning_efforts: Vec::new(),
                 default_model: discovery.default_model,
                 source: "gemini_acp",
                 error: None,
@@ -74,13 +90,10 @@ pub(crate) async fn list_provider_models(
         ProviderType::GaryxNative => ProviderModelsResponse {
             provider_type,
             supports_model_selection: true,
-            models: vec![ProviderModelOption {
-                id: "gpt-5.2".to_owned(),
-                label: "GPT-5.2".to_owned(),
-                description: Some("Garyx native default model".to_owned()),
-                recommended: true,
-            }],
-            default_model: Some("gpt-5.2".to_owned()),
+            models: garyx_native_models(),
+            supports_reasoning_effort_selection: true,
+            reasoning_efforts: reasoning_effort_options(),
+            default_model: Some("gpt-5.5".to_owned()),
             source: "provider",
             error: None,
         },
@@ -97,10 +110,82 @@ fn unsupported(
         provider_type,
         supports_model_selection: false,
         models: Vec::new(),
+        supports_reasoning_effort_selection: false,
+        reasoning_efforts: Vec::new(),
         default_model: None,
         source,
         error,
     }
+}
+
+fn garyx_native_models() -> Vec<ProviderModelOption> {
+    vec![
+        ProviderModelOption {
+            id: "gpt-5.5".to_owned(),
+            label: "GPT-5.5".to_owned(),
+            description: Some("Highest-quality Garyx native default model".to_owned()),
+            recommended: true,
+        },
+        ProviderModelOption {
+            id: "gpt-5.4".to_owned(),
+            label: "GPT-5.4".to_owned(),
+            description: Some("Strong everyday model".to_owned()),
+            recommended: false,
+        },
+        ProviderModelOption {
+            id: "gpt-5.4-mini".to_owned(),
+            label: "GPT-5.4 Mini".to_owned(),
+            description: Some("Faster, lower-cost option".to_owned()),
+            recommended: false,
+        },
+        ProviderModelOption {
+            id: "gpt-5.3-codex".to_owned(),
+            label: "GPT-5.3 Codex".to_owned(),
+            description: Some("Coding-optimized model".to_owned()),
+            recommended: false,
+        },
+        ProviderModelOption {
+            id: "gpt-5.3-codex-spark".to_owned(),
+            label: "GPT-5.3 Codex Spark".to_owned(),
+            description: Some("Fast coding model".to_owned()),
+            recommended: false,
+        },
+        ProviderModelOption {
+            id: "gpt-5.2".to_owned(),
+            label: "GPT-5.2".to_owned(),
+            description: Some("Stable fallback model".to_owned()),
+            recommended: false,
+        },
+    ]
+}
+
+fn reasoning_effort_options() -> Vec<ProviderReasoningEffortOption> {
+    vec![
+        ProviderReasoningEffortOption {
+            id: "low".to_owned(),
+            label: "Low".to_owned(),
+            description: Some("Faster responses with lighter reasoning".to_owned()),
+            recommended: false,
+        },
+        ProviderReasoningEffortOption {
+            id: "medium".to_owned(),
+            label: "Medium".to_owned(),
+            description: Some("Balanced speed and reasoning depth".to_owned()),
+            recommended: true,
+        },
+        ProviderReasoningEffortOption {
+            id: "high".to_owned(),
+            label: "High".to_owned(),
+            description: Some("Deeper reasoning for harder tasks".to_owned()),
+            recommended: false,
+        },
+        ProviderReasoningEffortOption {
+            id: "xhigh".to_owned(),
+            label: "Extra High".to_owned(),
+            description: Some("Maximum reasoning depth when latency is acceptable".to_owned()),
+            recommended: false,
+        },
+    ]
 }
 
 async fn fetch_gemini_acp_models(config: &GaryxConfig) -> Result<GeminiModelDiscovery, String> {

@@ -65,6 +65,7 @@ fn custom_agent(
         display_name: display_name.to_owned(),
         provider_type,
         model: model.to_owned(),
+        model_reasoning_effort: String::new(),
         default_workspace_dir: None,
         avatar_data_url: None,
         system_prompt: system_prompt.to_owned(),

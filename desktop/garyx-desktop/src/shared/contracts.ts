@@ -25,7 +25,8 @@ export type DesktopApiProviderType =
   | "claude_code"
   | "claude_tty"
   | "codex_app_server"
-  | "gemini_cli";
+  | "gemini_cli"
+  | "garyx_native";
 
 export interface DesktopProviderModelOption {
   id: string;
@@ -38,6 +39,8 @@ export interface DesktopProviderModels {
   providerType: DesktopApiProviderType;
   supportsModelSelection: boolean;
   models: DesktopProviderModelOption[];
+  supportsReasoningEffortSelection?: boolean;
+  reasoningEfforts?: DesktopProviderModelOption[];
   defaultModel?: string | null;
   source: string;
   error?: string | null;
@@ -248,6 +251,7 @@ export interface DesktopCustomAgent {
   displayName: string;
   providerType: DesktopApiProviderType;
   model: string;
+  modelReasoningEffort: string;
   defaultWorkspaceDir: string;
   avatarDataUrl: string;
   systemPrompt: string;
@@ -273,6 +277,7 @@ export interface CreateCustomAgentInput {
   displayName: string;
   providerType: DesktopApiProviderType;
   model: string;
+  modelReasoningEffort: string;
   defaultWorkspaceDir: string;
   avatarDataUrl?: string | null;
   systemPrompt: string;

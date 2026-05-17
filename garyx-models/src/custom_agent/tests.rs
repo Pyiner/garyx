@@ -15,6 +15,7 @@ fn custom_agent_profile_defaults_standalone_to_true() {
     let profile: CustomAgentProfile = serde_json::from_value(legacy).expect("legacy profile");
     assert!(profile.standalone);
     assert_eq!(profile.model, "claude-opus-4-1");
+    assert!(profile.model_reasoning_effort.is_empty());
     assert!(profile.default_workspace_dir.is_none());
     assert!(profile.avatar_data_url.is_none());
 
@@ -23,6 +24,7 @@ fn custom_agent_profile_defaults_standalone_to_true() {
         "display_name": "Team Member",
         "provider_type": "claude_code",
         "model": "",
+        "modelReasoningEffort": "high",
         "default_workspace_dir": "/tmp/team-member",
         "avatar_data_url": "data:image/png;base64,dGVzdA==",
         "system_prompt": "",
@@ -34,6 +36,7 @@ fn custom_agent_profile_defaults_standalone_to_true() {
     let profile: CustomAgentProfile =
         serde_json::from_value(explicit).expect("explicit standalone profile");
     assert!(!profile.standalone);
+    assert_eq!(profile.model_reasoning_effort, "high");
     assert_eq!(
         profile.default_workspace_dir.as_deref(),
         Some("/tmp/team-member")

@@ -55,7 +55,7 @@ import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
-type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli';
+type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'garyx_native';
 type HubTab = 'agents' | 'teams';
 type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 type TeamDialogMode = 'create' | 'edit' | 'view' | null;
@@ -66,18 +66,26 @@ type AgentDraft = {
   displayName: string;
   providerType: ProviderType;
   model: string;
+  modelReasoningEffort: string;
   defaultWorkspaceDir: string;
   avatarDataUrl: string;
   systemPrompt: string;
 };
 
 const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default__';
+const PROVIDER_DEFAULT_REASONING_VALUE = '__provider_default_reasoning__';
 const AGENT_AVATAR_MAX_BYTES = 3 * 1024 * 1024;
 const AGENT_AVATAR_SIZE = 256;
 const AGENT_AVATAR_DATA_URL_MAX_LENGTH = 700_000;
 const AGENT_AVATAR_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml';
 const CUSTOM_AVATAR_STYLE_ID: AvatarStyleId = 'custom';
 const DEFAULT_AVATAR_STYLE_ID: AvatarStyleId = 'clean_glyph';
+const FALLBACK_REASONING_EFFORTS = [
+  { id: 'low', label: 'Low', description: 'Faster responses', recommended: false },
+  { id: 'medium', label: 'Medium', description: 'Balanced speed and reasoning', recommended: true },
+  { id: 'high', label: 'High', description: 'Deeper reasoning', recommended: false },
+  { id: 'xhigh', label: 'Extra High', description: 'Maximum reasoning', recommended: false },
+];
 
 const AVATAR_STYLE_OPTIONS: Array<{
   id: Exclude<AvatarStyleId, 'custom'>;
@@ -133,6 +141,7 @@ function emptyAgentDraft(): AgentDraft {
     displayName: '',
     providerType: 'claude_code',
     model: '',
+    modelReasoningEffort: '',
     defaultWorkspaceDir: '',
     avatarDataUrl: '',
     systemPrompt: '',
@@ -166,6 +175,9 @@ function providerLabel(value: ProviderType): string {
   if (value === 'gemini_cli') {
     return 'Gemini';
   }
+  if (value === 'garyx_native') {
+    return 'Garyx';
+  }
   if (value === 'claude_tty') {
     return 'Claude TTY';
   }
@@ -190,6 +202,20 @@ function providerModelsWithCurrent(
     return models;
   }
   return [{ id: normalized, label: normalized, description: null, recommended: false }, ...models];
+}
+
+function reasoningEffortsWithCurrent(
+  providerModels: DesktopProviderModels | undefined,
+  currentEffort: string,
+): DesktopProviderModels['models'] {
+  const efforts = providerModels?.reasoningEfforts?.length
+    ? providerModels.reasoningEfforts
+    : FALLBACK_REASONING_EFFORTS;
+  const normalized = currentEffort.trim();
+  if (!normalized || efforts.some((effort) => effort.id === normalized)) {
+    return efforts;
+  }
+  return [{ id: normalized, label: normalized, description: null, recommended: false }, ...efforts];
 }
 
 function avatarLabel(value: string): string {
@@ -550,6 +576,13 @@ export function AgentsHubPanel({
   const agentModelOptions = providerModelsWithCurrent(activeAgentProviderModels, agentDraft.model);
   const agentSupportsModelSelection =
     activeAgentProviderModels?.supportsModelSelection === true && agentModelOptions.length > 0;
+  const agentReasoningEffortOptions = reasoningEffortsWithCurrent(
+    activeAgentProviderModels,
+    agentDraft.modelReasoningEffort,
+  );
+  const agentSupportsReasoningEffortSelection =
+    (agentDraft.providerType === 'codex_app_server' || agentDraft.providerType === 'garyx_native')
+    && agentReasoningEffortOptions.length > 0;
   const agentModelStatus =
     agentDraft.providerType === 'gemini_cli' && !agentSupportsModelSelection
       ? agentProviderModelsLoading
@@ -606,6 +639,7 @@ export function AgentsHubPanel({
       displayName: agent.displayName,
       providerType: agent.providerType,
       model: agent.model,
+      modelReasoningEffort: agent.modelReasoningEffort,
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       avatarDataUrl: agent.avatarDataUrl,
       systemPrompt: agent.systemPrompt,
@@ -628,6 +662,7 @@ export function AgentsHubPanel({
       displayName: agent.displayName,
       providerType: agent.providerType,
       model: agent.model,
+      modelReasoningEffort: agent.modelReasoningEffort,
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       avatarDataUrl: agent.avatarDataUrl,
       systemPrompt: agent.systemPrompt,
@@ -816,6 +851,7 @@ export function AgentsHubPanel({
         displayName: agentDraft.displayName.trim(),
         providerType: agentDraft.providerType,
         model: agentSupportsModelSelection ? agentDraft.model.trim() : '',
+        modelReasoningEffort: agentSupportsReasoningEffortSelection ? agentDraft.modelReasoningEffort.trim() : '',
         defaultWorkspaceDir: agentDraft.defaultWorkspaceDir.trim(),
         avatarDataUrl,
         systemPrompt: agentDraft.systemPrompt.trim(),
@@ -1273,6 +1309,9 @@ export function AgentsHubPanel({
                       ...current,
                       providerType: value,
                       model: '',
+                      modelReasoningEffort: value === 'codex_app_server' || value === 'garyx_native'
+                        ? current.modelReasoningEffort
+                        : '',
                     }));
                     void ensureProviderModels(value);
                   }}
@@ -1287,6 +1326,7 @@ export function AgentsHubPanel({
                       <SelectItem value="claude_tty">Claude TTY</SelectItem>
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="gemini_cli">Gemini</SelectItem>
+                      <SelectItem value="garyx_native">Garyx</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -1323,6 +1363,38 @@ export function AgentsHubPanel({
                     {activeAgentProviderModels?.defaultModel
                       ? t('Gateway default: {model}', { model: activeAgentProviderModels.defaultModel })
                       : t('Optional. Leave empty to use the provider default.')}
+                  </span>
+                </div>
+              ) : null}
+
+              {agentSupportsReasoningEffortSelection ? (
+                <div className="codex-form-field">
+                  <Label className="codex-form-label" htmlFor="agent-dialog-reasoning-effort">{t('Reasoning effort')}</Label>
+                  <Select
+                    onValueChange={(value) => {
+                      setAgentDraft((current) => ({
+                        ...current,
+                        modelReasoningEffort: value === PROVIDER_DEFAULT_REASONING_VALUE ? '' : value,
+                      }));
+                    }}
+                    value={agentDraft.modelReasoningEffort.trim() || PROVIDER_DEFAULT_REASONING_VALUE}
+                  >
+                    <SelectTrigger className="agents-hub-model-select" id="agent-dialog-reasoning-effort">
+                      <SelectValue placeholder={t('Select reasoning effort')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value={PROVIDER_DEFAULT_REASONING_VALUE}>{t('Provider default')}</SelectItem>
+                        {agentReasoningEffortOptions.map((effort) => (
+                          <SelectItem key={effort.id} value={effort.id}>
+                            {effort.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <span className="codex-form-hint">
+                    {t('Lower values are faster; higher values spend more reasoning.')}
                   </span>
                 </div>
               ) : null}
@@ -1391,8 +1463,11 @@ export function AgentsHubPanel({
                 </div>
                 <h3>{selectedAgent?.displayName || t('Agent')}</h3>
                 <p>{selectedAgent?.agentId || ''}</p>
-                {selectedAgent && (selectedAgent.providerType === 'gemini_cli' || selectedAgent.model.trim()) ? (
+                {selectedAgent && (selectedAgent.providerType === 'gemini_cli' || selectedAgent.providerType === 'garyx_native' || selectedAgent.model.trim()) ? (
                   <p>{selectedAgent.model || t('(provider default)')}</p>
+                ) : null}
+                {selectedAgent?.modelReasoningEffort.trim() ? (
+                  <p>{t('Reasoning effort')}: {selectedAgent.modelReasoningEffort}</p>
                 ) : null}
                 {selectedAgent?.defaultWorkspaceDir.trim() ? (
                   <p>{selectedAgent.defaultWorkspaceDir.trim()}</p>

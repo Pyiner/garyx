@@ -1342,6 +1342,7 @@ mod tests {
                 display_name: "Reviewer".to_owned(),
                 provider_type: ProviderType::CodexAppServer,
                 model: "gpt-5".to_owned(),
+                model_reasoning_effort: String::new(),
                 default_workspace_dir: Some("/tmp/agent-task-default".to_owned()),
                 avatar_data_url: None,
                 system_prompt: "Review carefully.".to_owned(),

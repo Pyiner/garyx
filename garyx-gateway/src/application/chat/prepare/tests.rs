@@ -159,6 +159,7 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
             display_name: "Spec Review".to_owned(),
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5-codex".to_owned(),
+            model_reasoning_effort: "xhigh".to_owned(),
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: "Review specs carefully.".to_owned(),
@@ -239,6 +240,13 @@ async fn prepare_chat_request_resolves_provider_and_system_prompt_from_thread_ag
     assert_eq!(
         prepared.metadata.get("model").and_then(Value::as_str),
         Some("gpt-5-codex")
+    );
+    assert_eq!(
+        prepared
+            .metadata
+            .get("model_reasoning_effort")
+            .and_then(Value::as_str),
+        Some("xhigh")
     );
     assert_eq!(
         prepared

@@ -20,7 +20,7 @@ import {
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 
-type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli';
+type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'garyx_native';
 type EditorMode = 'inspect' | 'create' | 'edit';
 
 type AgentsPanelProps = {
@@ -32,11 +32,20 @@ type AgentDraft = {
   displayName: string;
   providerType: ProviderType;
   model: string;
+  modelReasoningEffort: string;
   defaultWorkspaceDir: string;
   systemPrompt: string;
 };
 
 const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default__';
+const PROVIDER_DEFAULT_REASONING_VALUE = '__provider_default_reasoning__';
+
+const FALLBACK_REASONING_EFFORTS = [
+  { id: 'low', label: 'Low', description: 'Faster responses', recommended: false },
+  { id: 'medium', label: 'Medium', description: 'Balanced speed and reasoning', recommended: true },
+  { id: 'high', label: 'High', description: 'Deeper reasoning', recommended: false },
+  { id: 'xhigh', label: 'Extra High', description: 'Maximum reasoning', recommended: false },
+];
 
 function emptyDraft(): AgentDraft {
   return {
@@ -44,6 +53,7 @@ function emptyDraft(): AgentDraft {
     displayName: '',
     providerType: 'claude_code',
     model: '',
+    modelReasoningEffort: '',
     defaultWorkspaceDir: '',
     systemPrompt: '',
   };
@@ -65,6 +75,9 @@ function providerLabel(value: ProviderType): string {
   if (value === 'gemini_cli') {
     return 'Gemini';
   }
+  if (value === 'garyx_native') {
+    return 'Garyx';
+  }
   if (value === 'claude_tty') {
     return 'Claude TTY';
   }
@@ -81,6 +94,20 @@ function providerModelsWithCurrent(
     return models;
   }
   return [{ id: normalized, label: normalized, description: null, recommended: false }, ...models];
+}
+
+function reasoningEffortsWithCurrent(
+  providerModels: DesktopProviderModels | undefined,
+  currentEffort: string,
+): DesktopProviderModels['models'] {
+  const efforts = providerModels?.reasoningEfforts?.length
+    ? providerModels.reasoningEfforts
+    : FALLBACK_REASONING_EFFORTS;
+  const normalized = currentEffort.trim();
+  if (!normalized || efforts.some((effort) => effort.id === normalized)) {
+    return efforts;
+  }
+  return [{ id: normalized, label: normalized, description: null, recommended: false }, ...efforts];
 }
 
 const plusIcon = (
@@ -178,6 +205,13 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
   const modelOptions = providerModelsWithCurrent(activeProviderModels, draft.model);
   const supportsModelSelection =
     activeProviderModels?.supportsModelSelection === true && modelOptions.length > 0;
+  const reasoningEffortOptions = reasoningEffortsWithCurrent(
+    activeProviderModels,
+    draft.modelReasoningEffort,
+  );
+  const supportsReasoningEffortSelection =
+    (draft.providerType === 'codex_app_server' || draft.providerType === 'garyx_native')
+    && reasoningEffortOptions.length > 0;
   const modelStatus =
     draft.providerType === 'gemini_cli' && !supportsModelSelection
       ? providerModelsBusy
@@ -203,6 +237,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
       displayName: agent.displayName,
       providerType: agent.providerType,
       model: agent.model,
+      modelReasoningEffort: agent.modelReasoningEffort,
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       systemPrompt: agent.systemPrompt,
     });
@@ -235,6 +270,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
         displayName: draft.displayName.trim(),
         providerType: draft.providerType,
         model: supportsModelSelection ? draft.model.trim() : '',
+        modelReasoningEffort: supportsReasoningEffortSelection ? draft.modelReasoningEffort.trim() : '',
         defaultWorkspaceDir: draft.defaultWorkspaceDir.trim(),
         systemPrompt: draft.systemPrompt.trim(),
       };
@@ -360,6 +396,9 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       ...current,
                       providerType: value,
                       model: '',
+                      modelReasoningEffort: value === 'codex_app_server' || value === 'garyx_native'
+                        ? current.modelReasoningEffort
+                        : '',
                     }));
                     void ensureProviderModels(value);
                   }}
@@ -374,6 +413,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       <SelectItem value="claude_tty">Claude TTY</SelectItem>
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="gemini_cli">Gemini</SelectItem>
+                      <SelectItem value="garyx_native">Garyx</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -409,6 +449,37 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                     {activeProviderModels?.defaultModel
                       ? t('Gateway default: {model}', { model: activeProviderModels.defaultModel })
                       : t('Optional. Leave empty to use the provider default.')}
+                  </span>
+                </div>
+              ) : null}
+              {supportsReasoningEffortSelection ? (
+                <div className="codex-form-field">
+                  <Label className="codex-form-label" htmlFor="agent-reasoning-effort">{t('Reasoning effort')}</Label>
+                  <Select
+                    onValueChange={(value) => {
+                      setDraft((current) => ({
+                        ...current,
+                        modelReasoningEffort: value === PROVIDER_DEFAULT_REASONING_VALUE ? '' : value,
+                      }));
+                    }}
+                    value={draft.modelReasoningEffort.trim() || PROVIDER_DEFAULT_REASONING_VALUE}
+                  >
+                    <SelectTrigger id="agent-reasoning-effort">
+                      <SelectValue placeholder={t('Select reasoning effort')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value={PROVIDER_DEFAULT_REASONING_VALUE}>{t('Provider default')}</SelectItem>
+                        {reasoningEffortOptions.map((effort) => (
+                          <SelectItem key={effort.id} value={effort.id}>
+                            {effort.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <span className="codex-form-hint">
+                    {t('Lower values are faster; higher values spend more reasoning.')}
                   </span>
                 </div>
               ) : null}
@@ -498,10 +569,16 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 <span className="codex-list-row-name">{t('Provider')}</span>
                 <span className="codex-command-row-desc">{providerLabel(selectedAgent.providerType)}</span>
               </div>
-              {selectedAgent.providerType === 'gemini_cli' || selectedAgent.model.trim() ? (
+              {selectedAgent.providerType === 'gemini_cli' || selectedAgent.providerType === 'garyx_native' || selectedAgent.model.trim() ? (
                 <div className="codex-list-row">
                   <span className="codex-list-row-name">{t('Model')}</span>
                   <span className="codex-command-row-desc">{selectedAgent.model || t('(provider default)')}</span>
+                </div>
+              ) : null}
+              {selectedAgent.modelReasoningEffort.trim() ? (
+                <div className="codex-list-row">
+                  <span className="codex-list-row-name">{t('Reasoning effort')}</span>
+                  <span className="codex-command-row-desc">{selectedAgent.modelReasoningEffort}</span>
                 </div>
               ) : null}
               <div className="codex-list-row">

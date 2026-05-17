@@ -713,11 +713,16 @@ fn build_thread_start_params(
                 None
             }
         });
-    let model_reasoning_effort = if config.model_reasoning_effort.trim().is_empty() {
-        None
-    } else {
-        Some(config.model_reasoning_effort.clone())
-    };
+    let model_reasoning_effort = metadata
+        .get("model_reasoning_effort")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            (!config.model_reasoning_effort.trim().is_empty())
+                .then(|| config.model_reasoning_effort.clone())
+        });
 
     ThreadStartParams {
         cwd: cwd.clone(),

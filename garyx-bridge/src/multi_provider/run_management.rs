@@ -157,6 +157,7 @@ fn scrub_subagent_runtime_metadata(metadata: &mut HashMap<String, Value>) {
         "agent_id",
         "agent_display_name",
         "model",
+        "model_reasoning_effort",
         "system_prompt",
         "requested_provider_type",
         "sdk_session_id",

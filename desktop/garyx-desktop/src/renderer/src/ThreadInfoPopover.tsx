@@ -21,7 +21,7 @@ function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function buildResumeCommand(threadInfo: ThreadRuntimeInfo | null): string | null {
+function buildResumeCommand(threadId: string | null, threadInfo: ThreadRuntimeInfo | null): string | null {
   const sessionId = threadInfo?.sdkSessionId?.trim() || '';
   if (!sessionId) {
     return null;
@@ -41,8 +41,15 @@ function buildResumeCommand(threadInfo: ThreadRuntimeInfo | null): string | null
     case 'gemini_cli':
       command = `gemini --approval-mode yolo --resume ${shellEscape(sessionId)}`;
       break;
+    case 'garyx_native':
+      command = threadId ? `garyx thread send thread ${shellEscape(threadId)} continue` : '';
+      break;
     default:
       return null;
+  }
+
+  if (!command) {
+    return null;
   }
 
   const workspacePath = threadInfo.workspacePath?.trim() || '';
@@ -91,7 +98,7 @@ export function ThreadInfoPopover({
   const [copyState, setCopyState] = useState<'idle' | 'command' | 'session'>('idle');
   const shellRef = useRef<HTMLDivElement | null>(null);
   const sessionId = threadInfo?.sdkSessionId?.trim() || '';
-  const resumeCommand = buildResumeCommand(threadInfo);
+  const resumeCommand = buildResumeCommand(threadId, threadInfo);
   const bindings = threadInfo?.channelBindings || [];
 
   useEffect(() => {

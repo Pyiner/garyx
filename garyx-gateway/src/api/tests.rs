@@ -811,6 +811,7 @@ async fn test_create_and_list_custom_agents() {
                 "role": "reviewer",
                 "provider_type": "codex_app_server",
                 "model": "gpt-5-codex",
+                "model_reasoning_effort": "xhigh",
                 "avatar_data_url": "data:image/png;base64,dGVzdA==",
                 "system_prompt": "Review specs carefully."
             })
@@ -836,6 +837,7 @@ async fn test_create_and_list_custom_agents() {
             && agent["provider_type"] == "codex_app_server"
             && agent["display_name"] == "Spec Review"
             && agent["model"] == "gpt-5-codex"
+            && agent["model_reasoning_effort"] == "xhigh"
             && agent["avatar_data_url"] == "data:image/png;base64,dGVzdA=="
     }));
 }
@@ -906,8 +908,10 @@ async fn test_provider_models_reports_garyx_native_default() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["provider_type"], "garyx_native");
     assert_eq!(json["supports_model_selection"], true);
-    assert_eq!(json["default_model"], "gpt-5.2");
-    assert_eq!(json["models"][0]["id"], "gpt-5.2");
+    assert_eq!(json["default_model"], "gpt-5.5");
+    assert_eq!(json["models"][0]["id"], "gpt-5.5");
+    assert_eq!(json["supports_reasoning_effort_selection"], true);
+    assert_eq!(json["reasoning_efforts"][1]["id"], "medium");
 }
 
 #[tokio::test]

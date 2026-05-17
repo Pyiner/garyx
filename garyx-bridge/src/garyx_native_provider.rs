@@ -59,7 +59,7 @@ fn model_id(config: &GaryxNativeConfig, metadata: &HashMap<String, Value>) -> St
     normalize_non_empty(metadata.get("model").and_then(Value::as_str))
         .or_else(|| normalize_non_empty(Some(config.model.as_str())))
         .or_else(|| normalize_non_empty(Some(config.default_model.as_str())))
-        .unwrap_or_else(|| "gpt-5.2".to_owned())
+        .unwrap_or_else(|| "gpt-5.5".to_owned())
 }
 
 fn metadata_string_map(metadata: &HashMap<String, Value>, key: &str) -> HashMap<String, String> {

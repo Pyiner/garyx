@@ -103,7 +103,7 @@ async fn assistant_only_turn_streams_delta_and_persists_assistant_message() {
 
     let requests = client.requests();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].model, "gpt-5.2");
+    assert_eq!(requests[0].model, "gpt-5.5");
     assert!(requests[0].messages.iter().any(|message| {
         message
             .text

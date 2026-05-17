@@ -1074,12 +1074,15 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, claude_tty, codex_app_server, or gemini_cli
+        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, or garyx_native
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.
         #[arg(long)]
         model: Option<String>,
+        /// Optional reasoning effort override: low, medium, high, or xhigh.
+        #[arg(long)]
+        model_reasoning_effort: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent.
         #[arg(long)]
         default_workspace_dir: Option<String>,
@@ -1098,12 +1101,15 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, claude_tty, codex_app_server, or gemini_cli
+        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, or garyx_native
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.
         #[arg(long)]
         model: Option<String>,
+        /// Optional reasoning effort override: low, medium, high, or xhigh. Pass an empty string to clear it.
+        #[arg(long)]
+        model_reasoning_effort: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,
@@ -1122,12 +1128,15 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, claude_tty, codex_app_server, or gemini_cli
+        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, or garyx_native
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.
         #[arg(long)]
         model: Option<String>,
+        /// Optional reasoning effort override: low, medium, high, or xhigh. Pass an empty string to clear it.
+        #[arg(long)]
+        model_reasoning_effort: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,

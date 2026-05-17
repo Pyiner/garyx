@@ -3032,6 +3032,7 @@ fn build_agent_mutation_body(
     display_name: String,
     provider: String,
     model: Option<String>,
+    model_reasoning_effort: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
 ) -> Result<Value, Box<dyn std::error::Error>> {
@@ -3044,6 +3045,7 @@ fn build_agent_mutation_body(
         "display_name": display_name.trim(),
         "provider_type": provider.trim(),
         "model": model.as_deref().map(str::trim).unwrap_or(""),
+        "model_reasoning_effort": model_reasoning_effort.as_deref().map(str::trim).unwrap_or(""),
         "system_prompt": system_prompt,
     });
     if let Some(default_workspace_dir) = default_workspace_dir {
@@ -3058,6 +3060,7 @@ pub(crate) async fn cmd_agent_create(
     display_name: String,
     provider: String,
     model: Option<String>,
+    model_reasoning_effort: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
@@ -3068,6 +3071,7 @@ pub(crate) async fn cmd_agent_create(
         display_name,
         provider,
         model,
+        model_reasoning_effort,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3085,6 +3089,7 @@ pub(crate) async fn cmd_agent_update(
     display_name: String,
     provider: String,
     model: Option<String>,
+    model_reasoning_effort: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
@@ -3095,6 +3100,7 @@ pub(crate) async fn cmd_agent_update(
         display_name,
         provider,
         model,
+        model_reasoning_effort,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3116,6 +3122,7 @@ pub(crate) async fn cmd_agent_upsert(
     display_name: String,
     provider: String,
     model: Option<String>,
+    model_reasoning_effort: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
@@ -3126,6 +3133,7 @@ pub(crate) async fn cmd_agent_upsert(
         display_name,
         provider,
         model,
+        model_reasoning_effort,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3171,6 +3179,7 @@ fn print_agent_summary(a: &Value) {
     let name = a["display_name"].as_str().unwrap_or("-");
     let provider = a["provider_type"].as_str().unwrap_or("-");
     let model = a["model"].as_str().unwrap_or("").trim();
+    let model_reasoning_effort = a["model_reasoning_effort"].as_str().unwrap_or("").trim();
     let builtin = a["built_in"].as_bool().unwrap_or(false);
     println!(
         "Agent: {agent_id}{}",
@@ -3180,6 +3189,9 @@ fn print_agent_summary(a: &Value) {
     println!("Provider: {provider}");
     if !model.is_empty() {
         println!("Model: {model}");
+    }
+    if !model_reasoning_effort.is_empty() {
+        println!("Reasoning effort: {model_reasoning_effort}");
     }
     if let Some(default_workspace_dir) = a["default_workspace_dir"].as_str()
         && !default_workspace_dir.trim().is_empty()
@@ -5859,6 +5871,7 @@ fn provider_type_display(value: Option<&str>) -> &'static str {
     match value.unwrap_or("").trim() {
         "codex_app_server" => "Codex",
         "gemini_cli" => "Gemini",
+        "garyx_native" => "Garyx",
         "claude_tty" => "Claude TTY",
         "claude_code" => "Claude",
         _ => "-",

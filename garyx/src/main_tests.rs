@@ -1272,6 +1272,8 @@ fn parse_agent_create() {
         "codex_app_server",
         "--model",
         "gpt-5",
+        "--model-reasoning-effort",
+        "high",
         "--default-workspace-dir",
         "/tmp/spec-review",
         "--system-prompt",
@@ -1286,6 +1288,7 @@ fn parse_agent_create() {
                     display_name,
                     provider,
                     model,
+                    model_reasoning_effort,
                     default_workspace_dir,
                     system_prompt,
                     json,
@@ -1295,6 +1298,7 @@ fn parse_agent_create() {
             assert_eq!(display_name, "Spec Review");
             assert_eq!(provider, "codex_app_server");
             assert_eq!(model.as_deref(), Some("gpt-5"));
+            assert_eq!(model_reasoning_effort.as_deref(), Some("high"));
             assert_eq!(default_workspace_dir.as_deref(), Some("/tmp/spec-review"));
             assert_eq!(system_prompt, "Review specs carefully.");
             assert!(json);
@@ -1387,6 +1391,7 @@ fn parse_agent_update_without_model() {
                     display_name,
                     provider,
                     model,
+                    model_reasoning_effort,
                     default_workspace_dir,
                     system_prompt,
                     json,
@@ -1396,6 +1401,7 @@ fn parse_agent_update_without_model() {
             assert_eq!(display_name, "Spec Review");
             assert_eq!(provider, "codex_app_server");
             assert_eq!(model, None);
+            assert_eq!(model_reasoning_effort, None);
             assert_eq!(default_workspace_dir, None);
             assert_eq!(system_prompt, "Review specs carefully.");
             assert!(!json);
@@ -1418,6 +1424,8 @@ fn parse_agent_upsert() {
         "codex_app_server",
         "--model",
         "gpt-5",
+        "--model-reasoning-effort",
+        "xhigh",
         "--default-workspace-dir",
         "/tmp/spec-review",
         "--system-prompt",
@@ -1432,6 +1440,7 @@ fn parse_agent_upsert() {
                     display_name,
                     provider,
                     model,
+                    model_reasoning_effort,
                     default_workspace_dir,
                     system_prompt,
                     json,
@@ -1441,6 +1450,7 @@ fn parse_agent_upsert() {
             assert_eq!(display_name, "Spec Review");
             assert_eq!(provider, "codex_app_server");
             assert_eq!(model.as_deref(), Some("gpt-5"));
+            assert_eq!(model_reasoning_effort.as_deref(), Some("xhigh"));
             assert_eq!(default_workspace_dir.as_deref(), Some("/tmp/spec-review"));
             assert_eq!(system_prompt, "Review specs carefully.");
             assert!(json);

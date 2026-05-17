@@ -713,7 +713,7 @@ for line in sys.stdin:
                 }
             }
         }), flush=True)
-        time.sleep(3.0)
+        time.sleep(5.5)
         print(json.dumps({
             "jsonrpc": "2.0",
             "method": "session/update",
@@ -750,7 +750,7 @@ for line in sys.stdin:
     let mut provider = GeminiCliProvider::new(GeminiCliConfig {
         gemini_bin: script_path.to_string_lossy().to_string(),
         workspace_dir: Some(workspace_dir.to_string_lossy().to_string()),
-        timeout_seconds: 2.0,
+        timeout_seconds: 5.0,
         model: "gemini-3.1-pro-preview".to_owned(),
         ..Default::default()
     });

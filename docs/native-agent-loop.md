@@ -1,6 +1,6 @@
 # Garyx Native Agent Loop
 
-Status: planned implementation for the `garyx_native` provider.
+Status: implemented for the `garyx_native` provider.
 
 ## Goals
 

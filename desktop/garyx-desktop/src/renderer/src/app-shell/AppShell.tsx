@@ -1560,6 +1560,9 @@ function presentProviderReadyError(
   if (providerType === "gemini_cli") {
     return "Gemini CLI is not ready on this Mac. Check that the gemini CLI is installed and available on the Garyx gateway PATH.";
   }
+  if (providerType === "garyx_native") {
+    return "Garyx native is not ready on this Mac. Check the gateway status and Codex/OpenAI auth configuration.";
+  }
   if (providerType === "claude_tty") {
     return "Claude TTY is not ready on this Mac. Check the local Claude CLI auth and environment settings.";
   }
@@ -1580,7 +1583,8 @@ function inferProviderTypeForThread(
     runtimeProvider === "claude_code" ||
     runtimeProvider === "claude_tty" ||
     runtimeProvider === "codex_app_server" ||
-    runtimeProvider === "gemini_cli"
+    runtimeProvider === "gemini_cli" ||
+    runtimeProvider === "garyx_native"
   ) {
     return runtimeProvider;
   }
@@ -1595,6 +1599,9 @@ function inferProviderTypeForThread(
   }
   if (agentId === "gemini") {
     return "gemini_cli";
+  }
+  if (agentId === "garyx") {
+    return "garyx_native";
   }
   if (agentId === "claude") {
     return "claude_code";

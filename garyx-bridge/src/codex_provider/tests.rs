@@ -844,6 +844,19 @@ fn test_build_thread_start_params_full() {
 }
 
 #[test]
+fn test_build_thread_start_params_metadata_reasoning_effort_override() {
+    let config = CodexAppServerConfig {
+        model_reasoning_effort: "medium".to_owned(),
+        ..Default::default()
+    };
+    let metadata = HashMap::from([("model_reasoning_effort".to_owned(), json!("xhigh"))]);
+
+    let params = build_thread_start_params(&config, None, "thread::test", "run-1", &metadata);
+
+    assert_eq!(params.model_reasoning_effort.as_deref(), Some("xhigh"));
+}
+
+#[test]
 fn test_build_thread_start_params_fallback_model() {
     let config = CodexAppServerConfig {
         model: String::new(),

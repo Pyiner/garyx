@@ -568,7 +568,7 @@ fn default_garyx_native_provider_type() -> ProviderType {
 }
 
 fn default_garyx_native_model() -> String {
-    "gpt-5.2".to_owned()
+    "gpt-5.5".to_owned()
 }
 
 fn default_garyx_native_auth_source() -> String {

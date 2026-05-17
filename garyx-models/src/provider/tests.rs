@@ -213,7 +213,7 @@ fn test_gemini_config_defaults() {
 fn test_garyx_native_config_defaults() {
     let cfg = GaryxNativeConfig::default();
     assert_eq!(cfg.provider_type, ProviderType::GaryxNative);
-    assert_eq!(cfg.default_model, "gpt-5.2");
+    assert_eq!(cfg.default_model, "gpt-5.5");
     assert_eq!(cfg.model, "");
     assert_eq!(cfg.auth_source, "codex");
     assert_eq!(cfg.max_tool_iterations, 32);
