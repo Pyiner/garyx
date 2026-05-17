@@ -168,7 +168,12 @@ fn discord_gateway_url_with_query(url: &str) -> String {
     if trimmed.contains('?') {
         trimmed.to_owned()
     } else {
-        format!("{trimmed}?v=10&encoding=json")
+        let has_path = trimmed
+            .split_once("://")
+            .map(|(_, rest)| rest.contains('/'))
+            .unwrap_or_else(|| trimmed.contains('/'));
+        let separator = if has_path { "?" } else { "/?" };
+        format!("{trimmed}{separator}v=10&encoding=json")
     }
 }
 
@@ -1698,6 +1703,22 @@ mod tests {
         assert_eq!(payload["d"]["token"], "discord-token");
         assert_eq!(payload["d"]["session_id"], "session-123");
         assert_eq!(payload["d"]["seq"], 42);
+    }
+
+    #[test]
+    fn discord_gateway_url_query_keeps_root_path() {
+        assert_eq!(
+            discord_gateway_url_with_query("wss://gateway.discord.gg"),
+            "wss://gateway.discord.gg/?v=10&encoding=json"
+        );
+        assert_eq!(
+            discord_gateway_url_with_query("wss://gateway.discord.gg/"),
+            "wss://gateway.discord.gg/?v=10&encoding=json"
+        );
+        assert_eq!(
+            discord_gateway_url_with_query("wss://gateway.discord.gg/?v=10&encoding=json"),
+            "wss://gateway.discord.gg/?v=10&encoding=json"
+        );
     }
 
     #[tokio::test]
