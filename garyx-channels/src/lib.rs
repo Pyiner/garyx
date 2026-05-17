@@ -1,6 +1,7 @@
 pub mod auth_flow;
 pub mod builtin_catalog;
 pub mod channel_trait;
+pub mod discord;
 pub mod dispatcher;
 pub mod feishu;
 pub mod generated_images;
@@ -38,9 +39,10 @@ pub fn sanitize_filename(name: &str) -> String {
 pub(crate) mod test_helpers;
 
 pub use channel_trait::{Channel, ChannelError};
+pub use discord::DiscordChannel;
 pub use dispatcher::{
-    ChannelDispatcher, ChannelDispatcherImpl, ChannelInfo, FeishuChatSummary, FeishuSender,
-    OutboundMessage, SendMessageResult, StreamingDispatchTarget, SwappableDispatcher,
+    ChannelDispatcher, ChannelDispatcherImpl, ChannelInfo, DiscordSender, FeishuChatSummary,
+    FeishuSender, OutboundMessage, SendMessageResult, StreamingDispatchTarget, SwappableDispatcher,
     TelegramSender,
 };
 pub use feishu::FeishuChannel;

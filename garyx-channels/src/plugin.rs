@@ -14,8 +14,8 @@ use tracing::{info, warn};
 
 use garyx_bridge::MultiProviderBridge;
 use garyx_models::config::{
-    ChannelsConfig, FeishuAccount, FeishuConfig, FeishuDomain, OwnerTargetConfig, TelegramAccount,
-    TelegramConfig, WeixinAccount, WeixinConfig,
+    ChannelsConfig, DiscordAccount, DiscordConfig, FeishuAccount, FeishuConfig, FeishuDomain,
+    OwnerTargetConfig, TelegramAccount, TelegramConfig, WeixinAccount, WeixinConfig,
 };
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::MessageRouter;
@@ -31,7 +31,7 @@ use crate::plugin_host::{
     RpcError, SpawnOptions, SubprocessError, SubprocessPlugin,
 };
 use crate::telegram::{TgResponse, TgUpdate};
-use crate::{FeishuChannel, TelegramChannel, WeixinChannel};
+use crate::{DiscordChannel, FeishuChannel, TelegramChannel, WeixinChannel};
 
 // ---------------------------------------------------------------------------
 // Plugin model
@@ -542,6 +542,7 @@ impl ChannelPlugin for ManagedChannelPlugin {
     ) -> Result<AccountValidationResult, String> {
         match self.metadata.id.as_str() {
             "telegram" => validate_telegram_account_config(account).await,
+            "discord" => validate_discord_account_config(account).await,
             "feishu" => validate_feishu_account_config(account).await,
             "weixin" => validate_weixin_account_config(account),
             _ => Ok(AccountValidationResult::skipped(format!(
@@ -605,6 +606,26 @@ impl ChannelPlugin for ManagedChannelPlugin {
                             token: parsed.token,
                             http: reqwest::Client::new(),
                             api_base: "https://api.telegram.org".to_owned(),
+                            is_running: false,
+                        });
+                    out.insert(acc.id.clone(), sender);
+                }
+            }
+            "discord" => {
+                for acc in &accounts {
+                    let parsed: DiscordAccount = serde_json::from_value(acc.config.clone())
+                        .map_err(|e| {
+                            format!("discord account '{}' config rejected: {e}", acc.id)
+                        })?;
+                    if !parsed.enabled && !acc.enabled {
+                        continue;
+                    }
+                    let sender: Arc<dyn crate::dispatcher::OutboundSender> =
+                        Arc::new(crate::dispatcher::DiscordSender {
+                            account_id: acc.id.clone(),
+                            token: parsed.token,
+                            http: reqwest::Client::new(),
+                            api_base: parsed.api_base,
                             is_running: false,
                         });
                     out.insert(acc.id.clone(), sender);
@@ -684,6 +705,11 @@ impl ChannelPlugin for ManagedChannelPlugin {
                     serde_json::from_value(self.account_descriptor(account_id)?.config).ok()?;
                 resolve_telegram_main_endpoint(account_id, &account, endpoints).await
             }
+            "discord" => {
+                let account: DiscordAccount =
+                    serde_json::from_value(self.account_descriptor(account_id)?.config).ok()?;
+                resolve_discord_main_endpoint(account_id, &account, endpoints).await
+            }
             "feishu" => {
                 let account: FeishuAccount =
                     serde_json::from_value(self.account_descriptor(account_id)?.config).ok()?;
@@ -703,7 +729,7 @@ impl ChannelPlugin for ManagedChannelPlugin {
         endpoints: &[PluginConversationEndpoint],
     ) -> Option<PluginAccountUi> {
         match self.metadata.id.as_str() {
-            "telegram" | "feishu" | "weixin" => Some(build_builtin_account_ui(
+            "telegram" | "discord" | "feishu" | "weixin" => Some(build_builtin_account_ui(
                 self.account_root_behavior,
                 &self.metadata.id,
                 account_id,
@@ -759,6 +785,38 @@ async fn validate_telegram_account_config(
     }
     Ok(AccountValidationResult::verified(
         "Telegram bot token verified with getMe.",
+    ))
+}
+
+async fn validate_discord_account_config(
+    account: AccountDescriptor,
+) -> Result<AccountValidationResult, String> {
+    let parsed: DiscordAccount = serde_json::from_value(account.config)
+        .map_err(|error| format!("discord account '{}' config rejected: {error}", account.id))?;
+    let token = parsed.token.trim();
+    if token.is_empty() {
+        return Err("Discord token is required.".to_owned());
+    }
+
+    let http = HttpClient::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("failed to build Discord validator: {error}"))?;
+    let response = http
+        .get(format!(
+            "{}/users/@me",
+            parsed.api_base.trim_end_matches('/')
+        ))
+        .header("Authorization", format!("Bot {token}"))
+        .send()
+        .await
+        .map_err(|error| format!("Discord users/@me request failed: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("Discord users/@me HTTP {status}"));
+    }
+    Ok(AccountValidationResult::verified(
+        "Discord bot token verified with users/@me.",
     ))
 }
 
@@ -883,6 +941,13 @@ fn is_feishu_private_candidate(endpoint: &KnownChannelEndpoint) -> bool {
                 || endpoint.chat_id.trim() == endpoint.binding_key.trim()))
 }
 
+fn is_discord_private_candidate(endpoint: &KnownChannelEndpoint) -> bool {
+    endpoint.channel == "discord"
+        && endpoint.thread_id.is_none()
+        && !endpoint.binding_key.trim().is_empty()
+        && !endpoint.chat_id.trim().is_empty()
+}
+
 fn is_weixin_private_candidate(endpoint: &KnownChannelEndpoint) -> bool {
     endpoint.channel == "weixin"
         && endpoint_scope(endpoint).is_none()
@@ -986,6 +1051,7 @@ fn best_private_endpoint(
         .filter(|endpoint| endpoint.account_id == account_id && endpoint.channel == channel)
         .filter(|endpoint| match channel {
             "telegram" => is_telegram_private_candidate(endpoint),
+            "discord" => is_discord_private_candidate(endpoint),
             "feishu" => is_feishu_private_candidate(endpoint),
             "weixin" => is_weixin_private_candidate(endpoint),
             _ => false,
@@ -1020,6 +1086,11 @@ fn best_private_endpoint(
         } else {
             endpoint.delivery_target_id.clone()
         };
+    let delivery_thread_id = if endpoint.channel == "discord" {
+        None
+    } else {
+        binding_delivery_thread_id(&endpoint.binding_key, &chat_id)
+    };
     Some(PluginMainEndpoint {
         endpoint_key: endpoint.endpoint_key.clone(),
         channel: endpoint.channel.clone(),
@@ -1028,7 +1099,7 @@ fn best_private_endpoint(
         chat_id: chat_id.clone(),
         delivery_target_type: endpoint.delivery_target_type.clone(),
         delivery_target_id,
-        delivery_thread_id: binding_delivery_thread_id(&endpoint.binding_key, &chat_id),
+        delivery_thread_id,
         display_label: endpoint.display_label.clone(),
         thread_id: endpoint.thread_id.clone(),
         thread_label: endpoint.thread_label.clone(),
@@ -1104,6 +1175,32 @@ async fn resolve_telegram_main_endpoint(
     }
 
     None
+}
+
+async fn resolve_discord_main_endpoint(
+    account_id: &str,
+    account: &DiscordAccount,
+    endpoints: &[KnownChannelEndpoint],
+) -> Option<PluginMainEndpoint> {
+    if let Some((delivery_target_type, delivery_target_id)) =
+        normalized_owner_target("discord", account.owner_target.as_ref())
+    {
+        return Some(attach_known_endpoint_metadata(
+            synthetic_main_endpoint(
+                "discord",
+                account_id,
+                &delivery_target_id,
+                &delivery_target_id,
+                &delivery_target_type,
+                &delivery_target_id,
+                account.workspace_dir.as_deref(),
+                "owner_target",
+            ),
+            endpoints,
+        ));
+    }
+
+    best_private_endpoint(endpoints, "discord", account_id)
 }
 
 async fn fetch_recent_telegram_private_chat_id(
@@ -1359,6 +1456,11 @@ pub async fn resolve_main_endpoint_from_channels_config(
             let account = config.accounts.get(account_id)?;
             resolve_telegram_main_endpoint(account_id, account, endpoints).await
         }
+        "discord" => {
+            let config = channels.resolved_discord_config().ok()?;
+            let account = config.accounts.get(account_id)?;
+            resolve_discord_main_endpoint(account_id, account, endpoints).await
+        }
         "feishu" => {
             let config = channels.resolved_feishu_config().ok()?;
             let account = config.accounts.get(account_id)?;
@@ -1379,7 +1481,7 @@ pub fn resolve_account_ui_from_channels_config(
     endpoints: &[PluginConversationEndpoint],
 ) -> Option<PluginAccountUi> {
     match channel {
-        "telegram" | "feishu" | "weixin" => Some(build_builtin_account_ui(
+        "telegram" | "discord" | "feishu" | "weixin" => Some(build_builtin_account_ui(
             AccountRootBehavior::OpenDefault,
             channel,
             account_id,
@@ -1965,6 +2067,7 @@ impl ChannelPluginManager {
     /// host's `ChannelsConfig`.
     pub fn reload_builtin_senders(&self, channels: &ChannelsConfig) {
         let telegram = resolved_telegram_config(channels);
+        let discord = resolved_discord_config(channels);
         let feishu = resolved_feishu_config(channels);
         let weixin = resolved_weixin_config(channels);
         for (id, entry) in &self.plugins {
@@ -1973,6 +2076,7 @@ impl ChannelPluginManager {
             };
             let new_map = match id.as_str() {
                 "telegram" => build_telegram_senders(&telegram),
+                "discord" => build_discord_senders(&discord),
                 "feishu" => build_feishu_senders(&feishu),
                 "weixin" => build_weixin_senders(&weixin),
                 _ => continue, // unknown built-in id — don't touch
@@ -2904,6 +3008,15 @@ fn build_accounts_for_plugin(plugin_id: &str, channels: &ChannelsConfig) -> Vec<
                 config: serde_json::to_value(acc).unwrap_or(serde_json::Value::Null),
             })
             .collect(),
+        "discord" => resolved_discord_config(channels)
+            .accounts
+            .iter()
+            .map(|(id, acc)| AccountDescriptor {
+                id: id.clone(),
+                enabled: acc.enabled,
+                config: serde_json::to_value(acc).unwrap_or(serde_json::Value::Null),
+            })
+            .collect(),
         "feishu" => resolved_feishu_config(channels)
             .accounts
             .iter()
@@ -2946,6 +3059,13 @@ fn resolved_telegram_config(channels: &ChannelsConfig) -> TelegramConfig {
     })
 }
 
+fn resolved_discord_config(channels: &ChannelsConfig) -> DiscordConfig {
+    channels.resolved_discord_config().unwrap_or_else(|error| {
+        warn!(error = %error, "failed to resolve discord accounts from channels config");
+        DiscordConfig::default()
+    })
+}
+
 fn resolved_feishu_config(channels: &ChannelsConfig) -> FeishuConfig {
     channels.resolved_feishu_config().unwrap_or_else(|error| {
         warn!(error = %error, "failed to resolve feishu accounts from channels config");
@@ -2974,6 +3094,27 @@ fn build_telegram_senders(
                 token: acc.token.clone(),
                 http: reqwest::Client::new(),
                 api_base: "https://api.telegram.org".to_owned(),
+                is_running: false,
+            });
+        out.insert(id.clone(), sender);
+    }
+    out
+}
+
+fn build_discord_senders(
+    cfg: &garyx_models::config::DiscordConfig,
+) -> HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> {
+    let mut out: HashMap<String, Arc<dyn crate::dispatcher::OutboundSender>> = HashMap::new();
+    for (id, acc) in &cfg.accounts {
+        if !acc.enabled {
+            continue;
+        }
+        let sender: Arc<dyn crate::dispatcher::OutboundSender> =
+            Arc::new(crate::dispatcher::DiscordSender {
+                account_id: id.clone(),
+                token: acc.token.clone(),
+                http: reqwest::Client::new(),
+                api_base: acc.api_base.clone(),
                 is_running: false,
             });
         out.insert(id.clone(), sender);
@@ -3136,7 +3277,8 @@ impl BuiltInPluginDiscoverer {
 
 fn builtin_auth_flow_executor(plugin_id: &str) -> Option<Arc<dyn AuthFlowExecutor>> {
     match crate::builtin_catalog::builtin_channel_descriptor(plugin_id)?.kind {
-        crate::builtin_catalog::BuiltinChannelKind::Telegram => None,
+        crate::builtin_catalog::BuiltinChannelKind::Telegram
+        | crate::builtin_catalog::BuiltinChannelKind::Discord => None,
         crate::builtin_catalog::BuiltinChannelKind::Feishu => {
             Some(Arc::new(crate::feishu::FeishuAuthExecutor::default()))
         }
@@ -3150,6 +3292,7 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
     fn discover(&self) -> Result<Vec<Box<dyn ChannelPlugin>>, String> {
         let mut plugins: Vec<Box<dyn ChannelPlugin>> = Vec::new();
         let telegram = resolved_telegram_config(&self.channels);
+        let discord = resolved_discord_config(&self.channels);
         let feishu = resolved_feishu_config(&self.channels);
         let weixin = resolved_weixin_config(&self.channels);
 
@@ -3177,6 +3320,26 @@ impl PluginDiscoverer for BuiltInPluginDiscoverer {
                     account_root_behavior: descriptor.account_root_behavior,
                     accounts: Some(build_accounts_for_plugin("telegram", &self.channels)),
                     outbound_senders: Some(telegram_senders),
+                },
+            )));
+        }
+
+        {
+            let channel =
+                DiscordChannel::new(discord.clone(), self.router.clone(), self.bridge.clone());
+            let discord_senders = build_discord_senders(&discord);
+            let descriptor = crate::builtin_catalog::builtin_channel_descriptor("discord")
+                .expect("builtin discord descriptor");
+            plugins.push(Box::new(ManagedChannelPlugin::with_options(
+                builtin_plugin_metadata("discord").expect("builtin discord metadata"),
+                Box::new(channel),
+                ManagedChannelPluginOptions {
+                    capabilities: descriptor.capabilities(),
+                    schema: descriptor.schema(),
+                    auth_flow: builtin_auth_flow_executor(descriptor.id),
+                    account_root_behavior: descriptor.account_root_behavior,
+                    accounts: Some(build_accounts_for_plugin("discord", &self.channels)),
+                    outbound_senders: Some(discord_senders),
                 },
             )));
         }

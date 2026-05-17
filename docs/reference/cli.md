@@ -49,7 +49,7 @@ writes to disk.
 | Command | Use it for |
 | --- | --- |
 | `garyx channels list` | List configured channel accounts. |
-| `garyx channels add <channel> <account_id>` | Add a new account (Telegram, Feishu, WeChat, plugin id). |
+| `garyx channels add <channel> <account_id>` | Add a new account (Telegram, Discord, Feishu, WeChat, plugin id). |
 | `garyx channels enable <channel> <account_id>` | Enable an existing account. |
 | `garyx channels disable <channel> <account_id>` | Disable an existing account. |
 | `garyx channels remove <channel> <account_id>` | Delete an account from config. |
@@ -57,7 +57,7 @@ writes to disk.
 
 Common flags on `channels add`:
 
-- `--token "<bot token>"` — Telegram
+- `--token "<bot token>"` — Telegram or Discord
 - `--app-id <id> --app-secret <secret> --domain feishu|lark` — Feishu / Lark
 - `--uin <uin> --base-url <url>` — WeChat
 - `--agent-id <id>` — bind the channel to a specific agent
@@ -80,7 +80,7 @@ Common flags on `channels add`:
 | `garyx plugins install <path>` | Install a subprocess channel plugin from a binary. |
 | `garyx plugins list` | List installed plugins. |
 | `garyx plugins uninstall <id>` | Remove a plugin. |
-| `garyx plugins update [<name>]` | Update one installed subprocess plugin (or all when `<name>` is omitted). Supports `--version`, `--from`, `--target`, `--check`, `--force`, `--json`. Built-in channels (`telegram`, `feishu`, `weixin`) are rejected with a redirect to `garyx update`. |
+| `garyx plugins update [<name>]` | Update one installed subprocess plugin (or all when `<name>` is omitted). Supports `--version`, `--from`, `--target`, `--check`, `--force`, `--json`. Built-in channels (`telegram`, `discord`, `feishu`, `weixin`) are rejected with a redirect to `garyx update`. |
 
 ## Threads
 

@@ -21,6 +21,7 @@ use crate::plugin_host::manifest::{AccountRootBehavior, AuthFlowDescriptor, Deli
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinChannelKind {
     Telegram,
+    Discord,
     Feishu,
     Weixin,
 }
@@ -35,13 +36,21 @@ pub struct BuiltinChannelDescriptor {
     pub account_root_behavior: AccountRootBehavior,
 }
 
-const BUILTIN_CHANNEL_DESCRIPTORS: [BuiltinChannelDescriptor; 3] = [
+const BUILTIN_CHANNEL_DESCRIPTORS: [BuiltinChannelDescriptor; 4] = [
     BuiltinChannelDescriptor {
         kind: BuiltinChannelKind::Telegram,
         id: "telegram",
         aliases: &["tg"],
         display_name: "Telegram",
         description: "Built-in Telegram channel runtime",
+        account_root_behavior: AccountRootBehavior::OpenDefault,
+    },
+    BuiltinChannelDescriptor {
+        kind: BuiltinChannelKind::Discord,
+        id: "discord",
+        aliases: &[],
+        display_name: "Discord",
+        description: "Built-in Discord channel runtime",
         account_root_behavior: AccountRootBehavior::OpenDefault,
     },
     BuiltinChannelDescriptor {
@@ -66,6 +75,7 @@ impl BuiltinChannelDescriptor {
     pub fn capabilities(self) -> ManifestCapabilities {
         match self.kind {
             BuiltinChannelKind::Telegram
+            | BuiltinChannelKind::Discord
             | BuiltinChannelKind::Feishu
             | BuiltinChannelKind::Weixin => builtin_capabilities(true, true, false),
         }
@@ -74,6 +84,7 @@ impl BuiltinChannelDescriptor {
     pub fn schema(self) -> Value {
         match self.kind {
             BuiltinChannelKind::Telegram => telegram_schema(),
+            BuiltinChannelKind::Discord => discord_schema(),
             BuiltinChannelKind::Feishu => feishu_schema(),
             BuiltinChannelKind::Weixin => weixin_schema(),
         }
@@ -81,7 +92,7 @@ impl BuiltinChannelDescriptor {
 
     pub fn auth_flows(self) -> Vec<AuthFlowDescriptor> {
         match self.kind {
-            BuiltinChannelKind::Telegram => Vec::new(),
+            BuiltinChannelKind::Telegram | BuiltinChannelKind::Discord => Vec::new(),
             BuiltinChannelKind::Feishu => vec![AuthFlowDescriptor {
                 id: "device_code".into(),
                 label: "OAuth device code".into(),
@@ -97,7 +108,9 @@ impl BuiltinChannelDescriptor {
 
     pub fn config_methods(self) -> Vec<ConfigMethod> {
         match self.kind {
-            BuiltinChannelKind::Telegram => vec![ConfigMethod::Form],
+            BuiltinChannelKind::Telegram | BuiltinChannelKind::Discord => {
+                vec![ConfigMethod::Form]
+            }
             BuiltinChannelKind::Feishu | BuiltinChannelKind::Weixin => {
                 vec![ConfigMethod::Form, ConfigMethod::AutoLogin]
             }
@@ -154,6 +167,26 @@ pub fn telegram_schema() -> Value {
                 "type": "string",
                 "description": "Bot token from @BotFather (format 123:ABC...).",
                 "x-garyx": { "secret": true }
+            }
+        }
+    })
+}
+
+pub fn discord_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": ["token"],
+        "properties": {
+            "token": {
+                "type": "string",
+                "description": "Discord bot token from the Developer Portal.",
+                "x-garyx": { "secret": true }
+            },
+            "require_mention": {
+                "type": "boolean",
+                "default": true,
+                "description": "Only respond in server channels when the bot is @mentioned."
             }
         }
     })

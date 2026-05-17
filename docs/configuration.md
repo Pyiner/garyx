@@ -96,8 +96,9 @@ Common account fields:
 
 The desktop Add Bot flow validates account connectivity through the gateway
 before writing the account. Telegram verifies the bot token with `getMe`;
-Feishu/Lark verifies app credentials by requesting a tenant access token.
-Channels without a safe probe explicitly report the validation as skipped.
+Discord verifies the bot token with `users/@me`; Feishu/Lark verifies app
+credentials by requesting a tenant access token. Channels without a safe probe
+explicitly report the validation as skipped.
 
 ### Telegram
 
@@ -124,6 +125,34 @@ translates common assistant Markdown, including bold, italic, inline code,
 fenced code blocks, links, and reserved-character escaping. If Telegram rejects
 the MarkdownV2 entity parsing for a send or edit, Garyx logs the failure and
 retries that same message as plain text without `parse_mode`.
+
+### Discord
+
+```json
+{
+  "channels": {
+    "discord": {
+      "accounts": {
+        "main": {
+          "enabled": true,
+          "agent_id": "claude",
+          "config": {
+            "token": "${DISCORD_BOT_TOKEN}",
+            "require_mention": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Discord connects through the Gateway API and sends replies through the REST
+Create Message API. Direct messages are accepted without a mention. Server
+channels require a bot mention by default; set `require_mention` to `false` to
+allow free-response server channels. Outbound messages use safe
+`allowed_mentions` defaults: user pings and reply pings are allowed, while
+`@everyone`, `@here`, and role pings are blocked.
 
 ### Feishu / Lark
 

@@ -2,7 +2,9 @@ use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use garyx_models::ChannelOutboundContent;
-use garyx_models::config::{FeishuAccount, GaryxConfig, TelegramAccount, WeixinAccount};
+use garyx_models::config::{
+    DiscordAccount, FeishuAccount, GaryxConfig, OwnerTargetConfig, TelegramAccount, WeixinAccount,
+};
 use garyx_router::{InMemoryThreadStore, ThreadStore};
 
 fn insert_telegram_plugin_account(
@@ -17,6 +19,21 @@ fn insert_telegram_plugin_account(
         .insert(
             account_id.to_owned(),
             garyx_models::config::telegram_account_to_plugin_entry(&account),
+        );
+}
+
+fn insert_discord_plugin_account(
+    config: &mut GaryxConfig,
+    account_id: &str,
+    account: DiscordAccount,
+) {
+    config
+        .channels
+        .plugin_channel_mut("discord")
+        .accounts
+        .insert(
+            account_id.to_owned(),
+            garyx_models::config::discord_account_to_plugin_entry(&account),
         );
 }
 
@@ -389,6 +406,32 @@ async fn manager_isolates_start_failures() {
 }
 
 #[tokio::test]
+async fn builtin_discoverer_registers_discord_as_managed_builtin() {
+    let config = GaryxConfig::default();
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let router = Arc::new(Mutex::new(MessageRouter::new(store, config.clone())));
+    let bridge = Arc::new(MultiProviderBridge::new());
+    let discoverer =
+        BuiltInPluginDiscoverer::new(config.channels.clone(), router, bridge, String::new());
+
+    let discovered = discoverer.discover().unwrap();
+    let discord = discovered
+        .iter()
+        .find(|plugin| plugin.metadata().id == "discord")
+        .expect("discord builtin plugin should be registered");
+
+    assert!(discord.as_managed().is_some());
+    assert_eq!(discord.metadata().source, "builtin");
+    assert_eq!(
+        discord.metadata().config_methods,
+        vec![crate::auth_flow::ConfigMethod::Form]
+    );
+    assert!(discord.auth_flow().is_none());
+    assert_eq!(discord.capabilities().outbound, true);
+    assert_eq!(discord.capabilities().inbound, true);
+}
+
+#[tokio::test]
 async fn builtin_discoverer_discovers_enabled_channels() {
     let mut config = GaryxConfig::default();
     insert_telegram_plugin_account(
@@ -442,7 +485,7 @@ async fn builtin_discoverer_discovers_enabled_channels() {
         BuiltInPluginDiscoverer::new(config.channels.clone(), router, bridge, String::new());
 
     let discovered = discoverer.discover().unwrap();
-    assert_eq!(discovered.len(), 3);
+    assert_eq!(discovered.len(), 4);
 }
 
 #[test]
@@ -516,6 +559,7 @@ async fn builtin_discoverer_sets_config_methods_per_channel() {
     // reads this array verbatim to decide whether to render an
     // auto-login button next to the schema form.
     //   - telegram: form only (bot-token copy-paste, no SSO).
+    //   - discord:  form only (bot-token copy-paste, no SSO).
     //   - feishu:   form + auto_login (device-code OAuth).
     //   - weixin:   form + auto_login (QR-code login).
     use crate::auth_flow::ConfigMethod;
@@ -581,6 +625,7 @@ async fn builtin_discoverer_sets_config_methods_per_channel() {
     };
 
     assert_eq!(by_id("telegram"), vec![ConfigMethod::Form]);
+    assert_eq!(by_id("discord"), vec![ConfigMethod::Form]);
     assert_eq!(
         by_id("feishu"),
         vec![ConfigMethod::Form, ConfigMethod::AutoLogin]
@@ -603,6 +648,10 @@ async fn builtin_discoverer_sets_config_methods_per_channel() {
     assert!(
         manager.auth_flow_executor("telegram").is_none(),
         "Telegram advertises Form only and must not expose an executor"
+    );
+    assert!(
+        manager.auth_flow_executor("discord").is_none(),
+        "Discord advertises Form only and must not expose an executor"
     );
     assert!(
         manager.auth_flow_executor("feishu").is_some(),
@@ -826,6 +875,153 @@ async fn managed_channel_plugin_dispatch_outbound_routes_by_account() {
         }
         other => panic!("expected Config error for unknown account, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn managed_channel_plugin_dispatch_outbound_routes_discord_by_account() {
+    use crate::dispatcher::OutboundMessage;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/channels/channel-123/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "discord-message-001"
+        })))
+        .mount(&server)
+        .await;
+
+    let mut config = GaryxConfig::default();
+    insert_discord_plugin_account(
+        &mut config,
+        "bot_main",
+        DiscordAccount {
+            token: "discord-token".into(),
+            enabled: true,
+            name: None,
+            agent_id: "claude".into(),
+            workspace_dir: None,
+            owner_target: None,
+            require_mention: true,
+            api_base: server.uri(),
+            gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".into(),
+        },
+    );
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    let router = Arc::new(Mutex::new(MessageRouter::new(store, config.clone())));
+    let bridge = Arc::new(MultiProviderBridge::new());
+    let discoverer =
+        BuiltInPluginDiscoverer::new(config.channels.clone(), router, bridge, String::new());
+    let plugins = discoverer.discover().unwrap();
+    let discord = plugins
+        .iter()
+        .find(|p| p.metadata().id == "discord")
+        .unwrap();
+
+    let result = discord
+        .dispatch_outbound(OutboundMessage {
+            channel: "discord".into(),
+            account_id: "bot_main".into(),
+            chat_id: "channel-123".into(),
+            delivery_target_type: "chat_id".into(),
+            delivery_target_id: "channel-123".into(),
+            content: ChannelOutboundContent::text("hello discord"),
+            reply_to: None,
+            thread_id: None,
+        })
+        .await
+        .expect("discord dispatch reaches sender");
+
+    assert_eq!(result.message_ids, vec!["discord-message-001".to_owned()]);
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn resolve_discord_main_endpoint_from_owner_target() {
+    let mut config = GaryxConfig::default();
+    insert_discord_plugin_account(
+        &mut config,
+        "bot_main",
+        DiscordAccount {
+            token: "discord-token".into(),
+            enabled: true,
+            name: None,
+            agent_id: "claude".into(),
+            workspace_dir: Some("/tmp/test-workspace".into()),
+            owner_target: Some(OwnerTargetConfig {
+                target_type: String::new(),
+                target_id: "channel-123".into(),
+            }),
+            require_mention: true,
+            api_base: "https://discord.com/api/v10".into(),
+            gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".into(),
+        },
+    );
+
+    let endpoint =
+        resolve_main_endpoint_from_channels_config(&config.channels, "discord", "bot_main", &[])
+            .await
+            .expect("discord owner_target main endpoint");
+
+    assert_eq!(endpoint.channel, "discord");
+    assert_eq!(endpoint.account_id, "bot_main");
+    assert_eq!(endpoint.binding_key, "channel-123");
+    assert_eq!(endpoint.chat_id, "channel-123");
+    assert_eq!(endpoint.delivery_target_type, "chat_id");
+    assert_eq!(endpoint.delivery_target_id, "channel-123");
+    assert_eq!(endpoint.source, "owner_target");
+}
+
+#[tokio::test]
+async fn resolve_discord_main_endpoint_from_existing_private_endpoint() {
+    let mut config = GaryxConfig::default();
+    insert_discord_plugin_account(
+        &mut config,
+        "bot_main",
+        DiscordAccount {
+            token: "discord-token".into(),
+            enabled: true,
+            name: None,
+            agent_id: "claude".into(),
+            workspace_dir: None,
+            owner_target: None,
+            require_mention: true,
+            api_base: "https://discord.com/api/v10".into(),
+            gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".into(),
+        },
+    );
+    let endpoints = vec![KnownChannelEndpoint {
+        endpoint_key: endpoint_key("discord", "bot_main", "user-123"),
+        channel: "discord".into(),
+        account_id: "bot_main".into(),
+        binding_key: "user-123".into(),
+        chat_id: "dm-channel-456".into(),
+        delivery_target_type: "chat_id".into(),
+        delivery_target_id: "dm-channel-456".into(),
+        display_label: "Test User".into(),
+        thread_id: None,
+        thread_label: None,
+        workspace_dir: None,
+        thread_updated_at: None,
+        last_inbound_at: Some("2026-05-17T00:00:00Z".into()),
+        last_delivery_at: None,
+    }];
+
+    let endpoint = resolve_main_endpoint_from_channels_config(
+        &config.channels,
+        "discord",
+        "bot_main",
+        &endpoints,
+    )
+    .await
+    .expect("discord existing private main endpoint");
+
+    assert_eq!(endpoint.binding_key, "user-123");
+    assert_eq!(endpoint.chat_id, "dm-channel-456");
+    assert_eq!(endpoint.delivery_target_id, "dm-channel-456");
+    assert_eq!(endpoint.source, "existing_private_endpoint");
 }
 
 // ---------------------------------------------------------------------------

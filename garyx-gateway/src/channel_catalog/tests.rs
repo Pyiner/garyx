@@ -1,13 +1,16 @@
 use super::*;
-use garyx_models::config::{FeishuAccount, GaryxConfig, TelegramAccount, WeixinAccount};
+use garyx_models::config::{
+    DiscordAccount, FeishuAccount, GaryxConfig, TelegramAccount, WeixinAccount,
+};
 
 #[test]
 fn builtin_catalog_has_one_entry_per_channel() {
     let config = GaryxConfig::default();
     let catalog = builtin_channel_catalog(&config.channels);
-    assert_eq!(catalog.len(), 3);
+    assert_eq!(catalog.len(), 4);
     let ids: Vec<&str> = catalog.iter().map(|e| e.id.as_str()).collect();
     assert!(ids.contains(&"telegram"));
+    assert!(ids.contains(&"discord"));
     assert!(ids.contains(&"feishu"));
     assert!(ids.contains(&"weixin"));
     assert!(catalog.iter().all(|entry| {
@@ -16,6 +19,49 @@ fn builtin_catalog_has_one_entry_per_channel() {
             .as_deref()
             .is_some_and(|icon| icon.starts_with("data:image/"))
     }));
+}
+
+#[test]
+fn discord_catalog_exposes_form_schema_and_account_token() {
+    let mut config = GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("discord")
+        .accounts
+        .insert(
+            "discord_main".into(),
+            garyx_models::config::discord_account_to_plugin_entry(&DiscordAccount {
+                token: "discord-token".into(),
+                enabled: true,
+                name: None,
+                agent_id: "claude".into(),
+                workspace_dir: None,
+                owner_target: None,
+                require_mention: true,
+                api_base: "https://discord.com/api/v10".into(),
+                gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".into(),
+            }),
+        );
+
+    let catalog = builtin_channel_catalog(&config.channels);
+    let discord = catalog.iter().find(|e| e.id == "discord").unwrap();
+    assert_eq!(discord.display_name, "Discord");
+    assert_eq!(
+        discord.config_methods,
+        vec![garyx_channels::auth_flow::ConfigMethod::Form]
+    );
+    assert_eq!(discord.schema["required"][0], "token");
+    assert_eq!(
+        discord.schema["properties"]["token"]["x-garyx"]["secret"],
+        true
+    );
+    assert_eq!(discord.accounts.len(), 1);
+    assert_eq!(discord.accounts[0].id, "discord_main");
+    assert_eq!(discord.accounts[0].config["token"], "discord-token");
+    assert!(
+        discord.accounts[0].config.get("api_base").is_none(),
+        "catalog account config should only expose user-facing schema properties"
+    );
 }
 
 #[test]

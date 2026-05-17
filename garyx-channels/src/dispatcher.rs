@@ -14,7 +14,7 @@ use garyx_models::ChannelOutboundContent;
 use garyx_models::provider::StreamEvent;
 use garyx_models::routing::{infer_delivery_target_id, infer_delivery_target_type};
 use garyx_router::MessageRouter;
-use reqwest::Client;
+use reqwest::{Client, StatusCode, multipart};
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
@@ -248,6 +248,329 @@ impl TelegramSender {
         .await?;
         Ok(vec![message_id])
     }
+}
+
+// ---------------------------------------------------------------------------
+// Discord sender handle
+// ---------------------------------------------------------------------------
+
+const DISCORD_MAX_MESSAGE_LENGTH: usize = 2000;
+
+#[derive(Debug)]
+struct DiscordApiError {
+    status: StatusCode,
+    code: Option<i64>,
+    message: String,
+}
+
+impl DiscordApiError {
+    fn is_reply_reference_rejection(&self) -> bool {
+        self.code == Some(10008)
+            || (self.code == Some(50035)
+                && (self.message.contains("Cannot reply to a system message")
+                    || self.message.contains("message_reference")))
+    }
+}
+
+/// A clonable handle that can send Discord messages without owning the channel.
+#[derive(Clone)]
+pub struct DiscordSender {
+    pub account_id: String,
+    pub token: String,
+    pub http: Client,
+    pub api_base: String,
+    pub is_running: bool,
+}
+
+#[async_trait]
+impl OutboundSender for DiscordSender {
+    async fn send_outbound(
+        &self,
+        request: OutboundMessage,
+    ) -> Result<SendMessageResult, ChannelError> {
+        let target_id = discord_target_channel_id(&request);
+        let message_ids = if let Some(text) = request.text_content() {
+            self.send_text(&target_id, text, request.reply_to.as_deref())
+                .await?
+        } else if let Some((image_path, alt)) = request.image_content() {
+            self.send_file(
+                &target_id,
+                Path::new(image_path),
+                alt,
+                request.reply_to.as_deref(),
+            )
+            .await?
+        } else if let Some((file_path, caption)) = request.file_content() {
+            self.send_file(
+                &target_id,
+                Path::new(file_path),
+                caption,
+                request.reply_to.as_deref(),
+            )
+            .await?
+        } else {
+            return Ok(SendMessageResult::default());
+        };
+        Ok(SendMessageResult { message_ids })
+    }
+}
+
+impl DiscordSender {
+    pub async fn send_text(
+        &self,
+        channel_id: &str,
+        text: &str,
+        reply_to_message_id: Option<&str>,
+    ) -> Result<Vec<String>, ChannelError> {
+        let chunks = split_discord_message(text);
+        let mut message_ids = Vec::new();
+        let mut reply_to = reply_to_message_id;
+        for chunk in chunks {
+            match self.post_message_json(channel_id, &chunk, reply_to).await {
+                Ok(message_id) => message_ids.push(message_id),
+                Err(error) if reply_to.is_some() && error.is_reply_reference_rejection() => {
+                    warn!(
+                        account_id = %self.account_id,
+                        channel_id,
+                        status = %error.status,
+                        code = ?error.code,
+                        "Discord rejected reply reference; retrying without reference"
+                    );
+                    message_ids.push(
+                        self.post_message_json(channel_id, &chunk, None)
+                            .await
+                            .map_err(discord_send_error)?,
+                    );
+                }
+                Err(error) => return Err(discord_send_error(error)),
+            }
+            reply_to = None;
+        }
+        Ok(message_ids)
+    }
+
+    pub async fn send_file(
+        &self,
+        channel_id: &str,
+        path: &Path,
+        caption: Option<&str>,
+        reply_to_message_id: Option<&str>,
+    ) -> Result<Vec<String>, ChannelError> {
+        match self
+            .post_message_file(channel_id, path, caption, reply_to_message_id)
+            .await
+        {
+            Ok(message_id) => Ok(vec![message_id]),
+            Err(error) if reply_to_message_id.is_some() && error.is_reply_reference_rejection() => {
+                warn!(
+                    account_id = %self.account_id,
+                    channel_id,
+                    status = %error.status,
+                    code = ?error.code,
+                    "Discord rejected file reply reference; retrying without reference"
+                );
+                self.post_message_file(channel_id, path, caption, None)
+                    .await
+                    .map(|message_id| vec![message_id])
+                    .map_err(discord_send_error)
+            }
+            Err(error) => Err(discord_send_error(error)),
+        }
+    }
+
+    async fn post_message_json(
+        &self,
+        channel_id: &str,
+        content: &str,
+        reply_to_message_id: Option<&str>,
+    ) -> Result<String, DiscordApiError> {
+        let body = discord_message_payload(content, channel_id, reply_to_message_id, None);
+        let response = self
+            .http
+            .post(discord_channel_messages_url(&self.api_base, channel_id))
+            .header("Authorization", format!("Bot {}", self.token))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| DiscordApiError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: None,
+                message: error.to_string(),
+            })?;
+        parse_discord_message_response(response).await
+    }
+
+    async fn post_message_file(
+        &self,
+        channel_id: &str,
+        path: &Path,
+        caption: Option<&str>,
+        reply_to_message_id: Option<&str>,
+    ) -> Result<String, DiscordApiError> {
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|error| DiscordApiError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: None,
+                message: format!("failed to read attachment '{}': {error}", path.display()),
+            })?;
+        let filename = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("file.bin")
+            .to_owned();
+        let body = discord_message_payload(
+            caption.unwrap_or_default(),
+            channel_id,
+            reply_to_message_id,
+            Some(&filename),
+        );
+        let payload_json = serde_json::to_string(&body).map_err(|error| DiscordApiError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: None,
+            message: format!("failed to encode Discord multipart payload: {error}"),
+        })?;
+        let part = multipart::Part::bytes(bytes).file_name(filename);
+        let form = multipart::Form::new()
+            .text("payload_json", payload_json)
+            .part("files[0]", part);
+        let response = self
+            .http
+            .post(discord_channel_messages_url(&self.api_base, channel_id))
+            .header("Authorization", format!("Bot {}", self.token))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|error| DiscordApiError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: None,
+                message: error.to_string(),
+            })?;
+        parse_discord_message_response(response).await
+    }
+}
+
+fn discord_target_channel_id(request: &OutboundMessage) -> String {
+    if let Some(thread_id) = request
+        .thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return thread_id.to_owned();
+    }
+    let target = request.resolved_delivery_target_id();
+    let target = target.trim();
+    if target.is_empty() {
+        request.chat_id.trim().to_owned()
+    } else {
+        target.to_owned()
+    }
+}
+
+fn discord_channel_messages_url(api_base: &str, channel_id: &str) -> String {
+    format!(
+        "{}/channels/{}/messages",
+        api_base.trim_end_matches('/'),
+        channel_id
+    )
+}
+
+fn discord_message_payload(
+    content: &str,
+    channel_id: &str,
+    reply_to_message_id: Option<&str>,
+    attachment_filename: Option<&str>,
+) -> Value {
+    let mut body = serde_json::json!({
+        "content": content,
+        "allowed_mentions": {
+            "parse": ["users"],
+            "replied_user": true
+        }
+    });
+    if let Some(reply_to) = reply_to_message_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        body["message_reference"] = serde_json::json!({
+            "message_id": reply_to,
+            "channel_id": channel_id,
+            "fail_if_not_exists": false
+        });
+    }
+    if let Some(filename) = attachment_filename {
+        body["attachments"] = serde_json::json!([{
+            "id": 0,
+            "filename": filename
+        }]);
+    }
+    body
+}
+
+fn split_discord_message(text: &str) -> Vec<String> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for ch in text.chars() {
+        if current.len() + ch.len_utf8() > DISCORD_MAX_MESSAGE_LENGTH {
+            chunks.push(current);
+            current = String::new();
+        }
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+async fn parse_discord_message_response(
+    response: reqwest::Response,
+) -> Result<String, DiscordApiError> {
+    let status = response.status();
+    let bytes = response.bytes().await.map_err(|error| DiscordApiError {
+        status,
+        code: None,
+        message: error.to_string(),
+    })?;
+    let payload: Value = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).to_string()));
+    if !status.is_success() {
+        return Err(DiscordApiError {
+            status,
+            code: payload.get("code").and_then(Value::as_i64),
+            message: payload
+                .get("message")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| payload.to_string()),
+        });
+    }
+    payload
+        .get("id")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| DiscordApiError {
+            status,
+            code: None,
+            message: "Discord create message response did not include id".to_owned(),
+        })
+}
+
+fn discord_send_error(error: DiscordApiError) -> ChannelError {
+    ChannelError::SendFailed(format!(
+        "Discord create message HTTP {}{}: {}",
+        error.status,
+        error
+            .code
+            .map(|code| format!(" (code={code})"))
+            .unwrap_or_default(),
+        error.message
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -877,7 +1200,7 @@ impl OutboundMessage {
 /// test — keep in lockstep with the arms in
 /// [`ChannelDispatcher::send_message`].
 pub(crate) const RESERVED_CHANNEL_NAMES: &[&str] =
-    &["telegram", "feishu", "lark", "weixin", "wechat"];
+    &["telegram", "discord", "feishu", "lark", "weixin", "wechat"];
 
 /// Concrete dispatcher that routes outbound messages to registered channel senders.
 ///
@@ -891,6 +1214,7 @@ pub(crate) const RESERVED_CHANNEL_NAMES: &[&str] =
 #[derive(Clone)]
 pub struct ChannelDispatcherImpl {
     telegram_senders: HashMap<String, TelegramSender>,
+    discord_senders: HashMap<String, DiscordSender>,
     feishu_senders: HashMap<String, FeishuSender>,
     weixin_senders: HashMap<String, WeixinSender>,
     /// Plugin-backed senders keyed by their manifest `plugin.id`. The
@@ -905,6 +1229,7 @@ impl ChannelDispatcherImpl {
     pub fn new() -> Self {
         Self {
             telegram_senders: HashMap::new(),
+            discord_senders: HashMap::new(),
             feishu_senders: HashMap::new(),
             weixin_senders: HashMap::new(),
             plugin_senders: HashMap::new(),
@@ -926,6 +1251,10 @@ impl ChannelDispatcherImpl {
             warn!(error = %error, "failed to resolve telegram plugin config");
             Default::default()
         });
+        let discord = channels.resolved_discord_config().unwrap_or_else(|error| {
+            warn!(error = %error, "failed to resolve discord plugin config");
+            Default::default()
+        });
         let feishu = channels.resolved_feishu_config().unwrap_or_else(|error| {
             warn!(error = %error, "failed to resolve feishu plugin config");
             Default::default()
@@ -945,6 +1274,20 @@ impl ChannelDispatcherImpl {
                 token: account.token.clone(),
                 http: http.clone(),
                 api_base: "https://api.telegram.org".to_string(),
+                is_running: true,
+            });
+        }
+
+        // Register Discord senders.
+        for (account_id, account) in &discord.accounts {
+            if !account.enabled {
+                continue;
+            }
+            dispatcher.register_discord(DiscordSender {
+                account_id: account_id.clone(),
+                token: account.token.clone(),
+                http: http.clone(),
+                api_base: account.api_base.clone(),
                 is_running: true,
             });
         }
@@ -989,6 +1332,15 @@ impl ChannelDispatcherImpl {
             "Registered Telegram sender for dispatch"
         );
         self.telegram_senders
+            .insert(sender.account_id.clone(), sender);
+    }
+
+    pub fn register_discord(&mut self, sender: DiscordSender) {
+        info!(
+            account_id = %sender.account_id,
+            "Registered Discord sender for dispatch"
+        );
+        self.discord_senders
             .insert(sender.account_id.clone(), sender);
     }
 
@@ -1165,6 +1517,18 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
                     })?;
                 sender.send_outbound(request).await
             }
+            "discord" => {
+                let sender = self
+                    .discord_senders
+                    .get(&request.account_id)
+                    .ok_or_else(|| {
+                        ChannelError::Config(format!(
+                            "Discord account '{}' not registered in dispatcher",
+                            request.account_id
+                        ))
+                    })?;
+                sender.send_outbound(request).await
+            }
             "feishu" | "lark" => {
                 let sender = self
                     .feishu_senders
@@ -1224,6 +1588,14 @@ impl ChannelDispatcher for ChannelDispatcherImpl {
         for sender in self.telegram_senders.values() {
             channels.push(ChannelInfo {
                 channel: "telegram".to_string(),
+                account_id: sender.account_id.clone(),
+                is_running: sender.is_running,
+            });
+        }
+
+        for sender in self.discord_senders.values() {
+            channels.push(ChannelInfo {
+                channel: "discord".to_string(),
                 account_id: sender.account_id.clone(),
                 is_running: sender.is_running,
             });

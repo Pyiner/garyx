@@ -177,6 +177,37 @@ fn test_builtin_channels_deserialize_from_flattened_shape() {
 }
 
 #[test]
+fn test_discord_channel_deserialize_from_flattened_shape() {
+    let value = serde_json::json!({
+        "channels": {
+            "discord": {
+                "accounts": {
+                    "main": {
+                        "enabled": true,
+                        "name": "Discord",
+                        "agent_id": "codex",
+                        "workspace_dir": "/tmp/test-workspace",
+                        "config": {
+                            "token": "discord-token"
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let cfg: GaryxConfig = serde_json::from_value(value).unwrap();
+    let resolved = cfg.channels.resolved_discord_config().unwrap();
+    let account = resolved.accounts.get("main").unwrap();
+    assert_eq!(account.token, "discord-token");
+    assert_eq!(account.name.as_deref(), Some("Discord"));
+    assert_eq!(account.agent_id, "codex");
+    assert_eq!(
+        account.workspace_dir.as_deref(),
+        Some("/tmp/test-workspace")
+    );
+}
+
+#[test]
 fn test_flattened_channel_entries_override_legacy_plugins_bucket() {
     let value = serde_json::json!({
         "channels": {

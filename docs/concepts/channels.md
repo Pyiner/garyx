@@ -1,8 +1,8 @@
 # Channels
 
 A **channel** is a transport that carries messages between humans (or other
-bots) and Garyx. Built-in channels for Telegram, Feishu / Lark, WeChat, and
-an HTTP / WebSocket `api` channel ship with the binary; you can install
+bots) and Garyx. Built-in channels for Telegram, Discord, Feishu / Lark,
+WeChat, and an HTTP / WebSocket `api` channel ship with the binary; you can install
 additional channels as subprocess plugins.
 
 ## Built-in vs plugin channels
@@ -10,6 +10,7 @@ additional channels as subprocess plugins.
 | Channel | Type | Notes |
 | --- | --- | --- |
 | `telegram` | built-in | Long-poll Bot API; multiple accounts supported. |
+| `discord` | built-in | Gateway events + REST sends; server channels require @mention by default. |
 | `feishu` | built-in | WebSocket; supports `--domain feishu` and `--domain lark`. |
 | `weixin` | built-in | Polling via [ilinkai](https://ilinkai.weixin.qq.com); QR-code login. |
 | `api` | built-in | Local HTTP / WebSocket. Used by the desktop app, CLI, and MCP integrations. |
@@ -59,7 +60,7 @@ You can manage accounts from the CLI without hand-editing the JSON. See
 ## Endpoint bindings
 
 An **endpoint** is one specific destination *inside* a channel — a Telegram
-chat id, a Feishu chat id, a WeChat user id. Endpoints are not configured
+chat id, a Discord channel or DM, a Feishu chat id, a WeChat user id. Endpoints are not configured
 ahead of time; they are discovered lazily when the first message arrives,
 and immediately bound to a thread.
 

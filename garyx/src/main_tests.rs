@@ -1641,6 +1641,43 @@ async fn channels_add_non_interactive_telegram() {
 }
 
 #[tokio::test]
+async fn channels_add_non_interactive_discord() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config_path = write_empty_config(&tmp);
+
+    cmd_channels_add(
+        &config_path.display().to_string(),
+        Some("discord".to_owned()),
+        Some("guildbot".to_owned()),
+        Some("Discord Bot".to_owned()),
+        None,
+        None,
+        Some("discord-token".to_owned()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+
+    let loaded = load_config_or_default(
+        &config_path.display().to_string(),
+        garyx_models::config_loader::ConfigRuntimeOverrides::default(),
+    )
+    .unwrap();
+    let discord = loaded.config.channels.resolved_discord_config().unwrap();
+    let account = discord.accounts.get("guildbot").unwrap();
+    assert!(account.enabled);
+    assert_eq!(account.token, "discord-token");
+    assert_eq!(account.name.as_deref(), Some("Discord Bot"));
+    assert!(account.require_mention);
+    assert_eq!(account.agent_id, "claude");
+}
+
+#[tokio::test]
 async fn channels_add_non_interactive_feishu() {
     let tmp = tempfile::TempDir::new().unwrap();
     let config_path = write_empty_config(&tmp);
@@ -2206,8 +2243,9 @@ fn plugin_discovery_with_valid_config() {
         .iter()
         .map(|status| status.metadata.id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(statuses.len(), 3);
+    assert_eq!(statuses.len(), 4);
     assert!(plugin_ids.contains(&"telegram"));
+    assert!(plugin_ids.contains(&"discord"));
     assert!(plugin_ids.contains(&"feishu"));
     assert!(plugin_ids.contains(&"weixin"));
 }

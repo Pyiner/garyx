@@ -35,12 +35,14 @@ use garyx_models::command_catalog::{
     normalize_shortcut_command_name,
 };
 use garyx_models::config::{
-    ApiAccount, AutomationScheduleView, BUILTIN_CHANNEL_PLUGIN_FEISHU,
-    BUILTIN_CHANNEL_PLUGIN_TELEGRAM, BUILTIN_CHANNEL_PLUGIN_WEIXIN, FeishuAccount, FeishuDomain,
-    GaryxConfig, PluginAccountEntry, SlashCommand, TelegramAccount, WeixinAccount,
-    feishu_account_from_plugin_entry, feishu_account_to_plugin_entry,
-    telegram_account_from_plugin_entry, telegram_account_to_plugin_entry,
-    weixin_account_from_plugin_entry, weixin_account_to_plugin_entry,
+    ApiAccount, AutomationScheduleView, BUILTIN_CHANNEL_PLUGIN_DISCORD,
+    BUILTIN_CHANNEL_PLUGIN_FEISHU, BUILTIN_CHANNEL_PLUGIN_TELEGRAM, BUILTIN_CHANNEL_PLUGIN_WEIXIN,
+    DiscordAccount, FeishuAccount, FeishuDomain, GaryxConfig, PluginAccountEntry, SlashCommand,
+    TelegramAccount, WeixinAccount, discord_account_from_plugin_entry,
+    discord_account_to_plugin_entry, feishu_account_from_plugin_entry,
+    feishu_account_to_plugin_entry, telegram_account_from_plugin_entry,
+    telegram_account_to_plugin_entry, weixin_account_from_plugin_entry,
+    weixin_account_to_plugin_entry,
 };
 use garyx_models::config_loader::{
     ConfigHotReloadOptions, ConfigHotReloader, ConfigLoadOptions, ConfigRuntimeOverrides,
@@ -6223,6 +6225,26 @@ fn validate_builtin_channel_account(
                 format!("channel `{channel}` account `{account_id}` config is invalid: {err}"),
             ),
         },
+        BUILTIN_CHANNEL_PLUGIN_DISCORD => match discord_account_from_plugin_entry(entry) {
+            Ok(account) => {
+                if account.token.trim().is_empty() {
+                    push_channel_account_issue(
+                        issues,
+                        "CONFIG_CHANNEL_ACCOUNT_REQUIRED",
+                        channel,
+                        account_id,
+                        format!("channel `{channel}` account `{account_id}` is missing token"),
+                    );
+                }
+            }
+            Err(err) => push_channel_account_issue(
+                issues,
+                "CONFIG_CHANNEL_ACCOUNT_INVALID",
+                channel,
+                account_id,
+                format!("channel `{channel}` account `{account_id}` config is invalid: {err}"),
+            ),
+        },
         BUILTIN_CHANNEL_PLUGIN_FEISHU => match feishu_account_from_plugin_entry(entry) {
             Ok(account) => {
                 let mut missing = Vec::new();
@@ -6338,6 +6360,7 @@ fn validate_channel_account_configs(
             if !matches!(
                 channel_id.as_str(),
                 BUILTIN_CHANNEL_PLUGIN_TELEGRAM
+                    | BUILTIN_CHANNEL_PLUGIN_DISCORD
                     | BUILTIN_CHANNEL_PLUGIN_FEISHU
                     | BUILTIN_CHANNEL_PLUGIN_WEIXIN
             ) && let Some(schema) = plugin_schemas.get(channel_id)
@@ -6775,7 +6798,7 @@ pub(crate) async fn cmd_onboard(
         // ---- Channel binding ----
         // The api.* account auto-created above lets programs talk to gateway,
         // but a human needs at least one user-facing channel (telegram /
-        // feishu / weixin / subprocess plugin) to actually chat with gary.
+        // discord / feishu / weixin / subprocess plugin) to actually chat with gary.
         // Push the user through that now rather than leaving it as a footnote.
         let pre_bound = user_channel_account_count(&cfg);
         if pre_bound == 0 {
@@ -7093,6 +7116,7 @@ fn discover_plugin_manifest(
     if matches!(
         resolved.as_str(),
         BUILTIN_CHANNEL_PLUGIN_TELEGRAM
+            | BUILTIN_CHANNEL_PLUGIN_DISCORD
             | BUILTIN_CHANNEL_PLUGIN_FEISHU
             | BUILTIN_CHANNEL_PLUGIN_WEIXIN
             | "api"
@@ -7561,6 +7585,11 @@ async fn interactive_fill_channel_overrides(
         "telegram" => {
             if overrides.token.is_none() {
                 overrides.token = Some(prompt_secret("Telegram Bot Token")?);
+            }
+        }
+        "discord" => {
+            if overrides.token.is_none() {
+                overrides.token = Some(prompt_secret("Discord Bot Token")?);
             }
         }
         "feishu" => {
@@ -8067,6 +8096,28 @@ fn upsert_channel_account(
                         workspace_dir,
                         owner_target: None,
                         groups: Default::default(),
+                    }),
+                );
+        }
+        BUILTIN_CHANNEL_PLUGIN_DISCORD => {
+            let Some(token) = token else {
+                return Err("missing discord token".into());
+            };
+            cfg.channels
+                .plugin_channel_mut(BUILTIN_CHANNEL_PLUGIN_DISCORD)
+                .accounts
+                .insert(
+                    account.to_owned(),
+                    discord_account_to_plugin_entry(&DiscordAccount {
+                        token,
+                        enabled: true,
+                        name,
+                        agent_id: agent_id.clone(),
+                        workspace_dir,
+                        owner_target: None,
+                        require_mention: true,
+                        api_base: "https://discord.com/api/v10".to_owned(),
+                        gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".to_owned(),
                     }),
                 );
         }

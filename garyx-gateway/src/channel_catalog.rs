@@ -49,12 +49,18 @@ fn weixin_icon_data_url() -> String {
     )
 }
 
+fn discord_icon_data_url() -> String {
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#5865F2"/><path fill="#fff" d="M44.2 21.3a29.4 29.4 0 0 0-7.2-2.2l-.4.8c2.7.6 4 1.6 4 1.6a25.4 25.4 0 0 0-17.2 0s1.4-1 4-1.6l-.4-.8a29.4 29.4 0 0 0-7.2 2.2c-4.5 6.7-5.7 13.2-5.1 19.6a29.7 29.7 0 0 0 8.8 4.5l1.8-3a18.8 18.8 0 0 1-2.9-1.4l.7-.5a21.1 21.1 0 0 0 17.8 0l.7.5c-.9.5-1.9 1-2.9 1.4l1.8 3a29.7 29.7 0 0 0 8.8-4.5c.8-7.4-1.3-13.8-5.1-19.6ZM25.8 36.7c-1.7 0-3.1-1.6-3.1-3.5s1.4-3.5 3.1-3.5c1.8 0 3.2 1.6 3.1 3.5 0 1.9-1.4 3.5-3.1 3.5Zm12.4 0c-1.7 0-3.1-1.6-3.1-3.5s1.4-3.5 3.1-3.5c1.8 0 3.2 1.6 3.1 3.5 0 1.9-1.3 3.5-3.1 3.5Z"/></svg>"##;
+    bundled_image_data_url(svg.as_bytes(), "image/svg+xml")
+}
+
 /// Build one catalog entry per enabled built-in channel from the live
 /// config. Channels with no accounts still appear so the UI can show
 /// them as "Add your first <channel>".
 pub fn builtin_channel_catalog(channels: &ChannelsConfig) -> Vec<SubprocessPluginCatalogEntry> {
     vec![
         telegram_catalog(channels),
+        discord_catalog(channels),
         feishu_catalog(channels),
         weixin_catalog(channels),
     ]
@@ -63,6 +69,7 @@ pub fn builtin_channel_catalog(channels: &ChannelsConfig) -> Vec<SubprocessPlugi
 fn builtin_icon_data_url(descriptor: BuiltinChannelDescriptor) -> String {
     match descriptor.kind {
         BuiltinChannelKind::Telegram => telegram_icon_data_url(),
+        BuiltinChannelKind::Discord => discord_icon_data_url(),
         BuiltinChannelKind::Feishu => feishu_icon_data_url(),
         BuiltinChannelKind::Weixin => weixin_icon_data_url(),
     }
@@ -106,6 +113,25 @@ fn telegram_catalog(channels: &ChannelsConfig) -> SubprocessPluginCatalogEntry {
             enabled: account.enabled,
             config: json!({
                 "token": account.token,
+            }),
+        })
+        .collect();
+    builtin_catalog_entry(descriptor, accounts)
+}
+
+fn discord_catalog(channels: &ChannelsConfig) -> SubprocessPluginCatalogEntry {
+    let descriptor = builtin_channel_descriptor("discord").expect("builtin discord descriptor");
+    let accounts = channels
+        .resolved_discord_config()
+        .unwrap_or_default()
+        .accounts
+        .iter()
+        .map(|(id, account)| AccountDescriptor {
+            id: id.clone(),
+            enabled: account.enabled,
+            config: json!({
+                "token": account.token,
+                "require_mention": account.require_mention,
             }),
         })
         .collect();

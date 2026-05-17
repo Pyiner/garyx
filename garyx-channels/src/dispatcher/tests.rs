@@ -1,5 +1,6 @@
 use super::*;
 use garyx_models::ChannelOutboundContent;
+use garyx_models::config::{DiscordAccount, discord_account_to_plugin_entry};
 use garyx_models::routing::DELIVERY_TARGET_TYPE_CHAT_ID;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -71,6 +72,24 @@ fn test_register_weixin_sender() {
 }
 
 #[test]
+fn test_register_discord_sender() {
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_discord(DiscordSender {
+        account_id: "discord-main".to_string(),
+        token: "test-token".to_string(),
+        http: Client::new(),
+        api_base: "https://discord.com/api/v10".to_string(),
+        is_running: true,
+    });
+
+    let channels = dispatcher.available_channels();
+    assert_eq!(channels.len(), 1);
+    assert_eq!(channels[0].channel, "discord");
+    assert_eq!(channels[0].account_id, "discord-main");
+    assert!(channels[0].is_running);
+}
+
+#[test]
 fn test_from_config_registers_weixin_account() {
     let mut channels = ChannelsConfig::default();
     channels.plugin_channel_mut("weixin").accounts.insert(
@@ -94,6 +113,31 @@ fn test_from_config_registers_weixin_account() {
     assert_eq!(available.len(), 1);
     assert_eq!(available[0].channel, "weixin");
     assert_eq!(available[0].account_id, "wx-main");
+}
+
+#[test]
+fn test_from_config_registers_discord_account() {
+    let mut channels = ChannelsConfig::default();
+    channels.plugin_channel_mut("discord").accounts.insert(
+        "discord-main".to_string(),
+        discord_account_to_plugin_entry(&DiscordAccount {
+            token: "test-token".to_string(),
+            enabled: true,
+            name: None,
+            agent_id: "claude".to_string(),
+            workspace_dir: None,
+            owner_target: None,
+            require_mention: true,
+            api_base: "https://discord.com/api/v10".to_string(),
+            gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".to_string(),
+        }),
+    );
+
+    let dispatcher = ChannelDispatcherImpl::from_config(&channels);
+    let available = dispatcher.available_channels();
+    assert_eq!(available.len(), 1);
+    assert_eq!(available[0].channel, "discord");
+    assert_eq!(available[0].account_id, "discord-main");
 }
 
 #[test]
@@ -132,11 +176,120 @@ fn test_multiple_channels_sorted() {
 }
 
 #[tokio::test]
+async fn test_send_discord_text_uses_thread_and_safe_allowed_mentions() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/channels/thread-456/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "message-001"
+        })))
+        .mount(&server)
+        .await;
+
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_discord(DiscordSender {
+        account_id: "main".to_string(),
+        token: "test-token".to_string(),
+        http: Client::new(),
+        api_base: server.uri(),
+        is_running: true,
+    });
+
+    let result = dispatcher
+        .send_message(OutboundMessage {
+            channel: "discord".to_string(),
+            account_id: "main".to_string(),
+            chat_id: "channel-123".to_string(),
+            delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
+            delivery_target_id: "channel-123".to_string(),
+            content: ChannelOutboundContent::text("hello <@1000000001> @everyone"),
+            reply_to: Some("reply-789".to_string()),
+            thread_id: Some("thread-456".to_string()),
+        })
+        .await
+        .expect("send discord text");
+
+    assert_eq!(result.message_ids, vec!["message-001".to_string()]);
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(
+        request
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bot test-token")
+    );
+    let body: Value = serde_json::from_slice(&request.body).expect("discord request json");
+    assert_eq!(body["content"], "hello <@1000000001> @everyone");
+    assert_eq!(
+        body["allowed_mentions"]["parse"],
+        serde_json::json!(["users"])
+    );
+    assert_eq!(body["allowed_mentions"]["replied_user"], true);
+    assert_eq!(body["message_reference"]["message_id"], "reply-789");
+    assert_eq!(body["message_reference"]["channel_id"], "thread-456");
+    assert_eq!(body["message_reference"]["fail_if_not_exists"], false);
+}
+
+#[tokio::test]
+async fn test_send_discord_retries_without_reply_reference_when_rejected() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/channels/channel-123/messages"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "code": 10008,
+            "message": "Unknown Message"
+        })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/channels/channel-123/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "message-002"
+        })))
+        .mount(&server)
+        .await;
+
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_discord(DiscordSender {
+        account_id: "main".to_string(),
+        token: "test-token".to_string(),
+        http: Client::new(),
+        api_base: server.uri(),
+        is_running: true,
+    });
+
+    let result = dispatcher
+        .send_message(OutboundMessage {
+            channel: "discord".to_string(),
+            account_id: "main".to_string(),
+            chat_id: "channel-123".to_string(),
+            delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
+            delivery_target_id: "channel-123".to_string(),
+            content: ChannelOutboundContent::text("hello"),
+            reply_to: Some("missing-message".to_string()),
+            thread_id: None,
+        })
+        .await
+        .expect("retry without rejected reply reference");
+
+    assert_eq!(result.message_ids, vec!["message-002".to_string()]);
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(requests.len(), 2);
+    let first: Value = serde_json::from_slice(&requests[0].body).expect("first json");
+    let second: Value = serde_json::from_slice(&requests[1].body).expect("second json");
+    assert!(first.get("message_reference").is_some());
+    assert!(second.get("message_reference").is_none());
+}
+
+#[tokio::test]
 async fn test_send_unknown_channel() {
     let dispatcher = ChannelDispatcherImpl::new();
     let result = dispatcher
         .send_message(OutboundMessage {
-            channel: "discord".to_string(),
+            channel: "unknown-chat".to_string(),
             account_id: "x".to_string(),
             chat_id: "123".to_string(),
             delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),

@@ -397,6 +397,41 @@ pub struct TelegramConfig {
     pub accounts: HashMap<String, TelegramAccount>,
 }
 
+fn default_discord_api_base() -> String {
+    "https://discord.com/api/v10".to_owned()
+}
+
+fn default_discord_gateway_url() -> String {
+    "wss://gateway.discord.gg/?v=10&encoding=json".to_owned()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DiscordAccount {
+    pub token: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default = "default_channel_agent_id")]
+    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_target: Option<OwnerTargetConfig>,
+    #[serde(default = "default_true")]
+    pub require_mention: bool,
+    #[serde(default = "default_discord_api_base")]
+    pub api_base: String,
+    #[serde(default = "default_discord_gateway_url")]
+    pub gateway_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct DiscordConfig {
+    #[serde(default)]
+    pub accounts: HashMap<String, DiscordAccount>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FeishuAccount {
     pub app_id: String,
@@ -527,6 +562,7 @@ impl Default for PluginAccountEntry {
 }
 
 pub const BUILTIN_CHANNEL_PLUGIN_TELEGRAM: &str = "telegram";
+pub const BUILTIN_CHANNEL_PLUGIN_DISCORD: &str = "discord";
 pub const BUILTIN_CHANNEL_PLUGIN_FEISHU: &str = "feishu";
 pub const BUILTIN_CHANNEL_PLUGIN_WEIXIN: &str = "weixin";
 
@@ -613,6 +649,15 @@ impl ChannelsConfig {
         })
     }
 
+    pub fn resolved_discord_config(&self) -> Result<DiscordConfig, serde_json::Error> {
+        Ok(DiscordConfig {
+            accounts: resolve_builtin_accounts(
+                self.plugin_channel(BUILTIN_CHANNEL_PLUGIN_DISCORD),
+                discord_account_from_plugin_entry,
+            )?,
+        })
+    }
+
     pub fn resolved_feishu_config(&self) -> Result<FeishuConfig, serde_json::Error> {
         Ok(FeishuConfig {
             accounts: resolve_builtin_accounts(
@@ -690,6 +735,24 @@ pub fn telegram_account_to_plugin_entry(account: &TelegramAccount) -> PluginAcco
     }
 }
 
+pub fn discord_account_to_plugin_entry(account: &DiscordAccount) -> PluginAccountEntry {
+    let mut config =
+        serde_json::to_value(account).unwrap_or_else(|_| Value::Object(Default::default()));
+    if let Some(map) = config.as_object_mut() {
+        map.remove("enabled");
+        map.remove("name");
+        map.remove("agent_id");
+        map.remove("workspace_dir");
+    }
+    PluginAccountEntry {
+        enabled: account.enabled,
+        name: account.name.clone(),
+        agent_id: Some(account.agent_id.clone()),
+        workspace_dir: account.workspace_dir.clone(),
+        config,
+    }
+}
+
 pub fn feishu_account_to_plugin_entry(account: &FeishuAccount) -> PluginAccountEntry {
     let mut config =
         serde_json::to_value(account).unwrap_or_else(|_| Value::Object(Default::default()));
@@ -729,6 +792,12 @@ pub fn weixin_account_to_plugin_entry(account: &WeixinAccount) -> PluginAccountE
 pub fn telegram_account_from_plugin_entry(
     entry: &PluginAccountEntry,
 ) -> Result<TelegramAccount, serde_json::Error> {
+    serde_json::from_value(plugin_entry_payload_with_envelope(entry))
+}
+
+pub fn discord_account_from_plugin_entry(
+    entry: &PluginAccountEntry,
+) -> Result<DiscordAccount, serde_json::Error> {
     serde_json::from_value(plugin_entry_payload_with_envelope(entry))
 }
 
