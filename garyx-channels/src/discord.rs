@@ -96,6 +96,13 @@ struct DiscordHello {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct DiscordReady {
+    session_id: String,
+    #[serde(default)]
+    resume_gateway_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct DiscordCurrentUser {
     id: String,
     #[serde(default)]
@@ -128,6 +135,41 @@ fn strip_discord_bot_mention(content: &str, bot_id: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn discord_identify_payload(token: &str) -> Value {
+    json!({
+        "op": 2,
+        "d": {
+            "token": token,
+            "intents": DISCORD_GATEWAY_INTENTS,
+            "properties": {
+                "os": std::env::consts::OS,
+                "browser": "garyx",
+                "device": "garyx"
+            }
+        }
+    })
+}
+
+fn discord_resume_payload(token: &str, session_id: &str, sequence: u64) -> Value {
+    json!({
+        "op": 6,
+        "d": {
+            "token": token,
+            "session_id": session_id,
+            "seq": sequence
+        }
+    })
+}
+
+fn discord_gateway_url_with_query(url: &str) -> String {
+    let trimmed = url.trim();
+    if trimmed.contains('?') {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}?v=10&encoding=json")
+    }
 }
 
 pub(crate) fn build_inbound_request(
@@ -1231,8 +1273,15 @@ impl DiscordChannel {
         bot: DiscordCurrentUser,
         running: Arc<AtomicBool>,
     ) {
+        let mut last_sequence: Option<u64> = None;
+        let mut session_id: Option<String> = None;
+        let mut resume_gateway_url: Option<String> = None;
+
         while running.load(Ordering::Relaxed) {
-            let gateway_url = runtime.account.gateway_url.clone();
+            let gateway_url = resume_gateway_url
+                .as_deref()
+                .map(discord_gateway_url_with_query)
+                .unwrap_or_else(|| runtime.account.gateway_url.clone());
             let connection = connect_async(&gateway_url).await;
             let (socket, _) = match connection {
                 Ok(connection) => connection,
@@ -1253,7 +1302,6 @@ impl DiscordChannel {
                 "Discord Gateway connected"
             );
             let (mut write, mut read) = socket.split();
-            let mut last_sequence: Option<u64> = None;
             let mut heartbeat = tokio::time::interval(Duration::from_secs(45));
             heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             let mut identified = false;
@@ -1308,23 +1356,41 @@ impl DiscordChannel {
                                     hello.heartbeat_interval.max(1),
                                 ));
                                 heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                                let identify = json!({
-                                    "op": 2,
-                                    "d": {
-                                        "token": runtime.account.token,
-                                        "intents": DISCORD_GATEWAY_INTENTS,
-                                        "properties": {
-                                            "os": std::env::consts::OS,
-                                            "browser": "garyx",
-                                            "device": "garyx"
-                                        }
-                                    }
-                                });
-                                if let Err(error) = write.send(Message::Text(identify.to_string().into())).await {
-                                    warn!(account_id = %runtime.account_id, error = %error, "Discord identify failed");
+                                let (handshake, handshake_name) = if let (Some(session_id), Some(sequence)) =
+                                    (session_id.as_deref(), last_sequence)
+                                {
+                                    (
+                                        discord_resume_payload(&runtime.account.token, session_id, sequence),
+                                        "resume",
+                                    )
+                                } else {
+                                    (discord_identify_payload(&runtime.account.token), "identify")
+                                };
+                                if let Err(error) = write.send(Message::Text(handshake.to_string().into())).await {
+                                    warn!(account_id = %runtime.account_id, error = %error, handshake = handshake_name, "Discord Gateway handshake failed");
                                     break;
                                 }
+                                if handshake_name == "resume" {
+                                    info!(
+                                        account_id = %runtime.account_id,
+                                        sequence = last_sequence.unwrap_or_default(),
+                                        "Discord Gateway resume requested"
+                                    );
+                                }
                                 identified = true;
+                            }
+                            0 if envelope.t.as_deref() == Some("READY") => {
+                                match serde_json::from_value::<DiscordReady>(envelope.d) {
+                                    Ok(ready) => {
+                                        session_id = Some(ready.session_id);
+                                        resume_gateway_url = ready
+                                            .resume_gateway_url
+                                            .map(|url| discord_gateway_url_with_query(&url));
+                                    }
+                                    Err(error) => {
+                                        warn!(account_id = %runtime.account_id, error = %error, "Discord READY parse failed");
+                                    }
+                                }
                             }
                             0 if envelope.t.as_deref() == Some("MESSAGE_CREATE") => {
                                 match serde_json::from_value::<DiscordMessageCreateEvent>(envelope.d) {
@@ -1346,7 +1412,16 @@ impl DiscordChannel {
                                     break;
                                 }
                             }
-                            7 | 9 => break,
+                            7 => break,
+                            9 => {
+                                let resumable = envelope.d.as_bool().unwrap_or(false);
+                                if !resumable {
+                                    session_id = None;
+                                    last_sequence = None;
+                                    resume_gateway_url = None;
+                                }
+                                break;
+                            }
                             _ => {}
                         }
                     }
@@ -1613,6 +1688,16 @@ mod tests {
         };
 
         assert!(build_inbound_request("main", &account(true), "bot-999", event).is_none());
+    }
+
+    #[test]
+    fn discord_gateway_resume_payload_preserves_session_cursor() {
+        let payload = discord_resume_payload("discord-token", "session-123", 42);
+
+        assert_eq!(payload["op"], 6);
+        assert_eq!(payload["d"]["token"], "discord-token");
+        assert_eq!(payload["d"]["session_id"], "session-123");
+        assert_eq!(payload["d"]["seq"], 42);
     }
 
     #[tokio::test]
