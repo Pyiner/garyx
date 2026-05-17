@@ -62,6 +62,128 @@ async fn initialized_provider(
     provider
 }
 
+#[test]
+fn http_response_body_enables_streaming_and_reasoning_effort() {
+    let request = NativeModelRequest {
+        model: "gpt-test".to_owned(),
+        instructions: "Act carefully.".to_owned(),
+        messages: Vec::new(),
+        tools: vec![json!({
+            "type": "function",
+            "name": "read_file",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        })],
+        reasoning_effort: Some("high".to_owned()),
+        env: HashMap::new(),
+    };
+
+    let body = HttpNativeModelClient::response_body(
+        &request,
+        vec![json!({ "role": "user", "content": "hello" })],
+    );
+
+    assert_eq!(body["model"], "gpt-test");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["store"], false);
+    assert_eq!(body["reasoning"]["effort"], "high");
+    assert_eq!(body["input"][0]["content"], "hello");
+}
+
+#[test]
+fn streaming_completed_response_reuses_stream_output_items_when_final_output_is_empty() {
+    let mut acc = ResponseStreamAccumulator::default();
+
+    HttpNativeModelClient::apply_stream_event(
+        &mut acc,
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "reasoning",
+                "summary": []
+            }
+        }),
+    );
+    HttpNativeModelClient::apply_stream_event(
+        &mut acc,
+        json!({
+            "type": "response.output_text.done",
+            "text": "done"
+        }),
+    );
+    HttpNativeModelClient::apply_stream_event(
+        &mut acc,
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "content": [
+                    { "type": "output_text", "text": "done" }
+                ]
+            }
+        }),
+    );
+    HttpNativeModelClient::apply_stream_event(
+        &mut acc,
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "call_id": "call-1",
+                "name": "read_file",
+                "arguments": "{\"path\":\"AGENTS.md\"}"
+            }
+        }),
+    );
+    HttpNativeModelClient::apply_stream_event(
+        &mut acc,
+        json!({
+            "type": "response.completed",
+            "response": {
+                "model": "gpt-test-actual",
+                "output": [],
+                "usage": {
+                    "input_tokens": 4,
+                    "output_tokens": 2
+                }
+            }
+        }),
+    );
+
+    let response = HttpNativeModelClient::finalize_stream(acc).unwrap();
+    assert_eq!(response.actual_model.as_deref(), Some("gpt-test-actual"));
+    assert_eq!(response.input_tokens, 4);
+    assert_eq!(response.output_tokens, 2);
+    assert_eq!(response.outputs.len(), 2);
+    assert!(matches!(&response.outputs[0], NativeModelOutput::Text(text) if text == "done"));
+    assert!(matches!(
+        &response.outputs[1],
+        NativeModelOutput::ToolCall(call)
+            if call.name == "read_file" && call.arguments["path"] == "AGENTS.md"
+    ));
+}
+
+#[test]
+fn streaming_text_delta_fallback_returns_text_when_completed_response_absent() {
+    let mut acc = ResponseStreamAccumulator::default();
+
+    HttpNativeModelClient::apply_stream_event(
+        &mut acc,
+        json!({ "type": "response.output_text.delta", "delta": "hel" }),
+    );
+    HttpNativeModelClient::apply_stream_event(
+        &mut acc,
+        json!({ "type": "response.output_text.delta", "delta": "lo" }),
+    );
+
+    let response = HttpNativeModelClient::finalize_stream(acc).unwrap();
+    assert_eq!(response.outputs.len(), 1);
+    assert!(matches!(&response.outputs[0], NativeModelOutput::Text(text) if text == "hello"));
+}
+
 #[tokio::test]
 async fn assistant_only_turn_streams_delta_and_persists_assistant_message() {
     let client = Arc::new(FakeModelClient::new(vec![NativeModelResponse {

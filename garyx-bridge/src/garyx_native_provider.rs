@@ -319,6 +319,14 @@ fn responses_endpoint(base_url: &str) -> String {
     }
 }
 
+#[derive(Default)]
+struct ResponseStreamAccumulator {
+    completed_response: Option<Value>,
+    output_items: Vec<Value>,
+    text: String,
+    error: Option<String>,
+}
+
 struct HttpNativeModelClient {
     config: GaryxNativeConfig,
     http: reqwest::Client,
@@ -371,6 +379,25 @@ impl HttpNativeModelClient {
             }
             _ => None,
         }
+    }
+
+    fn response_body(request: &NativeModelRequest, input: Vec<Value>) -> Value {
+        let mut body = json!({
+            "model": request.model,
+            "instructions": request.instructions,
+            "input": input,
+            "tools": request.tools,
+            "tool_choice": "auto",
+            "parallel_tool_calls": false,
+            "stream": true,
+            "store": false,
+        });
+        if let Some(effort) = request.reasoning_effort.as_deref()
+            && !effort.trim().is_empty()
+        {
+            body["reasoning"] = json!({ "effort": effort.trim() });
+        }
+        body
     }
 
     fn parse_response(value: Value) -> NativeModelResponse {
@@ -442,6 +469,186 @@ impl HttpNativeModelClient {
                 .map(ToOwned::to_owned),
         }
     }
+
+    fn apply_stream_event(acc: &mut ResponseStreamAccumulator, event: Value) {
+        match event.get("type").and_then(Value::as_str) {
+            Some("response.completed") => {
+                acc.completed_response = event.get("response").cloned();
+            }
+            Some("response.failed") | Some("response.incomplete") => {
+                acc.error = event
+                    .get("response")
+                    .and_then(|response| response.get("error"))
+                    .and_then(|error| error.get("message"))
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        event
+                            .get("response")
+                            .and_then(|response| response.get("incomplete_details"))
+                            .and_then(|details| details.get("reason"))
+                            .and_then(Value::as_str)
+                    })
+                    .map(ToOwned::to_owned)
+                    .or_else(|| Some(event.to_string()));
+            }
+            Some("response.output_item.done") => {
+                if let Some(item) = event.get("item") {
+                    acc.output_items.push(item.clone());
+                }
+            }
+            Some("response.output_text.done") => {
+                if let Some(text) = event.get("text").and_then(Value::as_str) {
+                    acc.text = text.to_owned();
+                }
+            }
+            Some("response.output_text.delta") | Some("response.refusal.delta") => {
+                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
+                    acc.text.push_str(delta);
+                }
+            }
+            Some("response.refusal.done") => {
+                if let Some(refusal) = event.get("refusal").and_then(Value::as_str) {
+                    acc.text = refusal.to_owned();
+                }
+            }
+            Some("error") => {
+                acc.error = event
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .or_else(|| event.get("error").and_then(Value::as_str))
+                    .or_else(|| {
+                        event
+                            .get("error")
+                            .and_then(|error| error.get("message"))
+                            .and_then(Value::as_str)
+                    })
+                    .map(ToOwned::to_owned)
+                    .or_else(|| Some(event.to_string()));
+            }
+            _ => {}
+        }
+    }
+
+    fn finalize_stream(acc: ResponseStreamAccumulator) -> Result<NativeModelResponse, BridgeError> {
+        if let Some(error) = acc.error {
+            return Err(BridgeError::RunFailed(format!(
+                "Garyx native model stream failed: {error}"
+            )));
+        }
+        if let Some(mut response) = acc.completed_response {
+            let completed_output_empty = response
+                .get("output")
+                .and_then(Value::as_array)
+                .map(Vec::is_empty)
+                .unwrap_or(true);
+            if completed_output_empty && !acc.output_items.is_empty() {
+                response["output"] = Value::Array(acc.output_items);
+            }
+            let mut parsed = Self::parse_response(response);
+            if parsed.outputs.is_empty() && !acc.text.is_empty() {
+                parsed.outputs.push(NativeModelOutput::Text(acc.text));
+            }
+            return Ok(parsed);
+        }
+        if !acc.output_items.is_empty() {
+            let mut parsed = Self::parse_response(json!({ "output": acc.output_items }));
+            if parsed.outputs.is_empty() && !acc.text.is_empty() {
+                parsed.outputs.push(NativeModelOutput::Text(acc.text));
+            }
+            return Ok(parsed);
+        }
+        if !acc.text.is_empty() {
+            return Ok(NativeModelResponse {
+                outputs: vec![NativeModelOutput::Text(acc.text)],
+                ..Default::default()
+            });
+        }
+        Err(BridgeError::RunFailed(
+            "Garyx native model stream completed without output".to_owned(),
+        ))
+    }
+
+    fn process_sse_data(
+        acc: &mut ResponseStreamAccumulator,
+        data: &str,
+    ) -> Result<bool, BridgeError> {
+        let trimmed = data.trim();
+        if trimmed.is_empty() {
+            return Ok(false);
+        }
+        if trimmed == "[DONE]" {
+            return Ok(true);
+        }
+        let event = serde_json::from_str::<Value>(trimmed).map_err(|error| {
+            BridgeError::RunFailed(format!(
+                "Garyx native model stream event was invalid JSON: {error}"
+            ))
+        })?;
+        Self::apply_stream_event(acc, event);
+        Ok(false)
+    }
+
+    async fn parse_streaming_response(
+        mut response: reqwest::Response,
+    ) -> Result<NativeModelResponse, BridgeError> {
+        let mut acc = ResponseStreamAccumulator::default();
+        let mut pending = Vec::<u8>::new();
+        let mut event_data = String::new();
+        while let Some(chunk) = response.chunk().await.map_err(|error| {
+            BridgeError::RunFailed(format!("Garyx native model stream failed: {error}"))
+        })? {
+            pending.extend_from_slice(&chunk);
+            while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
+                let mut line = pending.drain(..=newline).collect::<Vec<_>>();
+                line.pop();
+                if line.ends_with(b"\r") {
+                    line.pop();
+                }
+                let line = std::str::from_utf8(&line).map_err(|error| {
+                    BridgeError::RunFailed(format!(
+                        "Garyx native model stream line was invalid UTF-8: {error}"
+                    ))
+                })?;
+                if line.is_empty() {
+                    if !event_data.is_empty() {
+                        if Self::process_sse_data(&mut acc, &event_data)? {
+                            return Self::finalize_stream(acc);
+                        }
+                        event_data.clear();
+                    }
+                    continue;
+                }
+                if let Some(data) = line.strip_prefix("data:") {
+                    let data = data.strip_prefix(' ').unwrap_or(data);
+                    if !event_data.is_empty() {
+                        event_data.push('\n');
+                    }
+                    event_data.push_str(data);
+                }
+            }
+        }
+        if !pending.is_empty() {
+            if pending.ends_with(b"\r") {
+                pending.pop();
+            }
+            let line = std::str::from_utf8(&pending).map_err(|error| {
+                BridgeError::RunFailed(format!(
+                    "Garyx native model stream line was invalid UTF-8: {error}"
+                ))
+            })?;
+            if let Some(data) = line.strip_prefix("data:") {
+                let data = data.strip_prefix(' ').unwrap_or(data);
+                if !event_data.is_empty() {
+                    event_data.push('\n');
+                }
+                event_data.push_str(data);
+            }
+        }
+        if !event_data.is_empty() {
+            Self::process_sse_data(&mut acc, &event_data)?;
+        }
+        Self::finalize_stream(acc)
+    }
 }
 
 #[async_trait]
@@ -458,21 +665,7 @@ impl NativeModelClient for HttpNativeModelClient {
             }
         }
 
-        let mut body = json!({
-            "model": request.model,
-            "instructions": request.instructions,
-            "input": input,
-            "tools": request.tools,
-            "tool_choice": "auto",
-            "parallel_tool_calls": false,
-            "stream": false,
-            "store": false,
-        });
-        if let Some(effort) = request.reasoning_effort.as_deref()
-            && !effort.trim().is_empty()
-        {
-            body["reasoning"] = json!({ "effort": effort.trim() });
-        }
+        let body = Self::response_body(&request, input);
 
         let mut builder = self
             .http
@@ -488,17 +681,13 @@ impl NativeModelClient for HttpNativeModelClient {
             BridgeError::RunFailed(format!("Garyx native model request failed: {error}"))
         })?;
         let status = response.status();
-        let value = response.json::<Value>().await.map_err(|error| {
-            BridgeError::RunFailed(format!(
-                "Garyx native model response was invalid JSON: {error}"
-            ))
-        })?;
         if !status.is_success() {
+            let value = response.text().await.unwrap_or_default();
             return Err(BridgeError::RunFailed(format!(
                 "Garyx native model request failed with {status}: {value}"
             )));
         }
-        Ok(Self::parse_response(value))
+        Self::parse_streaming_response(response).await
     }
 }
 
