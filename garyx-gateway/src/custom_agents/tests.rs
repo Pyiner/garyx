@@ -7,6 +7,7 @@ async fn lists_only_provider_builtin_agents() {
     assert!(agents.iter().any(|agent| agent.agent_id == "claude"));
     assert!(agents.iter().any(|agent| agent.agent_id == "codex"));
     assert!(agents.iter().any(|agent| agent.agent_id == "gemini"));
+    assert!(!agents.iter().any(|agent| agent.agent_id == "gpt"));
     assert!(!agents.iter().any(|agent| agent.agent_id == "planner"));
     assert!(!agents.iter().any(|agent| agent.agent_id == "generator"));
     assert!(!agents.iter().any(|agent| agent.agent_id == "reviewer"));

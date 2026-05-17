@@ -51,25 +51,24 @@ fn custom_agent_profile_defaults_standalone_to_true() {
 }
 
 #[test]
-fn builtin_provider_agent_id_detection_includes_legacy_aliases() {
+fn builtin_provider_agent_id_detection_is_limited_to_builtin_profiles() {
     assert!(is_builtin_provider_agent_id("claude"));
     assert!(is_builtin_provider_agent_id(" codex "));
     assert!(is_builtin_provider_agent_id("gemini"));
-    assert!(is_builtin_provider_agent_id("gpt"));
-    assert!(is_builtin_provider_agent_id("garyx"));
+    assert!(!is_builtin_provider_agent_id("gpt"));
+    assert!(!is_builtin_provider_agent_id("garyx"));
     assert!(!is_builtin_provider_agent_id("plain-claude"));
     assert!(!is_builtin_provider_agent_id("codex-reviewer"));
     assert!(!is_builtin_provider_agent_id("reviewer"));
 }
 
 #[test]
-fn builtin_provider_profiles_include_gpt_agent() {
+fn builtin_provider_profiles_do_not_include_gpt_agent() {
     let profiles = builtin_provider_agent_profiles();
-    let profile = profiles
-        .iter()
-        .find(|profile| profile.agent_id == "gpt")
-        .expect("gpt profile should exist");
-    assert_eq!(profile.display_name, "GPT");
-    assert_eq!(profile.provider_type, ProviderType::Gpt);
-    assert!(profile.built_in);
+    assert!(
+        profiles
+            .iter()
+            .all(|profile| profile.agent_id != "gpt" && profile.provider_type != ProviderType::Gpt),
+        "GPT is a provider option, not a built-in agent"
+    );
 }

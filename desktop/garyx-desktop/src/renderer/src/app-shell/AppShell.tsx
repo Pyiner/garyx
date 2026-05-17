@@ -1600,9 +1600,6 @@ function inferProviderTypeForThread(
   if (agentId === "gemini") {
     return "gemini_cli";
   }
-  if (agentId === "gpt" || agentId === "garyx") {
-    return "gpt";
-  }
   if (agentId === "claude") {
     return "claude_code";
   }

@@ -42,16 +42,6 @@ fn resolves_standalone_agents() {
 }
 
 #[test]
-fn resolves_legacy_garyx_alias_to_gpt_agent() {
-    let agents = vec![standalone_agent("gpt", ProviderType::Gpt)];
-
-    let resolved = resolve_agent_reference("garyx", &agents, &[]).expect("legacy alias");
-
-    assert_eq!(resolved.bound_agent_id(), "gpt");
-    assert_eq!(resolved.provider_type(), ProviderType::Gpt);
-}
-
-#[test]
 fn resolves_team_by_team_id() {
     let agents = vec![
         standalone_agent("planner", ProviderType::CodexAppServer),
@@ -66,6 +56,18 @@ fn resolves_team_by_team_id() {
         resolved.team().map(|team| team.team_id.as_str()),
         Some("product-ship")
     );
+}
+
+#[test]
+fn gpt_provider_does_not_create_builtin_agent_aliases() {
+    let agents = vec![standalone_agent("custom-gpt", ProviderType::Gpt)];
+
+    let error = resolve_agent_reference("gpt", &agents, &[]).expect_err("no built-in GPT agent");
+    assert_eq!(error, "unknown agent_id: gpt");
+
+    let legacy_error =
+        resolve_agent_reference("garyx", &agents, &[]).expect_err("no legacy Garyx agent alias");
+    assert_eq!(legacy_error, "unknown agent_id: garyx");
 }
 
 #[test]

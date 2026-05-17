@@ -691,20 +691,26 @@ async fn seed_imported_thread_history_persists_transcript_and_thread_state() {
 async fn create_thread_rejects_unknown_agent_id() {
     let (state, _logger, _dir) = test_state().await;
     let router = build_router(state);
-    let request = authed_request()
-        .method("POST")
-        .uri("/api/threads")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json!({
-                "label": "Bad thread",
-                "agentId": "definitely-not-real"
-            })
-            .to_string(),
-        ))
-        .unwrap();
-    let response = router.oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    for agent_id in ["definitely-not-real", "gpt"] {
+        let request = authed_request()
+            .method("POST")
+            .uri("/api/threads")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({
+                    "label": "Bad thread",
+                    "agentId": agent_id
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "{agent_id} should not resolve as an agent id"
+        );
+    }
 }
 
 #[tokio::test]

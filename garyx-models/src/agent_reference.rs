@@ -61,16 +61,10 @@ pub fn resolve_agent_reference(
     agents: &[CustomAgentProfile],
     teams: &[AgentTeamProfile],
 ) -> Result<AgentReference, String> {
-    let requested = requested_id.trim();
-    if requested.is_empty() {
+    let normalized = requested_id.trim();
+    if normalized.is_empty() {
         return Err("agent_id is required".to_owned());
     }
-    let normalized = match requested {
-        // Legacy alias from the first native-loop prototype. The user-facing
-        // provider is now the GPT model backend; the native loop is internal.
-        "garyx" | "garyx_native" | "native" => "gpt",
-        value => value,
-    };
 
     if let Some(team) = teams.iter().find(|team| team.team_id == normalized) {
         // Leader must exist — reported first so a misconfigured leader isn't

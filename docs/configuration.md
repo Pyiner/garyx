@@ -499,10 +499,16 @@ when the agent is selected, so provider-specific defaults can be overridden per
 agent.
 
 `gpt` is the OpenAI GPT model backend running on Garyx's in-process agent loop.
-Use the built-in agent id `gpt` to select it:
+It is not exposed as a built-in agent. Create a custom agent with
+`provider_type: "gpt"` to select it:
 
 ```json
-{ "agent_id": "gpt" }
+{
+  "agent_id": "gpt-reviewer",
+  "display_name": "GPT Reviewer",
+  "provider_type": "gpt",
+  "model": "gpt-5.5"
+}
 ```
 
 The GPT provider uses Codex-compatible auth by default. It checks
@@ -535,8 +541,9 @@ GPT model choices through `/api/provider-models/gpt` by reading the same Codex
 `/models` catalog used by the local Codex CLI. If that request is unavailable,
 Garyx falls back to a minimal copy of Codex's bundled model catalog so the
 picker can still show the Codex default (`gpt-5.5`) and the standard GPT coding
-models. `garyx_native`, `garyx`, and `native` are accepted as legacy aliases for
-`gpt`. `model_reasoning_effort` accepts the reasoning
+models. `garyx_native`, `garyx`, and `native` are accepted as legacy provider
+slug aliases for `gpt`; they do not create agent id aliases.
+`model_reasoning_effort` accepts the reasoning
 levels advertised by the selected Codex model, for example `low`, `medium`,
 `high`, or `xhigh`; lower values favor faster responses, while higher values
 spend more reasoning time. `model_service_tier` accepts the selected model's

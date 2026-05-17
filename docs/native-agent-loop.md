@@ -24,9 +24,10 @@ Non-goals for the first version:
 
 ## Provider Boundary
 
-The user-facing provider slug is `gpt`; the built-in agent id is `gpt`.
-Legacy slugs `garyx_native`, `garyx`, and `native` are accepted as aliases, but
-the native loop is an internal execution engine rather than a provider users
+The user-facing provider slug is `gpt`. GPT is selected by creating a custom
+agent with `provider_type: "gpt"`; it is not a built-in agent id. Legacy
+provider slugs `garyx_native`, `garyx`, and `native` are accepted as aliases,
+but the native loop is an internal execution engine rather than a provider users
 select directly.
 
 The implementation lives in `garyx-bridge` and implements
