@@ -811,6 +811,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "garyx-agent-loop"
+version = "0.1.23"
+dependencies = [
+ "async-trait",
+ "garyx-models",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "garyx-bridge"
 version = "0.1.24"
 dependencies = [
@@ -818,6 +833,7 @@ dependencies = [
  "chrono",
  "claude-agent-sdk",
  "codex-sdk",
+ "garyx-agent-loop",
  "garyx-models",
  "garyx-router",
  "libc",

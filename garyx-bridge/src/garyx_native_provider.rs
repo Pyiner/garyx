@@ -1,11 +1,25 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use garyx_models::codex_models::{resolve_codex_auth, responses_endpoint};
+#[cfg(test)]
+use garyx_agent_loop::LlmOutput as NativeModelOutput;
+use garyx_agent_loop::adapters::openai::OpenAiResponsesAdapter;
+#[cfg(test)]
+use garyx_agent_loop::adapters::openai::OpenAiResponsesAdapter as GptResponsesModelBackend;
+#[cfg(test)]
+use garyx_agent_loop::adapters::openai::ResponseStreamAccumulator;
+use garyx_agent_loop::{
+    AgentLoopError, AgentLoopEvent, AgentLoopRunRequest, AgentLoopSession, LlmAdapter,
+    LlmToolCall as NativeToolCall, QueueMode, ToolExecution, ToolExecutor, run_agent_loop,
+};
+#[cfg(test)]
+use garyx_agent_loop::{
+    LlmRequest as NativeModelRequest, LlmResponse as NativeModelResponse, ModelVendor,
+};
 use garyx_models::provider::{
     GaryxNativeConfig, ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType,
     QueuedUserInput, StreamBoundaryKind, StreamEvent, attachments_from_metadata,
@@ -110,18 +124,6 @@ fn truncate_text(value: &str, limit: usize) -> String {
     clipped
 }
 
-fn provider_message_text(message: &ProviderMessage) -> Option<String> {
-    message
-        .text
-        .clone()
-        .or_else(|| message.content.as_str().map(ToOwned::to_owned))
-        .or_else(|| {
-            (!message.content.is_null())
-                .then(|| serde_json::to_string(&message.content).ok())
-                .flatten()
-        })
-}
-
 fn persisted_session_messages(metadata: &HashMap<String, Value>) -> Vec<ProviderMessage> {
     metadata
         .get(SESSION_MESSAGES_METADATA_KEY)
@@ -151,473 +153,34 @@ fn goal_context(metadata: &HashMap<String, Value>) -> Option<String> {
     ))
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct NativeToolCall {
-    pub id: String,
-    pub name: String,
-    pub arguments: Value,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum NativeModelOutput {
-    Text(String),
-    ToolCall(NativeToolCall),
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct NativeModelResponse {
-    pub outputs: Vec<NativeModelOutput>,
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub actual_model: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct NativeModelRequest {
-    pub model: String,
-    pub instructions: String,
-    pub messages: Vec<ProviderMessage>,
-    pub tools: Vec<Value>,
-    pub reasoning_effort: Option<String>,
-    pub service_tier: Option<String>,
-    pub env: HashMap<String, String>,
-}
-
-#[async_trait]
-pub(crate) trait NativeModelBackend: Send + Sync {
-    async fn sample(&self, request: NativeModelRequest)
-    -> Result<NativeModelResponse, BridgeError>;
-}
-
-#[derive(Default)]
-struct ResponseStreamAccumulator {
-    completed_response: Option<Value>,
-    output_items: Vec<Value>,
-    text: String,
-    error: Option<String>,
-}
-
-/// GPT model backend for the native Garyx agent loop.
-///
-/// Additional model families should add their own `NativeModelBackend`
-/// implementations and let provider selection choose the matching backend.
-struct GptResponsesModelBackend {
-    config: GaryxNativeConfig,
-    http: reqwest::Client,
-}
-
-impl GptResponsesModelBackend {
-    fn new(config: GaryxNativeConfig) -> Self {
-        Self {
-            config,
-            http: reqwest::Client::new(),
-        }
-    }
-
-    fn message_input(message: &ProviderMessage) -> Option<Value> {
-        match message.role_str() {
-            "user" => Some(json!({
-                "role": "user",
-                "content": provider_message_text(message).unwrap_or_default(),
-            })),
-            "assistant" => Some(json!({
-                "role": "assistant",
-                "content": provider_message_text(message).unwrap_or_default(),
-            })),
-            "system" => Some(json!({
-                "role": "system",
-                "content": provider_message_text(message).unwrap_or_default(),
-            })),
-            "tool_use" => {
-                let call_id = message
-                    .tool_use_id
-                    .clone()
-                    .unwrap_or_else(|| format!("call_{}", Uuid::new_v4()));
-                Some(json!({
-                    "type": "function_call",
-                    "call_id": call_id,
-                    "name": message.tool_name.clone().unwrap_or_default(),
-                    "arguments": message.content.to_string(),
-                }))
-            }
-            "tool_result" => {
-                let call_id = message
-                    .tool_use_id
-                    .clone()
-                    .unwrap_or_else(|| format!("call_{}", Uuid::new_v4()));
-                Some(json!({
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": provider_message_text(message).unwrap_or_else(|| message.content.to_string()),
-                }))
-            }
-            _ => None,
-        }
-    }
-
-    fn response_body(request: &NativeModelRequest, input: Vec<Value>) -> Value {
-        let mut body = json!({
-            "model": request.model,
-            "instructions": request.instructions,
-            "input": input,
-            "tools": request.tools,
-            "tool_choice": "auto",
-            "parallel_tool_calls": false,
-            "stream": true,
-            "store": false,
-        });
-        if let Some(effort) = request.reasoning_effort.as_deref()
-            && !effort.trim().is_empty()
-        {
-            body["reasoning"] = json!({ "effort": effort.trim() });
-        }
-        if let Some(service_tier) = request.service_tier.as_deref()
-            && !service_tier.trim().is_empty()
-        {
-            body["service_tier"] = json!(service_tier.trim());
-        }
-        body
-    }
-
-    fn parse_response(value: Value) -> NativeModelResponse {
-        let mut outputs = Vec::new();
-        if let Some(items) = value.get("output").and_then(Value::as_array) {
-            for item in items {
-                match item.get("type").and_then(Value::as_str) {
-                    Some("message") => {
-                        if let Some(content) = item.get("content").and_then(Value::as_array) {
-                            for block in content {
-                                if let Some(text) = block
-                                    .get("text")
-                                    .and_then(Value::as_str)
-                                    .or_else(|| block.get("output_text").and_then(Value::as_str))
-                                    && !text.is_empty()
-                                {
-                                    outputs.push(NativeModelOutput::Text(text.to_owned()));
-                                }
-                            }
-                        }
-                    }
-                    Some("function_call") => {
-                        let name = item
-                            .get("name")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned();
-                        if name.is_empty() {
-                            continue;
-                        }
-                        let id = item
-                            .get("call_id")
-                            .and_then(Value::as_str)
-                            .or_else(|| item.get("id").and_then(Value::as_str))
-                            .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| format!("call_{}", Uuid::new_v4()));
-                        let arguments = item
-                            .get("arguments")
-                            .and_then(Value::as_str)
-                            .and_then(|text| serde_json::from_str::<Value>(text).ok())
-                            .unwrap_or_else(|| {
-                                item.get("arguments").cloned().unwrap_or(Value::Null)
-                            });
-                        outputs.push(NativeModelOutput::ToolCall(NativeToolCall {
-                            id,
-                            name,
-                            arguments,
-                        }));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let usage = value.get("usage").unwrap_or(&Value::Null);
-        NativeModelResponse {
-            outputs,
-            input_tokens: usage
-                .get("input_tokens")
-                .and_then(Value::as_i64)
-                .unwrap_or_default(),
-            output_tokens: usage
-                .get("output_tokens")
-                .and_then(Value::as_i64)
-                .unwrap_or_default(),
-            actual_model: value
-                .get("model")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-        }
-    }
-
-    fn apply_stream_event(acc: &mut ResponseStreamAccumulator, event: Value) {
-        match event.get("type").and_then(Value::as_str) {
-            Some("response.completed") => {
-                acc.completed_response = event.get("response").cloned();
-            }
-            Some("response.failed") | Some("response.incomplete") => {
-                acc.error = event
-                    .get("response")
-                    .and_then(|response| response.get("error"))
-                    .and_then(|error| error.get("message"))
-                    .and_then(Value::as_str)
-                    .or_else(|| {
-                        event
-                            .get("response")
-                            .and_then(|response| response.get("incomplete_details"))
-                            .and_then(|details| details.get("reason"))
-                            .and_then(Value::as_str)
-                    })
-                    .map(ToOwned::to_owned)
-                    .or_else(|| Some(event.to_string()));
-            }
-            Some("response.output_item.done") => {
-                if let Some(item) = event.get("item") {
-                    acc.output_items.push(item.clone());
-                }
-            }
-            Some("response.output_text.done") => {
-                if let Some(text) = event.get("text").and_then(Value::as_str) {
-                    acc.text = text.to_owned();
-                }
-            }
-            Some("response.output_text.delta") | Some("response.refusal.delta") => {
-                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                    acc.text.push_str(delta);
-                }
-            }
-            Some("response.refusal.done") => {
-                if let Some(refusal) = event.get("refusal").and_then(Value::as_str) {
-                    acc.text = refusal.to_owned();
-                }
-            }
-            Some("error") => {
-                acc.error = event
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .or_else(|| event.get("error").and_then(Value::as_str))
-                    .or_else(|| {
-                        event
-                            .get("error")
-                            .and_then(|error| error.get("message"))
-                            .and_then(Value::as_str)
-                    })
-                    .map(ToOwned::to_owned)
-                    .or_else(|| Some(event.to_string()));
-            }
-            _ => {}
-        }
-    }
-
-    fn finalize_stream(acc: ResponseStreamAccumulator) -> Result<NativeModelResponse, BridgeError> {
-        if let Some(error) = acc.error {
-            return Err(BridgeError::RunFailed(format!(
-                "Native GPT model stream failed: {error}"
-            )));
-        }
-        if let Some(mut response) = acc.completed_response {
-            let completed_output_empty = response
-                .get("output")
-                .and_then(Value::as_array)
-                .map(Vec::is_empty)
-                .unwrap_or(true);
-            if completed_output_empty && !acc.output_items.is_empty() {
-                response["output"] = Value::Array(acc.output_items);
-            }
-            let mut parsed = Self::parse_response(response);
-            if parsed.outputs.is_empty() && !acc.text.is_empty() {
-                parsed.outputs.push(NativeModelOutput::Text(acc.text));
-            }
-            return Ok(parsed);
-        }
-        if !acc.output_items.is_empty() {
-            let mut parsed = Self::parse_response(json!({ "output": acc.output_items }));
-            if parsed.outputs.is_empty() && !acc.text.is_empty() {
-                parsed.outputs.push(NativeModelOutput::Text(acc.text));
-            }
-            return Ok(parsed);
-        }
-        if !acc.text.is_empty() {
-            return Ok(NativeModelResponse {
-                outputs: vec![NativeModelOutput::Text(acc.text)],
-                ..Default::default()
-            });
-        }
-        Err(BridgeError::RunFailed(
-            "Native GPT model stream completed without output".to_owned(),
-        ))
-    }
-
-    fn process_sse_data(
-        acc: &mut ResponseStreamAccumulator,
-        data: &str,
-    ) -> Result<bool, BridgeError> {
-        let trimmed = data.trim();
-        if trimmed.is_empty() {
-            return Ok(false);
-        }
-        if trimmed == "[DONE]" {
-            return Ok(true);
-        }
-        let event = serde_json::from_str::<Value>(trimmed).map_err(|error| {
-            BridgeError::RunFailed(format!(
-                "Native GPT model stream event was invalid JSON: {error}"
-            ))
-        })?;
-        Self::apply_stream_event(acc, event);
-        Ok(false)
-    }
-
-    async fn parse_streaming_response(
-        mut response: reqwest::Response,
-    ) -> Result<NativeModelResponse, BridgeError> {
-        let mut acc = ResponseStreamAccumulator::default();
-        let mut pending = Vec::<u8>::new();
-        let mut event_data = String::new();
-        while let Some(chunk) = response.chunk().await.map_err(|error| {
-            BridgeError::RunFailed(format!("Native GPT model stream failed: {error}"))
-        })? {
-            pending.extend_from_slice(&chunk);
-            while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
-                let mut line = pending.drain(..=newline).collect::<Vec<_>>();
-                line.pop();
-                if line.ends_with(b"\r") {
-                    line.pop();
-                }
-                let line = std::str::from_utf8(&line).map_err(|error| {
-                    BridgeError::RunFailed(format!(
-                        "Native GPT model stream line was invalid UTF-8: {error}"
-                    ))
-                })?;
-                if line.is_empty() {
-                    if !event_data.is_empty() {
-                        if Self::process_sse_data(&mut acc, &event_data)? {
-                            return Self::finalize_stream(acc);
-                        }
-                        event_data.clear();
-                    }
-                    continue;
-                }
-                if let Some(data) = line.strip_prefix("data:") {
-                    let data = data.strip_prefix(' ').unwrap_or(data);
-                    if !event_data.is_empty() {
-                        event_data.push('\n');
-                    }
-                    event_data.push_str(data);
-                }
-            }
-        }
-        if !pending.is_empty() {
-            if pending.ends_with(b"\r") {
-                pending.pop();
-            }
-            let line = std::str::from_utf8(&pending).map_err(|error| {
-                BridgeError::RunFailed(format!(
-                    "Native GPT model stream line was invalid UTF-8: {error}"
-                ))
-            })?;
-            if let Some(data) = line.strip_prefix("data:") {
-                let data = data.strip_prefix(' ').unwrap_or(data);
-                if !event_data.is_empty() {
-                    event_data.push('\n');
-                }
-                event_data.push_str(data);
-            }
-        }
-        if !event_data.is_empty() {
-            Self::process_sse_data(&mut acc, &event_data)?;
-        }
-        Self::finalize_stream(acc)
-    }
-}
-
-#[async_trait]
-impl NativeModelBackend for GptResponsesModelBackend {
-    async fn sample(
-        &self,
-        request: NativeModelRequest,
-    ) -> Result<NativeModelResponse, BridgeError> {
-        let auth = resolve_codex_auth(&self.config, &request.env)
-            .map_err(|error| BridgeError::RunFailed(error.to_string()))?;
-        let mut input = Vec::new();
-        for message in &request.messages {
-            if let Some(item) = Self::message_input(message) {
-                input.push(item);
-            }
-        }
-
-        let body = Self::response_body(&request, input);
-
-        let mut builder = self
-            .http
-            .post(responses_endpoint(&auth.base_url))
-            .bearer_auth(auth.bearer_token)
-            .json(&body);
-        if let Some(account_id) = auth.account_id.as_deref()
-            && !account_id.trim().is_empty()
-        {
-            builder = builder.header("ChatGPT-Account-ID", account_id);
-        }
-        let response = builder.send().await.map_err(|error| {
-            BridgeError::RunFailed(format!("Native GPT model request failed: {error}"))
-        })?;
-        let status = response.status();
-        if !status.is_success() {
-            let value = response.text().await.unwrap_or_default();
-            return Err(BridgeError::RunFailed(format!(
-                "Native GPT model request failed with {status}: {value}"
-            )));
-        }
-        Self::parse_streaming_response(response).await
-    }
-}
-
-#[derive(Debug, Clone)]
-struct NativeSession {
-    sdk_session_id: String,
-    messages: Vec<ProviderMessage>,
-    pending_inputs: VecDeque<QueuedUserInput>,
-    interrupted: bool,
-}
-
-impl NativeSession {
-    fn new(sdk_session_id: String) -> Self {
-        Self {
-            sdk_session_id,
-            messages: Vec::new(),
-            pending_inputs: VecDeque::new(),
-            interrupted: false,
-        }
-    }
-}
-
 pub struct GaryxNativeProvider {
     config: GaryxNativeConfig,
     ready: Mutex<bool>,
-    sessions: Mutex<HashMap<String, Arc<Mutex<NativeSession>>>>,
+    sessions: Mutex<HashMap<String, Arc<Mutex<AgentLoopSession>>>>,
     active_runs: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    model_backend: Arc<dyn NativeModelBackend>,
+    model_adapter: Arc<dyn LlmAdapter>,
 }
 
 impl GaryxNativeProvider {
     pub fn new(config: GaryxNativeConfig) -> Self {
-        let model_backend = Arc::new(GptResponsesModelBackend::new(config.clone()));
-        Self::with_model_backend(config, model_backend)
+        let model_adapter = Arc::new(OpenAiResponsesAdapter::new(config.clone()));
+        Self::with_model_adapter(config, model_adapter)
     }
 
-    pub(crate) fn with_model_backend(
+    pub(crate) fn with_model_adapter(
         config: GaryxNativeConfig,
-        model_backend: Arc<dyn NativeModelBackend>,
+        model_adapter: Arc<dyn LlmAdapter>,
     ) -> Self {
         Self {
             config,
             ready: Mutex::new(false),
             sessions: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
-            model_backend,
+            model_adapter,
         }
     }
 
-    async fn ensure_session(&self, options: &ProviderRunOptions) -> Arc<Mutex<NativeSession>> {
+    async fn ensure_session(&self, options: &ProviderRunOptions) -> Arc<Mutex<AgentLoopSession>> {
         let restored_sid = options
             .metadata
             .get("sdk_session_id")
@@ -629,7 +192,7 @@ impl GaryxNativeProvider {
         let session = sessions
             .entry(options.thread_id.clone())
             .or_insert_with(|| {
-                Arc::new(Mutex::new(NativeSession::new(
+                Arc::new(Mutex::new(AgentLoopSession::new(
                     restored_sid
                         .clone()
                         .unwrap_or_else(|| format!("garyx-native-{}", Uuid::new_v4())),
@@ -751,7 +314,7 @@ impl GaryxNativeProvider {
         ]
     }
 
-    async fn execute_tool(
+    async fn run_tool(
         &self,
         call: &NativeToolCall,
         workspace_dir: &Path,
@@ -905,6 +468,34 @@ fn path_from_arg(workspace_dir: &Path, path: &str) -> PathBuf {
     }
 }
 
+struct BridgeToolExecutor<'a> {
+    provider: &'a GaryxNativeProvider,
+    workspace_dir: PathBuf,
+    metadata: &'a HashMap<String, Value>,
+}
+
+#[async_trait]
+impl ToolExecutor for BridgeToolExecutor<'_> {
+    async fn execute_tool(&self, call: &NativeToolCall) -> ToolExecution {
+        let (content, is_error) = self
+            .provider
+            .run_tool(call, &self.workspace_dir, self.metadata)
+            .await;
+        ToolExecution {
+            content,
+            is_error,
+            terminate: false,
+        }
+    }
+}
+
+fn map_loop_error(error: AgentLoopError) -> BridgeError {
+    match error {
+        AgentLoopError::Timeout => BridgeError::Timeout,
+        AgentLoopError::Failed(message) => BridgeError::RunFailed(message),
+    }
+}
+
 #[async_trait]
 impl AgentLoopProvider for GaryxNativeProvider {
     fn provider_type(&self) -> ProviderType {
@@ -956,165 +547,83 @@ impl AgentLoopProvider for GaryxNativeProvider {
             }
             state.sdk_session_id.clone()
         };
-        on_chunk(StreamEvent::SessionBound {
-            sdk_session_id: sdk_session_id.clone(),
-        });
-
-        let mut response_text = String::new();
-        let mut run_session_messages = Vec::<ProviderMessage>::new();
-        let mut input_tokens = 0i64;
-        let mut output_tokens = 0i64;
-        let mut actual_model = None;
-        let mut iterations = 0u32;
-        let max_iterations = self.config.max_tool_iterations.max(1);
-        let instructions = self.instructions(options);
-        let tools = Self::tool_schemas();
-
-        loop {
-            if cancel.load(Ordering::Relaxed) || session.lock().await.interrupted {
-                self.active_runs.lock().await.remove(&run_id);
-                return Err(BridgeError::RunFailed(
-                    "Native GPT run interrupted".to_owned(),
-                ));
-            }
-
-            let messages = { session.lock().await.messages.clone() };
-            let request = NativeModelRequest {
-                model: model_id(&self.config, &options.metadata),
-                instructions: instructions.clone(),
-                messages,
-                tools: tools.clone(),
-                reasoning_effort: normalize_non_empty(
-                    options
-                        .metadata
-                        .get("model_reasoning_effort")
-                        .and_then(Value::as_str)
-                        .or_else(|| Some(self.config.model_reasoning_effort.as_str())),
-                ),
-                service_tier: normalize_non_empty(
-                    options
-                        .metadata
-                        .get("model_service_tier")
-                        .and_then(Value::as_str)
-                        .or_else(|| Some(self.config.model_service_tier.as_str())),
-                ),
-                env: resolve_runtime_env(&self.config, &options.metadata),
-            };
-            let model_response = match tokio::time::timeout(
-                request_timeout(&self.config),
-                self.model_backend.sample(request),
-            )
-            .await
-            {
-                Ok(Ok(response)) => response,
-                Ok(Err(error)) => {
-                    self.active_runs.lock().await.remove(&run_id);
-                    return Err(error);
+        let request = AgentLoopRunRequest {
+            model: model_id(&self.config, &options.metadata),
+            instructions: self.instructions(options),
+            tools: Self::tool_schemas(),
+            reasoning_effort: normalize_non_empty(
+                options
+                    .metadata
+                    .get("model_reasoning_effort")
+                    .and_then(Value::as_str)
+                    .or_else(|| Some(self.config.model_reasoning_effort.as_str())),
+            ),
+            service_tier: normalize_non_empty(
+                options
+                    .metadata
+                    .get("model_service_tier")
+                    .and_then(Value::as_str)
+                    .or_else(|| Some(self.config.model_service_tier.as_str())),
+            ),
+            env: resolve_runtime_env(&self.config, &options.metadata),
+            request_timeout: request_timeout(&self.config),
+            max_tool_iterations: self.config.max_tool_iterations,
+            max_turns: self
+                .config
+                .max_turns
+                .and_then(|value| u32::try_from(value).ok())
+                .filter(|value| *value > 0),
+            queue_mode: QueueMode::All,
+            compaction: None,
+        };
+        let tool_executor = BridgeToolExecutor {
+            provider: self,
+            workspace_dir,
+            metadata: &options.metadata,
+        };
+        let mut emitted_sdk_session_id = sdk_session_id.clone();
+        let outcome = run_agent_loop(
+            session,
+            self.model_adapter.as_ref(),
+            &tool_executor,
+            request,
+            cancel,
+            |event| match event {
+                AgentLoopEvent::SessionBound { sdk_session_id } => {
+                    emitted_sdk_session_id = sdk_session_id.clone();
+                    on_chunk(StreamEvent::SessionBound { sdk_session_id });
                 }
-                Err(_) => {
-                    self.active_runs.lock().await.remove(&run_id);
-                    return Err(BridgeError::Timeout);
+                AgentLoopEvent::Delta { text } => on_chunk(StreamEvent::Delta { text }),
+                AgentLoopEvent::ToolUse { message } => on_chunk(StreamEvent::ToolUse { message }),
+                AgentLoopEvent::ToolResult { message } => {
+                    on_chunk(StreamEvent::ToolResult { message })
                 }
-            };
-
-            input_tokens += model_response.input_tokens;
-            output_tokens += model_response.output_tokens;
-            if actual_model.is_none() {
-                actual_model = model_response.actual_model.clone();
-            }
-
-            let mut needs_follow_up = false;
-            for output in model_response.outputs {
-                match output {
-                    NativeModelOutput::Text(text) => {
-                        if text.is_empty() {
-                            continue;
-                        }
-                        response_text.push_str(&text);
-                        on_chunk(StreamEvent::Delta { text: text.clone() });
-                        let message = ProviderMessage::assistant_text(text);
-                        session.lock().await.messages.push(message.clone());
-                        run_session_messages.push(message);
-                    }
-                    NativeModelOutput::ToolCall(call) => {
-                        iterations += 1;
-                        if iterations > max_iterations {
-                            self.active_runs.lock().await.remove(&run_id);
-                            return Err(BridgeError::RunFailed(format!(
-                                "Native GPT exceeded max_tool_iterations={max_iterations}"
-                            )));
-                        }
-                        let tool_use = ProviderMessage::tool_use(
-                            json!({
-                                "name": call.name,
-                                "arguments": call.arguments,
-                            }),
-                            Some(call.id.clone()),
-                            Some(call.name.clone()),
-                        );
-                        on_chunk(StreamEvent::ToolUse {
-                            message: tool_use.clone(),
-                        });
-                        session.lock().await.messages.push(tool_use.clone());
-                        run_session_messages.push(tool_use);
-
-                        let (result, is_error) = self
-                            .execute_tool(&call, &workspace_dir, &options.metadata)
-                            .await;
-                        let tool_result = ProviderMessage::tool_result(
-                            result,
-                            Some(call.id),
-                            Some(call.name),
-                            Some(is_error),
-                        );
-                        on_chunk(StreamEvent::ToolResult {
-                            message: tool_result.clone(),
-                        });
-                        session.lock().await.messages.push(tool_result.clone());
-                        run_session_messages.push(tool_result);
-                        needs_follow_up = true;
-                    }
-                }
-            }
-
-            let mut accepted_pending_input = false;
-            loop {
-                let pending = { session.lock().await.pending_inputs.pop_front() };
-                let Some(pending) = pending else {
-                    break;
-                };
-                on_chunk(StreamEvent::Boundary {
+                AgentLoopEvent::UserAck { pending_input_id } => on_chunk(StreamEvent::Boundary {
                     kind: StreamBoundaryKind::UserAck,
-                    pending_input_id: pending.pending_input_id.clone(),
-                });
-                session
-                    .lock()
-                    .await
-                    .messages
-                    .push(ProviderMessage::user_text(pending.message));
-                accepted_pending_input = true;
-            }
+                    pending_input_id,
+                }),
+                AgentLoopEvent::Done => on_chunk(StreamEvent::Done),
+                _ => {}
+            },
+        )
+        .await
+        .map_err(map_loop_error);
 
-            if !needs_follow_up && !accepted_pending_input {
-                break;
-            }
-        }
-
-        on_chunk(StreamEvent::Done);
         self.active_runs.lock().await.remove(&run_id);
+        let outcome = outcome?;
 
         Ok(ProviderRunResult {
             run_id,
             thread_id: options.thread_id.clone(),
-            response: response_text,
-            session_messages: run_session_messages,
-            sdk_session_id: Some(sdk_session_id),
-            actual_model,
+            response: outcome.response,
+            session_messages: outcome.session_messages,
+            sdk_session_id: Some(emitted_sdk_session_id),
+            actual_model: outcome.actual_model,
             thread_title: None,
             success: true,
             error: None,
-            input_tokens,
-            output_tokens,
+            input_tokens: outcome.input_tokens,
+            output_tokens: outcome.output_tokens,
             cost: 0.0,
             duration_ms: start.elapsed().as_millis() as i64,
         })
@@ -1165,7 +674,7 @@ impl AgentLoopProvider for GaryxNativeProvider {
         let session = sessions
             .entry(thread_id.to_owned())
             .or_insert_with(|| {
-                Arc::new(Mutex::new(NativeSession::new(format!(
+                Arc::new(Mutex::new(AgentLoopSession::new(format!(
                     "garyx-native-{}",
                     Uuid::new_v4()
                 ))))

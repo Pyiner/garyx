@@ -2,6 +2,7 @@
 members = [
     "garyx-models",
     "garyx-core",
+    "garyx-agent-loop",
     "garyx-router",
     "garyx-bridge",
     "garyx-channels",
@@ -47,6 +48,7 @@ claude-agent-sdk = { path = "claude-agent-sdk" }
 codex-sdk = { path = "codex-sdk" }
 garyx-models = { path = "garyx-models" }
 garyx-core = { path = "garyx-core" }
+garyx-agent-loop = { path = "garyx-agent-loop" }
 garyx-router = { path = "garyx-router" }
 garyx-bridge = { path = "garyx-bridge" }
 garyx-channels = { path = "garyx-channels" }
