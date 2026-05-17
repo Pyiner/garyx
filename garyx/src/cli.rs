@@ -437,28 +437,28 @@ pub(crate) enum ChannelsAction {
     },
     /// Enable an existing account
     Enable {
-        /// Channel type: telegram | feishu | weixin | api | <plugin_id>
+        /// Channel type: telegram | discord | feishu | weixin | api | <plugin_id>
         channel: String,
         /// Account id
         account: String,
     },
     /// Disable an existing account
     Disable {
-        /// Channel type: telegram | feishu | weixin | api | <plugin_id>
+        /// Channel type: telegram | discord | feishu | weixin | api | <plugin_id>
         channel: String,
         /// Account id
         account: String,
     },
     /// Remove an existing account
     Remove {
-        /// Channel type: telegram | feishu | weixin | api | <plugin_id>
+        /// Channel type: telegram | discord | feishu | weixin | api | <plugin_id>
         channel: String,
         /// Account id
         account: String,
     },
     /// Add a new account
     Add {
-        /// Channel type: telegram | feishu | weixin | api | <plugin_id>
+        /// Channel type: telegram | discord | feishu | weixin | api | <plugin_id>
         channel: Option<String>,
         /// Account id
         account: Option<String>,
@@ -471,7 +471,7 @@ pub(crate) enum ChannelsAction {
         /// Agent or team id to bind this channel account to
         #[arg(long)]
         agent_id: Option<String>,
-        /// Telegram bot token (for plugin-owned channels, prefer the
+        /// Telegram or Discord bot token (for plugin-owned channels, prefer the
         /// desktop UI or `garyx plugins install` flow)
         #[arg(long)]
         token: Option<String>,
