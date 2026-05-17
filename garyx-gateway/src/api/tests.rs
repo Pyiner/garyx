@@ -812,6 +812,7 @@ async fn test_create_and_list_custom_agents() {
                 "provider_type": "codex_app_server",
                 "model": "gpt-5-codex",
                 "model_reasoning_effort": "xhigh",
+                "model_service_tier": "priority",
                 "avatar_data_url": "data:image/png;base64,dGVzdA==",
                 "system_prompt": "Review specs carefully."
             })
@@ -838,6 +839,7 @@ async fn test_create_and_list_custom_agents() {
             && agent["display_name"] == "Spec Review"
             && agent["model"] == "gpt-5-codex"
             && agent["model_reasoning_effort"] == "xhigh"
+            && agent["model_service_tier"] == "priority"
             && agent["avatar_data_url"] == "data:image/png;base64,dGVzdA=="
     }));
 }

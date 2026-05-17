@@ -8,6 +8,10 @@ use garyx_models::provider::{
 };
 use serde_json::json;
 
+use garyx_models::codex_models::{
+    CHATGPT_CODEX_BASE_URL, OPENAI_RESPONSES_BASE_URL, resolve_codex_auth,
+};
+
 use super::*;
 
 struct FakeModelClient {
@@ -78,6 +82,7 @@ fn http_response_body_enables_streaming_and_reasoning_effort() {
             }
         })],
         reasoning_effort: Some("high".to_owned()),
+        service_tier: Some("priority".to_owned()),
         env: HashMap::new(),
     };
 
@@ -90,6 +95,7 @@ fn http_response_body_enables_streaming_and_reasoning_effort() {
     assert_eq!(body["stream"], true);
     assert_eq!(body["store"], false);
     assert_eq!(body["reasoning"]["effort"], "high");
+    assert_eq!(body["service_tier"], "priority");
     assert_eq!(body["input"][0]["content"], "hello");
 }
 
@@ -358,7 +364,7 @@ fn native_auth_prefers_codex_api_key_from_runtime_env() {
     let config = GaryxNativeConfig::default();
     let env = HashMap::from([("CODEX_API_KEY".to_owned(), "test-api-key".to_owned())]);
 
-    let auth = resolve_native_auth(&config, &env).unwrap();
+    let auth = resolve_codex_auth(&config, &env).unwrap();
 
     assert_eq!(auth.bearer_token, "test-api-key");
     assert_eq!(auth.base_url, OPENAI_RESPONSES_BASE_URL);
@@ -386,7 +392,7 @@ fn native_auth_reads_chatgpt_token_from_codex_auth_file() {
         ..Default::default()
     };
 
-    let auth = resolve_native_auth(&config, &HashMap::new()).unwrap();
+    let auth = resolve_codex_auth(&config, &HashMap::new()).unwrap();
 
     assert_eq!(auth.bearer_token, "test-access-token");
     assert_eq!(auth.base_url, CHATGPT_CODEX_BASE_URL);

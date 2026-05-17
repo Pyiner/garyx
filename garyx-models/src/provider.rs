@@ -541,6 +541,8 @@ pub struct GaryxNativeConfig {
     pub model: String,
     #[serde(default)]
     pub model_reasoning_effort: String,
+    #[serde(default)]
+    pub model_service_tier: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<i64>,
     #[serde(default)]
@@ -586,6 +588,7 @@ impl Default for GaryxNativeConfig {
             default_model: default_garyx_native_model(),
             model: String::new(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             max_turns: None,
             timeout_seconds: 0.0,
             workspace_dir: None,

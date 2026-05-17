@@ -1083,6 +1083,9 @@ pub(crate) enum AgentAction {
         /// Optional reasoning effort override: low, medium, high, or xhigh.
         #[arg(long)]
         model_reasoning_effort: Option<String>,
+        /// Optional model service tier override, for example priority for Fast mode.
+        #[arg(long)]
+        model_service_tier: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent.
         #[arg(long)]
         default_workspace_dir: Option<String>,
@@ -1110,6 +1113,9 @@ pub(crate) enum AgentAction {
         /// Optional reasoning effort override: low, medium, high, or xhigh. Pass an empty string to clear it.
         #[arg(long)]
         model_reasoning_effort: Option<String>,
+        /// Optional model service tier override, for example priority for Fast mode. Pass an empty string to clear it.
+        #[arg(long)]
+        model_service_tier: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,
@@ -1137,6 +1143,9 @@ pub(crate) enum AgentAction {
         /// Optional reasoning effort override: low, medium, high, or xhigh. Pass an empty string to clear it.
         #[arg(long)]
         model_reasoning_effort: Option<String>,
+        /// Optional model service tier override, for example priority for Fast mode. Pass an empty string to clear it.
+        #[arg(long)]
+        model_service_tier: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,

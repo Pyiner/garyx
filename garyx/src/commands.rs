@@ -3033,6 +3033,7 @@ fn build_agent_mutation_body(
     provider: String,
     model: Option<String>,
     model_reasoning_effort: Option<String>,
+    model_service_tier: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
 ) -> Result<Value, Box<dyn std::error::Error>> {
@@ -3046,6 +3047,7 @@ fn build_agent_mutation_body(
         "provider_type": provider.trim(),
         "model": model.as_deref().map(str::trim).unwrap_or(""),
         "model_reasoning_effort": model_reasoning_effort.as_deref().map(str::trim).unwrap_or(""),
+        "model_service_tier": model_service_tier.as_deref().map(str::trim).unwrap_or(""),
         "system_prompt": system_prompt,
     });
     if let Some(default_workspace_dir) = default_workspace_dir {
@@ -3061,6 +3063,7 @@ pub(crate) async fn cmd_agent_create(
     provider: String,
     model: Option<String>,
     model_reasoning_effort: Option<String>,
+    model_service_tier: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
@@ -3072,6 +3075,7 @@ pub(crate) async fn cmd_agent_create(
         provider,
         model,
         model_reasoning_effort,
+        model_service_tier,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3090,6 +3094,7 @@ pub(crate) async fn cmd_agent_update(
     provider: String,
     model: Option<String>,
     model_reasoning_effort: Option<String>,
+    model_service_tier: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
@@ -3101,6 +3106,7 @@ pub(crate) async fn cmd_agent_update(
         provider,
         model,
         model_reasoning_effort,
+        model_service_tier,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3123,6 +3129,7 @@ pub(crate) async fn cmd_agent_upsert(
     provider: String,
     model: Option<String>,
     model_reasoning_effort: Option<String>,
+    model_service_tier: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
@@ -3134,6 +3141,7 @@ pub(crate) async fn cmd_agent_upsert(
         provider,
         model,
         model_reasoning_effort,
+        model_service_tier,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3180,6 +3188,7 @@ fn print_agent_summary(a: &Value) {
     let provider = a["provider_type"].as_str().unwrap_or("-");
     let model = a["model"].as_str().unwrap_or("").trim();
     let model_reasoning_effort = a["model_reasoning_effort"].as_str().unwrap_or("").trim();
+    let model_service_tier = a["model_service_tier"].as_str().unwrap_or("").trim();
     let builtin = a["built_in"].as_bool().unwrap_or(false);
     println!(
         "Agent: {agent_id}{}",
@@ -3192,6 +3201,9 @@ fn print_agent_summary(a: &Value) {
     }
     if !model_reasoning_effort.is_empty() {
         println!("Reasoning effort: {model_reasoning_effort}");
+    }
+    if !model_service_tier.is_empty() {
+        println!("Service tier: {model_service_tier}");
     }
     if let Some(default_workspace_dir) = a["default_workspace_dir"].as_str()
         && !default_workspace_dir.trim().is_empty()

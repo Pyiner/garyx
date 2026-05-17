@@ -16,6 +16,8 @@ pub struct UpsertCustomAgentRequest {
     pub model: String,
     #[serde(default, alias = "modelReasoningEffort")]
     pub model_reasoning_effort: String,
+    #[serde(default, alias = "modelServiceTier")]
+    pub model_service_tier: String,
     #[serde(
         default,
         alias = "defaultWorkspaceDir",
@@ -119,6 +121,7 @@ impl CustomAgentStore {
         let display_name = request.display_name.trim();
         let model = request.model.trim();
         let model_reasoning_effort = request.model_reasoning_effort.trim();
+        let model_service_tier = request.model_service_tier.trim();
         let system_prompt = request.system_prompt.trim();
         let requested_default_workspace_dir = request
             .default_workspace_dir
@@ -166,6 +169,7 @@ impl CustomAgentStore {
             provider_type: request.provider_type,
             model: model.to_owned(),
             model_reasoning_effort: model_reasoning_effort.to_owned(),
+            model_service_tier: model_service_tier.to_owned(),
             default_workspace_dir,
             avatar_data_url,
             system_prompt: system_prompt.to_owned(),

@@ -7,6 +7,7 @@ fn standalone_agent(agent_id: &str, provider_type: ProviderType) -> CustomAgentP
         provider_type,
         model: String::new(),
         model_reasoning_effort: String::new(),
+        model_service_tier: String::new(),
         default_workspace_dir: None,
         avatar_data_url: None,
         system_prompt: String::new(),

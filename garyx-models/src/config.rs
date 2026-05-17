@@ -165,6 +165,8 @@ pub struct AgentProviderConfig {
     #[serde(default)]
     pub model_reasoning_effort: String,
     #[serde(default)]
+    pub model_service_tier: String,
+    #[serde(default)]
     pub experimental_api: bool,
 
     // Gemini CLI specific
@@ -221,6 +223,7 @@ impl Default for AgentProviderConfig {
             mcp_base_url: default_mcp_base_url(),
             model: String::new(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             experimental_api: false,
             gemini_bin: String::new(),
             approval_mode: default_gemini_approval_mode(),

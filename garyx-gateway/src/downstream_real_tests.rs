@@ -694,6 +694,7 @@ async fn codex_downstream_skill_and_mcp_are_usable() {
     let mut provider = CodexAgentProvider::new(CodexAppServerConfig {
         model: "gpt-5.4".to_owned(),
         model_reasoning_effort: "xhigh".to_owned(),
+        model_service_tier: String::new(),
         approval_policy: "never".to_owned(),
         sandbox_mode: "danger-full-access".to_owned(),
         workspace_dir: Some(workspace.to_string_lossy().to_string()),
@@ -815,6 +816,7 @@ async fn codex_downstream_home_skill_symlink_root_is_usable() {
     let mut provider = CodexAgentProvider::new(CodexAppServerConfig {
         model: "gpt-5.4".to_owned(),
         model_reasoning_effort: "xhigh".to_owned(),
+        model_service_tier: String::new(),
         approval_policy: "never".to_owned(),
         sandbox_mode: "danger-full-access".to_owned(),
         workspace_dir: Some(workspace.to_string_lossy().to_string()),
@@ -877,6 +879,7 @@ async fn codex_downstream_managed_skill_sync_is_usable() {
     let mut provider = CodexAgentProvider::new(CodexAppServerConfig {
         model: "gpt-5.4".to_owned(),
         model_reasoning_effort: "xhigh".to_owned(),
+        model_service_tier: String::new(),
         approval_policy: "never".to_owned(),
         sandbox_mode: "danger-full-access".to_owned(),
         workspace_dir: Some(workspace.to_string_lossy().to_string()),

@@ -86,6 +86,12 @@ pub(crate) fn agent_runtime_metadata(reference: &AgentReference) -> HashMap<Stri
                     Value::String(profile.model_reasoning_effort.clone()),
                 );
             }
+            if !profile.model_service_tier.trim().is_empty() {
+                metadata.insert(
+                    "model_service_tier".to_owned(),
+                    Value::String(profile.model_service_tier.clone()),
+                );
+            }
             if !profile.system_prompt.trim().is_empty() {
                 metadata.insert(
                     "system_prompt".to_owned(),
@@ -294,6 +300,7 @@ mod tests {
                 provider_type: ProviderType::CodexAppServer,
                 model: "gpt-5".to_owned(),
                 model_reasoning_effort: "high".to_owned(),
+                model_service_tier: "priority".to_owned(),
                 default_workspace_dir: Some("/tmp/agent-default".to_owned()),
                 avatar_data_url: None,
                 system_prompt: "Review carefully.".to_owned(),
@@ -377,6 +384,7 @@ mod tests {
         assert_eq!(metadata["requested_provider_type"], "codex_app_server");
         assert_eq!(metadata["model"], "gpt-5");
         assert_eq!(metadata["model_reasoning_effort"], "high");
+        assert_eq!(metadata["model_service_tier"], "priority");
         assert_eq!(metadata["system_prompt"], "Review carefully.");
     }
 

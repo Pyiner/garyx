@@ -112,7 +112,7 @@ Common flags on `channels add`:
 
 | Command | Use it for |
 | --- | --- |
-| `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. `create/update/upsert` accept `--default-workspace-dir <path>` for the Agent fallback used by new bot/task threads. |
+| `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. `create/update/upsert` accept `--model`, `--model-reasoning-effort`, `--model-service-tier`, and `--default-workspace-dir <path>` for new bot/task threads. |
 | `garyx team list / get / create / update / delete` | CRUD on agent teams. |
 
 ## Tools

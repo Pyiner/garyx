@@ -1274,6 +1274,8 @@ fn parse_agent_create() {
         "gpt-5",
         "--model-reasoning-effort",
         "high",
+        "--model-service-tier",
+        "priority",
         "--default-workspace-dir",
         "/tmp/spec-review",
         "--system-prompt",
@@ -1289,6 +1291,7 @@ fn parse_agent_create() {
                     provider,
                     model,
                     model_reasoning_effort,
+                    model_service_tier,
                     default_workspace_dir,
                     system_prompt,
                     json,
@@ -1299,6 +1302,7 @@ fn parse_agent_create() {
             assert_eq!(provider, "codex_app_server");
             assert_eq!(model.as_deref(), Some("gpt-5"));
             assert_eq!(model_reasoning_effort.as_deref(), Some("high"));
+            assert_eq!(model_service_tier.as_deref(), Some("priority"));
             assert_eq!(default_workspace_dir.as_deref(), Some("/tmp/spec-review"));
             assert_eq!(system_prompt, "Review specs carefully.");
             assert!(json);
@@ -1392,6 +1396,7 @@ fn parse_agent_update_without_model() {
                     provider,
                     model,
                     model_reasoning_effort,
+                    model_service_tier,
                     default_workspace_dir,
                     system_prompt,
                     json,
@@ -1402,6 +1407,7 @@ fn parse_agent_update_without_model() {
             assert_eq!(provider, "codex_app_server");
             assert_eq!(model, None);
             assert_eq!(model_reasoning_effort, None);
+            assert_eq!(model_service_tier, None);
             assert_eq!(default_workspace_dir, None);
             assert_eq!(system_prompt, "Review specs carefully.");
             assert!(!json);
@@ -1441,6 +1447,7 @@ fn parse_agent_upsert() {
                     provider,
                     model,
                     model_reasoning_effort,
+                    model_service_tier,
                     default_workspace_dir,
                     system_prompt,
                     json,
@@ -1451,6 +1458,7 @@ fn parse_agent_upsert() {
             assert_eq!(provider, "codex_app_server");
             assert_eq!(model.as_deref(), Some("gpt-5"));
             assert_eq!(model_reasoning_effort.as_deref(), Some("xhigh"));
+            assert_eq!(model_service_tier, None);
             assert_eq!(default_workspace_dir.as_deref(), Some("/tmp/spec-review"));
             assert_eq!(system_prompt, "Review specs carefully.");
             assert!(json);

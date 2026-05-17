@@ -67,6 +67,7 @@ type AgentDraft = {
   providerType: ProviderType;
   model: string;
   modelReasoningEffort: string;
+  modelServiceTier: string;
   defaultWorkspaceDir: string;
   avatarDataUrl: string;
   systemPrompt: string;
@@ -74,6 +75,7 @@ type AgentDraft = {
 
 const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default__';
 const PROVIDER_DEFAULT_REASONING_VALUE = '__provider_default_reasoning__';
+const PROVIDER_DEFAULT_SERVICE_TIER_VALUE = '__provider_default_service_tier__';
 const AGENT_AVATAR_MAX_BYTES = 3 * 1024 * 1024;
 const AGENT_AVATAR_SIZE = 256;
 const AGENT_AVATAR_DATA_URL_MAX_LENGTH = 700_000;
@@ -81,6 +83,8 @@ const AGENT_AVATAR_ACCEPT = 'image/png,image/jpeg,image/webp,image/svg+xml';
 const CUSTOM_AVATAR_STYLE_ID: AvatarStyleId = 'custom';
 const DEFAULT_AVATAR_STYLE_ID: AvatarStyleId = 'clean_glyph';
 const FALLBACK_REASONING_EFFORTS = [
+  { id: 'none', label: 'None', description: 'No reasoning', recommended: false },
+  { id: 'minimal', label: 'Minimal', description: 'Minimal reasoning', recommended: false },
   { id: 'low', label: 'Low', description: 'Faster responses', recommended: false },
   { id: 'medium', label: 'Medium', description: 'Balanced speed and reasoning', recommended: true },
   { id: 'high', label: 'High', description: 'Deeper reasoning', recommended: false },
@@ -142,6 +146,7 @@ function emptyAgentDraft(): AgentDraft {
     providerType: 'claude_code',
     model: '',
     modelReasoningEffort: '',
+    modelServiceTier: '',
     defaultWorkspaceDir: '',
     avatarDataUrl: '',
     systemPrompt: '',
@@ -206,9 +211,13 @@ function providerModelsWithCurrent(
 
 function reasoningEffortsWithCurrent(
   providerModels: DesktopProviderModels | undefined,
+  currentModel: string,
   currentEffort: string,
 ): DesktopProviderModels['models'] {
-  const efforts = providerModels?.reasoningEfforts?.length
+  const selectedModel = providerModels?.models.find((model) => model.id === currentModel.trim());
+  const efforts = selectedModel?.supportedReasoningEfforts?.length
+    ? selectedModel.supportedReasoningEfforts
+    : providerModels?.reasoningEfforts?.length
     ? providerModels.reasoningEfforts
     : FALLBACK_REASONING_EFFORTS;
   const normalized = currentEffort.trim();
@@ -216,6 +225,24 @@ function reasoningEffortsWithCurrent(
     return efforts;
   }
   return [{ id: normalized, label: normalized, description: null, recommended: false }, ...efforts];
+}
+
+function serviceTiersWithCurrent(
+  providerModels: DesktopProviderModels | undefined,
+  currentModel: string,
+  currentServiceTier: string,
+): DesktopProviderModels['models'] {
+  const selectedModel = providerModels?.models.find((model) => model.id === currentModel.trim());
+  const tiers = selectedModel?.serviceTiers?.length
+    ? selectedModel.serviceTiers
+    : providerModels?.serviceTiers?.length
+    ? providerModels.serviceTiers
+    : [];
+  const normalized = currentServiceTier.trim();
+  if (!normalized || tiers.some((tier) => tier.id === normalized)) {
+    return tiers;
+  }
+  return [{ id: normalized, label: normalized, description: null, recommended: false }, ...tiers];
 }
 
 function avatarLabel(value: string): string {
@@ -578,11 +605,21 @@ export function AgentsHubPanel({
     activeAgentProviderModels?.supportsModelSelection === true && agentModelOptions.length > 0;
   const agentReasoningEffortOptions = reasoningEffortsWithCurrent(
     activeAgentProviderModels,
+    agentDraft.model || activeAgentProviderModels?.defaultModel || '',
     agentDraft.modelReasoningEffort,
   );
   const agentSupportsReasoningEffortSelection =
     (agentDraft.providerType === 'codex_app_server' || agentDraft.providerType === 'garyx_native')
     && agentReasoningEffortOptions.length > 0;
+  const agentServiceTierOptions = serviceTiersWithCurrent(
+    activeAgentProviderModels,
+    agentDraft.model || activeAgentProviderModels?.defaultModel || '',
+    agentDraft.modelServiceTier,
+  );
+  const agentSupportsServiceTierSelection =
+    agentDraft.providerType === 'garyx_native'
+    && (activeAgentProviderModels?.supportsServiceTierSelection === true || agentDraft.modelServiceTier.trim().length > 0)
+    && agentServiceTierOptions.length > 0;
   const agentModelStatus =
     agentDraft.providerType === 'gemini_cli' && !agentSupportsModelSelection
       ? agentProviderModelsLoading
@@ -640,6 +677,7 @@ export function AgentsHubPanel({
       providerType: agent.providerType,
       model: agent.model,
       modelReasoningEffort: agent.modelReasoningEffort,
+      modelServiceTier: agent.modelServiceTier,
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       avatarDataUrl: agent.avatarDataUrl,
       systemPrompt: agent.systemPrompt,
@@ -663,6 +701,7 @@ export function AgentsHubPanel({
       providerType: agent.providerType,
       model: agent.model,
       modelReasoningEffort: agent.modelReasoningEffort,
+      modelServiceTier: agent.modelServiceTier,
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       avatarDataUrl: agent.avatarDataUrl,
       systemPrompt: agent.systemPrompt,
@@ -852,6 +891,7 @@ export function AgentsHubPanel({
         providerType: agentDraft.providerType,
         model: agentSupportsModelSelection ? agentDraft.model.trim() : '',
         modelReasoningEffort: agentSupportsReasoningEffortSelection ? agentDraft.modelReasoningEffort.trim() : '',
+        modelServiceTier: agentSupportsServiceTierSelection ? agentDraft.modelServiceTier.trim() : '',
         defaultWorkspaceDir: agentDraft.defaultWorkspaceDir.trim(),
         avatarDataUrl,
         systemPrompt: agentDraft.systemPrompt.trim(),
@@ -1312,6 +1352,7 @@ export function AgentsHubPanel({
                       modelReasoningEffort: value === 'codex_app_server' || value === 'garyx_native'
                         ? current.modelReasoningEffort
                         : '',
+                      modelServiceTier: value === 'garyx_native' ? current.modelServiceTier : '',
                     }));
                     void ensureProviderModels(value);
                   }}
@@ -1341,6 +1382,7 @@ export function AgentsHubPanel({
                       setAgentDraft((current) => ({
                         ...current,
                         model: value === PROVIDER_DEFAULT_MODEL_VALUE ? '' : value,
+                        modelServiceTier: '',
                       }));
                     }}
                     value={agentDraft.model.trim() || PROVIDER_DEFAULT_MODEL_VALUE}
@@ -1395,6 +1437,38 @@ export function AgentsHubPanel({
                   </Select>
                   <span className="codex-form-hint">
                     {t('Lower values are faster; higher values spend more reasoning.')}
+                  </span>
+                </div>
+              ) : null}
+
+              {agentSupportsServiceTierSelection ? (
+                <div className="codex-form-field">
+                  <Label className="codex-form-label" htmlFor="agent-dialog-service-tier">{t('Service tier')}</Label>
+                  <Select
+                    onValueChange={(value) => {
+                      setAgentDraft((current) => ({
+                        ...current,
+                        modelServiceTier: value === PROVIDER_DEFAULT_SERVICE_TIER_VALUE ? '' : value,
+                      }));
+                    }}
+                    value={agentDraft.modelServiceTier.trim() || PROVIDER_DEFAULT_SERVICE_TIER_VALUE}
+                  >
+                    <SelectTrigger className="agents-hub-model-select" id="agent-dialog-service-tier">
+                      <SelectValue placeholder={t('Select service tier')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value={PROVIDER_DEFAULT_SERVICE_TIER_VALUE}>{t('Provider default')}</SelectItem>
+                        {agentServiceTierOptions.map((tier) => (
+                          <SelectItem key={tier.id} value={tier.id}>
+                            {tier.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <span className="codex-form-hint">
+                    {t('Fast service tiers trade higher usage for lower latency when the model supports them.')}
                   </span>
                 </div>
               ) : null}
@@ -1468,6 +1542,9 @@ export function AgentsHubPanel({
                 ) : null}
                 {selectedAgent?.modelReasoningEffort.trim() ? (
                   <p>{t('Reasoning effort')}: {selectedAgent.modelReasoningEffort}</p>
+                ) : null}
+                {selectedAgent?.modelServiceTier.trim() ? (
+                  <p>{t('Service tier')}: {selectedAgent.modelServiceTier}</p>
                 ) : null}
                 {selectedAgent?.defaultWorkspaceDir.trim() ? (
                   <p>{selectedAgent.defaultWorkspaceDir.trim()}</p>

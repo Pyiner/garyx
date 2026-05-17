@@ -5,12 +5,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use garyx_models::codex_models::{resolve_codex_auth, responses_endpoint};
 use garyx_models::provider::{
     GaryxNativeConfig, ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType,
     QueuedUserInput, StreamBoundaryKind, StreamEvent, attachments_from_metadata,
     build_prompt_message_with_attachments,
 };
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -22,8 +22,6 @@ use crate::gary_prompt::{
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
 pub(crate) const SESSION_MESSAGES_METADATA_KEY: &str = "garyx_session_messages";
-const OPENAI_RESPONSES_BASE_URL: &str = "https://api.openai.com/v1";
-const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const DEFAULT_REQUEST_TIMEOUT_SECS: f64 = 300.0;
 const MAX_TOOL_OUTPUT_CHARS: usize = 20_000;
 
@@ -180,6 +178,7 @@ pub(crate) struct NativeModelRequest {
     pub messages: Vec<ProviderMessage>,
     pub tools: Vec<Value>,
     pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
     pub env: HashMap<String, String>,
 }
 
@@ -187,136 +186,6 @@ pub(crate) struct NativeModelRequest {
 pub(crate) trait NativeModelClient: Send + Sync {
     async fn sample(&self, request: NativeModelRequest)
     -> Result<NativeModelResponse, BridgeError>;
-}
-
-#[derive(Debug, Clone)]
-struct NativeAuth {
-    bearer_token: String,
-    base_url: String,
-    account_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AuthDotJson {
-    #[serde(rename = "OPENAI_API_KEY")]
-    openai_api_key: Option<String>,
-    tokens: Option<AuthTokens>,
-    agent_identity: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AuthTokens {
-    access_token: String,
-    account_id: Option<String>,
-    #[serde(default)]
-    id_token: Value,
-}
-
-fn env_value(env: &HashMap<String, String>, name: &str) -> Option<String> {
-    env.get(name)
-        .cloned()
-        .or_else(|| std::env::var(name).ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
-fn codex_home(config: &GaryxNativeConfig, env: &HashMap<String, String>) -> Option<PathBuf> {
-    normalize_non_empty(Some(config.codex_home.as_str()))
-        .or_else(|| env_value(env, "CODEX_HOME"))
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|home| format!("{home}/.codex"))
-        })
-        .map(|value| PathBuf::from(shellexpand::tilde(&value).as_ref()))
-}
-
-fn response_base_url(default_base_url: &str, config: &GaryxNativeConfig) -> String {
-    normalize_non_empty(Some(config.base_url.as_str()))
-        .unwrap_or_else(|| default_base_url.to_owned())
-}
-
-fn resolve_native_auth(
-    config: &GaryxNativeConfig,
-    env: &HashMap<String, String>,
-) -> Result<NativeAuth, BridgeError> {
-    if config.auth_source.trim().is_empty() || config.auth_source.trim() == "codex" {
-        if let Some(api_key) =
-            env_value(env, "CODEX_API_KEY").or_else(|| env_value(env, "OPENAI_API_KEY"))
-        {
-            return Ok(NativeAuth {
-                bearer_token: api_key,
-                base_url: response_base_url(OPENAI_RESPONSES_BASE_URL, config),
-                account_id: None,
-            });
-        }
-
-        let home = codex_home(config, env).ok_or_else(|| {
-            BridgeError::RunFailed("Codex auth not found: CODEX_HOME/HOME is unset".to_owned())
-        })?;
-        let auth_path = home.join("auth.json");
-        let contents = std::fs::read_to_string(&auth_path).map_err(|error| {
-            BridgeError::RunFailed(format!(
-                "Codex auth not found at {}: {error}",
-                auth_path.display()
-            ))
-        })?;
-        let auth: AuthDotJson = serde_json::from_str(&contents).map_err(|error| {
-            BridgeError::RunFailed(format!(
-                "Codex auth file {} is invalid: {error}",
-                auth_path.display()
-            ))
-        })?;
-        if let Some(api_key) = auth
-            .openai_api_key
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-        {
-            return Ok(NativeAuth {
-                bearer_token: api_key,
-                base_url: response_base_url(OPENAI_RESPONSES_BASE_URL, config),
-                account_id: None,
-            });
-        }
-        if let Some(tokens) = auth.tokens
-            && !tokens.access_token.trim().is_empty()
-        {
-            let account_id = tokens.account_id.or_else(|| {
-                tokens
-                    .id_token
-                    .get("chatgpt_account_id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            });
-            return Ok(NativeAuth {
-                bearer_token: tokens.access_token,
-                base_url: response_base_url(CHATGPT_CODEX_BASE_URL, config),
-                account_id,
-            });
-        }
-        if auth.agent_identity.is_some() {
-            return Err(BridgeError::RunFailed(
-                "Codex auth contains only agent_identity; Garyx native currently supports CODEX_API_KEY, OPENAI_API_KEY, auth.json OPENAI_API_KEY, or auth.json tokens.access_token".to_owned(),
-            ));
-        }
-        return Err(BridgeError::RunFailed(
-            "Codex auth file does not contain a supported credential".to_owned(),
-        ));
-    }
-
-    Err(BridgeError::RunFailed(format!(
-        "unsupported Garyx native auth_source '{}'",
-        config.auth_source
-    )))
-}
-
-fn responses_endpoint(base_url: &str) -> String {
-    let trimmed = base_url.trim().trim_end_matches('/');
-    if trimmed.ends_with("/responses") {
-        trimmed.to_owned()
-    } else {
-        format!("{trimmed}/responses")
-    }
 }
 
 #[derive(Default)]
@@ -396,6 +265,11 @@ impl HttpNativeModelClient {
             && !effort.trim().is_empty()
         {
             body["reasoning"] = json!({ "effort": effort.trim() });
+        }
+        if let Some(service_tier) = request.service_tier.as_deref()
+            && !service_tier.trim().is_empty()
+        {
+            body["service_tier"] = json!(service_tier.trim());
         }
         body
     }
@@ -657,7 +531,8 @@ impl NativeModelClient for HttpNativeModelClient {
         &self,
         request: NativeModelRequest,
     ) -> Result<NativeModelResponse, BridgeError> {
-        let auth = resolve_native_auth(&self.config, &request.env)?;
+        let auth = resolve_codex_auth(&self.config, &request.env)
+            .map_err(|error| BridgeError::RunFailed(error.to_string()))?;
         let mut input = Vec::new();
         for message in &request.messages {
             if let Some(item) = Self::message_input(message) {
@@ -1108,6 +983,13 @@ impl AgentLoopProvider for GaryxNativeProvider {
                         .get("model_reasoning_effort")
                         .and_then(Value::as_str)
                         .or_else(|| Some(self.config.model_reasoning_effort.as_str())),
+                ),
+                service_tier: normalize_non_empty(
+                    options
+                        .metadata
+                        .get("model_service_tier")
+                        .and_then(Value::as_str)
+                        .or_else(|| Some(self.config.model_service_tier.as_str())),
                 ),
                 env: resolve_runtime_env(&self.config, &options.metadata),
             };

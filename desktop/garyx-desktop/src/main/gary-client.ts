@@ -703,6 +703,8 @@ interface CustomAgentPayload {
   model?: string | null;
   model_reasoning_effort?: string | null;
   modelReasoningEffort?: string | null;
+  model_service_tier?: string | null;
+  modelServiceTier?: string | null;
   default_workspace_dir?: string | null;
   defaultWorkspaceDir?: string | null;
   avatar_data_url?: string | null;
@@ -729,6 +731,12 @@ interface ProviderModelOptionPayload {
   label?: unknown;
   description?: unknown;
   recommended?: unknown;
+  default_reasoning_effort?: unknown;
+  defaultReasoningEffort?: unknown;
+  supported_reasoning_efforts?: unknown;
+  supportedReasoningEfforts?: unknown;
+  service_tiers?: unknown;
+  serviceTiers?: unknown;
 }
 
 interface ProviderModelsPayload {
@@ -741,6 +749,10 @@ interface ProviderModelsPayload {
   supportsReasoningEffortSelection?: unknown;
   reasoning_efforts?: unknown;
   reasoningEfforts?: unknown;
+  supports_service_tier_selection?: unknown;
+  supportsServiceTierSelection?: unknown;
+  service_tiers?: unknown;
+  serviceTiers?: unknown;
   default_model?: unknown;
   defaultModel?: unknown;
   source?: unknown;
@@ -2219,6 +2231,7 @@ function mapCustomAgent(value: CustomAgentPayload): DesktopCustomAgent {
     model: value.model || "",
     modelReasoningEffort:
       value.model_reasoning_effort || value.modelReasoningEffort || "",
+    modelServiceTier: value.model_service_tier || value.modelServiceTier || "",
     defaultWorkspaceDir:
       value.default_workspace_dir ??
       value.defaultWorkspaceDir ??
@@ -2253,37 +2266,45 @@ function mapProviderModelOption(
         ? value.description.trim()
         : null,
     recommended: value.recommended === true,
+    defaultReasoningEffort:
+      typeof value.default_reasoning_effort === "string"
+        ? value.default_reasoning_effort
+        : typeof value.defaultReasoningEffort === "string"
+          ? value.defaultReasoningEffort
+          : null,
+    supportedReasoningEfforts: mapProviderModelOptionArray(
+      value.supported_reasoning_efforts || value.supportedReasoningEfforts,
+    ),
+    serviceTiers: mapProviderModelOptionArray(
+      value.service_tiers || value.serviceTiers,
+    ),
   };
 }
 
+function mapProviderModelOptionArray(
+  value: unknown,
+): DesktopProviderModelOption[] {
+  const options: DesktopProviderModelOption[] = [];
+  if (!Array.isArray(value)) {
+    return options;
+  }
+  for (const item of value) {
+    if (item && typeof item === "object") {
+      const option = mapProviderModelOption(item as ProviderModelOptionPayload);
+      if (option) {
+        options.push(option);
+      }
+    }
+  }
+  return options;
+}
+
 function mapProviderModels(value: ProviderModelsPayload): DesktopProviderModels {
-  const models: DesktopProviderModelOption[] = [];
-  if (Array.isArray(value.models)) {
-    for (const item of value.models) {
-      if (item && typeof item === "object") {
-        const option = mapProviderModelOption(
-          item as ProviderModelOptionPayload,
-        );
-        if (option) {
-          models.push(option);
-        }
-      }
-    }
-  }
-  const reasoningEfforts: DesktopProviderModelOption[] = [];
+  const models = mapProviderModelOptionArray(value.models);
   const rawReasoningEfforts = value.reasoning_efforts || value.reasoningEfforts;
-  if (Array.isArray(rawReasoningEfforts)) {
-    for (const item of rawReasoningEfforts) {
-      if (item && typeof item === "object") {
-        const option = mapProviderModelOption(
-          item as ProviderModelOptionPayload,
-        );
-        if (option) {
-          reasoningEfforts.push(option);
-        }
-      }
-    }
-  }
+  const reasoningEfforts = mapProviderModelOptionArray(rawReasoningEfforts);
+  const rawServiceTiers = value.service_tiers || value.serviceTiers;
+  const serviceTiers = mapProviderModelOptionArray(rawServiceTiers);
 
   return {
     providerType: normalizeDesktopProviderType(
@@ -2297,6 +2318,10 @@ function mapProviderModels(value: ProviderModelsPayload): DesktopProviderModels 
       value.supports_reasoning_effort_selection === true ||
       value.supportsReasoningEffortSelection === true,
     reasoningEfforts,
+    supportsServiceTierSelection:
+      value.supports_service_tier_selection === true ||
+      value.supportsServiceTierSelection === true,
+    serviceTiers,
     defaultModel:
       typeof value.default_model === "string"
         ? value.default_model
@@ -3478,6 +3503,7 @@ export async function createCustomAgent(
         provider_type: input.providerType,
         model: input.model,
         model_reasoning_effort: input.modelReasoningEffort,
+        model_service_tier: input.modelServiceTier,
         default_workspace_dir: input.defaultWorkspaceDir,
         avatar_data_url: input.avatarDataUrl ?? null,
         system_prompt: input.systemPrompt,
@@ -3504,6 +3530,7 @@ export async function updateCustomAgent(
         provider_type: input.providerType,
         model: input.model,
         model_reasoning_effort: input.modelReasoningEffort,
+        model_service_tier: input.modelServiceTier,
         default_workspace_dir: input.defaultWorkspaceDir,
         avatar_data_url: input.avatarDataUrl ?? null,
         system_prompt: input.systemPrompt,

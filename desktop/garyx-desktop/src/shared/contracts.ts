@@ -33,6 +33,9 @@ export interface DesktopProviderModelOption {
   label: string;
   description?: string | null;
   recommended?: boolean;
+  defaultReasoningEffort?: string | null;
+  supportedReasoningEfforts?: DesktopProviderModelOption[];
+  serviceTiers?: DesktopProviderModelOption[];
 }
 
 export interface DesktopProviderModels {
@@ -41,6 +44,8 @@ export interface DesktopProviderModels {
   models: DesktopProviderModelOption[];
   supportsReasoningEffortSelection?: boolean;
   reasoningEfforts?: DesktopProviderModelOption[];
+  supportsServiceTierSelection?: boolean;
+  serviceTiers?: DesktopProviderModelOption[];
   defaultModel?: string | null;
   source: string;
   error?: string | null;
@@ -252,6 +257,7 @@ export interface DesktopCustomAgent {
   providerType: DesktopApiProviderType;
   model: string;
   modelReasoningEffort: string;
+  modelServiceTier: string;
   defaultWorkspaceDir: string;
   avatarDataUrl: string;
   systemPrompt: string;
@@ -278,6 +284,7 @@ export interface CreateCustomAgentInput {
   providerType: DesktopApiProviderType;
   model: string;
   modelReasoningEffort: string;
+  modelServiceTier: string;
   defaultWorkspaceDir: string;
   avatarDataUrl?: string | null;
   systemPrompt: string;

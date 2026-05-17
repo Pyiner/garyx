@@ -33,14 +33,18 @@ type AgentDraft = {
   providerType: ProviderType;
   model: string;
   modelReasoningEffort: string;
+  modelServiceTier: string;
   defaultWorkspaceDir: string;
   systemPrompt: string;
 };
 
 const PROVIDER_DEFAULT_MODEL_VALUE = '__provider_default__';
 const PROVIDER_DEFAULT_REASONING_VALUE = '__provider_default_reasoning__';
+const PROVIDER_DEFAULT_SERVICE_TIER_VALUE = '__provider_default_service_tier__';
 
 const FALLBACK_REASONING_EFFORTS = [
+  { id: 'none', label: 'None', description: 'No reasoning', recommended: false },
+  { id: 'minimal', label: 'Minimal', description: 'Minimal reasoning', recommended: false },
   { id: 'low', label: 'Low', description: 'Faster responses', recommended: false },
   { id: 'medium', label: 'Medium', description: 'Balanced speed and reasoning', recommended: true },
   { id: 'high', label: 'High', description: 'Deeper reasoning', recommended: false },
@@ -54,6 +58,7 @@ function emptyDraft(): AgentDraft {
     providerType: 'claude_code',
     model: '',
     modelReasoningEffort: '',
+    modelServiceTier: '',
     defaultWorkspaceDir: '',
     systemPrompt: '',
   };
@@ -98,9 +103,13 @@ function providerModelsWithCurrent(
 
 function reasoningEffortsWithCurrent(
   providerModels: DesktopProviderModels | undefined,
+  currentModel: string,
   currentEffort: string,
 ): DesktopProviderModels['models'] {
-  const efforts = providerModels?.reasoningEfforts?.length
+  const selectedModel = providerModels?.models.find((model) => model.id === currentModel.trim());
+  const efforts = selectedModel?.supportedReasoningEfforts?.length
+    ? selectedModel.supportedReasoningEfforts
+    : providerModels?.reasoningEfforts?.length
     ? providerModels.reasoningEfforts
     : FALLBACK_REASONING_EFFORTS;
   const normalized = currentEffort.trim();
@@ -108,6 +117,24 @@ function reasoningEffortsWithCurrent(
     return efforts;
   }
   return [{ id: normalized, label: normalized, description: null, recommended: false }, ...efforts];
+}
+
+function serviceTiersWithCurrent(
+  providerModels: DesktopProviderModels | undefined,
+  currentModel: string,
+  currentServiceTier: string,
+): DesktopProviderModels['models'] {
+  const selectedModel = providerModels?.models.find((model) => model.id === currentModel.trim());
+  const tiers = selectedModel?.serviceTiers?.length
+    ? selectedModel.serviceTiers
+    : providerModels?.serviceTiers?.length
+    ? providerModels.serviceTiers
+    : [];
+  const normalized = currentServiceTier.trim();
+  if (!normalized || tiers.some((tier) => tier.id === normalized)) {
+    return tiers;
+  }
+  return [{ id: normalized, label: normalized, description: null, recommended: false }, ...tiers];
 }
 
 const plusIcon = (
@@ -207,11 +234,21 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     activeProviderModels?.supportsModelSelection === true && modelOptions.length > 0;
   const reasoningEffortOptions = reasoningEffortsWithCurrent(
     activeProviderModels,
+    draft.model || activeProviderModels?.defaultModel || '',
     draft.modelReasoningEffort,
   );
   const supportsReasoningEffortSelection =
     (draft.providerType === 'codex_app_server' || draft.providerType === 'garyx_native')
     && reasoningEffortOptions.length > 0;
+  const serviceTierOptions = serviceTiersWithCurrent(
+    activeProviderModels,
+    draft.model || activeProviderModels?.defaultModel || '',
+    draft.modelServiceTier,
+  );
+  const supportsServiceTierSelection =
+    draft.providerType === 'garyx_native'
+    && (activeProviderModels?.supportsServiceTierSelection === true || draft.modelServiceTier.trim().length > 0)
+    && serviceTierOptions.length > 0;
   const modelStatus =
     draft.providerType === 'gemini_cli' && !supportsModelSelection
       ? providerModelsBusy
@@ -238,6 +275,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
       providerType: agent.providerType,
       model: agent.model,
       modelReasoningEffort: agent.modelReasoningEffort,
+      modelServiceTier: agent.modelServiceTier,
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       systemPrompt: agent.systemPrompt,
     });
@@ -271,6 +309,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
         providerType: draft.providerType,
         model: supportsModelSelection ? draft.model.trim() : '',
         modelReasoningEffort: supportsReasoningEffortSelection ? draft.modelReasoningEffort.trim() : '',
+        modelServiceTier: supportsServiceTierSelection ? draft.modelServiceTier.trim() : '',
         defaultWorkspaceDir: draft.defaultWorkspaceDir.trim(),
         systemPrompt: draft.systemPrompt.trim(),
       };
@@ -399,6 +438,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       modelReasoningEffort: value === 'codex_app_server' || value === 'garyx_native'
                         ? current.modelReasoningEffort
                         : '',
+                      modelServiceTier: value === 'garyx_native' ? current.modelServiceTier : '',
                     }));
                     void ensureProviderModels(value);
                   }}
@@ -427,6 +467,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       setDraft((current) => ({
                         ...current,
                         model: value === PROVIDER_DEFAULT_MODEL_VALUE ? '' : value,
+                        modelServiceTier: '',
                       }));
                     }}
                     value={draft.model.trim() || PROVIDER_DEFAULT_MODEL_VALUE}
@@ -480,6 +521,37 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                   </Select>
                   <span className="codex-form-hint">
                     {t('Lower values are faster; higher values spend more reasoning.')}
+                  </span>
+                </div>
+              ) : null}
+              {supportsServiceTierSelection ? (
+                <div className="codex-form-field">
+                  <Label className="codex-form-label" htmlFor="agent-service-tier">{t('Service tier')}</Label>
+                  <Select
+                    onValueChange={(value) => {
+                      setDraft((current) => ({
+                        ...current,
+                        modelServiceTier: value === PROVIDER_DEFAULT_SERVICE_TIER_VALUE ? '' : value,
+                      }));
+                    }}
+                    value={draft.modelServiceTier.trim() || PROVIDER_DEFAULT_SERVICE_TIER_VALUE}
+                  >
+                    <SelectTrigger id="agent-service-tier">
+                      <SelectValue placeholder={t('Select service tier')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value={PROVIDER_DEFAULT_SERVICE_TIER_VALUE}>{t('Provider default')}</SelectItem>
+                        {serviceTierOptions.map((tier) => (
+                          <SelectItem key={tier.id} value={tier.id}>
+                            {tier.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <span className="codex-form-hint">
+                    {t('Fast service tiers trade higher usage for lower latency when the model supports them.')}
                   </span>
                 </div>
               ) : null}
@@ -579,6 +651,12 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 <div className="codex-list-row">
                   <span className="codex-list-row-name">{t('Reasoning effort')}</span>
                   <span className="codex-command-row-desc">{selectedAgent.modelReasoningEffort}</span>
+                </div>
+              ) : null}
+              {selectedAgent.modelServiceTier.trim() ? (
+                <div className="codex-list-row">
+                  <span className="codex-list-row-name">{t('Service tier')}</span>
+                  <span className="codex-command-row-desc">{selectedAgent.modelServiceTier}</span>
                 </div>
               ) : null}
               <div className="codex-list-row">

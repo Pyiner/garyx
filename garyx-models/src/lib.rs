@@ -3,6 +3,7 @@ pub mod agent_reference;
 pub mod agent_team;
 pub mod auto_research;
 pub mod channel_outbound;
+pub mod codex_models;
 pub mod command_catalog;
 pub mod config;
 pub mod config_loader;

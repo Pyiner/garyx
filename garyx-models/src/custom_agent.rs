@@ -12,6 +12,8 @@ pub struct CustomAgentProfile {
     pub model: String,
     #[serde(default, alias = "modelReasoningEffort")]
     pub model_reasoning_effort: String,
+    #[serde(default, alias = "modelServiceTier")]
+    pub model_service_tier: String,
     #[serde(
         default,
         alias = "defaultWorkspaceDir",
@@ -43,6 +45,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             provider_type: ProviderType::ClaudeCode,
             model: String::new(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: String::new(),
@@ -57,6 +60,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             provider_type: ProviderType::CodexAppServer,
             model: String::new(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: String::new(),
@@ -71,6 +75,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             provider_type: ProviderType::GeminiCli,
             model: "gemini-3-flash-preview".to_owned(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: String::new(),
@@ -85,6 +90,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             provider_type: ProviderType::GaryxNative,
             model: String::new(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: String::new(),

@@ -22,6 +22,7 @@ async fn rejects_builtin_agent_modification() {
             provider_type: ProviderType::ClaudeCode,
             model: "claude-opus-4-1".to_owned(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: "Override".to_owned(),
@@ -41,6 +42,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5".to_owned(),
             model_reasoning_effort: "high".to_owned(),
+            model_service_tier: "priority".to_owned(),
             default_workspace_dir: Some("  /tmp/reviewer  ".to_owned()),
             avatar_data_url: None,
             system_prompt: "Review carefully.".to_owned(),
@@ -52,6 +54,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
         Some("/tmp/reviewer")
     );
     assert_eq!(created.model_reasoning_effort, "high");
+    assert_eq!(created.model_service_tier, "priority");
 
     let updated = store
         .upsert_agent(UpsertCustomAgentRequest {
@@ -60,6 +63,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: "Review carefully.".to_owned(),
@@ -78,6 +82,7 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: Some("  ".to_owned()),
             avatar_data_url: None,
             system_prompt: "Review carefully.".to_owned(),
@@ -97,6 +102,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: None,
             avatar_data_url: Some("  data:image/png;base64,dGVzdA==  ".to_owned()),
             system_prompt: "Design carefully.".to_owned(),
@@ -115,6 +121,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: "Design carefully.".to_owned(),
@@ -133,6 +140,7 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             provider_type: ProviderType::CodexAppServer,
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
             default_workspace_dir: None,
             avatar_data_url: Some("  ".to_owned()),
             system_prompt: "Design carefully.".to_owned(),

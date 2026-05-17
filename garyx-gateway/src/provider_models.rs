@@ -2,8 +2,14 @@ use std::collections::HashSet;
 use std::process::Stdio;
 use std::time::Duration;
 
+use garyx_models::codex_models::{
+    CODEX_MODELS_CLIENT_VERSION_FLOOR, CodexModelPreset, CodexModelServiceTier,
+    CodexModelsResponse, CodexReasoningEffort, CodexReasoningEffortPreset,
+    available_codex_model_presets, codex_builtin_model_presets, models_endpoint,
+    parse_codex_cli_version, resolve_codex_auth,
+};
 use garyx_models::config::{AgentProviderConfig, GaryxConfig};
-use garyx_models::provider::ProviderType;
+use garyx_models::provider::{GaryxNativeConfig, ProviderType};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
@@ -28,6 +34,12 @@ pub(crate) struct ProviderModelOption {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub recommended: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_reasoning_efforts: Vec<ProviderReasoningEffortOption>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_tiers: Vec<ProviderModelOption>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -49,6 +61,10 @@ pub(crate) struct ProviderModelsResponse {
     pub supports_reasoning_effort_selection: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning_efforts: Vec<ProviderReasoningEffortOption>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub supports_service_tier_selection: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_tiers: Vec<ProviderModelOption>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
     pub source: &'static str,
@@ -59,6 +75,15 @@ pub(crate) struct ProviderModelsResponse {
 struct GeminiModelDiscovery {
     models: Vec<ProviderModelOption>,
     default_model: Option<String>,
+}
+
+struct GaryxNativeModelDiscovery {
+    models: Vec<ProviderModelOption>,
+    default_model: Option<String>,
+    reasoning_efforts: Vec<ProviderReasoningEffortOption>,
+    service_tiers: Vec<ProviderModelOption>,
+    source: &'static str,
+    error: Option<String>,
 }
 
 pub(crate) async fn list_provider_models(
@@ -73,6 +98,8 @@ pub(crate) async fn list_provider_models(
                 models: discovery.models,
                 supports_reasoning_effort_selection: false,
                 reasoning_efforts: Vec::new(),
+                supports_service_tier_selection: false,
+                service_tiers: Vec::new(),
                 default_model: discovery.default_model,
                 source: "gemini_acp",
                 error: None,
@@ -87,15 +114,39 @@ pub(crate) async fn list_provider_models(
         ProviderType::ClaudeCode | ProviderType::ClaudeTty | ProviderType::CodexAppServer => {
             unsupported(provider_type, "provider", None)
         }
-        ProviderType::GaryxNative => ProviderModelsResponse {
-            provider_type,
-            supports_model_selection: true,
-            models: garyx_native_models(),
-            supports_reasoning_effort_selection: true,
-            reasoning_efforts: reasoning_effort_options(),
-            default_model: Some("gpt-5.5".to_owned()),
-            source: "provider",
-            error: None,
+        ProviderType::GaryxNative => match fetch_garyx_native_codex_models(config).await {
+            Ok(discovery) if !discovery.models.is_empty() => ProviderModelsResponse {
+                provider_type,
+                supports_model_selection: true,
+                models: discovery.models,
+                supports_reasoning_effort_selection: true,
+                reasoning_efforts: discovery.reasoning_efforts,
+                supports_service_tier_selection: !discovery.service_tiers.is_empty(),
+                service_tiers: discovery.service_tiers,
+                default_model: discovery.default_model,
+                source: discovery.source,
+                error: discovery.error,
+            },
+            Ok(discovery) => unsupported(
+                provider_type,
+                discovery.source,
+                Some("Codex model catalog returned no picker-visible models".to_owned()),
+            ),
+            Err(error) => {
+                let discovery = garyx_native_builtin_models(Some(error));
+                ProviderModelsResponse {
+                    provider_type,
+                    supports_model_selection: true,
+                    models: discovery.models,
+                    supports_reasoning_effort_selection: true,
+                    reasoning_efforts: discovery.reasoning_efforts,
+                    supports_service_tier_selection: !discovery.service_tiers.is_empty(),
+                    service_tiers: discovery.service_tiers,
+                    default_model: discovery.default_model,
+                    source: discovery.source,
+                    error: discovery.error,
+                }
+            }
         },
         ProviderType::AgentTeam => unsupported(provider_type, "provider", None),
     }
@@ -112,80 +163,218 @@ fn unsupported(
         models: Vec::new(),
         supports_reasoning_effort_selection: false,
         reasoning_efforts: Vec::new(),
+        supports_service_tier_selection: false,
+        service_tiers: Vec::new(),
         default_model: None,
         source,
         error,
     }
 }
 
-fn garyx_native_models() -> Vec<ProviderModelOption> {
-    vec![
-        ProviderModelOption {
-            id: "gpt-5.5".to_owned(),
-            label: "GPT-5.5".to_owned(),
-            description: Some("Highest-quality Garyx native default model".to_owned()),
-            recommended: true,
-        },
-        ProviderModelOption {
-            id: "gpt-5.4".to_owned(),
-            label: "GPT-5.4".to_owned(),
-            description: Some("Strong everyday model".to_owned()),
-            recommended: false,
-        },
-        ProviderModelOption {
-            id: "gpt-5.4-mini".to_owned(),
-            label: "GPT-5.4 Mini".to_owned(),
-            description: Some("Faster, lower-cost option".to_owned()),
-            recommended: false,
-        },
-        ProviderModelOption {
-            id: "gpt-5.3-codex".to_owned(),
-            label: "GPT-5.3 Codex".to_owned(),
-            description: Some("Coding-optimized model".to_owned()),
-            recommended: false,
-        },
-        ProviderModelOption {
-            id: "gpt-5.3-codex-spark".to_owned(),
-            label: "GPT-5.3 Codex Spark".to_owned(),
-            description: Some("Fast coding model".to_owned()),
-            recommended: false,
-        },
-        ProviderModelOption {
-            id: "gpt-5.2".to_owned(),
-            label: "GPT-5.2".to_owned(),
-            description: Some("Stable fallback model".to_owned()),
-            recommended: false,
-        },
-    ]
+async fn fetch_garyx_native_codex_models(
+    config: &GaryxConfig,
+) -> Result<GaryxNativeModelDiscovery, String> {
+    #[cfg(test)]
+    if std::env::var_os("GARYX_ALLOW_REAL_CODEX_MODEL_FETCH").is_none() {
+        return Err("Codex model catalog fetch disabled in tests".to_owned());
+    }
+
+    let native_config = configured_garyx_native_config(config);
+    let auth = resolve_codex_auth(&native_config, &native_config.env)
+        .map_err(|error| error.to_string())?;
+    let client_version = resolve_codex_models_client_version().await;
+    let response = reqwest::Client::new()
+        .get(models_endpoint(&auth.base_url, &client_version))
+        .bearer_auth(&auth.bearer_token)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(
+            reqwest::header::USER_AGENT,
+            format!("garyx-provider-models/{}", env!("CARGO_PKG_VERSION")),
+        );
+    let response = if let Some(account_id) = auth.account_id.as_deref()
+        && !account_id.trim().is_empty()
+    {
+        response.header("ChatGPT-Account-ID", account_id)
+    } else {
+        response
+    };
+    let response = timeout(Duration::from_secs(10), response.send())
+        .await
+        .map_err(|_| "Codex model catalog request timed out".to_owned())?
+        .map_err(|error| format!("Codex model catalog request failed: {error}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "Codex model catalog request failed with {status}: {body}"
+        ));
+    }
+    let catalog = response
+        .json::<CodexModelsResponse>()
+        .await
+        .map_err(|error| format!("Codex model catalog response was invalid: {error}"))?;
+    let presets = available_codex_model_presets(catalog.models, auth.uses_codex_backend());
+    Ok(garyx_native_discovery_from_presets(
+        presets,
+        "codex_models",
+        None,
+    ))
 }
 
-fn reasoning_effort_options() -> Vec<ProviderReasoningEffortOption> {
-    vec![
-        ProviderReasoningEffortOption {
-            id: "low".to_owned(),
-            label: "Low".to_owned(),
-            description: Some("Faster responses with lighter reasoning".to_owned()),
-            recommended: false,
-        },
-        ProviderReasoningEffortOption {
-            id: "medium".to_owned(),
-            label: "Medium".to_owned(),
-            description: Some("Balanced speed and reasoning depth".to_owned()),
-            recommended: true,
-        },
-        ProviderReasoningEffortOption {
-            id: "high".to_owned(),
-            label: "High".to_owned(),
-            description: Some("Deeper reasoning for harder tasks".to_owned()),
-            recommended: false,
-        },
-        ProviderReasoningEffortOption {
-            id: "xhigh".to_owned(),
-            label: "Extra High".to_owned(),
-            description: Some("Maximum reasoning depth when latency is acceptable".to_owned()),
-            recommended: false,
-        },
-    ]
+fn garyx_native_builtin_models(error: Option<String>) -> GaryxNativeModelDiscovery {
+    garyx_native_discovery_from_presets(codex_builtin_model_presets(), "codex_builtin", error)
+}
+
+fn garyx_native_discovery_from_presets(
+    presets: Vec<CodexModelPreset>,
+    source: &'static str,
+    error: Option<String>,
+) -> GaryxNativeModelDiscovery {
+    let default_model = presets
+        .iter()
+        .find(|preset| preset.is_default)
+        .or_else(|| presets.iter().find(|preset| preset.show_in_picker));
+    let reasoning_efforts = default_model
+        .map(|preset| {
+            provider_reasoning_effort_options(
+                &preset.supported_reasoning_efforts,
+                preset.default_reasoning_effort,
+            )
+        })
+        .unwrap_or_default();
+    let service_tiers = default_model
+        .map(|preset| provider_service_tier_options(&preset.service_tiers))
+        .unwrap_or_default();
+    let default_model = default_model.map(|preset| preset.model.clone());
+    let models = presets
+        .into_iter()
+        .filter(|preset| preset.show_in_picker)
+        .map(provider_model_option_from_codex_preset)
+        .collect();
+
+    GaryxNativeModelDiscovery {
+        models,
+        default_model,
+        reasoning_efforts,
+        service_tiers,
+        source,
+        error,
+    }
+}
+
+fn provider_model_option_from_codex_preset(preset: CodexModelPreset) -> ProviderModelOption {
+    ProviderModelOption {
+        id: preset.model.clone(),
+        label: preset.display_name,
+        description: (!preset.description.trim().is_empty()).then_some(preset.description),
+        recommended: preset.is_default,
+        default_reasoning_effort: Some(preset.default_reasoning_effort.to_string()),
+        supported_reasoning_efforts: provider_reasoning_effort_options(
+            &preset.supported_reasoning_efforts,
+            preset.default_reasoning_effort,
+        ),
+        service_tiers: provider_service_tier_options(&preset.service_tiers),
+    }
+}
+
+fn provider_reasoning_effort_options(
+    presets: &[CodexReasoningEffortPreset],
+    default_effort: CodexReasoningEffort,
+) -> Vec<ProviderReasoningEffortOption> {
+    presets
+        .iter()
+        .map(|preset| ProviderReasoningEffortOption {
+            id: preset.effort.to_string(),
+            label: preset.effort.label().to_owned(),
+            description: (!preset.description.trim().is_empty())
+                .then(|| preset.description.clone()),
+            recommended: preset.effort == default_effort,
+        })
+        .collect()
+}
+
+fn provider_service_tier_options(tiers: &[CodexModelServiceTier]) -> Vec<ProviderModelOption> {
+    tiers
+        .iter()
+        .filter_map(|tier| {
+            let id = tier.id.trim();
+            if id.is_empty() {
+                return None;
+            }
+            let label = if tier.name.trim().is_empty() {
+                id.to_owned()
+            } else {
+                tier.name.trim().to_owned()
+            };
+            Some(ProviderModelOption {
+                id: id.to_owned(),
+                label,
+                description: (!tier.description.trim().is_empty())
+                    .then(|| tier.description.clone()),
+                recommended: false,
+                default_reasoning_effort: None,
+                supported_reasoning_efforts: Vec::new(),
+                service_tiers: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+async fn resolve_codex_models_client_version() -> String {
+    if let Ok(value) = std::env::var("CODEX_CLIENT_VERSION")
+        && let Some(version) = parse_codex_cli_version(&value)
+    {
+        return version;
+    }
+    let version = timeout(
+        Duration::from_secs(2),
+        Command::new("codex").arg("--version").output(),
+    )
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .and_then(|output| String::from_utf8(output.stdout).ok())
+    .and_then(|output| parse_codex_cli_version(&output));
+    version.unwrap_or_else(|| CODEX_MODELS_CLIENT_VERSION_FLOOR.to_owned())
+}
+
+fn configured_garyx_native_config(config: &GaryxConfig) -> GaryxNativeConfig {
+    for key in ["garyx", "garyx_native", "native"] {
+        if let Some(value) = config.agents.get(key)
+            && let Some(config) = garyx_native_config_from_agent_config(value)
+        {
+            return config;
+        }
+    }
+    for value in config.agents.values() {
+        if let Some(config) = garyx_native_config_from_agent_config(value) {
+            return config;
+        }
+    }
+    GaryxNativeConfig::default()
+}
+
+fn garyx_native_config_from_agent_config(value: &Value) -> Option<GaryxNativeConfig> {
+    let config = serde_json::from_value::<AgentProviderConfig>(value.clone()).ok()?;
+    if config.provider_type != "garyx_native" {
+        return None;
+    }
+    Some(GaryxNativeConfig {
+        default_model: config.default_model,
+        model: config.model,
+        model_reasoning_effort: config.model_reasoning_effort,
+        model_service_tier: config.model_service_tier,
+        max_turns: config.max_turns,
+        timeout_seconds: config.timeout_seconds,
+        workspace_dir: config.workspace_dir,
+        env: config.env,
+        auth_source: config.auth_source,
+        base_url: config.base_url,
+        codex_home: config.codex_home,
+        max_tool_iterations: config.max_tool_iterations,
+        request_timeout_seconds: config.request_timeout_seconds,
+        ..Default::default()
+    })
 }
 
 async fn fetch_gemini_acp_models(config: &GaryxConfig) -> Result<GeminiModelDiscovery, String> {
@@ -429,6 +618,9 @@ fn parse_model_option(value: &Value) -> Option<ProviderModelOption> {
             label: model_label(id, None),
             description: None,
             recommended: false,
+            default_reasoning_effort: None,
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
         });
     }
 
@@ -458,6 +650,9 @@ fn parse_model_option(value: &Value) -> Option<ProviderModelOption> {
             .get("recommended")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        default_reasoning_effort: None,
+        supported_reasoning_efforts: Vec::new(),
+        service_tiers: Vec::new(),
     })
 }
 
@@ -517,5 +712,43 @@ mod tests {
         );
 
         assert_eq!(configured_gemini_bin(&config), "/tmp/gemini-acp");
+    }
+
+    #[test]
+    fn maps_codex_presets_with_model_specific_reasoning() {
+        let discovery = garyx_native_builtin_models(None);
+
+        assert_eq!(discovery.source, "codex_builtin");
+        assert_eq!(discovery.default_model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(discovery.models[0].id, "gpt-5.5");
+        assert!(discovery.models[0].recommended);
+        assert_eq!(discovery.models[0].service_tiers[0].id, "priority");
+        assert_eq!(discovery.models[0].service_tiers[0].label, "Fast");
+        assert_eq!(
+            discovery.models[0].default_reasoning_effort.as_deref(),
+            Some("medium")
+        );
+        assert_eq!(discovery.models[0].supported_reasoning_efforts[0].id, "low");
+        assert_eq!(discovery.service_tiers[0].id, "priority");
+        assert_eq!(discovery.reasoning_efforts[1].id, "medium");
+        assert!(discovery.reasoning_efforts[1].recommended);
+    }
+
+    #[test]
+    fn reads_configured_garyx_native_codex_home() {
+        let mut config = GaryxConfig::default();
+        config.agents.insert(
+            "custom-garyx".to_owned(),
+            json!({
+                "provider_type": "garyx_native",
+                "codex_home": "/tmp/test-codex-home",
+                "base_url": "https://example.invalid/codex"
+            }),
+        );
+
+        let native = configured_garyx_native_config(&config);
+
+        assert_eq!(native.codex_home, "/tmp/test-codex-home");
+        assert_eq!(native.base_url, "https://example.invalid/codex");
     }
 }

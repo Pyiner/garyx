@@ -408,6 +408,8 @@ pub struct CustomAgentUpsertPayload {
     pub model: String,
     #[serde(default, alias = "modelReasoningEffort")]
     pub model_reasoning_effort: String,
+    #[serde(default, alias = "modelServiceTier")]
+    pub model_service_tier: String,
     #[serde(
         default,
         alias = "defaultWorkspaceDir",
@@ -2957,6 +2959,7 @@ pub async fn create_custom_agent(
             provider_type: payload.provider_type,
             model: payload.model,
             model_reasoning_effort: payload.model_reasoning_effort,
+            model_service_tier: payload.model_service_tier,
             default_workspace_dir: payload.default_workspace_dir,
             avatar_data_url: payload.avatar_data_url,
             system_prompt: payload.system_prompt,
@@ -3003,6 +3006,7 @@ pub async fn update_custom_agent(
             provider_type: payload.provider_type,
             model: payload.model,
             model_reasoning_effort: payload.model_reasoning_effort,
+            model_service_tier: payload.model_service_tier,
             default_workspace_dir: payload.default_workspace_dir,
             avatar_data_url: payload.avatar_data_url,
             system_prompt: payload.system_prompt,

@@ -62,6 +62,19 @@ Supported credential forms:
 Codex agent identity signing is intentionally not duplicated in this pass. If
 Codex only has `agent_identity`, Garyx reports a clear configuration error.
 
+## Model Catalog
+
+Garyx native follows Codex's model catalog rules instead of maintaining a
+separate hand-written model list. The gateway calls the Codex `/models`
+endpoint with the local Codex CLI version, sorts models by Codex `priority`,
+marks the first picker-visible model as the default, and exposes each model's
+own supported reasoning efforts and service tiers. The `service_tiers` values
+are forwarded to the Responses API as `service_tier`; for the current Codex
+catalog, Fast mode is exposed as `priority`. When the live catalog cannot be
+read, Garyx uses a minimal fallback copied from Codex's bundled model catalog so
+the default, reasoning controls, and known Fast service tiers remain available
+offline.
+
 ## Loop
 
 Each run performs the same basic cycle used by Codex and Claude Code:

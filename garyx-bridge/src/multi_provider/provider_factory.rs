@@ -105,6 +105,7 @@ fn build_garyx_native_config(
             agent_cfg.model.clone()
         },
         model_reasoning_effort: agent_cfg.model_reasoning_effort.clone(),
+        model_service_tier: agent_cfg.model_service_tier.clone(),
         max_turns: agent_cfg.max_turns,
         timeout_seconds: agent_cfg.timeout_seconds,
         env: agent_cfg.env.clone(),
