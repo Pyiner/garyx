@@ -1,12 +1,74 @@
+//! OpenAI Responses adapter for the model-neutral agent loop.
+//!
+//! Authentication is injected through [`OpenAiAuthProvider`] so host
+//! applications can use API keys, OAuth tokens, enterprise gateways, or any
+//! other credential source without coupling the adapter to the host's config
+//! model.
+
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use garyx_models::codex_models::{resolve_codex_auth, responses_endpoint};
-use garyx_models::provider::{GaryxNativeConfig, ProviderMessage};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    AgentLoopError, LlmAdapter, LlmOutput, LlmRequest, LlmResponse, LlmToolCall, ModelVendor,
+    AgentLoopError, ConversationMessage, LlmAdapter, LlmOutput, LlmRequest, LlmResponse,
+    LlmRuntimeContext, LlmToolCall, ModelVendor, ToolDefinition,
 };
+
+pub const OPENAI_RESPONSES_BASE_URL: &str = "https://api.openai.com/v1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiAuth {
+    pub bearer_token: String,
+    pub base_url: String,
+    pub account_id: Option<String>,
+}
+
+impl OpenAiAuth {
+    pub fn new(bearer_token: impl Into<String>) -> Self {
+        Self {
+            bearer_token: bearer_token.into(),
+            base_url: OPENAI_RESPONSES_BASE_URL.to_owned(),
+            account_id: None,
+        }
+    }
+}
+
+#[async_trait]
+pub trait OpenAiAuthProvider: Send + Sync {
+    async fn resolve_auth(&self, runtime: &LlmRuntimeContext)
+    -> Result<OpenAiAuth, AgentLoopError>;
+}
+
+pub struct StaticOpenAiAuthProvider {
+    auth: OpenAiAuth,
+}
+
+impl StaticOpenAiAuthProvider {
+    pub fn new(auth: OpenAiAuth) -> Self {
+        Self { auth }
+    }
+}
+
+#[async_trait]
+impl OpenAiAuthProvider for StaticOpenAiAuthProvider {
+    async fn resolve_auth(
+        &self,
+        _runtime: &LlmRuntimeContext,
+    ) -> Result<OpenAiAuth, AgentLoopError> {
+        Ok(self.auth.clone())
+    }
+}
+
+pub fn responses_endpoint(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    if trimmed.ends_with("/responses") {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}/responses")
+    }
+}
 
 #[derive(Default)]
 pub struct ResponseStreamAccumulator {
@@ -21,19 +83,19 @@ pub struct ResponseStreamAccumulator {
 /// It supports both direct OpenAI API-key auth and ChatGPT Codex auth resolved
 /// through the same Codex auth files used by the Codex CLI.
 pub struct OpenAiResponsesAdapter {
-    config: GaryxNativeConfig,
+    auth_provider: Arc<dyn OpenAiAuthProvider>,
     http: reqwest::Client,
 }
 
 impl OpenAiResponsesAdapter {
-    pub fn new(config: GaryxNativeConfig) -> Self {
+    pub fn new(auth_provider: Arc<dyn OpenAiAuthProvider>) -> Self {
         Self {
-            config,
+            auth_provider,
             http: reqwest::Client::new(),
         }
     }
 
-    fn provider_message_text(message: &ProviderMessage) -> Option<String> {
+    fn provider_message_text(message: &ConversationMessage) -> Option<String> {
         message
             .text
             .clone()
@@ -45,7 +107,7 @@ impl OpenAiResponsesAdapter {
             })
     }
 
-    pub fn message_input(message: &ProviderMessage) -> Option<Value> {
+    pub fn message_input(message: &ConversationMessage) -> Option<Value> {
         match message.role_str() {
             "user" => Some(json!({
                 "role": "user",
@@ -61,19 +123,19 @@ impl OpenAiResponsesAdapter {
             })),
             "tool_use" => {
                 let call_id = message
-                    .tool_use_id
+                    .tool_call_id
                     .clone()
                     .unwrap_or_else(|| format!("call_{}", Uuid::new_v4()));
                 Some(json!({
                     "type": "function_call",
                     "call_id": call_id,
-                    "name": message.tool_name.clone().unwrap_or_default(),
-                    "arguments": message.content.to_string(),
+                    "name": Self::tool_call_name(message),
+                    "arguments": Self::tool_call_arguments(message),
                 }))
             }
             "tool_result" => {
                 let call_id = message
-                    .tool_use_id
+                    .tool_call_id
                     .clone()
                     .unwrap_or_else(|| format!("call_{}", Uuid::new_v4()));
                 Some(json!({
@@ -86,23 +148,54 @@ impl OpenAiResponsesAdapter {
         }
     }
 
+    fn tool_call_name(message: &ConversationMessage) -> String {
+        message
+            .tool_name
+            .clone()
+            .or_else(|| {
+                message
+                    .content
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_default()
+    }
+
+    fn tool_call_arguments(message: &ConversationMessage) -> String {
+        let arguments = message.content.get("arguments").unwrap_or(&message.content);
+        match arguments.as_str() {
+            Some(text) => text.to_owned(),
+            None => arguments.to_string(),
+        }
+    }
+
+    fn tool_schema(tool: &ToolDefinition) -> Value {
+        json!({
+            "type": "function",
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
+        })
+    }
+
     pub fn response_body(request: &LlmRequest, input: Vec<Value>) -> Value {
         let mut body = json!({
             "model": request.model,
             "instructions": request.instructions,
             "input": input,
-            "tools": request.tools,
+            "tools": request.tools.iter().map(Self::tool_schema).collect::<Vec<_>>(),
             "tool_choice": "auto",
             "parallel_tool_calls": false,
             "stream": true,
             "store": false,
         });
-        if let Some(effort) = request.reasoning_effort.as_deref()
+        if let Some(effort) = request.options.reasoning_effort.as_deref()
             && !effort.trim().is_empty()
         {
             body["reasoning"] = json!({ "effort": effort.trim() });
         }
-        if let Some(service_tier) = request.service_tier.as_deref()
+        if let Some(service_tier) = request.options.service_tier.as_deref()
             && !service_tier.trim().is_empty()
         {
             body["service_tier"] = json!(service_tier.trim());
@@ -368,8 +461,7 @@ impl LlmAdapter for OpenAiResponsesAdapter {
     }
 
     async fn sample(&self, request: LlmRequest) -> Result<LlmResponse, AgentLoopError> {
-        let auth = resolve_codex_auth(&self.config, &request.env)
-            .map_err(|error| AgentLoopError::failed(error.to_string()))?;
+        let auth = self.auth_provider.resolve_auth(&request.runtime).await?;
         let mut input = Vec::new();
         for message in &request.messages {
             if let Some(item) = Self::message_input(message) {
@@ -404,11 +496,6 @@ impl LlmAdapter for OpenAiResponsesAdapter {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use garyx_models::codex_models::{
-        CHATGPT_CODEX_BASE_URL, OPENAI_RESPONSES_BASE_URL, resolve_codex_auth,
-    };
     use serde_json::json;
 
     use super::*;
@@ -419,18 +506,20 @@ mod tests {
             model: "gpt-test".to_owned(),
             instructions: "Act carefully.".to_owned(),
             messages: Vec::new(),
-            tools: vec![json!({
-                "type": "function",
-                "name": "read_file",
-                "parameters": {
+            tools: vec![ToolDefinition::function(
+                "read_file",
+                "Read a file.",
+                json!({
                     "type": "object",
                     "properties": {},
                     "additionalProperties": false
-                }
-            })],
-            reasoning_effort: Some("high".to_owned()),
-            service_tier: Some("priority".to_owned()),
-            env: HashMap::new(),
+                }),
+            )],
+            options: crate::LlmRequestOptions {
+                reasoning_effort: Some("high".to_owned()),
+                service_tier: Some("priority".to_owned()),
+            },
+            runtime: LlmRuntimeContext::default(),
         };
 
         let body = OpenAiResponsesAdapter::response_body(
@@ -444,6 +533,34 @@ mod tests {
         assert_eq!(body["reasoning"]["effort"], "high");
         assert_eq!(body["service_tier"], "priority");
         assert_eq!(body["input"][0]["content"], "hello");
+        assert_eq!(body["tools"][0]["name"], "read_file");
+        assert_eq!(body["tools"][0]["description"], "Read a file.");
+    }
+
+    #[test]
+    fn message_input_replays_tool_call_arguments_without_garyx_wrapper() {
+        let message = ConversationMessage::tool_use(
+            json!({
+                "name": "write_file",
+                "arguments": {
+                    "path": "demo.txt",
+                    "content": "hello"
+                }
+            }),
+            Some("call-1".to_owned()),
+            Some("write_file".to_owned()),
+        );
+
+        let input = OpenAiResponsesAdapter::message_input(&message).unwrap();
+
+        assert_eq!(input["type"], "function_call");
+        assert_eq!(input["call_id"], "call-1");
+        assert_eq!(input["name"], "write_file");
+        let arguments =
+            serde_json::from_str::<Value>(input["arguments"].as_str().unwrap()).unwrap();
+        assert_eq!(arguments["path"], "demo.txt");
+        assert_eq!(arguments["content"], "hello");
+        assert!(arguments.get("name").is_none());
     }
 
     #[test]
@@ -539,48 +656,22 @@ mod tests {
 
     #[test]
     fn openai_adapter_reports_vendor() {
-        let adapter = OpenAiResponsesAdapter::new(GaryxNativeConfig::default());
+        let auth_provider = Arc::new(StaticOpenAiAuthProvider::new(OpenAiAuth::new("test-key")));
+        let adapter = OpenAiResponsesAdapter::new(auth_provider);
 
         assert_eq!(adapter.vendor(), ModelVendor::OpenAi);
     }
 
     #[test]
-    fn auth_prefers_codex_api_key_from_runtime_env() {
-        let config = GaryxNativeConfig::default();
-        let env = HashMap::from([("CODEX_API_KEY".to_owned(), "test-api-key".to_owned())]);
+    fn responses_endpoint_appends_only_once() {
+        assert_eq!(
+            responses_endpoint(OPENAI_RESPONSES_BASE_URL),
+            "https://api.openai.com/v1/responses"
+        );
 
-        let auth = resolve_codex_auth(&config, &env).unwrap();
-
-        assert_eq!(auth.bearer_token, "test-api-key");
-        assert_eq!(auth.base_url, OPENAI_RESPONSES_BASE_URL);
-        assert_eq!(auth.account_id, None);
-    }
-
-    #[test]
-    fn auth_reads_chatgpt_token_from_codex_auth_file() {
-        let temp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            temp.path().join("auth.json"),
-            serde_json::to_string(&json!({
-                "tokens": {
-                    "access_token": "test-access-token",
-                    "refresh_token": "test-refresh-token",
-                    "account_id": "test-account",
-                    "id_token": {}
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let config = GaryxNativeConfig {
-            codex_home: temp.path().display().to_string(),
-            ..Default::default()
-        };
-
-        let auth = resolve_codex_auth(&config, &HashMap::new()).unwrap();
-
-        assert_eq!(auth.bearer_token, "test-access-token");
-        assert_eq!(auth.base_url, CHATGPT_CODEX_BASE_URL);
-        assert_eq!(auth.account_id.as_deref(), Some("test-account"));
+        assert_eq!(
+            responses_endpoint("https://api.openai.com/v1/responses"),
+            "https://api.openai.com/v1/responses"
+        );
     }
 }

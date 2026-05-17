@@ -7,22 +7,25 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 #[cfg(test)]
 use garyx_agent_loop::LlmOutput as NativeModelOutput;
-use garyx_agent_loop::adapters::openai::OpenAiResponsesAdapter;
 #[cfg(test)]
 use garyx_agent_loop::adapters::openai::OpenAiResponsesAdapter as GptResponsesModelBackend;
 #[cfg(test)]
 use garyx_agent_loop::adapters::openai::ResponseStreamAccumulator;
+use garyx_agent_loop::adapters::openai::{OpenAiAuth, OpenAiAuthProvider, OpenAiResponsesAdapter};
 use garyx_agent_loop::{
-    AgentLoopError, AgentLoopEvent, AgentLoopRunRequest, AgentLoopSession, LlmAdapter,
-    LlmToolCall as NativeToolCall, QueueMode, ToolExecution, ToolExecutor, run_agent_loop,
+    AgentLoopError, AgentLoopEvent, AgentLoopRunRequest, AgentLoopSession, ConversationMessage,
+    ConversationRole, LlmAdapter, LlmRequestOptions, LlmRuntimeContext,
+    LlmToolCall as NativeToolCall, PendingUserInput, QueueMode, ToolDefinition, ToolExecution,
+    ToolExecutor, run_agent_loop,
 };
 #[cfg(test)]
 use garyx_agent_loop::{
     LlmRequest as NativeModelRequest, LlmResponse as NativeModelResponse, ModelVendor,
 };
+use garyx_models::codex_models::resolve_codex_auth;
 use garyx_models::provider::{
-    GaryxNativeConfig, ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType,
-    QueuedUserInput, StreamBoundaryKind, StreamEvent, attachments_from_metadata,
+    GaryxNativeConfig, ProviderMessage, ProviderMessageRole, ProviderRunOptions, ProviderRunResult,
+    ProviderType, QueuedUserInput, StreamBoundaryKind, StreamEvent, attachments_from_metadata,
     build_prompt_message_with_attachments,
 };
 use serde_json::{Value, json};
@@ -153,6 +156,73 @@ fn goal_context(metadata: &HashMap<String, Value>) -> Option<String> {
     ))
 }
 
+fn conversation_from_provider(message: ProviderMessage) -> ConversationMessage {
+    let role = match message.role {
+        ProviderMessageRole::User => ConversationRole::User,
+        ProviderMessageRole::Assistant => ConversationRole::Assistant,
+        ProviderMessageRole::System => ConversationRole::System,
+        ProviderMessageRole::ToolUse => ConversationRole::ToolUse,
+        ProviderMessageRole::ToolResult => ConversationRole::ToolResult,
+    };
+    ConversationMessage {
+        role,
+        content: message.content,
+        text: message.text,
+        timestamp: message.timestamp,
+        metadata: message.metadata,
+        tool_call_id: message.tool_use_id,
+        tool_name: message.tool_name,
+        is_error: message.is_error,
+    }
+}
+
+fn provider_from_conversation(message: ConversationMessage) -> ProviderMessage {
+    let role = match message.role {
+        ConversationRole::User => ProviderMessageRole::User,
+        ConversationRole::Assistant => ProviderMessageRole::Assistant,
+        ConversationRole::System => ProviderMessageRole::System,
+        ConversationRole::ToolUse => ProviderMessageRole::ToolUse,
+        ConversationRole::ToolResult => ProviderMessageRole::ToolResult,
+    };
+    ProviderMessage {
+        role,
+        content: message.content,
+        text: message.text,
+        timestamp: message.timestamp,
+        metadata: message.metadata,
+        tool_use_id: message.tool_call_id,
+        tool_name: message.tool_name,
+        is_error: message.is_error,
+    }
+}
+
+fn pending_from_queued(input: QueuedUserInput) -> PendingUserInput {
+    PendingUserInput {
+        pending_input_id: input.pending_input_id,
+        message: input.message,
+    }
+}
+
+struct GaryxOpenAiAuthProvider {
+    config: GaryxNativeConfig,
+}
+
+#[async_trait]
+impl OpenAiAuthProvider for GaryxOpenAiAuthProvider {
+    async fn resolve_auth(
+        &self,
+        runtime: &LlmRuntimeContext,
+    ) -> Result<OpenAiAuth, AgentLoopError> {
+        let auth = resolve_codex_auth(&self.config, &runtime.env)
+            .map_err(|error| AgentLoopError::failed(error.to_string()))?;
+        Ok(OpenAiAuth {
+            bearer_token: auth.bearer_token,
+            base_url: auth.base_url,
+            account_id: auth.account_id,
+        })
+    }
+}
+
 pub struct GaryxNativeProvider {
     config: GaryxNativeConfig,
     ready: Mutex<bool>,
@@ -163,7 +233,10 @@ pub struct GaryxNativeProvider {
 
 impl GaryxNativeProvider {
     pub fn new(config: GaryxNativeConfig) -> Self {
-        let model_adapter = Arc::new(OpenAiResponsesAdapter::new(config.clone()));
+        let auth_provider = Arc::new(GaryxOpenAiAuthProvider {
+            config: config.clone(),
+        });
+        let model_adapter = Arc::new(OpenAiResponsesAdapter::new(auth_provider));
         Self::with_model_adapter(config, model_adapter)
     }
 
@@ -205,7 +278,10 @@ impl GaryxNativeProvider {
         if !persisted.is_empty() {
             let mut state = session.lock().await;
             if state.messages.is_empty() {
-                state.messages = persisted;
+                state.messages = persisted
+                    .into_iter()
+                    .map(conversation_from_provider)
+                    .collect();
             }
             if let Some(sid) = restored_sid
                 && state.sdk_session_id != sid
@@ -236,13 +312,12 @@ impl GaryxNativeProvider {
         parts.join("\n\n")
     }
 
-    fn tool_schemas() -> Vec<Value> {
+    fn tool_schemas() -> Vec<ToolDefinition> {
         vec![
-            json!({
-                "type": "function",
-                "name": "exec_command",
-                "description": "Run a shell command in the active workspace.",
-                "parameters": {
+            ToolDefinition::function(
+                "exec_command",
+                "Run a shell command in the active workspace.",
+                json!({
                     "type": "object",
                     "properties": {
                         "cmd": { "type": "string" },
@@ -250,24 +325,22 @@ impl GaryxNativeProvider {
                     },
                     "required": ["cmd"],
                     "additionalProperties": false
-                }
-            }),
-            json!({
-                "type": "function",
-                "name": "read_file",
-                "description": "Read a UTF-8 text file.",
-                "parameters": {
+                }),
+            ),
+            ToolDefinition::function(
+                "read_file",
+                "Read a UTF-8 text file.",
+                json!({
                     "type": "object",
                     "properties": { "path": { "type": "string" } },
                     "required": ["path"],
                     "additionalProperties": false
-                }
-            }),
-            json!({
-                "type": "function",
-                "name": "write_file",
-                "description": "Write a UTF-8 text file.",
-                "parameters": {
+                }),
+            ),
+            ToolDefinition::function(
+                "write_file",
+                "Write a UTF-8 text file.",
+                json!({
                     "type": "object",
                     "properties": {
                         "path": { "type": "string" },
@@ -275,33 +348,30 @@ impl GaryxNativeProvider {
                     },
                     "required": ["path", "content"],
                     "additionalProperties": false
-                }
-            }),
-            json!({
-                "type": "function",
-                "name": "list_dir",
-                "description": "List files and directories.",
-                "parameters": {
+                }),
+            ),
+            ToolDefinition::function(
+                "list_dir",
+                "List files and directories.",
+                json!({
                     "type": "object",
                     "properties": { "path": { "type": "string" } },
                     "additionalProperties": false
-                }
-            }),
-            json!({
-                "type": "function",
-                "name": "get_goal",
-                "description": "Return the current durable Garyx goal for this thread.",
-                "parameters": {
+                }),
+            ),
+            ToolDefinition::function(
+                "get_goal",
+                "Return the current durable Garyx goal for this thread.",
+                json!({
                     "type": "object",
                     "properties": {},
                     "additionalProperties": false
-                }
-            }),
-            json!({
-                "type": "function",
-                "name": "update_goal",
-                "description": "Update the current durable Garyx goal status.",
-                "parameters": {
+                }),
+            ),
+            ToolDefinition::function(
+                "update_goal",
+                "Update the current durable Garyx goal status.",
+                json!({
                     "type": "object",
                     "properties": {
                         "status": { "type": "string", "enum": ["active", "paused", "completed"] },
@@ -309,8 +379,8 @@ impl GaryxNativeProvider {
                     },
                     "required": ["status"],
                     "additionalProperties": false
-                }
-            }),
+                }),
+            ),
         ]
     }
 
@@ -543,7 +613,7 @@ impl AgentLoopProvider for GaryxNativeProvider {
                 let message = build_prompt_message_with_attachments(&options.message, &attachments);
                 let message =
                     prepend_initial_context_to_user_message(&message, &options.metadata, true);
-                state.messages.push(ProviderMessage::user_text(message));
+                state.messages.push(ConversationMessage::user_text(message));
             }
             state.sdk_session_id.clone()
         };
@@ -551,21 +621,26 @@ impl AgentLoopProvider for GaryxNativeProvider {
             model: model_id(&self.config, &options.metadata),
             instructions: self.instructions(options),
             tools: Self::tool_schemas(),
-            reasoning_effort: normalize_non_empty(
-                options
-                    .metadata
-                    .get("model_reasoning_effort")
-                    .and_then(Value::as_str)
-                    .or_else(|| Some(self.config.model_reasoning_effort.as_str())),
-            ),
-            service_tier: normalize_non_empty(
-                options
-                    .metadata
-                    .get("model_service_tier")
-                    .and_then(Value::as_str)
-                    .or_else(|| Some(self.config.model_service_tier.as_str())),
-            ),
-            env: resolve_runtime_env(&self.config, &options.metadata),
+            options: LlmRequestOptions {
+                reasoning_effort: normalize_non_empty(
+                    options
+                        .metadata
+                        .get("model_reasoning_effort")
+                        .and_then(Value::as_str)
+                        .or_else(|| Some(self.config.model_reasoning_effort.as_str())),
+                ),
+                service_tier: normalize_non_empty(
+                    options
+                        .metadata
+                        .get("model_service_tier")
+                        .and_then(Value::as_str)
+                        .or_else(|| Some(self.config.model_service_tier.as_str())),
+                ),
+            },
+            runtime: LlmRuntimeContext {
+                env: resolve_runtime_env(&self.config, &options.metadata),
+                metadata: options.metadata.clone(),
+            },
             request_timeout: request_timeout(&self.config),
             max_tool_iterations: self.config.max_tool_iterations,
             max_turns: self
@@ -594,10 +669,12 @@ impl AgentLoopProvider for GaryxNativeProvider {
                     on_chunk(StreamEvent::SessionBound { sdk_session_id });
                 }
                 AgentLoopEvent::Delta { text } => on_chunk(StreamEvent::Delta { text }),
-                AgentLoopEvent::ToolUse { message } => on_chunk(StreamEvent::ToolUse { message }),
-                AgentLoopEvent::ToolResult { message } => {
-                    on_chunk(StreamEvent::ToolResult { message })
-                }
+                AgentLoopEvent::ToolUse { message } => on_chunk(StreamEvent::ToolUse {
+                    message: provider_from_conversation(message),
+                }),
+                AgentLoopEvent::ToolResult { message } => on_chunk(StreamEvent::ToolResult {
+                    message: provider_from_conversation(message),
+                }),
                 AgentLoopEvent::UserAck { pending_input_id } => on_chunk(StreamEvent::Boundary {
                     kind: StreamBoundaryKind::UserAck,
                     pending_input_id,
@@ -616,7 +693,11 @@ impl AgentLoopProvider for GaryxNativeProvider {
             run_id,
             thread_id: options.thread_id.clone(),
             response: outcome.response,
-            session_messages: outcome.session_messages,
+            session_messages: outcome
+                .session_messages
+                .into_iter()
+                .map(provider_from_conversation)
+                .collect(),
             sdk_session_id: Some(emitted_sdk_session_id),
             actual_model: outcome.actual_model,
             thread_title: None,
@@ -653,7 +734,11 @@ impl AgentLoopProvider for GaryxNativeProvider {
         let Some(session) = session else {
             return false;
         };
-        session.lock().await.pending_inputs.push_back(input);
+        session
+            .lock()
+            .await
+            .pending_inputs
+            .push_back(pending_from_queued(input));
         true
     }
 

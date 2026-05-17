@@ -8,7 +8,6 @@ homepage.workspace = true
 description = "Reusable agent loop core and model adapters for garyx providers"
 
 [dependencies]
-garyx-models = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

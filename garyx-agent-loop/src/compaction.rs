@@ -1,6 +1,7 @@
-use garyx_models::provider::ProviderMessage;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+use crate::ConversationMessage;
 
 pub const COMPACTION_SUMMARY_PREFIX: &str =
     "The conversation history before this point was compacted into the following summary:";
@@ -39,8 +40,8 @@ pub struct ContextUsageEstimate {
 pub struct ContextCompactionPlan {
     pub tokens_before: usize,
     pub first_kept_index: usize,
-    pub messages_to_summarize: Vec<ProviderMessage>,
-    pub kept_messages: Vec<ProviderMessage>,
+    pub messages_to_summarize: Vec<ConversationMessage>,
+    pub kept_messages: Vec<ConversationMessage>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,10 +50,10 @@ pub struct ContextCompactionResult {
     pub tokens_before: usize,
     pub summarized_message_count: usize,
     pub kept_message_count: usize,
-    pub messages: Vec<ProviderMessage>,
+    pub messages: Vec<ConversationMessage>,
 }
 
-pub fn estimate_message_tokens(message: &ProviderMessage) -> usize {
+pub fn estimate_message_tokens(message: &ConversationMessage) -> usize {
     let chars = message
         .text
         .as_ref()
@@ -62,7 +63,7 @@ pub fn estimate_message_tokens(message: &ProviderMessage) -> usize {
     chars.div_ceil(4).max(1)
 }
 
-pub fn estimate_context_tokens(messages: &[ProviderMessage]) -> ContextUsageEstimate {
+pub fn estimate_context_tokens(messages: &[ConversationMessage]) -> ContextUsageEstimate {
     ContextUsageEstimate {
         tokens: messages.iter().map(estimate_message_tokens).sum(),
     }
@@ -78,7 +79,7 @@ pub fn should_compact(tokens: usize, config: &ContextCompactionConfig) -> bool {
 }
 
 pub fn build_compaction_plan(
-    messages: &[ProviderMessage],
+    messages: &[ConversationMessage],
     config: &ContextCompactionConfig,
 ) -> Option<ContextCompactionPlan> {
     let tokens_before = estimate_context_tokens(messages).tokens;
@@ -115,9 +116,9 @@ pub fn build_compaction_plan(
 pub fn compaction_summary_message(
     summary: impl Into<String>,
     tokens_before: usize,
-) -> ProviderMessage {
+) -> ConversationMessage {
     let summary = summary.into();
-    let mut message = ProviderMessage::system_text(format!(
+    let mut message = ConversationMessage::system_text(format!(
         "{COMPACTION_SUMMARY_PREFIX}\n\n<summary>\n{summary}\n</summary>"
     ));
     message
@@ -130,7 +131,7 @@ pub fn compaction_summary_message(
 }
 
 pub fn compact_messages_with_summary(
-    messages: &[ProviderMessage],
+    messages: &[ConversationMessage],
     summary: impl Into<String>,
     config: &ContextCompactionConfig,
 ) -> Option<ContextCompactionResult> {
@@ -152,7 +153,7 @@ pub fn compact_messages_with_summary(
     })
 }
 
-pub fn serialize_messages_for_summary(messages: &[ProviderMessage]) -> String {
+pub fn serialize_messages_for_summary(messages: &[ConversationMessage]) -> String {
     messages
         .iter()
         .map(|message| {
@@ -184,8 +185,8 @@ mod tests {
     }
 
     #[test]
-    fn estimates_provider_message_tokens() {
-        let message = ProviderMessage::user_text("abcdefghijkl");
+    fn estimates_conversation_message_tokens() {
+        let message = ConversationMessage::user_text("abcdefghijkl");
 
         assert_eq!(estimate_message_tokens(&message), 3);
     }
@@ -193,10 +194,10 @@ mod tests {
     #[test]
     fn builds_compaction_plan_when_context_exceeds_budget() {
         let messages = vec![
-            ProviderMessage::user_text("old user message that is long"),
-            ProviderMessage::assistant_text("old assistant message that is long"),
-            ProviderMessage::user_text("recent question"),
-            ProviderMessage::assistant_text("recent answer"),
+            ConversationMessage::user_text("old user message that is long"),
+            ConversationMessage::assistant_text("old assistant message that is long"),
+            ConversationMessage::user_text("recent question"),
+            ConversationMessage::assistant_text("recent answer"),
         ];
 
         let plan = build_compaction_plan(&messages, &compact_policy()).unwrap();
@@ -210,10 +211,10 @@ mod tests {
     #[test]
     fn compaction_result_prepends_summary_message_and_keeps_recent_messages() {
         let messages = vec![
-            ProviderMessage::user_text("old user message that is long"),
-            ProviderMessage::assistant_text("old assistant message that is long"),
-            ProviderMessage::user_text("recent question"),
-            ProviderMessage::assistant_text("recent answer"),
+            ConversationMessage::user_text("old user message that is long"),
+            ConversationMessage::assistant_text("old assistant message that is long"),
+            ConversationMessage::user_text("recent question"),
+            ConversationMessage::assistant_text("recent answer"),
         ];
 
         let result =
@@ -238,14 +239,14 @@ mod tests {
     #[test]
     fn compaction_cut_does_not_start_with_tool_result() {
         let messages = vec![
-            ProviderMessage::user_text("old user message that is long"),
-            ProviderMessage::assistant_text("old assistant message that is long"),
-            ProviderMessage::tool_use(
+            ConversationMessage::user_text("old user message that is long"),
+            ConversationMessage::assistant_text("old assistant message that is long"),
+            ConversationMessage::tool_use(
                 json!({"name": "read_file", "arguments": {}}),
                 Some("call-1".to_owned()),
                 Some("read_file".to_owned()),
             ),
-            ProviderMessage::tool_result(
+            ConversationMessage::tool_result(
                 json!({"content": "recent result"}),
                 Some("call-1".to_owned()),
                 Some("read_file".to_owned()),

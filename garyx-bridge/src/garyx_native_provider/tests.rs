@@ -76,18 +76,20 @@ fn http_response_body_enables_streaming_and_reasoning_effort() {
         model: "gpt-test".to_owned(),
         instructions: "Act carefully.".to_owned(),
         messages: Vec::new(),
-        tools: vec![json!({
-            "type": "function",
-            "name": "read_file",
-            "parameters": {
+        tools: vec![ToolDefinition::function(
+            "read_file",
+            "Read a file.",
+            json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false
-            }
-        })],
-        reasoning_effort: Some("high".to_owned()),
-        service_tier: Some("priority".to_owned()),
-        env: HashMap::new(),
+            }),
+        )],
+        options: LlmRequestOptions {
+            reasoning_effort: Some("high".to_owned()),
+            service_tier: Some("priority".to_owned()),
+        },
+        runtime: LlmRuntimeContext::default(),
     };
 
     let body = GptResponsesModelBackend::response_body(

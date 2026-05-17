@@ -1,10 +1,17 @@
+//! Reusable agent-loop core.
+//!
+//! The crate owns the model-neutral loop concepts: conversation messages, tool
+//! definitions, pending user input, model requests, loop events, hooks, and
+//! compaction. Host applications are responsible for translating their own
+//! transcript, configuration, authentication, and streaming-event types at the
+//! boundary.
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use garyx_models::provider::{ProviderMessage, QueuedUserInput};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -12,6 +19,9 @@ use tokio::sync::Mutex;
 
 pub mod adapters;
 pub mod compaction;
+pub mod message;
+
+pub use message::{ConversationMessage, ConversationRole, PendingUserInput};
 
 use compaction::{
     ContextCompactionConfig, ContextCompactionResult, build_compaction_plan,
@@ -61,15 +71,47 @@ pub struct LlmResponse {
     pub actual_model: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+impl ToolDefinition {
+    pub fn function(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmRequestOptions {
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LlmRuntimeContext {
+    pub env: HashMap<String, String>,
+    pub metadata: HashMap<String, Value>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmRequest {
     pub model: String,
     pub instructions: String,
-    pub messages: Vec<ProviderMessage>,
-    pub tools: Vec<Value>,
-    pub reasoning_effort: Option<String>,
-    pub service_tier: Option<String>,
-    pub env: HashMap<String, String>,
+    pub messages: Vec<ConversationMessage>,
+    pub tools: Vec<ToolDefinition>,
+    pub options: LlmRequestOptions,
+    pub runtime: LlmRuntimeContext,
 }
 
 #[async_trait]
@@ -118,14 +160,14 @@ pub enum QueueMode {
 #[derive(Debug, Clone)]
 pub struct ContextTransformInput {
     pub turn_index: u32,
-    pub messages: Vec<ProviderMessage>,
+    pub messages: Vec<ConversationMessage>,
 }
 
 #[derive(Debug, Clone)]
 pub struct BeforeToolCallInput {
     pub turn_index: u32,
     pub call: LlmToolCall,
-    pub messages: Vec<ProviderMessage>,
+    pub messages: Vec<ConversationMessage>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -139,26 +181,25 @@ pub struct AfterToolCallInput {
     pub turn_index: u32,
     pub call: LlmToolCall,
     pub execution: ToolExecution,
-    pub messages: Vec<ProviderMessage>,
+    pub messages: Vec<ConversationMessage>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AgentLoopTurnContext {
     pub turn_index: u32,
-    pub messages: Vec<ProviderMessage>,
-    pub new_messages: Vec<ProviderMessage>,
+    pub messages: Vec<ConversationMessage>,
+    pub turn_messages: Vec<ConversationMessage>,
     pub response: String,
-    pub tool_results: Vec<ProviderMessage>,
+    pub tool_results: Vec<ConversationMessage>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct AgentLoopTurnUpdate {
     pub model: Option<String>,
     pub instructions: Option<String>,
-    pub tools: Option<Vec<Value>>,
-    pub reasoning_effort: Option<Option<String>>,
-    pub service_tier: Option<Option<String>>,
-    pub env: Option<HashMap<String, String>>,
+    pub tools: Option<Vec<ToolDefinition>>,
+    pub options: Option<LlmRequestOptions>,
+    pub runtime: Option<LlmRuntimeContext>,
     pub request_timeout: Option<Duration>,
 }
 
@@ -167,7 +208,7 @@ pub trait AgentLoopHooks: Send + Sync {
     async fn transform_context(
         &self,
         input: ContextTransformInput,
-    ) -> Result<Vec<ProviderMessage>, AgentLoopError> {
+    ) -> Result<Vec<ConversationMessage>, AgentLoopError> {
         Ok(input.messages)
     }
 
@@ -199,11 +240,11 @@ pub trait AgentLoopHooks: Send + Sync {
         Ok(false)
     }
 
-    async fn steering_messages(&self) -> Result<Vec<ProviderMessage>, AgentLoopError> {
+    async fn steering_messages(&self) -> Result<Vec<ConversationMessage>, AgentLoopError> {
         Ok(Vec::new())
     }
 
-    async fn follow_up_messages(&self) -> Result<Vec<ProviderMessage>, AgentLoopError> {
+    async fn follow_up_messages(&self) -> Result<Vec<ConversationMessage>, AgentLoopError> {
         Ok(Vec::new())
     }
 }
@@ -216,8 +257,8 @@ impl AgentLoopHooks for NoopAgentLoopHooks {}
 #[derive(Debug, Clone)]
 pub struct AgentLoopSession {
     pub sdk_session_id: String,
-    pub messages: Vec<ProviderMessage>,
-    pub pending_inputs: VecDeque<QueuedUserInput>,
+    pub messages: Vec<ConversationMessage>,
+    pub pending_inputs: VecDeque<PendingUserInput>,
     pub interrupted: bool,
 }
 
@@ -236,10 +277,9 @@ impl AgentLoopSession {
 pub struct AgentLoopRunRequest {
     pub model: String,
     pub instructions: String,
-    pub tools: Vec<Value>,
-    pub reasoning_effort: Option<String>,
-    pub service_tier: Option<String>,
-    pub env: HashMap<String, String>,
+    pub tools: Vec<ToolDefinition>,
+    pub options: LlmRequestOptions,
+    pub runtime: LlmRuntimeContext,
     pub request_timeout: Duration,
     pub max_tool_iterations: u32,
     pub max_turns: Option<u32>,
@@ -266,16 +306,16 @@ pub enum AgentLoopEvent {
         summary: ContextCompactionResult,
     },
     SteeringMessage {
-        message: ProviderMessage,
+        message: ConversationMessage,
     },
     FollowUpMessage {
-        message: ProviderMessage,
+        message: ConversationMessage,
     },
     Delta {
         text: String,
     },
     ToolUse {
-        message: ProviderMessage,
+        message: ConversationMessage,
     },
     ToolExecutionStart {
         tool_use_id: String,
@@ -288,7 +328,7 @@ pub enum AgentLoopEvent {
         is_error: bool,
     },
     ToolResult {
-        message: ProviderMessage,
+        message: ConversationMessage,
     },
     UserAck {
         pending_input_id: Option<String>,
@@ -299,7 +339,7 @@ pub enum AgentLoopEvent {
 #[derive(Debug, Clone, Default)]
 pub struct AgentLoopOutcome {
     pub response: String,
-    pub session_messages: Vec<ProviderMessage>,
+    pub session_messages: Vec<ConversationMessage>,
     pub actual_model: Option<String>,
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -383,9 +423,8 @@ pub async fn run_agent_loop_with_hooks(
             instructions: request.instructions.clone(),
             messages,
             tools: request.tools.clone(),
-            reasoning_effort: request.reasoning_effort.clone(),
-            service_tier: request.service_tier.clone(),
-            env: request.env.clone(),
+            options: request.options.clone(),
+            runtime: request.runtime.clone(),
         };
         emit(AgentLoopEvent::TurnStart {
             turn_index: turn_index + 1,
@@ -408,7 +447,8 @@ pub async fn run_agent_loop_with_hooks(
         }
 
         let mut needs_follow_up = false;
-        let mut turn_tool_results = Vec::<ProviderMessage>::new();
+        let mut turn_tool_results = Vec::<ConversationMessage>::new();
+        let mut turn_messages = Vec::<ConversationMessage>::new();
         for output in model_response.outputs {
             match output {
                 LlmOutput::Text(text) => {
@@ -417,9 +457,10 @@ pub async fn run_agent_loop_with_hooks(
                     }
                     outcome.response.push_str(&text);
                     emit(AgentLoopEvent::Delta { text: text.clone() });
-                    let message = ProviderMessage::assistant_text(text);
+                    let message = ConversationMessage::assistant_text(text);
                     session.lock().await.messages.push(message.clone());
-                    outcome.session_messages.push(message);
+                    outcome.session_messages.push(message.clone());
+                    turn_messages.push(message);
                 }
                 LlmOutput::ToolCall(call) => {
                     iterations += 1;
@@ -428,7 +469,7 @@ pub async fn run_agent_loop_with_hooks(
                             "agent loop exceeded max_tool_iterations={max_iterations}"
                         )));
                     }
-                    let tool_use = ProviderMessage::tool_use(
+                    let tool_use = ConversationMessage::tool_use(
                         json!({
                             "name": call.name,
                             "arguments": call.arguments,
@@ -440,7 +481,8 @@ pub async fn run_agent_loop_with_hooks(
                         message: tool_use.clone(),
                     });
                     session.lock().await.messages.push(tool_use.clone());
-                    outcome.session_messages.push(tool_use);
+                    outcome.session_messages.push(tool_use.clone());
+                    turn_messages.push(tool_use);
 
                     emit(AgentLoopEvent::ToolExecutionStart {
                         tool_use_id: call.id.clone(),
@@ -471,7 +513,7 @@ pub async fn run_agent_loop_with_hooks(
                         tool_name: call.name.clone(),
                         is_error: execution.is_error,
                     });
-                    let tool_result = ProviderMessage::tool_result(
+                    let tool_result = ConversationMessage::tool_result(
                         execution.content,
                         Some(call.id),
                         Some(call.name),
@@ -482,6 +524,7 @@ pub async fn run_agent_loop_with_hooks(
                     });
                     session.lock().await.messages.push(tool_result.clone());
                     outcome.session_messages.push(tool_result.clone());
+                    turn_messages.push(tool_result.clone());
                     turn_tool_results.push(tool_result);
                     needs_follow_up |= !execution.terminate;
                 }
@@ -493,7 +536,7 @@ pub async fn run_agent_loop_with_hooks(
         let turn_context = AgentLoopTurnContext {
             turn_index,
             messages: session.lock().await.messages.clone(),
-            new_messages: outcome.session_messages.clone(),
+            turn_messages,
             response: outcome.response.clone(),
             tool_results: turn_tool_results,
         };
@@ -549,14 +592,11 @@ impl AgentLoopTurnUpdate {
         if let Some(tools) = self.tools {
             request.tools = tools;
         }
-        if let Some(reasoning_effort) = self.reasoning_effort {
-            request.reasoning_effort = reasoning_effort;
+        if let Some(options) = self.options {
+            request.options = options;
         }
-        if let Some(service_tier) = self.service_tier {
-            request.service_tier = service_tier;
-        }
-        if let Some(env) = self.env {
-            request.env = env;
+        if let Some(runtime) = self.runtime {
+            request.runtime = runtime;
         }
         if let Some(request_timeout) = self.request_timeout {
             request.request_timeout = request_timeout;
@@ -571,7 +611,7 @@ enum HookMessageKind {
 
 async fn append_hook_messages(
     session: Arc<Mutex<AgentLoopSession>>,
-    messages: Vec<ProviderMessage>,
+    messages: Vec<ConversationMessage>,
     kind: HookMessageKind,
     emit: &mut impl FnMut(AgentLoopEvent),
 ) -> bool {
@@ -609,7 +649,7 @@ async fn drain_pending_inputs(
             .lock()
             .await
             .messages
-            .push(ProviderMessage::user_text(pending.message));
+            .push(ConversationMessage::user_text(pending.message));
         accepted_pending_input = true;
         if queue_mode == QueueMode::OneAtATime {
             break;
@@ -637,13 +677,12 @@ async fn maybe_compact_session(
         model: request.model.clone(),
         instructions: "You are a Garyx context compaction assistant. Summarize the provided conversation so another model can continue the task. Preserve exact goals, constraints, file paths, tool results, errors, and next steps. Do not answer the conversation."
             .to_owned(),
-        messages: vec![ProviderMessage::user_text(format!(
+        messages: vec![ConversationMessage::user_text(format!(
             "<conversation>\n{summary_prompt}\n</conversation>\n\nCreate a concise structured checkpoint summary."
         ))],
         tools: Vec::new(),
-        reasoning_effort: request.reasoning_effort.clone(),
-        service_tier: request.service_tier.clone(),
-        env: request.env.clone(),
+        options: request.options.clone(),
+        runtime: request.runtime.clone(),
     };
     let summary_response = match tokio::time::timeout(
         request.request_timeout,
@@ -761,9 +800,11 @@ mod tests {
             model: "test-model".to_owned(),
             instructions: "Act.".to_owned(),
             tools: Vec::new(),
-            reasoning_effort: Some("medium".to_owned()),
-            service_tier: None,
-            env: HashMap::new(),
+            options: LlmRequestOptions {
+                reasoning_effort: Some("medium".to_owned()),
+                service_tier: None,
+            },
+            runtime: LlmRuntimeContext::default(),
             request_timeout: Duration::from_secs(5),
             max_tool_iterations: 4,
             max_turns: None,
@@ -785,7 +826,7 @@ mod tests {
             .lock()
             .await
             .messages
-            .push(ProviderMessage::user_text("hello"));
+            .push(ConversationMessage::user_text("hello"));
         let mut events = Vec::new();
 
         let outcome = run_agent_loop(
@@ -835,7 +876,7 @@ mod tests {
             .lock()
             .await
             .messages
-            .push(ProviderMessage::user_text("read"));
+            .push(ConversationMessage::user_text("read"));
 
         let outcome = run_agent_loop(
             session,
@@ -874,10 +915,10 @@ mod tests {
         let session = Arc::new(Mutex::new(AgentLoopSession::new("sid".to_owned())));
         {
             let mut guard = session.lock().await;
-            guard.messages.push(ProviderMessage::user_text("hello"));
+            guard.messages.push(ConversationMessage::user_text("hello"));
             guard
                 .pending_inputs
-                .push_back(QueuedUserInput::text("follow").with_pending_input_id("pending-1"));
+                .push_back(PendingUserInput::text("follow").with_pending_input_id("pending-1"));
         }
         let mut events = Vec::new();
 
@@ -906,7 +947,7 @@ mod tests {
         async fn transform_context(
             &self,
             input: ContextTransformInput,
-        ) -> Result<Vec<ProviderMessage>, AgentLoopError> {
+        ) -> Result<Vec<ConversationMessage>, AgentLoopError> {
             Ok(input.messages.into_iter().rev().take(1).collect())
         }
     }
@@ -920,8 +961,10 @@ mod tests {
         let session = Arc::new(Mutex::new(AgentLoopSession::new("sid".to_owned())));
         {
             let mut guard = session.lock().await;
-            guard.messages.push(ProviderMessage::user_text("old"));
-            guard.messages.push(ProviderMessage::user_text("latest"));
+            guard.messages.push(ConversationMessage::user_text("old"));
+            guard
+                .messages
+                .push(ConversationMessage::user_text("latest"));
         }
         let mut events = Vec::new();
 
@@ -979,7 +1022,7 @@ mod tests {
             .lock()
             .await
             .messages
-            .push(ProviderMessage::user_text("read"));
+            .push(ConversationMessage::user_text("read"));
 
         let outcome = run_agent_loop_with_hooks(
             session,
@@ -1014,7 +1057,10 @@ mod tests {
             if context.turn_index == 1 {
                 Ok(Some(AgentLoopTurnUpdate {
                     model: Some("test-model-2".to_owned()),
-                    reasoning_effort: Some(Some("low".to_owned())),
+                    options: Some(LlmRequestOptions {
+                        reasoning_effort: Some("low".to_owned()),
+                        service_tier: None,
+                    }),
                     ..Default::default()
                 }))
             } else {
@@ -1022,13 +1068,13 @@ mod tests {
             }
         }
 
-        async fn follow_up_messages(&self) -> Result<Vec<ProviderMessage>, AgentLoopError> {
+        async fn follow_up_messages(&self) -> Result<Vec<ConversationMessage>, AgentLoopError> {
             let mut sent = self.sent_follow_up.lock().unwrap();
             if *sent {
                 return Ok(Vec::new());
             }
             *sent = true;
-            Ok(vec![ProviderMessage::user_text("follow-up")])
+            Ok(vec![ConversationMessage::user_text("follow-up")])
         }
     }
 
@@ -1049,7 +1095,7 @@ mod tests {
             .lock()
             .await
             .messages
-            .push(ProviderMessage::user_text("hello"));
+            .push(ConversationMessage::user_text("hello"));
         let hooks = FollowUpAndUpdateHook {
             sent_follow_up: StdMutex::new(false),
         };
@@ -1072,7 +1118,7 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].model, "test-model");
         assert_eq!(requests[1].model, "test-model-2");
-        assert_eq!(requests[1].reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(requests[1].options.reasoning_effort.as_deref(), Some("low"));
         assert!(
             requests[1]
                 .messages
@@ -1084,6 +1130,78 @@ mod tests {
             AgentLoopEvent::FollowUpMessage { message }
                 if message.text.as_deref() == Some("follow-up")
         )));
+    }
+
+    struct TurnMessagesHook {
+        sent_follow_up: StdMutex<bool>,
+        turn_message_texts: StdMutex<Vec<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl AgentLoopHooks for TurnMessagesHook {
+        async fn prepare_next_turn(
+            &self,
+            context: AgentLoopTurnContext,
+        ) -> Result<Option<AgentLoopTurnUpdate>, AgentLoopError> {
+            self.turn_message_texts.lock().unwrap().push(
+                context
+                    .turn_messages
+                    .iter()
+                    .filter_map(|message| message.text.clone())
+                    .collect(),
+            );
+            Ok(None)
+        }
+
+        async fn follow_up_messages(&self) -> Result<Vec<ConversationMessage>, AgentLoopError> {
+            let mut sent = self.sent_follow_up.lock().unwrap();
+            if *sent {
+                return Ok(Vec::new());
+            }
+            *sent = true;
+            Ok(vec![ConversationMessage::user_text("follow-up")])
+        }
+    }
+
+    #[tokio::test]
+    async fn turn_context_exposes_only_current_turn_messages() {
+        let adapter = FakeAdapter::new(vec![
+            LlmResponse {
+                outputs: vec![LlmOutput::Text("first".to_owned())],
+                ..Default::default()
+            },
+            LlmResponse {
+                outputs: vec![LlmOutput::Text("second".to_owned())],
+                ..Default::default()
+            },
+        ]);
+        let session = Arc::new(Mutex::new(AgentLoopSession::new("sid".to_owned())));
+        session
+            .lock()
+            .await
+            .messages
+            .push(ConversationMessage::user_text("hello"));
+        let hooks = TurnMessagesHook {
+            sent_follow_up: StdMutex::new(false),
+            turn_message_texts: StdMutex::new(Vec::new()),
+        };
+
+        run_agent_loop_with_hooks(
+            session,
+            &adapter,
+            &FakeTools,
+            &hooks,
+            request(),
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            hooks.turn_message_texts.lock().unwrap().clone(),
+            vec![vec!["first".to_owned()], vec!["second".to_owned()]]
+        );
     }
 
     struct StopAfterFirstTurnHook;
@@ -1109,7 +1227,7 @@ mod tests {
             .lock()
             .await
             .messages
-            .push(ProviderMessage::user_text("hello"));
+            .push(ConversationMessage::user_text("hello"));
 
         let outcome = run_agent_loop_with_hooks(
             session,
@@ -1148,13 +1266,13 @@ mod tests {
         let session = Arc::new(Mutex::new(AgentLoopSession::new("sid".to_owned())));
         {
             let mut guard = session.lock().await;
-            guard.messages.push(ProviderMessage::user_text("hello"));
+            guard.messages.push(ConversationMessage::user_text("hello"));
             guard
                 .pending_inputs
-                .push_back(QueuedUserInput::text("one").with_pending_input_id("pending-1"));
+                .push_back(PendingUserInput::text("one").with_pending_input_id("pending-1"));
             guard
                 .pending_inputs
-                .push_back(QueuedUserInput::text("two").with_pending_input_id("pending-2"));
+                .push_back(PendingUserInput::text("two").with_pending_input_id("pending-2"));
         }
 
         let outcome = run_agent_loop(
@@ -1213,18 +1331,18 @@ mod tests {
         let session = Arc::new(Mutex::new(AgentLoopSession::new("sid".to_owned())));
         {
             let mut guard = session.lock().await;
-            guard
-                .messages
-                .push(ProviderMessage::user_text("old user message that is long"));
-            guard.messages.push(ProviderMessage::assistant_text(
+            guard.messages.push(ConversationMessage::user_text(
+                "old user message that is long",
+            ));
+            guard.messages.push(ConversationMessage::assistant_text(
                 "old assistant message that is long",
             ));
             guard
                 .messages
-                .push(ProviderMessage::user_text("recent question"));
+                .push(ConversationMessage::user_text("recent question"));
             guard
                 .messages
-                .push(ProviderMessage::assistant_text("recent answer"));
+                .push(ConversationMessage::assistant_text("recent answer"));
         }
         let mut events = Vec::new();
 
@@ -1280,7 +1398,7 @@ mod tests {
             .lock()
             .await
             .messages
-            .push(ProviderMessage::user_text("read"));
+            .push(ConversationMessage::user_text("read"));
 
         let error = run_agent_loop(
             session,
