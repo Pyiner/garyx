@@ -1074,7 +1074,7 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, or garyx_native
+        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, or gpt
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.
@@ -1104,7 +1104,7 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, or garyx_native
+        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, or gpt
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.
@@ -1134,7 +1134,7 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, or garyx_native
+        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, or gpt
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.

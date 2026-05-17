@@ -121,8 +121,8 @@ function providerOptionLabel(providerType: DesktopApiProviderType): string {
   if (providerType === 'gemini_cli') {
     return 'Gemini';
   }
-  if (providerType === 'garyx_native') {
-    return 'Garyx';
+  if (providerType === 'gpt') {
+    return 'GPT';
   }
   if (providerType === 'claude_tty') {
     return 'Claude TTY';

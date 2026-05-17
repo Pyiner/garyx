@@ -18,7 +18,9 @@ pub enum ProviderType {
     ClaudeTty,
     CodexAppServer,
     GeminiCli,
-    GaryxNative,
+    /// OpenAI GPT model backend served through Garyx's in-process agent loop.
+    #[serde(alias = "garyx_native", alias = "garyx", alias = "native")]
+    Gpt,
     /// Meta-provider that orchestrates a Team as a group chat over regular
     /// per-sub-agent threads. Selected when a thread's `agent_id` resolves to
     /// an `AgentTeamProfile` rather than a `CustomAgentProfile`.
@@ -32,7 +34,7 @@ impl ProviderType {
             Self::ClaudeTty => "claude_tty",
             Self::CodexAppServer => "codex_app_server",
             Self::GeminiCli => "gemini_cli",
-            Self::GaryxNative => "garyx_native",
+            Self::Gpt => "gpt",
             Self::AgentTeam => "agent_team",
         }
     }
@@ -43,7 +45,9 @@ impl ProviderType {
             "claude-tty" | "claude_tty" => Some(Self::ClaudeTty),
             "codex" | "codex_app_server" => Some(Self::CodexAppServer),
             "gemini" | "gemini_cli" => Some(Self::GeminiCli),
-            "garyx" | "garyx_native" | "native" => Some(Self::GaryxNative),
+            "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx_native" | "native" => {
+                Some(Self::Gpt)
+            }
             "agent_team" => Some(Self::AgentTeam),
             _ => None,
         }
@@ -566,7 +570,7 @@ pub struct GaryxNativeConfig {
 }
 
 fn default_garyx_native_provider_type() -> ProviderType {
-    ProviderType::GaryxNative
+    ProviderType::Gpt
 }
 
 fn default_garyx_native_model() -> String {
@@ -584,7 +588,7 @@ fn default_garyx_native_max_tool_iterations() -> u32 {
 impl Default for GaryxNativeConfig {
     fn default() -> Self {
         Self {
-            provider_type: ProviderType::GaryxNative,
+            provider_type: ProviderType::Gpt,
             default_model: default_garyx_native_model(),
             model: String::new(),
             model_reasoning_effort: String::new(),

@@ -20,7 +20,7 @@ import {
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 
-type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'garyx_native';
+type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'gpt';
 type EditorMode = 'inspect' | 'create' | 'edit';
 
 type AgentsPanelProps = {
@@ -80,8 +80,8 @@ function providerLabel(value: ProviderType): string {
   if (value === 'gemini_cli') {
     return 'Gemini';
   }
-  if (value === 'garyx_native') {
-    return 'Garyx';
+  if (value === 'gpt') {
+    return 'GPT';
   }
   if (value === 'claude_tty') {
     return 'Claude TTY';
@@ -238,7 +238,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     draft.modelReasoningEffort,
   );
   const supportsReasoningEffortSelection =
-    (draft.providerType === 'codex_app_server' || draft.providerType === 'garyx_native')
+    (draft.providerType === 'codex_app_server' || draft.providerType === 'gpt')
     && reasoningEffortOptions.length > 0;
   const serviceTierOptions = serviceTiersWithCurrent(
     activeProviderModels,
@@ -246,7 +246,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     draft.modelServiceTier,
   );
   const supportsServiceTierSelection =
-    draft.providerType === 'garyx_native'
+    draft.providerType === 'gpt'
     && (activeProviderModels?.supportsServiceTierSelection === true || draft.modelServiceTier.trim().length > 0)
     && serviceTierOptions.length > 0;
   const modelStatus =
@@ -435,10 +435,10 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       ...current,
                       providerType: value,
                       model: '',
-                      modelReasoningEffort: value === 'codex_app_server' || value === 'garyx_native'
+                      modelReasoningEffort: value === 'codex_app_server' || value === 'gpt'
                         ? current.modelReasoningEffort
                         : '',
-                      modelServiceTier: value === 'garyx_native' ? current.modelServiceTier : '',
+                      modelServiceTier: value === 'gpt' ? current.modelServiceTier : '',
                     }));
                     void ensureProviderModels(value);
                   }}
@@ -453,7 +453,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       <SelectItem value="claude_tty">Claude TTY</SelectItem>
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="gemini_cli">Gemini</SelectItem>
-                      <SelectItem value="garyx_native">Garyx</SelectItem>
+                      <SelectItem value="gpt">GPT</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -641,7 +641,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 <span className="codex-list-row-name">{t('Provider')}</span>
                 <span className="codex-command-row-desc">{providerLabel(selectedAgent.providerType)}</span>
               </div>
-              {selectedAgent.providerType === 'gemini_cli' || selectedAgent.providerType === 'garyx_native' || selectedAgent.model.trim() ? (
+              {selectedAgent.providerType === 'gemini_cli' || selectedAgent.providerType === 'gpt' || selectedAgent.model.trim() ? (
                 <div className="codex-list-row">
                   <span className="codex-list-row-name">{t('Model')}</span>
                   <span className="codex-command-row-desc">{selectedAgent.model || t('(provider default)')}</span>

@@ -1,12 +1,12 @@
 # Garyx Native Agent Loop
 
-Status: implemented for the `garyx_native` provider.
+Status: implemented for the `gpt` model provider.
 
 ## Goals
 
-Garyx needs a first-party provider that runs the agent loop inside the bridge
-instead of delegating it to Claude Code, Codex app-server, or Gemini CLI. The
-provider should:
+Garyx needs a first-party agent loop that runs inside the bridge instead of
+delegating loop control to Claude Code, Codex app-server, or Gemini CLI. The
+first model backend on this loop is the GPT provider. It should:
 
 - use Garyx's existing streaming, transcript, interruption, task, and channel
   delivery pipeline;
@@ -24,13 +24,16 @@ Non-goals for the first version:
 
 ## Provider Boundary
 
-The provider slug is `garyx_native`; the built-in agent id is `garyx`.
+The user-facing provider slug is `gpt`; the built-in agent id is `gpt`.
+Legacy slugs `garyx_native`, `garyx`, and `native` are accepted as aliases, but
+the native loop is an internal execution engine rather than a provider users
+select directly.
 
 The implementation lives in `garyx-bridge` and implements
 `AgentLoopProvider`. It consumes the existing `ProviderRunOptions` and emits the
 existing `StreamEvent` variants:
 
-- `SessionBound` when a Garyx-native session id is created or restored;
+- `SessionBound` when a native GPT session id is created or restored;
 - `Delta` for assistant text;
 - `ToolUse` and `ToolResult` for normalized transcript persistence;
 - `Boundary::UserAck` when queued streaming input is accepted;
@@ -40,7 +43,8 @@ The bridge persists these messages through the existing persistence worker. To
 support restart/resume quality without changing the public provider request
 shape, the bridge places normalized recent session messages in
 `ProviderRunOptions.metadata.garyx_session_messages`. Other providers ignore
-the metadata key; `garyx_native` uses it to rebuild the next model request.
+the metadata key; the GPT backend on the native loop uses it to rebuild the next
+model request.
 
 ## Authentication
 
@@ -64,7 +68,7 @@ Codex only has `agent_identity`, Garyx reports a clear configuration error.
 
 ## Model Catalog
 
-Garyx native follows Codex's model catalog rules instead of maintaining a
+The GPT backend follows Codex's model catalog rules instead of maintaining a
 separate hand-written model list. The gateway calls the Codex `/models`
 endpoint with the local Codex CLI version, sorts models by Codex `priority`,
 marks the first picker-visible model as the default, and exposes each model's
@@ -137,8 +141,8 @@ current thread, writes the goal both at the thread top level and under
 
 `/goal off`, `/goal clear`, or `/goal done` clears the goal and disables loop.
 
-Bridge run metadata is enriched from thread metadata, so the native provider
-receives the goal object on each turn. The provider turns it into hidden system
+Bridge run metadata is enriched from thread metadata, so the native loop
+receives the goal object on each turn. The loop turns it into hidden system
 context and exposes the goal tools. When `update_goal` marks the goal
 `completed`, the provider returns metadata indicating completion; the bridge
 turns off loop mode for that thread.

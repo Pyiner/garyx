@@ -20,11 +20,13 @@ fn test_provider_type_serde() {
     let back: ProviderType = serde_json::from_str(&json).unwrap();
     assert_eq!(back, ProviderType::GeminiCli);
 
-    let pt = ProviderType::GaryxNative;
+    let pt = ProviderType::Gpt;
     let json = serde_json::to_string(&pt).unwrap();
-    assert_eq!(json, "\"garyx_native\"");
+    assert_eq!(json, "\"gpt\"");
     let back: ProviderType = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ProviderType::GaryxNative);
+    assert_eq!(back, ProviderType::Gpt);
+    let legacy: ProviderType = serde_json::from_str("\"garyx_native\"").unwrap();
+    assert_eq!(legacy, ProviderType::Gpt);
 
     let pt = ProviderType::AgentTeam;
     let json = serde_json::to_string(&pt).unwrap();
@@ -40,7 +42,7 @@ fn test_provider_type_slug_round_trip() {
         ProviderType::ClaudeTty,
         ProviderType::CodexAppServer,
         ProviderType::GeminiCli,
-        ProviderType::GaryxNative,
+        ProviderType::Gpt,
         ProviderType::AgentTeam,
     ] {
         assert_eq!(
@@ -62,9 +64,10 @@ fn test_provider_type_slug_round_trip() {
         Some(ProviderType::ClaudeTty)
     );
     assert_eq!(ProviderType::from_slug("unknown-provider"), None);
+    assert_eq!(ProviderType::from_slug("gpt"), Some(ProviderType::Gpt));
     assert_eq!(
-        ProviderType::from_slug("garyx"),
-        Some(ProviderType::GaryxNative)
+        ProviderType::from_slug("garyx_native"),
+        Some(ProviderType::Gpt)
     );
 }
 
@@ -210,9 +213,9 @@ fn test_gemini_config_defaults() {
 }
 
 #[test]
-fn test_garyx_native_config_defaults() {
+fn test_native_gpt_config_defaults() {
     let cfg = GaryxNativeConfig::default();
-    assert_eq!(cfg.provider_type, ProviderType::GaryxNative);
+    assert_eq!(cfg.provider_type, ProviderType::Gpt);
     assert_eq!(cfg.default_model, "gpt-5.5");
     assert_eq!(cfg.model, "");
     assert_eq!(cfg.auth_source, "codex");

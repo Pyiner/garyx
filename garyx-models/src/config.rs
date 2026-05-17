@@ -175,7 +175,7 @@ pub struct AgentProviderConfig {
     #[serde(default = "default_gemini_approval_mode")]
     pub approval_mode: String,
 
-    // Garyx native provider specific
+    // Native GPT model backend specific
     #[serde(default = "default_garyx_native_auth_source")]
     pub auth_source: String,
     #[serde(default)]

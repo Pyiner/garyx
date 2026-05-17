@@ -350,7 +350,7 @@ pub fn resolve_codex_auth(
 ) -> Result<CodexAuth, CodexAuthError> {
     if !matches!(config.auth_source.trim(), "" | "codex") {
         return Err(CodexAuthError::new(format!(
-            "unsupported Garyx native auth_source '{}'",
+            "unsupported Native GPT auth_source '{}'",
             config.auth_source
         )));
     }
@@ -409,7 +409,7 @@ pub fn resolve_codex_auth(
     }
     if auth.agent_identity.is_some() {
         return Err(CodexAuthError::new(
-            "Codex auth contains only agent_identity; Garyx native currently supports CODEX_API_KEY, OPENAI_API_KEY, auth.json OPENAI_API_KEY, or auth.json tokens.access_token",
+            "Codex auth contains only agent_identity; Native GPT currently supports CODEX_API_KEY, OPENAI_API_KEY, auth.json OPENAI_API_KEY, or auth.json tokens.access_token",
         ));
     }
     Err(CodexAuthError::new(

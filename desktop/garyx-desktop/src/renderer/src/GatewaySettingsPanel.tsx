@@ -339,8 +339,8 @@ function preferredStandaloneAgentId(
     normalizedProviderType = 'codex_app_server';
   } else if (providerType === 'gemini_cli') {
     normalizedProviderType = 'gemini_cli';
-  } else if (providerType === 'garyx_native') {
-    normalizedProviderType = 'garyx_native';
+  } else if (providerType === 'gpt') {
+    normalizedProviderType = 'gpt';
   }
 
   let builtInId = 'claude';
@@ -348,8 +348,8 @@ function preferredStandaloneAgentId(
     builtInId = 'codex';
   } else if (normalizedProviderType === 'gemini_cli') {
     builtInId = 'gemini';
-  } else if (normalizedProviderType === 'garyx_native') {
-    builtInId = 'garyx';
+  } else if (normalizedProviderType === 'gpt') {
+    builtInId = 'gpt';
   }
 
   return agents.find((agent) => agent.agentId === builtInId)?.agentId

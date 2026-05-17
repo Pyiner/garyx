@@ -710,7 +710,7 @@ fn attach_native_session_messages(
     session_data: &Value,
     provider_type: &ProviderType,
 ) {
-    if provider_type != &ProviderType::GaryxNative {
+    if provider_type != &ProviderType::Gpt {
         return;
     }
     let messages = persisted_provider_messages_from_thread(session_data);

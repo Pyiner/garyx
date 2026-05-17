@@ -26,7 +26,7 @@ export type DesktopApiProviderType =
   | "claude_tty"
   | "codex_app_server"
   | "gemini_cli"
-  | "garyx_native";
+  | "gpt";
 
 export interface DesktopProviderModelOption {
   id: string;

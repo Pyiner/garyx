@@ -156,7 +156,7 @@ fn native_session_messages_are_attached_from_committed_thread_messages() {
         metadata: HashMap::new(),
     };
 
-    attach_native_session_messages(&mut options, &session_data, &ProviderType::GaryxNative);
+    attach_native_session_messages(&mut options, &session_data, &ProviderType::Gpt);
 
     let messages: Vec<ProviderMessage> = serde_json::from_value(
         options

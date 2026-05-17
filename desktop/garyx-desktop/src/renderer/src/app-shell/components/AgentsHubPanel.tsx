@@ -55,7 +55,7 @@ import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
-type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'garyx_native';
+type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'gpt';
 type HubTab = 'agents' | 'teams';
 type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 type TeamDialogMode = 'create' | 'edit' | 'view' | null;
@@ -180,8 +180,8 @@ function providerLabel(value: ProviderType): string {
   if (value === 'gemini_cli') {
     return 'Gemini';
   }
-  if (value === 'garyx_native') {
-    return 'Garyx';
+  if (value === 'gpt') {
+    return 'GPT';
   }
   if (value === 'claude_tty') {
     return 'Claude TTY';
@@ -609,7 +609,7 @@ export function AgentsHubPanel({
     agentDraft.modelReasoningEffort,
   );
   const agentSupportsReasoningEffortSelection =
-    (agentDraft.providerType === 'codex_app_server' || agentDraft.providerType === 'garyx_native')
+    (agentDraft.providerType === 'codex_app_server' || agentDraft.providerType === 'gpt')
     && agentReasoningEffortOptions.length > 0;
   const agentServiceTierOptions = serviceTiersWithCurrent(
     activeAgentProviderModels,
@@ -617,7 +617,7 @@ export function AgentsHubPanel({
     agentDraft.modelServiceTier,
   );
   const agentSupportsServiceTierSelection =
-    agentDraft.providerType === 'garyx_native'
+    agentDraft.providerType === 'gpt'
     && (activeAgentProviderModels?.supportsServiceTierSelection === true || agentDraft.modelServiceTier.trim().length > 0)
     && agentServiceTierOptions.length > 0;
   const agentModelStatus =
@@ -1349,10 +1349,10 @@ export function AgentsHubPanel({
                       ...current,
                       providerType: value,
                       model: '',
-                      modelReasoningEffort: value === 'codex_app_server' || value === 'garyx_native'
+                      modelReasoningEffort: value === 'codex_app_server' || value === 'gpt'
                         ? current.modelReasoningEffort
                         : '',
-                      modelServiceTier: value === 'garyx_native' ? current.modelServiceTier : '',
+                      modelServiceTier: value === 'gpt' ? current.modelServiceTier : '',
                     }));
                     void ensureProviderModels(value);
                   }}
@@ -1367,7 +1367,7 @@ export function AgentsHubPanel({
                       <SelectItem value="claude_tty">Claude TTY</SelectItem>
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="gemini_cli">Gemini</SelectItem>
-                      <SelectItem value="garyx_native">Garyx</SelectItem>
+                      <SelectItem value="gpt">GPT</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -1537,7 +1537,7 @@ export function AgentsHubPanel({
                 </div>
                 <h3>{selectedAgent?.displayName || t('Agent')}</h3>
                 <p>{selectedAgent?.agentId || ''}</p>
-                {selectedAgent && (selectedAgent.providerType === 'gemini_cli' || selectedAgent.providerType === 'garyx_native' || selectedAgent.model.trim()) ? (
+                {selectedAgent && (selectedAgent.providerType === 'gemini_cli' || selectedAgent.providerType === 'gpt' || selectedAgent.model.trim()) ? (
                   <p>{selectedAgent.model || t('(provider default)')}</p>
                 ) : null}
                 {selectedAgent?.modelReasoningEffort.trim() ? (

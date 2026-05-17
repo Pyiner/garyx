@@ -82,6 +82,7 @@ fn resolve_runtime_env(
     let mut env = config.env.clone();
     env.extend(task_cli_env(metadata));
     env.extend(metadata_string_map(metadata, "desktop_codex_env"));
+    env.extend(metadata_string_map(metadata, "desktop_gpt_env"));
     env.extend(metadata_string_map(metadata, "desktop_garyx_native_env"));
     env
 }
@@ -183,7 +184,7 @@ pub(crate) struct NativeModelRequest {
 }
 
 #[async_trait]
-pub(crate) trait NativeModelClient: Send + Sync {
+pub(crate) trait NativeModelBackend: Send + Sync {
     async fn sample(&self, request: NativeModelRequest)
     -> Result<NativeModelResponse, BridgeError>;
 }
@@ -196,12 +197,16 @@ struct ResponseStreamAccumulator {
     error: Option<String>,
 }
 
-struct HttpNativeModelClient {
+/// GPT model backend for the native Garyx agent loop.
+///
+/// Additional model families should add their own `NativeModelBackend`
+/// implementations and let provider selection choose the matching backend.
+struct GptResponsesModelBackend {
     config: GaryxNativeConfig,
     http: reqwest::Client,
 }
 
-impl HttpNativeModelClient {
+impl GptResponsesModelBackend {
     fn new(config: GaryxNativeConfig) -> Self {
         Self {
             config,
@@ -406,7 +411,7 @@ impl HttpNativeModelClient {
     fn finalize_stream(acc: ResponseStreamAccumulator) -> Result<NativeModelResponse, BridgeError> {
         if let Some(error) = acc.error {
             return Err(BridgeError::RunFailed(format!(
-                "Garyx native model stream failed: {error}"
+                "Native GPT model stream failed: {error}"
             )));
         }
         if let Some(mut response) = acc.completed_response {
@@ -438,7 +443,7 @@ impl HttpNativeModelClient {
             });
         }
         Err(BridgeError::RunFailed(
-            "Garyx native model stream completed without output".to_owned(),
+            "Native GPT model stream completed without output".to_owned(),
         ))
     }
 
@@ -455,7 +460,7 @@ impl HttpNativeModelClient {
         }
         let event = serde_json::from_str::<Value>(trimmed).map_err(|error| {
             BridgeError::RunFailed(format!(
-                "Garyx native model stream event was invalid JSON: {error}"
+                "Native GPT model stream event was invalid JSON: {error}"
             ))
         })?;
         Self::apply_stream_event(acc, event);
@@ -469,7 +474,7 @@ impl HttpNativeModelClient {
         let mut pending = Vec::<u8>::new();
         let mut event_data = String::new();
         while let Some(chunk) = response.chunk().await.map_err(|error| {
-            BridgeError::RunFailed(format!("Garyx native model stream failed: {error}"))
+            BridgeError::RunFailed(format!("Native GPT model stream failed: {error}"))
         })? {
             pending.extend_from_slice(&chunk);
             while let Some(newline) = pending.iter().position(|byte| *byte == b'\n') {
@@ -480,7 +485,7 @@ impl HttpNativeModelClient {
                 }
                 let line = std::str::from_utf8(&line).map_err(|error| {
                     BridgeError::RunFailed(format!(
-                        "Garyx native model stream line was invalid UTF-8: {error}"
+                        "Native GPT model stream line was invalid UTF-8: {error}"
                     ))
                 })?;
                 if line.is_empty() {
@@ -507,7 +512,7 @@ impl HttpNativeModelClient {
             }
             let line = std::str::from_utf8(&pending).map_err(|error| {
                 BridgeError::RunFailed(format!(
-                    "Garyx native model stream line was invalid UTF-8: {error}"
+                    "Native GPT model stream line was invalid UTF-8: {error}"
                 ))
             })?;
             if let Some(data) = line.strip_prefix("data:") {
@@ -526,7 +531,7 @@ impl HttpNativeModelClient {
 }
 
 #[async_trait]
-impl NativeModelClient for HttpNativeModelClient {
+impl NativeModelBackend for GptResponsesModelBackend {
     async fn sample(
         &self,
         request: NativeModelRequest,
@@ -553,13 +558,13 @@ impl NativeModelClient for HttpNativeModelClient {
             builder = builder.header("ChatGPT-Account-ID", account_id);
         }
         let response = builder.send().await.map_err(|error| {
-            BridgeError::RunFailed(format!("Garyx native model request failed: {error}"))
+            BridgeError::RunFailed(format!("Native GPT model request failed: {error}"))
         })?;
         let status = response.status();
         if !status.is_success() {
             let value = response.text().await.unwrap_or_default();
             return Err(BridgeError::RunFailed(format!(
-                "Garyx native model request failed with {status}: {value}"
+                "Native GPT model request failed with {status}: {value}"
             )));
         }
         Self::parse_streaming_response(response).await
@@ -590,25 +595,25 @@ pub struct GaryxNativeProvider {
     ready: Mutex<bool>,
     sessions: Mutex<HashMap<String, Arc<Mutex<NativeSession>>>>,
     active_runs: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    model_client: Arc<dyn NativeModelClient>,
+    model_backend: Arc<dyn NativeModelBackend>,
 }
 
 impl GaryxNativeProvider {
     pub fn new(config: GaryxNativeConfig) -> Self {
-        let model_client = Arc::new(HttpNativeModelClient::new(config.clone()));
-        Self::with_model_client(config, model_client)
+        let model_backend = Arc::new(GptResponsesModelBackend::new(config.clone()));
+        Self::with_model_backend(config, model_backend)
     }
 
-    pub(crate) fn with_model_client(
+    pub(crate) fn with_model_backend(
         config: GaryxNativeConfig,
-        model_client: Arc<dyn NativeModelClient>,
+        model_backend: Arc<dyn NativeModelBackend>,
     ) -> Self {
         Self {
             config,
             ready: Mutex::new(false),
             sessions: Mutex::new(HashMap::new()),
             active_runs: Mutex::new(HashMap::new()),
-            model_client,
+            model_backend,
         }
     }
 
@@ -903,7 +908,9 @@ fn path_from_arg(workspace_dir: &Path, path: &str) -> PathBuf {
 #[async_trait]
 impl AgentLoopProvider for GaryxNativeProvider {
     fn provider_type(&self) -> ProviderType {
-        ProviderType::GaryxNative
+        // The provider type is the selected model backend. The in-process
+        // native loop is the execution engine behind this backend.
+        ProviderType::Gpt
     }
 
     fn is_ready(&self) -> bool {
@@ -967,7 +974,7 @@ impl AgentLoopProvider for GaryxNativeProvider {
             if cancel.load(Ordering::Relaxed) || session.lock().await.interrupted {
                 self.active_runs.lock().await.remove(&run_id);
                 return Err(BridgeError::RunFailed(
-                    "Garyx native run interrupted".to_owned(),
+                    "Native GPT run interrupted".to_owned(),
                 ));
             }
 
@@ -995,7 +1002,7 @@ impl AgentLoopProvider for GaryxNativeProvider {
             };
             let model_response = match tokio::time::timeout(
                 request_timeout(&self.config),
-                self.model_client.sample(request),
+                self.model_backend.sample(request),
             )
             .await
             {
@@ -1034,7 +1041,7 @@ impl AgentLoopProvider for GaryxNativeProvider {
                         if iterations > max_iterations {
                             self.active_runs.lock().await.remove(&run_id);
                             return Err(BridgeError::RunFailed(format!(
-                                "Garyx native exceeded max_tool_iterations={max_iterations}"
+                                "Native GPT exceeded max_tool_iterations={max_iterations}"
                             )));
                         }
                         let tool_use = ProviderMessage::tool_use(

@@ -5883,7 +5883,8 @@ fn provider_type_display(value: Option<&str>) -> &'static str {
     match value.unwrap_or("").trim() {
         "codex_app_server" => "Codex",
         "gemini_cli" => "Gemini",
-        "garyx_native" => "Garyx",
+        "gpt" => "GPT",
+        "garyx_native" => "GPT",
         "claude_tty" => "Claude TTY",
         "claude_code" => "Claude",
         _ => "-",
@@ -7667,7 +7668,7 @@ fn provider_type_label(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
-        ProviderType::GaryxNative => "Garyx",
+        ProviderType::Gpt => "GPT",
         ProviderType::AgentTeam => "Team",
         ProviderType::ClaudeTty => "Claude TTY",
         ProviderType::ClaudeCode => "Claude",

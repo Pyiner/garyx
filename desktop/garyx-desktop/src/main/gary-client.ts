@@ -796,8 +796,8 @@ function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
   if (value === "gemini_cli") {
     return "gemini_cli";
   }
-  if (value === "garyx_native") {
-    return "garyx_native";
+  if (value === "gpt" || value === "openai" || value === "garyx_native") {
+    return "gpt";
   }
   return "claude_code";
 }
@@ -810,9 +810,13 @@ function parseThreadProviderType(
     value === "claude_tty" ||
     value === "codex_app_server" ||
     value === "gemini_cli" ||
+    value === "gpt" ||
     value === "garyx_native" ||
     value === "agent_team"
   ) {
+    if (value === "garyx_native") {
+      return "gpt";
+    }
     return value;
   }
   return null;
@@ -830,8 +834,8 @@ function providerLabelForThread(
       return "Codex";
     case "gemini_cli":
       return "Gemini";
-    case "garyx_native":
-      return "Garyx";
+    case "gpt":
+      return "GPT";
     case "agent_team":
       return "Team";
     default:

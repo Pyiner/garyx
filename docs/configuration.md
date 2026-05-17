@@ -489,8 +489,8 @@ Use a built-in provider agent:
 ```
 
 Custom agents can set `provider_type` to `claude_code`, `claude_tty`,
-`codex_app_server`, `gemini_cli`, or `garyx_native`. `claude_tty` uses the local
-Claude CLI's interactive terminal mode inside the gateway and keeps the same
+`codex_app_server`, `gemini_cli`, or `gpt`. `claude_tty` uses the local Claude
+CLI's interactive terminal mode inside the gateway and keeps the same
 thread/session model as the regular Claude provider.
 
 Custom agents may also set `model`, `model_reasoning_effort`, and
@@ -498,26 +498,26 @@ Custom agents may also set `model`, `model_reasoning_effort`, and
 when the agent is selected, so provider-specific defaults can be overridden per
 agent.
 
-`garyx_native` is Garyx's in-process agent loop. Use the built-in agent id
-`garyx` to select it:
+`gpt` is the OpenAI GPT model backend running on Garyx's in-process agent loop.
+Use the built-in agent id `gpt` to select it:
 
 ```json
-{ "agent_id": "garyx" }
+{ "agent_id": "gpt" }
 ```
 
-The native provider uses Codex-compatible auth by default. It checks
+The GPT provider uses Codex-compatible auth by default. It checks
 `CODEX_API_KEY`, then `OPENAI_API_KEY`, then Codex auth at
 `$CODEX_HOME/auth.json` or `~/.codex/auth.json`. Codex auth files with
 `OPENAI_API_KEY` use the OpenAI Responses API; auth files with
 `tokens.access_token` use the ChatGPT Codex backend and forward the stored
 ChatGPT account id when present. Codex `agent_identity`-only auth is not
-duplicated by Garyx native.
+duplicated by the GPT backend.
 
-Optional native-provider fields on an agent/provider config:
+Optional GPT-provider fields on an agent/provider config:
 
 ```json
 {
-  "provider_type": "garyx_native",
+  "provider_type": "gpt",
   "default_model": "gpt-5.5",
   "model": "",
   "model_reasoning_effort": "medium",
@@ -531,11 +531,12 @@ Optional native-provider fields on an agent/provider config:
 ```
 
 `model` can be left empty to use the provider default. The gateway exposes
-Garyx native model choices through `/api/provider-models/garyx_native` by
-reading the same Codex `/models` catalog used by the local Codex CLI. If that
-request is unavailable, Garyx falls back to a minimal copy of Codex's bundled
-model catalog so the picker can still show the Codex default (`gpt-5.5`) and
-the standard GPT coding models. `model_reasoning_effort` accepts the reasoning
+GPT model choices through `/api/provider-models/gpt` by reading the same Codex
+`/models` catalog used by the local Codex CLI. If that request is unavailable,
+Garyx falls back to a minimal copy of Codex's bundled model catalog so the
+picker can still show the Codex default (`gpt-5.5`) and the standard GPT coding
+models. `garyx_native`, `garyx`, and `native` are accepted as legacy aliases for
+`gpt`. `model_reasoning_effort` accepts the reasoning
 levels advertised by the selected Codex model, for example `low`, `medium`,
 `high`, or `xhigh`; lower values favor faster responses, while higher values
 spend more reasoning time. `model_service_tier` accepts the selected model's

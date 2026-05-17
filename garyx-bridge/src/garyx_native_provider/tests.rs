@@ -14,12 +14,12 @@ use garyx_models::codex_models::{
 
 use super::*;
 
-struct FakeModelClient {
+struct FakeModelBackend {
     responses: StdMutex<VecDeque<NativeModelResponse>>,
     requests: StdMutex<Vec<NativeModelRequest>>,
 }
 
-impl FakeModelClient {
+impl FakeModelBackend {
     fn new(responses: Vec<NativeModelResponse>) -> Self {
         Self {
             responses: StdMutex::new(VecDeque::from(responses)),
@@ -33,7 +33,7 @@ impl FakeModelClient {
 }
 
 #[async_trait]
-impl NativeModelClient for FakeModelClient {
+impl NativeModelBackend for FakeModelBackend {
     async fn sample(
         &self,
         request: NativeModelRequest,
@@ -59,9 +59,9 @@ fn options(workspace_dir: Option<String>) -> ProviderRunOptions {
 
 async fn initialized_provider(
     config: GaryxNativeConfig,
-    client: Arc<FakeModelClient>,
+    client: Arc<FakeModelBackend>,
 ) -> GaryxNativeProvider {
-    let mut provider = GaryxNativeProvider::with_model_client(config, client);
+    let mut provider = GaryxNativeProvider::with_model_backend(config, client);
     provider.initialize().await.unwrap();
     provider
 }
@@ -86,7 +86,7 @@ fn http_response_body_enables_streaming_and_reasoning_effort() {
         env: HashMap::new(),
     };
 
-    let body = HttpNativeModelClient::response_body(
+    let body = GptResponsesModelBackend::response_body(
         &request,
         vec![json!({ "role": "user", "content": "hello" })],
     );
@@ -103,7 +103,7 @@ fn http_response_body_enables_streaming_and_reasoning_effort() {
 fn streaming_completed_response_reuses_stream_output_items_when_final_output_is_empty() {
     let mut acc = ResponseStreamAccumulator::default();
 
-    HttpNativeModelClient::apply_stream_event(
+    GptResponsesModelBackend::apply_stream_event(
         &mut acc,
         json!({
             "type": "response.output_item.done",
@@ -113,14 +113,14 @@ fn streaming_completed_response_reuses_stream_output_items_when_final_output_is_
             }
         }),
     );
-    HttpNativeModelClient::apply_stream_event(
+    GptResponsesModelBackend::apply_stream_event(
         &mut acc,
         json!({
             "type": "response.output_text.done",
             "text": "done"
         }),
     );
-    HttpNativeModelClient::apply_stream_event(
+    GptResponsesModelBackend::apply_stream_event(
         &mut acc,
         json!({
             "type": "response.output_item.done",
@@ -132,7 +132,7 @@ fn streaming_completed_response_reuses_stream_output_items_when_final_output_is_
             }
         }),
     );
-    HttpNativeModelClient::apply_stream_event(
+    GptResponsesModelBackend::apply_stream_event(
         &mut acc,
         json!({
             "type": "response.output_item.done",
@@ -144,7 +144,7 @@ fn streaming_completed_response_reuses_stream_output_items_when_final_output_is_
             }
         }),
     );
-    HttpNativeModelClient::apply_stream_event(
+    GptResponsesModelBackend::apply_stream_event(
         &mut acc,
         json!({
             "type": "response.completed",
@@ -159,7 +159,7 @@ fn streaming_completed_response_reuses_stream_output_items_when_final_output_is_
         }),
     );
 
-    let response = HttpNativeModelClient::finalize_stream(acc).unwrap();
+    let response = GptResponsesModelBackend::finalize_stream(acc).unwrap();
     assert_eq!(response.actual_model.as_deref(), Some("gpt-test-actual"));
     assert_eq!(response.input_tokens, 4);
     assert_eq!(response.output_tokens, 2);
@@ -176,23 +176,23 @@ fn streaming_completed_response_reuses_stream_output_items_when_final_output_is_
 fn streaming_text_delta_fallback_returns_text_when_completed_response_absent() {
     let mut acc = ResponseStreamAccumulator::default();
 
-    HttpNativeModelClient::apply_stream_event(
+    GptResponsesModelBackend::apply_stream_event(
         &mut acc,
         json!({ "type": "response.output_text.delta", "delta": "hel" }),
     );
-    HttpNativeModelClient::apply_stream_event(
+    GptResponsesModelBackend::apply_stream_event(
         &mut acc,
         json!({ "type": "response.output_text.delta", "delta": "lo" }),
     );
 
-    let response = HttpNativeModelClient::finalize_stream(acc).unwrap();
+    let response = GptResponsesModelBackend::finalize_stream(acc).unwrap();
     assert_eq!(response.outputs.len(), 1);
     assert!(matches!(&response.outputs[0], NativeModelOutput::Text(text) if text == "hello"));
 }
 
 #[tokio::test]
 async fn assistant_only_turn_streams_delta_and_persists_assistant_message() {
-    let client = Arc::new(FakeModelClient::new(vec![NativeModelResponse {
+    let client = Arc::new(FakeModelBackend::new(vec![NativeModelResponse {
         outputs: vec![NativeModelOutput::Text("done".to_owned())],
         input_tokens: 10,
         output_tokens: 2,
@@ -244,7 +244,7 @@ async fn assistant_only_turn_streams_delta_and_persists_assistant_message() {
 async fn tool_call_runs_and_follow_up_request_sees_tool_result() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path().join("demo.txt");
-    let client = Arc::new(FakeModelClient::new(vec![
+    let client = Arc::new(FakeModelBackend::new(vec![
         NativeModelResponse {
             outputs: vec![NativeModelOutput::ToolCall(NativeToolCall {
                 id: "call-write".to_owned(),
@@ -290,7 +290,7 @@ async fn tool_call_runs_and_follow_up_request_sees_tool_result() {
 
 #[tokio::test]
 async fn queued_streaming_input_is_acknowledged_and_sampled_again() {
-    let client = Arc::new(FakeModelClient::new(vec![
+    let client = Arc::new(FakeModelBackend::new(vec![
         NativeModelResponse {
             outputs: vec![NativeModelOutput::Text("first".to_owned())],
             ..Default::default()
@@ -342,7 +342,7 @@ async fn queued_streaming_input_is_acknowledged_and_sampled_again() {
 
 #[tokio::test]
 async fn failed_model_request_clears_active_run() {
-    let client = Arc::new(FakeModelClient::new(Vec::new()));
+    let client = Arc::new(FakeModelBackend::new(Vec::new()));
     let provider = initialized_provider(GaryxNativeConfig::default(), client).await;
 
     let result = provider

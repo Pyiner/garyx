@@ -84,7 +84,7 @@ fn build_gemini_config(
     }
 }
 
-/// Build a `GaryxNativeConfig` from an agent runtime config.
+/// Build the native-loop GPT backend config from an agent runtime config.
 fn build_garyx_native_config(
     agent_cfg: &AgentProviderConfig,
     default_workspace: &Option<String>,
@@ -131,7 +131,7 @@ pub(super) fn compute_provider_key(
         "claude_tty" => "claude_tty".to_owned(),
         "codex_app_server" => "codex_app_server".to_owned(),
         "gemini_cli" => "gemini_cli".to_owned(),
-        "garyx_native" => "garyx_native".to_owned(),
+        "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native" => "gpt".to_owned(),
         _ => "claude_code".to_owned(),
     }
 }
@@ -160,7 +160,7 @@ pub(super) async fn create_provider(
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }
-        "garyx_native" => {
+        "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native" => {
             let config = build_garyx_native_config(agent_cfg, default_workspace);
             let mut provider = GaryxNativeProvider::new(config);
             provider.initialize().await?;

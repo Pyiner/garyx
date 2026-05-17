@@ -77,7 +77,7 @@ struct GeminiModelDiscovery {
     default_model: Option<String>,
 }
 
-struct GaryxNativeModelDiscovery {
+struct GptModelDiscovery {
     models: Vec<ProviderModelOption>,
     default_model: Option<String>,
     reasoning_efforts: Vec<ProviderReasoningEffortOption>,
@@ -114,7 +114,7 @@ pub(crate) async fn list_provider_models(
         ProviderType::ClaudeCode | ProviderType::ClaudeTty | ProviderType::CodexAppServer => {
             unsupported(provider_type, "provider", None)
         }
-        ProviderType::GaryxNative => match fetch_garyx_native_codex_models(config).await {
+        ProviderType::Gpt => match fetch_gpt_codex_models(config).await {
             Ok(discovery) if !discovery.models.is_empty() => ProviderModelsResponse {
                 provider_type,
                 supports_model_selection: true,
@@ -133,7 +133,7 @@ pub(crate) async fn list_provider_models(
                 Some("Codex model catalog returned no picker-visible models".to_owned()),
             ),
             Err(error) => {
-                let discovery = garyx_native_builtin_models(Some(error));
+                let discovery = gpt_builtin_models(Some(error));
                 ProviderModelsResponse {
                     provider_type,
                     supports_model_selection: true,
@@ -171,17 +171,15 @@ fn unsupported(
     }
 }
 
-async fn fetch_garyx_native_codex_models(
-    config: &GaryxConfig,
-) -> Result<GaryxNativeModelDiscovery, String> {
+async fn fetch_gpt_codex_models(config: &GaryxConfig) -> Result<GptModelDiscovery, String> {
     #[cfg(test)]
     if std::env::var_os("GARYX_ALLOW_REAL_CODEX_MODEL_FETCH").is_none() {
         return Err("Codex model catalog fetch disabled in tests".to_owned());
     }
 
-    let native_config = configured_garyx_native_config(config);
-    let auth = resolve_codex_auth(&native_config, &native_config.env)
-        .map_err(|error| error.to_string())?;
+    let gpt_config = configured_gpt_config(config);
+    let auth =
+        resolve_codex_auth(&gpt_config, &gpt_config.env).map_err(|error| error.to_string())?;
     let client_version = resolve_codex_models_client_version().await;
     let response = reqwest::Client::new()
         .get(models_endpoint(&auth.base_url, &client_version))
@@ -214,22 +212,18 @@ async fn fetch_garyx_native_codex_models(
         .await
         .map_err(|error| format!("Codex model catalog response was invalid: {error}"))?;
     let presets = available_codex_model_presets(catalog.models, auth.uses_codex_backend());
-    Ok(garyx_native_discovery_from_presets(
-        presets,
-        "codex_models",
-        None,
-    ))
+    Ok(gpt_discovery_from_presets(presets, "codex_models", None))
 }
 
-fn garyx_native_builtin_models(error: Option<String>) -> GaryxNativeModelDiscovery {
-    garyx_native_discovery_from_presets(codex_builtin_model_presets(), "codex_builtin", error)
+fn gpt_builtin_models(error: Option<String>) -> GptModelDiscovery {
+    gpt_discovery_from_presets(codex_builtin_model_presets(), "codex_builtin", error)
 }
 
-fn garyx_native_discovery_from_presets(
+fn gpt_discovery_from_presets(
     presets: Vec<CodexModelPreset>,
     source: &'static str,
     error: Option<String>,
-) -> GaryxNativeModelDiscovery {
+) -> GptModelDiscovery {
     let default_model = presets
         .iter()
         .find(|preset| preset.is_default)
@@ -252,7 +246,7 @@ fn garyx_native_discovery_from_presets(
         .map(provider_model_option_from_codex_preset)
         .collect();
 
-    GaryxNativeModelDiscovery {
+    GptModelDiscovery {
         models,
         default_model,
         reasoning_efforts,
@@ -338,25 +332,28 @@ async fn resolve_codex_models_client_version() -> String {
     version.unwrap_or_else(|| CODEX_MODELS_CLIENT_VERSION_FLOOR.to_owned())
 }
 
-fn configured_garyx_native_config(config: &GaryxConfig) -> GaryxNativeConfig {
-    for key in ["garyx", "garyx_native", "native"] {
+fn configured_gpt_config(config: &GaryxConfig) -> GaryxNativeConfig {
+    for key in ["gpt", "openai", "garyx", "garyx_native", "native"] {
         if let Some(value) = config.agents.get(key)
-            && let Some(config) = garyx_native_config_from_agent_config(value)
+            && let Some(config) = gpt_config_from_agent_config(value)
         {
             return config;
         }
     }
     for value in config.agents.values() {
-        if let Some(config) = garyx_native_config_from_agent_config(value) {
+        if let Some(config) = gpt_config_from_agent_config(value) {
             return config;
         }
     }
     GaryxNativeConfig::default()
 }
 
-fn garyx_native_config_from_agent_config(value: &Value) -> Option<GaryxNativeConfig> {
+fn gpt_config_from_agent_config(value: &Value) -> Option<GaryxNativeConfig> {
     let config = serde_json::from_value::<AgentProviderConfig>(value.clone()).ok()?;
-    if config.provider_type != "garyx_native" {
+    if !matches!(
+        config.provider_type.as_str(),
+        "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native"
+    ) {
         return None;
     }
     Some(GaryxNativeConfig {
@@ -716,7 +713,7 @@ mod tests {
 
     #[test]
     fn maps_codex_presets_with_model_specific_reasoning() {
-        let discovery = garyx_native_builtin_models(None);
+        let discovery = gpt_builtin_models(None);
 
         assert_eq!(discovery.source, "codex_builtin");
         assert_eq!(discovery.default_model.as_deref(), Some("gpt-5.5"));
@@ -735,20 +732,20 @@ mod tests {
     }
 
     #[test]
-    fn reads_configured_garyx_native_codex_home() {
+    fn reads_configured_gpt_codex_home() {
         let mut config = GaryxConfig::default();
         config.agents.insert(
-            "custom-garyx".to_owned(),
+            "custom-gpt".to_owned(),
             json!({
-                "provider_type": "garyx_native",
+                "provider_type": "gpt",
                 "codex_home": "/tmp/test-codex-home",
                 "base_url": "https://example.invalid/codex"
             }),
         );
 
-        let native = configured_garyx_native_config(&config);
+        let gpt = configured_gpt_config(&config);
 
-        assert_eq!(native.codex_home, "/tmp/test-codex-home");
-        assert_eq!(native.base_url, "https://example.invalid/codex");
+        assert_eq!(gpt.codex_home, "/tmp/test-codex-home");
+        assert_eq!(gpt.base_url, "https://example.invalid/codex");
     }
 }

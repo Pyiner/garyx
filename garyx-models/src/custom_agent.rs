@@ -85,9 +85,9 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             updated_at: now.clone(),
         },
         CustomAgentProfile {
-            agent_id: "garyx".to_owned(),
-            display_name: "Garyx".to_owned(),
-            provider_type: ProviderType::GaryxNative,
+            agent_id: "gpt".to_owned(),
+            display_name: "GPT".to_owned(),
+            provider_type: ProviderType::Gpt,
             model: String::new(),
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
@@ -103,7 +103,10 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
 }
 
 pub fn is_builtin_provider_agent_id(agent_id: &str) -> bool {
-    matches!(agent_id.trim(), "claude" | "codex" | "gemini" | "garyx")
+    matches!(
+        agent_id.trim(),
+        "claude" | "codex" | "gemini" | "gpt" | "garyx"
+    )
 }
 
 #[cfg(test)]

@@ -42,6 +42,16 @@ fn resolves_standalone_agents() {
 }
 
 #[test]
+fn resolves_legacy_garyx_alias_to_gpt_agent() {
+    let agents = vec![standalone_agent("gpt", ProviderType::Gpt)];
+
+    let resolved = resolve_agent_reference("garyx", &agents, &[]).expect("legacy alias");
+
+    assert_eq!(resolved.bound_agent_id(), "gpt");
+    assert_eq!(resolved.provider_type(), ProviderType::Gpt);
+}
+
+#[test]
 fn resolves_team_by_team_id() {
     let agents = vec![
         standalone_agent("planner", ProviderType::CodexAppServer),
