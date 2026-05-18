@@ -1286,6 +1286,7 @@ fn reauthorize_weixin_can_inherit_metadata_and_disable_previous_account() {
         "old-wx",
         Some("Wiki".to_owned()),
         Some("/Users/test".to_owned()),
+        Some("worktree".to_owned()),
         Some("wiki-curator".to_owned()),
         Some("old-token".to_owned()),
         Some("old-uin".to_owned()),
@@ -1302,6 +1303,7 @@ fn reauthorize_weixin_can_inherit_metadata_and_disable_previous_account() {
         .expect("previous account should exist");
     assert_eq!(inherited.name.as_deref(), Some("Wiki"));
     assert_eq!(inherited.workspace_dir.as_deref(), Some("/Users/test"));
+    assert_eq!(inherited.workspace_mode.as_deref(), Some("worktree"));
     assert_eq!(inherited.agent_id.as_deref(), Some("wiki-curator"));
     assert_eq!(config_string(&inherited, "uin").as_deref(), Some("old-uin"));
 
@@ -1311,6 +1313,7 @@ fn reauthorize_weixin_can_inherit_metadata_and_disable_previous_account() {
         "new-wx",
         inherited.name.clone(),
         inherited.workspace_dir.clone(),
+        inherited.workspace_mode.clone(),
         inherited.agent_id.clone(),
         Some("new-token".to_owned()),
         config_string(&inherited, "uin"),
@@ -1399,6 +1402,7 @@ fn user_channel_account_count_ignores_api_accounts() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
     // api-only should still count as zero user-facing channels
@@ -1721,6 +1725,7 @@ async fn channels_add_persists_generic_plugin_accounts() {
         Some("agent-1".to_owned()),
         Some("AcmeChat Main".to_owned()),
         None,
+        Some("worktree".to_owned()),
         None,
         Some("tok-1".to_owned()),
         None,
@@ -1747,6 +1752,7 @@ async fn channels_add_persists_generic_plugin_accounts() {
         .expect("plugin account should exist");
     assert_eq!(entry.name.as_deref(), Some("AcmeChat Main"));
     assert_eq!(entry.agent_id.as_deref(), Some("claude"));
+    assert_eq!(entry.workspace_mode.as_deref(), Some("worktree"));
     assert_eq!(entry.config["token"], "tok-1");
     assert_eq!(entry.config["base_url"], "https://chat.example.com");
 }
@@ -1763,6 +1769,7 @@ fn upsert_plugin_account_rejects_missing_required_fields() {
         &mut cfg,
         "test-acmechat-cli",
         "agent-1",
+        None,
         None,
         None,
         None,
@@ -1794,6 +1801,7 @@ fn validate_channel_account_configs_flags_null_plugin_config() {
                 name: Some("Test Account".to_owned()),
                 agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
+                workspace_mode: None,
                 config: Value::Null,
             },
         );
@@ -1821,6 +1829,7 @@ fn validate_channel_account_configs_decodes_builtin_accounts() {
                 name: None,
                 agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
+                workspace_mode: None,
                 config: json!({}),
             },
         );
@@ -1845,6 +1854,7 @@ fn validate_channel_account_configs_uses_installed_plugin_required_fields() {
                 name: None,
                 agent_id: Some("claude".to_owned()),
                 workspace_dir: None,
+                workspace_mode: None,
                 config: json!({
                     "base_url": "https://chat.example.invalid"
                 }),

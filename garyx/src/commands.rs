@@ -5951,6 +5951,10 @@ pub(crate) async fn cmd_bot_status(
     {
         println!("Workspace: {workspace_dir}");
     }
+    println!(
+        "Workspace mode: {}",
+        payload["workspace_mode"].as_str().unwrap_or("direct")
+    );
     if let Some(binding_key) = payload["main_endpoint"]["binding_key"].as_str()
         && !binding_key.trim().is_empty()
     {
@@ -6655,6 +6659,7 @@ fn ensure_onboard_api_account(config: &mut GaryxConfig, account_id: &str) -> boo
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
     true
@@ -7115,6 +7120,7 @@ pub(crate) struct ChannelOverrides {
     pub account: Option<String>,
     pub name: Option<String>,
     pub workspace_dir: Option<String>,
+    pub workspace_mode: Option<String>,
     pub agent_id: Option<String>,
     pub token: Option<String>,
     pub uin: Option<String>,
@@ -7147,6 +7153,22 @@ fn trim_opt(value: Option<String>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn normalize_channel_workspace_mode(
+    value: Option<String>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let Some(value) = trim_opt(value) else {
+        return Ok(None);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "direct" | "local" => Ok(Some("direct".to_owned())),
+        "worktree" => Ok(Some("worktree".to_owned())),
+        _ => Err(
+            format!("invalid workspace mode `{value}`; use `direct`, `local`, or `worktree`")
+                .into(),
+        ),
+    }
 }
 
 fn discover_plugin_manifest(
@@ -7727,6 +7749,7 @@ async fn interactive_bind_channel(
         &account,
         overrides.name,
         overrides.workspace_dir,
+        overrides.workspace_mode,
         overrides.agent_id,
         overrides.token,
         overrides.uin,
@@ -7746,6 +7769,7 @@ pub(crate) async fn cmd_channels_add(
     account: Option<String>,
     name: Option<String>,
     workspace_dir: Option<String>,
+    workspace_mode: Option<String>,
     agent_id: Option<String>,
     token: Option<String>,
     uin: Option<String>,
@@ -7772,6 +7796,7 @@ pub(crate) async fn cmd_channels_add(
         account: trim_opt(account),
         name: trim_opt(name),
         workspace_dir: trim_opt(workspace_dir),
+        workspace_mode: trim_opt(workspace_mode),
         agent_id: trim_opt(agent_id),
         token,
         uin,
@@ -7859,6 +7884,7 @@ pub(crate) async fn cmd_channels_add(
         &account,
         overrides.name,
         overrides.workspace_dir,
+        overrides.workspace_mode,
         overrides.agent_id,
         overrides.token,
         overrides.uin,
@@ -8110,6 +8136,7 @@ fn upsert_channel_account(
     account: &str,
     name: Option<String>,
     workspace_dir: Option<String>,
+    workspace_mode: Option<String>,
     agent_id: Option<String>,
     token: Option<String>,
     uin: Option<String>,
@@ -8120,48 +8147,47 @@ fn upsert_channel_account(
     plugin_extras: Map<String, Value>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let agent_id = trim_opt(agent_id).unwrap_or_else(|| DEFAULT_CHANNEL_AGENT_ID.to_owned());
+    let workspace_mode = normalize_channel_workspace_mode(workspace_mode)?;
     match channel {
         BUILTIN_CHANNEL_PLUGIN_TELEGRAM => {
             let Some(token) = token else {
                 return Err("missing telegram token".into());
             };
+            let mut entry = telegram_account_to_plugin_entry(&TelegramAccount {
+                token,
+                enabled: true,
+                name,
+                agent_id: agent_id.clone(),
+                workspace_dir,
+                owner_target: None,
+                groups: Default::default(),
+            });
+            entry.workspace_mode = workspace_mode;
             cfg.channels
                 .plugin_channel_mut(BUILTIN_CHANNEL_PLUGIN_TELEGRAM)
                 .accounts
-                .insert(
-                    account.to_owned(),
-                    telegram_account_to_plugin_entry(&TelegramAccount {
-                        token,
-                        enabled: true,
-                        name,
-                        agent_id: agent_id.clone(),
-                        workspace_dir,
-                        owner_target: None,
-                        groups: Default::default(),
-                    }),
-                );
+                .insert(account.to_owned(), entry);
         }
         BUILTIN_CHANNEL_PLUGIN_DISCORD => {
             let Some(token) = token else {
                 return Err("missing discord token".into());
             };
+            let mut entry = discord_account_to_plugin_entry(&DiscordAccount {
+                token,
+                enabled: true,
+                name,
+                agent_id: agent_id.clone(),
+                workspace_dir,
+                owner_target: None,
+                require_mention: true,
+                api_base: "https://discord.com/api/v10".to_owned(),
+                gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".to_owned(),
+            });
+            entry.workspace_mode = workspace_mode;
             cfg.channels
                 .plugin_channel_mut(BUILTIN_CHANNEL_PLUGIN_DISCORD)
                 .accounts
-                .insert(
-                    account.to_owned(),
-                    discord_account_to_plugin_entry(&DiscordAccount {
-                        token,
-                        enabled: true,
-                        name,
-                        agent_id: agent_id.clone(),
-                        workspace_dir,
-                        owner_target: None,
-                        require_mention: true,
-                        api_base: "https://discord.com/api/v10".to_owned(),
-                        gateway_url: "wss://gateway.discord.gg/?v=10&encoding=json".to_owned(),
-                    }),
-                );
+                .insert(account.to_owned(), entry);
         }
         BUILTIN_CHANNEL_PLUGIN_FEISHU => {
             let Some(app_id) = app_id else {
@@ -8174,46 +8200,43 @@ fn upsert_channel_account(
                 .as_deref()
                 .and_then(parse_feishu_domain)
                 .unwrap_or_default();
+            let mut entry = feishu_account_to_plugin_entry(&FeishuAccount {
+                app_id,
+                app_secret,
+                enabled: true,
+                domain: resolved_domain,
+                name,
+                agent_id: agent_id.clone(),
+                workspace_dir,
+                owner_target: None,
+                require_mention: true,
+                topic_session_mode: Default::default(),
+            });
+            entry.workspace_mode = workspace_mode;
             cfg.channels
                 .plugin_channel_mut(BUILTIN_CHANNEL_PLUGIN_FEISHU)
                 .accounts
-                .insert(
-                    account.to_owned(),
-                    feishu_account_to_plugin_entry(&FeishuAccount {
-                        app_id,
-                        app_secret,
-                        enabled: true,
-                        domain: resolved_domain,
-                        name,
-                        agent_id: agent_id.clone(),
-                        workspace_dir,
-                        owner_target: None,
-                        require_mention: true,
-                        topic_session_mode: Default::default(),
-                    }),
-                );
+                .insert(account.to_owned(), entry);
         }
         BUILTIN_CHANNEL_PLUGIN_WEIXIN => {
             let Some(token) = token else {
                 return Err("missing weixin token".into());
             };
+            let mut entry = weixin_account_to_plugin_entry(&WeixinAccount {
+                token,
+                uin: uin.unwrap_or_default(),
+                enabled: true,
+                base_url: base_url.unwrap_or_else(|| "https://ilinkai.weixin.qq.com".to_owned()),
+                name,
+                agent_id: agent_id.clone(),
+                workspace_dir,
+                streaming_update: true,
+            });
+            entry.workspace_mode = workspace_mode;
             cfg.channels
                 .plugin_channel_mut(BUILTIN_CHANNEL_PLUGIN_WEIXIN)
                 .accounts
-                .insert(
-                    account.to_owned(),
-                    weixin_account_to_plugin_entry(&WeixinAccount {
-                        token,
-                        uin: uin.unwrap_or_default(),
-                        enabled: true,
-                        base_url: base_url
-                            .unwrap_or_else(|| "https://ilinkai.weixin.qq.com".to_owned()),
-                        name,
-                        agent_id: agent_id.clone(),
-                        workspace_dir,
-                        streaming_update: true,
-                    }),
-                );
+                .insert(account.to_owned(), entry);
         }
         "api" => {
             cfg.channels.api.accounts.insert(
@@ -8223,6 +8246,7 @@ fn upsert_channel_account(
                     name,
                     agent_id: agent_id.clone(),
                     workspace_dir,
+                    workspace_mode,
                 },
             );
         }
@@ -8234,6 +8258,7 @@ fn upsert_channel_account(
                 account: Some(account.to_owned()),
                 name: name.clone(),
                 workspace_dir: workspace_dir.clone(),
+                workspace_mode: workspace_mode.clone(),
                 agent_id: Some(agent_id.clone()),
                 token,
                 uin,
@@ -8255,6 +8280,7 @@ fn upsert_channel_account(
                         name,
                         agent_id: Some(agent_id),
                         workspace_dir,
+                        workspace_mode,
                         config: Value::Object(form_state),
                     },
                 );
@@ -8588,6 +8614,7 @@ pub(crate) async fn cmd_channels_login(
     forget_previous: bool,
     name: Option<String>,
     workspace_dir: Option<String>,
+    workspace_mode: Option<String>,
     agent_id: Option<String>,
     uin: Option<String>,
     base_url: Option<String>,
@@ -8614,6 +8641,11 @@ pub(crate) async fn cmd_channels_login(
         reauthorize_entry
             .as_ref()
             .and_then(|e| e.workspace_dir.clone())
+    });
+    let selected_workspace_mode = trim_opt(workspace_mode).or_else(|| {
+        reauthorize_entry
+            .as_ref()
+            .and_then(|entry| entry.workspace_mode.clone())
     });
     let selected_uin = trim_opt(uin).or_else(|| {
         reauthorize_entry
@@ -8666,6 +8698,7 @@ pub(crate) async fn cmd_channels_login(
                 &target_account_id,
                 selected_name.clone(),
                 selected_workspace_dir.clone(),
+                selected_workspace_mode.clone(),
                 selected_agent_id.clone(),
                 Some(token),
                 selected_uin.clone(),
@@ -8745,6 +8778,7 @@ pub(crate) async fn cmd_channels_login(
                 &target_account_id,
                 selected_name.clone(),
                 selected_workspace_dir.clone(),
+                selected_workspace_mode.clone(),
                 selected_agent_id.clone(),
                 None,
                 None,
@@ -8829,6 +8863,7 @@ pub(crate) async fn cmd_channels_login(
                 account: Some(target_account_id.clone()),
                 name: selected_name.clone(),
                 workspace_dir: selected_workspace_dir.clone(),
+                workspace_mode: selected_workspace_mode.clone(),
                 agent_id: selected_agent_id.clone(),
                 plugin_extras: Map::new(),
                 ..ChannelOverrides::default()
@@ -8842,6 +8877,7 @@ pub(crate) async fn cmd_channels_login(
                 &target_account_id,
                 overrides.name,
                 overrides.workspace_dir,
+                overrides.workspace_mode,
                 overrides.agent_id,
                 overrides.token,
                 overrides.uin,

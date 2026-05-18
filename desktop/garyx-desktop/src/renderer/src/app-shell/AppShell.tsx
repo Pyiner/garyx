@@ -3291,6 +3291,7 @@ export function AppShell() {
     accountId: string;
     name?: string | null;
     workspaceDir?: string | null;
+    workspaceMode?: "direct" | "worktree";
     agentId?: string | null;
     token?: string | null;
     appId?: string | null;

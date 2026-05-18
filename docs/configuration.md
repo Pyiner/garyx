@@ -92,6 +92,7 @@ Common account fields:
 | `name` | Optional display name in the desktop app. |
 | `agent_id` | Agent or team used for new inbound threads. |
 | `workspace_dir` | Default execution directory path for new threads from this account. Takes priority over the selected Agent's `default_workspace_dir`. |
+| `workspace_mode` | Optional workspace mode for new inbound threads from this account: `direct`/`local` or `worktree`. Defaults to `direct`. |
 | `config` | Channel-specific fields declared by the built-in channel or plugin. |
 
 The desktop Add Bot flow validates account connectivity through the gateway
@@ -652,6 +653,33 @@ New local threads and task backing threads can opt into a managed Git worktree:
 ```bash
 garyx thread create --workspace-dir /path/to/repo --worktree
 garyx task create --title "Investigate" --workspace-dir /path/to/repo --worktree --notify none
+```
+
+Bot accounts can make the same choice for newly created inbound threads:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "accounts": {
+        "main": {
+          "agent_id": "claude",
+          "workspace_dir": "/path/to/repo",
+          "workspace_mode": "worktree",
+          "config": {
+            "token": "${TELEGRAM_BOT_TOKEN}"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+You can also set it from the CLI:
+
+```bash
+garyx channels add telegram main --workspace-dir /path/to/repo --workspace-mode worktree --token ${TELEGRAM_BOT_TOKEN}
 ```
 
 `--worktree` requires `--workspace-dir` to be the Git repository root and the

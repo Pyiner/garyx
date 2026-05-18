@@ -123,6 +123,7 @@ async fn test_state_with_provider() -> Arc<AppState> {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 
@@ -145,6 +146,7 @@ async fn test_state_with_slow_provider() -> (Arc<AppState>, Arc<MultiProviderBri
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 

@@ -71,8 +71,9 @@ garyx thread create --workspace-dir /path/to/repo --worktree
 garyx task create --workspace-dir /path/to/repo --worktree
 ```
 
-Worktree mode is not supported on `thread send` or other implicit creation
-paths.
+Bot channel accounts can also set `workspace_mode=worktree`; newly created
+inbound threads and bot-local `/newthread` commands use that account default.
+`thread send` does not change an existing thread's workspace mode.
 
 If `--worktree` / `workspace_mode=worktree` is used and `workspace_dir` is not
 a git repository root, or the repository has no `HEAD` commit, Garyx returns an
@@ -167,6 +168,13 @@ Task creation in worktree mode:
 1. Task creation passes the worktree request into backing thread creation.
 2. Backing thread creation follows the same thread worktree flow.
 3. Task state remains unchanged beyond its existing backing thread relation.
+
+Bot inbound thread creation in worktree mode:
+
+1. The channel account supplies `workspace_dir` and `workspace_mode`.
+2. Router thread creation forwards the same worktree request used by explicit
+   thread creation.
+3. Existing bound bot threads keep their original immutable `workspace_dir`.
 
 ## Git Command Semantics
 

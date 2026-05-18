@@ -505,6 +505,8 @@ pub struct ApiAccount {
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_mode: Option<String>,
 }
 
 impl Default for ApiAccount {
@@ -514,6 +516,7 @@ impl Default for ApiAccount {
             name: None,
             agent_id: default_channel_agent_id(),
             workspace_dir: None,
+            workspace_mode: None,
         }
     }
 }
@@ -547,6 +550,8 @@ pub struct PluginAccountEntry {
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_mode: Option<String>,
     /// Opaque JSON validated by the plugin's JSON Schema on save. The
     /// gateway does not introspect any field inside it.
     #[serde(default)]
@@ -560,6 +565,7 @@ impl Default for PluginAccountEntry {
             name: None,
             agent_id: None,
             workspace_dir: None,
+            workspace_mode: None,
             config: Value::Null,
         }
     }
@@ -718,6 +724,12 @@ fn plugin_entry_payload_with_envelope(entry: &PluginAccountEntry) -> Value {
             Value::String(workspace_dir.clone()),
         );
     }
+    if let Some(workspace_mode) = &entry.workspace_mode {
+        payload.insert(
+            "workspace_mode".to_owned(),
+            Value::String(workspace_mode.clone()),
+        );
+    }
     Value::Object(payload)
 }
 
@@ -729,12 +741,14 @@ pub fn telegram_account_to_plugin_entry(account: &TelegramAccount) -> PluginAcco
         map.remove("name");
         map.remove("agent_id");
         map.remove("workspace_dir");
+        map.remove("workspace_mode");
     }
     PluginAccountEntry {
         enabled: account.enabled,
         name: account.name.clone(),
         agent_id: Some(account.agent_id.clone()),
         workspace_dir: account.workspace_dir.clone(),
+        workspace_mode: None,
         config,
     }
 }
@@ -747,12 +761,14 @@ pub fn discord_account_to_plugin_entry(account: &DiscordAccount) -> PluginAccoun
         map.remove("name");
         map.remove("agent_id");
         map.remove("workspace_dir");
+        map.remove("workspace_mode");
     }
     PluginAccountEntry {
         enabled: account.enabled,
         name: account.name.clone(),
         agent_id: Some(account.agent_id.clone()),
         workspace_dir: account.workspace_dir.clone(),
+        workspace_mode: None,
         config,
     }
 }
@@ -765,12 +781,14 @@ pub fn feishu_account_to_plugin_entry(account: &FeishuAccount) -> PluginAccountE
         map.remove("name");
         map.remove("agent_id");
         map.remove("workspace_dir");
+        map.remove("workspace_mode");
     }
     PluginAccountEntry {
         enabled: account.enabled,
         name: account.name.clone(),
         agent_id: Some(account.agent_id.clone()),
         workspace_dir: account.workspace_dir.clone(),
+        workspace_mode: None,
         config,
     }
 }
@@ -783,12 +801,14 @@ pub fn weixin_account_to_plugin_entry(account: &WeixinAccount) -> PluginAccountE
         map.remove("name");
         map.remove("agent_id");
         map.remove("workspace_dir");
+        map.remove("workspace_mode");
     }
     PluginAccountEntry {
         enabled: account.enabled,
         name: account.name.clone(),
         agent_id: Some(account.agent_id.clone()),
         workspace_dir: account.workspace_dir.clone(),
+        workspace_mode: None,
         config,
     }
 }

@@ -9,8 +9,9 @@ use serde_json::Value;
 use super::super::*;
 use crate::threads::{
     ChannelBinding, ThreadEnsureOptions, ThreadIndexStats, bind_endpoint_to_thread,
-    default_agent_for_channel_account, default_workspace_for_channel_account, endpoint_key,
-    label_from_value, list_known_channel_endpoints, new_thread_key,
+    default_agent_for_channel_account, default_workspace_for_channel_account,
+    default_workspace_mode_for_channel_account, endpoint_key, label_from_value,
+    list_known_channel_endpoints, new_thread_key, worktree_base_dir_for_config,
 };
 
 const INBOUND_FALLBACK_AGENT_ID: &str = "claude";
@@ -243,11 +244,15 @@ impl MessageRouter {
 
         let display_label =
             Self::resolve_display_label(extra_metadata, channel, account_id, thread_binding_key);
+        let workspace_mode =
+            default_workspace_mode_for_channel_account(&self.config, channel, account_id);
         let options = ThreadEnsureOptions {
             label: Some(display_label.clone()),
             workspace_dir: default_workspace_for_channel_account(&self.config, channel, account_id),
-            workspace_mode: Default::default(),
-            worktree_base_dir: None,
+            workspace_mode,
+            worktree_base_dir: workspace_mode
+                .is_worktree()
+                .then(|| worktree_base_dir_for_config(&self.config)),
             agent_id: default_agent_for_channel_account(&self.config, channel, account_id),
             metadata: HashMap::new(),
             provider_type: None,

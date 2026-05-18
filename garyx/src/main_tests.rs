@@ -1560,6 +1560,7 @@ async fn onboard_updates_existing_config_without_resetting_other_fields() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
     std::fs::write(&config_path, serde_json::to_vec_pretty(&initial).unwrap()).unwrap();
@@ -1628,6 +1629,7 @@ async fn channels_add_non_interactive_telegram() {
         Some("Alice Bot".to_owned()),
         None,
         None,
+        None,
         Some("123:ABCDEF".to_owned()),
         None,
         None,
@@ -1664,6 +1666,7 @@ async fn channels_add_non_interactive_discord() {
         Some("Discord Bot".to_owned()),
         None,
         None,
+        None,
         Some("discord-token".to_owned()),
         None,
         None,
@@ -1698,6 +1701,7 @@ async fn channels_add_non_interactive_feishu() {
         &config_path.display().to_string(),
         Some("feishu".to_owned()),
         Some("myapp".to_owned()),
+        None,
         None,
         None,
         None,
@@ -1748,6 +1752,7 @@ async fn channels_add_non_interactive_api_only_needs_account() {
         None,
         None,
         None,
+        None,
         false,
     )
     .await
@@ -1773,6 +1778,7 @@ async fn channels_add_non_interactive_persists_explicit_agent_id() {
         &config_path.display().to_string(),
         Some("api".to_owned()),
         Some("scripted".to_owned()),
+        None,
         None,
         None,
         Some("product-ship".to_owned()),
@@ -1809,6 +1815,7 @@ async fn channels_add_non_interactive_weixin_accepts_preexisting_token() {
         &config_path.display().to_string(),
         Some("weixin".to_owned()),
         Some("wxbot".to_owned()),
+        None,
         None,
         None,
         None,
@@ -1854,6 +1861,7 @@ async fn channels_add_non_interactive_rejects_missing_required_token() {
         None,
         None,
         None,
+        None,
         None, // no --token
         None,
         None,
@@ -1895,6 +1903,7 @@ async fn channels_add_non_interactive_rejects_missing_feishu_app_secret() {
         &config_path.display().to_string(),
         Some("feishu".to_owned()),
         Some("myapp".to_owned()),
+        None,
         None,
         None,
         None,
@@ -1972,6 +1981,7 @@ async fn channels_add_feishu_persists_lark_domain_when_flag_set() {
         None,
         None,
         None,
+        None,
         Some("cli_lark".to_owned()),
         Some("s_lark".to_owned()),
         Some("lark".to_owned()),
@@ -2009,6 +2019,7 @@ async fn channels_add_rejects_auto_register_with_explicit_credentials() {
         &config_path.display().to_string(),
         Some("feishu".to_owned()),
         Some("conflict".to_owned()),
+        None,
         None,
         None,
         None,
@@ -2087,13 +2098,21 @@ fn cli_channels_add_parses_agent_id_flag() {
         "add",
         "telegram",
         "mybot",
+        "--workspace-mode",
+        "worktree",
         "--agent-id",
         "product-ship",
     ]);
     match cli.command {
         Some(Commands::Channels {
-            action: ChannelsAction::Add { agent_id, .. },
+            action:
+                ChannelsAction::Add {
+                    workspace_mode,
+                    agent_id,
+                    ..
+                },
         }) => {
+            assert_eq!(workspace_mode.as_deref(), Some("worktree"));
             assert_eq!(agent_id.as_deref(), Some("product-ship"));
         }
         _ => panic!("unexpected parse result: expected Channels::Add"),
@@ -2116,6 +2135,8 @@ fn cli_channels_login_parses_feishu_domain_flag() {
         "My Bot",
         "--workspace-dir",
         "/tmp/garyx-login",
+        "--workspace-mode",
+        "local",
         "--agent-id",
         "product-ship",
         "--domain",
@@ -2132,6 +2153,7 @@ fn cli_channels_login_parses_feishu_domain_flag() {
                     forget_previous,
                     name,
                     workspace_dir,
+                    workspace_mode,
                     agent_id,
                     domain,
                     json,
@@ -2144,6 +2166,7 @@ fn cli_channels_login_parses_feishu_domain_flag() {
             assert!(forget_previous);
             assert_eq!(name.as_deref(), Some("My Bot"));
             assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx-login"));
+            assert_eq!(workspace_mode.as_deref(), Some("local"));
             assert_eq!(agent_id.as_deref(), Some("product-ship"));
             assert_eq!(domain.as_deref(), Some("lark"));
             assert!(json);
@@ -2163,6 +2186,7 @@ async fn channels_login_rejects_unsupported_channel() {
         Some("alice".to_owned()),
         None,
         false,
+        None,
         None,
         None,
         None,
@@ -2359,6 +2383,7 @@ fn routing_rebuild_channels_includes_all_enabled_channels() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 

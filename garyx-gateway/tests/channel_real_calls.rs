@@ -280,6 +280,7 @@ async fn make_state_with_recording_provider(provider: Arc<RecordingProvider>) ->
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 

@@ -11,6 +11,7 @@ import { Check, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import type {
   ChannelPluginCatalogEntry,
   ChannelPluginConfigMethod,
+  DesktopWorkspaceMode,
 } from "@shared/contracts";
 
 import { Button } from "@/components/ui/button";
@@ -56,6 +57,7 @@ export type EditBotPatch = {
   name?: string | null;
   agentId?: string;
   workspaceDir?: string | null;
+  workspaceMode?: DesktopWorkspaceMode;
   config?: Record<string, unknown>;
 };
 
@@ -167,6 +169,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
   const [name, setName] = useState("");
   const [agentId, setAgentId] = useState("");
   const [workspaceDir, setWorkspaceDir] = useState("");
+  const [workspaceMode, setWorkspaceMode] = useState<DesktopWorkspaceMode>("direct");
   const [pluginConfig, setPluginConfig] = useState<Record<string, unknown>>({});
   const [showReauthorize, setShowReauthorize] = useState(false);
   const [reauthorizedAccountId, setReauthorizedAccountId] = useState<string | null>(null);
@@ -183,6 +186,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
     setName(String(account.name || ""));
     setAgentId(context.resolvedAgentId || "");
     setWorkspaceDir(String(account.workspace_dir || ""));
+    setWorkspaceMode(account.workspace_mode === "worktree" ? "worktree" : "direct");
     setPluginConfig(accountToConfig(account));
     setShowReauthorize(false);
     setReauthorizedAccountId(null);
@@ -256,6 +260,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
         nextAccountId,
         name: name.trim() || null,
         workspaceDir: workspaceDir.trim() || null,
+        workspaceMode,
         config: pluginConfig,
       };
       if (agentId) patch.agentId = agentId;
@@ -395,6 +400,24 @@ export function EditBotDialog(props: EditBotDialogProps) {
                     onChange={setWorkspaceDir}
                     placeholder={t("Use the main workspace by default")}
                   />
+                </div>
+
+                <div className="add-bot-field">
+                  <Label className="add-bot-label" htmlFor="edit-bot-workspace-mode">
+                    {t("Workspace mode")}
+                  </Label>
+                  <Select
+                    value={workspaceMode}
+                    onValueChange={(value) => setWorkspaceMode(value as DesktopWorkspaceMode)}
+                  >
+                    <SelectTrigger className="add-bot-control" id="edit-bot-workspace-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="direct">{t("Local")}</SelectItem>
+                      <SelectItem value="worktree">{t("Worktree")}</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             </div>

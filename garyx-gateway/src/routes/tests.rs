@@ -1209,6 +1209,7 @@ async fn delete_thread_aborts_active_run_and_prevents_recreation() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 
@@ -1291,6 +1292,7 @@ async fn delete_thread_drops_local_state_even_when_provider_clear_fails() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 
@@ -1583,6 +1585,7 @@ async fn configured_bots_route_returns_only_account_workspace_bindings() {
             name: None,
             agent_id: Some("claude".to_owned()),
             workspace_dir: Some("/tmp/plugin-workspace".to_owned()),
+            workspace_mode: None,
             config: serde_json::json!({
                 "token": "plugin_agent_test",
                 "base_url": "https://example.com",
@@ -1711,6 +1714,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
             name: None,
             agent_id: Some("claude".to_owned()),
             workspace_dir: Some("/tmp/plugin-owner".to_owned()),
+            workspace_mode: None,
             config: serde_json::json!({
                 "token": "plugin_agent_owner",
                 "base_url": "https://plugin.example.com",
@@ -2464,6 +2468,7 @@ async fn task_stop_aborts_active_backing_thread_run_and_releases_task() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 
@@ -2555,6 +2560,7 @@ async fn task_delete_aborts_run_and_removes_task_overlay_but_retains_thread() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 

@@ -185,6 +185,7 @@ async fn test_status_lists_api_channels() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
     let server = GaryMcpServer::new(crate::server::create_app_state(config));
@@ -271,6 +272,7 @@ async fn test_status_reports_current_and_other_bots() {
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 

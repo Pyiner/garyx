@@ -8,7 +8,8 @@ use super::super::inbound::NativeThreadCommand;
 use super::super::*;
 use crate::threads::{
     ChannelBinding, ThreadEnsureOptions, default_agent_for_channel_account,
-    default_workspace_for_channel_account, loop_enabled_from_value,
+    default_workspace_for_channel_account, default_workspace_mode_for_channel_account,
+    loop_enabled_from_value, worktree_base_dir_for_config,
 };
 
 impl MessageRouter {
@@ -69,6 +70,8 @@ impl MessageRouter {
             }
             NativeThreadCommand::New => {
                 let thread_name = Local::now().format("thread-%Y%m%d-%H%M%S").to_string();
+                let workspace_mode =
+                    default_workspace_mode_for_channel_account(&self.config, channel, account_id);
                 let options = ThreadEnsureOptions {
                     label: Some(thread_name.clone()),
                     workspace_dir: default_workspace_for_channel_account(
@@ -76,8 +79,10 @@ impl MessageRouter {
                         channel,
                         account_id,
                     ),
-                    workspace_mode: Default::default(),
-                    worktree_base_dir: None,
+                    workspace_mode,
+                    worktree_base_dir: workspace_mode
+                        .is_worktree()
+                        .then(|| worktree_base_dir_for_config(&self.config)),
                     agent_id: default_agent_for_channel_account(&self.config, channel, account_id),
                     metadata: HashMap::new(),
                     provider_type: None,

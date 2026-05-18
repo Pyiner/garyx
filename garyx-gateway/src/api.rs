@@ -23,7 +23,8 @@ use garyx_models::config_loader::{
 use garyx_models::provider::{ProviderMessage, ProviderType};
 use garyx_router::{
     ChannelBinding, ThreadHistoryError, bindings_from_value, count_user_query_messages,
-    history_message_count, is_thread_key, workspace_dir_from_value,
+    default_workspace_mode_for_channel_account, history_message_count, is_thread_key,
+    workspace_dir_from_value,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1207,6 +1208,11 @@ async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value 
             "bot_id": bot_id,
             "channel": channel,
             "account_id": account_id,
+            "workspace_mode": default_workspace_mode_for_channel_account(
+                &state.config_snapshot(),
+                channel,
+                account_id,
+            ),
             "main_endpoint_status": "unresolved",
             "main_endpoint": Value::Null,
             "current_thread_status": "unresolved",
@@ -1231,12 +1237,15 @@ async fn build_bot_status_payload(state: &Arc<AppState>, bot_id: &str) -> Value 
     } else {
         "unbound"
     };
+    let default_workspace_mode =
+        default_workspace_mode_for_channel_account(&state.config_snapshot(), channel, account_id);
 
     json!({
         "ok": true,
         "bot_id": bot_id,
         "channel": channel,
         "account_id": account_id,
+        "workspace_mode": default_workspace_mode,
         "main_endpoint_status": "resolved",
         "main_endpoint": endpoint.to_value(),
         "current_thread_status": current_thread_status,

@@ -109,7 +109,8 @@ fn test_api_channels_deserialize() {
                         "enabled": true,
                         "name": "API Bot",
                         "agent_id": "codex",
-                        "workspace_dir": "/tmp/codex-workspace"
+                        "workspace_dir": "/tmp/codex-workspace",
+                        "workspace_mode": "worktree"
                     }
                 }
             }
@@ -124,6 +125,7 @@ fn test_api_channels_deserialize() {
         account.workspace_dir.as_deref(),
         Some("/tmp/codex-workspace")
     );
+    assert_eq!(account.workspace_mode.as_deref(), Some("worktree"));
 }
 
 #[test]
@@ -321,4 +323,5 @@ fn api_account_default_matches_serde_defaults() {
     assert_eq!(from_default.name, from_serde.name);
     assert_eq!(from_default.agent_id, from_serde.agent_id);
     assert_eq!(from_default.workspace_dir, from_serde.workspace_dir);
+    assert_eq!(from_default.workspace_mode, from_serde.workspace_mode);
 }

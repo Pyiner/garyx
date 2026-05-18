@@ -153,6 +153,7 @@ async fn test_state_with_named_provider(
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 
@@ -190,6 +191,7 @@ async fn test_state_with_mock_provider(
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 

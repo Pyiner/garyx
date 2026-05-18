@@ -132,6 +132,7 @@ type GatewaySettingsPanelProps = {
     accountId: string;
     name?: string | null;
     workspaceDir?: string | null;
+    workspaceMode?: 'direct' | 'worktree';
     agentId?: string | null;
     token?: string | null;
     appId?: string | null;
@@ -2159,6 +2160,7 @@ export function GatewaySettingsPanel({
             const finalAccountId = patch.nextAccountId?.trim() || accountId;
             if (patch.name !== undefined) account.name = patch.name;
             if (patch.workspaceDir !== undefined) account.workspace_dir = patch.workspaceDir;
+            if (patch.workspaceMode !== undefined) account.workspace_mode = patch.workspaceMode;
             if (patch.agentId !== undefined) account.agent_id = patch.agentId;
             if (patch.config !== undefined) account.config = patch.config;
             if (finalAccountId !== accountId) {

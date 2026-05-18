@@ -1771,6 +1771,7 @@ async fn test_settings_update_merge_false_deletes_channel_account() {
             name: Some("doomed".to_owned()),
             agent_id: Some("claude".to_owned()),
             workspace_dir: None,
+            workspace_mode: None,
             config: serde_json::json!({ "token": "secret" }),
         },
     );
@@ -1874,6 +1875,7 @@ async fn test_settings_update_rejects_missing_or_null_channel_account_config() {
             name: Some("Test Bot".to_owned()),
             agent_id: Some("claude".to_owned()),
             workspace_dir: None,
+            workspace_mode: None,
             config: serde_json::json!({ "token": "test-token" }),
         },
     );

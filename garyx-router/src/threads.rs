@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use garyx_models::config::GaryxConfig;
+use garyx_models::local_paths::gary_home_dir;
 use garyx_models::provider::ProviderType;
 use garyx_models::routing::{
     default_delivery_target_type, infer_delivery_target_id, infer_delivery_target_type,
@@ -832,7 +834,7 @@ pub async fn list_known_channel_endpoints(
 }
 
 pub fn default_workspace_for_channel_account(
-    config: &garyx_models::config::GaryxConfig,
+    config: &GaryxConfig,
     channel: &str,
     account_id: &str,
 ) -> Option<String> {
@@ -853,7 +855,7 @@ pub fn default_workspace_for_channel_account(
 }
 
 pub fn default_agent_for_channel_account(
-    config: &garyx_models::config::GaryxConfig,
+    config: &GaryxConfig,
     channel: &str,
     account_id: &str,
 ) -> Option<String> {
@@ -874,6 +876,47 @@ pub fn default_agent_for_channel_account(
             .map(str::to_owned),
     }
     .filter(|value| !value.is_empty())
+}
+
+pub fn default_workspace_mode_for_channel_account(
+    config: &GaryxConfig,
+    channel: &str,
+    account_id: &str,
+) -> WorkspaceMode {
+    let configured = match channel {
+        "api" => config
+            .channels
+            .api
+            .accounts
+            .get(account_id)
+            .and_then(|account| account.workspace_mode.as_deref()),
+        _ => config
+            .channels
+            .plugins
+            .get(channel)
+            .and_then(|plugin| plugin.accounts.get(account_id))
+            .and_then(|account| account.workspace_mode.as_deref()),
+    };
+
+    match configured
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("worktree") => WorkspaceMode::Worktree,
+        _ => WorkspaceMode::Direct,
+    }
+}
+
+pub fn worktree_base_dir_for_config(config: &GaryxConfig) -> PathBuf {
+    config
+        .sessions
+        .data_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .and_then(|path| path.parent().map(PathBuf::from))
+        .unwrap_or_else(gary_home_dir)
+        .join("worktrees")
 }
 
 fn ensure_object(value: &mut Value) -> Option<&mut Map<String, Value>> {

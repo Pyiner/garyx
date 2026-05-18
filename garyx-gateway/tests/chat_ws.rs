@@ -177,6 +177,7 @@ async fn start_test_gateway_with_provider(
             name: None,
             agent_id: "claude".to_owned(),
             workspace_dir: None,
+            workspace_mode: None,
         },
     );
 

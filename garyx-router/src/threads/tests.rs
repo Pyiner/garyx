@@ -473,6 +473,42 @@ fn default_workspace_for_channel_account_returns_none_without_bot_workspace() {
 }
 
 #[test]
+fn default_workspace_mode_for_channel_account_returns_bot_mode() {
+    let mut config = garyx_models::config::GaryxConfig::default();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::PluginAccountEntry {
+                workspace_mode: Some("worktree".to_owned()),
+                ..Default::default()
+            },
+        );
+    config.channels.api.accounts.insert(
+        "scripted".to_owned(),
+        garyx_models::config::ApiAccount {
+            workspace_mode: Some("local".to_owned()),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(
+        default_workspace_mode_for_channel_account(&config, "telegram", "main"),
+        WorkspaceMode::Worktree
+    );
+    assert_eq!(
+        default_workspace_mode_for_channel_account(&config, "api", "scripted"),
+        WorkspaceMode::Direct
+    );
+    assert_eq!(
+        default_workspace_mode_for_channel_account(&config, "telegram", "missing"),
+        WorkspaceMode::Direct
+    );
+}
+
+#[test]
 fn automation_threads_are_not_hidden_by_default() {
     let value = json!({
         "thread_id": "thread::automation"

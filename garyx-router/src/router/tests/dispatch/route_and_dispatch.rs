@@ -1,8 +1,8 @@
 use super::*;
 use crate::threads::is_thread_key;
 use crate::{
-    ChannelBinding, ThreadCreator, ThreadEnsureOptions, ThreadStore, bind_endpoint_to_thread,
-    bindings_from_value, create_thread_record,
+    ChannelBinding, ThreadCreator, ThreadEnsureOptions, ThreadStore, WorkspaceMode,
+    bind_endpoint_to_thread, bindings_from_value, create_thread_record,
 };
 
 struct FallbackOnlyThreadCreator;
@@ -19,6 +19,37 @@ impl ThreadCreator for FallbackOnlyThreadCreator {
             Some(agent_id) => Err(format!("unknown agent_id: {agent_id}")),
             None => Err("agent_id is required".to_owned()),
         }
+    }
+}
+
+struct CapturingThreadCreator {
+    options: tokio::sync::Mutex<Vec<ThreadEnsureOptions>>,
+}
+
+impl CapturingThreadCreator {
+    fn new() -> Self {
+        Self {
+            options: tokio::sync::Mutex::new(Vec::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl ThreadCreator for CapturingThreadCreator {
+    async fn create_thread(
+        &self,
+        thread_store: Arc<dyn ThreadStore>,
+        options: ThreadEnsureOptions,
+    ) -> Result<(String, Value), String> {
+        self.options.lock().await.push(options.clone());
+        let thread_id = "thread::captured";
+        let value = json!({
+            "thread_id": thread_id,
+            "workspace_dir": options.workspace_dir,
+            "agent_id": options.agent_id,
+        });
+        thread_store.set(thread_id, value.clone()).await;
+        Ok((thread_id.to_owned(), value))
     }
 }
 
@@ -205,6 +236,53 @@ async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent(
             .await
             .as_deref(),
         Some(result.thread_id.as_str())
+    );
+}
+
+#[tokio::test]
+async fn test_inbound_thread_creation_uses_configured_bot_workspace_mode() {
+    let store = Arc::new(InMemoryThreadStore::new());
+    let mut config = GaryxConfig::default();
+    let data_root = tempfile::tempdir().expect("temp data root");
+    config.sessions.data_dir = Some(
+        data_root
+            .path()
+            .join("sessions")
+            .to_string_lossy()
+            .to_string(),
+    );
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            garyx_models::config::PluginAccountEntry {
+                enabled: true,
+                agent_id: Some("claude".to_owned()),
+                workspace_dir: Some("/tmp/test-repo".to_owned()),
+                workspace_mode: Some("worktree".to_owned()),
+                config: json!({ "token": "test-token" }),
+                ..Default::default()
+            },
+        );
+
+    let creator = Arc::new(CapturingThreadCreator::new());
+    let mut router = MessageRouter::new(store, config);
+    router.set_thread_creator(creator.clone());
+
+    let thread_id = router
+        .resolve_or_create_inbound_thread("telegram", "main", "1000000001", &HashMap::new())
+        .await;
+
+    assert_eq!(thread_id, "thread::captured");
+    let options = creator.options.lock().await;
+    assert_eq!(options.len(), 1);
+    assert_eq!(options[0].workspace_mode, WorkspaceMode::Worktree);
+    assert_eq!(options[0].workspace_dir.as_deref(), Some("/tmp/test-repo"));
+    assert_eq!(
+        options[0].worktree_base_dir.as_deref(),
+        Some(data_root.path().join("worktrees").as_path())
     );
 }
 

@@ -29,6 +29,7 @@ import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 
 import type {
   ChannelPluginCatalogEntry,
+  DesktopWorkspaceMode,
   PollFeishuChannelAuthResult,
   PollWeixinChannelAuthResult,
   StartFeishuChannelAuthResult,
@@ -83,6 +84,7 @@ type AddBotDialogProps = {
     accountId: string;
     name?: string | null;
     workspaceDir?: string | null;
+    workspaceMode?: DesktopWorkspaceMode;
     agentId?: string | null;
     token?: string | null;
     appId?: string | null;
@@ -240,6 +242,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
   const [accountId, setAccountId] = useState("");
   const [name, setName] = useState("");
   const [workspaceDir, setWorkspaceDir] = useState("");
+  const [workspaceMode, setWorkspaceMode] = useState<DesktopWorkspaceMode>("direct");
   const [agentId, setAgentId] = useState("claude");
   const [pluginConfig, setPluginConfig] = useState<Record<string, unknown>>({});
   const [generatedAccountId, setGeneratedAccountId] = useState<string | null>(null);
@@ -380,6 +383,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
         accountId: resolvedAccountId,
         name: name.trim() || null,
         workspaceDir: workspaceDir.trim() || null,
+        workspaceMode,
         agentId: agentId.trim() || null,
         config: pluginConfig,
       });
@@ -553,6 +557,24 @@ export function AddBotDialog(props: AddBotDialogProps) {
                     onChange={setWorkspaceDir}
                     placeholder={t("Use the main workspace by default")}
                   />
+                </div>
+
+                <div className="add-bot-field">
+                  <Label className="add-bot-label" htmlFor="add-bot-workspace-mode">
+                    {t("Workspace mode")}
+                  </Label>
+                  <Select
+                    value={workspaceMode}
+                    onValueChange={(value) => setWorkspaceMode(value as DesktopWorkspaceMode)}
+                  >
+                    <SelectTrigger className="add-bot-control" id="add-bot-workspace-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="direct">{t("Local")}</SelectItem>
+                      <SelectItem value="worktree">{t("Worktree")}</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             </div>

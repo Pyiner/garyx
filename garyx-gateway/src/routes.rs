@@ -187,6 +187,7 @@ struct ConfiguredChannelAccount {
     name: Option<String>,
     agent_id: Option<String>,
     workspace_dir: Option<String>,
+    workspace_mode: Option<String>,
 }
 
 fn configured_channel_accounts(channels: &ChannelsConfig) -> Vec<ConfiguredChannelAccount> {
@@ -200,6 +201,7 @@ fn configured_channel_accounts(channels: &ChannelsConfig) -> Vec<ConfiguredChann
                 name: entry.name.clone(),
                 agent_id: entry.agent_id.clone(),
                 workspace_dir: entry.workspace_dir.clone(),
+                workspace_mode: entry.workspace_mode.clone(),
             });
         }
     }
@@ -1707,6 +1709,7 @@ pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl In
             "enabled": account.enabled,
             "agent_id": account.agent_id.as_deref().unwrap_or(""),
             "workspace_dir": account.workspace_dir.as_deref(),
+            "workspace_mode": account.workspace_mode.as_deref().unwrap_or("direct"),
             "root_behavior": root_behavior,
             "main_endpoint_status": if main_endpoint.is_some() { "resolved" } else { "unresolved" },
             "main_endpoint": main_endpoint.as_ref().map(ResolvedMainEndpoint::to_value),
@@ -1776,6 +1779,7 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
                 "subtitle": bot_subtitle(&account.channel, &account.account_id),
                 "agent_id": account.agent_id.as_deref().unwrap_or(""),
                 "workspace_dir": account.workspace_dir.as_deref(),
+                "workspace_mode": account.workspace_mode.as_deref().unwrap_or("direct"),
                 "root_behavior": root_behavior,
                 "endpoint_count": 0,
                 "bound_endpoint_count": 0,
