@@ -1559,6 +1559,9 @@ fn build_discord_account_ui(
             continue;
         }
         let kind = discord_endpoint_kind(endpoint);
+        if kind == "private" {
+            continue;
+        }
         let node_id = if kind == "group" {
             format!("discord:{}:{}", endpoint.account_id, endpoint.chat_id)
         } else {

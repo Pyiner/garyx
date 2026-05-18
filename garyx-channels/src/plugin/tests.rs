@@ -461,7 +461,7 @@ async fn builtin_discoverer_registers_discord_as_managed_builtin() {
 }
 
 #[test]
-fn discord_account_ui_owns_conversation_titles_and_omits_badges() {
+fn discord_account_ui_opens_dm_by_default_and_lists_channels_only() {
     let endpoints = vec![
         plugin_conversation_endpoint(
             "discord",
@@ -489,15 +489,16 @@ fn discord_account_ui_owns_conversation_titles_and_omits_badges() {
         &channel_names,
     );
 
-    assert_eq!(ui.conversation_nodes.len(), 2);
-    let dm = ui
-        .conversation_nodes
-        .iter()
-        .find(|node| node.endpoint_key.contains("1000000001"))
-        .expect("dm node");
-    assert_eq!(dm.kind, "private");
-    assert_eq!(dm.title, "Test User");
-    assert_eq!(dm.badge, None);
+    assert_eq!(
+        ui.default_open_endpoint_key.as_deref(),
+        Some("discord::main::1000000001::2000000001")
+    );
+    assert_eq!(ui.conversation_nodes.len(), 1);
+    assert!(
+        ui.conversation_nodes
+            .iter()
+            .all(|node| !node.endpoint_key.contains("1000000001"))
+    );
 
     let guild_channel = ui
         .conversation_nodes
