@@ -724,6 +724,17 @@ Settings view.
 Thread history is persisted through transcript records; backend selection is no
 longer exposed as a gateway setting.
 
+The desktop Providers tab shows a fixed provider table rather than an arbitrary
+add-provider form. `Claude Code`, `Codex`, and `Gemini CLI` are always listed at
+the top as built-in provider agents; their Configure dialogs edit desktop-local
+auth and environment overrides. The same table also lists Garyx native-loop
+model backends (`GPT`, `Claude LLM`, and `Gemini LLM`). Configuring one of
+those rows creates or updates its deterministic custom agent (`gpt`,
+`claude_llm`, or `gemini_llm`), making it selectable like any other agent.
+Clearing the row removes that custom agent. The page does not support adding
+extra provider rows; additional named personas still belong in the Agents tab
+or CLI custom-agent commands.
+
 The desktop app mirrors its current view into the window URL hash. For example,
 thread pages use `#/thread/<thread-id>`, new-thread drafts can use
 `#/new?workspace=<path>`, and settings pages use `#/settings/<tab>`. This is a

@@ -3,7 +3,7 @@ import type { RenderTranscriptBlock } from './transcript-render';
 /**
  * A "turn" groups consecutive non-user blocks (intermediate assistant
  * messages + tool groups) so the renderer can collapse them behind a
- * single "已处理 Xs" summary, mirroring Codex's chat layout.
+ * single elapsed-time summary, mirroring Codex's chat layout.
  *
  * Once the run is complete, the trailing assistant message — when present
  * and not pending — is surfaced as `finalBlock` so it renders OUTSIDE the

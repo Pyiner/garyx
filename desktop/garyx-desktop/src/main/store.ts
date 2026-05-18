@@ -251,6 +251,7 @@ function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
       typeof value?.providerCodexApiKey === 'string'
         ? value.providerCodexApiKey.trim()
         : DEFAULT_DESKTOP_SETTINGS.providerCodexApiKey,
+    providerGeminiEnv: normalizeMultiline(value?.providerGeminiEnv),
     threadLogsPanelWidth: normalizeThreadLogsPanelWidth(value?.threadLogsPanelWidth),
     languagePreference: normalizeLanguagePreference(value?.languagePreference),
   };

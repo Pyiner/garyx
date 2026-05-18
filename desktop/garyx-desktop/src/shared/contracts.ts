@@ -9,6 +9,7 @@ export interface DesktopSettings {
   providerClaudeEnv: string;
   providerCodexAuthMode: "cli" | "api_key";
   providerCodexApiKey: string;
+  providerGeminiEnv: string;
   threadLogsPanelWidth: number;
   languagePreference: DesktopLanguagePreference;
 }
@@ -1748,6 +1749,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   providerClaudeEnv: "",
   providerCodexAuthMode: "cli",
   providerCodexApiKey: "",
+  providerGeminiEnv: "",
   threadLogsPanelWidth: 360,
   languagePreference: "system",
 };

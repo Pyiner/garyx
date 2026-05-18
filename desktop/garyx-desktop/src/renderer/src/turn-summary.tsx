@@ -50,7 +50,7 @@ function computeElapsed(
 /**
  * Codex-parity collapsible header rendered above each multi-step
  * assistant turn. While the run is in flight the panel auto-expands and
- * the "已处理 Xs" counter ticks every second; when the stream finishes
+ * the elapsed-time counter ticks every second; when the stream finishes
  * it auto-collapses (unless the user manually toggled it).
  */
 function TurnSummaryComponent({
@@ -96,9 +96,8 @@ function TurnSummaryComponent({
 
   const elapsed = computeElapsed(turn, isRunning, nowMs, mountStartMs);
   const elapsedLabel = formatElapsed(elapsed);
-  // English Codex distinguishes "Working for X" (live) vs "Worked for X"
-  // (done); the bundled zh-CN translation collapses both to "已处理 X".
-  // Use distinct labels so the running state reads unambiguously.
+  // English Codex distinguishes the live and done elapsed-time labels. Use
+  // distinct keys so every locale can render the running state unambiguously.
   const summaryLabel = isRunning
     ? elapsedLabel
       ? t('Working for {duration}', { duration: elapsedLabel })

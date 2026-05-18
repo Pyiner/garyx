@@ -13806,6 +13806,24 @@ button.codex-list-row {
     text-align: left;
   }
 
+  .provider-config-grid,
+  .provider-config-footer-actions {
+    width: 100%;
+    grid-template-columns: 1fr;
+  }
+
+  .provider-config-footer-left {
+    width: 100%;
+  }
+
+  .provider-config-footer-actions {
+    justify-content: stretch;
+  }
+
+  .provider-config-footer-actions .commands-dialog-button {
+    flex: 1 1 0;
+  }
+
   .mcp-modal-grid {
     grid-template-columns: 1fr;
   }
@@ -14035,6 +14053,171 @@ button.codex-list-row {
   font-size: 17px;
   font-weight: var(--font-weight-semibold);
   letter-spacing: -0.005em;
+}
+
+.provider-config-table {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(26, 28, 31, 0.08);
+  border-radius: 10px;
+  background: var(--color-token-bg-primary);
+}
+
+.provider-config-table [data-slot="table-container"] {
+  overflow-x: auto;
+}
+
+.provider-config-table table {
+  width: 100%;
+  min-width: 840px;
+  border-collapse: collapse;
+}
+
+.provider-config-table thead {
+  background: #fcfcfb;
+}
+
+.provider-config-table thead tr {
+  border-bottom: 1px solid rgba(26, 28, 31, 0.06);
+}
+
+.provider-config-table tbody tr {
+  border-bottom: 1px solid rgba(26, 28, 31, 0.045);
+  background: var(--color-token-bg-primary);
+  transition: background 120ms ease;
+}
+
+.provider-config-table tbody tr:last-child {
+  border-bottom: 0;
+}
+
+.provider-config-table tbody tr:hover {
+  background: rgba(26, 28, 31, 0.025);
+}
+
+.provider-config-table th {
+  height: auto;
+  padding: 12px 20px;
+  color: rgba(26, 28, 31, 0.46);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.provider-config-table td {
+  padding: 13px 20px;
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+  line-height: 1.35;
+  vertical-align: middle;
+}
+
+.provider-config-col-provider {
+  width: 210px;
+}
+
+.provider-config-col-kind {
+  width: 150px;
+}
+
+.provider-config-col-auth {
+  width: 150px;
+}
+
+.provider-config-col-model {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-config-col-status {
+  width: 132px;
+}
+
+.provider-config-col-actions {
+  width: 112px;
+  text-align: right;
+}
+
+.provider-config-col-kind code {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--color-token-bg-fog);
+  color: var(--color-token-text-secondary);
+  font-family: var(--message-code-font);
+  font-size: 11.5px;
+}
+
+.provider-config-name-cell {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.provider-config-name {
+  color: var(--color-token-text-primary);
+  font-size: 13.5px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.provider-config-subtitle {
+  color: var(--color-token-description-foreground);
+  font-size: 12px;
+}
+
+.provider-config-status {
+  border-color: color-mix(in srgb, var(--color-token-success-foreground) 28%, transparent);
+  background: color-mix(in srgb, var(--color-token-success-foreground) 7%, transparent);
+  color: var(--color-token-success-foreground);
+  font-size: 11.5px;
+  font-weight: var(--font-weight-medium);
+}
+
+.provider-config-status[data-state="empty"] {
+  border-color: var(--color-token-border);
+  background: var(--color-token-bg-secondary);
+  color: var(--color-token-text-secondary);
+}
+
+.provider-config-dialog {
+  width: min(620px, calc(100vw - 32px));
+}
+
+.provider-config-dialog-body {
+  max-height: min(62vh, 620px);
+  overflow-y: auto;
+}
+
+.provider-config-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.64fr);
+  gap: 14px;
+}
+
+.provider-config-footer-left {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.provider-config-footer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.commands-dialog-button.danger {
+  border-color: color-mix(in srgb, var(--color-token-danger-foreground) 24%, transparent);
+  color: var(--color-token-danger-foreground);
+}
+
+.commands-dialog-button.danger:hover {
+  background: color-mix(in srgb, var(--color-token-danger-foreground) 7%, transparent);
 }
 
 .provider-view-docs {

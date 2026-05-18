@@ -132,6 +132,7 @@ const LOCAL_GATEWAY_HOSTS = new Set([
 ]);
 const CLAUDE_ENV_METADATA_KEY = "desktop_claude_env";
 const CODEX_ENV_METADATA_KEY = "desktop_codex_env";
+const GEMINI_ENV_METADATA_KEY = "desktop_gemini_env";
 const CODEX_API_KEY_ENV = "OPENAI_API_KEY";
 
 type SerializedMessageAttachments = {
@@ -1214,6 +1215,11 @@ function buildProviderMetadata(
 
   if (Object.keys(claudeEnv).length > 0) {
     metadata[CLAUDE_ENV_METADATA_KEY] = claudeEnv;
+  }
+
+  const geminiEnv = parseProviderEnvBlock(settings.providerGeminiEnv);
+  if (Object.keys(geminiEnv).length > 0) {
+    metadata[GEMINI_ENV_METADATA_KEY] = geminiEnv;
   }
 
   metadata[CODEX_ENV_METADATA_KEY] = {

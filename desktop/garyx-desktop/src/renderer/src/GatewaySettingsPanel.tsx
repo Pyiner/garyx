@@ -7,6 +7,7 @@ import {
   type ChannelPluginCatalogEntry,
   type ConnectionStatus,
   type DesktopApiProviderType,
+  type CreateCustomAgentInput,
   type DesktopCustomAgent,
   type DesktopTeam,
   type DesktopSettings,
@@ -18,6 +19,7 @@ import {
   type SlashCommand,
   type UpdateMcpServerInput,
   type UpdateSlashCommandInput,
+  type UpdateCustomAgentInput,
   type UpsertMcpServerInput,
   type UpsertSlashCommandInput,
   type PollWeixinChannelAuthResult,
@@ -114,6 +116,13 @@ type GatewaySettingsPanelProps = {
     requireGatewayConnection?: boolean;
     reloadGatewaySettings?: boolean;
   }) => Promise<boolean>;
+  onSaveLocalSettingsDraft?: (
+    nextSettings: DesktopSettings,
+    options?: {
+      requireGatewayConnection?: boolean;
+      reloadGatewaySettings?: boolean;
+    },
+  ) => Promise<boolean>;
   onSaveGatewaySettings?: (options?: GatewaySettingsSaveOptions) => Promise<boolean>;
   onOpenGatewaySetup?: () => void;
   onMutateGatewayDraft?: DraftMutator;
@@ -167,11 +176,87 @@ type McpServerDraft = {
   enabled: boolean;
 };
 
+type FixedModelProviderKey =
+  | 'claude_code'
+  | 'codex_app_server'
+  | 'gemini_cli'
+  | 'gpt'
+  | 'claude_llm'
+  | 'gemini_llm';
+
+type FixedModelProviderRow = {
+  key: FixedModelProviderKey;
+  label: string;
+  providerType: DesktopApiProviderType;
+  group: 'default' | 'native';
+  defaultModel: string;
+};
+
+type ModelProviderConfigDraft = {
+  key: FixedModelProviderKey;
+  claudeEnv: string;
+  codexAuthMode: DesktopSettings['providerCodexAuthMode'];
+  codexApiKey: string;
+  geminiEnv: string;
+  model: string;
+  modelReasoningEffort: string;
+  modelServiceTier: string;
+  authSource: string;
+  apiKey: string;
+  baseUrl: string;
+};
+
 const SLASH_COMMAND_NAME_PATTERN = /^[a-z0-9_]{1,32}$/;
 const noop = () => {};
 const noopAsync = async () => {};
 const noopAsyncBoolean = async () => false;
 const IDLE_UPDATE_STATUS: DesktopUpdateStatus = { phase: 'idle' };
+const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
+  {
+    key: 'claude_code',
+    label: 'Claude Code',
+    providerType: 'claude_code',
+    group: 'default',
+    defaultModel: '(provider default)',
+  },
+  {
+    key: 'codex_app_server',
+    label: 'Codex',
+    providerType: 'codex_app_server',
+    group: 'default',
+    defaultModel: '(provider default)',
+  },
+  {
+    key: 'gemini_cli',
+    label: 'Gemini CLI',
+    providerType: 'gemini_cli',
+    group: 'default',
+    defaultModel: 'gemini-3-flash-preview',
+  },
+  {
+    key: 'gpt',
+    label: 'GPT',
+    providerType: 'gpt',
+    group: 'native',
+    defaultModel: 'gpt-5.5',
+  },
+  {
+    key: 'claude_llm',
+    label: 'Claude LLM',
+    providerType: 'claude_llm',
+    group: 'native',
+    defaultModel: 'claude-sonnet-4-6',
+  },
+  {
+    key: 'gemini_llm',
+    label: 'Gemini LLM',
+    providerType: 'gemini_llm',
+    group: 'native',
+    defaultModel: 'gemini-3-flash-preview',
+  },
+];
+const MODEL_PROVIDER_SYSTEM_PROMPT =
+  'You are Garyx. Follow the user request directly and use available tools when needed.';
 
 type UpdateFeedback = {
   message: string;
@@ -549,6 +634,85 @@ function countNonEmptyLines(value: string): number {
     .filter((line) => line.length > 0 && !line.startsWith('#')).length;
 }
 
+function fixedModelProviderRow(key: FixedModelProviderKey): FixedModelProviderRow {
+  return MODEL_PROVIDER_ROWS.find((row) => row.key === key) || MODEL_PROVIDER_ROWS[0];
+}
+
+function apiKeyEnvName(value: DesktopApiProviderType): string | null {
+  if (value === 'gpt') {
+    return 'OPENAI_API_KEY';
+  }
+  if (value === 'claude_llm') {
+    return 'ANTHROPIC_API_KEY';
+  }
+  if (value === 'gemini_llm') {
+    return 'GEMINI_API_KEY';
+  }
+  return null;
+}
+
+function defaultNativeAuthSource(value: DesktopApiProviderType): string {
+  return value === 'gpt' ? 'codex' : 'api_key';
+}
+
+function apiKeyFromProviderAgent(agent: DesktopCustomAgent | null | undefined): string {
+  if (!agent) {
+    return '';
+  }
+  const envName = apiKeyEnvName(agent.providerType);
+  return envName ? agent.providerEnv?.[envName] || '' : '';
+}
+
+function configuredProviderAgent(
+  agents: DesktopCustomAgent[],
+  key: FixedModelProviderKey,
+): DesktopCustomAgent | null {
+  const row = fixedModelProviderRow(key);
+  if (row.group !== 'native') {
+    return null;
+  }
+  return agents.find((agent) => agent.agentId === key && !agent.builtIn) || null;
+}
+
+function emptyModelProviderConfigDraft(key: FixedModelProviderKey = 'claude_code'): ModelProviderConfigDraft {
+  const row = fixedModelProviderRow(key);
+  return {
+    key,
+    claudeEnv: '',
+    codexAuthMode: 'cli',
+    codexApiKey: '',
+    geminiEnv: '',
+    model: row.defaultModel.startsWith('(') ? '' : row.defaultModel,
+    modelReasoningEffort: '',
+    modelServiceTier: '',
+    authSource: defaultNativeAuthSource(row.providerType),
+    apiKey: '',
+    baseUrl: '',
+  };
+}
+
+function modelProviderDraftFromState(
+  key: FixedModelProviderKey,
+  localSettings: DesktopSettings,
+  agents: DesktopCustomAgent[],
+): ModelProviderConfigDraft {
+  const row = fixedModelProviderRow(key);
+  const agent = configuredProviderAgent(agents, key);
+  return {
+    key,
+    claudeEnv: localSettings.providerClaudeEnv,
+    codexAuthMode: localSettings.providerCodexAuthMode,
+    codexApiKey: localSettings.providerCodexApiKey,
+    geminiEnv: localSettings.providerGeminiEnv,
+    model: agent?.model || (row.defaultModel.startsWith('(') ? '' : row.defaultModel),
+    modelReasoningEffort: agent?.modelReasoningEffort || '',
+    modelServiceTier: agent?.modelServiceTier || '',
+    authSource: agent?.authSource || defaultNativeAuthSource(row.providerType),
+    apiKey: apiKeyFromProviderAgent(agent),
+    baseUrl: agent?.baseUrl || '',
+  };
+}
+
 function emptyCommandDraft(): CommandDraft {
   return {
     name: '',
@@ -907,6 +1071,7 @@ export function GatewaySettingsPanel({
   onToggleMcpServer = noopAsync,
   onLocalSettingsChange = noop,
   onSaveLocalSettingsNow = noopAsyncBoolean,
+  onSaveLocalSettingsDraft = noopAsyncBoolean,
   onSaveGatewaySettings = noopAsyncBoolean,
   onOpenGatewaySetup = noop,
   onMutateGatewayDraft = noop,
@@ -950,6 +1115,11 @@ export function GatewaySettingsPanel({
   const [editingMcpServerName, setEditingMcpServerName] = useState<string | null>(null);
   const [mcpServerDraft, setMcpServerDraft] = useState<McpServerDraft>(() => emptyMcpServerDraft());
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false);
+  const [providerConfigKey, setProviderConfigKey] = useState<FixedModelProviderKey | null>(null);
+  const [providerConfigDraft, setProviderConfigDraft] = useState<ModelProviderConfigDraft>(() =>
+    emptyModelProviderConfigDraft(),
+  );
+  const [providerConfigSaving, setProviderConfigSaving] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
   const [updateFeedback, setUpdateFeedback] = useState<UpdateFeedback | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -986,6 +1156,11 @@ export function GatewaySettingsPanel({
         : 'success';
   const desktopStateTone: SettingsFactTone = connection?.ok ? 'success' : 'danger';
   const claudeEnvLineCount = countNonEmptyLines(localSettings.providerClaudeEnv);
+  const geminiEnvLineCount = countNonEmptyLines(localSettings.providerGeminiEnv);
+  const providerConfigRow = providerConfigKey ? fixedModelProviderRow(providerConfigKey) : null;
+  const providerConfigAgent = providerConfigKey
+    ? configuredProviderAgent(agents, providerConfigKey)
+    : null;
   const channelsSourceMessage = gatewaySettingsSource === 'local_file'
     ? t('Editing the gateway runtime config file on the gateway host.')
     : t('Editing live gateway settings over the API.');
@@ -1149,6 +1324,151 @@ export function GatewaySettingsPanel({
     }
   }
 
+  function providerRowDetails(row: FixedModelProviderRow): {
+    status: string;
+    auth: string;
+    model: string;
+  } {
+    if (row.key === 'claude_code') {
+      return {
+        status: t('Default'),
+        auth: claudeEnvLineCount
+          ? t('{count} env vars', { count: claudeEnvLineCount })
+          : t('CLI / env'),
+        model: row.defaultModel,
+      };
+    }
+    if (row.key === 'codex_app_server') {
+      return {
+        status: t('Default'),
+        auth: localSettings.providerCodexAuthMode === 'api_key' ? t('API Key') : t('CLI'),
+        model: row.defaultModel,
+      };
+    }
+    if (row.key === 'gemini_cli') {
+      return {
+        status: t('Default'),
+        auth: geminiEnvLineCount
+          ? t('{count} env vars', { count: geminiEnvLineCount })
+          : t('CLI / env'),
+        model: row.defaultModel,
+      };
+    }
+
+    const agent = configuredProviderAgent(agents, row.key);
+    const authSource = agent?.authSource || defaultNativeAuthSource(row.providerType);
+    return {
+      status: agent ? t('Configured') : t('Not configured'),
+      auth: row.providerType === 'gpt' && authSource === 'codex'
+        ? t('GPT token')
+        : apiKeyFromProviderAgent(agent)
+          ? t('API Key')
+          : t('Env / API key'),
+      model: agent?.model || row.defaultModel,
+    };
+  }
+
+  function openProviderConfigDialog(key: FixedModelProviderKey) {
+    setProviderConfigDraft(modelProviderDraftFromState(key, localSettings, agents));
+    setProviderConfigKey(key);
+  }
+
+  function closeProviderConfigDialog() {
+    setProviderConfigKey(null);
+    setProviderConfigDraft(emptyModelProviderConfigDraft());
+  }
+
+  async function handleSaveProviderConfig() {
+    if (!providerConfigRow || providerConfigSaving) {
+      return;
+    }
+    setProviderConfigSaving(true);
+    try {
+      if (providerConfigRow.key === 'claude_code') {
+        const nextSettings = {
+          ...localSettings,
+          providerClaudeEnv: providerConfigDraft.claudeEnv,
+        };
+        if (await onSaveLocalSettingsDraft(nextSettings, { reloadGatewaySettings: false })) {
+          closeProviderConfigDialog();
+        }
+        return;
+      }
+      if (providerConfigRow.key === 'codex_app_server') {
+        const nextSettings = {
+          ...localSettings,
+          providerCodexAuthMode: providerConfigDraft.codexAuthMode,
+          providerCodexApiKey: providerConfigDraft.codexApiKey,
+        };
+        if (await onSaveLocalSettingsDraft(nextSettings, { reloadGatewaySettings: false })) {
+          closeProviderConfigDialog();
+        }
+        return;
+      }
+      if (providerConfigRow.key === 'gemini_cli') {
+        const nextSettings = {
+          ...localSettings,
+          providerGeminiEnv: providerConfigDraft.geminiEnv,
+        };
+        if (await onSaveLocalSettingsDraft(nextSettings, { reloadGatewaySettings: false })) {
+          closeProviderConfigDialog();
+        }
+        return;
+      }
+
+      const envName = apiKeyEnvName(providerConfigRow.providerType);
+      const providerEnv = envName && providerConfigDraft.apiKey.trim()
+        ? { [envName]: providerConfigDraft.apiKey.trim() }
+        : {};
+      const payload: CreateCustomAgentInput = {
+        agentId: providerConfigRow.key,
+        displayName: providerConfigRow.label,
+        providerType: providerConfigRow.providerType,
+        model: providerConfigDraft.model.trim(),
+        modelReasoningEffort: providerConfigDraft.modelReasoningEffort.trim(),
+        modelServiceTier: providerConfigRow.providerType === 'gpt'
+          ? providerConfigDraft.modelServiceTier.trim()
+          : '',
+        providerEnv,
+        authSource: providerConfigDraft.authSource.trim()
+          || defaultNativeAuthSource(providerConfigRow.providerType),
+        baseUrl: providerConfigDraft.baseUrl.trim(),
+        defaultWorkspaceDir: '',
+        systemPrompt: providerConfigAgent?.systemPrompt || MODEL_PROVIDER_SYSTEM_PROMPT,
+      };
+      if (providerConfigAgent) {
+        const updatePayload: UpdateCustomAgentInput = {
+          ...payload,
+          currentAgentId: providerConfigAgent.agentId,
+        };
+        await window.garyxDesktop.updateCustomAgent(updatePayload);
+      } else {
+        await window.garyxDesktop.createCustomAgent(payload);
+      }
+      await onRefreshAgentTargets();
+      closeProviderConfigDialog();
+    } finally {
+      setProviderConfigSaving(false);
+    }
+  }
+
+  async function handleClearProviderConfig() {
+    if (!providerConfigRow || providerConfigRow.group !== 'native' || !providerConfigAgent) {
+      return;
+    }
+    if (!window.confirm(t('Clear configuration for {name}?', { name: providerConfigRow.label }))) {
+      return;
+    }
+    setProviderConfigSaving(true);
+    try {
+      await window.garyxDesktop.deleteCustomAgent({ agentId: providerConfigAgent.agentId });
+      await onRefreshAgentTargets();
+      closeProviderConfigDialog();
+    } finally {
+      setProviderConfigSaving(false);
+    }
+  }
+
   const connectionPanel = (
     <div className="codex-section">
       <div className="codex-section-header">
@@ -1248,126 +1568,364 @@ export function GatewaySettingsPanel({
     </>
   );
 
+  const providerConfigTablePanel = (
+    <section className="provider-section">
+      <div className="provider-section-head">
+        <h2 className="provider-section-title">{t('Configured Providers')}</h2>
+      </div>
+      <div className="provider-config-table">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="provider-config-col-provider">{t('Provider')}</TableHead>
+              <TableHead className="provider-config-col-kind">{t('Type')}</TableHead>
+              <TableHead className="provider-config-col-auth">{t('Auth')}</TableHead>
+              <TableHead className="provider-config-col-model">{t('Model')}</TableHead>
+              <TableHead className="provider-config-col-status">{t('Status')}</TableHead>
+              <TableHead className="provider-config-col-actions">{t('Actions')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {MODEL_PROVIDER_ROWS.map((row) => {
+              const details = providerRowDetails(row);
+              const modelLabel = details.model === '(provider default)'
+                ? t('(provider default)')
+                : details.model;
+              const rowReady = row.group === 'default' || Boolean(configuredProviderAgent(agents, row.key));
+              return (
+                <TableRow key={row.key}>
+                  <TableCell className="provider-config-col-provider">
+                    <div className="provider-config-name-cell">
+                      <span className="provider-config-name">{row.label}</span>
+                      {row.group === 'default' ? (
+                        <span className="provider-config-subtitle">{t('Built-in')}</span>
+                      ) : (
+                        <span className="provider-config-subtitle">{t('Native agent loop')}</span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="provider-config-col-kind">
+                    <code>{row.providerType}</code>
+                  </TableCell>
+                  <TableCell className="provider-config-col-auth">{details.auth}</TableCell>
+                  <TableCell className="provider-config-col-model" title={modelLabel}>
+                    {modelLabel}
+                  </TableCell>
+                  <TableCell className="provider-config-col-status">
+                    <Badge
+                      className="provider-config-status"
+                      data-state={rowReady ? 'ready' : 'empty'}
+                      variant="outline"
+                    >
+                      {details.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="provider-config-col-actions">
+                    <button
+                      className="command-row-action"
+                      onClick={() => { openProviderConfigDialog(row.key); }}
+                      type="button"
+                    >
+                      {t('Configure')}
+                    </button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+    </section>
+  );
+
   const providerPanel = (
     <div className="settings-form provider-panel">
-      <section className="provider-section">
-        <div className="provider-section-head">
-          <h2 className="provider-section-title">{t('Claude Code')}</h2>
-          <a
-            className="provider-view-docs"
-            href="https://code.claude.com/docs"
-            rel="noreferrer"
-            target="_blank"
-          >
-            {t('View docs')}
-            <svg aria-hidden className="provider-view-docs-icon" fill="none" viewBox="0 0 10 10">
-              <path d="M3 3h4v4M7 3L3 7" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.3" />
-            </svg>
-          </a>
-        </div>
-        <Textarea
-          className="provider-env-editor"
-          placeholder={[
-            'ANTHROPIC_API_KEY=sk-ant-...',
-            'CLAUDE_CODE_USE_BEDROCK=1',
-            'AWS_REGION=us-east-1',
-            'AWS_PROFILE=default',
-          ].join('\n')}
-          spellCheck={false}
-          value={localSettings.providerClaudeEnv}
-          onChange={(event) => {
-            onLocalSettingsChange((current) => ({
-              ...current,
-              providerClaudeEnv: event.target.value,
-            }));
-          }}
-        />
-        <p className="provider-hint">
-          {claudeEnvLineCount
-            ? t('{count} {unit} · one per line, format: ', {
-                count: claudeEnvLineCount,
-                unit: claudeEnvLineCount === 1 ? t('variable') : t('variables'),
-              })
-            : t('One per line, format: ')}
-          <code>VAR_NAME=value</code> or <code>export VAR_NAME=value</code>
-        </p>
-      </section>
-      <section className="provider-section">
-        <div className="provider-section-head">
-          <h2 className="provider-section-title">{t('Codex')}</h2>
-        </div>
-        <div aria-label={t('Codex auth mode')} className="provider-tiles" role="radiogroup">
-          <button
-            aria-checked={localSettings.providerCodexAuthMode === 'cli'}
-            className="provider-tile"
-            data-state={localSettings.providerCodexAuthMode === 'cli' ? 'checked' : 'unchecked'}
-            disabled={savingLocalSettings}
-            onClick={() => {
-              onLocalSettingsChange((current) => ({
-                ...current,
-                providerCodexAuthMode: 'cli',
-              }));
-            }}
-            role="radio"
-            type="button"
-          >
-            <span className="provider-tile-body">
-              <span className="provider-tile-label">{t('CLI')}</span>
-              <span className="provider-tile-desc">
-                {t('Reuse the local {command} login on this Mac.', { command: 'codex' })}
-              </span>
-            </span>
-            <Badge className="provider-tile-badge" variant="outline">{t('no key')}</Badge>
-          </button>
-          <button
-            aria-checked={localSettings.providerCodexAuthMode === 'api_key'}
-            className="provider-tile"
-            data-state={localSettings.providerCodexAuthMode === 'api_key' ? 'checked' : 'unchecked'}
-            disabled={savingLocalSettings}
-            onClick={() => {
-              onLocalSettingsChange((current) => ({
-                ...current,
-                providerCodexAuthMode: 'api_key',
-              }));
-            }}
-            role="radio"
-            type="button"
-          >
-            <span className="provider-tile-body">
-              <span className="provider-tile-label">{t('API Key')}</span>
-              <span className="provider-tile-desc">{t('Desktop-only key, stored in macOS Keychain.')}</span>
-            </span>
-            <Badge className="provider-tile-badge" variant="outline">{t('keychain')}</Badge>
-          </button>
-        </div>
-        {localSettings.providerCodexAuthMode === 'api_key' ? (
-          <div className="provider-api-field">
-            <label className="provider-api-label" htmlFor="codex-api-key">{t('API Key')}</label>
-            <Input
-              autoCapitalize="off"
-              autoComplete="off"
-              className="provider-api-input"
-              id="codex-api-key"
-              placeholder="sk-YOUR-API-KEY"
-              spellCheck={false}
-              type="password"
-              value={localSettings.providerCodexApiKey}
-              onChange={(event) => {
-                onLocalSettingsChange((current) => ({
-                  ...current,
-                  providerCodexApiKey: event.target.value,
-                }));
-              }}
-            />
-            <p className="provider-hint">
-              {t('Sets')} <code>CODEX_API_KEY</code>
-            </p>
+      {providerConfigTablePanel}
+      <Dialog
+        open={Boolean(providerConfigKey)}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeProviderConfigDialog();
+          }
+        }}
+      >
+        <DialogContent
+          className="provider-config-dialog"
+          showCloseButton={false}
+          size="form"
+        >
+          <DialogHeader className="commands-dialog-header">
+            <Badge variant="outline" className="commands-dialog-badge">
+              {providerConfigRow?.group === 'native' ? t('Native Provider') : t('Default Provider')}
+            </Badge>
+            <div className="commands-dialog-title-group">
+              <DialogTitle className="commands-dialog-title">
+                {providerConfigRow ? t('Configure {name}', { name: providerConfigRow.label }) : t('Configure Provider')}
+              </DialogTitle>
+              <DialogDescription className="commands-dialog-description">
+                {t('Provider rows are fixed. Configuration controls whether each provider is ready to use.')}
+              </DialogDescription>
+            </div>
+          </DialogHeader>
+
+          <div className="commands-dialog-body provider-config-dialog-body">
+            {providerConfigRow?.key === 'claude_code' ? (
+              <div className="commands-field">
+                <div className="commands-field-header">
+                  <Label className="commands-field-label" htmlFor="provider-claude-env">{t('Environment')}</Label>
+                  <span className="commands-field-hint">{t('One variable per line.')}</span>
+                </div>
+                <Textarea
+                  className="provider-env-editor"
+                  id="provider-claude-env"
+                  placeholder={[
+                    'ANTHROPIC_API_KEY=sk-ant-...',
+                    'CLAUDE_CODE_USE_BEDROCK=1',
+                    'AWS_REGION=us-east-1',
+                    'AWS_PROFILE=default',
+                  ].join('\n')}
+                  spellCheck={false}
+                  value={providerConfigDraft.claudeEnv}
+                  onChange={(event) => {
+                    setProviderConfigDraft((current) => ({
+                      ...current,
+                      claudeEnv: event.target.value,
+                    }));
+                  }}
+                />
+              </div>
+            ) : null}
+
+            {providerConfigRow?.key === 'codex_app_server' ? (
+              <>
+                <div className="commands-field">
+                  <Label className="commands-field-label">{t('Auth')}</Label>
+                  <Select
+                    value={providerConfigDraft.codexAuthMode}
+                    onValueChange={(value) => {
+                      setProviderConfigDraft((current) => ({
+                        ...current,
+                        codexAuthMode: value === 'api_key' ? 'api_key' : 'cli',
+                      }));
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="cli">{t('CLI')}</SelectItem>
+                        <SelectItem value="api_key">{t('API Key')}</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {providerConfigDraft.codexAuthMode === 'api_key' ? (
+                  <div className="commands-field">
+                    <Label className="commands-field-label" htmlFor="provider-codex-api-key">{t('API Key')}</Label>
+                    <Input
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      id="provider-codex-api-key"
+                      placeholder="OPENAI_API_KEY"
+                      spellCheck={false}
+                      type="password"
+                      value={providerConfigDraft.codexApiKey}
+                      onChange={(event) => {
+                        setProviderConfigDraft((current) => ({
+                          ...current,
+                          codexApiKey: event.target.value,
+                        }));
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+
+            {providerConfigRow?.key === 'gemini_cli' ? (
+              <div className="commands-field">
+                <div className="commands-field-header">
+                  <Label className="commands-field-label" htmlFor="provider-gemini-env">{t('Environment')}</Label>
+                  <span className="commands-field-hint">{t('One variable per line.')}</span>
+                </div>
+                <Textarea
+                  className="provider-env-editor"
+                  id="provider-gemini-env"
+                  placeholder={[
+                    'GEMINI_API_KEY=...',
+                    'GOOGLE_API_KEY=...',
+                    'GEMINI_CLI_HOME=~/.gemini',
+                  ].join('\n')}
+                  spellCheck={false}
+                  value={providerConfigDraft.geminiEnv}
+                  onChange={(event) => {
+                    setProviderConfigDraft((current) => ({
+                      ...current,
+                      geminiEnv: event.target.value,
+                    }));
+                  }}
+                />
+              </div>
+            ) : null}
+
+            {providerConfigRow?.group === 'native' ? (
+              <>
+                {providerConfigRow.providerType === 'gpt' ? (
+                  <div className="commands-field">
+                    <Label className="commands-field-label">{t('Auth')}</Label>
+                    <Select
+                      value={providerConfigDraft.authSource || 'codex'}
+                      onValueChange={(value) => {
+                        setProviderConfigDraft((current) => ({
+                          ...current,
+                          authSource: value,
+                          apiKey: value === 'codex' ? '' : current.apiKey,
+                        }));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="codex">{t('Use GPT token')}</SelectItem>
+                          <SelectItem value="api_key">{t('Use API key')}</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+                {providerConfigRow.providerType !== 'gpt' || providerConfigDraft.authSource === 'api_key' ? (
+                  <div className="commands-field">
+                    <Label className="commands-field-label" htmlFor="provider-native-api-key">{t('API Key')}</Label>
+                    <Input
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      id="provider-native-api-key"
+                      placeholder={apiKeyEnvName(providerConfigRow.providerType) || 'API_KEY'}
+                      spellCheck={false}
+                      type="password"
+                      value={providerConfigDraft.apiKey}
+                      onChange={(event) => {
+                        setProviderConfigDraft((current) => ({
+                          ...current,
+                          apiKey: event.target.value,
+                        }));
+                      }}
+                    />
+                  </div>
+                ) : null}
+                <div className="provider-config-grid">
+                  <div className="commands-field">
+                    <Label className="commands-field-label" htmlFor="provider-native-model">{t('Model')}</Label>
+                    <Input
+                      id="provider-native-model"
+                      placeholder={providerConfigRow.defaultModel}
+                      value={providerConfigDraft.model}
+                      onChange={(event) => {
+                        setProviderConfigDraft((current) => ({
+                          ...current,
+                          model: event.target.value,
+                        }));
+                      }}
+                    />
+                  </div>
+                  <div className="commands-field">
+                    <Label className="commands-field-label">{t('Reasoning')}</Label>
+                    <Select
+                      value={providerConfigDraft.modelReasoningEffort || '__default__'}
+                      onValueChange={(value) => {
+                        setProviderConfigDraft((current) => ({
+                          ...current,
+                          modelReasoningEffort: value === '__default__' ? '' : value,
+                        }));
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem value="__default__">{t('Provider default')}</SelectItem>
+                          <SelectItem value="low">low</SelectItem>
+                          <SelectItem value="medium">medium</SelectItem>
+                          <SelectItem value="high">high</SelectItem>
+                          <SelectItem value="xhigh">xhigh</SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                {providerConfigRow.providerType === 'gpt' ? (
+                  <div className="commands-field">
+                    <Label className="commands-field-label" htmlFor="provider-native-service-tier">{t('Speed')}</Label>
+                    <Input
+                      id="provider-native-service-tier"
+                      placeholder={t('Provider default')}
+                      value={providerConfigDraft.modelServiceTier}
+                      onChange={(event) => {
+                        setProviderConfigDraft((current) => ({
+                          ...current,
+                          modelServiceTier: event.target.value,
+                        }));
+                      }}
+                    />
+                  </div>
+                ) : null}
+                <div className="commands-field">
+                  <Label className="commands-field-label" htmlFor="provider-native-base-url">{t('Base URL')}</Label>
+                  <Input
+                    id="provider-native-base-url"
+                    placeholder={t('Provider default')}
+                    value={providerConfigDraft.baseUrl}
+                    onChange={(event) => {
+                      setProviderConfigDraft((current) => ({
+                        ...current,
+                        baseUrl: event.target.value,
+                      }));
+                    }}
+                  />
+                </div>
+              </>
+            ) : null}
           </div>
-        ) : null}
-      </section>
-      {localSettingsDirty ? (
-        <div className="provider-save-row">{renderLocalSaveAction()}</div>
-      ) : null}
+
+          <DialogFooter className="commands-dialog-footer">
+            <div className="provider-config-footer-left">
+              {providerConfigRow?.group === 'native' && providerConfigAgent ? (
+                <Button
+                  className="commands-dialog-button danger"
+                  disabled={providerConfigSaving}
+                  onClick={() => { void handleClearProviderConfig(); }}
+                  type="button"
+                  variant="outline"
+                >
+                  {t('Clear')}
+                </Button>
+              ) : null}
+            </div>
+            <div className="provider-config-footer-actions">
+              <Button
+                className="commands-dialog-button secondary"
+                onClick={closeProviderConfigDialog}
+                type="button"
+                variant="outline"
+              >
+                {t('Cancel')}
+              </Button>
+              <Button
+                className="commands-dialog-button primary"
+                disabled={providerConfigSaving || savingLocalSettings}
+                onClick={() => { void handleSaveProviderConfig(); }}
+                type="button"
+              >
+                {providerConfigSaving || savingLocalSettings ? t('Saving…') : t('Save')}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 

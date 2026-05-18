@@ -35,6 +35,7 @@ function desktopSettingsEqual(
     left.providerClaudeEnv === right.providerClaudeEnv &&
     left.providerCodexAuthMode === right.providerCodexAuthMode &&
     left.providerCodexApiKey === right.providerCodexApiKey &&
+    left.providerGeminiEnv === right.providerGeminiEnv &&
     left.threadLogsPanelWidth === right.threadLogsPanelWidth &&
     left.languagePreference === right.languagePreference
   );
@@ -411,11 +412,15 @@ export function useSettingsController({
     }
   }
 
-  async function persistLocalSettings(options?: {
-    refreshConnection?: boolean;
-    requireGatewayConnection?: boolean;
-    reloadGatewaySettings?: boolean;
-  }): Promise<boolean> {
+  async function persistLocalSettings(
+    options?: {
+      refreshConnection?: boolean;
+      requireGatewayConnection?: boolean;
+      reloadGatewaySettings?: boolean;
+    },
+    draftOverride?: typeof DEFAULT_DESKTOP_SETTINGS,
+  ): Promise<boolean> {
+    const draft = draftOverride ?? settingsDraft;
     if (savingSettings) {
       return true;
     }
@@ -426,8 +431,8 @@ export function useSettingsController({
     try {
       if (options?.requireGatewayConnection) {
         const status = await window.garyxDesktop.checkConnection({
-          gatewayUrl: settingsDraft.gatewayUrl,
-          gatewayAuthToken: settingsDraft.gatewayAuthToken,
+          gatewayUrl: draft.gatewayUrl,
+          gatewayAuthToken: draft.gatewayAuthToken,
         });
         setConnection(status);
         if (!status.ok) {
@@ -438,7 +443,7 @@ export function useSettingsController({
         }
       }
 
-      let nextState = await window.garyxDesktop.saveSettings(settingsDraft);
+      let nextState = await window.garyxDesktop.saveSettings(draft);
       setDesktopState(nextState);
 
       if (options?.requireGatewayConnection) {
@@ -481,6 +486,21 @@ export function useSettingsController({
       refreshConnection: true,
       reloadGatewaySettings: options?.reloadGatewaySettings ?? !isLocalSettingsTab(settingsActiveTab),
     });
+  }
+
+  async function handleSaveLocalSettingsDraft(
+    nextSettings: typeof DEFAULT_DESKTOP_SETTINGS,
+    options?: {
+      requireGatewayConnection?: boolean;
+      reloadGatewaySettings?: boolean;
+    },
+  ): Promise<boolean> {
+    setSettingsDraft(nextSettings);
+    return persistLocalSettings({
+      requireGatewayConnection: options?.requireGatewayConnection ?? false,
+      refreshConnection: true,
+      reloadGatewaySettings: options?.reloadGatewaySettings ?? !isLocalSettingsTab(settingsActiveTab),
+    }, nextSettings);
   }
 
   async function refreshDesktopStateAfterGatewaySave(
@@ -619,6 +639,7 @@ export function useSettingsController({
     handleDeleteSlashCommand,
     handleRetrySettingsView,
     handleSaveGatewaySettings,
+    handleSaveLocalSettingsDraft,
     handleSaveLocalSettingsNow,
     handleSaveSettings,
     handleSelectSettingsTab,

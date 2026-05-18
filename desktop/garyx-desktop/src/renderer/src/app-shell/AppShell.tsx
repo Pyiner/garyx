@@ -1955,6 +1955,7 @@ export function AppShell() {
     handleDeleteSlashCommand,
     handleRetrySettingsView,
     handleSaveGatewaySettings,
+    handleSaveLocalSettingsDraft,
     handleSaveLocalSettingsNow,
     handleSelectSettingsTab,
     handleToggleMcpServer,
@@ -8279,6 +8280,9 @@ export function AppShell() {
                     onMutateGatewayDraft={mutateGatewaySettingsDraft}
                     onSaveLocalSettingsNow={(options) => {
                       return handleSaveLocalSettingsNow(options);
+                    }}
+                    onSaveLocalSettingsDraft={(nextSettings, options) => {
+                      return handleSaveLocalSettingsDraft(nextSettings, options);
                     }}
                     onSaveGatewaySettings={(options) => {
                       return handleSaveGatewaySettings(options);
