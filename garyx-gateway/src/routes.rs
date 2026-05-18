@@ -190,6 +190,13 @@ struct ConfiguredChannelAccount {
     workspace_mode: Option<String>,
 }
 
+fn public_workspace_mode(value: Option<&str>) -> &'static str {
+    match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("worktree") => "worktree",
+        _ => "local",
+    }
+}
+
 fn configured_channel_accounts(channels: &ChannelsConfig) -> Vec<ConfiguredChannelAccount> {
     let mut accounts = Vec::new();
     for (plugin_id, plugin_cfg) in &channels.plugins {
@@ -1700,7 +1707,7 @@ pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl In
             "enabled": account.enabled,
             "agent_id": account.agent_id.as_deref().unwrap_or(""),
             "workspace_dir": account.workspace_dir.as_deref(),
-            "workspace_mode": account.workspace_mode.as_deref().unwrap_or("direct"),
+            "workspace_mode": public_workspace_mode(account.workspace_mode.as_deref()),
             "root_behavior": root_behavior,
             "main_endpoint_status": if main_endpoint.is_some() { "resolved" } else { "unresolved" },
             "main_endpoint": main_endpoint.as_ref().map(ResolvedMainEndpoint::to_value),
@@ -1770,7 +1777,7 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
                 "subtitle": bot_subtitle(&account.channel, &account.account_id),
                 "agent_id": account.agent_id.as_deref().unwrap_or(""),
                 "workspace_dir": account.workspace_dir.as_deref(),
-                "workspace_mode": account.workspace_mode.as_deref().unwrap_or("direct"),
+                "workspace_mode": public_workspace_mode(account.workspace_mode.as_deref()),
                 "root_behavior": root_behavior,
                 "endpoint_count": 0,
                 "bound_endpoint_count": 0,

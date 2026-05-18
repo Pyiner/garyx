@@ -263,7 +263,7 @@ export function TasksPanel({
   const [draftAssignee, setDraftAssignee] = useState('');
   const [draftWorkspaceDir, setDraftWorkspaceDir] = useState('');
   const [draftWorkspaceMode, setDraftWorkspaceMode] =
-    useState<DesktopWorkspaceMode>('direct');
+    useState<DesktopWorkspaceMode>('local');
   const [draftWorkspaceGitStatus, setDraftWorkspaceGitStatus] = useState<{
     workspacePath: string;
     isGitRepo: boolean;
@@ -328,7 +328,7 @@ export function TasksPanel({
     let cancelled = false;
     setDraftWorkspaceGitStatus(null);
     if (!draftWorkspaceDir.trim()) {
-      setDraftWorkspaceMode('direct');
+      setDraftWorkspaceMode('local');
       return;
     }
     void window.garyxDesktop
@@ -340,13 +340,13 @@ export function TasksPanel({
           isGitRepo: status.isGitRepo,
         });
         if (!status.isGitRepo) {
-          setDraftWorkspaceMode('direct');
+          setDraftWorkspaceMode('local');
         }
       })
       .catch(() => {
         if (cancelled) return;
         setDraftWorkspaceGitStatus(null);
-        setDraftWorkspaceMode('direct');
+        setDraftWorkspaceMode('local');
       });
     return () => {
       cancelled = true;
@@ -563,7 +563,7 @@ export function TasksPanel({
       setDraftBody('');
       setDraftAssignee('');
       setDraftWorkspaceDir('');
-      setDraftWorkspaceMode('direct');
+      setDraftWorkspaceMode('local');
       setDraftNotificationTarget('');
       await loadTasks({ silent: true });
       onToast(t('Task created.'), 'success');
@@ -583,7 +583,7 @@ export function TasksPanel({
         const workspace = await onAddWorkspace();
         if (workspace?.path) {
           setDraftWorkspaceDir(workspace.path);
-          setDraftWorkspaceMode('direct');
+          setDraftWorkspaceMode('local');
         }
       } catch (workspaceError) {
         onToast(
@@ -597,11 +597,11 @@ export function TasksPanel({
     }
     if (value === NO_WORKSPACE_VALUE || value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) {
       setDraftWorkspaceDir('');
-      setDraftWorkspaceMode('direct');
+      setDraftWorkspaceMode('local');
       return;
     }
     setDraftWorkspaceDir(value);
-    setDraftWorkspaceMode('direct');
+    setDraftWorkspaceMode('local');
   }
 
   const disabled = isTasksDisabled(error);
@@ -1006,7 +1006,7 @@ export function TasksPanel({
                         >
                           <SelectGroup>
                             <SelectLabel>{t('Workspace mode')}</SelectLabel>
-                            <SelectItem value="direct">
+                            <SelectItem value="local">
                               <Laptop aria-hidden size={15} strokeWidth={1.8} />
                               {t('Local mode')}
                             </SelectItem>

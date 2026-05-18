@@ -1655,7 +1655,7 @@ export function AppShell() {
       : null,
   );
   const [pendingWorkspaceMode, setPendingWorkspaceMode] =
-    useState<DesktopWorkspaceMode>("direct");
+    useState<DesktopWorkspaceMode>("local");
   const [pendingBotId, setPendingBotId] = useState<string | null>(null);
   const [optimisticThreadBotBinding, setOptimisticThreadBotBinding] = useState<{
     botId: string | null;
@@ -1811,7 +1811,7 @@ export function AppShell() {
   const selectedThreadIdRef = useRef<string | null>(null);
   const newThreadDraftActiveRef = useRef(false);
   const pendingWorkspacePathRef = useRef<string | null>(null);
-  const pendingWorkspaceModeRef = useRef<DesktopWorkspaceMode>("direct");
+  const pendingWorkspaceModeRef = useRef<DesktopWorkspaceMode>("local");
   const pendingBotIdRef = useRef<string | null>(null);
   const composerHasPayloadRef = useRef(false);
   const newThreadInitialDispatchLockRef = useRef(false);
@@ -3299,7 +3299,7 @@ export function AppShell() {
     accountId: string;
     name?: string | null;
     workspaceDir?: string | null;
-    workspaceMode?: "direct" | "worktree";
+    workspaceMode?: "local" | "worktree";
     agentId?: string | null;
     token?: string | null;
     appId?: string | null;
@@ -3448,7 +3448,7 @@ export function AppShell() {
           setNewThreadDraftActive(true);
           setSelectedThreadId(null);
           setPendingWorkspacePath(route.workspacePath || null);
-          setPendingWorkspaceMode("direct");
+          setPendingWorkspaceMode("local");
           setPendingBotId(null);
           setPendingAgentId(route.agentId || "claude");
           clearComposerDraft();
@@ -3474,7 +3474,7 @@ export function AppShell() {
           setContentView("thread");
           setNewThreadDraftActive(false);
           setPendingWorkspacePath(null);
-          setPendingWorkspaceMode("direct");
+          setPendingWorkspaceMode("local");
           setSelectedThreadId((current) =>
             isKnownThreadId(desktopState, current)
               ? current
@@ -4053,7 +4053,7 @@ export function AppShell() {
           setNewThreadDraftActive(true);
           setSelectedThreadId(null);
           setPendingWorkspacePath(startupRoute.workspacePath || null);
-          setPendingWorkspaceMode("direct");
+          setPendingWorkspaceMode("local");
           setPendingAgentId(startupRoute.agentId || "claude");
         } else {
           setSelectedThreadId((current) =>
@@ -6210,7 +6210,7 @@ export function AppShell() {
         [created.thread.id]: current[created.thread.id] || [],
       }));
       setPendingWorkspacePath(null);
-      setPendingWorkspaceMode("direct");
+      setPendingWorkspaceMode("local");
       setPendingBotId(null);
       setPendingAgentId(created.thread.agentId || providerHint || "claude");
       requestComposerFocus();
@@ -6404,7 +6404,7 @@ export function AppShell() {
     setNewThreadDraftActive(true);
     setSelectedThreadId(null);
     setPendingWorkspacePath(nextWorkspace?.path || null);
-    setPendingWorkspaceMode("direct");
+    setPendingWorkspaceMode("local");
     setPendingBotId(null);
     setPendingAgentId(agentId);
     clearComposerDraft();
@@ -6425,7 +6425,7 @@ export function AppShell() {
         return openExistingThread(threadId, "bot-root").then((opened) => {
           if (opened) {
             setPendingWorkspacePath(null);
-            setPendingWorkspaceMode("direct");
+            setPendingWorkspaceMode("local");
             setPendingBotId(null);
           }
           return opened;
@@ -6490,7 +6490,7 @@ export function AppShell() {
       if (result.workspace) {
         setNewThreadDraftActive(true);
         setPendingWorkspacePath(result.workspace.path);
-        setPendingWorkspaceMode("direct");
+        setPendingWorkspaceMode("local");
         requestComposerFocus();
       }
     } catch (workspaceError) {
@@ -8584,7 +8584,7 @@ export function AppShell() {
                   void openExistingThread(threadId);
                 }}
                 onSelectWorkspace={(workspacePath) => {
-                  setPendingWorkspaceMode("direct");
+                  setPendingWorkspaceMode("local");
                   void handleSelectWorkspace(workspacePath, null);
                 }}
                 onSetDraggedQueueIntentId={setDraggedQueueIntentId}

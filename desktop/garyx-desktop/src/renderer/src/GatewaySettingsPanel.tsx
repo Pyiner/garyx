@@ -134,7 +134,7 @@ type GatewaySettingsPanelProps = {
     accountId: string;
     name?: string | null;
     workspaceDir?: string | null;
-    workspaceMode?: 'direct' | 'worktree';
+    workspaceMode?: 'local' | 'worktree';
     agentId?: string | null;
     token?: string | null;
     appId?: string | null;

@@ -2852,7 +2852,7 @@ export async function createRemoteThread(
   input?: {
     title?: string;
     workspacePath?: string | null;
-    workspaceMode?: "direct" | "worktree";
+    workspaceMode?: "local" | "worktree";
     agentId?: string | null;
     sdkSessionId?: string | null;
     sdkSessionProviderHint?: "claude" | "codex" | "gemini" | null;
@@ -3884,7 +3884,7 @@ export async function createTask(
       runtime: {
         agent_id: runtimeAgentId || null,
         workspace_dir: runtimeWorkspaceDir || null,
-        workspace_mode: input.workspaceMode || "direct",
+        workspace_mode: input.workspaceMode || "local",
       },
       notification_target: taskNotificationTargetPayload(input.notificationTarget),
     }),

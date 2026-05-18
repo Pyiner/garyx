@@ -17,7 +17,7 @@ working directory and then passes that directory as `cwd` / `workspace_dir`.
 ## Confirmed Decisions
 
 - Worktree mode is opt-in. Existing thread and task creation continue to use
-  direct workspace mode by default.
+  local workspace mode by default.
 - Worktree mode applies only to new thread creation and task creation. It does
   not affect sending messages to existing threads.
 - A thread's execution directory remains fixed after the thread is created.
@@ -53,16 +53,16 @@ API should use an explicit workspace mode field:
 
 ```json
 {
-  "workspace_mode": "direct"
+  "workspace_mode": "local"
 }
 ```
 
 Supported values:
 
-- `direct`
+- `local`
 - `worktree`
 
-Default is `direct`.
+Default is `local`.
 
 CLI should expose worktree mode as a boolean flag on explicit create commands:
 
@@ -223,7 +223,7 @@ Confirmed:
 
 - The Mac app should show worktree mode only when the selected workspace is a
   git repository root.
-- Default remains direct mode.
+- Default remains local mode.
 - The app should not expose worktree mode for non-git workspaces or git
   subdirectories.
 - Empty state layout should align with Codex Mac app: when no thread is

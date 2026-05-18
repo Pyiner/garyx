@@ -840,7 +840,7 @@ fn task_runtime_input(
         .unwrap_or(TaskRuntimeInput {
             agent_id: None,
             workspace_dir: None,
-            workspace_mode: WorkspaceMode::Direct,
+            workspace_mode: WorkspaceMode::Local,
             worktree_base_dir: None,
         });
     if input.agent_id.is_none() {
@@ -910,7 +910,7 @@ async fn task_runtime_with_default_workspace(
     let mut input = runtime.unwrap_or(TaskRuntimeInput {
         agent_id: None,
         workspace_dir: None,
-        workspace_mode: WorkspaceMode::Direct,
+        workspace_mode: WorkspaceMode::Local,
         worktree_base_dir: None,
     });
     input.workspace_dir = Some(default_workspace_dir);
@@ -1389,7 +1389,7 @@ mod tests {
             Some(TaskRuntimeInput {
                 agent_id: Some("reviewer".to_owned()),
                 workspace_dir: Some("/tmp/task-explicit".to_owned()),
-                workspace_mode: WorkspaceMode::Direct,
+                workspace_mode: WorkspaceMode::Local,
                 worktree_base_dir: None,
             }),
             Some(&Principal::Agent {

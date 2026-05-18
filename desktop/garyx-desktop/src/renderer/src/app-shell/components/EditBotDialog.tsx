@@ -169,7 +169,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
   const [name, setName] = useState("");
   const [agentId, setAgentId] = useState("");
   const [workspaceDir, setWorkspaceDir] = useState("");
-  const [workspaceMode, setWorkspaceMode] = useState<DesktopWorkspaceMode>("direct");
+  const [workspaceMode, setWorkspaceMode] = useState<DesktopWorkspaceMode>("local");
   const [pluginConfig, setPluginConfig] = useState<Record<string, unknown>>({});
   const [showReauthorize, setShowReauthorize] = useState(false);
   const [reauthorizedAccountId, setReauthorizedAccountId] = useState<string | null>(null);
@@ -186,7 +186,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
     setName(String(account.name || ""));
     setAgentId(context.resolvedAgentId || "");
     setWorkspaceDir(String(account.workspace_dir || ""));
-    setWorkspaceMode(account.workspace_mode === "worktree" ? "worktree" : "direct");
+    setWorkspaceMode(account.workspace_mode === "worktree" ? "worktree" : "local");
     setPluginConfig(accountToConfig(account));
     setShowReauthorize(false);
     setReauthorizedAccountId(null);
@@ -414,7 +414,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="direct">{t("Local")}</SelectItem>
+                      <SelectItem value="local">{t("Local")}</SelectItem>
                       <SelectItem value="worktree">{t("Worktree")}</SelectItem>
                     </SelectContent>
                   </Select>

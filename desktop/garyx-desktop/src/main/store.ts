@@ -1106,7 +1106,7 @@ export async function removeDesktopWorkspace(workspacePath: string): Promise<Des
 export async function createDesktopThread(input?: {
   title?: string;
   workspacePath?: string | null;
-  workspaceMode?: "direct" | "worktree";
+  workspaceMode?: "local" | "worktree";
   agentId?: string | null;
   sdkSessionId?: string | null;
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
@@ -1142,7 +1142,7 @@ export async function createDesktopThread(input?: {
   const created = await createRemoteThread(current.settings, {
     title: requestedTitle,
     workspacePath,
-    workspaceMode: sdkSessionId ? "direct" : input?.workspaceMode,
+    workspaceMode: sdkSessionId ? "local" : input?.workspaceMode,
     agentId: input?.agentId,
     sdkSessionId,
     sdkSessionProviderHint,

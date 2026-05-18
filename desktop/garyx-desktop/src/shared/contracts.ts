@@ -1202,7 +1202,7 @@ export interface CreateThreadInput {
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
 }
 
-export type DesktopWorkspaceMode = "direct" | "worktree";
+export type DesktopWorkspaceMode = "local" | "worktree";
 
 export interface DesktopWorkspaceGitStatus {
   workspaceDir: string;

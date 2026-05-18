@@ -242,7 +242,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
   const [accountId, setAccountId] = useState("");
   const [name, setName] = useState("");
   const [workspaceDir, setWorkspaceDir] = useState("");
-  const [workspaceMode, setWorkspaceMode] = useState<DesktopWorkspaceMode>("direct");
+  const [workspaceMode, setWorkspaceMode] = useState<DesktopWorkspaceMode>("local");
   const [agentId, setAgentId] = useState("claude");
   const [pluginConfig, setPluginConfig] = useState<Record<string, unknown>>({});
   const [generatedAccountId, setGeneratedAccountId] = useState<string | null>(null);
@@ -571,7 +571,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="direct">{t("Local")}</SelectItem>
+                      <SelectItem value="local">{t("Local")}</SelectItem>
                       <SelectItem value="worktree">{t("Worktree")}</SelectItem>
                     </SelectContent>
                   </Select>

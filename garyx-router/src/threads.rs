@@ -904,7 +904,7 @@ pub fn default_workspace_mode_for_channel_account(
         .as_deref()
     {
         Some("worktree") => WorkspaceMode::Worktree,
-        _ => WorkspaceMode::Direct,
+        _ => WorkspaceMode::Local,
     }
 }
 

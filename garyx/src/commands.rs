@@ -3752,7 +3752,7 @@ pub(crate) async fn cmd_thread_create(
         &json!({
             "label": title.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
             "workspaceDir": workspace_dir,
-            "workspaceMode": if worktree { "worktree" } else { "direct" },
+            "workspaceMode": if worktree { "worktree" } else { "local" },
             "agentId": agent_id,
         }),
     )
@@ -4856,7 +4856,7 @@ pub(crate) async fn cmd_task_create(
         "runtime": {
             "agent_id": runtime_agent_id,
             "workspace_dir": workspace_dir,
-            "workspace_mode": if worktree { "worktree" } else { "direct" },
+            "workspace_mode": if worktree { "worktree" } else { "local" },
         },
         "notification_target": notification_target,
         "source": source,
@@ -5953,7 +5953,7 @@ pub(crate) async fn cmd_bot_status(
     }
     println!(
         "Workspace mode: {}",
-        payload["workspace_mode"].as_str().unwrap_or("direct")
+        payload["workspace_mode"].as_str().unwrap_or("local")
     );
     if let Some(binding_key) = payload["main_endpoint"]["binding_key"].as_str()
         && !binding_key.trim().is_empty()
@@ -7162,12 +7162,9 @@ fn normalize_channel_workspace_mode(
         return Ok(None);
     };
     match value.to_ascii_lowercase().as_str() {
-        "direct" | "local" => Ok(Some("direct".to_owned())),
+        "local" => Ok(Some("local".to_owned())),
         "worktree" => Ok(Some("worktree".to_owned())),
-        _ => Err(
-            format!("invalid workspace mode `{value}`; use `direct`, `local`, or `worktree`")
-                .into(),
-        ),
+        _ => Err(format!("invalid workspace mode `{value}`; use `local` or `worktree`").into()),
     }
 }
 

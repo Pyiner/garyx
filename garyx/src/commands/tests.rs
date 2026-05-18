@@ -1789,6 +1789,33 @@ fn upsert_plugin_account_rejects_missing_required_fields() {
 }
 
 #[test]
+fn upsert_channel_account_rejects_direct_workspace_mode() {
+    let mut cfg = GaryxConfig::default();
+    let err = upsert_channel_account(
+        &mut cfg,
+        "api",
+        "scripted",
+        None,
+        None,
+        Some("direct".to_owned()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Map::new(),
+    )
+    .expect_err("direct should not be accepted as a workspace mode");
+
+    assert!(
+        err.to_string().contains("use `local` or `worktree`"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn validate_channel_account_configs_flags_null_plugin_config() {
     let mut cfg = GaryxConfig::default();
     cfg.channels

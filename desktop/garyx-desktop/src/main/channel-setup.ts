@@ -75,7 +75,7 @@ type PreparedChannelAccount = {
   pluginId: string;
   accountName: string | null;
   workspaceDir: string | null;
-  workspaceMode: "direct" | "worktree";
+  workspaceMode: "local" | "worktree";
   agentId: string | null;
   config: Record<string, unknown>;
 };
@@ -83,7 +83,7 @@ type PreparedChannelAccount = {
 function prepareChannelAccount(input: AddChannelAccountInput): PreparedChannelAccount {
   const accountName = normalizeOptionalText(input.name);
   const workspaceDir = normalizeOptionalText(input.workspaceDir);
-  const workspaceMode = input.workspaceMode === "worktree" ? "worktree" : "direct";
+  const workspaceMode = input.workspaceMode === "worktree" ? "worktree" : "local";
   const pluginId = canonicalPluginId(input.channel);
   const pluginConfig =
     input.config && typeof input.config === "object" && !Array.isArray(input.config)

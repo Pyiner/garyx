@@ -406,7 +406,7 @@ export async function ensureThread(input: {
   try {
     const created = await input.api.createThread({
       workspacePath,
-      workspaceMode: input.pendingWorkspaceMode || "direct",
+      workspaceMode: input.pendingWorkspaceMode || "local",
       agentId,
     });
     input.setDesktopState(created.state);
@@ -415,7 +415,7 @@ export async function ensureThread(input: {
     threadId = created.thread.id;
     input.setNewThreadDraftActive(false);
     input.setPendingWorkspacePath(null);
-    input.setPendingWorkspaceMode("direct");
+    input.setPendingWorkspaceMode("local");
     input.setPendingBotId(null);
     input.setPendingAgentId("claude");
     return threadId;

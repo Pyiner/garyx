@@ -500,11 +500,27 @@ fn default_workspace_mode_for_channel_account_returns_bot_mode() {
     );
     assert_eq!(
         default_workspace_mode_for_channel_account(&config, "api", "scripted"),
-        WorkspaceMode::Direct
+        WorkspaceMode::Local
     );
     assert_eq!(
         default_workspace_mode_for_channel_account(&config, "telegram", "missing"),
-        WorkspaceMode::Direct
+        WorkspaceMode::Local
+    );
+}
+
+#[test]
+fn workspace_mode_serializes_public_local_name() {
+    assert_eq!(
+        serde_json::to_value(WorkspaceMode::Local).unwrap(),
+        json!("local")
+    );
+    assert_eq!(
+        serde_json::to_value(WorkspaceMode::Worktree).unwrap(),
+        json!("worktree")
+    );
+    assert_eq!(
+        serde_json::from_value::<WorkspaceMode>(json!("local")).unwrap(),
+        WorkspaceMode::Local
     );
 }
 

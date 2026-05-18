@@ -90,14 +90,14 @@ pub struct TaskRuntimeInput {
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "is_direct_workspace_mode")]
+    #[serde(default, skip_serializing_if = "is_local_workspace_mode")]
     pub workspace_mode: WorkspaceMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_base_dir: Option<std::path::PathBuf>,
 }
 
-fn is_direct_workspace_mode(value: &WorkspaceMode) -> bool {
-    *value == WorkspaceMode::Direct
+fn is_local_workspace_mode(value: &WorkspaceMode) -> bool {
+    *value == WorkspaceMode::Local
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1868,7 +1868,7 @@ mod tests {
                 runtime: Some(TaskRuntimeInput {
                     agent_id: Some("codex".to_owned()),
                     workspace_dir: Some("/tmp/garyx-task".to_owned()),
-                    workspace_mode: WorkspaceMode::Direct,
+                    workspace_mode: WorkspaceMode::Local,
                     worktree_base_dir: None,
                 }),
             })

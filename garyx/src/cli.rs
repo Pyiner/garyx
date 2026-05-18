@@ -468,7 +468,7 @@ pub(crate) enum ChannelsAction {
         /// Workspace directory
         #[arg(long)]
         workspace_dir: Option<String>,
-        /// Workspace mode for new bot threads: direct/local or worktree
+        /// Workspace mode for new bot threads: local or worktree
         #[arg(long)]
         workspace_mode: Option<String>,
         /// Agent or team id to bind this channel account to
@@ -525,7 +525,7 @@ pub(crate) enum ChannelsAction {
         /// Workspace directory
         #[arg(long)]
         workspace_dir: Option<String>,
-        /// Workspace mode for new bot threads: direct/local or worktree
+        /// Workspace mode for new bot threads: local or worktree
         #[arg(long)]
         workspace_mode: Option<String>,
         /// Agent or team id to bind this channel account to

@@ -97,7 +97,7 @@ export function NewThreadEmptyState({
     let cancelled = false;
     setGitStatusResult(null);
     if (!selectedWorkspacePath) {
-      onWorkspaceModeChange("direct");
+      onWorkspaceModeChange("local");
       return;
     }
     const cachedStatus = workspaceGitStatusCache.get(selectedWorkspacePath);
@@ -107,7 +107,7 @@ export function NewThreadEmptyState({
         status: cachedStatus,
       });
       if (!cachedStatus.isGitRepo) {
-        onWorkspaceModeChange("direct");
+        onWorkspaceModeChange("local");
       }
       return;
     }
@@ -120,13 +120,13 @@ export function NewThreadEmptyState({
           workspaceGitStatusCache.set(selectedWorkspacePath, status);
           setGitStatusResult({ workspacePath: selectedWorkspacePath, status });
           if (!status.isGitRepo) {
-            onWorkspaceModeChange("direct");
+            onWorkspaceModeChange("local");
           }
         })
         .catch(() => {
           if (cancelled) return;
           setGitStatusResult(null);
-          onWorkspaceModeChange("direct");
+          onWorkspaceModeChange("local");
         });
     }, GIT_STATUS_CHECK_DELAY_MS);
     return () => {
@@ -175,7 +175,7 @@ export function NewThreadEmptyState({
                 if (value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) {
                   return;
                 }
-                onWorkspaceModeChange("direct");
+                onWorkspaceModeChange("local");
                 onSelectWorkspace(value);
               }}
               value={selectedWorkspace?.path ?? ""}
@@ -268,7 +268,7 @@ export function NewThreadEmptyState({
               >
                 <SelectGroup>
                   <SelectLabel>{t("Workspace mode")}</SelectLabel>
-                  <SelectItem value="direct">
+                  <SelectItem value="local">
                     <IconDeviceLaptop aria-hidden size={16} stroke={1.7} />
                     <span className="new-thread-menu-text">{t("Local mode")}</span>
                   </SelectItem>

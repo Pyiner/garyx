@@ -973,7 +973,7 @@ async fn create_data_trigger_task(
     let runtime = TaskRuntimeInput {
         agent_id: trigger.agent_id.clone(),
         workspace_dir: trigger.workspace_dir.clone(),
-        workspace_mode: WorkspaceMode::Direct,
+        workspace_mode: WorkspaceMode::Local,
         worktree_base_dir: None,
     };
     let assignee = trigger.agent_id.as_ref().map(|agent_id| Principal::Agent {

@@ -11,7 +11,7 @@ use tokio::process::Command;
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceMode {
     #[default]
-    Direct,
+    Local,
     Worktree,
 }
 
