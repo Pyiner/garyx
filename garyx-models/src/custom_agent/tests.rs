@@ -17,6 +17,8 @@ fn custom_agent_profile_defaults_standalone_to_true() {
     assert_eq!(profile.model, "claude-opus-4-1");
     assert!(profile.model_reasoning_effort.is_empty());
     assert!(profile.model_service_tier.is_empty());
+    assert!(profile.provider_env.is_empty());
+    assert!(profile.auth_source.is_empty());
     assert!(profile.default_workspace_dir.is_none());
     assert!(profile.avatar_data_url.is_none());
 
@@ -48,6 +50,43 @@ fn custom_agent_profile_defaults_standalone_to_true() {
         profile.avatar_data_url.as_deref(),
         Some("data:image/png;base64,dGVzdA==")
     );
+}
+
+#[test]
+fn custom_agent_provider_config_carries_native_auth_settings() {
+    let profile: CustomAgentProfile = serde_json::from_value(serde_json::json!({
+        "agent_id": "gpt-reviewer",
+        "display_name": "GPT Reviewer",
+        "provider_type": "gpt",
+        "model": "gpt-5.5",
+        "model_reasoning_effort": "high",
+        "model_service_tier": "priority",
+        "provider_env": {
+            "OPENAI_API_KEY": "test-api-key"
+        },
+        "auth_source": "api_key",
+        "base_url": "https://example.invalid/v1",
+        "codex_home": "/tmp/test-codex-home",
+        "system_prompt": "Review carefully.",
+        "built_in": false,
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z"
+    }))
+    .expect("profile");
+
+    let config = profile.to_provider_config();
+    assert_eq!(config.provider_id, "gpt-reviewer");
+    assert_eq!(config.provider_type, "gpt");
+    assert_eq!(config.default_model, "gpt-5.5");
+    assert_eq!(config.model_reasoning_effort, "high");
+    assert_eq!(config.model_service_tier, "priority");
+    assert_eq!(
+        config.env.get("OPENAI_API_KEY").map(String::as_str),
+        Some("test-api-key")
+    );
+    assert_eq!(config.auth_source, "api_key");
+    assert_eq!(config.base_url, "https://example.invalid/v1");
+    assert_eq!(config.codex_home, "/tmp/test-codex-home");
 }
 
 #[test]

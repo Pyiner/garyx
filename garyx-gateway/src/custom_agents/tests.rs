@@ -24,6 +24,12 @@ async fn rejects_builtin_agent_modification() {
             model: "claude-opus-4-1".to_owned(),
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: "Override".to_owned(),
@@ -44,6 +50,12 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             model: "gpt-5".to_owned(),
             model_reasoning_effort: "high".to_owned(),
             model_service_tier: "priority".to_owned(),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
             default_workspace_dir: Some("  /tmp/reviewer  ".to_owned()),
             avatar_data_url: None,
             system_prompt: "Review carefully.".to_owned(),
@@ -65,6 +77,12 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: "Review carefully.".to_owned(),
@@ -84,6 +102,12 @@ async fn upsert_preserves_and_clears_default_workspace_dir() {
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
             default_workspace_dir: Some("  ".to_owned()),
             avatar_data_url: None,
             system_prompt: "Review carefully.".to_owned(),
@@ -104,6 +128,12 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: Some("  data:image/png;base64,dGVzdA==  ".to_owned()),
             system_prompt: "Design carefully.".to_owned(),
@@ -123,6 +153,12 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: None,
             system_prompt: "Design carefully.".to_owned(),
@@ -142,6 +178,12 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
             model: "gpt-5".to_owned(),
             model_reasoning_effort: String::new(),
             model_service_tier: String::new(),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
             default_workspace_dir: None,
             avatar_data_url: Some("  ".to_owned()),
             system_prompt: "Design carefully.".to_owned(),
@@ -149,4 +191,74 @@ async fn upsert_preserves_and_clears_avatar_data_url() {
         .await
         .expect("clear agent avatar");
     assert!(cleared.avatar_data_url.is_none());
+}
+
+#[tokio::test]
+async fn upsert_persists_and_preserves_provider_auth_config() {
+    let store = CustomAgentStore::new();
+    let created = store
+        .upsert_agent(UpsertCustomAgentRequest {
+            agent_id: "budget-gpt".to_owned(),
+            display_name: "Budget GPT".to_owned(),
+            provider_type: ProviderType::Gpt,
+            model: "gpt-5.5".to_owned(),
+            model_reasoning_effort: "medium".to_owned(),
+            model_service_tier: String::new(),
+            provider_env: Some(HashMap::from([(
+                " OPENAI_API_KEY ".to_owned(),
+                " test-api-key ".to_owned(),
+            )])),
+            auth_source: Some(" api_key ".to_owned()),
+            base_url: Some(" https://example.invalid/v1 ".to_owned()),
+            codex_home: None,
+            max_tool_iterations: Some(24),
+            request_timeout_seconds: Some(120),
+            default_workspace_dir: None,
+            avatar_data_url: None,
+            system_prompt: "Use GPT.".to_owned(),
+        })
+        .await
+        .expect("create native agent");
+
+    assert_eq!(created.auth_source, "api_key");
+    assert_eq!(created.base_url, "https://example.invalid/v1");
+    assert_eq!(created.max_tool_iterations, 24);
+    assert_eq!(created.request_timeout_seconds, 120);
+    assert_eq!(
+        created
+            .provider_env
+            .get("OPENAI_API_KEY")
+            .map(String::as_str),
+        Some("test-api-key")
+    );
+
+    let updated = store
+        .upsert_agent(UpsertCustomAgentRequest {
+            agent_id: "budget-gpt".to_owned(),
+            display_name: "Budget GPT".to_owned(),
+            provider_type: ProviderType::Gpt,
+            model: "gpt-5.5".to_owned(),
+            model_reasoning_effort: String::new(),
+            model_service_tier: String::new(),
+            provider_env: None,
+            auth_source: None,
+            base_url: None,
+            codex_home: None,
+            max_tool_iterations: None,
+            request_timeout_seconds: None,
+            default_workspace_dir: None,
+            avatar_data_url: None,
+            system_prompt: "Use GPT.".to_owned(),
+        })
+        .await
+        .expect("update native agent");
+
+    assert_eq!(updated.auth_source, "api_key");
+    assert_eq!(
+        updated
+            .provider_env
+            .get("OPENAI_API_KEY")
+            .map(String::as_str),
+        Some("test-api-key")
+    );
 }

@@ -935,6 +935,8 @@ async fn cmd_agent_create_posts_model_payload() {
         Some("gpt-5".to_owned()),
         Some("high".to_owned()),
         Some("priority".to_owned()),
+        None,
+        None,
         Some("/tmp/spec-review".to_owned()),
         "Review specs carefully.".to_owned(),
         false,
@@ -967,6 +969,8 @@ async fn cmd_agent_update_puts_empty_model_when_omitted() {
         "spec-review".to_owned(),
         "Spec Review".to_owned(),
         "codex_app_server".to_owned(),
+        None,
+        None,
         None,
         None,
         None,
@@ -1005,6 +1009,8 @@ async fn cmd_agent_upsert_falls_back_to_post_after_put_failure() {
         None,
         None,
         None,
+        None,
+        None,
         "Review specs carefully.".to_owned(),
         false,
     )
@@ -1020,6 +1026,42 @@ async fn cmd_agent_upsert_falls_back_to_post_after_put_failure() {
     assert_eq!(records[1].method, "POST");
     assert_eq!(records[1].path, "/api/custom-agents");
     assert_eq!(records[1].body["model"], "gemini-3.1-pro-preview");
+}
+
+#[tokio::test]
+async fn cmd_agent_create_posts_native_provider_api_key_payload() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_agent_http_test_server(requests.clone(), StatusCode::OK).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_agent_create(
+        config_path.to_str().expect("config path"),
+        "budget-gpt".to_owned(),
+        "Budget GPT".to_owned(),
+        "gpt".to_owned(),
+        Some("gpt-5.5".to_owned()),
+        Some("medium".to_owned()),
+        None,
+        None,
+        Some("test-openai-api-key".to_owned()),
+        None,
+        "Use GPT.".to_owned(),
+        false,
+    )
+    .await
+    .expect("agent create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].body["provider_type"], "gpt");
+    assert_eq!(records[0].body["auth_source"], "api_key");
+    assert_eq!(
+        records[0].body["provider_env"]["OPENAI_API_KEY"],
+        "test-openai-api-key"
+    );
 }
 
 #[test]

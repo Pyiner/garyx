@@ -214,6 +214,9 @@ impl Default for GatewayAutoUpdateConfig {
 /// Provider runtime configuration used by concrete provider instances.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AgentProviderConfig {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provider_id: String,
+
     #[serde(default = "default_provider_type")]
     pub provider_type: String,
 
@@ -290,6 +293,7 @@ pub fn default_native_request_timeout() -> f64 {
 impl Default for AgentProviderConfig {
     fn default() -> Self {
         Self {
+            provider_id: String::new(),
             provider_type: default_provider_type(),
             workspace_dir: None,
             default_model: String::new(),

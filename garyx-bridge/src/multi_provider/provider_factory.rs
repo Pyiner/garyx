@@ -146,6 +146,16 @@ pub(super) fn compute_provider_key(
     agent_cfg: &AgentProviderConfig,
     _default_workspace: &Option<String>,
 ) -> String {
+    let provider_type = ProviderType::from_slug(&agent_cfg.provider_type);
+    let provider_id = agent_cfg.provider_id.trim();
+    if !provider_id.is_empty()
+        && matches!(
+            provider_type,
+            Some(ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm)
+        )
+    {
+        return format!("agent:{provider_id}");
+    }
     match agent_cfg.provider_type.as_str() {
         "claude_tty" => "claude_tty".to_owned(),
         "codex_app_server" => "codex_app_server".to_owned(),

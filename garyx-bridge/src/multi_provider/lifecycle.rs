@@ -9,7 +9,7 @@ use super::MultiProviderBridge;
 use super::provider_factory::{compute_provider_key, create_provider};
 use super::state::{BridgeRunIndex, BridgeTopologyState};
 
-fn default_provider_config(provider_type: ProviderType) -> AgentProviderConfig {
+pub(super) fn default_provider_config(provider_type: ProviderType) -> AgentProviderConfig {
     AgentProviderConfig {
         provider_type: match provider_type {
             ProviderType::CodexAppServer => "codex_app_server".to_owned(),
@@ -114,50 +114,9 @@ impl MultiProviderBridge {
             }
         };
 
-        let gpt_default_agent_cfg = default_provider_config(ProviderType::Gpt);
-        let gpt_default_key = match self
-            .get_or_create_provider(&gpt_default_agent_cfg, &default_workspace)
-            .await
-        {
-            Ok(key) => {
-                tracing::info!(provider_key = %key, "registered GPT model provider");
-                Some(key)
-            }
-            Err(error) => {
-                tracing::debug!(error = %error, "optional GPT model provider unavailable");
-                None
-            }
-        };
-
-        let claude_llm_default_agent_cfg = default_provider_config(ProviderType::ClaudeLlm);
-        let claude_llm_default_key = match self
-            .get_or_create_provider(&claude_llm_default_agent_cfg, &default_workspace)
-            .await
-        {
-            Ok(key) => {
-                tracing::info!(provider_key = %key, "registered Claude model provider");
-                Some(key)
-            }
-            Err(error) => {
-                tracing::debug!(error = %error, "optional Claude model provider unavailable");
-                None
-            }
-        };
-
-        let gemini_llm_default_agent_cfg = default_provider_config(ProviderType::GeminiLlm);
-        let gemini_llm_default_key = match self
-            .get_or_create_provider(&gemini_llm_default_agent_cfg, &default_workspace)
-            .await
-        {
-            Ok(key) => {
-                tracing::info!(provider_key = %key, "registered Gemini model provider");
-                Some(key)
-            }
-            Err(error) => {
-                tracing::debug!(error = %error, "optional Gemini model provider unavailable");
-                None
-            }
-        };
+        let configured_model_provider_keys = self
+            .register_configured_model_providers(&default_workspace)
+            .await;
 
         let mut desired_routes: HashMap<(String, String), String> = HashMap::new();
 
@@ -208,15 +167,7 @@ impl MultiProviderBridge {
         if let Some(ref key) = gemini_default_key {
             desired_provider_keys.insert(key.clone());
         }
-        if let Some(ref key) = gpt_default_key {
-            desired_provider_keys.insert(key.clone());
-        }
-        if let Some(ref key) = claude_llm_default_key {
-            desired_provider_keys.insert(key.clone());
-        }
-        if let Some(ref key) = gemini_llm_default_key {
-            desired_provider_keys.insert(key.clone());
-        }
+        desired_provider_keys.extend(configured_model_provider_keys);
         // Preserve the AgentTeam meta-provider across reloads: it is not owned
         // by a channel account route, so the
         // "desired set from config" reconciliation above would otherwise drop
@@ -293,11 +244,10 @@ impl MultiProviderBridge {
         default_workspace: &Option<String>,
         default_key: &str,
     ) -> String {
-        let provider_type = self
-            .provider_type_for_agent(agent_id)
+        let agent_cfg = self
+            .provider_config_for_agent(agent_id)
             .await
-            .unwrap_or(ProviderType::ClaudeCode);
-        let agent_cfg = default_provider_config(provider_type);
+            .unwrap_or_else(|| default_provider_config(ProviderType::ClaudeCode));
 
         // Compute provider key from config for dedup check.
         let key = compute_provider_key(&agent_cfg, default_workspace);
@@ -340,7 +290,7 @@ impl MultiProviderBridge {
     }
 
     /// Get or create a provider based on `AgentProviderConfig`, with dedup.
-    async fn get_or_create_provider(
+    pub(super) async fn get_or_create_provider(
         &self,
         agent_cfg: &AgentProviderConfig,
         default_workspace: &Option<String>,
@@ -358,6 +308,120 @@ impl MultiProviderBridge {
         Ok(key)
     }
 
+    pub(super) async fn provider_config_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Option<AgentProviderConfig> {
+        let normalized = agent_id.trim();
+        if normalized.is_empty() {
+            return None;
+        }
+        let agent_profiles = self
+            .inner
+            .agent_profiles
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let team_profiles = self
+            .inner
+            .team_profiles
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        if let Ok(reference) = resolve_agent_reference(normalized, &agent_profiles, &team_profiles)
+        {
+            if let garyx_models::AgentReference::Standalone { profile, .. } = reference {
+                if !profile.built_in {
+                    return Some(profile.to_provider_config());
+                }
+                return Some(default_provider_config(profile.provider_type));
+            }
+            return Some(default_provider_config(ProviderType::AgentTeam));
+        }
+        match normalized {
+            "codex" => Some(default_provider_config(ProviderType::CodexAppServer)),
+            "claude" => Some(default_provider_config(ProviderType::ClaudeCode)),
+            "claude-tty" | "claude_tty" => Some(default_provider_config(ProviderType::ClaudeTty)),
+            "gemini" => Some(default_provider_config(ProviderType::GeminiCli)),
+            _ => None,
+        }
+    }
+
+    pub(super) async fn provider_key_for_agent_id(
+        &self,
+        agent_id: &str,
+    ) -> Result<Option<String>, BridgeError> {
+        let Some(agent_cfg) = self.provider_config_for_agent(agent_id).await else {
+            return Ok(None);
+        };
+        let Some(provider_type) = ProviderType::from_slug(&agent_cfg.provider_type) else {
+            return Ok(None);
+        };
+        if !matches!(
+            provider_type,
+            ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm
+        ) {
+            return Ok(None);
+        }
+        let default_workspace = None;
+        self.get_or_create_provider(&agent_cfg, &default_workspace)
+            .await
+            .map(Some)
+    }
+
+    async fn register_configured_model_providers(
+        &self,
+        default_workspace: &Option<String>,
+    ) -> HashSet<String> {
+        let profiles = self
+            .inner
+            .agent_profiles
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut keys = HashSet::new();
+        for profile in profiles {
+            if profile.built_in {
+                continue;
+            }
+            if !matches!(
+                &profile.provider_type,
+                ProviderType::Gpt | ProviderType::ClaudeLlm | ProviderType::GeminiLlm
+            ) {
+                continue;
+            }
+            let agent_cfg = profile.to_provider_config();
+            match self
+                .get_or_create_provider(&agent_cfg, default_workspace)
+                .await
+            {
+                Ok(key) => {
+                    tracing::info!(
+                        agent_id = %profile.agent_id,
+                        provider_key = %key,
+                        "registered configured model provider"
+                    );
+                    keys.insert(key);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        agent_id = %profile.agent_id,
+                        error = %error,
+                        "failed to register configured model provider"
+                    );
+                }
+            }
+        }
+        keys
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn provider_type_for_agent(&self, agent_id: &str) -> Option<ProviderType> {
         let normalized = agent_id.trim();
         if normalized.is_empty() {
@@ -387,13 +451,7 @@ impl MultiProviderBridge {
             "codex" => Some(ProviderType::CodexAppServer),
             "claude" => Some(ProviderType::ClaudeCode),
             "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeTty),
-            "claude_llm" | "anthropic" | "claude_model" => Some(ProviderType::ClaudeLlm),
             "gemini" => Some(ProviderType::GeminiCli),
-            "gemini_llm" | "google" | "google_gemini" | "gemini_model" => {
-                Some(ProviderType::GeminiLlm)
-            }
-            "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx-native" | "garyx_native"
-            | "native" => Some(ProviderType::Gpt),
             _ => None,
         }
     }

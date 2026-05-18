@@ -310,6 +310,15 @@ function providerTypeLabel(provider: any): string {
   if (value === 'gemini_cli') {
     return 'gemini';
   }
+  if (value === 'gpt') {
+    return 'gpt';
+  }
+  if (value === 'claude_llm') {
+    return 'claude llm';
+  }
+  if (value === 'gemini_llm') {
+    return 'gemini llm';
+  }
   return 'claude';
 }
 
@@ -341,6 +350,10 @@ function preferredStandaloneAgentId(
     normalizedProviderType = 'gemini_cli';
   } else if (providerType === 'gpt') {
     normalizedProviderType = 'gpt';
+  } else if (providerType === 'claude_llm') {
+    normalizedProviderType = 'claude_llm';
+  } else if (providerType === 'gemini_llm') {
+    normalizedProviderType = 'gemini_llm';
   }
 
   let builtInId = 'claude';
@@ -350,6 +363,10 @@ function preferredStandaloneAgentId(
     builtInId = 'gemini';
   } else if (normalizedProviderType === 'gpt') {
     builtInId = 'gpt';
+  } else if (normalizedProviderType === 'claude_llm') {
+    builtInId = 'claude_llm';
+  } else if (normalizedProviderType === 'gemini_llm') {
+    builtInId = 'gemini_llm';
   }
 
   return agents.find((agent) => agent.agentId === builtInId)?.agentId

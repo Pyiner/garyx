@@ -20,7 +20,7 @@ import {
 import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 
-type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'gpt';
+type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'gpt' | 'claude_llm' | 'gemini_llm';
 type EditorMode = 'inspect' | 'create' | 'edit';
 
 type AgentsPanelProps = {
@@ -34,6 +34,9 @@ type AgentDraft = {
   model: string;
   modelReasoningEffort: string;
   modelServiceTier: string;
+  authSource: string;
+  apiKey: string;
+  baseUrl: string;
   defaultWorkspaceDir: string;
   systemPrompt: string;
 };
@@ -59,6 +62,9 @@ function emptyDraft(): AgentDraft {
     model: '',
     modelReasoningEffort: '',
     modelServiceTier: '',
+    authSource: 'codex',
+    apiKey: '',
+    baseUrl: '',
     defaultWorkspaceDir: '',
     systemPrompt: '',
   };
@@ -83,10 +89,42 @@ function providerLabel(value: ProviderType): string {
   if (value === 'gpt') {
     return 'GPT';
   }
+  if (value === 'claude_llm') {
+    return 'Claude LLM';
+  }
+  if (value === 'gemini_llm') {
+    return 'Gemini LLM';
+  }
   if (value === 'claude_tty') {
     return 'Claude TTY';
   }
   return 'Claude';
+}
+
+function isNativeModelProvider(value: ProviderType): boolean {
+  return value === 'gpt' || value === 'claude_llm' || value === 'gemini_llm';
+}
+
+function defaultAuthSource(value: ProviderType): string {
+  return value === 'gpt' ? 'codex' : 'api_key';
+}
+
+function apiKeyEnvName(value: ProviderType): string | null {
+  if (value === 'gpt') {
+    return 'OPENAI_API_KEY';
+  }
+  if (value === 'claude_llm') {
+    return 'ANTHROPIC_API_KEY';
+  }
+  if (value === 'gemini_llm') {
+    return 'GEMINI_API_KEY';
+  }
+  return null;
+}
+
+function apiKeyFromAgent(agent: DesktopCustomAgent): string {
+  const envName = apiKeyEnvName(agent.providerType as ProviderType);
+  return envName ? agent.providerEnv?.[envName] || '' : '';
 }
 
 function providerModelsWithCurrent(
@@ -238,7 +276,7 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     draft.modelReasoningEffort,
   );
   const supportsReasoningEffortSelection =
-    (draft.providerType === 'codex_app_server' || draft.providerType === 'gpt')
+    (draft.providerType === 'codex_app_server' || isNativeModelProvider(draft.providerType))
     && reasoningEffortOptions.length > 0;
   const serviceTierOptions = serviceTiersWithCurrent(
     activeProviderModels,
@@ -276,6 +314,9 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
       model: agent.model,
       modelReasoningEffort: agent.modelReasoningEffort,
       modelServiceTier: agent.modelServiceTier,
+      authSource: agent.authSource || defaultAuthSource(agent.providerType as ProviderType),
+      apiKey: apiKeyFromAgent(agent),
+      baseUrl: agent.baseUrl || '',
       defaultWorkspaceDir: agent.defaultWorkspaceDir,
       systemPrompt: agent.systemPrompt,
     });
@@ -303,6 +344,11 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
     event.preventDefault();
     setSaving(true);
     try {
+      const nativeProvider = isNativeModelProvider(draft.providerType);
+      const apiKeyEnv = apiKeyEnvName(draft.providerType);
+      const providerEnv = nativeProvider && apiKeyEnv && draft.apiKey.trim()
+        ? { [apiKeyEnv]: draft.apiKey.trim() }
+        : null;
       const payload: CreateCustomAgentInput = {
         agentId: draft.agentId.trim(),
         displayName: draft.displayName.trim(),
@@ -310,6 +356,11 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
         model: supportsModelSelection ? draft.model.trim() : '',
         modelReasoningEffort: supportsReasoningEffortSelection ? draft.modelReasoningEffort.trim() : '',
         modelServiceTier: supportsServiceTierSelection ? draft.modelServiceTier.trim() : '',
+        providerEnv,
+        authSource: nativeProvider
+          ? (draft.authSource.trim() || defaultAuthSource(draft.providerType))
+          : null,
+        baseUrl: nativeProvider ? draft.baseUrl.trim() : null,
         defaultWorkspaceDir: draft.defaultWorkspaceDir.trim(),
         systemPrompt: draft.systemPrompt.trim(),
       };
@@ -435,10 +486,13 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       ...current,
                       providerType: value,
                       model: '',
-                      modelReasoningEffort: value === 'codex_app_server' || value === 'gpt'
+                      modelReasoningEffort: value === 'codex_app_server' || isNativeModelProvider(value)
                         ? current.modelReasoningEffort
                         : '',
                       modelServiceTier: value === 'gpt' ? current.modelServiceTier : '',
+                      authSource: isNativeModelProvider(value) ? defaultAuthSource(value) : '',
+                      apiKey: '',
+                      baseUrl: '',
                     }));
                     void ensureProviderModels(value);
                   }}
@@ -454,11 +508,80 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="gemini_cli">Gemini</SelectItem>
                       <SelectItem value="gpt">GPT</SelectItem>
+                      <SelectItem value="claude_llm">Claude LLM</SelectItem>
+                      <SelectItem value="gemini_llm">Gemini LLM</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
                 {modelStatus ? <span className="codex-form-hint">{modelStatus}</span> : null}
               </div>
+              {isNativeModelProvider(draft.providerType) ? (
+                <>
+                  {draft.providerType === 'gpt' ? (
+                    <div className="codex-form-field">
+                      <Label className="codex-form-label">{t('GPT auth')}</Label>
+                      <Select
+                        onValueChange={(value) => {
+                          setDraft((current) => ({
+                            ...current,
+                            authSource: value,
+                            apiKey: value === 'codex' ? '' : current.apiKey,
+                          }));
+                        }}
+                        value={draft.authSource || 'codex'}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={t('Select auth')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem value="codex">{t('Use GPT token')}</SelectItem>
+                            <SelectItem value="api_key">{t('Use API key')}</SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : null}
+                  {draft.providerType !== 'gpt' || draft.authSource === 'api_key' ? (
+                    <div className="codex-form-field">
+                      <Label className="codex-form-label" htmlFor="agent-api-key">{t('API Key')}</Label>
+                      <Input
+                        autoCapitalize="off"
+                        autoComplete="off"
+                        id="agent-api-key"
+                        onChange={(event) => {
+                          setDraft((current) => ({ ...current, apiKey: event.target.value }));
+                        }}
+                        placeholder={
+                          draft.providerType === 'claude_llm'
+                            ? 'ANTHROPIC_API_KEY'
+                            : draft.providerType === 'gemini_llm'
+                              ? 'GEMINI_API_KEY'
+                              : 'OPENAI_API_KEY'
+                        }
+                        spellCheck={false}
+                        type="password"
+                        value={draft.apiKey}
+                      />
+                      <span className="codex-form-hint">{t('Stored on this custom provider config.')}</span>
+                    </div>
+                  ) : null}
+                  <div className="codex-form-field">
+                    <Label className="codex-form-label" htmlFor="agent-base-url">{t('Base URL')}</Label>
+                    <Input
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      id="agent-base-url"
+                      onChange={(event) => {
+                        setDraft((current) => ({ ...current, baseUrl: event.target.value }));
+                      }}
+                      placeholder={t('(provider default)')}
+                      spellCheck={false}
+                      value={draft.baseUrl}
+                    />
+                  </div>
+                </>
+              ) : null}
               {supportsModelSelection ? (
                 <div className="codex-form-field">
                   <Label className="codex-form-label" htmlFor="agent-model">{t('Model')}</Label>
@@ -641,10 +764,18 @@ export function AgentsPanel({ onToast }: AgentsPanelProps) {
                 <span className="codex-list-row-name">{t('Provider')}</span>
                 <span className="codex-command-row-desc">{providerLabel(selectedAgent.providerType)}</span>
               </div>
-              {selectedAgent.providerType === 'gemini_cli' || selectedAgent.providerType === 'gpt' || selectedAgent.model.trim() ? (
+              {selectedAgent.providerType === 'gemini_cli' || isNativeModelProvider(selectedAgent.providerType as ProviderType) || selectedAgent.model.trim() ? (
                 <div className="codex-list-row">
                   <span className="codex-list-row-name">{t('Model')}</span>
                   <span className="codex-command-row-desc">{selectedAgent.model || t('(provider default)')}</span>
+                </div>
+              ) : null}
+              {isNativeModelProvider(selectedAgent.providerType as ProviderType) ? (
+                <div className="codex-list-row">
+                  <span className="codex-list-row-name">{t('Auth')}</span>
+                  <span className="codex-command-row-desc">
+                    {selectedAgent.authSource || defaultAuthSource(selectedAgent.providerType as ProviderType)}
+                  </span>
                 </div>
               ) : null}
               {selectedAgent.modelReasoningEffort.trim() ? (

@@ -67,6 +67,12 @@ fn custom_agent(
         model: model.to_owned(),
         model_reasoning_effort: String::new(),
         model_service_tier: String::new(),
+        provider_env: Default::default(),
+        auth_source: String::new(),
+        base_url: String::new(),
+        codex_home: String::new(),
+        max_tool_iterations: garyx_models::config::default_garyx_native_max_tool_iterations(),
+        request_timeout_seconds: garyx_models::config::default_native_request_timeout() as u32,
         default_workspace_dir: None,
         avatar_data_url: None,
         system_prompt: system_prompt.to_owned(),
@@ -1161,6 +1167,47 @@ async fn test_provider_type_for_team_returns_agent_team_meta_provider() {
         bridge.provider_type_for_agent("claude-tty").await,
         Some(ProviderType::ClaudeTty)
     );
+    assert_eq!(bridge.provider_type_for_agent("gpt").await, None);
+    assert_eq!(bridge.provider_type_for_agent("claude_llm").await, None);
+    assert_eq!(bridge.provider_type_for_agent("gemini_llm").await, None);
+}
+
+#[tokio::test]
+async fn test_configured_native_model_agent_gets_dedicated_provider_key() {
+    let bridge = MultiProviderBridge::new();
+    bridge
+        .replace_agent_profiles({
+            let mut profiles = builtin_provider_agent_profiles();
+            profiles.push(custom_agent(
+                "budget-gpt",
+                "Budget GPT",
+                ProviderType::Gpt,
+                "gpt-5.5",
+                "Use the native GPT model backend.",
+            ));
+            profiles
+        })
+        .await;
+
+    assert_eq!(
+        bridge.provider_type_for_agent("budget-gpt").await,
+        Some(ProviderType::Gpt)
+    );
+    assert_eq!(bridge.provider_type_for_agent("gpt").await, None);
+
+    let config = GaryxConfig::default();
+    bridge.reload_from_config(&config).await.unwrap();
+
+    assert!(
+        bridge.get_provider("agent:budget-gpt").await.is_some(),
+        "configured native model agents get provider instances"
+    );
+    assert!(
+        bridge.get_provider("gpt").await.is_none(),
+        "native GPT is not a default provider"
+    );
+    assert!(bridge.get_provider("claude_llm").await.is_none());
+    assert!(bridge.get_provider("gemini_llm").await.is_none());
 }
 
 #[tokio::test]

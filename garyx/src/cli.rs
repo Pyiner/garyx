@@ -1124,6 +1124,12 @@ pub(crate) enum AgentAction {
         /// Optional model service tier override, for example priority for Fast mode.
         #[arg(long)]
         model_service_tier: Option<String>,
+        /// Native model auth source, for example codex or api_key.
+        #[arg(long, alias = "auth-source")]
+        provider_auth_source: Option<String>,
+        /// Native model API key. Stored on the custom agent provider config.
+        #[arg(long, alias = "api-key")]
+        provider_api_key: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent.
         #[arg(long)]
         default_workspace_dir: Option<String>,
@@ -1154,6 +1160,12 @@ pub(crate) enum AgentAction {
         /// Optional model service tier override, for example priority for Fast mode. Pass an empty string to clear it.
         #[arg(long)]
         model_service_tier: Option<String>,
+        /// Native model auth source, for example codex or api_key.
+        #[arg(long, alias = "auth-source")]
+        provider_auth_source: Option<String>,
+        /// Native model API key. Stored on the custom agent provider config.
+        #[arg(long, alias = "api-key")]
+        provider_api_key: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,
@@ -1184,6 +1196,12 @@ pub(crate) enum AgentAction {
         /// Optional model service tier override, for example priority for Fast mode. Pass an empty string to clear it.
         #[arg(long)]
         model_service_tier: Option<String>,
+        /// Native model auth source, for example codex or api_key.
+        #[arg(long, alias = "auth-source")]
+        provider_auth_source: Option<String>,
+        /// Native model API key. Stored on the custom agent provider config.
+        #[arg(long, alias = "api-key")]
+        provider_api_key: Option<String>,
         /// Optional default workspace directory for new task/bot threads using this agent. Pass an empty string to clear it.
         #[arg(long)]
         default_workspace_dir: Option<String>,

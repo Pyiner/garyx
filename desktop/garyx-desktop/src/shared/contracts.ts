@@ -26,7 +26,9 @@ export type DesktopApiProviderType =
   | "claude_tty"
   | "codex_app_server"
   | "gemini_cli"
-  | "gpt";
+  | "gpt"
+  | "claude_llm"
+  | "gemini_llm";
 
 export interface DesktopProviderModelOption {
   id: string;
@@ -258,6 +260,12 @@ export interface DesktopCustomAgent {
   model: string;
   modelReasoningEffort: string;
   modelServiceTier: string;
+  providerEnv: Record<string, string>;
+  authSource: string;
+  baseUrl: string;
+  codexHome: string;
+  maxToolIterations: number;
+  requestTimeoutSeconds: number;
   defaultWorkspaceDir: string;
   avatarDataUrl: string;
   systemPrompt: string;
@@ -285,6 +293,12 @@ export interface CreateCustomAgentInput {
   model: string;
   modelReasoningEffort: string;
   modelServiceTier: string;
+  providerEnv?: Record<string, string> | null;
+  authSource?: string | null;
+  baseUrl?: string | null;
+  codexHome?: string | null;
+  maxToolIterations?: number | null;
+  requestTimeoutSeconds?: number | null;
   defaultWorkspaceDir: string;
   avatarDataUrl?: string | null;
   systemPrompt: string;

@@ -3260,6 +3260,8 @@ fn build_agent_mutation_body(
     model: Option<String>,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
+    provider_auth_source: Option<String>,
+    provider_api_key: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
 ) -> Result<Value, Box<dyn std::error::Error>> {
@@ -3276,6 +3278,32 @@ fn build_agent_mutation_body(
         "model_service_tier": model_service_tier.as_deref().map(str::trim).unwrap_or(""),
         "system_prompt": system_prompt,
     });
+    let provider_type = ProviderType::from_slug(provider.trim());
+    let auth_source = provider_auth_source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(auth_source) = auth_source {
+        body["auth_source"] = Value::String(auth_source.to_owned());
+    }
+    if let Some(api_key) = provider_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let env_name = match provider_type.as_ref() {
+            Some(ProviderType::Gpt) => "OPENAI_API_KEY",
+            Some(ProviderType::ClaudeLlm) => "ANTHROPIC_API_KEY",
+            Some(ProviderType::GeminiLlm) => "GEMINI_API_KEY",
+            _ => {
+                return Err("--provider-api-key is only supported for gpt, claude_llm, or gemini_llm providers".into());
+            }
+        };
+        body["provider_env"] = json!({ env_name: api_key });
+        if matches!(provider_type, Some(ProviderType::Gpt)) && auth_source.is_none() {
+            body["auth_source"] = Value::String("api_key".to_owned());
+        }
+    }
     if let Some(default_workspace_dir) = default_workspace_dir {
         body["default_workspace_dir"] = Value::String(default_workspace_dir.trim().to_owned());
     }
@@ -3290,6 +3318,8 @@ pub(crate) async fn cmd_agent_create(
     model: Option<String>,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
+    provider_auth_source: Option<String>,
+    provider_api_key: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
@@ -3302,6 +3332,8 @@ pub(crate) async fn cmd_agent_create(
         model,
         model_reasoning_effort,
         model_service_tier,
+        provider_auth_source,
+        provider_api_key,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3321,6 +3353,8 @@ pub(crate) async fn cmd_agent_update(
     model: Option<String>,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
+    provider_auth_source: Option<String>,
+    provider_api_key: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
@@ -3333,6 +3367,8 @@ pub(crate) async fn cmd_agent_update(
         model,
         model_reasoning_effort,
         model_service_tier,
+        provider_auth_source,
+        provider_api_key,
         default_workspace_dir,
         system_prompt,
     )?;
@@ -3356,6 +3392,8 @@ pub(crate) async fn cmd_agent_upsert(
     model: Option<String>,
     model_reasoning_effort: Option<String>,
     model_service_tier: Option<String>,
+    provider_auth_source: Option<String>,
+    provider_api_key: Option<String>,
     default_workspace_dir: Option<String>,
     system_prompt: String,
     json: bool,
@@ -3368,6 +3406,8 @@ pub(crate) async fn cmd_agent_upsert(
         model,
         model_reasoning_effort,
         model_service_tier,
+        provider_auth_source,
+        provider_api_key,
         default_workspace_dir,
         system_prompt,
     )?;

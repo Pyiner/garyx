@@ -17,13 +17,13 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
   if (!normalized) {
     return null;
   }
-  if (normalized === 'claude' || normalized === 'claude_code' || normalized === 'claude_tty') {
+  if (normalized === 'claude' || normalized === 'claude_code' || normalized === 'claude_tty' || normalized === 'claude_llm') {
     return 'claude';
   }
   if (normalized === 'codex' || normalized === 'codex_app_server') {
     return 'codex';
   }
-  if (normalized === 'gemini' || normalized === 'gemini_cli') {
+  if (normalized === 'gemini' || normalized === 'gemini_cli' || normalized === 'gemini_llm') {
     return 'gemini';
   }
   return null;

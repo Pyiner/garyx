@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use garyx_models::config::{
+    default_garyx_native_max_tool_iterations, default_native_request_timeout,
+};
 use garyx_models::{CustomAgentProfile, ProviderType, builtin_provider_agent_profiles};
 use serde::Deserialize;
 use tokio::sync::RwLock;
@@ -18,6 +21,18 @@ pub struct UpsertCustomAgentRequest {
     pub model_reasoning_effort: String,
     #[serde(default, alias = "modelServiceTier")]
     pub model_service_tier: String,
+    #[serde(default, alias = "env", alias = "providerEnv")]
+    pub provider_env: Option<HashMap<String, String>>,
+    #[serde(default, alias = "authSource")]
+    pub auth_source: Option<String>,
+    #[serde(default, alias = "baseUrl")]
+    pub base_url: Option<String>,
+    #[serde(default, alias = "codexHome")]
+    pub codex_home: Option<String>,
+    #[serde(default, alias = "maxToolIterations")]
+    pub max_tool_iterations: Option<u32>,
+    #[serde(default, alias = "requestTimeoutSeconds")]
+    pub request_timeout_seconds: Option<u32>,
     #[serde(
         default,
         alias = "defaultWorkspaceDir",
@@ -122,6 +137,22 @@ impl CustomAgentStore {
         let model = request.model.trim();
         let model_reasoning_effort = request.model_reasoning_effort.trim();
         let model_service_tier = request.model_service_tier.trim();
+        let provider_env = request.provider_env.map(|values| {
+            values
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    let key = key.trim();
+                    if key.is_empty() {
+                        None
+                    } else {
+                        Some((key.to_owned(), value.trim().to_owned()))
+                    }
+                })
+                .collect::<HashMap<_, _>>()
+        });
+        let auth_source = request.auth_source.map(|value| value.trim().to_owned());
+        let base_url = request.base_url.map(|value| value.trim().to_owned());
+        let codex_home = request.codex_home.map(|value| value.trim().to_owned());
         let system_prompt = request.system_prompt.trim();
         let requested_default_workspace_dir = request
             .default_workspace_dir
@@ -163,6 +194,27 @@ impl CustomAgentStore {
                 .get(agent_id)
                 .and_then(|existing| existing.avatar_data_url.clone()),
         };
+        let existing = inner.get(agent_id);
+        let provider_env = provider_env
+            .or_else(|| existing.map(|profile| profile.provider_env.clone()))
+            .unwrap_or_default();
+        let auth_source = auth_source
+            .or_else(|| existing.map(|profile| profile.auth_source.clone()))
+            .unwrap_or_default();
+        let base_url = base_url
+            .or_else(|| existing.map(|profile| profile.base_url.clone()))
+            .unwrap_or_default();
+        let codex_home = codex_home
+            .or_else(|| existing.map(|profile| profile.codex_home.clone()))
+            .unwrap_or_default();
+        let max_tool_iterations = request
+            .max_tool_iterations
+            .or_else(|| existing.map(|profile| profile.max_tool_iterations))
+            .unwrap_or_else(default_garyx_native_max_tool_iterations);
+        let request_timeout_seconds = request
+            .request_timeout_seconds
+            .or_else(|| existing.map(|profile| profile.request_timeout_seconds))
+            .unwrap_or(default_native_request_timeout() as u32);
         let profile = CustomAgentProfile {
             agent_id: agent_id.to_owned(),
             display_name: display_name.to_owned(),
@@ -170,6 +222,12 @@ impl CustomAgentStore {
             model: model.to_owned(),
             model_reasoning_effort: model_reasoning_effort.to_owned(),
             model_service_tier: model_service_tier.to_owned(),
+            provider_env,
+            auth_source,
+            base_url,
+            codex_home,
+            max_tool_iterations,
+            request_timeout_seconds,
             default_workspace_dir,
             avatar_data_url,
             system_prompt: system_prompt.to_owned(),

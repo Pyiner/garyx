@@ -348,7 +348,8 @@ pub fn resolve_codex_auth(
     config: &GaryxNativeConfig,
     env: &HashMap<String, String>,
 ) -> Result<CodexAuth, CodexAuthError> {
-    if !matches!(config.auth_source.trim(), "" | "codex") {
+    let auth_source = config.auth_source.trim();
+    if !matches!(auth_source, "" | "codex" | "api_key" | "openai_api_key") {
         return Err(CodexAuthError::new(format!(
             "unsupported Native GPT auth_source '{}'",
             config.auth_source
@@ -363,6 +364,11 @@ pub fn resolve_codex_auth(
             base_url: response_base_url(OPENAI_RESPONSES_BASE_URL, config),
             account_id: None,
         });
+    }
+    if matches!(auth_source, "api_key" | "openai_api_key") {
+        return Err(CodexAuthError::new(
+            "Native GPT auth_source api_key requires CODEX_API_KEY or OPENAI_API_KEY",
+        ));
     }
 
     let home = codex_home(config, env)
@@ -600,6 +606,29 @@ mod tests {
         assert_eq!(auth.base_url, CHATGPT_CODEX_BASE_URL);
         assert_eq!(auth.account_id.as_deref(), Some("test-account"));
         assert!(auth.uses_codex_backend());
+    }
+
+    #[test]
+    fn codex_auth_api_key_source_requires_explicit_api_key() {
+        let config = GaryxNativeConfig {
+            auth_source: "api_key".to_owned(),
+            ..Default::default()
+        };
+
+        let error = resolve_codex_auth(&config, &HashMap::new()).expect_err("missing key");
+        assert!(
+            error
+                .to_string()
+                .contains("requires CODEX_API_KEY or OPENAI_API_KEY")
+        );
+
+        let auth = resolve_codex_auth(
+            &config,
+            &HashMap::from([("OPENAI_API_KEY".to_owned(), "test-api-key".to_owned())]),
+        )
+        .expect("explicit key");
+        assert_eq!(auth.bearer_token, "test-api-key");
+        assert_eq!(auth.account_id, None);
     }
 
     #[test]

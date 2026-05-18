@@ -705,6 +705,19 @@ interface CustomAgentPayload {
   modelReasoningEffort?: string | null;
   model_service_tier?: string | null;
   modelServiceTier?: string | null;
+  provider_env?: Record<string, string> | null;
+  providerEnv?: Record<string, string> | null;
+  env?: Record<string, string> | null;
+  auth_source?: string | null;
+  authSource?: string | null;
+  base_url?: string | null;
+  baseUrl?: string | null;
+  codex_home?: string | null;
+  codexHome?: string | null;
+  max_tool_iterations?: number | null;
+  maxToolIterations?: number | null;
+  request_timeout_seconds?: number | null;
+  requestTimeoutSeconds?: number | null;
   default_workspace_dir?: string | null;
   defaultWorkspaceDir?: string | null;
   avatar_data_url?: string | null;
@@ -799,6 +812,12 @@ function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
   if (value === "gpt" || value === "openai" || value === "garyx_native") {
     return "gpt";
   }
+  if (value === "claude_llm" || value === "anthropic" || value === "claude_model") {
+    return "claude_llm";
+  }
+  if (value === "gemini_llm" || value === "google" || value === "google_gemini" || value === "gemini_model") {
+    return "gemini_llm";
+  }
   return "claude_code";
 }
 
@@ -811,6 +830,8 @@ function parseThreadProviderType(
     value === "codex_app_server" ||
     value === "gemini_cli" ||
     value === "gpt" ||
+    value === "claude_llm" ||
+    value === "gemini_llm" ||
     value === "garyx_native" ||
     value === "agent_team"
   ) {
@@ -836,6 +857,10 @@ function providerLabelForThread(
       return "Gemini";
     case "gpt":
       return "GPT";
+    case "claude_llm":
+      return "Claude";
+    case "gemini_llm":
+      return "Gemini";
     case "agent_team":
       return "Team";
     default:
@@ -2236,6 +2261,15 @@ function mapCustomAgent(value: CustomAgentPayload): DesktopCustomAgent {
     modelReasoningEffort:
       value.model_reasoning_effort || value.modelReasoningEffort || "",
     modelServiceTier: value.model_service_tier || value.modelServiceTier || "",
+    providerEnv:
+      value.provider_env || value.providerEnv || value.env || {},
+    authSource: value.auth_source || value.authSource || "",
+    baseUrl: value.base_url || value.baseUrl || "",
+    codexHome: value.codex_home || value.codexHome || "",
+    maxToolIterations:
+      value.max_tool_iterations || value.maxToolIterations || 32,
+    requestTimeoutSeconds:
+      value.request_timeout_seconds || value.requestTimeoutSeconds || 300,
     defaultWorkspaceDir:
       value.default_workspace_dir ??
       value.defaultWorkspaceDir ??
@@ -3508,6 +3542,12 @@ export async function createCustomAgent(
         model: input.model,
         model_reasoning_effort: input.modelReasoningEffort,
         model_service_tier: input.modelServiceTier,
+        provider_env: input.providerEnv ?? null,
+        auth_source: input.authSource ?? null,
+        base_url: input.baseUrl ?? null,
+        codex_home: input.codexHome ?? null,
+        max_tool_iterations: input.maxToolIterations ?? null,
+        request_timeout_seconds: input.requestTimeoutSeconds ?? null,
         default_workspace_dir: input.defaultWorkspaceDir,
         avatar_data_url: input.avatarDataUrl ?? null,
         system_prompt: input.systemPrompt,
@@ -3535,6 +3575,12 @@ export async function updateCustomAgent(
         model: input.model,
         model_reasoning_effort: input.modelReasoningEffort,
         model_service_tier: input.modelServiceTier,
+        provider_env: input.providerEnv ?? null,
+        auth_source: input.authSource ?? null,
+        base_url: input.baseUrl ?? null,
+        codex_home: input.codexHome ?? null,
+        max_tool_iterations: input.maxToolIterations ?? null,
+        request_timeout_seconds: input.requestTimeoutSeconds ?? null,
         default_workspace_dir: input.defaultWorkspaceDir,
         avatar_data_url: input.avatarDataUrl ?? null,
         system_prompt: input.systemPrompt,

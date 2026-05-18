@@ -61,6 +61,15 @@ fn requested_provider_from_metadata(metadata: &HashMap<String, Value>) -> Option
         .and_then(ProviderType::from_slug)
 }
 
+fn requested_agent_id_from_metadata(metadata: &HashMap<String, Value>) -> Option<String> {
+    metadata
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn summarize_text(value: &str, limit: usize) -> String {
     let sanitized = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let trimmed = sanitized.trim();
@@ -1023,23 +1032,33 @@ impl MultiProviderBridge {
             return Err(missing_agent_team_binding_error(thread_id, metadata));
         }
 
-        let provider_key = self
-            .resolve_provider_for_request(
-                thread_id,
-                channel,
-                account_id,
-                requested_provider.clone(),
-            )
-            .await
-            .ok_or_else(|| {
-                BridgeError::ProviderNotFound(format!(
-                    "no provider for channel={channel} account={account_id}{}",
-                    requested_provider
-                        .as_ref()
-                        .map(|value| format!(" type={value:?}"))
-                        .unwrap_or_default(),
-                ))
-            })?;
+        let exact_agent_provider_key =
+            if let Some(agent_id) = requested_agent_id_from_metadata(metadata) {
+                self.provider_key_for_agent_id(&agent_id).await?
+            } else {
+                None
+            };
+        let provider_key = match exact_agent_provider_key {
+            Some(provider_key) => Some(provider_key),
+            None => {
+                self.resolve_provider_for_request(
+                    thread_id,
+                    channel,
+                    account_id,
+                    requested_provider.clone(),
+                )
+                .await
+            }
+        }
+        .ok_or_else(|| {
+            BridgeError::ProviderNotFound(format!(
+                "no provider for channel={channel} account={account_id}{}",
+                requested_provider
+                    .as_ref()
+                    .map(|value| format!(" type={value:?}"))
+                    .unwrap_or_default(),
+            ))
+        })?;
         let provider = self
             .get_provider(&provider_key)
             .await

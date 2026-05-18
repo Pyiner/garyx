@@ -492,8 +492,9 @@ when the agent is selected, so provider-specific defaults can be overridden per
 agent.
 
 `gpt`, `claude_llm`, and `gemini_llm` are model backends running on Garyx's
-in-process agent loop. They are not exposed as built-in agents. Create a custom
-agent with the model backend provider type to select one:
+in-process agent loop. They are not exposed as built-in agents or default
+runtime providers. Create a custom agent with the model backend provider type
+to make one selectable:
 
 ```json
 {
@@ -530,6 +531,29 @@ The GPT provider uses Codex-compatible auth by default. It checks
 ChatGPT account id when present. Codex `agent_identity`-only auth is not
 duplicated by the GPT backend.
 
+For GPT custom agents, set `"auth_source": "codex"` to reuse the local Codex /
+GPT token, or `"auth_source": "api_key"` with `provider_env.OPENAI_API_KEY` to
+use a key supplied for that custom provider. `api_key` mode does not fall back
+to the Codex token when the key is missing.
+
+The CLI exposes the same path:
+
+```bash
+garyx agent create \
+  --agent-id budget-gpt \
+  --display-name "Budget GPT" \
+  --provider gpt \
+  --auth-source codex \
+  --system-prompt "Use GPT for this agent."
+
+garyx agent create \
+  --agent-id keyed-gpt \
+  --display-name "Keyed GPT" \
+  --provider gpt \
+  --api-key "${OPENAI_API_KEY}" \
+  --system-prompt "Use this provider key."
+```
+
 Optional GPT-provider fields on an agent/provider config:
 
 ```json
@@ -540,6 +564,9 @@ Optional GPT-provider fields on an agent/provider config:
   "model_reasoning_effort": "medium",
   "model_service_tier": "",
   "auth_source": "codex",
+  "provider_env": {
+    "OPENAI_API_KEY": "${OPENAI_API_KEY}"
+  },
   "base_url": "",
   "codex_home": "",
   "max_tool_iterations": 32,
@@ -567,6 +594,8 @@ it empty to use the backend default.
 bearer token. `ANTHROPIC_BASE_URL` or `CLAUDE_BASE_URL` can override the
 endpoint, and `ANTHROPIC_VERSION` / `ANTHROPIC_BETA` can override request
 headers. `anthropic` and `claude_model` are accepted as provider slug aliases.
+For a custom `claude_llm` agent, the desktop provider manager and CLI
+`--api-key` store the key as `provider_env.ANTHROPIC_API_KEY`.
 
 `gemini_llm` uses Google Gemini API auth from `GEMINI_API_KEY` or
 `GOOGLE_API_KEY`. It can also reuse Gemini CLI OAuth by reading
@@ -585,6 +614,8 @@ key endpoint; `GEMINI_CODE_ASSIST_BASE_URL`, `GOOGLE_CODE_ASSIST_BASE_URL`,
 Generative Language bearer token is required, set `GOOGLE_GENERATIVE_AI_ACCESS_TOKEN`.
 `google`, `google_gemini`, and `gemini_model` are accepted as provider slug
 aliases.
+For a custom `gemini_llm` agent, the desktop provider manager and CLI
+`--api-key` store the key as `provider_env.GEMINI_API_KEY`.
 
 The gateway exposes built-in picker catalogs for `/api/provider-models/claude_llm`
 and `/api/provider-models/gemini_llm`, including reasoning effort choices.
