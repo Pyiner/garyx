@@ -10,6 +10,7 @@ mod cli;
 mod commands;
 mod config_support;
 mod gateway_auto_update;
+mod plugin_self_replace;
 mod plugins_cli;
 mod runtime_assembler;
 mod service_manager;

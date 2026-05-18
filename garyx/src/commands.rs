@@ -261,7 +261,7 @@ fn register_plugin_state_logging(plugin_manager: &mut ChannelPluginManager) {
 }
 
 async fn rebuild_channel_plugins(
-    plugin_manager: &tokio::sync::Mutex<ChannelPluginManager>,
+    plugin_manager: &std::sync::Arc<tokio::sync::Mutex<ChannelPluginManager>>,
     config: &GaryxConfig,
     state: &Arc<AppState>,
     bridge: &Arc<MultiProviderBridge>,
@@ -314,6 +314,19 @@ async fn rebuild_channel_plugins(
                 router: state.threads.router.clone(),
                 bridge: bridge.clone(),
                 swap: state.channel_dispatcher_swap(),
+                // Weak handle so the `request_self_replace` host
+                // RPC can drive respawn after a successful swap
+                // without forming a manager↔handler reference
+                // cycle that would survive gateway shutdown.
+                plugin_manager: std::sync::Arc::downgrade(plugin_manager),
+                // Plugin-side master kill switch is the existing
+                // `plugins.auto_update` config field. Captured here
+                // (one-shot read) so handlers see the right
+                // initial value; future hot-reload paths flip the
+                // AtomicBool without rebuilding handlers.
+                plugin_auto_update_enabled: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(config.plugins.auto_update),
+                ),
             },
         )
         .await;

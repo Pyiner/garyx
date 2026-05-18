@@ -25,7 +25,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Weak;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use garyx_bridge::MultiProviderBridge;
@@ -78,6 +79,22 @@ pub struct HostInboundHandler {
     /// `route_and_dispatch` today) still finish in the background;
     /// their output is silently dropped once the id tombstones.
     live_streams: Arc<StdMutex<HashSet<String>>>,
+    /// Weak handle back to the manager so the `request_self_replace`
+    /// host RPC can drive `respawn_plugin_with_fresh_manifest` after
+    /// successfully landing a new binary. Weak rather than Arc so we
+    /// don't form a manager↔handler reference cycle that survives
+    /// gateway shutdown.
+    plugin_manager: Weak<Mutex<ChannelPluginManager>>,
+    /// Per-plugin swap state (B1 single-flight latch + B2 barrier).
+    /// `deliver_inbound` checks `is_swapping` before doing anything
+    /// so a new dispatch can't slip past the stream-idle gate into
+    /// the kill window.
+    self_replace_state: Arc<crate::plugin_self_replace::SelfReplaceState>,
+    /// Master kill switch for accepting `request_self_replace` RPCs
+    /// (= `garyx.json::plugins.auto_update`). Stored as `Arc<AtomicBool>`
+    /// so a future hot-reload path can flip it without rebuilding
+    /// the handler.
+    plugin_auto_update_enabled: Arc<AtomicBool>,
 }
 
 impl HostInboundHandler {
@@ -86,6 +103,8 @@ impl HostInboundHandler {
         router: Arc<Mutex<MessageRouter>>,
         bridge: Arc<MultiProviderBridge>,
         swap: Arc<SwappableDispatcher>,
+        plugin_manager: Weak<Mutex<ChannelPluginManager>>,
+        plugin_auto_update_enabled: Arc<AtomicBool>,
     ) -> Self {
         Self {
             plugin_id,
@@ -95,6 +114,9 @@ impl HostInboundHandler {
             stream_ids: StreamIdGenerator::new(),
             streams: Arc::new(StreamRegistry::new()),
             live_streams: Arc::new(StdMutex::new(HashSet::new())),
+            plugin_manager,
+            self_replace_state: crate::plugin_self_replace::SelfReplaceState::new(),
+            plugin_auto_update_enabled,
         }
     }
 }
@@ -153,6 +175,26 @@ impl InboundHandler for HostInboundHandler {
                 Ok(Value::Object(Default::default()))
             }
             "abandon_inbound" => self.handle_abandon_inbound(params),
+            "request_self_replace" => {
+                // Architecture C: plugin-driven self-update. Plugin
+                // hands us a release URL + sha + version; we do the
+                // safe swap (idle gate, atomic rename, respawn) on
+                // its behalf. Master switch + per-plugin
+                // single-flight + caller-id validation all live in
+                // `plugin_self_replace::handle`. Never returns Err
+                // — every failure is a structured decision body.
+                let master = self
+                    .plugin_auto_update_enabled
+                    .load(Ordering::Acquire);
+                Ok(crate::plugin_self_replace::handle(
+                    &self.plugin_id,
+                    &self.self_replace_state,
+                    self.plugin_manager.clone(),
+                    master,
+                    params,
+                )
+                .await)
+            }
             other => Err((
                 PluginErrorCode::MethodNotFound.as_i32(),
                 format!("unknown host method: {other}"),
@@ -274,6 +316,22 @@ impl HostInboundHandler {
     }
 
     async fn handle_deliver_inbound(&self, params: Value) -> Result<Value, (i32, String)> {
+        // Architecture C / B2 swap barrier. While `request_self_replace`
+        // is in its critical section (idle gate → atomic rename →
+        // respawn) we reject any new inbound dispatch with `Busy` so
+        // it can't slip past the gate into the kill window. The
+        // plugin SDK should back off and retry after the suggested
+        // delay; if it doesn't, the user sees a one-off error rather
+        // than a half-finished dispatch torn down mid-stream.
+        if self.self_replace_state.is_swapping() {
+            return Err((
+                PluginErrorCode::Busy.as_i32(),
+                format!(
+                    "plugin_swapping retry_after_ms={}",
+                    crate::plugin_self_replace::SelfReplaceState::swap_barrier_retry_after_ms()
+                ),
+            ));
+        }
         let parsed: DeliverInboundParams = serde_json::from_value(params).map_err(|err| {
             (
                 PluginErrorCode::InvalidParams.as_i32(),
@@ -792,6 +850,16 @@ pub struct HostDeps {
     pub router: Arc<Mutex<MessageRouter>>,
     pub bridge: Arc<MultiProviderBridge>,
     pub swap: Arc<SwappableDispatcher>,
+    /// Weak handle to the manager — given to each per-plugin
+    /// `HostInboundHandler` so the new `request_self_replace` RPC
+    /// can drive `respawn_plugin_with_fresh_manifest` without
+    /// forming a manager↔handler reference cycle.
+    pub plugin_manager: Weak<Mutex<ChannelPluginManager>>,
+    /// Shared kill switch for `request_self_replace` (=
+    /// `plugins.auto_update`). Each handler reads it via
+    /// `Acquire`; future config-reload paths can flip it without
+    /// rebuilding handlers.
+    pub plugin_auto_update_enabled: Arc<AtomicBool>,
 }
 
 pub async fn register_manifest_plugins(
@@ -897,6 +965,8 @@ async fn register_one_manifest(
         deps.router,
         deps.bridge,
         deps.swap,
+        deps.plugin_manager,
+        deps.plugin_auto_update_enabled,
     ));
 
     let mut guard = manager.lock().await;

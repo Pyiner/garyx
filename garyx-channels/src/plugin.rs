@@ -1583,6 +1583,23 @@ impl InboundHandler for DynHandler {
     }
 }
 
+/// Snapshot of a subprocess plugin's install layout for the
+/// `request_self_replace` host RPC. Returned by-value so the manager
+/// lock can be released before any download / I/O happens. Carries
+/// just enough to (a) decide whether the caller's request is allowed
+/// (`survives_respawn`, `version` for `should_upgrade`), (b) find the
+/// on-disk install dir to atomically rename the new binary into, and
+/// (c) validate the archived plugin.toml matches what's already
+/// registered (`id`, `binary_relative`).
+#[derive(Debug, Clone)]
+pub struct SubprocessPluginInstallSnapshot {
+    pub id: String,
+    pub version: String,
+    pub survives_respawn: bool,
+    pub manifest_dir: PathBuf,
+    pub binary_relative: String,
+}
+
 /// Read-only snapshot of a subprocess plugin's catalog-visible
 /// metadata — everything the desktop UI or a `GET /api/channels/plugins`
 /// consumer needs to render a schema-driven account configuration
@@ -1915,6 +1932,25 @@ impl ChannelPluginManager {
             .subprocess
             .as_ref()
             .map(|sub| sub.manifest.plugin.version.clone())
+    }
+
+    /// Snapshot of the on-disk install layout for a subprocess plugin.
+    /// Returned by-value (not borrowing) so the auto-update / RPC
+    /// caller can release the manager lock before doing any I/O.
+    /// Used by the `request_self_replace` host RPC handler to decide
+    /// whether a swap is allowed and where to land the new binary.
+    pub fn subprocess_plugin_install_snapshot(
+        &self,
+        plugin_id: &str,
+    ) -> Option<SubprocessPluginInstallSnapshot> {
+        let sub = self.plugins.get(plugin_id)?.subprocess.as_ref()?;
+        Some(SubprocessPluginInstallSnapshot {
+            id: sub.manifest.plugin.id.clone(),
+            version: sub.manifest.plugin.version.clone(),
+            survives_respawn: sub.manifest.capabilities.survives_respawn,
+            manifest_dir: sub.manifest.manifest_dir.clone(),
+            binary_relative: sub.manifest.entry.binary.clone(),
+        })
     }
 
     /// Refresh every built-in plugin's per-account outbound sender

@@ -13,7 +13,24 @@ fn build_handler_with_config(config: GaryxConfig) -> HostInboundHandler {
     let router = Arc::new(Mutex::new(MessageRouter::new(store, config)));
     let bridge = Arc::new(MultiProviderBridge::new());
     let swap = Arc::new(SwappableDispatcher::new(ChannelDispatcherImpl::new()));
-    HostInboundHandler::new("test-plugin".into(), router, bridge, swap)
+    // Both C-architecture deps are inert in tests that don't drive
+    // the request_self_replace path: a never-upgradable Weak +
+    // master switch defaulted to false so any stray RPC short-
+    // circuits via "refused: master_disabled" instead of trying to
+    // hit the real GitHub API.
+    let plugin_manager: std::sync::Weak<Mutex<garyx_channels::plugin::ChannelPluginManager>> =
+        std::sync::Weak::new();
+    let plugin_auto_update_enabled = std::sync::Arc::new(
+        std::sync::atomic::AtomicBool::new(false),
+    );
+    HostInboundHandler::new(
+        "test-plugin".into(),
+        router,
+        bridge,
+        swap,
+        plugin_manager,
+        plugin_auto_update_enabled,
+    )
 }
 
 #[tokio::test]
