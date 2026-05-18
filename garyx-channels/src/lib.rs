@@ -7,6 +7,7 @@ pub mod feishu;
 pub mod generated_images;
 pub mod plugin;
 pub mod plugin_host;
+pub mod plugin_tools;
 pub mod streaming_core;
 pub mod telegram;
 pub mod weixin;

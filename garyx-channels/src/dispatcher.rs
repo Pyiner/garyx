@@ -389,6 +389,16 @@ impl DiscordSender {
             .map_err(discord_send_error)
     }
 
+    pub async fn delete_text(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+    ) -> Result<(), ChannelError> {
+        self.delete_message(channel_id, message_id)
+            .await
+            .map_err(discord_send_error)
+    }
+
     async fn post_message_json(
         &self,
         channel_id: &str,
@@ -481,6 +491,25 @@ impl DiscordSender {
                 message: error.to_string(),
             })?;
         parse_discord_message_response(response).await
+    }
+
+    async fn delete_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+    ) -> Result<(), DiscordApiError> {
+        let response = self
+            .http
+            .delete(discord_message_url(&self.api_base, channel_id, message_id))
+            .header("Authorization", format!("Bot {}", self.token))
+            .send()
+            .await
+            .map_err(|error| DiscordApiError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: None,
+                message: error.to_string(),
+            })?;
+        parse_discord_empty_response(response).await
     }
 }
 
@@ -611,6 +640,30 @@ async fn parse_discord_message_response(
             code: None,
             message: "Discord create message response did not include id".to_owned(),
         })
+}
+
+async fn parse_discord_empty_response(response: reqwest::Response) -> Result<(), DiscordApiError> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+
+    let bytes = response.bytes().await.map_err(|error| DiscordApiError {
+        status,
+        code: None,
+        message: error.to_string(),
+    })?;
+    let payload: Value = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).to_string()));
+    Err(DiscordApiError {
+        status,
+        code: payload.get("code").and_then(Value::as_i64),
+        message: payload
+            .get("message")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| payload.to_string()),
+    })
 }
 
 fn discord_send_error(error: DiscordApiError) -> ChannelError {

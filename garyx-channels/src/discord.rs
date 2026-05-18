@@ -28,6 +28,7 @@ use garyx_router::{InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_K
 use crate::channel_trait::{Channel, ChannelError};
 use crate::dispatcher::{DISCORD_MAX_MESSAGE_LENGTH, DiscordSender, split_discord_message};
 use crate::generated_images::{extract_image_generation_result, write_generated_image_temp};
+use crate::plugin_tools::{ToolCallDisplayState, should_hide_tool_call_display};
 
 const DISCORD_GATEWAY_INTENTS: u64 = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
 const DISCORD_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -702,6 +703,16 @@ fn discord_editable_text(text: &str) -> String {
         .unwrap_or_default()
 }
 
+fn render_discord_stream_content_text(state: &DiscordStreamState) -> String {
+    state
+        .tool_display
+        .render_content_text(&state.accumulated_text)
+}
+
+fn render_discord_stream_display_text(state: &DiscordStreamState) -> String {
+    discord_editable_text(&render_discord_stream_content_text(state))
+}
+
 fn markdown_image_key(image_ref: &MarkdownImageRef) -> String {
     match &image_ref.target {
         MarkdownImageTarget::Local(path) => path.to_string_lossy().to_string(),
@@ -844,6 +855,7 @@ struct DiscordStreamState {
     last_rendered_text: String,
     last_edit_time: Instant,
     finalized: bool,
+    tool_display: ToolCallDisplayState,
 }
 
 impl Default for DiscordStreamState {
@@ -857,6 +869,7 @@ impl Default for DiscordStreamState {
             last_rendered_text: String::new(),
             last_edit_time: Instant::now(),
             finalized: false,
+            tool_display: ToolCallDisplayState::default(),
         }
     }
 }
@@ -983,6 +996,65 @@ impl DiscordStreamingCallbackShared {
         }
     }
 
+    async fn process_tool_use(
+        &self,
+        thread_id: &str,
+        state: &mut DiscordStreamState,
+        message: ProviderMessage,
+    ) {
+        state.tool_display.start_tool_call(&message);
+        state.finalized = false;
+        let display_text = render_discord_stream_display_text(state);
+        if state.message_id.is_none() {
+            self.send_initial_text(thread_id, state, &display_text)
+                .await;
+        } else {
+            self.edit_existing_text(thread_id, state, &display_text)
+                .await;
+        }
+    }
+
+    async fn clear_tool_placeholder(&self, thread_id: &str, state: &mut DiscordStreamState) {
+        if !state.tool_display.is_active() {
+            return;
+        }
+
+        state.tool_display.clear_active();
+        let display_text = discord_editable_text(&state.accumulated_text);
+        let Some(message_id) = state.message_id.clone() else {
+            state.last_rendered_text.clear();
+            return;
+        };
+
+        if display_text.trim().is_empty() {
+            match self
+                .cfg
+                .sender
+                .delete_text(&self.cfg.chat_id, &message_id)
+                .await
+            {
+                Ok(()) => {
+                    state.message_id = None;
+                    state.last_rendered_text.clear();
+                    state.last_edit_time = Instant::now();
+                }
+                Err(error) => {
+                    warn!(
+                        account_id = %self.cfg.sender.account_id,
+                        chat_id = %self.cfg.chat_id,
+                        thread_id,
+                        error = %error,
+                        "failed to delete Discord tool placeholder"
+                    );
+                }
+            }
+            return;
+        }
+
+        self.edit_existing_text(thread_id, state, &display_text)
+            .await;
+    }
+
     async fn finalize_text(&self, thread_id: &str, state: &mut DiscordStreamState) {
         let display_text = strip_deliverable_markdown_images(&state.accumulated_text);
         if display_text.trim().is_empty() {
@@ -1092,6 +1164,9 @@ impl DiscordStreamingCallbackShared {
         let Some(image) = extract_image_generation_result(&message) else {
             return;
         };
+        if state.tool_display.is_active() {
+            self.clear_tool_placeholder(thread_id, state).await;
+        }
         let image_path = match write_generated_image_temp("discord", &image).await {
             Ok(path) => path,
             Err(error) => {
@@ -1135,7 +1210,12 @@ impl DiscordStreamingCallbackShared {
         let mut state = self.state.lock().await;
         match event {
             StreamEvent::SessionBound { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
-            StreamEvent::ToolUse { .. } => {}
+            StreamEvent::ToolUse { message } => {
+                if should_hide_tool_call_display(&message) {
+                    return;
+                }
+                self.process_tool_use(thread_id, &mut state, message).await;
+            }
             StreamEvent::ToolResult { message } => {
                 self.process_generated_image_result(thread_id, &mut state, message)
                     .await;
@@ -1156,11 +1236,12 @@ impl DiscordStreamingCallbackShared {
                 if text.is_empty() {
                     return;
                 }
+                state.tool_display.reset();
                 state.markdown_image_scan_text.push_str(&text);
                 state.accumulated_text =
                     crate::streaming_core::merge_stream_text(&state.accumulated_text, &text);
                 state.finalized = false;
-                let display_text = discord_editable_text(&state.accumulated_text);
+                let display_text = render_discord_stream_display_text(&state);
                 if state.message_id.is_none() {
                     self.send_initial_text(thread_id, &mut state, &display_text)
                         .await;
@@ -1172,6 +1253,9 @@ impl DiscordStreamingCallbackShared {
             StreamEvent::Done => {
                 if state.finalized {
                     return;
+                }
+                if state.tool_display.is_active() {
+                    self.clear_tool_placeholder(thread_id, &mut state).await;
                 }
                 state.finalized = true;
                 self.finalize_text(thread_id, &mut state).await;
@@ -1918,6 +2002,167 @@ mod tests {
             ),
             Some("thread::discord-test"),
         );
+    }
+
+    #[tokio::test]
+    async fn response_callback_replaces_tool_placeholder_with_text() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/channels/dm-channel-123/messages/discord-tool-001"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-tool-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Read"}),
+                Some("tool-read-1".to_owned()),
+                None,
+            ),
+        });
+        callback(StreamEvent::Delta {
+            text: "done".to_owned(),
+        });
+        callback(StreamEvent::Done);
+
+        let mut requests = Vec::new();
+        for _ in 0..20 {
+            requests = server.received_requests().await.expect("received requests");
+            if requests.len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert_eq!(requests.len(), 2);
+        let create_body: Value =
+            serde_json::from_slice(&requests[0].body).expect("discord create body");
+        assert_eq!(requests[0].method.as_str(), "POST");
+        assert_eq!(create_body["content"], "🔧 #1 Read");
+        let edit_body: Value =
+            serde_json::from_slice(&requests[1].body).expect("discord edit body");
+        assert_eq!(requests[1].method.as_str(), "PATCH");
+        assert_eq!(edit_body["content"], "done");
+    }
+
+    #[tokio::test]
+    async fn response_callback_deletes_runtime_only_tool_placeholder_on_done() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/channels/dm-channel-123/messages/discord-tool-001"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-tool-only-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Bash"}),
+                Some("tool-bash-1".to_owned()),
+                None,
+            ),
+        });
+        callback(StreamEvent::Done);
+
+        let mut requests = Vec::new();
+        for _ in 0..20 {
+            requests = server.received_requests().await.expect("received requests");
+            if requests.len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method.as_str(), "POST");
+        assert_eq!(requests[1].method.as_str(), "DELETE");
+    }
+
+    #[tokio::test]
+    async fn response_callback_suppresses_child_agent_tool_placeholder() {
+        let server = MockServer::start().await;
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-child-tool-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Bash"}),
+                Some("tool-child-1".to_owned()),
+                None,
+            )
+            .with_metadata_value("parent_tool_use_id", json!("tool-parent")),
+        });
+        callback(StreamEvent::Done);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let requests = server.received_requests().await.expect("received requests");
+        assert!(requests.is_empty());
     }
 
     #[tokio::test]

@@ -126,6 +126,9 @@ translates common assistant Markdown, including bold, italic, inline code,
 fenced code blocks, links, and reserved-character escaping. If Telegram rejects
 the MarkdownV2 entity parsing for a send or edit, Garyx logs the failure and
 retries that same message as plain text without `parse_mode`.
+During streaming, top-level tool calls are shown as short numbered progress
+placeholders. Garyx hides child-agent and internal planning/reasoning tool
+events from the Telegram chat.
 
 ### Discord
 
@@ -152,12 +155,14 @@ Discord connects through the Gateway API and sends replies through the REST
 message APIs. Direct messages are accepted without a mention. Server channels
 require a bot mention by default; set `require_mention` to `false` to allow
 free-response server channels. Assistant responses stream by creating the first
-reply message and editing it until the run finishes. Local and remote Markdown
-image references are sent as Discord attachments, generated image results are
-sent as files, and inbound Discord image/file attachments are downloaded to
-local temp files before the agent run. Outbound messages use safe
-`allowed_mentions` defaults: user pings and reply pings are allowed, while
-`@everyone`, `@here`, and role pings are blocked.
+reply message and editing it until the run finishes. Top-level tool calls use
+the same numbered progress placeholders as Telegram; child-agent and internal
+planning/reasoning tool events stay hidden. Local and remote Markdown image
+references are sent as Discord attachments, generated image results are sent as
+files, and inbound Discord image/file attachments are downloaded to local temp
+files before the agent run. Outbound messages use safe `allowed_mentions`
+defaults: user pings and reply pings are allowed, while `@everyone`, `@here`,
+and role pings are blocked.
 
 ### Feishu / Lark
 

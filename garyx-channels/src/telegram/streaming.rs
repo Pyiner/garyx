@@ -8,9 +8,8 @@ use reqwest::Client;
 use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{error, warn};
 
-use crate::generated_images::{
-    extract_image_generation_result, provider_message_item_type, write_generated_image_temp,
-};
+use crate::generated_images::{extract_image_generation_result, write_generated_image_temp};
+use crate::plugin_tools::{ToolCallDisplayState, should_hide_tool_call_display};
 use garyx_models::config::ReplyToMode;
 use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
 use garyx_router::MessageRouter;
@@ -32,9 +31,7 @@ struct StreamState {
     last_edit_time: Instant,
     flush_scheduled: bool,
     finalized: bool,
-    tool_placeholder_active: bool,
-    active_tool_name: Option<String>,
-    tool_call_index: usize,
+    tool_display: ToolCallDisplayState,
 }
 
 impl Default for StreamState {
@@ -48,9 +45,7 @@ impl Default for StreamState {
             last_edit_time: Instant::now(),
             flush_scheduled: false,
             finalized: false,
-            tool_placeholder_active: false,
-            active_tool_name: None,
-            tool_call_index: 0,
+            tool_display: ToolCallDisplayState::default(),
         }
     }
 }
@@ -73,82 +68,10 @@ struct StreamingCallbackShared {
     state: Mutex<StreamState>,
 }
 
-fn telegram_tool_display_name(message: &ProviderMessage) -> String {
-    message
-        .tool_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            message
-                .content
-                .pointer("/name")
-                .or_else(|| message.content.pointer("/tool_name"))
-                .or_else(|| message.content.pointer("/tool"))
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| "tool".to_owned())
-}
-
-fn telegram_tool_item_type(message: &ProviderMessage) -> Option<&str> {
-    provider_message_item_type(message)
-}
-
-fn telegram_should_hide_tool_placeholder(message: &ProviderMessage) -> bool {
-    if ["agent_id", "parent_tool_use_id"].iter().any(|key| {
-        message
-            .metadata
-            .get(*key)
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-    }) {
-        return true;
-    }
-
-    matches!(
-        telegram_tool_item_type(message),
-        Some(
-            "hookPrompt"
-                | "reasoning"
-                | "plan"
-                | "enteredReviewMode"
-                | "exitedReviewMode"
-                | "contextCompaction"
-        )
-    )
-}
-
-fn render_tool_placeholder(index: usize, name: &str) -> String {
-    format!("🔧 #{index} {name}")
-}
-
 fn render_stream_content_text(state: &StreamState) -> String {
-    if !state.tool_placeholder_active {
-        return state.accumulated_text.clone();
-    }
-
-    let Some(name) = state.active_tool_name.as_deref() else {
-        return state.accumulated_text.clone();
-    };
-    let placeholder = render_tool_placeholder(state.tool_call_index, name);
-    if placeholder.trim().is_empty() {
-        return state.accumulated_text.clone();
-    }
-    if state.accumulated_text.trim().is_empty() {
-        return placeholder;
-    }
-    if state.accumulated_text.ends_with("\n\n") {
-        format!("{}{}", state.accumulated_text, placeholder)
-    } else if state.accumulated_text.ends_with('\n') {
-        format!("{}\n{}", state.accumulated_text, placeholder)
-    } else {
-        format!("{}\n\n{}", state.accumulated_text, placeholder)
-    }
+    state
+        .tool_display
+        .render_content_text(&state.accumulated_text)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,16 +209,14 @@ impl StreamingCallbackShared {
         state.last_edit_time = Instant::now();
         state.flush_scheduled = false;
         state.finalized = false;
-        state.tool_placeholder_active = false;
-        state.active_tool_name = None;
-        state.tool_call_index = 0;
+        state.tool_display.reset();
     }
 
     async fn flush_pending_stream_text(self: &Arc<Self>, thread_id: &str) {
         let mut state = self.state.lock().await;
         state.flush_scheduled = false;
 
-        if state.finalized || state.tool_placeholder_active {
+        if state.finalized || state.tool_display.is_active() {
             return;
         }
 
@@ -560,15 +481,11 @@ impl StreamingCallbackShared {
                 .roll_stream_segment_if_needed(thread_id, state, &accumulated_text)
                 .await
             {
-                state.tool_placeholder_active = false;
-                state.active_tool_name = None;
+                state.tool_display.clear_active();
             }
         }
 
-        let name = telegram_tool_display_name(&message);
-        state.tool_call_index = state.tool_call_index.saturating_add(1);
-        state.active_tool_name = Some(name);
-        state.tool_placeholder_active = true;
+        state.tool_display.start_tool_call(&message);
         let display_text = render_stream_display_text(state);
         if display_text.trim().is_empty() {
             return;
@@ -579,8 +496,7 @@ impl StreamingCallbackShared {
                 display_len = display_text.len(),
                 "Telegram tool placeholder skipped because it would exceed message length"
             );
-            state.tool_placeholder_active = false;
-            state.active_tool_name = None;
+            state.tool_display.clear_active();
             return;
         }
 
@@ -648,12 +564,11 @@ impl StreamingCallbackShared {
     }
 
     async fn clear_tool_placeholder(&self, state: &mut StreamState) {
-        if !state.tool_placeholder_active {
+        if !state.tool_display.is_active() {
             return;
         }
 
-        state.tool_placeholder_active = false;
-        state.active_tool_name = None;
+        state.tool_display.clear_active();
         state.flush_scheduled = false;
 
         let display_text = strip_deliverable_markdown_images(&state.accumulated_text);
@@ -727,7 +642,7 @@ impl StreamingCallbackShared {
             return;
         };
 
-        if state.tool_placeholder_active {
+        if state.tool_display.is_active() {
             self.clear_tool_placeholder(state).await;
         }
         let prior_text_msg_id = state.message_id;
@@ -921,11 +836,7 @@ impl StreamingCallbackShared {
                 if text.is_empty() {
                     return;
                 }
-                if state.tool_placeholder_active {
-                    state.tool_placeholder_active = false;
-                    state.active_tool_name = None;
-                }
-                state.tool_call_index = 0;
+                state.tool_display.reset();
                 state.markdown_image_scan_text.push_str(&text);
                 state.accumulated_text =
                     crate::streaming_core::merge_stream_text(&state.accumulated_text, &text);
@@ -933,7 +844,7 @@ impl StreamingCallbackShared {
                 false
             }
             StreamEvent::ToolUse { message } => {
-                if telegram_should_hide_tool_placeholder(&message) {
+                if should_hide_tool_call_display(&message) {
                     return;
                 }
                 self.process_tool_use(thread_id, &mut state, message).await;
@@ -948,7 +859,7 @@ impl StreamingCallbackShared {
             StreamEvent::Done => true,
         };
 
-        if is_final && state.tool_placeholder_active {
+        if is_final && state.tool_display.is_active() {
             self.clear_tool_placeholder(&mut state).await;
             state.finalized = true;
             state.flush_scheduled = false;
