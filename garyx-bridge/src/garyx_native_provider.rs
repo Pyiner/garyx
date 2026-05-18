@@ -44,6 +44,9 @@ use uuid::Uuid;
 use crate::gary_prompt::{
     compose_gary_instructions, prepend_initial_context_to_user_message, task_cli_env,
 };
+use crate::native_capabilities::{
+    capability_instructions, capability_tool_schemas, is_capability_tool, run_capability_tool,
+};
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
 pub(crate) const SESSION_MESSAGES_METADATA_KEY: &str = "garyx_session_messages";
@@ -698,7 +701,7 @@ impl GaryxNativeProvider {
         session
     }
 
-    fn instructions(&self, options: &ProviderRunOptions) -> String {
+    fn instructions(&self, options: &ProviderRunOptions, workspace_dir: &Path) -> String {
         let mut parts = Vec::new();
         let runtime_system_prompt = options
             .metadata
@@ -715,11 +718,18 @@ impl GaryxNativeProvider {
         if let Some(goal) = goal_context(&options.metadata) {
             parts.push(goal);
         }
+        let native_capabilities = capability_instructions(workspace_dir, &options.metadata);
+        if !native_capabilities.trim().is_empty() {
+            parts.push(native_capabilities);
+        }
         parts.join("\n\n")
     }
 
-    fn tool_schemas() -> Vec<ToolDefinition> {
-        vec![
+    fn tool_schemas(
+        workspace_dir: &Path,
+        metadata: &HashMap<String, Value>,
+    ) -> Vec<ToolDefinition> {
+        let mut tools = vec![
             ToolDefinition::function(
                 "exec_command",
                 "Run a shell command in the active workspace.",
@@ -787,7 +797,9 @@ impl GaryxNativeProvider {
                     "additionalProperties": false
                 }),
             ),
-        ]
+        ];
+        tools.extend(capability_tool_schemas(workspace_dir, metadata));
+        tools
     }
 
     async fn run_tool(
@@ -806,6 +818,10 @@ impl GaryxNativeProvider {
                 "status": call.arguments.get("status").and_then(Value::as_str).unwrap_or("active"),
                 "note": call.arguments.get("note").and_then(Value::as_str).unwrap_or(""),
             })),
+            name if is_capability_tool(name) => {
+                let runtime_env = resolve_runtime_env(&self.config, metadata);
+                run_capability_tool(call, workspace_dir, metadata, &runtime_env).await
+            }
             _ => Err(format!("unknown tool '{}'", call.name)),
         };
         match result {
@@ -1025,8 +1041,8 @@ impl AgentLoopProvider for GaryxNativeProvider {
         };
         let request = AgentLoopRunRequest {
             model: model_id(&self.config, &options.metadata, self.default_model),
-            instructions: self.instructions(options),
-            tools: Self::tool_schemas(),
+            instructions: self.instructions(options, &workspace_dir),
+            tools: Self::tool_schemas(&workspace_dir, &options.metadata),
             options: LlmRequestOptions {
                 reasoning_effort: normalize_non_empty(
                     options

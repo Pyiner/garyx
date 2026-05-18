@@ -26,6 +26,13 @@ chrono = { workspace = true }
 toml = "0.8"
 libc = "0.2"
 reqwest = { workspace = true }
+rmcp = { version = "0.17", features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+] }
+http = "1"
+serde_yaml = "0.9"
 
 [dev-dependencies]
 tempfile = { workspace = true }

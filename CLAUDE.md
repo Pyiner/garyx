@@ -31,6 +31,10 @@ from a real chat captured during local debugging.
 - Thread records and known endpoint state: `garyx-router`.
 - MCP schema and tool behavior: `garyx-gateway/src/mcp.rs`.
 - Provider session behavior: `garyx-bridge`.
+- Garyx in-process native model providers load Garyx-managed Skills from
+  `~/.garyx/skills` and managed MCP from gateway-injected
+  `remote_mcp_servers`; they should not read downstream Claude/Codex Skill or
+  MCP config files.
 
 ## Claude Code SDK Notes
 

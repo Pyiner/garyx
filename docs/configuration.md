@@ -581,6 +581,13 @@ Garyx falls back to a minimal copy of Codex's bundled model catalog so the
 picker can still show the Codex default (`gpt-5.5`) and the standard GPT coding
 models. `garyx_native`, `garyx`, and `native` are accepted as legacy provider
 slug aliases for `gpt`; they do not create agent id aliases.
+
+The in-process agent loop exposes Garyx-managed capabilities directly. It reads
+enabled skills from `~/.garyx/skills` and makes them available through
+`load_skill` / `read_skill_file`. It also exposes Garyx-managed MCP servers
+through `list_mcp_tools` / `call_mcp_tool` when those servers are present in the
+thread metadata injected by the gateway.
+
 `model_reasoning_effort` accepts the reasoning
 levels advertised by the selected Codex model, for example `low`, `medium`,
 `high`, or `xhigh`; lower values favor faster responses, while higher values
@@ -689,6 +696,10 @@ Put managed MCP servers under `mcp_servers` in `~/.garyx/garyx.json`.
 
 Garyx syncs managed MCP configuration into the downstream provider config files
 it controls.
+
+Garyx's in-process model providers do not rely on downstream provider config
+files for MCP. They use the same managed MCP entries from `mcp_servers` after
+the gateway injects them into the run metadata.
 
 ## Desktop App
 
