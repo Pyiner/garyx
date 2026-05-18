@@ -94,6 +94,12 @@ const CODEX_ENV_METADATA_KEY: &str = "desktop_codex_env";
 const CLAUDE_OAUTH_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 const CODEX_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const GITHUB_RELEASE_REPO: &str = "Pyiner/garyx";
+/// Re-exported under a `_DEFAULT` name so callers (the gateway
+/// auto-update loop) can fall back to it when the config field is
+/// blank. Keeping the const private and exposing the alias keeps
+/// the surface explicit about which name is intended for fallback
+/// vs internal use.
+pub(crate) const GITHUB_RELEASE_REPO_DEFAULT: &str = GITHUB_RELEASE_REPO;
 #[cfg(any(target_os = "macos", test))]
 const MACOS_CLI_CODESIGN_IDENTIFIER: &str = "com.garyx.gateway";
 const DEFAULT_CHANNEL_AGENT_ID: &str = "claude";
@@ -1050,9 +1056,15 @@ pub(crate) struct SwapOutcome {
 /// log/print as appropriate for their context.
 ///
 /// `requested_version` must already be normalized (no leading `v`).
+/// `repo` is the GitHub `owner/repo` to download from; the gateway
+/// loop passes `gateway.auto_update.github_repo` so fork-testing
+/// retrieves both the tag AND the binary from the same fork (codex
+/// review caught the asymmetry on landing — the "latest" lookup
+/// honored the override but the asset download went to the const).
 /// `destination_path` is where the new binary lands on success.
 pub(crate) async fn try_swap_garyx_binary(
     requested_version: &str,
+    repo: &str,
     destination_path: &Path,
 ) -> Result<SwapOutcome, Box<dyn std::error::Error>> {
     let target = detect_release_target()?;
@@ -1068,7 +1080,7 @@ pub(crate) async fn try_swap_garyx_binary(
 
     let archive_name = format!("garyx-{requested_version}-{target}.tar.gz");
     let base_url =
-        format!("https://github.com/{GITHUB_RELEASE_REPO}/releases/download/v{requested_version}");
+        format!("https://github.com/{repo}/releases/download/v{requested_version}");
 
     let client = reqwest::Client::builder()
         .user_agent(format!("garyx-cli/{VERSION}"))
@@ -1148,6 +1160,20 @@ pub(crate) async fn cmd_update(
     let destination = replacement_binary_path(install_path)?;
     let target = detect_release_target()?;
 
+    // Validate destination has a parent BEFORE the short-circuit so
+    // `garyx update --path /nonexistent/dir/garyx` still surfaces the
+    // missing-parent error even on the "already up to date" path.
+    // Pre-refactor behavior was the same; codex review #4 caught the
+    // accidental ordering change when this got pulled into a thin
+    // wrapper around `try_swap_garyx_binary`.
+    if destination.parent().is_none() {
+        return Err(format!(
+            "update target has no parent directory: {}",
+            destination.display()
+        )
+        .into());
+    }
+
     if version.is_none() && requested_version == VERSION {
         println!(
             "garyx is already up to date at v{} ({})",
@@ -1158,7 +1184,8 @@ pub(crate) async fn cmd_update(
     }
 
     println!("Updating garyx to v{requested_version} for {target}...");
-    let outcome = try_swap_garyx_binary(&requested_version, &destination).await?;
+    let outcome =
+        try_swap_garyx_binary(&requested_version, GITHUB_RELEASE_REPO, &destination).await?;
     println!(
         "Updated garyx from v{} to v{} at {}",
         outcome.from_version,

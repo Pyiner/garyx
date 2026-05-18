@@ -104,13 +104,25 @@ async fn tick(
         }
     };
 
+    // Codex review #6: treat blank `github_repo` (operator wrote
+    // `""` in garyx.json) as "use the compile-time default" rather
+    // than letting it form a `https://api.github.com/repos//...` URL.
+    // Trim defensively so trailing whitespace doesn't poison the URL
+    // either.
+    let configured_repo = config.github_repo.trim();
+    let effective_repo = if configured_repo.is_empty() {
+        crate::commands::GITHUB_RELEASE_REPO_DEFAULT
+    } else {
+        configured_repo
+    };
+
     let token = github_token_from_env();
-    let latest = match latest_release_version_for_repo(&client, &config.github_repo, token.as_deref()).await {
+    let latest = match latest_release_version_for_repo(&client, effective_repo, token.as_deref()).await {
         Ok(v) => v,
         Err(err) => {
             warn!(
                 error = %err,
-                github_repo = %config.github_repo,
+                github_repo = %effective_repo,
                 "gateway auto-update: failed to fetch latest release"
             );
             return;
@@ -164,7 +176,7 @@ async fn tick(
         "gateway auto-update: stream-idle confirmed; starting swap"
     );
 
-    let outcome = match try_swap_garyx_binary(&latest, &destination).await {
+    let outcome = match try_swap_garyx_binary(&latest, effective_repo, &destination).await {
         Ok(o) => o,
         Err(err) => {
             warn!(
