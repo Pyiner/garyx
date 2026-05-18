@@ -37,7 +37,10 @@ from a real chat captured during local debugging.
   through 300ms edit coalescing while top-level tool calls flush immediately.
 - Discord uses the buffered plugin stream policy: assistant text deltas wait
   until a top-level tool call starts or the run finishes; rapid tool-call
-  placeholder updates are coalesced with a one-second minimum interval.
+  placeholder updates are coalesced with a one-second minimum interval. When a
+  queued user message is acknowledged mid-stream, Discord finalizes the current
+  reply segment and starts subsequent assistant output in a new message.
+  Discord REST writes retry 429 responses according to `Retry-After`.
 - Garyx in-process native model providers load Garyx-managed Skills from
   `~/.garyx/skills` and managed MCP from gateway-injected
   `remote_mcp_servers`; they should not read downstream Claude/Codex Skill or

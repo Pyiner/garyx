@@ -850,13 +850,15 @@ struct DiscordStreamState {
     finalized: bool,
 }
 
+fn discord_stream_send_policy() -> PluginStreamSendPolicy {
+    PluginStreamSendPolicy::buffered_until_tool_or_done()
+        .with_tool_min_flush_interval(DISCORD_TOOL_PLACEHOLDER_UPDATE_INTERVAL)
+}
+
 impl Default for DiscordStreamState {
     fn default() -> Self {
         Self {
-            stream_text: PluginStreamSendState::new(
-                PluginStreamSendPolicy::buffered_until_tool_or_done()
-                    .with_tool_min_flush_interval(DISCORD_TOOL_PLACEHOLDER_UPDATE_INTERVAL),
-            ),
+            stream_text: PluginStreamSendState::new(discord_stream_send_policy()),
             markdown_image_scan_text: String::new(),
             sent_markdown_image_keys: HashSet::new(),
             recorded_message_ids: HashSet::new(),
@@ -873,6 +875,15 @@ struct DiscordStreamingCallbackShared {
 }
 
 impl DiscordStreamingCallbackShared {
+    fn reset_for_fresh_message(state: &mut DiscordStreamState) {
+        state.stream_text = PluginStreamSendState::new(discord_stream_send_policy());
+        state.markdown_image_scan_text.clear();
+        state.sent_markdown_image_keys.clear();
+        state.message_id = None;
+        state.last_rendered_text.clear();
+        state.finalized = false;
+    }
+
     async fn record_outbound_messages(&self, thread_id: &str, message_ids: &[String]) {
         if thread_id.trim().is_empty() || message_ids.is_empty() {
             return;
@@ -1024,6 +1035,35 @@ impl DiscordStreamingCallbackShared {
             .await;
     }
 
+    async fn delete_runtime_only_message(&self, thread_id: &str, state: &mut DiscordStreamState) {
+        let Some(message_id) = state.message_id.clone() else {
+            return;
+        };
+
+        match self
+            .cfg
+            .sender
+            .delete_text(&self.cfg.chat_id, &message_id)
+            .await
+        {
+            Ok(()) => {
+                state.message_id = None;
+                state.last_rendered_text.clear();
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %self.cfg.sender.account_id,
+                    chat_id = %self.cfg.chat_id,
+                    thread_id,
+                    error = %error,
+                    "failed to delete Discord runtime-only stream message"
+                );
+                state.message_id = None;
+                state.last_rendered_text.clear();
+            }
+        }
+    }
+
     async fn clear_tool_placeholder(&self, thread_id: &str, state: &mut DiscordStreamState) {
         if !state.stream_text.is_tool_placeholder_active() {
             return;
@@ -1062,6 +1102,30 @@ impl DiscordStreamingCallbackShared {
 
         self.edit_existing_text(thread_id, state, &display_text)
             .await;
+    }
+
+    async fn process_boundary(&self, thread_id: &str, state: &mut DiscordStreamState) {
+        let boundary_content_text = state.stream_text.accumulated_text().trim().to_owned();
+        let boundary_text = strip_deliverable_markdown_images(&boundary_content_text);
+
+        state.stream_text.clear_tool_placeholder();
+
+        if boundary_content_text.is_empty() {
+            self.delete_runtime_only_message(thread_id, state).await;
+            Self::reset_for_fresh_message(state);
+            return;
+        }
+
+        if boundary_text.trim().is_empty() {
+            self.delete_runtime_only_message(thread_id, state).await;
+            self.send_markdown_images_from_state(thread_id, state).await;
+            Self::reset_for_fresh_message(state);
+            return;
+        }
+
+        self.finalize_text(thread_id, state).await;
+        self.send_markdown_images_from_state(thread_id, state).await;
+        Self::reset_for_fresh_message(state);
     }
 
     async fn finalize_text(&self, thread_id: &str, state: &mut DiscordStreamState) {
@@ -1241,8 +1305,11 @@ impl DiscordStreamingCallbackShared {
                 self.process_generated_image_result(thread_id, &mut state, message)
                     .await;
             }
-            StreamEvent::Boundary { kind, .. } => {
-                if kind == StreamBoundaryKind::AssistantSegment {
+            StreamEvent::Boundary { kind, .. } => match kind {
+                StreamBoundaryKind::UserAck => {
+                    self.process_boundary(thread_id, &mut state).await;
+                }
+                StreamBoundaryKind::AssistantSegment => {
                     crate::streaming_core::apply_stream_boundary_text(
                         &mut state.markdown_image_scan_text,
                         StreamBoundaryKind::AssistantSegment,
@@ -1251,7 +1318,7 @@ impl DiscordStreamingCallbackShared {
                         .stream_text
                         .apply_boundary(StreamBoundaryKind::AssistantSegment);
                 }
-            }
+            },
             StreamEvent::Delta { text } => {
                 if text.is_empty() {
                     return;
@@ -2215,6 +2282,217 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method.as_str(), "POST");
+        assert_eq!(requests[1].method.as_str(), "DELETE");
+    }
+
+    #[tokio::test]
+    async fn response_callback_user_ack_boundary_splits_messages() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-boundary-001"
+            })))
+            .mount(&server)
+            .await;
+
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-boundary-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::Delta {
+            text: "第一段".to_owned(),
+        });
+        callback(StreamEvent::Boundary {
+            kind: StreamBoundaryKind::UserAck,
+            pending_input_id: None,
+        });
+        callback(StreamEvent::Delta {
+            text: "第二段".to_owned(),
+        });
+        callback(StreamEvent::Done);
+
+        let mut requests = Vec::new();
+        for _ in 0..20 {
+            requests = server.received_requests().await.expect("received requests");
+            if requests.len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert_eq!(requests.len(), 2);
+        let first_body: Value =
+            serde_json::from_slice(&requests[0].body).expect("discord first body");
+        let second_body: Value =
+            serde_json::from_slice(&requests[1].body).expect("discord second body");
+        assert_eq!(requests[0].method.as_str(), "POST");
+        assert_eq!(requests[1].method.as_str(), "POST");
+        assert_eq!(first_body["content"], "第一段");
+        assert_eq!(second_body["content"], "第二段");
+    }
+
+    #[tokio::test]
+    async fn response_callback_user_ack_deletes_runtime_only_tool_placeholder() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/channels/dm-channel-123/messages/discord-tool-001"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-tool-boundary-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Bash"}),
+                Some("tool-bash-1".to_owned()),
+                None,
+            ),
+        });
+        callback(StreamEvent::Boundary {
+            kind: StreamBoundaryKind::UserAck,
+            pending_input_id: None,
+        });
+        callback(StreamEvent::Delta {
+            text: "after".to_owned(),
+        });
+        callback(StreamEvent::Done);
+
+        let mut requests = Vec::new();
+        for _ in 0..20 {
+            requests = server.received_requests().await.expect("received requests");
+            if requests.len() >= 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert_eq!(requests.len(), 3);
+        let tool_body: Value =
+            serde_json::from_slice(&requests[0].body).expect("discord tool body");
+        let after_body: Value =
+            serde_json::from_slice(&requests[2].body).expect("discord after body");
+        assert_eq!(requests[0].method.as_str(), "POST");
+        assert_eq!(tool_body["content"], "🔧 #1 Bash");
+        assert_eq!(requests[1].method.as_str(), "DELETE");
+        assert_eq!(requests[2].method.as_str(), "POST");
+        assert_eq!(after_body["content"], "after");
+    }
+
+    #[tokio::test]
+    async fn response_callback_user_ack_cancels_scheduled_tool_placeholder_update() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/channels/dm-channel-123/messages/discord-tool-001"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path("/channels/dm-channel-123/messages/discord-tool-001"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-tool-boundary-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Bash"}),
+                Some("tool-bash-1".to_owned()),
+                None,
+            ),
+        });
+        let mut requests = Vec::new();
+        for _ in 0..20 {
+            requests = server.received_requests().await.expect("received requests");
+            if requests.len() >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(requests.len(), 1);
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Read"}),
+                Some("tool-read-1".to_owned()),
+                None,
+            ),
+        });
+        callback(StreamEvent::Boundary {
+            kind: StreamBoundaryKind::UserAck,
+            pending_input_id: None,
+        });
+
+        tokio::time::sleep(DISCORD_TOOL_PLACEHOLDER_UPDATE_INTERVAL + Duration::from_millis(150))
+            .await;
+        requests = server.received_requests().await.expect("received requests");
 
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].method.as_str(), "POST");

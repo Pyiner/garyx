@@ -285,6 +285,103 @@ async fn test_send_discord_retries_without_reply_reference_when_rejected() {
 }
 
 #[tokio::test]
+async fn test_send_discord_text_retries_after_rate_limit() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/channels/channel-123/messages"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "0.01")
+                .insert_header("x-ratelimit-scope", "user")
+                .set_body_json(serde_json::json!({
+                    "message": "You are being rate limited.",
+                    "retry_after": 0.01,
+                    "global": false
+                })),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/channels/channel-123/messages"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "message-003"
+        })))
+        .mount(&server)
+        .await;
+
+    let mut dispatcher = ChannelDispatcherImpl::new();
+    dispatcher.register_discord(DiscordSender {
+        account_id: "main".to_string(),
+        token: "test-token".to_string(),
+        http: Client::new(),
+        api_base: server.uri(),
+        is_running: true,
+    });
+
+    let result = dispatcher
+        .send_message(OutboundMessage {
+            channel: "discord".to_string(),
+            account_id: "main".to_string(),
+            chat_id: "channel-123".to_string(),
+            delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_string(),
+            delivery_target_id: "channel-123".to_string(),
+            content: ChannelOutboundContent::text("hello"),
+            reply_to: None,
+            thread_id: None,
+        })
+        .await
+        .expect("retry after rate limit");
+
+    assert_eq!(result.message_ids, vec!["message-003".to_string()]);
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(requests.len(), 2);
+}
+
+#[tokio::test]
+async fn test_edit_discord_text_retries_after_rate_limit() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path("/channels/channel-123/messages/message-001"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "0.01")
+                .set_body_json(serde_json::json!({
+                    "message": "You are being rate limited.",
+                    "retry_after": 0.01,
+                    "global": false
+                })),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/channels/channel-123/messages/message-001"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "message-001"
+        })))
+        .mount(&server)
+        .await;
+
+    let sender = DiscordSender {
+        account_id: "main".to_string(),
+        token: "test-token".to_string(),
+        http: Client::new(),
+        api_base: server.uri(),
+        is_running: true,
+    };
+
+    let result = sender
+        .edit_text("channel-123", "message-001", "updated")
+        .await
+        .expect("retry edit after rate limit");
+
+    assert_eq!(result, "message-001");
+    let requests = server.received_requests().await.expect("received requests");
+    assert_eq!(requests.len(), 2);
+}
+
+#[tokio::test]
 async fn test_send_unknown_channel() {
     let dispatcher = ChannelDispatcherImpl::new();
     let result = dispatcher

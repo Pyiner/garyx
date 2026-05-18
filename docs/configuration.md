@@ -158,10 +158,15 @@ require a bot mention by default; set `require_mention` to `false` to allow
 free-response server channels. Assistant text deltas are buffered and merged
 until a top-level tool call starts or the run finishes. Tool calls use the same
 numbered progress placeholders as Telegram; rapid tool placeholder updates are
-coalesced to the latest state with a one-second minimum interval. Child-agent
-and internal planning/reasoning tool events stay hidden. Local and remote
-Markdown image references are sent as Discord attachments, generated image
-results are sent as files, and inbound Discord image/file attachments are
+coalesced to the latest state with a one-second minimum interval. If a queued
+user message is acknowledged while a response is still streaming, Discord
+finalizes the current reply segment and starts later assistant output in a new
+message; runtime-only tool placeholders are deleted during that split.
+Discord REST writes retry 429 responses using Discord's `Retry-After` /
+`retry_after` delay before surfacing a delivery failure.
+Child-agent and internal planning/reasoning tool events stay hidden. Local and
+remote Markdown image references are sent as Discord attachments, generated
+image results are sent as files, and inbound Discord image/file attachments are
 downloaded to local temp files before the agent run. Outbound messages use safe
 `allowed_mentions` defaults: user pings and reply pings are allowed, while
 `@everyone`, `@here`, and role pings are blocked.

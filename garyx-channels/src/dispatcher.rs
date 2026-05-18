@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use async_trait::async_trait;
@@ -14,7 +15,7 @@ use garyx_models::ChannelOutboundContent;
 use garyx_models::provider::StreamEvent;
 use garyx_models::routing::{infer_delivery_target_id, infer_delivery_target_type};
 use garyx_router::MessageRouter;
-use reqwest::{Client, StatusCode, multipart};
+use reqwest::{Client, StatusCode, header, multipart};
 use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
@@ -255,20 +256,47 @@ impl TelegramSender {
 // ---------------------------------------------------------------------------
 
 pub(crate) const DISCORD_MAX_MESSAGE_LENGTH: usize = 2000;
+const DISCORD_RATE_LIMIT_MAX_RETRIES: usize = 3;
+const DISCORD_RATE_LIMIT_DEFAULT_DELAY: Duration = Duration::from_secs(1);
+const DISCORD_RATE_LIMIT_MAX_DELAY: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 struct DiscordApiError {
     status: StatusCode,
     code: Option<i64>,
     message: String,
+    retry_after: Option<Duration>,
+    global: bool,
+    scope: Option<String>,
 }
 
 impl DiscordApiError {
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: None,
+            message: message.into(),
+            retry_after: None,
+            global: false,
+            scope: None,
+        }
+    }
+
     fn is_reply_reference_rejection(&self) -> bool {
         self.code == Some(10008)
             || (self.code == Some(50035)
                 && (self.message.contains("Cannot reply to a system message")
                     || self.message.contains("message_reference")))
+    }
+
+    fn is_rate_limited(&self) -> bool {
+        self.status == StatusCode::TOO_MANY_REQUESTS
+    }
+
+    fn retry_delay(&self) -> Duration {
+        self.retry_after
+            .unwrap_or(DISCORD_RATE_LIMIT_DEFAULT_DELAY)
+            .min(DISCORD_RATE_LIMIT_MAX_DELAY)
     }
 }
 
@@ -406,19 +434,27 @@ impl DiscordSender {
         reply_to_message_id: Option<&str>,
     ) -> Result<String, DiscordApiError> {
         let body = discord_message_payload(content, channel_id, reply_to_message_id, None);
-        let response = self
-            .http
-            .post(discord_channel_messages_url(&self.api_base, channel_id))
-            .header("Authorization", format!("Bot {}", self.token))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| DiscordApiError {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                code: None,
-                message: error.to_string(),
-            })?;
-        parse_discord_message_response(response).await
+        let mut attempt = 0;
+        loop {
+            let response = self
+                .http
+                .post(discord_channel_messages_url(&self.api_base, channel_id))
+                .header("Authorization", format!("Bot {}", self.token))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|error| DiscordApiError::internal(error.to_string()))?;
+            match parse_discord_message_response(response).await {
+                Err(error)
+                    if self
+                        .sleep_before_discord_rate_limit_retry("create message", attempt, &error)
+                        .await =>
+                {
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
     }
 
     async fn post_message_file(
@@ -428,13 +464,12 @@ impl DiscordSender {
         caption: Option<&str>,
         reply_to_message_id: Option<&str>,
     ) -> Result<String, DiscordApiError> {
-        let bytes = tokio::fs::read(path)
-            .await
-            .map_err(|error| DiscordApiError {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                code: None,
-                message: format!("failed to read attachment '{}': {error}", path.display()),
-            })?;
+        let bytes = tokio::fs::read(path).await.map_err(|error| {
+            DiscordApiError::internal(format!(
+                "failed to read attachment '{}': {error}",
+                path.display()
+            ))
+        })?;
         let filename = path
             .file_name()
             .and_then(|value| value.to_str())
@@ -447,28 +482,40 @@ impl DiscordSender {
             reply_to_message_id,
             Some(&filename),
         );
-        let payload_json = serde_json::to_string(&body).map_err(|error| DiscordApiError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: None,
-            message: format!("failed to encode Discord multipart payload: {error}"),
+        let payload_json = serde_json::to_string(&body).map_err(|error| {
+            DiscordApiError::internal(format!(
+                "failed to encode Discord multipart payload: {error}"
+            ))
         })?;
-        let part = multipart::Part::bytes(bytes).file_name(filename);
-        let form = multipart::Form::new()
-            .text("payload_json", payload_json)
-            .part("files[0]", part);
-        let response = self
-            .http
-            .post(discord_channel_messages_url(&self.api_base, channel_id))
-            .header("Authorization", format!("Bot {}", self.token))
-            .multipart(form)
-            .send()
-            .await
-            .map_err(|error| DiscordApiError {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                code: None,
-                message: error.to_string(),
-            })?;
-        parse_discord_message_response(response).await
+        let mut attempt = 0;
+        loop {
+            let part = multipart::Part::bytes(bytes.clone()).file_name(filename.clone());
+            let form = multipart::Form::new()
+                .text("payload_json", payload_json.clone())
+                .part("files[0]", part);
+            let response = self
+                .http
+                .post(discord_channel_messages_url(&self.api_base, channel_id))
+                .header("Authorization", format!("Bot {}", self.token))
+                .multipart(form)
+                .send()
+                .await
+                .map_err(|error| DiscordApiError::internal(error.to_string()))?;
+            match parse_discord_message_response(response).await {
+                Err(error)
+                    if self
+                        .sleep_before_discord_rate_limit_retry(
+                            "create file message",
+                            attempt,
+                            &error,
+                        )
+                        .await =>
+                {
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
     }
 
     async fn patch_message_json(
@@ -478,19 +525,27 @@ impl DiscordSender {
         content: &str,
     ) -> Result<String, DiscordApiError> {
         let body = discord_edit_message_payload(content);
-        let response = self
-            .http
-            .patch(discord_message_url(&self.api_base, channel_id, message_id))
-            .header("Authorization", format!("Bot {}", self.token))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| DiscordApiError {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                code: None,
-                message: error.to_string(),
-            })?;
-        parse_discord_message_response(response).await
+        let mut attempt = 0;
+        loop {
+            let response = self
+                .http
+                .patch(discord_message_url(&self.api_base, channel_id, message_id))
+                .header("Authorization", format!("Bot {}", self.token))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|error| DiscordApiError::internal(error.to_string()))?;
+            match parse_discord_message_response(response).await {
+                Err(error)
+                    if self
+                        .sleep_before_discord_rate_limit_retry("edit message", attempt, &error)
+                        .await =>
+                {
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
     }
 
     async fn delete_message(
@@ -498,18 +553,50 @@ impl DiscordSender {
         channel_id: &str,
         message_id: &str,
     ) -> Result<(), DiscordApiError> {
-        let response = self
-            .http
-            .delete(discord_message_url(&self.api_base, channel_id, message_id))
-            .header("Authorization", format!("Bot {}", self.token))
-            .send()
-            .await
-            .map_err(|error| DiscordApiError {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                code: None,
-                message: error.to_string(),
-            })?;
-        parse_discord_empty_response(response).await
+        let mut attempt = 0;
+        loop {
+            let response = self
+                .http
+                .delete(discord_message_url(&self.api_base, channel_id, message_id))
+                .header("Authorization", format!("Bot {}", self.token))
+                .send()
+                .await
+                .map_err(|error| DiscordApiError::internal(error.to_string()))?;
+            match parse_discord_empty_response(response).await {
+                Err(error)
+                    if self
+                        .sleep_before_discord_rate_limit_retry("delete message", attempt, &error)
+                        .await =>
+                {
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn sleep_before_discord_rate_limit_retry(
+        &self,
+        operation: &str,
+        attempt: usize,
+        error: &DiscordApiError,
+    ) -> bool {
+        if !error.is_rate_limited() || attempt >= DISCORD_RATE_LIMIT_MAX_RETRIES {
+            return false;
+        }
+        let delay = error.retry_delay();
+        warn!(
+            account_id = %self.account_id,
+            operation,
+            retry_after_ms = delay.as_millis(),
+            attempt = attempt + 1,
+            max_retries = DISCORD_RATE_LIMIT_MAX_RETRIES,
+            global = error.global,
+            scope = error.scope.as_deref().unwrap_or(""),
+            "Discord request rate limited; retrying after delay"
+        );
+        tokio::time::sleep(delay).await;
+        true
     }
 }
 
@@ -613,10 +700,14 @@ async fn parse_discord_message_response(
     response: reqwest::Response,
 ) -> Result<String, DiscordApiError> {
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = response.bytes().await.map_err(|error| DiscordApiError {
         status,
         code: None,
         message: error.to_string(),
+        retry_after: None,
+        global: false,
+        scope: None,
     })?;
     let payload: Value = serde_json::from_slice(&bytes)
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).to_string()));
@@ -629,6 +720,9 @@ async fn parse_discord_message_response(
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| payload.to_string()),
+            retry_after: discord_retry_after(&headers, &payload),
+            global: discord_rate_limit_global(&headers, &payload),
+            scope: discord_rate_limit_scope(&headers),
         });
     }
     payload
@@ -639,11 +733,15 @@ async fn parse_discord_message_response(
             status,
             code: None,
             message: "Discord create message response did not include id".to_owned(),
+            retry_after: None,
+            global: false,
+            scope: None,
         })
 }
 
 async fn parse_discord_empty_response(response: reqwest::Response) -> Result<(), DiscordApiError> {
     let status = response.status();
+    let headers = response.headers().clone();
     if status.is_success() {
         return Ok(());
     }
@@ -652,6 +750,9 @@ async fn parse_discord_empty_response(response: reqwest::Response) -> Result<(),
         status,
         code: None,
         message: error.to_string(),
+        retry_after: None,
+        global: false,
+        scope: None,
     })?;
     let payload: Value = serde_json::from_slice(&bytes)
         .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).to_string()));
@@ -663,12 +764,56 @@ async fn parse_discord_empty_response(response: reqwest::Response) -> Result<(),
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| payload.to_string()),
+        retry_after: discord_retry_after(&headers, &payload),
+        global: discord_rate_limit_global(&headers, &payload),
+        scope: discord_rate_limit_scope(&headers),
     })
+}
+
+fn discord_retry_after(headers: &header::HeaderMap, payload: &Value) -> Option<Duration> {
+    payload
+        .get("retry_after")
+        .and_then(Value::as_f64)
+        .or_else(|| {
+            headers
+                .get(header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<f64>().ok())
+        })
+        .or_else(|| {
+            headers
+                .get("x-ratelimit-reset-after")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<f64>().ok())
+        })
+        .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+        .map(Duration::from_secs_f64)
+}
+
+fn discord_rate_limit_global(headers: &header::HeaderMap, payload: &Value) -> bool {
+    payload
+        .get("global")
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            headers
+                .get("x-ratelimit-global")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+        })
+}
+
+fn discord_rate_limit_scope(headers: &header::HeaderMap) -> Option<String> {
+    headers
+        .get("x-ratelimit-scope")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn discord_send_error(error: DiscordApiError) -> ChannelError {
     ChannelError::SendFailed(format!(
-        "Discord create message HTTP {}{}: {}",
+        "Discord API HTTP {}{}: {}",
         error.status,
         error
             .code
