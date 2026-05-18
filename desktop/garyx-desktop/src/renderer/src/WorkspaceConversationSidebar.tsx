@@ -1,3 +1,4 @@
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { PanelLeftClose, Trash } from 'lucide-react';
 
@@ -20,6 +21,8 @@ type WorkspaceConversationSidebarProps = {
   onClose: () => void;
   onDeleteThread: (threadId: string) => void;
   onOpenThread: (threadId: string) => void;
+  onRailResizeStart?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  railResizing?: boolean;
 };
 
 export function WorkspaceConversationSidebar({
@@ -32,6 +35,8 @@ export function WorkspaceConversationSidebar({
   onClose,
   onDeleteThread,
   onOpenThread,
+  onRailResizeStart,
+  railResizing,
 }: WorkspaceConversationSidebarProps) {
   const { t } = useI18n();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -153,6 +158,14 @@ export function WorkspaceConversationSidebar({
           <p className="workspace-empty-note">{t('No threads yet')}</p>
         )}
       </div>
+      {onRailResizeStart ? (
+        <div
+          className={`sidebar-resizer ${railResizing ? "is-resizing" : ""}`}
+          onPointerDown={onRailResizeStart}
+        >
+          <div className="sidebar-resizer-line" />
+        </div>
+      ) : null}
     </aside>
   );
 }

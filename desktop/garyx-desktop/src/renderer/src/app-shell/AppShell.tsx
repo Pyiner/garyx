@@ -1703,6 +1703,8 @@ export function AppShell() {
   const [threadLogsResizing, setThreadLogsResizing] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(245);
   const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [railWidth, setRailWidth] = useState(258);
+  const [railResizing, setRailResizing] = useState(false);
   const [botConversationGroupId, setBotConversationGroupId] = useState<string | null>(null);
   const [workspaceConversationPath, setWorkspaceConversationPath] =
     useState<string | null>(null);
@@ -1710,6 +1712,10 @@ export function AppShell() {
     readPinnedThreadIds(),
   );
   const sidebarResizeStateRef = useRef<{
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+  const railResizeStateRef = useRef<{
     startX: number;
     startWidth: number;
   } | null>(null);
@@ -1721,6 +1727,14 @@ export function AppShell() {
       root.style.removeProperty("--app-sidebar-width");
     };
   }, [sidebarWidth]);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--spacing-token-rail", `${railWidth}px`);
+    return () => {
+      root.style.removeProperty("--spacing-token-rail");
+    };
+  }, [railWidth]);
   const [contentView, setContentViewRaw] = useState<ContentView>(() =>
     initialContentView(initialRouteValue),
   );
@@ -2288,6 +2302,17 @@ export function AppShell() {
       startWidth: sidebarWidth,
     };
     setSidebarResizing(true);
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
+  }
+
+  function handleRailResizeStart(event: React.PointerEvent<HTMLDivElement>) {
+    railResizeStateRef.current = {
+      startX: event.clientX,
+      startWidth: railWidth,
+    };
+    setRailResizing(true);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
     event.preventDefault();
@@ -3761,6 +3786,56 @@ export function AppShell() {
       window.removeEventListener("pointercancel", finishResize);
     };
   }, [sidebarResizing]);
+
+  useEffect(() => {
+    if (!railResizing) {
+      return;
+    }
+    let lastNext = railResizeStateRef.current?.startWidth ?? railWidth;
+    let rafId: number | null = null;
+    const flush = () => {
+      rafId = null;
+      document.documentElement.style.setProperty(
+        "--spacing-token-rail",
+        `${lastNext}px`,
+      );
+    };
+    const handlePointerMove = (event: PointerEvent) => {
+      const state = railResizeStateRef.current;
+      if (!state) return;
+      lastNext = Math.max(
+        220,
+        Math.min(420, state.startWidth + (event.clientX - state.startX)),
+      );
+      if (rafId === null) {
+        rafId = requestAnimationFrame(flush);
+      }
+    };
+    const finishResize = () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      railResizeStateRef.current = null;
+      setRailResizing(false);
+      setRailWidth(lastNext);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", finishResize);
+    window.addEventListener("pointercancel", finishResize);
+    return () => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", finishResize);
+      window.removeEventListener("pointercancel", finishResize);
+    };
+  }, [railResizing]);
 
   useEffect(() => {
     if (!threadLogsResizing) {
@@ -6275,6 +6350,10 @@ export function AppShell() {
   }
 
   async function handleNewThread() {
+    setBotConversationGroupId(null);
+    setWorkspaceConversationPath(null);
+    setThreadLogsOpen(false);
+    setInspectorOpen(false);
     startNewThreadDraft({
       selectableNewThreadWorkspaces,
       pendingNewThreadWorkspaceEntry,
@@ -8012,6 +8091,8 @@ export function AppShell() {
           onOpenEndpoint={(endpoint) => {
             void handleOpenThreadFromEndpoint(endpoint, "bot-conversation");
           }}
+          onRailResizeStart={handleRailResizeStart}
+          railResizing={railResizing}
           selectedThreadId={botConversationSelectedThreadId}
         />
       ) : activeWorkspaceThreadGroup ? (
@@ -8034,6 +8115,8 @@ export function AppShell() {
           onOpenThread={(threadId) => {
             void openExistingThread(threadId, "workspace-conversation");
           }}
+          onRailResizeStart={handleRailResizeStart}
+          railResizing={railResizing}
           selectedThreadId={workspaceConversationSelectedThreadId}
         />
       ) : null}

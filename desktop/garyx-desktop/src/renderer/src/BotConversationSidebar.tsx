@@ -1,3 +1,4 @@
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PanelLeftClose, Trash } from 'lucide-react';
 
@@ -16,6 +17,8 @@ type BotConversationSidebarProps = {
   onArchiveEndpoint: (endpoint: DesktopChannelEndpoint) => void;
   onClose: () => void;
   onOpenEndpoint: (endpoint: DesktopChannelEndpoint) => void;
+  onRailResizeStart?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  railResizing?: boolean;
 };
 
 export function BotConversationSidebar({
@@ -27,6 +30,8 @@ export function BotConversationSidebar({
   onArchiveEndpoint,
   onClose,
   onOpenEndpoint,
+  onRailResizeStart,
+  railResizing,
 }: BotConversationSidebarProps) {
   const { t } = useI18n();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -162,6 +167,14 @@ export function BotConversationSidebar({
           );
         })}
       </div>
+      {onRailResizeStart ? (
+        <div
+          className={`sidebar-resizer ${railResizing ? "is-resizing" : ""}`}
+          onPointerDown={onRailResizeStart}
+        >
+          <div className="sidebar-resizer-line" />
+        </div>
+      ) : null}
     </aside>
   );
 }

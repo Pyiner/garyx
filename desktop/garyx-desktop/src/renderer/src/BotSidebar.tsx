@@ -99,7 +99,7 @@ export function BotSidebar({
             const rootCanOpen = botRootCanOpen(group);
             const rowCanOpen = rootCanOpen || childEntries.length > 0;
             const rootIsSelected = selectedThreadId ? rootThreadIds.has(selectedThreadId) : false;
-            const rowIsSelected = rootIsSelected;
+            const rowIsSelected = rootIsSelected || isConversationRailOpen;
             const rowActionLabel = rootCanOpen
               ? t('Open {name} thread', { name: group.title })
               : t('Show conversations');
