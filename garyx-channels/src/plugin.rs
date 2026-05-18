@@ -729,7 +729,18 @@ impl ChannelPlugin for ManagedChannelPlugin {
         endpoints: &[PluginConversationEndpoint],
     ) -> Option<PluginAccountUi> {
         match self.metadata.id.as_str() {
-            "telegram" | "discord" | "feishu" | "weixin" => Some(build_builtin_account_ui(
+            "discord" => {
+                let account: DiscordAccount =
+                    serde_json::from_value(self.account_descriptor(account_id)?.config).ok()?;
+                let channel_names = fetch_discord_channel_names(&account, endpoints).await;
+                Some(build_discord_account_ui(
+                    self.account_root_behavior,
+                    account_id,
+                    endpoints,
+                    &channel_names,
+                ))
+            }
+            "telegram" | "feishu" | "weixin" => Some(build_builtin_account_ui(
                 self.account_root_behavior,
                 &self.metadata.id,
                 account_id,
@@ -943,9 +954,9 @@ fn is_feishu_private_candidate(endpoint: &KnownChannelEndpoint) -> bool {
 
 fn is_discord_private_candidate(endpoint: &KnownChannelEndpoint) -> bool {
     endpoint.channel == "discord"
-        && endpoint.thread_id.is_none()
         && !endpoint.binding_key.trim().is_empty()
         && !endpoint.chat_id.trim().is_empty()
+        && endpoint.binding_key.trim() != endpoint.chat_id.trim()
 }
 
 fn is_weixin_private_candidate(endpoint: &KnownChannelEndpoint) -> bool {
@@ -1362,6 +1373,220 @@ fn conversation_node_id(endpoint: &PluginConversationEndpoint, kind: &str) -> St
     endpoint.endpoint_key.clone()
 }
 
+#[derive(Debug, Deserialize)]
+struct DiscordChannelInfo {
+    #[serde(default)]
+    name: Option<String>,
+}
+
+fn discord_endpoint_kind(endpoint: &PluginConversationEndpoint) -> &'static str {
+    let binding_key = endpoint.binding_key.trim();
+    let chat_id = endpoint.chat_id.trim();
+    if !binding_key.is_empty() && !chat_id.is_empty() && binding_key == chat_id {
+        "group"
+    } else {
+        "private"
+    }
+}
+
+fn compact_discord_identifier(value: &str) -> String {
+    let trimmed = value.trim();
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= 12 {
+        return trimmed.to_owned();
+    }
+    let suffix: String = chars[chars.len().saturating_sub(6)..].iter().collect();
+    format!("...{suffix}")
+}
+
+fn is_synthetic_discord_label(endpoint: &PluginConversationEndpoint, label: &str) -> bool {
+    let trimmed = label.trim();
+    trimmed.is_empty()
+        || trimmed == endpoint.binding_key.trim()
+        || trimmed == endpoint.chat_id.trim()
+        || trimmed == endpoint.endpoint_key.trim()
+        || trimmed.starts_with(&format!("discord/{}/", endpoint.account_id))
+        || trimmed.starts_with("discord/")
+}
+
+fn discord_channel_title(name: &str) -> Option<String> {
+    let trimmed = name.trim().trim_start_matches('#').trim();
+    (!trimmed.is_empty()).then(|| format!("#{trimmed}"))
+}
+
+fn discord_conversation_title(
+    endpoint: &PluginConversationEndpoint,
+    kind: &str,
+    channel_names: &HashMap<String, String>,
+) -> String {
+    if kind == "group"
+        && let Some(title) = channel_names
+            .get(endpoint.chat_id.trim())
+            .and_then(|name| discord_channel_title(name))
+    {
+        return title;
+    }
+
+    for candidate in [
+        endpoint.conversation_label.as_deref(),
+        Some(endpoint.display_label.as_str()),
+        endpoint.thread_label.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let trimmed = candidate.trim();
+        if !is_synthetic_discord_label(endpoint, trimmed) {
+            return trimmed.to_owned();
+        }
+    }
+
+    let identifier = if kind == "group" {
+        endpoint.chat_id.trim()
+    } else if !endpoint.binding_key.trim().is_empty() {
+        endpoint.binding_key.trim()
+    } else {
+        endpoint.chat_id.trim()
+    };
+    let compact = compact_discord_identifier(identifier);
+    if kind == "group" {
+        format!("Channel {compact}")
+    } else {
+        format!("DM {compact}")
+    }
+}
+
+async fn fetch_discord_channel_names(
+    account: &DiscordAccount,
+    endpoints: &[PluginConversationEndpoint],
+) -> HashMap<String, String> {
+    let token = account.token.trim();
+    if token.is_empty() {
+        return HashMap::new();
+    }
+    let channel_ids: HashSet<String> = endpoints
+        .iter()
+        .filter(|endpoint| endpoint.channel == "discord")
+        .filter(|endpoint| discord_endpoint_kind(endpoint) == "group")
+        .map(|endpoint| endpoint.chat_id.trim())
+        .filter(|chat_id| !chat_id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    if channel_ids.is_empty() {
+        return HashMap::new();
+    }
+
+    let http = HttpClient::new();
+    let api_base = account.api_base.trim_end_matches('/');
+    let mut names = HashMap::new();
+    for channel_id in channel_ids {
+        let url = format!(
+            "{api_base}/channels/{}",
+            urlencoding::encode(channel_id.as_str())
+        );
+        let response = match http
+            .get(&url)
+            .header("Authorization", format!("Bot {token}"))
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                warn!(error = %error, "failed to fetch Discord channel metadata");
+                continue;
+            }
+        };
+        if !response.status().is_success() {
+            warn!(
+                status = %response.status(),
+                "failed to fetch Discord channel metadata"
+            );
+            continue;
+        }
+        match response.json::<DiscordChannelInfo>().await {
+            Ok(info) => {
+                if let Some(title) = info.name.and_then(|name| discord_channel_title(&name)) {
+                    names.insert(channel_id, title);
+                }
+            }
+            Err(error) => {
+                warn!(error = %error, "failed to parse Discord channel metadata");
+            }
+        }
+    }
+    names
+}
+
+fn build_discord_account_ui(
+    root_behavior: AccountRootBehavior,
+    account_id: &str,
+    endpoints: &[PluginConversationEndpoint],
+    channel_names: &HashMap<String, String>,
+) -> PluginAccountUi {
+    let mut account_endpoints: Vec<&PluginConversationEndpoint> = endpoints
+        .iter()
+        .filter(|endpoint| endpoint.channel == "discord" && endpoint.account_id == account_id)
+        .collect();
+
+    account_endpoints.sort_by(|left, right| {
+        right
+            .thread_id
+            .is_some()
+            .cmp(&left.thread_id.is_some())
+            .then_with(|| {
+                conversation_kind_rank(discord_endpoint_kind(left))
+                    .cmp(&conversation_kind_rank(discord_endpoint_kind(right)))
+            })
+            .then_with(|| {
+                endpoint_snapshot_activity(right)
+                    .unwrap_or("")
+                    .cmp(endpoint_snapshot_activity(left).unwrap_or(""))
+            })
+            .then_with(|| left.endpoint_key.cmp(&right.endpoint_key))
+    });
+
+    let default_open_endpoint_key = if matches!(root_behavior, AccountRootBehavior::ExpandOnly) {
+        None
+    } else {
+        account_endpoints
+            .first()
+            .map(|endpoint| endpoint.endpoint_key.clone())
+    };
+
+    let mut deduped = BTreeMap::<String, PluginConversationNode>::new();
+    for endpoint in account_endpoints {
+        if endpoint.thread_id.is_none() {
+            continue;
+        }
+        let kind = discord_endpoint_kind(endpoint);
+        let node_id = if kind == "group" {
+            format!("discord:{}:{}", endpoint.account_id, endpoint.chat_id)
+        } else {
+            endpoint.endpoint_key.clone()
+        };
+        if deduped.contains_key(&node_id) {
+            continue;
+        }
+        deduped.insert(
+            node_id.clone(),
+            PluginConversationNode {
+                id: node_id,
+                endpoint_key: endpoint.endpoint_key.clone(),
+                kind: kind.to_owned(),
+                title: discord_conversation_title(endpoint, kind, channel_names),
+                badge: None,
+                latest_activity: endpoint_snapshot_activity(endpoint).map(ToOwned::to_owned),
+                openable: endpoint.thread_id.is_some(),
+            },
+        );
+    }
+
+    PluginAccountUi {
+        default_open_endpoint_key,
+        conversation_nodes: deduped.into_values().collect(),
+    }
+}
+
 fn build_builtin_account_ui(
     root_behavior: AccountRootBehavior,
     channel: &str,
@@ -1481,7 +1706,13 @@ pub fn resolve_account_ui_from_channels_config(
     endpoints: &[PluginConversationEndpoint],
 ) -> Option<PluginAccountUi> {
     match channel {
-        "telegram" | "discord" | "feishu" | "weixin" => Some(build_builtin_account_ui(
+        "discord" => Some(build_discord_account_ui(
+            AccountRootBehavior::OpenDefault,
+            account_id,
+            endpoints,
+            &HashMap::new(),
+        )),
+        "telegram" | "feishu" | "weixin" => Some(build_builtin_account_ui(
             AccountRootBehavior::OpenDefault,
             channel,
             account_id,

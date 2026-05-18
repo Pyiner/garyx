@@ -1449,13 +1449,16 @@ code {
 }
 
 .bot-conversation-row-main {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
   min-width: 0;
+  overflow: hidden;
 }
 
 .bot-conversation-row-title {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   font-size: var(--text-sm);
@@ -1465,6 +1468,7 @@ code {
 }
 
 .bot-conversation-row-time {
+  justify-self: end;
   flex-shrink: 0;
   color: color-mix(in srgb, var(--color-token-text-primary) 48%, transparent);
   font-size: var(--text-xs);
@@ -1528,6 +1532,7 @@ code {
 .bot-thread-badge {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   min-height: 18px;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
@@ -1541,6 +1546,7 @@ code {
   font-weight: var(--font-weight-medium);
   letter-spacing: 0.02em;
   text-transform: none;
+  white-space: nowrap;
 }
 
 .workspace-row-copy {

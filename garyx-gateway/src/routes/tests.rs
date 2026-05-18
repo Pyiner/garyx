@@ -223,6 +223,56 @@ fn endpoint_conversation_details_keeps_feishu_private_as_private() {
     assert_eq!(details.label, "garyx");
 }
 
+#[test]
+fn endpoint_conversation_details_marks_discord_dm_as_private() {
+    let endpoint = garyx_router::KnownChannelEndpoint {
+        endpoint_key: "discord::main::1000000001::2000000001".to_owned(),
+        channel: "discord".to_owned(),
+        account_id: "main".to_owned(),
+        binding_key: "1000000001".to_owned(),
+        chat_id: "2000000001".to_owned(),
+        delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+        delivery_target_id: "2000000001".to_owned(),
+        display_label: "Test User".to_owned(),
+        thread_id: Some("thread::discord-dm".to_owned()),
+        thread_label: Some("Test User".to_owned()),
+        workspace_dir: None,
+        thread_updated_at: None,
+        last_inbound_at: None,
+        last_delivery_at: None,
+    };
+
+    let details = endpoint_conversation_details(&endpoint, None);
+
+    assert_eq!(details.kind, "private");
+    assert_eq!(details.label, "Test User");
+}
+
+#[test]
+fn endpoint_conversation_details_marks_discord_channel_as_group() {
+    let endpoint = garyx_router::KnownChannelEndpoint {
+        endpoint_key: "discord::main::3000000001".to_owned(),
+        channel: "discord".to_owned(),
+        account_id: "main".to_owned(),
+        binding_key: "3000000001".to_owned(),
+        chat_id: "3000000001".to_owned(),
+        delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+        delivery_target_id: "3000000001".to_owned(),
+        display_label: "general".to_owned(),
+        thread_id: Some("thread::discord-channel".to_owned()),
+        thread_label: Some("general".to_owned()),
+        workspace_dir: None,
+        thread_updated_at: None,
+        last_inbound_at: None,
+        last_delivery_at: None,
+    };
+
+    let details = endpoint_conversation_details(&endpoint, None);
+
+    assert_eq!(details.kind, "group");
+    assert_eq!(details.label, "general");
+}
+
 #[async_trait::async_trait]
 impl AgentLoopProvider for SlowDeleteProvider {
     fn provider_type(&self) -> ProviderType {

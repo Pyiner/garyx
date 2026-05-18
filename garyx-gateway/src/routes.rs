@@ -251,7 +251,15 @@ fn endpoint_conversation_details(
         .and_then(|summary| trimmed_nonempty(summary.name.as_deref()))
         .unwrap_or_else(|| fallback_label.clone());
 
-    let kind = if endpoint.channel == "feishu" {
+    let kind = if endpoint.channel == "discord" {
+        let binding_key = endpoint.binding_key.trim();
+        let chat_id = endpoint.chat_id.trim();
+        if !binding_key.is_empty() && !chat_id.is_empty() && binding_key == chat_id {
+            "group"
+        } else {
+            "private"
+        }
+    } else if endpoint.channel == "feishu" {
         match feishu_summary.and_then(|summary| summary.chat_mode.as_deref()) {
             Some("group") => {
                 if endpoint_is_topic(endpoint) {
@@ -290,7 +298,15 @@ fn endpoint_conversation_details(
 fn resolved_main_endpoint_conversation_details(
     endpoint: &ResolvedMainEndpoint,
 ) -> EndpointConversationDetails {
-    let kind = if endpoint.delivery_thread_id.is_some() {
+    let kind = if endpoint.channel == "discord" {
+        let binding_key = endpoint.binding_key.trim();
+        let chat_id = endpoint.chat_id.trim();
+        if !binding_key.is_empty() && !chat_id.is_empty() && binding_key == chat_id {
+            "group"
+        } else {
+            "private"
+        }
+    } else if endpoint.delivery_thread_id.is_some() {
         "topic"
     } else {
         let binding_key = endpoint.binding_key.trim();

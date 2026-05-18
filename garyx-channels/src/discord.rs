@@ -177,6 +177,33 @@ fn discord_gateway_url_with_query(url: &str) -> String {
     }
 }
 
+fn compact_discord_identifier(value: &str) -> String {
+    let trimmed = value.trim();
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= 12 {
+        return trimmed.to_owned();
+    }
+    let suffix: String = chars[chars.len().saturating_sub(6)..].iter().collect();
+    format!("...{suffix}")
+}
+
+fn discord_inbound_display_label(event: &DiscordMessageCreateEvent, is_group: bool) -> String {
+    if is_group {
+        return format!(
+            "Discord channel {}",
+            compact_discord_identifier(&event.channel_id)
+        );
+    }
+    event
+        .author
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|username| !username.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("DM {}", compact_discord_identifier(&event.author.id)))
+}
+
 pub(crate) fn build_inbound_request(
     account_id: &str,
     account: &DiscordAccount,
@@ -217,6 +244,10 @@ pub(crate) fn build_inbound_request(
     metadata.insert(
         NATIVE_COMMAND_TEXT_METADATA_KEY.to_owned(),
         Value::String(message.clone()),
+    );
+    metadata.insert(
+        "display_label".to_owned(),
+        Value::String(discord_inbound_display_label(&event, is_group)),
     );
     if let Some(username) = event.author.username.as_deref() {
         metadata.insert("from_name".to_owned(), Value::String(username.to_owned()));
@@ -1616,6 +1647,7 @@ mod tests {
         assert_eq!(request.thread_binding_key, "user-123");
         assert_eq!(request.message, "hello from dm");
         assert_eq!(request.extra_metadata["chat_id"], "dm-channel-123");
+        assert_eq!(request.extra_metadata["display_label"], "Test User");
     }
 
     #[test]

@@ -67,6 +67,35 @@ fn insert_weixin_plugin_account(
         );
 }
 
+fn plugin_conversation_endpoint(
+    channel: &str,
+    account_id: &str,
+    binding_key: &str,
+    chat_id: &str,
+    display_label: &str,
+    conversation_kind: &str,
+) -> PluginConversationEndpoint {
+    PluginConversationEndpoint {
+        endpoint_key: format!("{channel}::{account_id}::{binding_key}::{chat_id}"),
+        channel: channel.to_owned(),
+        account_id: account_id.to_owned(),
+        binding_key: binding_key.to_owned(),
+        chat_id: chat_id.to_owned(),
+        delivery_target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+        delivery_target_id: chat_id.to_owned(),
+        delivery_thread_id: (binding_key != chat_id).then(|| binding_key.to_owned()),
+        display_label: display_label.to_owned(),
+        thread_id: Some(format!("thread::{binding_key}")),
+        thread_label: None,
+        workspace_dir: None,
+        thread_updated_at: Some("2026-03-16T01:00:00Z".to_owned()),
+        last_inbound_at: None,
+        last_delivery_at: None,
+        conversation_kind: Some(conversation_kind.to_owned()),
+        conversation_label: Some(display_label.to_owned()),
+    }
+}
+
 #[test]
 fn read_icon_as_data_url_handles_svg() {
     let dir = tempfile::tempdir().unwrap();
@@ -429,6 +458,55 @@ async fn builtin_discoverer_registers_discord_as_managed_builtin() {
     assert!(discord.auth_flow().is_none());
     assert_eq!(discord.capabilities().outbound, true);
     assert_eq!(discord.capabilities().inbound, true);
+}
+
+#[test]
+fn discord_account_ui_owns_conversation_titles_and_omits_badges() {
+    let endpoints = vec![
+        plugin_conversation_endpoint(
+            "discord",
+            "main",
+            "1000000001",
+            "2000000001",
+            "Test User",
+            "topic",
+        ),
+        plugin_conversation_endpoint(
+            "discord",
+            "main",
+            "3000000001",
+            "3000000001",
+            "discord/main/3000000001",
+            "private",
+        ),
+    ];
+
+    let channel_names = HashMap::from([("3000000001".to_owned(), "general".to_owned())]);
+    let ui = build_discord_account_ui(
+        AccountRootBehavior::OpenDefault,
+        "main",
+        &endpoints,
+        &channel_names,
+    );
+
+    assert_eq!(ui.conversation_nodes.len(), 2);
+    let dm = ui
+        .conversation_nodes
+        .iter()
+        .find(|node| node.endpoint_key.contains("1000000001"))
+        .expect("dm node");
+    assert_eq!(dm.kind, "private");
+    assert_eq!(dm.title, "Test User");
+    assert_eq!(dm.badge, None);
+
+    let guild_channel = ui
+        .conversation_nodes
+        .iter()
+        .find(|node| node.endpoint_key.contains("3000000001"))
+        .expect("guild channel node");
+    assert_eq!(guild_channel.kind, "group");
+    assert_eq!(guild_channel.title, "#general");
+    assert_eq!(guild_channel.badge, None);
 }
 
 #[tokio::test]
@@ -1001,7 +1079,7 @@ async fn resolve_discord_main_endpoint_from_existing_private_endpoint() {
         delivery_target_type: "chat_id".into(),
         delivery_target_id: "dm-channel-456".into(),
         display_label: "Test User".into(),
-        thread_id: None,
+        thread_id: Some("thread::discord-dm".into()),
         thread_label: None,
         workspace_dir: None,
         thread_updated_at: None,
