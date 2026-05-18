@@ -35,6 +35,7 @@ use crate::plugin_tools::{
 
 const DISCORD_GATEWAY_INTENTS: u64 = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
 const DISCORD_RECONNECT_DELAY: Duration = Duration::from_secs(5);
+const DISCORD_TOOL_PLACEHOLDER_UPDATE_INTERVAL: Duration = Duration::from_secs(1);
 const DISCORD_MAX_IMAGE_SIZE_BYTES: u64 = 5 * 1024 * 1024;
 const DISCORD_MAX_FILE_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
 
@@ -853,7 +854,8 @@ impl Default for DiscordStreamState {
     fn default() -> Self {
         Self {
             stream_text: PluginStreamSendState::new(
-                PluginStreamSendPolicy::buffered_until_tool_or_done(),
+                PluginStreamSendPolicy::buffered_until_tool_or_done()
+                    .with_tool_min_flush_interval(DISCORD_TOOL_PLACEHOLDER_UPDATE_INTERVAL),
             ),
             markdown_image_scan_text: String::new(),
             sent_markdown_image_keys: HashSet::new(),
@@ -990,6 +992,7 @@ impl DiscordStreamingCallbackShared {
         thread_id: &str,
         state: &mut DiscordStreamState,
         decision: PluginStreamSendDecision,
+        mark_tool_flush: bool,
     ) {
         match decision {
             PluginStreamSendDecision::Wait | PluginStreamSendDecision::ScheduleFlush { .. } => {}
@@ -1002,9 +1005,23 @@ impl DiscordStreamingCallbackShared {
                     self.edit_existing_text(thread_id, state, &display_text)
                         .await;
                 }
-                state.stream_text.mark_flushed(Instant::now());
+                if mark_tool_flush {
+                    state.stream_text.mark_tool_flushed(Instant::now());
+                } else {
+                    state.stream_text.mark_flushed(Instant::now());
+                }
             }
         }
+    }
+
+    async fn flush_pending_tool_placeholder(self: Arc<Self>, thread_id: String) {
+        let mut state = self.state.lock().await;
+        if state.finalized {
+            return;
+        }
+        let decision = state.stream_text.scheduled_tool_flush();
+        self.apply_stream_send_decision(&thread_id, &mut state, decision, true)
+            .await;
     }
 
     async fn clear_tool_placeholder(&self, thread_id: &str, state: &mut DiscordStreamState) {
@@ -1198,7 +1215,7 @@ impl DiscordStreamingCallbackShared {
         }
     }
 
-    async fn process_event(&self, event: StreamEvent, thread_id: &str) {
+    async fn process_event(self: &Arc<Self>, event: StreamEvent, thread_id: &str) {
         let mut state = self.state.lock().await;
         match event {
             StreamEvent::SessionBound { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
@@ -1208,8 +1225,17 @@ impl DiscordStreamingCallbackShared {
                 }
                 let decision = state.stream_text.on_tool_call(&message, Instant::now());
                 state.finalized = false;
-                self.apply_stream_send_decision(thread_id, &mut state, decision)
-                    .await;
+                if let PluginStreamSendDecision::ScheduleFlush { after } = decision {
+                    let shared = self.clone();
+                    let thread_id = thread_id.to_owned();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(after).await;
+                        shared.flush_pending_tool_placeholder(thread_id).await;
+                    });
+                } else {
+                    self.apply_stream_send_decision(thread_id, &mut state, decision, true)
+                        .await;
+                }
             }
             StreamEvent::ToolResult { message } => {
                 self.process_generated_image_result(thread_id, &mut state, message)
@@ -1233,7 +1259,7 @@ impl DiscordStreamingCallbackShared {
                 state.markdown_image_scan_text.push_str(&text);
                 let decision = state.stream_text.on_delta(&text, Instant::now());
                 state.finalized = false;
-                self.apply_stream_send_decision(thread_id, &mut state, decision)
+                self.apply_stream_send_decision(thread_id, &mut state, decision, false)
                     .await;
             }
             StreamEvent::Done => {
@@ -2193,6 +2219,101 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].method.as_str(), "POST");
         assert_eq!(requests[1].method.as_str(), "DELETE");
+    }
+
+    #[tokio::test]
+    async fn response_callback_coalesces_rapid_tool_placeholder_updates() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/channels/dm-channel-123/messages/discord-tool-001"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-tool-coalesce-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Bash"}),
+                Some("tool-bash-1".to_owned()),
+                None,
+            ),
+        });
+        let mut requests = Vec::new();
+        for _ in 0..20 {
+            requests = server.received_requests().await.expect("received requests");
+            if requests.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(requests.len(), 1);
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Read"}),
+                Some("tool-read-1".to_owned()),
+                None,
+            ),
+        });
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Write"}),
+                Some("tool-write-1".to_owned()),
+                None,
+            ),
+        });
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        requests = server.received_requests().await.expect("received requests");
+        assert_eq!(
+            requests.len(),
+            1,
+            "rapid Discord tool placeholders should wait for the coalesced update"
+        );
+
+        for _ in 0..30 {
+            requests = server.received_requests().await.expect("received requests");
+            if requests.len() >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert_eq!(requests.len(), 2);
+        let create_body: Value =
+            serde_json::from_slice(&requests[0].body).expect("discord create body");
+        assert_eq!(requests[0].method.as_str(), "POST");
+        assert_eq!(create_body["content"], "🔧 #1 Bash");
+        let edit_body: Value =
+            serde_json::from_slice(&requests[1].body).expect("discord edit body");
+        assert_eq!(requests[1].method.as_str(), "PATCH");
+        assert_eq!(edit_body["content"], "🔧 #3 Write");
     }
 
     #[tokio::test]

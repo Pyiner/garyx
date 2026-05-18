@@ -157,13 +157,14 @@ message APIs. Direct messages are accepted without a mention. Server channels
 require a bot mention by default; set `require_mention` to `false` to allow
 free-response server channels. Assistant text deltas are buffered and merged
 until a top-level tool call starts or the run finishes. Tool calls use the same
-numbered progress placeholders as Telegram; child-agent and internal
-planning/reasoning tool events stay hidden. Local and remote Markdown image
-references are sent as Discord attachments, generated image results are sent as
-files, and inbound Discord image/file attachments are downloaded to local temp
-files before the agent run. Outbound messages use safe `allowed_mentions`
-defaults: user pings and reply pings are allowed, while `@everyone`, `@here`,
-and role pings are blocked.
+numbered progress placeholders as Telegram; rapid tool placeholder updates are
+coalesced to the latest state with a one-second minimum interval. Child-agent
+and internal planning/reasoning tool events stay hidden. Local and remote
+Markdown image references are sent as Discord attachments, generated image
+results are sent as files, and inbound Discord image/file attachments are
+downloaded to local temp files before the agent run. Outbound messages use safe
+`allowed_mentions` defaults: user pings and reply pings are allowed, while
+`@everyone`, `@here`, and role pings are blocked.
 
 ### Feishu / Lark
 

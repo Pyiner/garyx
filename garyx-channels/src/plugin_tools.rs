@@ -67,7 +67,10 @@ pub enum PluginStreamTextFlushPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PluginStreamSendPolicy {
     pub text_flush_policy: PluginStreamTextFlushPolicy,
+    /// Minimum interval for text-only flushes.
     pub min_flush_interval: Option<Duration>,
+    /// Minimum interval for visible tool-call placeholder flushes.
+    pub tool_min_flush_interval: Option<Duration>,
 }
 
 impl PluginStreamSendPolicy {
@@ -75,6 +78,7 @@ impl PluginStreamSendPolicy {
         Self {
             text_flush_policy: PluginStreamTextFlushPolicy::OnEveryDelta,
             min_flush_interval: Some(Duration::from_millis(300)),
+            tool_min_flush_interval: None,
         }
     }
 
@@ -82,7 +86,13 @@ impl PluginStreamSendPolicy {
         Self {
             text_flush_policy: PluginStreamTextFlushPolicy::OnToolUseOrDone,
             min_flush_interval: None,
+            tool_min_flush_interval: None,
         }
+    }
+
+    pub fn with_tool_min_flush_interval(mut self, interval: Duration) -> Self {
+        self.tool_min_flush_interval = Some(interval);
+        self
     }
 }
 
@@ -107,6 +117,8 @@ pub struct PluginStreamSendState {
     policy: PluginStreamSendPolicy,
     last_flush_time: Option<Instant>,
     flush_scheduled: bool,
+    last_tool_flush_time: Option<Instant>,
+    tool_flush_scheduled: bool,
 }
 
 impl Default for PluginStreamSendPolicy {
@@ -132,7 +144,7 @@ impl PluginStreamSendState {
     }
 
     pub fn flush_scheduled(&self) -> bool {
-        self.flush_scheduled
+        self.flush_scheduled || self.tool_flush_scheduled
     }
 
     pub fn set_accumulated_text(&mut self, text: impl Into<String>) {
@@ -144,6 +156,7 @@ impl PluginStreamSendState {
             return PluginStreamSendDecision::Wait;
         }
         self.tool_display.reset();
+        self.tool_flush_scheduled = false;
         self.accumulated_text =
             crate::streaming_core::merge_stream_text(&self.accumulated_text, text);
         self.text_delta_flush_decision(now)
@@ -156,17 +169,16 @@ impl PluginStreamSendState {
     pub fn on_tool_call(
         &mut self,
         message: &ProviderMessage,
-        _now: Instant,
+        now: Instant,
     ) -> PluginStreamSendDecision {
         self.tool_display.start_tool_call(message);
         self.flush_scheduled = false;
-        PluginStreamSendDecision::FlushNow {
-            content_text: self.render_content_text(),
-        }
+        self.tool_call_flush_decision(now)
     }
 
     pub fn on_done(&mut self, _now: Instant) -> PluginStreamSendDecision {
         self.flush_scheduled = false;
+        self.tool_flush_scheduled = false;
         let content_text = self.render_content_text();
         if content_text.trim().is_empty() {
             PluginStreamSendDecision::Wait
@@ -177,11 +189,17 @@ impl PluginStreamSendState {
 
     pub fn clear_tool_placeholder(&mut self) {
         self.tool_display.clear_active();
+        self.tool_flush_scheduled = false;
     }
 
     pub fn mark_flushed(&mut self, now: Instant) {
         self.last_flush_time = Some(now);
         self.flush_scheduled = false;
+    }
+
+    pub fn mark_tool_flushed(&mut self, now: Instant) {
+        self.last_tool_flush_time = Some(now);
+        self.tool_flush_scheduled = false;
     }
 
     pub fn scheduled_flush(&mut self) -> PluginStreamSendDecision {
@@ -193,6 +211,19 @@ impl PluginStreamSendState {
             PluginStreamSendDecision::Wait
         } else {
             self.flush_scheduled = false;
+            PluginStreamSendDecision::FlushNow { content_text }
+        }
+    }
+
+    pub fn scheduled_tool_flush(&mut self) -> PluginStreamSendDecision {
+        if !self.tool_flush_scheduled || !self.tool_display.is_active() {
+            return PluginStreamSendDecision::Wait;
+        }
+        let content_text = self.render_content_text();
+        if content_text.trim().is_empty() {
+            PluginStreamSendDecision::Wait
+        } else {
+            self.tool_flush_scheduled = false;
             PluginStreamSendDecision::FlushNow { content_text }
         }
     }
@@ -223,6 +254,31 @@ impl PluginStreamSendState {
             PluginStreamSendDecision::FlushNow { content_text }
         } else if !self.flush_scheduled {
             self.flush_scheduled = true;
+            PluginStreamSendDecision::ScheduleFlush {
+                after: min_interval - elapsed,
+            }
+        } else {
+            PluginStreamSendDecision::Wait
+        }
+    }
+
+    fn tool_call_flush_decision(&mut self, now: Instant) -> PluginStreamSendDecision {
+        let content_text = self.render_content_text();
+        if content_text.trim().is_empty() {
+            return PluginStreamSendDecision::Wait;
+        }
+
+        let Some(min_interval) = self.policy.tool_min_flush_interval else {
+            return PluginStreamSendDecision::FlushNow { content_text };
+        };
+        let Some(last_tool_flush_time) = self.last_tool_flush_time else {
+            return PluginStreamSendDecision::FlushNow { content_text };
+        };
+        let elapsed = now.saturating_duration_since(last_tool_flush_time);
+        if elapsed >= min_interval {
+            PluginStreamSendDecision::FlushNow { content_text }
+        } else if !self.tool_flush_scheduled {
+            self.tool_flush_scheduled = true;
             PluginStreamSendDecision::ScheduleFlush {
                 after: min_interval - elapsed,
             }
@@ -446,5 +502,60 @@ mod tests {
             }
         );
         assert!(!buffer.flush_scheduled());
+    }
+
+    #[test]
+    fn tool_placeholder_flush_can_be_coalesced_independently_from_text() {
+        let now = Instant::now();
+        let mut buffer = PluginStreamSendState::new(
+            PluginStreamSendPolicy::buffered_until_tool_or_done()
+                .with_tool_min_flush_interval(Duration::from_secs(1)),
+        );
+
+        assert_eq!(
+            buffer.on_tool_call(
+                &ProviderMessage::tool_use(
+                    json!({"name": "Bash"}),
+                    Some("tool-1".to_owned()),
+                    None,
+                ),
+                now,
+            ),
+            PluginStreamSendDecision::FlushNow {
+                content_text: "🔧 #1 Bash".to_owned()
+            }
+        );
+        buffer.mark_tool_flushed(now);
+
+        assert!(matches!(
+            buffer.on_tool_call(
+                &ProviderMessage::tool_use(
+                    json!({"name": "Read"}),
+                    Some("tool-2".to_owned()),
+                    None,
+                ),
+                now + Duration::from_millis(50),
+            ),
+            PluginStreamSendDecision::ScheduleFlush { .. }
+        ));
+        assert!(matches!(
+            buffer.on_tool_call(
+                &ProviderMessage::tool_use(
+                    json!({"name": "Write"}),
+                    Some("tool-3".to_owned()),
+                    None,
+                ),
+                now + Duration::from_millis(80),
+            ),
+            PluginStreamSendDecision::Wait
+        ));
+        assert!(buffer.flush_scheduled());
+
+        assert_eq!(
+            buffer.scheduled_tool_flush(),
+            PluginStreamSendDecision::FlushNow {
+                content_text: "🔧 #3 Write".to_owned()
+            }
+        );
     }
 }

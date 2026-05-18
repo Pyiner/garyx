@@ -512,7 +512,7 @@ impl StreamingCallbackShared {
             {
                 Ok(()) => {
                     state.last_rendered_text = display_text;
-                    state.stream_text.mark_flushed(Instant::now());
+                    state.stream_text.mark_tool_flushed(Instant::now());
                     state.finalized = false;
                     return;
                 }
@@ -544,7 +544,7 @@ impl StreamingCallbackShared {
                 if let Some(&last_id) = msg_ids.last() {
                     state.message_id = Some(last_id);
                     state.last_rendered_text = display_text;
-                    state.stream_text.mark_flushed(Instant::now());
+                    state.stream_text.mark_tool_flushed(Instant::now());
                     state.finalized = false;
                 }
             }
