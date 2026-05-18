@@ -71,6 +71,16 @@ pub trait InboundHandler: Send + Sync + 'static {
 
     /// Plugin sent a notification (no id, no response expected).
     async fn on_notification(&self, method: String, params: Value);
+
+    /// Number of in-flight inbound streams the host is currently
+    /// driving for this plugin. Used by gateway + plugin auto-update
+    /// flows to gate the "no active stream" check before tearing
+    /// down or replacing the subprocess. Default returns 0 so
+    /// handlers that don't track stream lifecycle (test stubs,
+    /// reserved-channel handlers) report as idle automatically.
+    fn active_stream_count(&self) -> usize {
+        0
+    }
 }
 
 /// Handles returned by [`Transport::spawn`] — one per reader task,

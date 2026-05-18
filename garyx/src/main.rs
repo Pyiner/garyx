@@ -4,10 +4,12 @@ use garyx_router::is_thread_key;
 use serde_json::json;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+mod auto_update_common;
 mod channel_plugin_host;
 mod cli;
 mod commands;
 mod config_support;
+mod gateway_auto_update;
 mod plugins_cli;
 mod runtime_assembler;
 mod service_manager;
@@ -16,10 +18,10 @@ mod service_manager;
 mod main_tests;
 
 use cli::{
-    AgentAction, AutoResearchAction, AutomationAction, AutomationDataTriggerAction,
-    AutomationTriggerAction, BotAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction,
-    DbAction, DbFieldAction, DbRecordAction, DbTableAction, GatewayAction, LogsAction,
-    PluginsAction, TaskAction, TeamAction, ThreadAction, ToolAction,
+    AgentAction, AutoResearchAction, AutoUpdateAction, AutomationAction,
+    AutomationDataTriggerAction, AutomationTriggerAction, BotAction, ChannelsAction, Cli,
+    CommandAction, Commands, ConfigAction, DbAction, DbFieldAction, DbRecordAction, DbTableAction,
+    GatewayAction, LogsAction, PluginsAction, TaskAction, TeamAction, ThreadAction, ToolAction,
 };
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
@@ -354,6 +356,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
         }
         Some(Commands::Update { version, path }) => cmd_update(version, path).await,
+        Some(Commands::AutoUpdate { action }) => match action {
+            AutoUpdateAction::Status { json } => {
+                commands::cmd_auto_update_status(config_path, json).await
+            }
+            AutoUpdateAction::Disable { gateway, plugin } => {
+                commands::cmd_auto_update_disable(config_path, gateway, plugin).await
+            }
+            AutoUpdateAction::Enable { gateway, plugin } => {
+                commands::cmd_auto_update_enable(config_path, gateway, plugin).await
+            }
+        },
         Some(Commands::Channels { action }) => match action {
             ChannelsAction::List { json } | ChannelsAction::Status { json } => {
                 cmd_channels_list(config_path, json)

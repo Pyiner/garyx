@@ -2030,6 +2030,40 @@ impl ChannelPluginManager {
             .map(|entry| entry.plugin.clone())
     }
 
+    /// Number of in-flight inbound streams the host is currently
+    /// driving for `plugin_id`. Returns `None` if no plugin is
+    /// registered under that id (resolved through the alias map).
+    /// Built-in plugins without an `InboundHandler` of their own
+    /// always report 0 through the trait default — they have no
+    /// subprocess that auto-update would need to gate on.
+    ///
+    /// Used by plugin auto-update's hot-swap gate: don't tear down
+    /// a plugin while a dispatch is mid-flight.
+    pub fn active_stream_count(&self, plugin_id: &str) -> Option<usize> {
+        let canonical = self
+            .registry
+            .alias_to_id
+            .get(plugin_id)
+            .cloned()
+            .unwrap_or_else(|| plugin_id.to_owned());
+        let entry = self.plugins.get(&canonical)?;
+        let sub = entry.subprocess.as_ref()?;
+        Some(sub.handler.active_stream_count())
+    }
+
+    /// Sum of `active_stream_count` across every registered subprocess
+    /// plugin. Used by the gateway auto-update loop's stream-idle
+    /// gate — the gateway needs every plugin to be quiet before
+    /// SIGTERM-ing itself, since a respawn would interrupt all
+    /// in-flight dispatches simultaneously.
+    pub fn total_active_streams(&self) -> usize {
+        self.plugins
+            .values()
+            .filter_map(|entry| entry.subprocess.as_ref())
+            .map(|sub| sub.handler.active_stream_count())
+            .sum()
+    }
+
     /// Catalog of subprocess plugins with the full metadata the
     /// desktop UI needs for schema-driven channel configuration
     /// (§11): id, version, capabilities, account-config schema, and

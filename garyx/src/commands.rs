@@ -145,7 +145,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
-async fn latest_release_version(
+pub(crate) async fn latest_release_version(
     client: &reqwest::Client,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let summary = client
@@ -160,7 +160,7 @@ async fn latest_release_version(
     Ok(normalize_release_version(&summary.tag_name))
 }
 
-fn replacement_binary_path(
+pub(crate) fn replacement_binary_path(
     install_path: Option<PathBuf>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Some(path) = install_path {
@@ -411,6 +411,21 @@ pub(crate) async fn run_gateway(
                     .expect("auto_update_handle mutex poisoned during init") = Some(handle);
             }
         }
+
+        // Spawn the gateway self-updater. Separate loop from the
+        // plugin one because the two have independent kill switches
+        // (`gateway.auto_update.enabled` vs `plugins.auto_update`)
+        // and target different release sources. We keep the handle
+        // alive but don't track it in `auto_update_handle` — that
+        // one is plugin-specific (e.g. hot-reload may want to cycle
+        // it). Gateway self-update is intentionally fire-and-forget;
+        // there's no scenario where we restart this loop without
+        // also restarting the gateway, so a hot-reload doesn't need
+        // to manage it.
+        let _gateway_auto_update_handle = crate::gateway_auto_update::spawn(
+            plugin_manager.clone(),
+            config.gateway.auto_update.clone(),
+        );
 
         // Runtime services are started and wired by RuntimeAssembler.
         let gateway = Gateway::new(state);
@@ -979,45 +994,51 @@ pub(crate) async fn cmd_status(
     Ok(())
 }
 
-pub(crate) async fn cmd_update(
-    version: Option<String>,
-    install_path: Option<PathBuf>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let client = reqwest::Client::builder()
-        .user_agent(format!("garyx-cli/{VERSION}"))
-        .build()?;
+/// Outcome of [`try_swap_garyx_binary`] — the unattended sibling to
+/// the user-facing `cmd_update` path. Used by both callers (manual
+/// CLI + background auto-update loop) to log a "from→to" line after
+/// a successful swap, and by the loop to decide whether to SIGTERM
+/// self for restart.
+#[derive(Debug)]
+pub(crate) struct SwapOutcome {
+    /// Version that was installed pre-swap.
+    pub from_version: String,
+    /// Version that was installed post-swap (= the requested version).
+    pub to_version: String,
+    /// Final path of the installed binary on disk.
+    pub install_path: PathBuf,
+}
 
-    let requested_version = match version.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        Some(value) => normalize_release_version(value),
-        None => latest_release_version(&client).await?,
-    };
+/// Download a specific garyx release from GitHub, verify it, codesign
+/// it (macOS), and atomically swap it into `destination_path`. Used
+/// by both `cmd_update` (manual CLI) and the gateway auto-update loop
+/// (background tick). The function does NOT print anything — callers
+/// log/print as appropriate for their context.
+///
+/// `requested_version` must already be normalized (no leading `v`).
+/// `destination_path` is where the new binary lands on success.
+pub(crate) async fn try_swap_garyx_binary(
+    requested_version: &str,
+    destination_path: &Path,
+) -> Result<SwapOutcome, Box<dyn std::error::Error>> {
     let target = detect_release_target()?;
-    let destination = replacement_binary_path(install_path)?;
-    let parent = destination
+    let parent = destination_path
         .parent()
         .ok_or_else(|| {
             format!(
                 "update target has no parent directory: {}",
-                destination.display()
+                destination_path.display()
             )
         })?
         .to_path_buf();
-
-    if version.is_none() && requested_version == VERSION {
-        println!(
-            "garyx is already up to date at v{} ({})",
-            VERSION,
-            destination.display()
-        );
-        return Ok(());
-    }
-
-    println!("Updating garyx to v{requested_version} for {target}...");
 
     let archive_name = format!("garyx-{requested_version}-{target}.tar.gz");
     let base_url =
         format!("https://github.com/{GITHUB_RELEASE_REPO}/releases/download/v{requested_version}");
 
+    let client = reqwest::Client::builder()
+        .user_agent(format!("garyx-cli/{VERSION}"))
+        .build()?;
     let archive_bytes = client
         .get(format!("{base_url}/{archive_name}"))
         .send()
@@ -1069,13 +1090,176 @@ pub(crate) async fn cmd_update(
         fs::set_permissions(&staged_path, perms)?;
     }
     ad_hoc_codesign_macos_binary(&staged_path)?;
-    fs::rename(&staged_path, &destination)?;
+    fs::rename(&staged_path, destination_path)?;
 
+    Ok(SwapOutcome {
+        from_version: VERSION.to_owned(),
+        to_version: requested_version.to_owned(),
+        install_path: destination_path.to_path_buf(),
+    })
+}
+
+pub(crate) async fn cmd_update(
+    version: Option<String>,
+    install_path: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::builder()
+        .user_agent(format!("garyx-cli/{VERSION}"))
+        .build()?;
+
+    let requested_version = match version.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+        Some(value) => normalize_release_version(value),
+        None => latest_release_version(&client).await?,
+    };
+    let destination = replacement_binary_path(install_path)?;
+    let target = detect_release_target()?;
+
+    if version.is_none() && requested_version == VERSION {
+        println!(
+            "garyx is already up to date at v{} ({})",
+            VERSION,
+            destination.display()
+        );
+        return Ok(());
+    }
+
+    println!("Updating garyx to v{requested_version} for {target}...");
+    let outcome = try_swap_garyx_binary(&requested_version, &destination).await?;
     println!(
         "Updated garyx from v{} to v{} at {}",
-        VERSION,
-        requested_version,
-        destination.display()
+        outcome.from_version,
+        outcome.to_version,
+        outcome.install_path.display()
+    );
+    Ok(())
+}
+
+/// Print current auto-update state for `auto-update status`. Reads
+/// the on-disk config (not the running gateway's in-memory state)
+/// because the gateway may not be running, and a freshly-edited
+/// config that hasn't been reloaded yet is what the user cares about.
+pub(crate) async fn cmd_auto_update_status(
+    config_path: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let loaded = load_config_or_default(config_path, Default::default())?;
+    let gw = &loaded.config.gateway.auto_update;
+    let plugins = &loaded.config.plugins;
+
+    let latest = match reqwest::Client::builder()
+        .user_agent(format!("garyx-cli/{VERSION}"))
+        .build()
+    {
+        Ok(client) => latest_release_version(&client).await.ok(),
+        Err(_) => None,
+    };
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "installed_version": VERSION,
+                "latest_known_version": latest,
+                "gateway": {
+                    "enabled": gw.enabled,
+                    "check_interval_secs": gw.check_interval_secs,
+                    "github_repo": gw.github_repo,
+                },
+                "plugin": {
+                    "enabled": plugins.auto_update,
+                    "check_interval_secs": plugins.auto_update_check_interval_secs,
+                },
+            }))?
+        );
+    } else {
+        println!("auto-update status (from {})", loaded.path.display());
+        println!("  installed:   v{VERSION}");
+        match latest.as_deref() {
+            Some(v) => println!("  latest:      v{v}"),
+            None => println!("  latest:      <fetch failed>"),
+        }
+        println!(
+            "  gateway:     {} (every {}s, repo={})",
+            if gw.enabled { "ENABLED" } else { "disabled" },
+            gw.check_interval_secs,
+            gw.github_repo,
+        );
+        println!(
+            "  plugin:      {} (every {}s)",
+            if plugins.auto_update {
+                "ENABLED"
+            } else {
+                "disabled"
+            },
+            plugins.auto_update_check_interval_secs,
+        );
+    }
+    Ok(())
+}
+
+/// Implementation shared by `cmd_auto_update_disable` and
+/// `cmd_auto_update_enable`. `target_gateway` and `target_plugin`
+/// describe which loops to touch (both true means "all"); `enabled`
+/// is the new value. Returns the post-mutation tuple `(gateway,
+/// plugin)` so the caller can print a sensible summary.
+async fn set_auto_update_flags(
+    config_path: &str,
+    target_gateway: bool,
+    target_plugin: bool,
+    enabled: bool,
+) -> Result<(bool, bool), Box<dyn std::error::Error>> {
+    let loaded = load_config_or_default(config_path, Default::default())?;
+    let resolved_config_path = loaded.path;
+    let mut config = loaded.config;
+
+    // No explicit target → touch both. Matches the help text on the
+    // CLI subcommands.
+    let (touch_gateway, touch_plugin) = if !target_gateway && !target_plugin {
+        (true, true)
+    } else {
+        (target_gateway, target_plugin)
+    };
+
+    if touch_gateway {
+        config.gateway.auto_update.enabled = enabled;
+    }
+    if touch_plugin {
+        config.plugins.auto_update = enabled;
+    }
+
+    save_config_struct(&resolved_config_path, &config)?;
+    notify_gateway_reload_quiet(&resolved_config_path).await;
+
+    Ok((
+        config.gateway.auto_update.enabled,
+        config.plugins.auto_update,
+    ))
+}
+
+pub(crate) async fn cmd_auto_update_disable(
+    config_path: &str,
+    gateway: bool,
+    plugin: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (gw_after, plugin_after) = set_auto_update_flags(config_path, gateway, plugin, false).await?;
+    println!(
+        "auto-update updated: gateway={} plugin={}",
+        if gw_after { "ENABLED" } else { "disabled" },
+        if plugin_after { "ENABLED" } else { "disabled" },
+    );
+    Ok(())
+}
+
+pub(crate) async fn cmd_auto_update_enable(
+    config_path: &str,
+    gateway: bool,
+    plugin: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (gw_after, plugin_after) = set_auto_update_flags(config_path, gateway, plugin, true).await?;
+    println!(
+        "auto-update updated: gateway={} plugin={}",
+        if gw_after { "ENABLED" } else { "disabled" },
+        if plugin_after { "ENABLED" } else { "disabled" },
     );
     Ok(())
 }

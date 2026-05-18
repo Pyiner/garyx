@@ -668,17 +668,81 @@ choose English or Chinese explicitly from Settings.
 
 ## CLI Update
 
-The CLI does not auto-update. Use:
+### Manual update
 
 ```bash
-garyx update
+garyx update                    # latest from GitHub Releases
+garyx update --version 0.1.7    # pin a specific tag
 ```
 
-You can pin a version:
+### Gateway auto-update
+
+When the gateway runs as a managed service (launchd on macOS, systemd
+on Linux), it periodically checks GitHub Releases and self-updates in
+the background:
+
+1. fetch the `latest` tag from the configured `github_repo`
+2. strict-greater version comparator — never downgrades, never
+   replaces a local dev build
+3. stream-idle gate — waits until every subprocess plugin reports
+   zero active streams for `stream_idle_required_secs` consecutive
+   seconds, polled every `stream_idle_poll_interval_secs`, with a
+   `stream_idle_max_wait_secs` ceiling
+4. download, sha256-verify, codesign (macOS), atomic swap
+5. exit cleanly; the OS supervisor restarts on the new binary
+
+Configuration knobs in `~/.garyx/garyx.json`:
+
+```json
+{
+  "gateway": {
+    "auto_update": {
+      "enabled": true,
+      "check_interval_secs": 21600,
+      "stream_idle_required_secs": 60,
+      "stream_idle_poll_interval_secs": 5,
+      "stream_idle_max_wait_secs": 86400,
+      "github_repo": "Pyiner/garyx"
+    }
+  }
+}
+```
+
+- `enabled` (bool, default `true`) — master switch.
+- `check_interval_secs` (u64, default `21600` = 6 h) — seconds
+  between checks. Floor of 60 s to respect GitHub's unauthenticated
+  rate limit (60 req/h).
+- `stream_idle_required_secs` (u64, default `60`) — how many
+  consecutive idle seconds before the swap proceeds. Any new stream
+  resets the timer.
+- `stream_idle_poll_interval_secs` (u64, default `5`) — how often the
+  gate polls.
+- `stream_idle_max_wait_secs` (u64, default `86400` = 24 h) — give-up
+  ceiling. On timeout the tick is dropped; the next interval retries.
+- `github_repo` (string, default `"Pyiner/garyx"`) — override for
+  testing against a fork.
+
+**Linux supervisor caveat:** on macOS `launchd` with `KeepAlive=true`
+relaunches us automatically after the post-swap exit. On Linux you
+need a supervisor with equivalent semantics (systemd user unit with
+`Restart=always`, or your container orchestrator's restart policy)
+or the gateway won't come back up on the new binary.
+
+### Kill switches
 
 ```bash
-garyx update --version 0.1.7
+garyx auto-update status          # show installed / latest + flags
+garyx auto-update disable         # disable both gateway + plugin loops
+garyx auto-update disable --gateway
+garyx auto-update disable --plugin
+garyx auto-update enable          # mirror of disable
 ```
+
+Status reads the on-disk config, not the running gateway's in-memory
+state, so a freshly-edited file shows up immediately. Disable /
+enable rewrite `garyx.json` atomically and trigger a gateway config
+reload — the next tick observes the new flag and either keeps
+running or quietly drops out of its loop.
 
 ## Useful Commands
 

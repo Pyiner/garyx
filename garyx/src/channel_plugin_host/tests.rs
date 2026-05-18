@@ -57,6 +57,50 @@ async fn abandon_inbound_is_idempotent() {
 }
 
 #[test]
+fn active_stream_count_is_zero_when_no_live_streams() {
+    // Fresh handler has never seen deliver_inbound — the auto-update
+    // stream-idle gate must observe a clean 0 so it can proceed.
+    let handler = build_handler();
+    assert_eq!(handler.active_stream_count(), 0);
+}
+
+#[test]
+fn active_stream_count_reflects_live_streams_set_cardinality() {
+    // `live_streams` is the source of truth — `handle_deliver_inbound`
+    // inserts at stream-id allocation and removes after
+    // `route_and_dispatch` returns, so its cardinality at any instant
+    // is the count of in-flight inbound dispatches the host is
+    // driving. Simulate two concurrent inbound runs directly to keep
+    // this test independent of the full deliver_inbound async path.
+    let handler = build_handler();
+    {
+        let mut guard = handler.live_streams.lock().expect("live_streams lock");
+        guard.insert("str_active_a".to_owned());
+        guard.insert("str_active_b".to_owned());
+    }
+    assert_eq!(
+        handler.active_stream_count(),
+        2,
+        "two inserted ids must surface as count=2"
+    );
+
+    // After one finishes (mirrors the post-route_and_dispatch remove),
+    // count drops to 1.
+    {
+        let mut guard = handler.live_streams.lock().expect("live_streams lock");
+        guard.remove("str_active_a");
+    }
+    assert_eq!(handler.active_stream_count(), 1);
+
+    // Drained → 0, idle-gate-ready.
+    {
+        let mut guard = handler.live_streams.lock().expect("live_streams lock");
+        guard.remove("str_active_b");
+    }
+    assert_eq!(handler.active_stream_count(), 0);
+}
+
+#[test]
 fn merge_inbound_image_refs_promotes_path_images_into_attachment_metadata() {
     let mut metadata = HashMap::from([(
         "attachments".to_owned(),

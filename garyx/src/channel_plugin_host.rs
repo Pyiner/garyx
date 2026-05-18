@@ -169,6 +169,21 @@ impl InboundHandler for HostInboundHandler {
             );
         }
     }
+
+    fn active_stream_count(&self) -> usize {
+        // `live_streams` is incremented in `handle_deliver_inbound` at
+        // stream-id allocation time and decremented when
+        // `route_and_dispatch` returns, so its cardinality is the
+        // count of inbound dispatches the host is actively driving.
+        // A poisoned mutex shouldn't be possible here (we only call
+        // .lock() while holding no other lock), but if it happens
+        // we conservatively report 0 — the gating caller will retry
+        // on the next tick.
+        self.live_streams
+            .lock()
+            .map(|guard| guard.len())
+            .unwrap_or(0)
+    }
 }
 
 /// Wire shape of `abandon_inbound` params (§7.3).

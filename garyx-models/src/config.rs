@@ -112,6 +112,8 @@ pub struct GatewayConfig {
     pub search: SearchConfig,
     #[serde(default)]
     pub conversation_index: ConversationIndexConfig,
+    #[serde(default)]
+    pub auto_update: GatewayAutoUpdateConfig,
 }
 
 fn default_port() -> u16 {
@@ -130,6 +132,81 @@ impl Default for GatewayConfig {
             auth_token: String::new(),
             search: SearchConfig::default(),
             conversation_index: ConversationIndexConfig::default(),
+            auto_update: GatewayAutoUpdateConfig::default(),
+        }
+    }
+}
+
+/// Configuration for the gateway-binary self-updater (separate from
+/// `PluginsConfig` which governs plugin auto-update). The gateway
+/// loop checks GitHub Releases periodically; when a strictly higher
+/// version is available it waits for a "no in-flight stream" window,
+/// downloads the release, verifies the sha256, codesigns on macOS,
+/// atomically swaps the binary into the install path, then SIGTERM's
+/// itself so the OS supervisor (launchd / systemd) restarts on the
+/// new binary.
+///
+/// All durations are seconds because that's how the on-disk JSON
+/// schema stores them.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GatewayAutoUpdateConfig {
+    /// Master switch. When `false` the loop is never spawned and no
+    /// release check fires. Default `true` for parity with the
+    /// desktop client's auto-update.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Seconds between recurring checks. Default 6h. Lower bound
+    /// enforced in `garyx_auto_update::MIN_INTERVAL_SECS` (operator
+    /// can shorten for testing but not below the floor — protects
+    /// the GitHub API quota).
+    #[serde(default = "default_gateway_auto_update_interval_secs")]
+    pub check_interval_secs: u64,
+    /// How many consecutive seconds the gateway must observe zero
+    /// active streams across all subprocess plugins before the
+    /// stream-idle gate releases and lets the swap proceed.
+    #[serde(default = "default_stream_idle_required_secs")]
+    pub stream_idle_required_secs: u64,
+    /// How often the stream-idle gate polls
+    /// `total_active_streams()`. Lower = faster reaction at the cost
+    /// of more lock contention.
+    #[serde(default = "default_stream_idle_poll_interval_secs")]
+    pub stream_idle_poll_interval_secs: u64,
+    /// Wall-clock cap on how long a single tick is allowed to spin
+    /// inside the stream-idle gate before giving up. Defaults to 24h
+    /// — the loop is forgiving by design; the next tick retries.
+    #[serde(default = "default_stream_idle_max_wait_secs")]
+    pub stream_idle_max_wait_secs: u64,
+    /// GitHub `owner/repo` that hosts the gateway release archives.
+    /// Override for testing against a fork.
+    #[serde(default = "default_github_repo")]
+    pub github_repo: String,
+}
+
+fn default_gateway_auto_update_interval_secs() -> u64 {
+    21_600
+}
+fn default_stream_idle_required_secs() -> u64 {
+    60
+}
+fn default_stream_idle_poll_interval_secs() -> u64 {
+    5
+}
+fn default_stream_idle_max_wait_secs() -> u64 {
+    24 * 60 * 60
+}
+fn default_github_repo() -> String {
+    "Pyiner/garyx".to_owned()
+}
+
+impl Default for GatewayAutoUpdateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            check_interval_secs: default_gateway_auto_update_interval_secs(),
+            stream_idle_required_secs: default_stream_idle_required_secs(),
+            stream_idle_poll_interval_secs: default_stream_idle_poll_interval_secs(),
+            stream_idle_max_wait_secs: default_stream_idle_max_wait_secs(),
+            github_repo: default_github_repo(),
         }
     }
 }

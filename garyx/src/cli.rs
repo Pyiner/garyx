@@ -112,6 +112,12 @@ pub(crate) enum Commands {
         #[arg(long)]
         path: Option<PathBuf>,
     },
+    /// Manage the gateway + plugin auto-update kill switches
+    #[command(name = "auto-update")]
+    AutoUpdate {
+        #[command(subcommand)]
+        action: AutoUpdateAction,
+    },
     /// Channel account management
     #[command(alias = "channel")]
     Channels {
@@ -198,6 +204,38 @@ pub(crate) enum Commands {
         file: Option<PathBuf>,
         /// Message text. Required unless --image or --file is provided.
         text: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum AutoUpdateAction {
+    /// Show whether gateway + plugin auto-update are enabled and the
+    /// installed / latest-known versions
+    Status {
+        /// Output result as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Disable auto-update. By default both gateway and plugin
+    /// loops are disabled; pass `--gateway` or `--plugin` to
+    /// disable only one. Persists to garyx.json and triggers a
+    /// gateway config reload so the loops stop on the next tick.
+    Disable {
+        /// Disable only the gateway auto-update loop
+        #[arg(long, conflicts_with = "plugin")]
+        gateway: bool,
+        /// Disable only the plugin auto-update loop
+        #[arg(long, conflicts_with = "gateway")]
+        plugin: bool,
+    },
+    /// Enable auto-update. Mirror of `disable`.
+    Enable {
+        /// Enable only the gateway auto-update loop
+        #[arg(long, conflicts_with = "plugin")]
+        gateway: bool,
+        /// Enable only the plugin auto-update loop
+        #[arg(long, conflicts_with = "gateway")]
+        plugin: bool,
     },
 }
 
