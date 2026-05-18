@@ -6672,6 +6672,8 @@ button.new-thread-mode-trigger[data-state="open"] {
 
 .message-image-frame {
   display: inline-flex;
+  width: fit-content;
+  max-width: min(100%, 460px);
   overflow: hidden;
   border-radius: var(--radius-xl);
   border: 0.5px solid var(--color-token-border-light);
@@ -6697,8 +6699,8 @@ button.message-image-frame:focus-visible {
 
 .message-image {
   display: block;
-  width: 100%;
-  max-width: min(100%, 460px);
+  width: auto;
+  max-width: 100%;
   height: auto;
 }
 
