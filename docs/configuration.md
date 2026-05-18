@@ -127,8 +127,9 @@ fenced code blocks, links, and reserved-character escaping. If Telegram rejects
 the MarkdownV2 entity parsing for a send or edit, Garyx logs the failure and
 retries that same message as plain text without `parse_mode`.
 During streaming, top-level tool calls are shown as short numbered progress
-placeholders. Garyx hides child-agent and internal planning/reasoning tool
-events from the Telegram chat.
+placeholders and flush immediately, while assistant text edits are coalesced at
+roughly 300ms intervals. Garyx hides child-agent and internal
+planning/reasoning tool events from the Telegram chat.
 
 ### Discord
 
@@ -154,9 +155,9 @@ events from the Telegram chat.
 Discord connects through the Gateway API and sends replies through the REST
 message APIs. Direct messages are accepted without a mention. Server channels
 require a bot mention by default; set `require_mention` to `false` to allow
-free-response server channels. Assistant responses stream by creating the first
-reply message and editing it until the run finishes. Top-level tool calls use
-the same numbered progress placeholders as Telegram; child-agent and internal
+free-response server channels. Assistant text deltas are buffered and merged
+until a top-level tool call starts or the run finishes. Tool calls use the same
+numbered progress placeholders as Telegram; child-agent and internal
 planning/reasoning tool events stay hidden. Local and remote Markdown image
 references are sent as Discord attachments, generated image results are sent as
 files, and inbound Discord image/file attachments are downloaded to local temp

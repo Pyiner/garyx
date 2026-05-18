@@ -2,14 +2,17 @@ use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use reqwest::Client;
 use tokio::sync::{Mutex, mpsc, watch};
 use tracing::{error, warn};
 
 use crate::generated_images::{extract_image_generation_result, write_generated_image_temp};
-use crate::plugin_tools::{ToolCallDisplayState, should_hide_tool_call_display};
+use crate::plugin_tools::{
+    PluginStreamSendDecision, PluginStreamSendPolicy, PluginStreamSendState,
+    should_hide_tool_call_display,
+};
 use garyx_models::config::ReplyToMode;
 use garyx_models::provider::{ProviderMessage, StreamBoundaryKind, StreamEvent};
 use garyx_router::MessageRouter;
@@ -24,28 +27,22 @@ use super::{MAX_MESSAGE_LENGTH, resolve_reply_to, send_response};
 #[derive(Debug)]
 struct StreamState {
     message_id: Option<i64>,
-    accumulated_text: String,
+    stream_text: PluginStreamSendState,
     markdown_image_scan_text: String,
     sent_markdown_image_paths: HashSet<String>,
     last_rendered_text: String,
-    last_edit_time: Instant,
-    flush_scheduled: bool,
     finalized: bool,
-    tool_display: ToolCallDisplayState,
 }
 
 impl Default for StreamState {
     fn default() -> Self {
         Self {
             message_id: None,
-            accumulated_text: String::new(),
+            stream_text: PluginStreamSendState::new(PluginStreamSendPolicy::telegram_like()),
             markdown_image_scan_text: String::new(),
             sent_markdown_image_paths: HashSet::new(),
             last_rendered_text: String::new(),
-            last_edit_time: Instant::now(),
-            flush_scheduled: false,
             finalized: false,
-            tool_display: ToolCallDisplayState::default(),
         }
     }
 }
@@ -69,9 +66,7 @@ struct StreamingCallbackShared {
 }
 
 fn render_stream_content_text(state: &StreamState) -> String {
-    state
-        .tool_display
-        .render_content_text(&state.accumulated_text)
+    state.stream_text.render_content_text()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,29 +197,30 @@ fn render_stream_display_text(state: &StreamState) -> String {
 impl StreamingCallbackShared {
     fn reset_for_fresh_message(state: &mut StreamState) {
         state.message_id = None;
-        state.accumulated_text.clear();
+        state.stream_text = PluginStreamSendState::new(PluginStreamSendPolicy::telegram_like());
         state.markdown_image_scan_text.clear();
         state.sent_markdown_image_paths.clear();
         state.last_rendered_text.clear();
-        state.last_edit_time = Instant::now();
-        state.flush_scheduled = false;
         state.finalized = false;
-        state.tool_display.reset();
     }
 
     async fn flush_pending_stream_text(self: &Arc<Self>, thread_id: &str) {
         let mut state = self.state.lock().await;
-        state.flush_scheduled = false;
 
-        if state.finalized || state.tool_display.is_active() {
+        if state.finalized {
             return;
         }
 
-        let content_text = render_stream_content_text(&state);
+        let PluginStreamSendDecision::FlushNow { content_text } =
+            state.stream_text.scheduled_flush()
+        else {
+            return;
+        };
+
         if content_text.trim().is_empty() {
             return;
         }
-        let display_text = render_stream_display_text(&state);
+        let display_text = strip_deliverable_markdown_images(&content_text);
         if display_text.trim().is_empty() {
             return;
         }
@@ -253,7 +249,7 @@ impl StreamingCallbackShared {
             {
                 Ok(()) => {
                     state.last_rendered_text = display_text;
-                    state.last_edit_time = Instant::now();
+                    state.stream_text.mark_flushed(Instant::now());
                 }
                 Err(e) => {
                     warn!(
@@ -283,7 +279,6 @@ impl StreamingCallbackShared {
             Ok(()) => {
                 state.message_id = None;
                 state.last_rendered_text.clear();
-                state.last_edit_time = Instant::now();
             }
             Err(error) => {
                 warn!(
@@ -375,11 +370,11 @@ impl StreamingCallbackShared {
     async fn process_boundary(&self, thread_id: &str, state: &mut StreamState) {
         let mut delivered_msg_ids: Vec<i64> = Vec::new();
 
-        let pending_boundary_text = state.accumulated_text.clone();
+        let pending_boundary_text = state.stream_text.accumulated_text().to_owned();
         let _ = self
             .roll_stream_segment_if_needed(thread_id, state, &pending_boundary_text)
             .await;
-        let boundary_content_text = state.accumulated_text.trim().to_owned();
+        let boundary_content_text = state.stream_text.accumulated_text().trim().to_owned();
         let boundary_text = strip_deliverable_markdown_images(&boundary_content_text);
 
         if boundary_content_text.is_empty() {
@@ -412,7 +407,7 @@ impl StreamingCallbackShared {
                 {
                     Ok(()) => {
                         state.last_rendered_text = boundary_text.clone();
-                        state.last_edit_time = Instant::now();
+                        state.stream_text.mark_flushed(Instant::now());
                     }
                     Err(e) => {
                         warn!(
@@ -445,7 +440,7 @@ impl StreamingCallbackShared {
                         if let Some(&last_id) = msg_ids.last() {
                             state.message_id = Some(last_id);
                             state.last_rendered_text = boundary_text.clone();
-                            state.last_edit_time = Instant::now();
+                            state.stream_text.mark_flushed(Instant::now());
                         }
                         delivered_msg_ids = msg_ids;
                     }
@@ -475,18 +470,21 @@ impl StreamingCallbackShared {
         state: &mut StreamState,
         message: ProviderMessage,
     ) {
-        if !state.accumulated_text.trim().is_empty() {
-            let accumulated_text = state.accumulated_text.clone();
+        if !state.stream_text.accumulated_text().trim().is_empty() {
+            let accumulated_text = state.stream_text.accumulated_text().to_owned();
             if self
                 .roll_stream_segment_if_needed(thread_id, state, &accumulated_text)
                 .await
             {
-                state.tool_display.clear_active();
+                state.stream_text.clear_tool_placeholder();
             }
         }
 
-        state.tool_display.start_tool_call(&message);
-        let display_text = render_stream_display_text(state);
+        let decision = state.stream_text.on_tool_call(&message, Instant::now());
+        let PluginStreamSendDecision::FlushNow { content_text } = decision else {
+            return;
+        };
+        let display_text = strip_deliverable_markdown_images(&content_text);
         if display_text.trim().is_empty() {
             return;
         }
@@ -496,7 +494,7 @@ impl StreamingCallbackShared {
                 display_len = display_text.len(),
                 "Telegram tool placeholder skipped because it would exceed message length"
             );
-            state.tool_display.clear_active();
+            state.stream_text.clear_tool_placeholder();
             return;
         }
 
@@ -514,8 +512,7 @@ impl StreamingCallbackShared {
             {
                 Ok(()) => {
                     state.last_rendered_text = display_text;
-                    state.last_edit_time = Instant::now();
-                    state.flush_scheduled = false;
+                    state.stream_text.mark_flushed(Instant::now());
                     state.finalized = false;
                     return;
                 }
@@ -547,8 +544,7 @@ impl StreamingCallbackShared {
                 if let Some(&last_id) = msg_ids.last() {
                     state.message_id = Some(last_id);
                     state.last_rendered_text = display_text;
-                    state.last_edit_time = Instant::now();
-                    state.flush_scheduled = false;
+                    state.stream_text.mark_flushed(Instant::now());
                     state.finalized = false;
                 }
             }
@@ -564,14 +560,13 @@ impl StreamingCallbackShared {
     }
 
     async fn clear_tool_placeholder(&self, state: &mut StreamState) {
-        if !state.tool_display.is_active() {
+        if !state.stream_text.is_tool_placeholder_active() {
             return;
         }
 
-        state.tool_display.clear_active();
-        state.flush_scheduled = false;
+        state.stream_text.clear_tool_placeholder();
 
-        let display_text = strip_deliverable_markdown_images(&state.accumulated_text);
+        let display_text = strip_deliverable_markdown_images(state.stream_text.accumulated_text());
         let Some(msg_id) = state.message_id else {
             state.last_rendered_text.clear();
             return;
@@ -590,7 +585,7 @@ impl StreamingCallbackShared {
                 Ok(()) => {
                     state.message_id = None;
                     state.last_rendered_text.clear();
-                    state.last_edit_time = Instant::now();
+                    state.stream_text.mark_flushed(Instant::now());
                 }
                 Err(error) => {
                     warn!(
@@ -620,7 +615,7 @@ impl StreamingCallbackShared {
         {
             Ok(()) => {
                 state.last_rendered_text = display_text;
-                state.last_edit_time = Instant::now();
+                state.stream_text.mark_flushed(Instant::now());
             }
             Err(error) => {
                 warn!(
@@ -642,7 +637,7 @@ impl StreamingCallbackShared {
             return;
         };
 
-        if state.tool_display.is_active() {
+        if state.stream_text.is_tool_placeholder_active() {
             self.clear_tool_placeholder(state).await;
         }
         let prior_text_msg_id = state.message_id;
@@ -800,10 +795,9 @@ impl StreamingCallbackShared {
             }
         }
 
-        state.accumulated_text = active_chunk.clone();
+        state.stream_text.set_accumulated_text(active_chunk.clone());
         state.last_rendered_text = active_chunk;
-        state.last_edit_time = Instant::now();
-        state.flush_scheduled = false;
+        state.stream_text.mark_flushed(Instant::now());
 
         self.record_outbound_messages(thread_id, &finalized_msg_ids)
             .await;
@@ -822,13 +816,12 @@ impl StreamingCallbackShared {
                 }
                 StreamBoundaryKind::AssistantSegment => {
                     crate::streaming_core::apply_stream_boundary_text(
-                        &mut state.accumulated_text,
-                        StreamBoundaryKind::AssistantSegment,
-                    );
-                    crate::streaming_core::apply_stream_boundary_text(
                         &mut state.markdown_image_scan_text,
                         StreamBoundaryKind::AssistantSegment,
                     );
+                    state
+                        .stream_text
+                        .apply_boundary(StreamBoundaryKind::AssistantSegment);
                     false
                 }
             },
@@ -836,12 +829,22 @@ impl StreamingCallbackShared {
                 if text.is_empty() {
                     return;
                 }
-                state.tool_display.reset();
                 state.markdown_image_scan_text.push_str(&text);
-                state.accumulated_text =
-                    crate::streaming_core::merge_stream_text(&state.accumulated_text, &text);
+                let decision = state.stream_text.on_delta(&text, Instant::now());
                 state.finalized = false;
-                false
+                match decision {
+                    PluginStreamSendDecision::Wait => return,
+                    PluginStreamSendDecision::ScheduleFlush { after } => {
+                        let shared = self.clone();
+                        let thread_id = thread_id.to_owned();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(after).await;
+                            shared.flush_pending_stream_text(&thread_id).await;
+                        });
+                        return;
+                    }
+                    PluginStreamSendDecision::FlushNow { .. } => false,
+                }
             }
             StreamEvent::ToolUse { message } => {
                 if should_hide_tool_call_display(&message) {
@@ -856,56 +859,21 @@ impl StreamingCallbackShared {
                 return;
             }
             StreamEvent::ThreadTitleUpdated { .. } => return,
-            StreamEvent::Done => true,
+            StreamEvent::Done => {
+                let _ = state.stream_text.on_done(Instant::now());
+                true
+            }
         };
 
-        if is_final && state.tool_display.is_active() {
+        if is_final && state.stream_text.is_tool_placeholder_active() {
             self.clear_tool_placeholder(&mut state).await;
             state.finalized = true;
-            state.flush_scheduled = false;
             if let Some(msg_id) = state.message_id {
                 self.record_outbound_messages(thread_id, &[msg_id]).await;
             }
             self.send_markdown_images_from_state(thread_id, &mut state)
                 .await;
             return;
-        }
-
-        if is_final && state.flush_scheduled {
-            let pending_text = render_stream_content_text(&state);
-            let pending_display_text = strip_deliverable_markdown_images(&pending_text);
-            if !pending_display_text.trim().is_empty()
-                && pending_display_text.trim() != state.last_rendered_text.trim()
-                && !self
-                    .roll_stream_segment_if_needed(thread_id, &mut state, &pending_text)
-                    .await
-                && let Some(msg_id) = state.message_id
-            {
-                match edit_message_text(
-                    &self.cfg.http,
-                    &self.cfg.token,
-                    self.cfg.chat_id,
-                    msg_id,
-                    &pending_display_text,
-                    Some(MARKDOWN_V2_PARSE_MODE),
-                    &self.cfg.api_base,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        state.last_rendered_text = pending_display_text;
-                        state.last_edit_time = Instant::now();
-                    }
-                    Err(e) => {
-                        warn!(
-                            account_id = %self.cfg.account_id,
-                            error = %e,
-                            "pre-final delayed stream flush edit failed"
-                        );
-                    }
-                }
-            }
-            state.flush_scheduled = false;
         }
 
         let content_text = render_stream_content_text(&state);
@@ -924,7 +892,6 @@ impl StreamingCallbackShared {
         {
             if is_final {
                 state.finalized = true;
-                state.flush_scheduled = false;
             }
             if is_final && let Some(msg_id) = state.message_id {
                 self.record_outbound_messages(thread_id, &[msg_id]).await;
@@ -941,7 +908,6 @@ impl StreamingCallbackShared {
             if is_final {
                 self.delete_runtime_only_message(&mut state).await;
                 state.finalized = true;
-                state.flush_scheduled = false;
                 self.send_markdown_images_from_state(thread_id, &mut state)
                     .await;
             }
@@ -949,28 +915,9 @@ impl StreamingCallbackShared {
         }
 
         if let Some(msg_id) = state.message_id {
-            if !is_final {
-                let now = Instant::now();
-                let elapsed = now.duration_since(state.last_edit_time);
-                if elapsed < Duration::from_millis(300) {
-                    if !state.flush_scheduled {
-                        state.flush_scheduled = true;
-                        let shared = self.clone();
-                        let thread_id = thread_id.to_owned();
-                        let delay = Duration::from_millis(300) - elapsed;
-                        tokio::spawn(async move {
-                            tokio::time::sleep(delay).await;
-                            shared.flush_pending_stream_text(&thread_id).await;
-                        });
-                    }
-                    return;
-                }
-            }
-
             if display_text.trim() == state.last_rendered_text.trim() {
                 if is_final {
                     state.finalized = true;
-                    state.flush_scheduled = false;
                     if let Some(msg_id) = state.message_id {
                         self.record_outbound_messages(thread_id, &[msg_id]).await;
                     }
@@ -993,8 +940,7 @@ impl StreamingCallbackShared {
             {
                 Ok(()) => {
                     state.last_rendered_text = display_text.clone();
-                    state.last_edit_time = Instant::now();
-                    state.flush_scheduled = false;
+                    state.stream_text.mark_flushed(Instant::now());
                 }
                 Err(e) => {
                     warn!(
@@ -1023,8 +969,7 @@ impl StreamingCallbackShared {
                     if let Some(&last_id) = msg_ids.last() {
                         state.message_id = Some(last_id);
                         state.last_rendered_text = display_text.clone();
-                        state.last_edit_time = Instant::now();
-                        state.flush_scheduled = false;
+                        state.stream_text.mark_flushed(Instant::now());
                     }
                 }
                 Err(e) => {
@@ -1040,7 +985,6 @@ impl StreamingCallbackShared {
 
         if is_final {
             state.finalized = true;
-            state.flush_scheduled = false;
         }
 
         if is_final && let Some(msg_id) = state.message_id {

@@ -28,7 +28,10 @@ use garyx_router::{InboundRequest, MessageRouter, NATIVE_COMMAND_TEXT_METADATA_K
 use crate::channel_trait::{Channel, ChannelError};
 use crate::dispatcher::{DISCORD_MAX_MESSAGE_LENGTH, DiscordSender, split_discord_message};
 use crate::generated_images::{extract_image_generation_result, write_generated_image_temp};
-use crate::plugin_tools::{ToolCallDisplayState, should_hide_tool_call_display};
+use crate::plugin_tools::{
+    PluginStreamSendDecision, PluginStreamSendPolicy, PluginStreamSendState,
+    should_hide_tool_call_display,
+};
 
 const DISCORD_GATEWAY_INTENTS: u64 = (1 << 0) | (1 << 9) | (1 << 12) | (1 << 15);
 const DISCORD_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -703,16 +706,6 @@ fn discord_editable_text(text: &str) -> String {
         .unwrap_or_default()
 }
 
-fn render_discord_stream_content_text(state: &DiscordStreamState) -> String {
-    state
-        .tool_display
-        .render_content_text(&state.accumulated_text)
-}
-
-fn render_discord_stream_display_text(state: &DiscordStreamState) -> String {
-    discord_editable_text(&render_discord_stream_content_text(state))
-}
-
 fn markdown_image_key(image_ref: &MarkdownImageRef) -> String {
     match &image_ref.target {
         MarkdownImageTarget::Local(path) => path.to_string_lossy().to_string(),
@@ -847,29 +840,27 @@ pub(crate) struct DiscordStreamingCallbackConfig {
 }
 
 struct DiscordStreamState {
-    accumulated_text: String,
+    stream_text: PluginStreamSendState,
     markdown_image_scan_text: String,
     sent_markdown_image_keys: HashSet<String>,
     recorded_message_ids: HashSet<String>,
     message_id: Option<String>,
     last_rendered_text: String,
-    last_edit_time: Instant,
     finalized: bool,
-    tool_display: ToolCallDisplayState,
 }
 
 impl Default for DiscordStreamState {
     fn default() -> Self {
         Self {
-            accumulated_text: String::new(),
+            stream_text: PluginStreamSendState::new(
+                PluginStreamSendPolicy::buffered_until_tool_or_done(),
+            ),
             markdown_image_scan_text: String::new(),
             sent_markdown_image_keys: HashSet::new(),
             recorded_message_ids: HashSet::new(),
             message_id: None,
             last_rendered_text: String::new(),
-            last_edit_time: Instant::now(),
             finalized: false,
-            tool_display: ToolCallDisplayState::default(),
         }
     }
 }
@@ -941,7 +932,6 @@ impl DiscordStreamingCallbackShared {
             Ok(message_ids) => {
                 state.message_id = message_ids.last().cloned();
                 state.last_rendered_text = display_text.to_owned();
-                state.last_edit_time = Instant::now();
                 self.record_new_outbound_messages(thread_id, state, message_ids)
                     .await;
             }
@@ -979,7 +969,6 @@ impl DiscordStreamingCallbackShared {
         {
             Ok(edited_id) => {
                 state.last_rendered_text = display_text.to_owned();
-                state.last_edit_time = Instant::now();
                 self.record_new_outbound_messages(thread_id, state, vec![edited_id])
                     .await;
             }
@@ -996,31 +985,35 @@ impl DiscordStreamingCallbackShared {
         }
     }
 
-    async fn process_tool_use(
+    async fn apply_stream_send_decision(
         &self,
         thread_id: &str,
         state: &mut DiscordStreamState,
-        message: ProviderMessage,
+        decision: PluginStreamSendDecision,
     ) {
-        state.tool_display.start_tool_call(&message);
-        state.finalized = false;
-        let display_text = render_discord_stream_display_text(state);
-        if state.message_id.is_none() {
-            self.send_initial_text(thread_id, state, &display_text)
-                .await;
-        } else {
-            self.edit_existing_text(thread_id, state, &display_text)
-                .await;
+        match decision {
+            PluginStreamSendDecision::Wait | PluginStreamSendDecision::ScheduleFlush { .. } => {}
+            PluginStreamSendDecision::FlushNow { content_text } => {
+                let display_text = discord_editable_text(&content_text);
+                if state.message_id.is_none() {
+                    self.send_initial_text(thread_id, state, &display_text)
+                        .await;
+                } else {
+                    self.edit_existing_text(thread_id, state, &display_text)
+                        .await;
+                }
+                state.stream_text.mark_flushed(Instant::now());
+            }
         }
     }
 
     async fn clear_tool_placeholder(&self, thread_id: &str, state: &mut DiscordStreamState) {
-        if !state.tool_display.is_active() {
+        if !state.stream_text.is_tool_placeholder_active() {
             return;
         }
 
-        state.tool_display.clear_active();
-        let display_text = discord_editable_text(&state.accumulated_text);
+        state.stream_text.clear_tool_placeholder();
+        let display_text = discord_editable_text(state.stream_text.accumulated_text());
         let Some(message_id) = state.message_id.clone() else {
             state.last_rendered_text.clear();
             return;
@@ -1036,7 +1029,6 @@ impl DiscordStreamingCallbackShared {
                 Ok(()) => {
                     state.message_id = None;
                     state.last_rendered_text.clear();
-                    state.last_edit_time = Instant::now();
                 }
                 Err(error) => {
                     warn!(
@@ -1056,7 +1048,7 @@ impl DiscordStreamingCallbackShared {
     }
 
     async fn finalize_text(&self, thread_id: &str, state: &mut DiscordStreamState) {
-        let display_text = strip_deliverable_markdown_images(&state.accumulated_text);
+        let display_text = strip_deliverable_markdown_images(state.stream_text.accumulated_text());
         if display_text.trim().is_empty() {
             return;
         }
@@ -1164,7 +1156,7 @@ impl DiscordStreamingCallbackShared {
         let Some(image) = extract_image_generation_result(&message) else {
             return;
         };
-        if state.tool_display.is_active() {
+        if state.stream_text.is_tool_placeholder_active() {
             self.clear_tool_placeholder(thread_id, state).await;
         }
         let image_path = match write_generated_image_temp("discord", &image).await {
@@ -1214,7 +1206,10 @@ impl DiscordStreamingCallbackShared {
                 if should_hide_tool_call_display(&message) {
                     return;
                 }
-                self.process_tool_use(thread_id, &mut state, message).await;
+                let decision = state.stream_text.on_tool_call(&message, Instant::now());
+                state.finalized = false;
+                self.apply_stream_send_decision(thread_id, &mut state, decision)
+                    .await;
             }
             StreamEvent::ToolResult { message } => {
                 self.process_generated_image_result(thread_id, &mut state, message)
@@ -1223,38 +1218,29 @@ impl DiscordStreamingCallbackShared {
             StreamEvent::Boundary { kind, .. } => {
                 if kind == StreamBoundaryKind::AssistantSegment {
                     crate::streaming_core::apply_stream_boundary_text(
-                        &mut state.accumulated_text,
-                        StreamBoundaryKind::AssistantSegment,
-                    );
-                    crate::streaming_core::apply_stream_boundary_text(
                         &mut state.markdown_image_scan_text,
                         StreamBoundaryKind::AssistantSegment,
                     );
+                    state
+                        .stream_text
+                        .apply_boundary(StreamBoundaryKind::AssistantSegment);
                 }
             }
             StreamEvent::Delta { text } => {
                 if text.is_empty() {
                     return;
                 }
-                state.tool_display.reset();
                 state.markdown_image_scan_text.push_str(&text);
-                state.accumulated_text =
-                    crate::streaming_core::merge_stream_text(&state.accumulated_text, &text);
+                let decision = state.stream_text.on_delta(&text, Instant::now());
                 state.finalized = false;
-                let display_text = render_discord_stream_display_text(&state);
-                if state.message_id.is_none() {
-                    self.send_initial_text(thread_id, &mut state, &display_text)
-                        .await;
-                } else if state.last_edit_time.elapsed() >= Duration::from_millis(300) {
-                    self.edit_existing_text(thread_id, &mut state, &display_text)
-                        .await;
-                }
+                self.apply_stream_send_decision(thread_id, &mut state, decision)
+                    .await;
             }
             StreamEvent::Done => {
                 if state.finalized {
                     return;
                 }
-                if state.tool_display.is_active() {
+                if state.stream_text.is_tool_placeholder_active() {
                     self.clear_tool_placeholder(thread_id, &mut state).await;
                 }
                 state.finalized = true;
@@ -1933,13 +1919,6 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        Mock::given(method("PATCH"))
-            .and(path("/channels/dm-channel-123/messages/discord-reply-001"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "id": "discord-reply-001"
-            })))
-            .mount(&server)
-            .await;
 
         let router = crate::test_helpers::make_router();
         let (callback, thread_id_tx) =
@@ -1966,6 +1945,109 @@ mod tests {
         callback(StreamEvent::Delta {
             text: "。".to_owned(),
         });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("received requests")
+                .is_empty(),
+            "Discord text deltas should buffer until a tool call or final Done"
+        );
+
+        callback(StreamEvent::Done);
+
+        let mut requests = Vec::new();
+        for _ in 0..20 {
+            requests = server.received_requests().await.expect("received requests");
+            if !requests.is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert_eq!(requests.len(), 1);
+        let create_body: Value =
+            serde_json::from_slice(&requests[0].body).expect("discord create body");
+        assert_eq!(requests[0].method.as_str(), "POST");
+        assert_eq!(create_body["content"], "在。");
+        assert_eq!(
+            create_body["message_reference"]["message_id"],
+            "message-001"
+        );
+
+        let router = router.lock().await;
+        assert_eq!(
+            router.resolve_reply_thread_for_chat(
+                "discord",
+                "main",
+                Some("dm-channel-123"),
+                Some("user-123"),
+                "discord-reply-001",
+            ),
+            Some("thread::discord-test"),
+        );
+    }
+
+    #[tokio::test]
+    async fn response_callback_flushes_buffered_text_when_tool_starts() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/channels/dm-channel-123/messages/discord-tool-001"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-tool-001"
+            })))
+            .mount(&server)
+            .await;
+
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-buffered-tool-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::Delta {
+            text: "before ".to_owned(),
+        });
+        callback(StreamEvent::Delta {
+            text: "tool".to_owned(),
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            server
+                .received_requests()
+                .await
+                .expect("received requests")
+                .is_empty(),
+            "Discord should not send buffered text before a tool call"
+        );
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Bash"}),
+                Some("tool-bash-1".to_owned()),
+                None,
+            ),
+        });
         callback(StreamEvent::Done);
 
         let mut requests = Vec::new();
@@ -1981,27 +2063,11 @@ mod tests {
         let create_body: Value =
             serde_json::from_slice(&requests[0].body).expect("discord create body");
         assert_eq!(requests[0].method.as_str(), "POST");
-        assert_eq!(create_body["content"], "在");
-        assert_eq!(
-            create_body["message_reference"]["message_id"],
-            "message-001"
-        );
+        assert_eq!(create_body["content"], "before tool\n\n🔧 #1 Bash");
         let edit_body: Value =
             serde_json::from_slice(&requests[1].body).expect("discord edit body");
         assert_eq!(requests[1].method.as_str(), "PATCH");
-        assert_eq!(edit_body["content"], "在。");
-
-        let router = router.lock().await;
-        assert_eq!(
-            router.resolve_reply_thread_for_chat(
-                "discord",
-                "main",
-                Some("dm-channel-123"),
-                Some("user-123"),
-                "discord-reply-001",
-            ),
-            Some("thread::discord-test"),
-        );
+        assert_eq!(edit_body["content"], "before tool");
     }
 
     #[tokio::test]
