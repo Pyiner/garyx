@@ -319,6 +319,7 @@ impl HostInboundHandler {
             swap: self.swap.clone(),
             streams: self.streams.clone(),
             thread_holder: thread_holder.clone(),
+            live_streams: self.live_streams.clone(),
         });
 
         let inbound_request = InboundRequest {
@@ -354,13 +355,14 @@ impl HostInboundHandler {
                 .await
         };
 
-        // Clear the live-stream entry regardless of outcome. The
-        // tombstone (if any) stays and continues to gate the
-        // callback, which is the correct behaviour for background
-        // agent runs that outlive this call.
-        if let Ok(mut guard) = self.live_streams.lock() {
-            guard.remove(&stream_id);
-        }
+        // NOTE: live_streams.remove is owned by the spawned callback
+        // task in `build_response_callback`. Doing it here would
+        // clear the entry the moment `route_and_dispatch` returns,
+        // but the actual agent stream often keeps running in the
+        // background — leaving the auto-update stream-idle gate
+        // blind to in-flight Claude/Codex/Gemini runs. The callback
+        // task drains its mpsc on its own schedule and removes the
+        // id on exit, which is the true end-of-stream.
 
         let result = result.map_err(|err| (PluginErrorCode::InternalError.as_i32(), err))?;
 
@@ -450,6 +452,13 @@ struct StreamCallbackCtx {
     swap: Arc<SwappableDispatcher>,
     streams: Arc<StreamRegistry>,
     thread_holder: Arc<StdMutex<Option<String>>>,
+    /// Shared with the parent `HostInboundHandler` so the spawned
+    /// callback task can clear this stream's id when the underlying
+    /// agent run actually completes — not when `route_and_dispatch`
+    /// returns synchronously. Without this the auto-update
+    /// stream-idle gate (and `abandon_inbound`'s "is this id live"
+    /// check) would see a 0 count while Claude is still streaming.
+    live_streams: Arc<StdMutex<HashSet<String>>>,
 }
 
 /// Build the stream callback that does TWO things on every agent
@@ -479,6 +488,7 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
         swap,
         streams,
         thread_holder,
+        live_streams,
     } = ctx;
 
     tokio::spawn(async move {
@@ -687,6 +697,15 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
                     }
                 }
             }
+        }
+        // mpsc receiver returned None — every callback sender was
+        // dropped, so this stream has ended (Done observed and
+        // callback dropped by `route_and_dispatch`, or the dispatch
+        // path errored before any event fired). Either way the
+        // stream is no longer "live" and the auto-update
+        // stream-idle gate should stop seeing it.
+        if let Ok(mut guard) = live_streams.lock() {
+            guard.remove(&stream_id);
         }
     });
     Arc::new(move |event: StreamEvent| {

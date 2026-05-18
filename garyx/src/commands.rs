@@ -148,16 +148,50 @@ fn sha256_hex(bytes: &[u8]) -> String {
 pub(crate) async fn latest_release_version(
     client: &reqwest::Client,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let summary = client
-        .get(format!(
-            "https://api.github.com/repos/{GITHUB_RELEASE_REPO}/releases/latest"
-        ))
+    let token = github_token_from_env();
+    latest_release_version_for_repo(client, GITHUB_RELEASE_REPO, token.as_deref()).await
+}
+
+/// Variant of [`latest_release_version`] that lets the caller
+/// override the GitHub `owner/repo`. The gateway auto-update loop
+/// reads its repo from `garyx.json::gateway.auto_update.github_repo`
+/// so operators can point at a fork for testing; the manual
+/// `garyx update` path keeps the compile-time default.
+///
+/// `token` is an optional GitHub personal access token. When set the
+/// request is bearer-authenticated, lifting the unauthenticated
+/// 60 req/h IP-rate-limit to the per-token 5000 req/h budget. Read
+/// from the `GARYX_GITHUB_TOKEN` env var rather than `garyx.json` so
+/// the secret never lands on disk in the config file.
+pub(crate) async fn latest_release_version_for_repo(
+    client: &reqwest::Client,
+    repo: &str,
+    token: Option<&str>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut request = client.get(format!(
+        "https://api.github.com/repos/{repo}/releases/latest"
+    ));
+    if let Some(value) = token {
+        request = request.bearer_auth(value);
+    }
+    let summary = request
         .send()
         .await?
         .error_for_status()?
         .json::<GitHubReleaseSummary>()
         .await?;
     Ok(normalize_release_version(&summary.tag_name))
+}
+
+/// Read `GARYX_GITHUB_TOKEN` and return `Some` only when non-empty
+/// after trim. Lifts the GitHub unauthenticated rate limit when set.
+/// Lives outside the config struct on purpose — secrets in env vars,
+/// not in `garyx.json`.
+pub(crate) fn github_token_from_env() -> Option<String> {
+    std::env::var("GARYX_GITHUB_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
 }
 
 pub(crate) fn replacement_binary_path(

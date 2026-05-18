@@ -38,7 +38,8 @@ use crate::auto_update_common::{
     IdleGateConfig, IdleWaitError, should_upgrade, wait_for_stream_idle,
 };
 use crate::commands::{
-    VERSION, latest_release_version, replacement_binary_path, try_swap_garyx_binary,
+    VERSION, github_token_from_env, latest_release_version_for_repo, replacement_binary_path,
+    try_swap_garyx_binary,
 };
 
 /// Delay before the first tick. Lets boot work (config load, plugin
@@ -103,7 +104,8 @@ async fn tick(
         }
     };
 
-    let latest = match latest_release_version(&client).await {
+    let token = github_token_from_env();
+    let latest = match latest_release_version_for_repo(&client, &config.github_repo, token.as_deref()).await {
         Ok(v) => v,
         Err(err) => {
             warn!(
