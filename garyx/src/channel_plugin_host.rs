@@ -471,6 +471,14 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
         let seq = AtomicU64::new(0);
         let typed_id = StreamId::from(stream_id.clone());
         let sender = swap.plugin_sender(&plugin_id);
+        // Provider-native session id captured from the first
+        // `SessionBound` event. Emitted back to the plugin on
+        // `stream_end.dispatch_metadata.session_id` so the plugin can
+        // attribute the CLI's local transcript to this issue without
+        // walking the filesystem. See `garyx-bridge` providers for
+        // where `SessionBound` is produced; only Claude SDK / Codex
+        // populate it in 0.1.x.
+        let mut sdk_session_id: Option<String> = None;
         while let Some(event) = rx.recv().await {
             // Fast exit once the plugin abandons the stream.
             if streams.is_tombstoned(&typed_id) {
@@ -578,7 +586,19 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
                         );
                     }
                 }
-                StreamEvent::SessionBound { .. } | StreamEvent::ThreadTitleUpdated { .. } => {}
+                StreamEvent::SessionBound { sdk_session_id: ref sid } => {
+                    // Capture for the upcoming `stream_end` notification.
+                    // Replace any prior value if the provider re-binds the
+                    // session mid-stream (rare; treat as authoritative).
+                    tracing::info!(
+                        plugin_id = %plugin_id,
+                        stream_id = %stream_id,
+                        sdk_session_id = %sid,
+                        "captured sdk_session_id for stream_end attribution"
+                    );
+                    sdk_session_id = Some(sid.clone());
+                }
+                StreamEvent::ThreadTitleUpdated { .. } => {}
                 StreamEvent::Done => {
                     let text = accumulated.trim().to_owned();
                     accumulated.clear();
@@ -592,13 +612,37 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
                     // consolidated outbound so the plugin can close
                     // whatever streaming UI it was driving.
                     if let Some(sender) = sender.as_ref() {
-                        let params = json!({
+                        // Issue-attribution surface for channel plugins.
+                        // A plugin that wants to credit a CLI run to
+                        // the originating message (usage telemetry,
+                        // session-bound logging, etc.) needs the
+                        // provider-native session_id so it can locate
+                        // the transcript file the CLI wrote. Filling
+                        // `dispatch_metadata.session_id` is sufficient;
+                        // the plugin already knows its own
+                        // workspace_dir + tool kind from local config
+                        // and can compute the transcript_path. Empty
+                        // when no provider emitted SessionBound for
+                        // this stream (legacy proxies, error paths).
+                        let dispatch_metadata = sdk_session_id
+                            .as_ref()
+                            .map(|sid| json!({ "session_id": sid }));
+                        let mut params = json!({
                             "stream_id": stream_id,
                             "seq": seq.fetch_add(1, Ordering::Relaxed),
                             "status": "ok",
                             "thread_id": thread_id,
                             "final_text": text,
                         });
+                        if let Some(meta) = dispatch_metadata {
+                            params["dispatch_metadata"] = meta;
+                        }
+                        tracing::info!(
+                            plugin_id = %plugin_id,
+                            stream_id = %stream_id,
+                            has_dispatch_metadata = sdk_session_id.is_some(),
+                            "emitting inbound/stream_end"
+                        );
                         let _ = sender.notify("inbound/stream_end", &params).await;
                     }
 
