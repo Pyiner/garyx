@@ -1201,6 +1201,7 @@ code {
   justify-content: space-between;
   gap: 8px;
   flex: 1;
+  min-width: 0;
   min-height: 28px;
   border: 0;
   margin: 0;
@@ -1552,8 +1553,10 @@ code {
 .workspace-row-copy {
   display: inline-flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .workspace-row-copy .icon {
@@ -1564,6 +1567,8 @@ code {
 }
 
 .workspace-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   font-size: var(--text-base);
   font-weight: var(--font-weight-normal);
@@ -1590,6 +1595,7 @@ code {
 .workspace-actions {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 4px;
   position: relative;
 }
