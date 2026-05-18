@@ -813,11 +813,11 @@ function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
   if (value === "gpt" || value === "openai" || value === "garyx_native") {
     return "gpt";
   }
-  if (value === "claude_llm" || value === "anthropic" || value === "claude_model") {
-    return "claude_llm";
+  if (value === "anthropic" || value === "claude_llm" || value === "claude_model") {
+    return "anthropic";
   }
-  if (value === "gemini_llm" || value === "google" || value === "google_gemini" || value === "gemini_model") {
-    return "gemini_llm";
+  if (value === "google" || value === "gemini_llm" || value === "google_gemini" || value === "gemini_model") {
+    return "google";
   }
   return "claude_code";
 }
@@ -831,6 +831,8 @@ function parseThreadProviderType(
     value === "codex_app_server" ||
     value === "gemini_cli" ||
     value === "gpt" ||
+    value === "anthropic" ||
+    value === "google" ||
     value === "claude_llm" ||
     value === "gemini_llm" ||
     value === "garyx_native" ||
@@ -838,6 +840,12 @@ function parseThreadProviderType(
   ) {
     if (value === "garyx_native") {
       return "gpt";
+    }
+    if (value === "claude_llm") {
+      return "anthropic";
+    }
+    if (value === "gemini_llm") {
+      return "google";
     }
     return value;
   }
@@ -858,8 +866,10 @@ function providerLabelForThread(
       return "Gemini";
     case "gpt":
       return "GPT";
+    case "anthropic":
     case "claude_llm":
       return "Claude";
+    case "google":
     case "gemini_llm":
       return "Gemini";
     case "agent_team":

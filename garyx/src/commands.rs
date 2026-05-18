@@ -3296,7 +3296,7 @@ fn build_agent_mutation_body(
             Some(ProviderType::ClaudeLlm) => "ANTHROPIC_API_KEY",
             Some(ProviderType::GeminiLlm) => "GEMINI_API_KEY",
             _ => {
-                return Err("--provider-api-key is only supported for gpt, claude_llm, or gemini_llm providers".into());
+                return Err("--provider-api-key is only supported for gpt, anthropic, or google providers".into());
             }
         };
         body["provider_env"] = json!({ env_name: api_key });

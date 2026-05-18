@@ -483,7 +483,7 @@ Use a built-in provider agent:
 ```
 
 Custom agents can set `provider_type` to `claude_code`, `claude_tty`,
-`codex_app_server`, `gemini_cli`, `gpt`, `claude_llm`, or `gemini_llm`.
+`codex_app_server`, `gemini_cli`, `gpt`, `anthropic`, or `google`.
 `claude_tty` uses the local Claude CLI's interactive terminal mode inside the
 gateway and keeps the same thread/session model as the regular Claude provider.
 
@@ -492,7 +492,7 @@ Custom agents may also set `model`, `model_reasoning_effort`, and
 when the agent is selected, so provider-specific defaults can be overridden per
 agent.
 
-`gpt`, `claude_llm`, and `gemini_llm` are model backends running on Garyx's
+`gpt`, `anthropic`, and `google` are model backends running on Garyx's
 in-process agent loop. They are not exposed as built-in agents or default
 runtime providers. Create a custom agent with the model backend provider type
 to make one selectable:
@@ -508,18 +508,18 @@ to make one selectable:
 
 ```json
 {
-  "agent_id": "claude-model-reviewer",
-  "display_name": "Claude Model Reviewer",
-  "provider_type": "claude_llm",
+  "agent_id": "anthropic-reviewer",
+  "display_name": "Claude Reviewer",
+  "provider_type": "anthropic",
   "model": "claude-sonnet-4-6"
 }
 ```
 
 ```json
 {
-  "agent_id": "gemini-model-reviewer",
-  "display_name": "Gemini Model Reviewer",
-  "provider_type": "gemini_llm",
+  "agent_id": "google-reviewer",
+  "display_name": "Gemini Reviewer",
+  "provider_type": "google",
   "model": "gemini-3-flash-preview"
 }
 ```
@@ -596,16 +596,17 @@ spend more reasoning time. `model_service_tier` accepts the selected model's
 advertised service tier ids, for example `priority` for Codex's Fast tier; leave
 it empty to use the backend default.
 
-`claude_llm` uses Anthropic Messages API-compatible auth from
+`anthropic` uses Anthropic Messages API-compatible auth from
 `ANTHROPIC_API_KEY` or `CLAUDE_API_KEY`. It can also use
 `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_OAUTH_TOKEN` as a
 bearer token. `ANTHROPIC_BASE_URL` or `CLAUDE_BASE_URL` can override the
 endpoint, and `ANTHROPIC_VERSION` / `ANTHROPIC_BETA` can override request
-headers. `anthropic` and `claude_model` are accepted as provider slug aliases.
-For a custom `claude_llm` agent, the desktop provider manager and CLI
+headers. `claude_llm` and `claude_model` are accepted as legacy provider slug
+aliases.
+For a custom `anthropic` agent, the desktop provider manager and CLI
 `--api-key` store the key as `provider_env.ANTHROPIC_API_KEY`.
 
-`gemini_llm` uses Google Gemini API auth from `GEMINI_API_KEY` or
+`google` uses Google Gemini API auth from `GEMINI_API_KEY` or
 `GOOGLE_API_KEY`. It can also reuse Gemini CLI OAuth by reading
 `GEMINI_OAUTH_ACCESS_TOKEN` / `GOOGLE_OAUTH_ACCESS_TOKEN`, or a Gemini CLI OAuth
 cache at `$GEMINI_CLI_HOME/oauth_creds.json` or `~/.gemini/oauth_creds.json`.
@@ -620,13 +621,13 @@ key endpoint; `GEMINI_CODE_ASSIST_BASE_URL`, `GOOGLE_CODE_ASSIST_BASE_URL`,
 `CODE_ASSIST_BASE_URL`, or `CODE_ASSIST_ENDPOINT` plus
 `CODE_ASSIST_API_VERSION` can override the OAuth endpoint. If a direct
 Generative Language bearer token is required, set `GOOGLE_GENERATIVE_AI_ACCESS_TOKEN`.
-`google`, `google_gemini`, and `gemini_model` are accepted as provider slug
-aliases.
-For a custom `gemini_llm` agent, the desktop provider manager and CLI
+`gemini_llm`, `google_gemini`, and `gemini_model` are accepted as legacy
+provider slug aliases.
+For a custom `google` agent, the desktop provider manager and CLI
 `--api-key` store the key as `provider_env.GEMINI_API_KEY`.
 
-The gateway exposes built-in picker catalogs for `/api/provider-models/claude_llm`
-and `/api/provider-models/gemini_llm`, including reasoning effort choices.
+The gateway exposes built-in picker catalogs for `/api/provider-models/anthropic`
+and `/api/provider-models/google`, including per-model reasoning effort choices.
 These two providers ignore `model_service_tier`; use `model_reasoning_effort`
 for lower-latency or higher-depth model behavior.
 
@@ -756,9 +757,9 @@ The desktop Providers tab shows a fixed provider table rather than an arbitrary
 add-provider form. `Claude Code`, `Codex`, and `Gemini CLI` are always listed at
 the top as built-in provider agents; their Configure dialogs edit desktop-local
 auth and environment overrides. The same table also lists Garyx native-loop
-model backends (`GPT`, `Claude LLM`, and `Gemini LLM`). Configuring one of
-those rows creates or updates its deterministic custom agent (`gpt`,
-`claude_llm`, or `gemini_llm`), making it selectable like any other agent.
+model backends (`GPT`, `Claude`, and `Gemini`). Configuring one of those rows
+creates or updates its deterministic custom agent (`gpt`, `anthropic`, or
+`google`), making it selectable like any other agent.
 Clearing the row removes that custom agent. The page does not support adding
 extra provider rows; additional named personas still belong in the Agents tab
 or CLI custom-agent commands.

@@ -1563,10 +1563,10 @@ function presentProviderReadyError(
   if (providerType === "gpt") {
     return "GPT provider is not ready on this Mac. Check the gateway status and Codex/OpenAI auth configuration.";
   }
-  if (providerType === "claude_llm") {
+  if (providerType === "anthropic" || providerType === "claude_llm") {
     return "Claude model provider is not ready on this Mac. Check the gateway status and Anthropic auth configuration.";
   }
-  if (providerType === "gemini_llm") {
+  if (providerType === "google" || providerType === "gemini_llm") {
     return "Gemini model provider is not ready on this Mac. Check the gateway status and Gemini auth configuration.";
   }
   if (providerType === "claude_tty") {
@@ -1591,9 +1591,17 @@ function inferProviderTypeForThread(
     runtimeProvider === "codex_app_server" ||
     runtimeProvider === "gemini_cli" ||
     runtimeProvider === "gpt" ||
+    runtimeProvider === "anthropic" ||
+    runtimeProvider === "google" ||
     runtimeProvider === "claude_llm" ||
     runtimeProvider === "gemini_llm"
   ) {
+    if (runtimeProvider === "claude_llm") {
+      return "anthropic";
+    }
+    if (runtimeProvider === "gemini_llm") {
+      return "google";
+    }
     return runtimeProvider;
   }
 

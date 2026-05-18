@@ -156,15 +156,9 @@ pub(super) fn compute_provider_key(
     {
         return format!("agent:{provider_id}");
     }
-    match agent_cfg.provider_type.as_str() {
-        "claude_tty" => "claude_tty".to_owned(),
-        "codex_app_server" => "codex_app_server".to_owned(),
-        "gemini_cli" => "gemini_cli".to_owned(),
-        "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native" => "gpt".to_owned(),
-        "claude_llm" | "anthropic" | "claude_model" => "claude_llm".to_owned(),
-        "gemini_llm" | "google" | "google_gemini" | "gemini_model" => "gemini_llm".to_owned(),
-        _ => "claude_code".to_owned(),
-    }
+    provider_type
+        .map(|provider_type| provider_type.as_slug().to_owned())
+        .unwrap_or_else(|| "claude_code".to_owned())
 }
 
 /// Create and initialize a provider from `AgentProviderConfig`.
@@ -197,13 +191,13 @@ pub(super) async fn create_provider(
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }
-        "claude_llm" | "anthropic" | "claude_model" => {
+        "anthropic" | "claude_llm" | "claude_model" => {
             let config = build_garyx_native_config(agent_cfg, default_workspace);
             let mut provider = GaryxNativeProvider::new_claude(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }
-        "gemini_llm" | "google" | "google_gemini" | "gemini_model" => {
+        "google" | "gemini_llm" | "google_gemini" | "gemini_model" => {
             let config = build_garyx_native_config(agent_cfg, default_workspace);
             let mut provider = GaryxNativeProvider::new_gemini(config);
             provider.initialize().await?;

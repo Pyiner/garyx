@@ -153,14 +153,12 @@ pub(crate) async fn list_provider_models(
             "native_builtin",
             native_claude_models(),
             "claude-sonnet-4-6",
-            native_reasoning_efforts("medium", true),
         ),
         ProviderType::GeminiLlm => native_model_catalog_response(
             provider_type,
             "native_builtin",
             native_gemini_models(),
             "gemini-3-flash-preview",
-            native_reasoning_efforts("medium", false),
         ),
         ProviderType::AgentTeam => unsupported(provider_type, "provider", None),
     }
@@ -333,13 +331,18 @@ fn native_model_catalog_response(
     source: &'static str,
     models: Vec<ProviderModelOption>,
     default_model: &str,
-    reasoning_efforts: Vec<ProviderReasoningEffortOption>,
 ) -> ProviderModelsResponse {
+    let reasoning_efforts = models
+        .iter()
+        .find(|model| model.id == default_model)
+        .or_else(|| models.first())
+        .map(|model| model.supported_reasoning_efforts.clone())
+        .unwrap_or_default();
     ProviderModelsResponse {
         provider_type,
         supports_model_selection: true,
         models,
-        supports_reasoning_effort_selection: true,
+        supports_reasoning_effort_selection: !reasoning_efforts.is_empty(),
         reasoning_efforts,
         supports_service_tier_selection: false,
         service_tiers: Vec::new(),
@@ -351,42 +354,54 @@ fn native_model_catalog_response(
 
 fn native_reasoning_efforts(
     default: &str,
-    include_xhigh: bool,
+    supported: &[&str],
 ) -> Vec<ProviderReasoningEffortOption> {
-    let mut efforts = vec![
-        ("off", "Off", "Disable explicit thinking controls."),
-        (
+    supported
+        .iter()
+        .copied()
+        .filter_map(|id| {
+            native_reasoning_effort_metadata(id).map(|(id, label, description)| {
+                ProviderReasoningEffortOption {
+                    id: id.to_owned(),
+                    label: label.to_owned(),
+                    description: Some(description.to_owned()),
+                    recommended: id == default,
+                }
+            })
+        })
+        .collect()
+}
+
+fn native_reasoning_effort_metadata(id: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    match id {
+        "off" => Some(("off", "Off", "Disable explicit thinking controls.")),
+        "minimal" => Some((
+            "minimal",
+            "Minimal",
+            "Use the smallest explicit reasoning budget.",
+        )),
+        "low" => Some((
             "low",
             "Low",
             "Prefer lower latency and lower reasoning budget.",
-        ),
-        (
+        )),
+        "medium" => Some((
             "medium",
             "Medium",
             "Balanced reasoning budget for normal coding tasks.",
-        ),
-        (
+        )),
+        "high" => Some((
             "high",
             "High",
             "Use a larger reasoning budget for harder tasks.",
-        ),
-    ];
-    if include_xhigh {
-        efforts.push((
+        )),
+        "xhigh" => Some((
             "xhigh",
             "Extra High",
             "Use the highest supported adaptive reasoning effort.",
-        ));
+        )),
+        _ => None,
     }
-    efforts
-        .into_iter()
-        .map(|(id, label, description)| ProviderReasoningEffortOption {
-            id: id.to_owned(),
-            label: label.to_owned(),
-            description: Some(description.to_owned()),
-            recommended: id == default,
-        })
-        .collect()
 }
 
 fn native_model_option(
@@ -409,45 +424,54 @@ fn native_model_option(
 }
 
 fn native_claude_models() -> Vec<ProviderModelOption> {
-    let efforts = native_reasoning_efforts("medium", true);
+    let claude_standard_efforts =
+        native_reasoning_efforts("high", &["off", "minimal", "low", "medium", "high"]);
+    let claude_opus_efforts = native_reasoning_efforts(
+        "xhigh",
+        &["off", "minimal", "low", "medium", "high", "xhigh"],
+    );
     vec![
         native_model_option(
             "claude-sonnet-4-6",
             "Claude Sonnet 4.6",
             "Default Claude model backend for Garyx's native agent loop.",
             true,
-            "medium",
-            efforts.clone(),
+            "high",
+            claude_standard_efforts.clone(),
         ),
         native_model_option(
             "claude-opus-4-7",
             "Claude Opus 4.7",
             "Highest-depth Claude model option.",
             false,
-            "high",
-            efforts.clone(),
+            "xhigh",
+            claude_opus_efforts,
         ),
         native_model_option(
             "claude-haiku-4-5",
             "Claude Haiku 4.5",
             "Lower-latency Claude model option.",
             false,
-            "low",
-            efforts,
+            "high",
+            claude_standard_efforts,
         ),
     ]
 }
 
 fn native_gemini_models() -> Vec<ProviderModelOption> {
-    let efforts = native_reasoning_efforts("medium", false);
+    let gemini_25_efforts =
+        native_reasoning_efforts("high", &["off", "minimal", "low", "medium", "high"]);
+    let gemini_3_flash_efforts =
+        native_reasoning_efforts("high", &["minimal", "low", "medium", "high"]);
+    let gemini_31_pro_efforts = native_reasoning_efforts("high", &["low", "high"]);
     vec![
         native_model_option(
             "gemini-3-flash-preview",
             "Gemini 3 Flash Preview",
             "Default Gemini model backend for Garyx's native agent loop.",
             true,
-            "medium",
-            efforts.clone(),
+            "high",
+            gemini_3_flash_efforts,
         ),
         native_model_option(
             "gemini-3.1-pro-preview",
@@ -455,7 +479,7 @@ fn native_gemini_models() -> Vec<ProviderModelOption> {
             "Higher-depth Gemini model option.",
             false,
             "high",
-            efforts.clone(),
+            gemini_31_pro_efforts,
         ),
         native_model_option(
             "gemini-2.5-pro",
@@ -463,15 +487,15 @@ fn native_gemini_models() -> Vec<ProviderModelOption> {
             "Stable pro Gemini model option.",
             false,
             "high",
-            efforts.clone(),
+            gemini_25_efforts.clone(),
         ),
         native_model_option(
             "gemini-2.5-flash",
             "Gemini 2.5 Flash",
             "Lower-latency Gemini model option.",
             false,
-            "low",
-            efforts,
+            "high",
+            gemini_25_efforts,
         ),
     ]
 }
@@ -903,12 +927,25 @@ mod tests {
         assert_eq!(response.default_model.as_deref(), Some("claude-sonnet-4-6"));
         assert_eq!(response.models[0].id, "claude-sonnet-4-6");
         assert!(response.models[0].recommended);
+        assert_eq!(
+            response.models[0]
+                .supported_reasoning_efforts
+                .iter()
+                .map(|effort| effort.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["off", "minimal", "low", "medium", "high"]
+        );
         assert!(
             response
-                .reasoning_efforts
+                .models
+                .iter()
+                .find(|model| model.id == "claude-opus-4-7")
+                .expect("opus model")
+                .supported_reasoning_efforts
                 .iter()
                 .any(|effort| effort.id == "xhigh")
         );
+        assert_eq!(response.reasoning_efforts.last().map(|effort| effort.id.as_str()), Some("high"));
     }
 
     #[tokio::test]
@@ -924,11 +961,25 @@ mod tests {
         );
         assert_eq!(response.models[0].id, "gemini-3-flash-preview");
         assert!(response.models[0].recommended);
-        assert!(
-            response
-                .reasoning_efforts
+        assert_eq!(
+            response.models[0]
+                .supported_reasoning_efforts
                 .iter()
-                .all(|effort| effort.id != "xhigh")
+                .map(|effort| effort.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["minimal", "low", "medium", "high"]
+        );
+        assert_eq!(
+            response
+                .models
+                .iter()
+                .find(|model| model.id == "gemini-3.1-pro-preview")
+                .expect("gemini pro preview model")
+                .supported_reasoning_efforts
+                .iter()
+                .map(|effort| effort.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["low", "high"]
         );
     }
 

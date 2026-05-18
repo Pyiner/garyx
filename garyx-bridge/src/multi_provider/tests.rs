@@ -1168,6 +1168,8 @@ async fn test_provider_type_for_team_returns_agent_team_meta_provider() {
         Some(ProviderType::ClaudeTty)
     );
     assert_eq!(bridge.provider_type_for_agent("gpt").await, None);
+    assert_eq!(bridge.provider_type_for_agent("anthropic").await, None);
+    assert_eq!(bridge.provider_type_for_agent("google").await, None);
     assert_eq!(bridge.provider_type_for_agent("claude_llm").await, None);
     assert_eq!(bridge.provider_type_for_agent("gemini_llm").await, None);
 }
@@ -1206,6 +1208,8 @@ async fn test_configured_native_model_agent_gets_dedicated_provider_key() {
         bridge.get_provider("gpt").await.is_none(),
         "native GPT is not a default provider"
     );
+    assert!(bridge.get_provider("anthropic").await.is_none());
+    assert!(bridge.get_provider("google").await.is_none());
     assert!(bridge.get_provider("claude_llm").await.is_none());
     assert!(bridge.get_provider("gemini_llm").await.is_none());
 }

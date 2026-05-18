@@ -42,6 +42,8 @@ function buildResumeCommand(threadId: string | null, threadInfo: ThreadRuntimeIn
       command = `gemini --approval-mode yolo --resume ${shellEscape(sessionId)}`;
       break;
     case 'gpt':
+    case 'anthropic':
+    case 'google':
     case 'claude_llm':
     case 'gemini_llm':
       command = threadId ? `garyx thread send thread ${shellEscape(threadId)} continue` : '';

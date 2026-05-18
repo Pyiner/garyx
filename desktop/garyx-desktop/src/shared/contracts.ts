@@ -28,6 +28,8 @@ export type DesktopApiProviderType =
   | "codex_app_server"
   | "gemini_cli"
   | "gpt"
+  | "anthropic"
+  | "google"
   | "claude_llm"
   | "gemini_llm";
 

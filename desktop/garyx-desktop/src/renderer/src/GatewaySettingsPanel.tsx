@@ -9,6 +9,8 @@ import {
   type DesktopApiProviderType,
   type CreateCustomAgentInput,
   type DesktopCustomAgent,
+  type DesktopProviderModelOption,
+  type DesktopProviderModels,
   type DesktopTeam,
   type DesktopSettings,
   type DesktopMcpServer,
@@ -182,11 +184,13 @@ type FixedModelProviderKey =
   | 'codex_app_server'
   | 'gemini_cli'
   | 'gpt'
-  | 'claude_llm'
-  | 'gemini_llm';
+  | 'anthropic'
+  | 'google';
 
 type FixedModelProviderRow = {
   key: FixedModelProviderKey;
+  agentId: string;
+  legacyAgentIds?: string[];
   label: string;
   providerType: DesktopApiProviderType;
   group: 'default' | 'native';
@@ -215,6 +219,7 @@ const IDLE_UPDATE_STATUS: DesktopUpdateStatus = { phase: 'idle' };
 const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
   {
     key: 'claude_code',
+    agentId: 'claude',
     label: 'Claude Code',
     providerType: 'claude_code',
     group: 'default',
@@ -222,6 +227,7 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
   },
   {
     key: 'codex_app_server',
+    agentId: 'codex',
     label: 'Codex',
     providerType: 'codex_app_server',
     group: 'default',
@@ -229,6 +235,7 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
   },
   {
     key: 'gemini_cli',
+    agentId: 'gemini',
     label: 'Gemini CLI',
     providerType: 'gemini_cli',
     group: 'default',
@@ -236,22 +243,27 @@ const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
   },
   {
     key: 'gpt',
+    agentId: 'gpt',
     label: 'GPT',
     providerType: 'gpt',
     group: 'native',
     defaultModel: 'gpt-5.5',
   },
   {
-    key: 'claude_llm',
-    label: 'Claude LLM',
-    providerType: 'claude_llm',
+    key: 'anthropic',
+    agentId: 'anthropic',
+    legacyAgentIds: ['claude_llm'],
+    label: 'Claude',
+    providerType: 'anthropic',
     group: 'native',
     defaultModel: 'claude-sonnet-4-6',
   },
   {
-    key: 'gemini_llm',
-    label: 'Gemini LLM',
-    providerType: 'gemini_llm',
+    key: 'google',
+    agentId: 'google',
+    legacyAgentIds: ['gemini_llm'],
+    label: 'Gemini',
+    providerType: 'google',
     group: 'native',
     defaultModel: 'gemini-3-flash-preview',
   },
@@ -399,11 +411,11 @@ function providerTypeLabel(provider: any): string {
   if (value === 'gpt') {
     return 'gpt';
   }
-  if (value === 'claude_llm') {
-    return 'claude llm';
+  if (value === 'anthropic' || value === 'claude_llm') {
+    return 'anthropic';
   }
-  if (value === 'gemini_llm') {
-    return 'gemini llm';
+  if (value === 'google' || value === 'gemini_llm') {
+    return 'google';
   }
   return 'claude';
 }
@@ -436,10 +448,10 @@ function preferredStandaloneAgentId(
     normalizedProviderType = 'gemini_cli';
   } else if (providerType === 'gpt') {
     normalizedProviderType = 'gpt';
-  } else if (providerType === 'claude_llm') {
-    normalizedProviderType = 'claude_llm';
-  } else if (providerType === 'gemini_llm') {
-    normalizedProviderType = 'gemini_llm';
+  } else if (providerType === 'anthropic' || providerType === 'claude_llm') {
+    normalizedProviderType = 'anthropic';
+  } else if (providerType === 'google' || providerType === 'gemini_llm') {
+    normalizedProviderType = 'google';
   }
 
   let builtInId = 'claude';
@@ -449,10 +461,10 @@ function preferredStandaloneAgentId(
     builtInId = 'gemini';
   } else if (normalizedProviderType === 'gpt') {
     builtInId = 'gpt';
-  } else if (normalizedProviderType === 'claude_llm') {
-    builtInId = 'claude_llm';
-  } else if (normalizedProviderType === 'gemini_llm') {
-    builtInId = 'gemini_llm';
+  } else if (normalizedProviderType === 'anthropic') {
+    builtInId = 'anthropic';
+  } else if (normalizedProviderType === 'google') {
+    builtInId = 'google';
   }
 
   return agents.find((agent) => agent.agentId === builtInId)?.agentId
@@ -639,14 +651,116 @@ function fixedModelProviderRow(key: FixedModelProviderKey): FixedModelProviderRo
   return MODEL_PROVIDER_ROWS.find((row) => row.key === key) || MODEL_PROVIDER_ROWS[0];
 }
 
+const REASONING_EFFORT_RANK: Record<string, number> = {
+  off: 0,
+  minimal: 1,
+  low: 2,
+  medium: 3,
+  high: 4,
+  xhigh: 5,
+};
+
+function providerModelOptionsWithCurrent(
+  providerModels: DesktopProviderModels | null | undefined,
+  currentModel: string,
+): DesktopProviderModelOption[] {
+  const options = providerModels?.models || [];
+  const trimmed = currentModel.trim();
+  if (!trimmed || options.some((model) => model.id === trimmed)) {
+    return options;
+  }
+  return [
+    ...options,
+    {
+      id: trimmed,
+      label: trimmed,
+      recommended: false,
+      supportedReasoningEfforts: providerModels?.reasoningEfforts || [],
+      serviceTiers: providerModels?.serviceTiers || [],
+    },
+  ];
+}
+
+function reasoningEffortOptionsForModel(
+  providerModels: DesktopProviderModels | null | undefined,
+  modelId: string,
+  currentEffort: string,
+): DesktopProviderModelOption[] {
+  const selectedModel = providerModels?.models.find((model) => model.id === modelId.trim());
+  const options = selectedModel?.supportedReasoningEfforts?.length
+    ? selectedModel.supportedReasoningEfforts
+    : providerModels?.reasoningEfforts || [];
+  const trimmed = currentEffort.trim();
+  if (!trimmed || options.some((option) => option.id === trimmed)) {
+    return options;
+  }
+  return [
+    ...options,
+    {
+      id: trimmed,
+      label: trimmed,
+      recommended: false,
+    },
+  ];
+}
+
+function serviceTierOptionsForModel(
+  providerModels: DesktopProviderModels | null | undefined,
+  modelId: string,
+): DesktopProviderModelOption[] {
+  const selectedModel = providerModels?.models.find((model) => model.id === modelId.trim());
+  return selectedModel?.serviceTiers?.length
+    ? selectedModel.serviceTiers
+    : providerModels?.serviceTiers || [];
+}
+
+function highestReasoningEffort(options: DesktopProviderModelOption[]): string {
+  return options.reduce((best, option) => {
+    if (!best) {
+      return option.id;
+    }
+    return (REASONING_EFFORT_RANK[option.id] ?? -1) > (REASONING_EFFORT_RANK[best] ?? -1)
+      ? option.id
+      : best;
+  }, '');
+}
+
+function applyProviderCatalogDefaults(
+  draft: ModelProviderConfigDraft,
+  row: FixedModelProviderRow,
+  providerModels: DesktopProviderModels | null | undefined,
+): ModelProviderConfigDraft {
+  if (row.group !== 'native' || !providerModels) {
+    return draft;
+  }
+  const model = draft.model.trim()
+    || providerModels.defaultModel?.trim()
+    || (row.defaultModel.startsWith('(') ? '' : row.defaultModel);
+  const reasoningOptions = reasoningEffortOptionsForModel(
+    providerModels,
+    model,
+    draft.modelReasoningEffort,
+  );
+  const currentReasoning = draft.modelReasoningEffort.trim();
+  const modelReasoningEffort = currentReasoning
+    && reasoningOptions.some((option) => option.id === currentReasoning)
+    ? currentReasoning
+    : highestReasoningEffort(reasoningOptions);
+  return {
+    ...draft,
+    model,
+    modelReasoningEffort,
+  };
+}
+
 function apiKeyEnvName(value: DesktopApiProviderType): string | null {
   if (value === 'gpt') {
     return 'OPENAI_API_KEY';
   }
-  if (value === 'claude_llm') {
+  if (value === 'anthropic' || value === 'claude_llm') {
     return 'ANTHROPIC_API_KEY';
   }
-  if (value === 'gemini_llm') {
+  if (value === 'google' || value === 'gemini_llm') {
     return 'GEMINI_API_KEY';
   }
   return null;
@@ -672,7 +786,9 @@ function configuredProviderAgent(
   if (row.group !== 'native') {
     return null;
   }
-  return agents.find((agent) => agent.agentId === key && !agent.builtIn) || null;
+  return agents.find((agent) => agent.agentId === row.agentId && !agent.builtIn)
+    || agents.find((agent) => (row.legacyAgentIds || []).includes(agent.agentId) && !agent.builtIn)
+    || null;
 }
 
 function emptyModelProviderConfigDraft(key: FixedModelProviderKey = 'claude_code'): ModelProviderConfigDraft {
@@ -1121,6 +1237,12 @@ export function GatewaySettingsPanel({
     emptyModelProviderConfigDraft(),
   );
   const [providerConfigSaving, setProviderConfigSaving] = useState(false);
+  const [providerModelsByType, setProviderModelsByType] = useState<
+    Partial<Record<DesktopApiProviderType, DesktopProviderModels>>
+  >({});
+  const [providerModelsLoading, setProviderModelsLoading] = useState<
+    Partial<Record<DesktopApiProviderType, boolean>>
+  >({});
   const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus>(IDLE_UPDATE_STATUS);
   const [updateFeedback, setUpdateFeedback] = useState<UpdateFeedback | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -1162,6 +1284,25 @@ export function GatewaySettingsPanel({
   const providerConfigAgent = providerConfigKey
     ? configuredProviderAgent(agents, providerConfigKey)
     : null;
+  const activeProviderModels = providerConfigRow?.group === 'native'
+    ? providerModelsByType[providerConfigRow.providerType] || null
+    : null;
+  const activeProviderModelsLoading = providerConfigRow?.group === 'native'
+    ? providerModelsLoading[providerConfigRow.providerType] === true
+    : false;
+  const activeProviderModelOptions = providerModelOptionsWithCurrent(
+    activeProviderModels,
+    providerConfigDraft.model,
+  );
+  const activeReasoningOptions = reasoningEffortOptionsForModel(
+    activeProviderModels,
+    providerConfigDraft.model,
+    providerConfigDraft.modelReasoningEffort,
+  );
+  const activeServiceTierOptions = serviceTierOptionsForModel(
+    activeProviderModels,
+    providerConfigDraft.model,
+  );
   const channelsSourceMessage = gatewaySettingsSource === 'local_file'
     ? t('Editing the gateway runtime config file on the gateway host.')
     : t('Editing live gateway settings over the API.');
@@ -1244,6 +1385,50 @@ export function GatewaySettingsPanel({
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!providerConfigRow || providerConfigRow.group !== 'native') {
+      return;
+    }
+    const providerType = providerConfigRow.providerType;
+    if (providerModelsByType[providerType] || providerModelsLoading[providerType]) {
+      return;
+    }
+    let cancelled = false;
+    setProviderModelsLoading((current) => ({
+      ...current,
+      [providerType]: true,
+    }));
+    void window.garyxDesktop.listProviderModels(providerType).then((models) => {
+      if (cancelled) return;
+      setProviderModelsByType((current) => ({
+        ...current,
+        [providerType]: models,
+      }));
+    }).catch(() => {
+      // The dialog keeps the raw model input fallback if catalog loading fails.
+    }).finally(() => {
+      setProviderModelsLoading((current) => ({
+        ...current,
+        [providerType]: false,
+      }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerConfigRow?.providerType, providerConfigRow?.group, providerModelsByType, providerModelsLoading]);
+
+  useEffect(() => {
+    if (!providerConfigRow || providerConfigRow.group !== 'native' || !activeProviderModels) {
+      return;
+    }
+    setProviderConfigDraft((current) => {
+      if (current.key !== providerConfigRow.key) {
+        return current;
+      }
+      return applyProviderCatalogDefaults(current, providerConfigRow, activeProviderModels);
+    });
+  }, [providerConfigRow?.key, providerConfigRow?.group, activeProviderModels]);
 
   function renderGatewaySaveAction(_buttonLabel?: string) {
     const statusLabel = gatewaySaving
@@ -1370,7 +1555,9 @@ export function GatewaySettingsPanel({
   }
 
   function openProviderConfigDialog(key: FixedModelProviderKey) {
-    setProviderConfigDraft(modelProviderDraftFromState(key, localSettings, agents));
+    const row = fixedModelProviderRow(key);
+    const draft = modelProviderDraftFromState(key, localSettings, agents);
+    setProviderConfigDraft(applyProviderCatalogDefaults(draft, row, providerModelsByType[row.providerType]));
     setProviderConfigKey(key);
   }
 
@@ -1422,7 +1609,7 @@ export function GatewaySettingsPanel({
         ? { [envName]: providerConfigDraft.apiKey.trim() }
         : {};
       const payload: CreateCustomAgentInput = {
-        agentId: providerConfigRow.key,
+        agentId: providerConfigRow.agentId,
         displayName: providerConfigRow.label,
         providerType: providerConfigRow.providerType,
         model: providerConfigDraft.model.trim(),
@@ -1438,11 +1625,16 @@ export function GatewaySettingsPanel({
         systemPrompt: providerConfigAgent?.systemPrompt || MODEL_PROVIDER_SYSTEM_PROMPT,
       };
       if (providerConfigAgent) {
-        const updatePayload: UpdateCustomAgentInput = {
-          ...payload,
-          currentAgentId: providerConfigAgent.agentId,
-        };
-        await window.garyxDesktop.updateCustomAgent(updatePayload);
+        if (providerConfigAgent.agentId !== providerConfigRow.agentId) {
+          await window.garyxDesktop.createCustomAgent(payload);
+          await window.garyxDesktop.deleteCustomAgent({ agentId: providerConfigAgent.agentId });
+        } else {
+          const updatePayload: UpdateCustomAgentInput = {
+            ...payload,
+            currentAgentId: providerConfigAgent.agentId,
+          };
+          await window.garyxDesktop.updateCustomAgent(updatePayload);
+        }
       } else {
         await window.garyxDesktop.createCustomAgent(payload);
       }
@@ -1820,58 +2012,127 @@ export function GatewaySettingsPanel({
                 <div className="provider-config-grid">
                   <div className="commands-field">
                     <Label className="commands-field-label" htmlFor="provider-native-model">{t('Model')}</Label>
-                    <Input
-                      id="provider-native-model"
-                      placeholder={providerConfigRow.defaultModel}
-                      value={providerConfigDraft.model}
-                      onChange={(event) => {
-                        setProviderConfigDraft((current) => ({
-                          ...current,
-                          model: event.target.value,
-                        }));
-                      }}
-                    />
+                    {activeProviderModelOptions.length > 0 ? (
+                      <Select
+                        value={providerConfigDraft.model || activeProviderModels?.defaultModel || providerConfigRow.defaultModel}
+                        onValueChange={(value) => {
+                          setProviderConfigDraft((current) => {
+                            const reasoningOptions = reasoningEffortOptionsForModel(
+                              activeProviderModels,
+                              value,
+                              '',
+                            );
+                            return {
+                              ...current,
+                              model: value,
+                              modelReasoningEffort: highestReasoningEffort(reasoningOptions),
+                              modelServiceTier: '',
+                            };
+                          });
+                        }}
+                      >
+                        <SelectTrigger id="provider-native-model">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {activeProviderModelOptions.map((option) => (
+                              <SelectItem key={option.id} value={option.id}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        id="provider-native-model"
+                        placeholder={activeProviderModelsLoading ? t('Loading models...') : providerConfigRow.defaultModel}
+                        value={providerConfigDraft.model}
+                        onChange={(event) => {
+                          setProviderConfigDraft((current) => ({
+                            ...current,
+                            model: event.target.value,
+                          }));
+                        }}
+                      />
+                    )}
                   </div>
                   <div className="commands-field">
                     <Label className="commands-field-label">{t('Reasoning')}</Label>
-                    <Select
-                      value={providerConfigDraft.modelReasoningEffort || '__default__'}
-                      onValueChange={(value) => {
-                        setProviderConfigDraft((current) => ({
-                          ...current,
-                          modelReasoningEffort: value === '__default__' ? '' : value,
-                        }));
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem value="__default__">{t('Provider default')}</SelectItem>
-                          <SelectItem value="low">low</SelectItem>
-                          <SelectItem value="medium">medium</SelectItem>
-                          <SelectItem value="high">high</SelectItem>
-                          <SelectItem value="xhigh">xhigh</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
+                    {activeReasoningOptions.length > 0 ? (
+                      <Select
+                        value={providerConfigDraft.modelReasoningEffort || highestReasoningEffort(activeReasoningOptions)}
+                        onValueChange={(value) => {
+                          setProviderConfigDraft((current) => ({
+                            ...current,
+                            modelReasoningEffort: value,
+                          }));
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {activeReasoningOptions.map((option) => (
+                              <SelectItem key={option.id} value={option.id}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        disabled
+                        value=""
+                        placeholder={activeProviderModelsLoading ? t('Loading models...') : t('Unavailable')}
+                        readOnly
+                      />
+                    )}
                   </div>
                 </div>
                 {providerConfigRow.providerType === 'gpt' ? (
                   <div className="commands-field">
                     <Label className="commands-field-label" htmlFor="provider-native-service-tier">{t('Speed')}</Label>
-                    <Input
-                      id="provider-native-service-tier"
-                      placeholder={t('Provider default')}
-                      value={providerConfigDraft.modelServiceTier}
-                      onChange={(event) => {
-                        setProviderConfigDraft((current) => ({
-                          ...current,
-                          modelServiceTier: event.target.value,
-                        }));
-                      }}
-                    />
+                    {activeServiceTierOptions.length > 0 ? (
+                      <Select
+                        value={providerConfigDraft.modelServiceTier || '__standard__'}
+                        onValueChange={(value) => {
+                          setProviderConfigDraft((current) => ({
+                            ...current,
+                            modelServiceTier: value === '__standard__' ? '' : value,
+                          }));
+                        }}
+                      >
+                        <SelectTrigger id="provider-native-service-tier">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem value="__standard__">{t('Standard')}</SelectItem>
+                            {activeServiceTierOptions.map((option) => (
+                              <SelectItem key={option.id} value={option.id}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        id="provider-native-service-tier"
+                        placeholder={t('Standard')}
+                        value={providerConfigDraft.modelServiceTier}
+                        onChange={(event) => {
+                          setProviderConfigDraft((current) => ({
+                            ...current,
+                            modelServiceTier: event.target.value,
+                          }));
+                        }}
+                      />
+                    )}
                   </div>
                 ) : null}
                 <div className="commands-field">

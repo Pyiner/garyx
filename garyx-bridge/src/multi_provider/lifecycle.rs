@@ -11,17 +11,7 @@ use super::state::{BridgeRunIndex, BridgeTopologyState};
 
 pub(super) fn default_provider_config(provider_type: ProviderType) -> AgentProviderConfig {
     AgentProviderConfig {
-        provider_type: match provider_type {
-            ProviderType::CodexAppServer => "codex_app_server".to_owned(),
-            ProviderType::ClaudeCode => "claude_code".to_owned(),
-            ProviderType::ClaudeTty => "claude_tty".to_owned(),
-            ProviderType::GeminiCli => "gemini_cli".to_owned(),
-            ProviderType::Gpt => "gpt".to_owned(),
-            ProviderType::ClaudeLlm => "claude_llm".to_owned(),
-            ProviderType::GeminiLlm => "gemini_llm".to_owned(),
-            // Meta-provider with no backing CLI config.
-            ProviderType::AgentTeam => "agent_team".to_owned(),
-        },
+        provider_type: provider_type.as_slug().to_owned(),
         ..Default::default()
     }
 }

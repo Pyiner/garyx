@@ -124,11 +124,11 @@ function providerOptionLabel(providerType: DesktopApiProviderType): string {
   if (providerType === 'gpt') {
     return 'GPT';
   }
-  if (providerType === 'claude_llm') {
-    return 'Claude LLM';
+  if (providerType === 'anthropic' || providerType === 'claude_llm') {
+    return 'Claude';
   }
-  if (providerType === 'gemini_llm') {
-    return 'Gemini LLM';
+  if (providerType === 'google' || providerType === 'gemini_llm') {
+    return 'Gemini';
   }
   if (providerType === 'claude_tty') {
     return 'Claude TTY';

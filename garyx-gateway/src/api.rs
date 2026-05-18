@@ -77,18 +77,7 @@ fn provider_type_from_value(value: &Value) -> Option<ProviderType> {
 
 fn provider_type_from_key(value: &str) -> Option<ProviderType> {
     let prefix = value.trim().split(':').next().unwrap_or_default();
-    match prefix {
-        "claude_code" => Some(ProviderType::ClaudeCode),
-        "claude_tty" => Some(ProviderType::ClaudeTty),
-        "codex_app_server" => Some(ProviderType::CodexAppServer),
-        "gemini_cli" => Some(ProviderType::GeminiCli),
-        "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native" => {
-            Some(ProviderType::Gpt)
-        }
-        "claude_llm" | "anthropic" | "claude_model" => Some(ProviderType::ClaudeLlm),
-        "gemini_llm" | "google" | "google_gemini" | "gemini_model" => Some(ProviderType::GeminiLlm),
-        _ => None,
-    }
+    ProviderType::from_slug(prefix)
 }
 
 fn provider_type_value(thread_value: &Value) -> Option<ProviderType> {

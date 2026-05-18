@@ -30,18 +30,18 @@ fn test_provider_type_serde() {
 
     let pt = ProviderType::ClaudeLlm;
     let json = serde_json::to_string(&pt).unwrap();
-    assert_eq!(json, "\"claude_llm\"");
+    assert_eq!(json, "\"anthropic\"");
     let back: ProviderType = serde_json::from_str(&json).unwrap();
     assert_eq!(back, ProviderType::ClaudeLlm);
-    let alias: ProviderType = serde_json::from_str("\"anthropic\"").unwrap();
+    let alias: ProviderType = serde_json::from_str("\"claude_llm\"").unwrap();
     assert_eq!(alias, ProviderType::ClaudeLlm);
 
     let pt = ProviderType::GeminiLlm;
     let json = serde_json::to_string(&pt).unwrap();
-    assert_eq!(json, "\"gemini_llm\"");
+    assert_eq!(json, "\"google\"");
     let back: ProviderType = serde_json::from_str(&json).unwrap();
     assert_eq!(back, ProviderType::GeminiLlm);
-    let alias: ProviderType = serde_json::from_str("\"google\"").unwrap();
+    let alias: ProviderType = serde_json::from_str("\"gemini_llm\"").unwrap();
     assert_eq!(alias, ProviderType::GeminiLlm);
 
     let pt = ProviderType::AgentTeam;
@@ -91,6 +91,7 @@ fn test_provider_type_slug_round_trip() {
         ProviderType::from_slug("anthropic"),
         Some(ProviderType::ClaudeLlm)
     );
+    assert_eq!(ProviderType::from_slug("google"), Some(ProviderType::GeminiLlm));
     assert_eq!(
         ProviderType::from_slug("google_gemini"),
         Some(ProviderType::GeminiLlm)

@@ -55,7 +55,7 @@ import { Textarea } from '../../components/ui/textarea';
 import { useI18n } from '../../i18n';
 import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
-type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'gpt' | 'claude_llm' | 'gemini_llm';
+type ProviderType = 'claude_code' | 'claude_tty' | 'codex_app_server' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
 type HubTab = 'agents' | 'teams';
 type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 type TeamDialogMode = 'create' | 'edit' | 'view' | null;
@@ -189,11 +189,11 @@ function providerLabel(value: ProviderType): string {
   if (value === 'gpt') {
     return 'GPT';
   }
-  if (value === 'claude_llm') {
-    return 'Claude LLM';
+  if (value === 'anthropic' || value === 'claude_llm') {
+    return 'Claude';
   }
-  if (value === 'gemini_llm') {
-    return 'Gemini LLM';
+  if (value === 'google' || value === 'gemini_llm') {
+    return 'Gemini';
   }
   if (value === 'claude_tty') {
     return 'Claude TTY';
@@ -202,7 +202,7 @@ function providerLabel(value: ProviderType): string {
 }
 
 function isNativeModelProvider(value: ProviderType): boolean {
-  return value === 'gpt' || value === 'claude_llm' || value === 'gemini_llm';
+  return value === 'gpt' || value === 'anthropic' || value === 'google' || value === 'claude_llm' || value === 'gemini_llm';
 }
 
 function defaultAuthSource(value: ProviderType): string {
@@ -213,10 +213,10 @@ function apiKeyEnvName(value: ProviderType): string | null {
   if (value === 'gpt') {
     return 'OPENAI_API_KEY';
   }
-  if (value === 'claude_llm') {
+  if (value === 'anthropic' || value === 'claude_llm') {
     return 'ANTHROPIC_API_KEY';
   }
-  if (value === 'gemini_llm') {
+  if (value === 'google' || value === 'gemini_llm') {
     return 'GEMINI_API_KEY';
   }
   return null;
@@ -1425,8 +1425,8 @@ export function AgentsHubPanel({
                       <SelectItem value="codex_app_server">Codex</SelectItem>
                       <SelectItem value="gemini_cli">Gemini</SelectItem>
                       <SelectItem value="gpt">GPT</SelectItem>
-                      <SelectItem value="claude_llm">Claude LLM</SelectItem>
-                      <SelectItem value="gemini_llm">Gemini LLM</SelectItem>
+                      <SelectItem value="anthropic">Claude</SelectItem>
+                      <SelectItem value="google">Gemini</SelectItem>
                     </SelectGroup>
                   </SelectContent>
                 </Select>
@@ -1474,9 +1474,9 @@ export function AgentsHubPanel({
                           setAgentDraft((current) => ({ ...current, apiKey: event.target.value }));
                         }}
                         placeholder={
-                          agentDraft.providerType === 'claude_llm'
+                          agentDraft.providerType === 'anthropic' || agentDraft.providerType === 'claude_llm'
                             ? 'ANTHROPIC_API_KEY'
-                            : agentDraft.providerType === 'gemini_llm'
+                            : agentDraft.providerType === 'google' || agentDraft.providerType === 'gemini_llm'
                               ? 'GEMINI_API_KEY'
                               : 'OPENAI_API_KEY'
                         }

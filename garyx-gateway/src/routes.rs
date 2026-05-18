@@ -686,22 +686,13 @@ fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<Provide
         return Ok(None);
     };
 
-    match value.to_ascii_lowercase().as_str() {
-        "claude" | "claude_code" => Ok(Some(ProviderType::ClaudeCode)),
-        "claude-tty" | "claude_tty" => Ok(Some(ProviderType::ClaudeTty)),
-        "claude_llm" | "anthropic" | "claude_model" => Ok(Some(ProviderType::ClaudeLlm)),
-        "codex" => Ok(Some(ProviderType::CodexAppServer)),
-        "gemini" => Ok(Some(ProviderType::GeminiCli)),
-        "gemini_llm" | "google" | "google_gemini" | "gemini_model" => {
-            Ok(Some(ProviderType::GeminiLlm))
-        }
-        "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx_native" | "native" => {
-            Ok(Some(ProviderType::Gpt))
-        }
-        _ => Err(format!(
-            "Unsupported sdkSessionProviderHint '{value}'. Use claude, claude_tty, codex, gemini, or gpt."
-        )),
-    }
+    ProviderType::from_slug(&value.to_ascii_lowercase())
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "Unsupported sdkSessionProviderHint '{value}'. Use claude, claude_tty, codex, gemini, gpt, anthropic, or google."
+            )
+        })
 }
 
 fn provider_hint_label(value: &ProviderType) -> &'static str {

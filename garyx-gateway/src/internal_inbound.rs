@@ -130,19 +130,9 @@ pub(crate) async fn dispatch_internal_message_to_thread(
 
     extra_metadata.insert("internal_dispatch".to_owned(), Value::Bool(true));
     if let Some(requested_provider) = requested_provider.as_ref() {
-        let provider_value = match requested_provider {
-            ProviderType::ClaudeCode => "claude_code",
-            ProviderType::ClaudeTty => "claude_tty",
-            ProviderType::CodexAppServer => "codex_app_server",
-            ProviderType::GeminiCli => "gemini_cli",
-            ProviderType::Gpt => "gpt",
-            ProviderType::ClaudeLlm => "claude_llm",
-            ProviderType::GeminiLlm => "gemini_llm",
-            ProviderType::AgentTeam => "agent_team",
-        };
         extra_metadata.insert(
             "requested_provider_type".to_owned(),
-            Value::String(provider_value.to_owned()),
+            Value::String(requested_provider.as_slug().to_owned()),
         );
     }
     let response_callback = build_bound_response_callback(
