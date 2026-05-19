@@ -1058,12 +1058,14 @@ code {
 
 .pinned-thread-row {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   width: 100%;
   min-height: 31px;
-  padding: 5px 8px;
+  /* Extra left padding leaves room for the absolute-positioned pin (unpin)
+     button which always renders at the left edge of the shell. */
+  padding: 5px 8px 5px 32px;
   border: 0;
   border-radius: 12.5px;
   background: transparent;
@@ -1112,36 +1114,79 @@ code {
   opacity: 0;
 }
 
+/* Left unpin (pin) button. Always visible as the pinned-row glyph; on
+   direct hover the chip gets a soft background and the icon deepens so
+   the affordance reads as clickable. Matches the right
+   `.pinned-thread-archive` chip styling. */
 .pinned-thread-unpin {
   position: absolute;
-  right: 6px;
+  left: 4px;
   top: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--color-token-text-secondary);
+  color: var(--sidebar-text-muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.pinned-thread-unpin:hover {
+  background: color-mix(
+    in oklab,
+    var(--color-token-text-primary) 10%,
+    transparent
+  );
+  color: color-mix(in srgb, var(--color-token-text-primary) 75%, transparent);
+}
+
+/* Right, hover-revealed archive button. Mirrors the BotConversationSidebar
+   `.thread-delete-button` chip so both L1 and L2 archive affordances read
+   as one design (image-4 parity). */
+.pinned-thread-archive {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-token-description-foreground);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-50%);
+  cursor: pointer;
   transition:
-    background-color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard),
     opacity var(--duration-fast) var(--ease-standard);
 }
 
-.pinned-thread-row-shell:hover .pinned-thread-unpin {
+.pinned-thread-row-shell:hover .pinned-thread-archive {
   opacity: 1;
   pointer-events: auto;
 }
 
-.pinned-thread-unpin:hover {
-  background: color-mix(in oklab, var(--color-token-text-primary) 10%, transparent);
-  color: var(--color-token-text-primary);
+.pinned-thread-archive:hover {
+  background: color-mix(
+    in oklab,
+    var(--color-token-text-primary) 10%,
+    transparent
+  );
+  color: color-mix(in srgb, var(--color-token-text-primary) 75%, transparent);
 }
 
 .pinned-thread-spinner {

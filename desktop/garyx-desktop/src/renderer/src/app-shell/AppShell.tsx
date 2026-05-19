@@ -8029,6 +8029,17 @@ export function AppShell() {
         onUnpinThread={(threadId) => {
           togglePinnedThread(threadId);
         }}
+        onArchivePinnedThread={(threadId) => {
+          // `handleArchiveBotConversationEndpoint` reads only `threadId` and
+          // (optionally) `endpointKey` off the argument; it then looks up every
+          // matching endpoint from `desktopState.endpoints` itself. Passing a
+          // minimal endpoint shape is enough to drive the archive path from a
+          // pinned-row context that doesn't carry a full endpoint.
+          void handleArchiveBotConversationEndpoint({
+            threadId,
+            endpointKey: '',
+          } as DesktopChannelEndpoint);
+        }}
         onToggleBotConversationGroup={(group) => {
           setWorkspaceConversationPath(null);
           setBotConversationGroupId((current) =>

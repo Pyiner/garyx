@@ -57,6 +57,7 @@ type AppLeftRailProps = {
   onOpenBot: (group: ReturnType<typeof buildBotGroups>[number]) => void;
   onOpenPinnedThread: (threadId: string) => void;
   onUnpinThread: (threadId: string) => void;
+  onArchivePinnedThread: (threadId: string) => void;
   onToggleBotConversationGroup: (group: ReturnType<typeof buildBotGroups>[number]) => void;
   onToggleWorkspaceThreadGroup: (workspacePath: string) => void;
   onAddBot: () => void;
@@ -108,6 +109,7 @@ export function AppLeftRail({
   onOpenBot,
   onOpenPinnedThread,
   onUnpinThread,
+  onArchivePinnedThread,
   onToggleBotConversationGroup,
   onToggleWorkspaceThreadGroup,
   onAddBot,
@@ -234,6 +236,7 @@ export function AppLeftRail({
 
           <PinnedThreadsSidebar
             formatThreadTimestamp={formatThreadTimestamp}
+            onArchiveThread={onArchivePinnedThread}
             onOpenThread={onOpenPinnedThread}
             onUnpinThread={onUnpinThread}
             rows={pinnedThreadRows}

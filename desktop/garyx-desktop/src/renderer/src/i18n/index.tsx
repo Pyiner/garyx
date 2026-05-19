@@ -196,6 +196,8 @@ const zhCN: Record<string, string> = {
   'Unavailable': '不可用',
   'Unpin {title}': '取消置顶 {title}',
   'Unpin thread': '取消置顶线程',
+  'Archive {title}': '归档 {title}',
+  'Archive thread': '归档线程',
   'Unsaved Changes': '未保存改动',
   'Updated {time}': '更新于 {time}',
   'Weixin bot connected.': '微信 Bot 已连接。',

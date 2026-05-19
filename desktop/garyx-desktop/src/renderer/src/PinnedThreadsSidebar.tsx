@@ -1,5 +1,5 @@
 import { IconPin } from '@tabler/icons-react';
-import { X } from 'lucide-react';
+import { Archive } from 'lucide-react';
 
 import type { DesktopThreadSummary } from '@shared/contracts';
 
@@ -16,6 +16,7 @@ type PinnedThreadsSidebarProps = {
   formatThreadTimestamp: (value?: string | null) => string;
   onOpenThread: (threadId: string) => void;
   onUnpinThread: (threadId: string) => void;
+  onArchiveThread: (threadId: string) => void;
 };
 
 export function PinnedThreadsSidebar({
@@ -23,6 +24,7 @@ export function PinnedThreadsSidebar({
   formatThreadTimestamp,
   onOpenThread,
   onUnpinThread,
+  onArchiveThread,
 }: PinnedThreadsSidebarProps) {
   const { t } = useI18n();
 
@@ -45,23 +47,6 @@ export function PinnedThreadsSidebar({
               key={thread.id}
             >
               <button
-                aria-current={isActive ? 'page' : undefined}
-                className="pinned-thread-row"
-                onClick={() => {
-                  onOpenThread(thread.id);
-                }}
-                title={thread.title}
-                type="button"
-              >
-                <IconPin aria-hidden className="pinned-thread-icon" size={16} stroke={1.55} />
-                <span className="pinned-thread-title">{thread.title}</span>
-                {isBusy ? (
-                  <span aria-label={t('Loading')} className="pinned-thread-spinner" />
-                ) : (
-                  <span className="pinned-thread-time">{timeLabel}</span>
-                )}
-              </button>
-              <button
                 aria-label={t('Unpin {title}', { title: thread.title })}
                 className="pinned-thread-unpin"
                 onClick={(event) => {
@@ -71,7 +56,35 @@ export function PinnedThreadsSidebar({
                 title={t('Unpin thread')}
                 type="button"
               >
-                <X aria-hidden size={14} strokeWidth={1.6} />
+                <IconPin aria-hidden className="pinned-thread-icon" size={16} stroke={1.55} />
+              </button>
+              <button
+                aria-current={isActive ? 'page' : undefined}
+                className="pinned-thread-row"
+                onClick={() => {
+                  onOpenThread(thread.id);
+                }}
+                title={thread.title}
+                type="button"
+              >
+                <span className="pinned-thread-title">{thread.title}</span>
+                {isBusy ? (
+                  <span aria-label={t('Loading')} className="pinned-thread-spinner" />
+                ) : (
+                  <span className="pinned-thread-time">{timeLabel}</span>
+                )}
+              </button>
+              <button
+                aria-label={t('Archive {title}', { title: thread.title })}
+                className="pinned-thread-archive"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onArchiveThread(thread.id);
+                }}
+                title={t('Archive thread')}
+                type="button"
+              >
+                <Archive aria-hidden size={13} strokeWidth={1.55} />
               </button>
             </div>
           );
