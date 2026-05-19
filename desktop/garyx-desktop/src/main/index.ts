@@ -1365,10 +1365,25 @@ function showBrowserConnectionMenu(input: ShowBrowserConnectionMenuInput): void 
     },
   ]);
 
+  // The renderer passes viewport coordinates (the trigger button's
+  // `getBoundingClientRect().bottom + 6`). On macOS with
+  // `titleBarStyle: "hiddenInset"`, calling `menu.popup({ window, x, y })`
+  // visibly drops the menu about a titlebar-height (~30-40px) below the
+  // intended y. Omitting `window` makes Electron use the currently focused
+  // window's content area as the coordinate origin instead, which lines up
+  // with the renderer's viewport reference. Don't add the window's screen
+  // offset — the menu would then accumulate the offset twice, drifting
+  // right by `bounds.x` (visible as "right when the window is small, left
+  // when it's wide").
+  //
+  // Empirically the menu still lands ~90 DIPs left of the requested x in
+  // this configuration — likely a leftover from Electron's macOS
+  // content-area mapping. Add a fixed compensation so the menu's right
+  // edge lines up with the trigger button's right edge.
+  const POPUP_X_OFFSET = 96;
   menu.popup({
-    window: mainWindow ?? undefined,
-    x: Math.max(8, Math.round(input.x)),
-    y: Math.max(8, Math.round(input.y)),
+    x: Math.max(0, Math.round(input.x) + POPUP_X_OFFSET),
+    y: Math.max(0, Math.round(input.y)),
   });
 }
 
