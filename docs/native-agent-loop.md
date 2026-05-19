@@ -76,9 +76,8 @@ marks the first picker-visible model as the default, and exposes each model's
 own supported reasoning efforts and service tiers. The `service_tiers` values
 are forwarded to the Responses API as `service_tier`; for the current Codex
 catalog, Fast mode is exposed as `priority`. When the live catalog cannot be
-read, Garyx uses a minimal fallback copied from Codex's bundled model catalog so
-the default, reasoning controls, and known Fast service tiers remain available
-offline.
+read, Garyx uses a minimal built-in fallback so the default, reasoning controls,
+and known Fast service tiers remain available offline.
 
 ## Loop
 
