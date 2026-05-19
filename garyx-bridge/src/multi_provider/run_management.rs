@@ -11,9 +11,8 @@ use garyx_models::provider::{
 };
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, resolve_thread_log_thread_id};
 use garyx_router::{
-    ThreadHistoryRepository, ThreadStore, active_run_snapshot_messages, loop_enabled_from_value,
-    loop_iteration_count_from_value, mark_thread_task_in_review_if_in_progress,
-    thread_metadata_from_value,
+    ThreadHistoryRepository, ThreadStore, active_run_snapshot_messages,
+    mark_thread_task_in_review_if_in_progress, thread_metadata_from_value,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -536,79 +535,6 @@ fn spawn_partial_thread_persistence_worker(
     });
 
     (event_tx, task)
-}
-
-fn has_tool_activity(messages: &[garyx_models::provider::ProviderMessage]) -> bool {
-    messages
-        .iter()
-        .any(|message| matches!(message.role_str(), "tool_use" | "tool_result"))
-}
-
-fn metadata_has_active_goal(metadata: &HashMap<String, Value>) -> bool {
-    metadata
-        .get("goal")
-        .and_then(Value::as_object)
-        .is_some_and(|goal| {
-            goal.get("objective")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .is_some_and(|value| !value.is_empty())
-                && goal
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .unwrap_or("active")
-                    == "active"
-        })
-}
-
-fn result_marks_goal_completed(result: &garyx_models::provider::ProviderRunResult) -> bool {
-    result.session_messages.iter().any(|message| {
-        message.role_str() == "tool_result"
-            && message.tool_name.as_deref() == Some("update_goal")
-            && message
-                .content
-                .get("status")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .is_some_and(|status| status == "completed")
-    })
-}
-
-fn mark_thread_goal_completed(session_data: &mut Value) -> bool {
-    let Some(obj) = session_data.as_object_mut() else {
-        return false;
-    };
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut changed = false;
-    if let Some(goal) = obj.get_mut("goal").and_then(Value::as_object_mut) {
-        goal.insert("status".to_owned(), Value::String("completed".to_owned()));
-        goal.insert("updated_at".to_owned(), Value::String(now.clone()));
-        changed = true;
-    }
-    if let Some(goal) = obj
-        .get_mut("metadata")
-        .and_then(Value::as_object_mut)
-        .and_then(|metadata| metadata.get_mut("goal"))
-        .and_then(Value::as_object_mut)
-    {
-        goal.insert("status".to_owned(), Value::String("completed".to_owned()));
-        goal.insert("updated_at".to_owned(), Value::String(now));
-        changed = true;
-    }
-    changed
-}
-
-fn should_auto_disable_loop(
-    metadata: &HashMap<String, Value>,
-    result: &garyx_models::provider::ProviderRunResult,
-) -> bool {
-    if metadata_has_active_goal(metadata) {
-        return result_marks_goal_completed(result);
-    }
-    result.success
-        && !has_tool_activity(&result.session_messages)
-        && !result.response.trim().is_empty()
 }
 
 fn resolve_sdk_session_id_for_persistence(
@@ -1627,8 +1553,6 @@ impl MultiProviderBridge {
                     )
                     .await;
 
-                    let mut scheduled_loop_continue = false;
-
                     // Emit run_complete event.
                     if let Some(tx) = &*inner.event_tx.read().await {
                         let event = serde_json::json!({
@@ -1640,97 +1564,7 @@ impl MultiProviderBridge {
                         let _ = tx.send(event.to_string());
                     }
 
-                    // Auto-continue loop: if loop_enabled, schedule a
-                    // continuation run after a short delay.
-                    if res.success
-                        && let Some(store) = &*inner.thread_store.read().await
-                        && let Some(mut session_data) = store.get(&thread_id_owned).await
-                    {
-                        let goal_status_changed = if result_marks_goal_completed(res) {
-                            mark_thread_goal_completed(&mut session_data)
-                        } else {
-                            false
-                        };
-                        let loop_enabled = loop_enabled_from_value(&session_data);
-                        let iteration_count = loop_iteration_count_from_value(&session_data);
-
-                        if loop_enabled {
-                            const MAX_LOOP_ITERATIONS: u64 = 50;
-                            if should_auto_disable_loop(&graph_state.run_options.metadata, res) {
-                                tracing::warn!(
-                                    thread_id = %thread_id_owned,
-                                    iteration_count,
-                                    "latest run completed without tool activity; disabling loop"
-                                );
-                                if let Some(obj) = session_data.as_object_mut() {
-                                    obj.insert("loop_enabled".to_owned(), Value::Bool(false));
-                                    obj.insert("loop_iteration_count".to_owned(), json!(0));
-                                    store.set(&thread_id_owned, session_data).await;
-                                }
-                                record_thread_log(
-                                    thread_logs_for_task.clone(),
-                                    thread_log_id_owned.as_deref(),
-                                    ThreadLogEvent::warn(
-                                        "",
-                                        "loop",
-                                        "loop auto-disabled after tool-free completion",
-                                    )
-                                    .with_run_id(run_id_owned.clone())
-                                    .with_field("iteration", json!(iteration_count)),
-                                )
-                                .await;
-                            } else if iteration_count >= MAX_LOOP_ITERATIONS {
-                                tracing::warn!(
-                                    thread_id = %thread_id_owned,
-                                    iteration_count,
-                                    "loop iteration limit reached, disabling loop"
-                                );
-                                if let Some(obj) = session_data.as_object_mut() {
-                                    obj.insert("loop_enabled".to_owned(), Value::Bool(false));
-                                    obj.insert("loop_iteration_count".to_owned(), json!(0));
-                                    store.set(&thread_id_owned, session_data).await;
-                                }
-                            } else {
-                                // Increment iteration count.
-                                if let Some(obj) = session_data.as_object_mut() {
-                                    obj.insert(
-                                        "loop_iteration_count".to_owned(),
-                                        json!(iteration_count + 1),
-                                    );
-                                    store.set(&thread_id_owned, session_data).await;
-                                }
-
-                                // Emit loop_continue event for the
-                                // gateway to pick up.
-                                if let Some(tx) = &*inner.event_tx.read().await {
-                                    let event = serde_json::json!({
-                                        "type": "loop_continue",
-                                        "thread_id": thread_id_owned,
-                                        "iteration": iteration_count + 1,
-                                    });
-                                    let _ = tx.send(event.to_string());
-                                }
-                                scheduled_loop_continue = true;
-
-                                record_thread_log(
-                                    thread_logs_for_task.clone(),
-                                    thread_log_id_owned.as_deref(),
-                                    ThreadLogEvent::info(
-                                        "",
-                                        "loop",
-                                        "loop auto-continue scheduled",
-                                    )
-                                    .with_run_id(run_id_owned.clone())
-                                    .with_field("iteration", json!(iteration_count + 1)),
-                                )
-                                .await;
-                            }
-                        } else if goal_status_changed {
-                            store.set(&thread_id_owned, session_data).await;
-                        }
-                    }
-
-                    if res.success && !scheduled_loop_continue {
+                    if res.success {
                         mark_task_ready_for_review_after_stopped_run(
                             &inner,
                             &thread_id_owned,
@@ -1841,22 +1675,6 @@ impl MultiProviderBridge {
                             "error": e.to_string(),
                         });
                         let _ = tx.send(event.to_string());
-                    }
-
-                    // Error guard: disable loop on failure.
-                    if let Some(store) = &*inner.thread_store.read().await
-                        && let Some(mut session_data) = store.get(&thread_id_owned).await
-                        && loop_enabled_from_value(&session_data)
-                    {
-                        tracing::warn!(
-                            thread_id = %thread_id_owned,
-                            "loop run failed, disabling loop mode"
-                        );
-                        if let Some(obj) = session_data.as_object_mut() {
-                            obj.insert("loop_enabled".to_owned(), Value::Bool(false));
-                            obj.insert("loop_iteration_count".to_owned(), json!(0));
-                            store.set(&thread_id_owned, session_data).await;
-                        }
                     }
 
                     record_thread_log(

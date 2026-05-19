@@ -8,7 +8,7 @@ command list.
 Garyx currently has exactly two interaction command kinds:
 
 - `channel_native`: built-in channel-only management commands, such as
-  `/threads`, `/newthread`, `/threadprev`, `/threadnext`, and `/loop`.
+  `/threads`, `/newthread`, `/threadprev`, and `/threadnext`.
 - `shortcut`: global prompt shortcuts configured by the user, such as
   `/summary -> "Summarize the active thread"`.
 

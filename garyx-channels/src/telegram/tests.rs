@@ -89,7 +89,13 @@ fn telegram_bot_commands_are_projected_from_command_list() {
 
     assert_eq!(
         &names[..5],
-        &["newthread", "threads", "threadprev", "threadnext", "loop",]
+        &[
+            "newthread",
+            "threads",
+            "threadprev",
+            "threadnext",
+            "summary",
+        ]
     );
     assert!(names.contains(&"summary"));
 }
@@ -274,12 +280,12 @@ fn test_strip_mention_empty_username() {
 
 #[test]
 fn test_native_router_commands_do_not_interrupt_inflight_streams() {
-    assert!(is_native_command_text("/loop", "telegram"));
+    assert!(!is_native_command_text("/loop", "telegram"));
     assert!(is_native_command_text("/threads", "telegram"));
     assert!(is_native_command_text("/newthread", "telegram"));
     assert!(is_native_command_text("/threadprev", "telegram"));
     assert!(is_native_command_text("/threadnext", "telegram"));
-    assert!(is_native_command_text("/loop@test_gary_bot", "telegram"));
+    assert!(!is_native_command_text("/loop@test_gary_bot", "telegram"));
     assert!(!is_native_command_text("hello", "telegram"));
     assert!(!is_native_command_text("/unknown", "telegram"));
     assert!(!is_native_command_text("/start", "telegram"));

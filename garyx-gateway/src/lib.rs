@@ -17,7 +17,6 @@ mod delivery_target;
 pub mod gateway_auth;
 pub mod health;
 mod internal_inbound;
-mod loop_continuation;
 mod managed_mcp_metadata;
 pub mod mcp;
 pub mod mcp_config;

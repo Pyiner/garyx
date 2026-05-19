@@ -13,8 +13,6 @@ const DISPATCH_THREADS: &str = "router.native.threads";
 const DISPATCH_NEWTHREAD: &str = "router.native.newthread";
 const DISPATCH_THREADPREV: &str = "router.native.threadprev";
 const DISPATCH_THREADNEXT: &str = "router.native.threadnext";
-const DISPATCH_LOOP: &str = "router.native.loop";
-const DISPATCH_GOAL: &str = "router.native.goal";
 
 struct NativeCommandDef {
     name: &'static str,
@@ -53,20 +51,6 @@ const NATIVE_COMMANDS: &[NativeCommandDef] = &[
         dispatch_key: DISPATCH_THREADNEXT,
         telegram: true,
     },
-    NativeCommandDef {
-        name: "loop",
-        description: "Toggle loop mode for this thread",
-        category: "Thread",
-        dispatch_key: DISPATCH_LOOP,
-        telegram: true,
-    },
-    NativeCommandDef {
-        name: "goal",
-        description: "Set or inspect the durable goal for this thread",
-        category: "Thread",
-        dispatch_key: DISPATCH_GOAL,
-        telegram: true,
-    },
 ];
 
 pub fn reserved_command_names() -> HashSet<&'static str> {
@@ -90,8 +74,6 @@ pub fn native_command_name(command: NativeCommand) -> &'static str {
         NativeCommand::Thread(NativeThreadCommand::New) => "/newthread",
         NativeCommand::Thread(NativeThreadCommand::ThreadPrev) => "/threadprev",
         NativeCommand::Thread(NativeThreadCommand::ThreadNext) => "/threadnext",
-        NativeCommand::Loop => "/loop",
-        NativeCommand::Goal => "/goal",
     }
 }
 
@@ -167,8 +149,6 @@ fn native_command_from_dispatch_key(key: &str) -> Option<NativeCommand> {
         DISPATCH_NEWTHREAD => NativeCommand::Thread(NativeThreadCommand::New),
         DISPATCH_THREADPREV => NativeCommand::Thread(NativeThreadCommand::ThreadPrev),
         DISPATCH_THREADNEXT => NativeCommand::Thread(NativeThreadCommand::ThreadNext),
-        DISPATCH_LOOP => NativeCommand::Loop,
-        DISPATCH_GOAL => NativeCommand::Goal,
         _ => return None,
     })
 }

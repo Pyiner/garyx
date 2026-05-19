@@ -251,20 +251,6 @@ pub fn thread_kind_from_value(value: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub fn loop_enabled_from_value(value: &Value) -> bool {
-    value
-        .get("loop_enabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
-pub fn loop_iteration_count_from_value(value: &Value) -> u64 {
-    value
-        .get("loop_iteration_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-}
-
 pub fn is_hidden_thread_value(value: &Value) -> bool {
     value.get("hidden").and_then(Value::as_bool) == Some(true)
 }

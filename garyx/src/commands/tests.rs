@@ -910,8 +910,8 @@ async fn cmd_command_set_rejects_builtin_collision() {
 
     let err = cmd_command_set(
         config_path.to_str().expect("config path"),
-        "loop".to_owned(),
-        Some("custom loop".to_owned()),
+        "threads".to_owned(),
+        Some("custom thread list".to_owned()),
         None,
         true,
     )

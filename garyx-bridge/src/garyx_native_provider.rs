@@ -160,27 +160,6 @@ fn persisted_session_messages(metadata: &HashMap<String, Value>) -> Vec<Provider
         .unwrap_or_default()
 }
 
-fn goal_context(metadata: &HashMap<String, Value>) -> Option<String> {
-    let goal = metadata.get("goal")?.as_object()?;
-    let objective = goal
-        .get("objective")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let status = goal
-        .get("status")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("active");
-    if status != "active" {
-        return None;
-    }
-    Some(format!(
-        "Current durable Garyx goal: {objective}\nUse get_goal to inspect it and update_goal with status=completed when the objective is genuinely done."
-    ))
-}
-
 fn conversation_from_provider(message: ProviderMessage) -> ConversationMessage {
     let role = match message.role {
         ProviderMessageRole::User => ConversationRole::User,
@@ -715,9 +694,6 @@ impl GaryxNativeProvider {
                 .get("automation_id")
                 .and_then(Value::as_str),
         ));
-        if let Some(goal) = goal_context(&options.metadata) {
-            parts.push(goal);
-        }
         let native_capabilities = capability_instructions(workspace_dir, &options.metadata);
         if !native_capabilities.trim().is_empty() {
             parts.push(native_capabilities);
@@ -775,28 +751,6 @@ impl GaryxNativeProvider {
                     "additionalProperties": false
                 }),
             ),
-            ToolDefinition::function(
-                "get_goal",
-                "Return the current durable Garyx goal for this thread.",
-                json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                }),
-            ),
-            ToolDefinition::function(
-                "update_goal",
-                "Update the current durable Garyx goal status.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "status": { "type": "string", "enum": ["active", "paused", "completed"] },
-                        "note": { "type": "string" }
-                    },
-                    "required": ["status"],
-                    "additionalProperties": false
-                }),
-            ),
         ];
         tools.extend(capability_tool_schemas(workspace_dir, metadata));
         tools
@@ -813,11 +767,6 @@ impl GaryxNativeProvider {
             "read_file" => self.read_file_tool(call, workspace_dir).await,
             "write_file" => self.write_file_tool(call, workspace_dir).await,
             "list_dir" => self.list_dir_tool(call, workspace_dir).await,
-            "get_goal" => Ok(metadata.get("goal").cloned().unwrap_or(Value::Null)),
-            "update_goal" => Ok(json!({
-                "status": call.arguments.get("status").and_then(Value::as_str).unwrap_or("active"),
-                "note": call.arguments.get("note").and_then(Value::as_str).unwrap_or(""),
-            })),
             name if is_capability_tool(name) => {
                 let runtime_env = resolve_runtime_env(&self.config, metadata);
                 run_capability_tool(call, workspace_dir, metadata, &runtime_env).await

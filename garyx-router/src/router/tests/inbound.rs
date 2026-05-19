@@ -12,8 +12,11 @@ fn test_is_native_command_text_recognizes_thread_commands() {
     assert!(is_native_command_text("/newthread", "telegram"));
     assert!(is_native_command_text("/threadprev", "telegram"));
     assert!(is_native_command_text("/threadnext", "telegram"));
-    assert!(is_native_command_text("/loop", "telegram"));
-    assert!(is_native_command_text("/goal ship the feature", "telegram"));
+    assert!(!is_native_command_text("/loop", "telegram"));
+    assert!(!is_native_command_text(
+        "/goal ship the feature",
+        "telegram"
+    ));
 }
 
 #[test]
@@ -69,14 +72,7 @@ fn test_channel_native_catalog_exposes_telegram_menu_commands() {
         .collect::<Vec<_>>();
     assert_eq!(
         names,
-        vec![
-            "newthread",
-            "threads",
-            "threadprev",
-            "threadnext",
-            "loop",
-            "goal"
-        ]
+        vec!["newthread", "threads", "threadprev", "threadnext"]
     );
     assert!(
         catalog
@@ -131,12 +127,18 @@ fn test_default_command_catalog_exposes_only_shortcuts() {
 }
 
 #[test]
-fn test_command_catalog_rejects_shortcut_collision_with_channel_native() {
+fn test_command_catalog_allows_former_loop_goal_shortcuts() {
     let mut config = GaryxConfig::default();
     config.commands.push(SlashCommand {
         name: "loop".to_owned(),
         description: "Custom loop".to_owned(),
         prompt: Some("custom loop prompt".to_owned()),
+        skill_id: None,
+    });
+    config.commands.push(SlashCommand {
+        name: "goal".to_owned(),
+        description: "Custom goal".to_owned(),
+        prompt: Some("custom goal prompt".to_owned()),
         skill_id: None,
     });
 
@@ -150,21 +152,26 @@ fn test_command_catalog_rejects_shortcut_collision_with_channel_native() {
         },
     );
 
-    assert_eq!(
-        catalog
-            .commands
-            .iter()
-            .filter(|entry| entry.name == "loop")
-            .count(),
-        1,
-        "only the built-in /loop should survive"
-    );
+    let loop_entry = catalog
+        .commands
+        .iter()
+        .find(|entry| entry.name == "loop")
+        .expect("custom /loop shortcut");
+    assert_eq!(loop_entry.kind, CommandKind::Shortcut);
+    assert_eq!(loop_entry.source, CommandSource::Config);
+
+    let goal_entry = catalog
+        .commands
+        .iter()
+        .find(|entry| entry.name == "goal")
+        .expect("custom /goal shortcut");
+    assert_eq!(goal_entry.kind, CommandKind::Shortcut);
+    assert_eq!(goal_entry.source, CommandSource::Config);
+
     assert!(
         catalog
             .warnings
             .iter()
-            .any(|warning| warning.code == "reserved_command_name"
-                && warning.message.contains("loop")),
-        "collision should be reported as a catalog validation warning"
+            .all(|warning| warning.code != "reserved_command_name")
     );
 }

@@ -642,12 +642,9 @@ and `/api/provider-models/google`, including per-model reasoning effort choices.
 These two providers ignore `model_service_tier`; use `model_reasoning_effort`
 for lower-latency or higher-depth model behavior.
 
-The `/goal <objective>` native command sets a durable thread goal and enables
-loop mode. `/goal` shows the current goal; `/goal pause` pauses it; `/goal
-resume` resumes it; `/goal clear` clears it and disables loop mode. While a
-goal is active, Garyx keeps loop mode running until the provider marks the goal
-completed with its `update_goal` tool, the goal is paused/cleared, the run is
-interrupted, or the loop hits its safety limit.
+Garyx does not expose a persistent `/goal` command or thread-level
+auto-continuation loop mode. Use normal thread turns, tasks, or automations for
+long-running work.
 
 Use a custom agent or an agent team by setting the same `agent_id` used in your
 Garyx agent/team configuration. The CLI account setup flow can also prompt for

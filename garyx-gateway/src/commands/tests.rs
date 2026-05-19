@@ -109,9 +109,9 @@ async fn test_shortcut_create_rejects_channel_native_collision() {
         Method::POST,
         "/api/commands/shortcuts",
         Some(json!({
-            "name": "loop",
-            "description": "Custom loop",
-            "prompt": "custom loop prompt"
+            "name": "threads",
+            "description": "Custom thread list",
+            "prompt": "custom thread list prompt"
         })),
     )
     .await;
@@ -131,8 +131,8 @@ async fn test_shortcuts_route_lists_only_valid_prompt_shortcuts() {
     });
     config.commands.push(SlashCommand {
         name: "loop".to_owned(),
-        description: "Reserved".to_owned(),
-        prompt: Some("Reserved shortcut should be hidden.".to_owned()),
+        description: "Custom loop".to_owned(),
+        prompt: Some("Former native command name should be allowed.".to_owned()),
         skill_id: None,
     });
     config.commands.push(SlashCommand {
@@ -149,7 +149,9 @@ async fn test_shortcuts_route_lists_only_valid_prompt_shortcuts() {
 
     assert_eq!(status, StatusCode::OK);
     let commands = payload["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 1);
+    assert_eq!(commands.len(), 2);
     assert_eq!(commands[0]["name"], "summary");
     assert!(commands[0].get("skill_id").is_none());
+    assert_eq!(commands[1]["name"], "loop");
+    assert!(commands[1].get("skill_id").is_none());
 }

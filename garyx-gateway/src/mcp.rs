@@ -335,13 +335,6 @@ impl GaryMcpServer {
     ) -> Result<String, String> {
         tools::auto_research::run_verdict(self, ctx, params).await
     }
-
-    #[tool(
-        description = "Stop loop mode for the current thread. Call this when you have completed all pending tasks and there is no more work to do."
-    )]
-    async fn stop_loop(&self, ctx: RequestContext<RoleServer>) -> Result<String, String> {
-        tools::stop_loop::run(self, ctx).await
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -366,7 +359,7 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, search, conversation_history, conversation_search, stop_loop."
+                "Garyx MCP server. Tools: status, search, conversation_history, conversation_search."
                     .to_owned(),
             ),
         }

@@ -13,8 +13,7 @@ first model backend on this loop is the GPT provider. It should:
 - use Codex-compatible OpenAI authentication so users who already logged in to
   Codex do not need to duplicate API keys in Garyx;
 - expose enough local tools for a model to inspect and modify the workspace;
-- persist provider messages so a thread can continue with useful context;
-- support `/goal` as a persistent objective layer on top of normal chat.
+- persist provider messages so a thread can continue with useful context.
 
 Non-goals for the first version:
 
@@ -84,8 +83,7 @@ and known Fast service tiers remain available offline.
 Each run performs the same basic cycle used by Codex and Claude Code:
 
 1. Add the user input to the session transcript.
-2. Send transcript, system instructions, optional goal instructions, and tool
-   schemas to the model.
+2. Send transcript, system instructions, and tool schemas to the model.
 3. Stream assistant text to Garyx as it arrives.
 4. If the model asks for tool calls, execute them, append tool results, and
    sample again.
@@ -105,63 +103,26 @@ work:
   timeout;
 - `read_file`: read a UTF-8 text file;
 - `write_file`: write a UTF-8 text file;
-- `list_dir`: list directory entries;
-- `get_goal`: inspect the current thread goal;
-- `update_goal`: mark the current goal `active`, `paused`, or `completed`.
+- `list_dir`: list directory entries.
 
 Tool outputs are truncated before sending them back to the model and before
 persisting to the transcript.
 
-## Goal State
+## No Persistent Goal Mode
 
-`/goal <objective>` is a router-native command. It resolves or creates the
-current thread, writes the goal both at the thread top level and under
-`metadata.goal`, and enables loop mode:
-
-```json
-{
-  "goal": {
-    "objective": "...",
-    "status": "active",
-    "created_at": "...",
-    "updated_at": "..."
-  },
-  "metadata": {
-    "goal": {
-      "objective": "...",
-      "status": "active",
-      "created_at": "...",
-      "updated_at": "..."
-    }
-  },
-  "loop_enabled": true,
-  "loop_iteration_count": 0
-}
-```
-
-`/goal off`, `/goal clear`, or `/goal done` clears the goal and disables loop.
-
-Bridge run metadata is enriched from thread metadata, so the native loop
-receives the goal object on each turn. The loop turns it into hidden system
-context and exposes the goal tools. When `update_goal` marks the goal
-`completed`, the provider returns metadata indicating completion; the bridge
-turns off loop mode for that thread.
-
-This does not mathematically guarantee the objective is achieved. The guarantee
-is operational: the objective is durable, every turn sees it, the model has a
-goal-completion tool, the loop can continue automatically, and Garyx stops only
-when the goal is completed, paused, cleared, interrupted, or exhausted by
-budget/error.
+Garyx no longer exposes a router-native `/goal` command or thread-level
+auto-continuation loop mode. Long-running work should be represented by normal
+thread turns, tasks, or automations instead of hidden thread state that causes
+the bridge to re-enter a run automatically.
 
 ## Tests
 
 The implementation is test-driven in vertical slices:
 
 1. provider/model config round-trips and built-in `garyx` agent profile;
-2. `/goal` command parsing and thread mutation;
-3. bridge option hydration with persisted `session_messages`;
-4. native loop with fake model: assistant-only turn;
-5. native loop with fake model: tool call followed by second model request;
-6. native loop with queued streaming input and interrupt;
-7. auth resolution from env and Codex auth file;
-8. focused package tests for touched crates.
+2. bridge option hydration with persisted `session_messages`;
+3. native loop with fake model: assistant-only turn;
+4. native loop with fake model: tool call followed by second model request;
+5. native loop with queued streaming input and interrupt;
+6. auth resolution from env and Codex auth file;
+7. focused package tests for touched crates.
