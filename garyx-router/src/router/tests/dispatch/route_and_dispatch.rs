@@ -177,7 +177,7 @@ async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent(
     let mut config = GaryxConfig::default();
     config
         .channels
-        .plugin_channel_mut("minolab")
+        .plugin_channel_mut("examplebot")
         .accounts
         .insert(
             "main".to_owned(),
@@ -195,13 +195,13 @@ async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent(
     let dispatcher = MockDispatcher::new();
 
     let request = InboundRequest {
-        channel: "minolab".to_owned(),
+        channel: "examplebot".to_owned(),
         account_id: "main".to_owned(),
         from_id: "user-1".to_owned(),
         is_group: false,
         thread_binding_key: "issue-1".to_owned(),
         message: "hello".to_owned(),
-        run_id: "run-minolab-invalid-agent".to_owned(),
+        run_id: "run-examplebot-invalid-agent".to_owned(),
         reply_to_message_id: None,
         images: vec![],
         extra_metadata: HashMap::from([
@@ -221,18 +221,18 @@ async fn test_route_and_dispatch_falls_back_to_claude_for_invalid_channel_agent(
         .await
         .expect("fallback thread should be persisted");
     assert_eq!(saved["agent_id"], "claude");
-    assert_eq!(saved["channel"], "minolab");
+    assert_eq!(saved["channel"], "examplebot");
     assert_eq!(saved["account_id"], "main");
 
     let bindings = bindings_from_value(&saved);
     assert_eq!(bindings.len(), 1);
-    assert_eq!(bindings[0].channel, "minolab");
+    assert_eq!(bindings[0].channel, "examplebot");
     assert_eq!(bindings[0].account_id, "main");
     assert_eq!(bindings[0].binding_key, "issue-1");
 
     assert_eq!(
         router
-            .resolve_endpoint_thread_id("minolab", "main", "issue-1")
+            .resolve_endpoint_thread_id("examplebot", "main", "issue-1")
             .await
             .as_deref(),
         Some(result.thread_id.as_str())

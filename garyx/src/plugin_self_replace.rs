@@ -683,17 +683,17 @@ mod tests {
     #[test]
     fn find_plugin_toml_walks_one_level() {
         let tmp = tempfile::tempdir().unwrap();
-        let inner = tmp.path().join("minolab");
+        let inner = tmp.path().join("examplebot");
         std::fs::create_dir(&inner).unwrap();
         let target = inner.join("plugin.toml");
-        std::fs::write(&target, "[plugin]\nid=\"minolab\"\nversion=\"0.0.1\"\n").unwrap();
+        std::fs::write(&target, "[plugin]\nid=\"examplebot\"\nversion=\"0.0.1\"\n").unwrap();
         assert_eq!(find_plugin_toml(tmp.path()), Some(target));
     }
 
     #[tokio::test]
     async fn backup_then_restore_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
-        let live = tmp.path().join("garyx-plugin-minolab");
+        let live = tmp.path().join("garyx-plugin-examplebot");
         std::fs::write(&live, b"old-bytes").unwrap();
         let backup = backup_path(&live).await.unwrap();
         // Live untouched after backup.
@@ -711,7 +711,7 @@ mod tests {
     #[tokio::test]
     async fn delete_backup_removes_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let live = tmp.path().join("garyx-plugin-minolab");
+        let live = tmp.path().join("garyx-plugin-examplebot");
         std::fs::write(&live, b"x").unwrap();
         let backup = backup_path(&live).await.unwrap();
         assert!(backup.exists());

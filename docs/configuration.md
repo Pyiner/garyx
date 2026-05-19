@@ -383,11 +383,9 @@ false (`reason: no_survives_respawn`).
 
 The plugin's tick is plugin-internal — implement whatever cadence,
 release-source, and version-pinning rules suit your release
-discipline. A reference implementation lives in
-[`minolab-garyx::self_update`](../../minolab-garyx/src/self_update.rs):
-6 h tick by default, env-var overridable interval, strict-greater
-version compare, target-aware archive URL fetched from a
-plugin-server endpoint.
+discipline. A typical pattern: tick every 6 h by default with an
+env-var overridable interval, use strict-greater version compare,
+and fetch a target-aware archive URL from a plugin-server endpoint.
 
 #### Plugin update server contract
 
