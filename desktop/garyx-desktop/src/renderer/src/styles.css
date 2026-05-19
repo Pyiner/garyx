@@ -667,7 +667,12 @@ code {
     var(--spacing-token-sidebar)
     var(--spacing-token-rail, 258px)
     minmax(0, 1fr);
-  column-gap: 1px;
+  /* Seam is drawn as an explicit hairline on `.conversation`'s left edge
+     (see the `.with-bot-conversation-rail .conversation` rule below) rather
+     than a 1px column-gap. The gap version was actually body vibrancy
+     (~#ebebeb) peeking through two white panels, which read as a noisy
+     crack at desktop scale. The designed border is softer and consistent
+     with the rest of the app's chrome lines. */
 }
 
 .sidebar-resizer {
@@ -1293,7 +1298,9 @@ code {
   max-height: 100vh;
   padding: var(--inset-toolbar) 8px 10px;
   background: rgb(255, 255, 255);
-  border-radius: var(--radius-pill);
+  /* Right side (seam against `.conversation`) is square so the 1px column-gap
+     reads as a single seam line instead of two opposing curves. */
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
   border: none;
   box-shadow: none;
   -webkit-app-region: drag;
@@ -2447,6 +2454,15 @@ code {
   background: rgb(255, 255, 255);
   border-radius: var(--radius-pill) 0 0 var(--radius-pill);
   overflow: hidden;
+}
+
+/* When the L2 conversation rail is open the right pane sits flush against
+   it, so the left edge needs to be square and carries the single seam
+   hairline. The single-column (L1-only) layout keeps the pill corners and
+   no border so the pane still feels like a floating card. */
+.app-shell.with-bot-conversation-rail .conversation {
+  border-radius: 0;
+  border-left: 1px solid var(--color-token-border-light);
 }
 
 .conversation:not(.settings-view) {
