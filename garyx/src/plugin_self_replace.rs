@@ -352,16 +352,42 @@ pub async fn handle(
         return deferred("stream_active", waited_secs, max_wait_secs);
     }
 
+    // Back up the live binary + manifest BEFORE either promote so we
+    // can roll on-disk state back if a later step fails. Without this,
+    // a manifest-promote failure leaves the install dir in {new binary
+    // + old toml}; a respawn failure leaves {new binary + new toml}
+    // but no running process. The next gateway restart would then try
+    // to launch the broken pairing and brick the plugin.
+    let install_manifest_path = snapshot.manifest_dir.join("plugin.toml");
+    let binary_backup = match backup_path(&install_binary_path).await {
+        Ok(p) => p,
+        Err(err) => return swap_failed("binary_backup", err, "promote"),
+    };
+
     // Promote the new binary atomically. We rename a staged tmp file
     // (in the install dir, so rename is same-filesystem-atomic) over
     // the live binary path.
     if let Err(err) = atomic_promote(&archived_binary_path, &install_binary_path).await {
+        // atomic_promote either renamed cleanly or returned without
+        // touching the dest; restore from backup defensively in case
+        // the staged file partially clobbered dest.
+        let _ = restore_backup(&binary_backup, &install_binary_path).await;
         return swap_failed("promote", err, "promote");
     }
+
+    let manifest_backup = match backup_path(&install_manifest_path).await {
+        Ok(p) => p,
+        Err(err) => {
+            let _ = restore_backup(&binary_backup, &install_binary_path).await;
+            return swap_failed("manifest_backup", err, "promote");
+        }
+    };
+
     // Also copy the archived plugin.toml over the installed one so
     // the manifest reflects the new version. Same-fs atomic rename.
-    let install_manifest_path = snapshot.manifest_dir.join("plugin.toml");
     if let Err(err) = atomic_promote(&archived_manifest_path, &install_manifest_path).await {
+        let _ = restore_backup(&binary_backup, &install_binary_path).await;
+        let _ = restore_backup(&manifest_backup, &install_manifest_path).await;
         return swap_failed("promote_manifest", err, "promote");
     }
 
@@ -373,8 +399,17 @@ pub async fn handle(
         guard.respawn_plugin_with_fresh_manifest(&plugin_id_owned).await
     };
     if let Err(err) = respawn_result {
+        // Manager has already restored its in-memory manifest on
+        // failure (plugin.rs:2605); restore the on-disk pair too so a
+        // subsequent retry/restart launches the prior working version.
+        let _ = restore_backup(&binary_backup, &install_binary_path).await;
+        let _ = restore_backup(&manifest_backup, &install_manifest_path).await;
         return swap_failed("respawn", err.to_string(), "respawn");
     }
+
+    // Success — drop the backups.
+    let _ = delete_backup(&binary_backup).await;
+    let _ = delete_backup(&manifest_backup).await;
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
     info!(
@@ -517,6 +552,64 @@ async fn atomic_promote(src: &Path, dest: &Path) -> Result<(), String> {
     .map_err(|e| format!("promote task panicked: {e}"))?
 }
 
+/// Snapshot the live file at `path` into a sibling `.bak.<uuid>`. The
+/// returned path is the backup location, which the caller passes to
+/// `restore_backup` on later failure or to `delete_backup` on success.
+async fn backup_path(path: &Path) -> Result<PathBuf, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("backup target has no parent: {}", path.display()))?
+        .to_path_buf();
+    let filename = path
+        .file_name()
+        .ok_or_else(|| format!("backup target has no filename: {}", path.display()))?
+        .to_string_lossy()
+        .into_owned();
+    let backup = parent.join(format!(".{filename}.bak.{}", uuid::Uuid::new_v4().simple()));
+    let src = path.to_path_buf();
+    let backup_clone = backup.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        std::fs::copy(&src, &backup_clone)
+            .map(|_| ())
+            .map_err(|e| {
+                format!(
+                    "backup copy {} -> {}: {e}",
+                    src.display(),
+                    backup_clone.display()
+                )
+            })
+    })
+    .await
+    .map_err(|e| format!("backup task panicked: {e}"))??;
+    Ok(backup)
+}
+
+/// Atomically restore `backup` over `live`. Used on failure paths in
+/// the swap pipeline. Best-effort: callers should not retry beyond
+/// this and should always observe the underlying `swap_failed`
+/// outcome.
+async fn restore_backup(backup: &Path, live: &Path) -> Result<(), String> {
+    let backup = backup.to_path_buf();
+    let live = live.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        std::fs::rename(&backup, &live).map_err(|e| {
+            format!(
+                "restore rename {} -> {}: {e}",
+                backup.display(),
+                live.display()
+            )
+        })
+    })
+    .await
+    .map_err(|e| format!("restore task panicked: {e}"))?
+}
+
+/// Discard a backup file on the success path. Best-effort.
+async fn delete_backup(backup: &Path) {
+    let backup = backup.to_path_buf();
+    let _ = tokio::task::spawn_blocking(move || std::fs::remove_file(&backup)).await;
+}
+
 // ----- decision builders ------------------------------------------
 
 fn refused(reason: &str, detail: String) -> Value {
@@ -595,6 +688,35 @@ mod tests {
         let target = inner.join("plugin.toml");
         std::fs::write(&target, "[plugin]\nid=\"minolab\"\nversion=\"0.0.1\"\n").unwrap();
         assert_eq!(find_plugin_toml(tmp.path()), Some(target));
+    }
+
+    #[tokio::test]
+    async fn backup_then_restore_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("garyx-plugin-minolab");
+        std::fs::write(&live, b"old-bytes").unwrap();
+        let backup = backup_path(&live).await.unwrap();
+        // Live untouched after backup.
+        assert_eq!(std::fs::read(&live).unwrap(), b"old-bytes");
+        // Simulate the promote step overwriting live.
+        std::fs::write(&live, b"new-bytes").unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"new-bytes");
+        // Rollback returns the original bytes.
+        restore_backup(&backup, &live).await.unwrap();
+        assert_eq!(std::fs::read(&live).unwrap(), b"old-bytes");
+        // Backup file is consumed by the rename.
+        assert!(!backup.exists());
+    }
+
+    #[tokio::test]
+    async fn delete_backup_removes_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("garyx-plugin-minolab");
+        std::fs::write(&live, b"x").unwrap();
+        let backup = backup_path(&live).await.unwrap();
+        assert!(backup.exists());
+        delete_backup(&backup).await;
+        assert!(!backup.exists());
     }
 
     #[test]
