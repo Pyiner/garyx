@@ -1,6 +1,6 @@
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { PanelLeftClose, Trash } from 'lucide-react';
+import { Archive, PanelLeftClose } from 'lucide-react';
 
 import type { DesktopBotConsoleSummary, DesktopChannelEndpoint } from '@shared/contracts';
 
@@ -136,7 +136,7 @@ export function BotConversationSidebar({
               </button>
               {archiveDisabled ? null : confirmDeleteId === threadId ? (
                 <button
-                  aria-label={t('Confirm delete {name}', { name: entry.title })}
+                  aria-label={t('Confirm archive {name}', { name: entry.title })}
                   className="thread-delete-button confirm"
                   style={{ opacity: 1, pointerEvents: 'auto' }}
                   onClick={(event) => {
@@ -151,16 +151,17 @@ export function BotConversationSidebar({
                 </button>
               ) : (
                 <button
-                  aria-label={t('Delete {name}', { name: entry.title })}
+                  aria-label={t('Archive {name}', { name: entry.title })}
                   className="thread-delete-button"
                   onClick={(event) => {
                     event.stopPropagation();
                     setConfirmDeleteId(threadId);
                   }}
                   tabIndex={-1}
+                  title={t('Archive thread')}
                   type="button"
                 >
-                  <Trash aria-hidden />
+                  <Archive aria-hidden />
                 </button>
               )}
             </div>
