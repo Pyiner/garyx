@@ -459,27 +459,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PluginsAction::Uninstall { id, target } => {
                 plugins_cli::uninstall(&id, target).map_err(|e| e.to_string().into())
             }
-            PluginsAction::Update {
-                name,
-                version,
-                from,
-                target,
-                check,
-                force,
-                json,
-            } => plugins_cli::update(
-                name.as_deref(),
-                plugins_cli::UpdateOptions {
-                    version,
-                    from,
-                    target,
-                    check,
-                    force,
-                    json,
-                },
-            )
-            .await
-            .map_err(|e| e.to_string().into()),
         },
         Some(Commands::Logs { action }) => match action {
             LogsAction::Path { path } => {

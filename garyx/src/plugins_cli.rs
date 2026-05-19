@@ -17,11 +17,17 @@
 //! place. Without `--force` we refuse rather than silently overwrite
 //! a manifest the user might have hand-tuned.
 
-mod auto_update_loop;
-mod update;
-pub use auto_update_loop::{AutoUpdateConfig, spawn as spawn_auto_update};
-pub use update::update;
-
+// Architecture C: plugin self-update is now driven by the plugin
+// itself via the `request_self_replace` host RPC (see
+// `garyx::plugin_self_replace`). The host no longer runs a per-tick
+// loop polling each plugin's `manifest_url`; that responsibility
+// (timer + advertised-version source) lives inside each plugin.
+// The `garyx plugins update` CLI command was retired along with the
+// host-driven loop — operators trigger upgrades by promoting a new
+// release on the plugin's own update server; the plugin tick picks
+// it up on the next interval. The only manual escape hatch is
+// `garyx plugins install --force` against a local binary, which
+// stays available for first-party plugins / sideload scenarios.
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -268,16 +274,6 @@ pub fn uninstall(id: &str, target_root: Option<PathBuf>) -> Result<(), PluginsCl
     println!("Uninstalled `{id}` from {}.", dest.display());
     println!("Restart the gateway to stop the plugin's running child process if any.");
     Ok(())
-}
-
-#[derive(Debug, Default)]
-pub struct UpdateOptions {
-    pub version: Option<String>,
-    pub from: Option<String>,
-    pub target: Option<PathBuf>,
-    pub check: bool,
-    pub force: bool,
-    pub json: bool,
 }
 
 // ---------------------------------------------------------------------------

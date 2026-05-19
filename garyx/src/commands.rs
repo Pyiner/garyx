@@ -424,17 +424,6 @@ pub(crate) async fn run_gateway(
     };
 
     // 4. Discover and start channel plugins (if not disabled).
-    //
-    // `auto_update_handle` is hoisted out of the inner async block so
-    // the shutdown sequence below can abort the background tick
-    // before locking the plugin manager — otherwise an in-flight
-    // auto-update tick could race with `stop_all` / `cleanup_all`
-    // and try to respawn a plugin we are tearing down. `std::sync::Mutex`
-    // is enough here: the slot is written exactly once (from inside
-    // the async block) and read exactly once (after the block returns).
-    let auto_update_handle: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>> =
-        std::sync::Mutex::new(None);
-
     let run_result: Result<(), Box<dyn std::error::Error>> = async {
         rebuild_channel_plugins(&plugin_manager, &config, &state, &bridge, no_channels)
             .await
@@ -446,24 +435,15 @@ pub(crate) async fn run_gateway(
             });
         }
 
-        // Spawn the silent plugin auto-updater. `spawn_auto_update`
-        // returns `None` (and we record nothing) when disabled via
-        // `plugins.auto_update`. We skip the spawn entirely under
-        // `--no-channels` because there's no plugin runtime for the
-        // loop to update.
-        if !no_channels {
-            if let Some(handle) = crate::plugins_cli::spawn_auto_update(
-                plugin_manager.clone(),
-                crate::plugins_cli::AutoUpdateConfig {
-                    enabled: config.plugins.auto_update,
-                    interval_secs: config.plugins.auto_update_check_interval_secs,
-                },
-            ) {
-                *auto_update_handle
-                    .lock()
-                    .expect("auto_update_handle mutex poisoned during init") = Some(handle);
-            }
-        }
+        // Architecture C: host no longer runs a periodic plugin
+        // update loop. Each plugin owns its own timer + advertised-
+        // version source and sends `request_self_replace` reverse
+        // RPCs when it decides to upgrade; the host responds with
+        // the safe-swap pipeline (idle gate + atomic rename +
+        // respawn) inside `plugin_self_replace::handle`. The
+        // `plugins.auto_update` config flag now controls whether
+        // those RPCs are accepted at all, gated per-call rather
+        // than at spawn-time.
 
         // Spawn the gateway self-updater. Separate loop from the
         // plugin one because the two have independent kill switches
@@ -501,20 +481,6 @@ pub(crate) async fn run_gateway(
 
     // Always run shutdown sequence, even when startup/serve fails.
     //
-    // Abort the auto-updater FIRST so it can't enter a new tick
-    // between here and the plugin manager teardown below. The §9.4
-    // respawn path acquires the same `plugin_manager` lock the
-    // shutdown is about to take; cancelling the loop here means
-    // `stop_all` doesn't have to wait for an in-flight tick to
-    // release the lock.
-    if let Some(handle) = auto_update_handle
-        .lock()
-        .expect("auto_update_handle mutex poisoned during shutdown")
-        .take()
-    {
-        handle.abort();
-    }
-
     {
         let mut plugin_manager = plugin_manager.lock().await;
         plugin_manager.stop_all().await;
