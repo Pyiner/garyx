@@ -607,4 +607,75 @@ mod tests {
         }
         assert!(find_plugin_toml(tmp.path()).is_none());
     }
+
+    fn valid_params_body() -> Value {
+        json!({
+            "archive_url": "https://example.test/x.tar.gz",
+            "expected_sha256": "deadbeef",
+            "version": "9.9.9",
+            "request_id": "req-test",
+        })
+    }
+
+    #[tokio::test]
+    async fn handle_refuses_when_master_disabled() {
+        // master switch off → refusal before any network or
+        // filesystem activity. The handler MUST NOT touch the
+        // manager weakref or attempt a download in this branch,
+        // so a never-upgradable Weak is fine here.
+        let state = SelfReplaceState::new();
+        let weak: Weak<Mutex<ChannelPluginManager>> = Weak::new();
+        let response = handle("test-plugin", &state, weak, false, valid_params_body()).await;
+        assert_eq!(response["decision"], "refused");
+        assert_eq!(response["reason"], "master_disabled");
+    }
+
+    #[tokio::test]
+    async fn handle_refuses_when_params_malformed() {
+        // serde failure happens before single-flight latch is
+        // acquired, so the state stays untouched and a follow-up
+        // call with valid params can still acquire the latch.
+        let state = SelfReplaceState::new();
+        let weak: Weak<Mutex<ChannelPluginManager>> = Weak::new();
+        let response = handle(
+            "test-plugin",
+            &state,
+            weak,
+            true,
+            json!({ "garbage": 1 }),
+        )
+        .await;
+        assert_eq!(response["decision"], "refused");
+        assert_eq!(response["reason"], "invalid_params");
+        assert!(state.in_flight.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_swap_failed_when_manager_weak_expired() {
+        // Manager weak doesn't upgrade — host is shutting down or
+        // wasn't wired correctly. Should NOT panic; report
+        // host_shutdown so the calling plugin retries next tick.
+        // master switch must be true to get past the kill switch.
+        let state = SelfReplaceState::new();
+        let weak: Weak<Mutex<ChannelPluginManager>> = Weak::new();
+        let response = handle("test-plugin", &state, weak, true, valid_params_body()).await;
+        assert_eq!(response["decision"], "swap_failed");
+        assert_eq!(response["reason"], "host_shutdown");
+    }
+
+    #[tokio::test]
+    async fn handle_refuses_plugin_not_registered() {
+        // Manager exists but doesn't have an entry for
+        // "ghost-plugin" — caller_plugin_id should be defended:
+        // refusing here means the swap path can't be tricked into
+        // looking up another plugin's install root.
+        use garyx_channels::plugin::ChannelPluginManager;
+        let manager = Arc::new(Mutex::new(ChannelPluginManager::new()));
+        let state = SelfReplaceState::new();
+        let weak = Arc::downgrade(&manager);
+        let response =
+            handle("ghost-plugin", &state, weak, true, valid_params_body()).await;
+        assert_eq!(response["decision"], "refused");
+        assert_eq!(response["reason"], "plugin_not_registered");
+    }
 }
