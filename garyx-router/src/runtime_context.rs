@@ -77,7 +77,15 @@ fn build_bot_context(
     }
     insert_string(&mut bot, "channel", channel);
     insert_string(&mut bot, "account_id", account_id);
-    insert_metadata_string(&mut bot, metadata, "thread_binding_key");
+    let thread_binding_key = metadata.get("thread_binding_key").and_then(value_to_string);
+    if let Some(thread_binding_key) = thread_binding_key.as_ref() {
+        insert_string(&mut bot, "thread_binding_key", thread_binding_key);
+        insert_string(
+            &mut bot,
+            "endpoint_key",
+            &format!("{channel}::{account_id}::{thread_binding_key}"),
+        );
+    }
     insert_metadata_string(&mut bot, metadata, "chat_id");
     insert_metadata_string(&mut bot, metadata, "display_label");
     insert_metadata_string(&mut bot, metadata, "delivery_target_type");
@@ -124,6 +132,7 @@ fn build_thread_context(thread_id: &str, thread_record: &Value) -> Value {
                     bound_bots.insert(bot_id.clone());
                     value.insert("bot_id".to_owned(), Value::String(bot_id));
                 }
+                insert_string(&mut value, "endpoint_key", &binding.endpoint_key());
                 insert_string(&mut value, "binding_key", &binding.binding_key);
                 insert_string(&mut value, "chat_id", &binding.chat_id);
                 insert_string(
@@ -309,7 +318,12 @@ mod tests {
         assert_eq!(context["account_id"], "bot1");
         assert_eq!(context["bot_id"], "telegram:bot1");
         assert_eq!(context["bot"]["thread_binding_key"], "user42");
+        assert_eq!(context["bot"]["endpoint_key"], "telegram::bot1::user42");
         assert_eq!(context["thread"]["label"], "Prompt work");
+        assert_eq!(
+            context["thread"]["channel_bindings"][0]["endpoint_key"],
+            "telegram::bot1::user42"
+        );
         assert_eq!(context["thread"]["bound_bots"][0], "telegram:bot1");
         assert_eq!(context["task"]["task_id"], "#TASK-7");
         assert_eq!(context["task"]["status"], "in_progress");

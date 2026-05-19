@@ -40,8 +40,6 @@ for an in-flight provider run:
 - `conversation_history` — stored user/assistant transcript lines, with
   filters for thread, workspace, and time window.
 - `conversation_search` — semantic recall over stored conversation snippets.
-- `rebind_current_channel` — create a new thread for the current channel
-  endpoint and bind it to the requested agent/workspace.
 - `stop_loop` — stop auto-continuation for the current thread.
 - `auto_research_verdict` — internal verifier-only tool for AutoResearch
   runs.

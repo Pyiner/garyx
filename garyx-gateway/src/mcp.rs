@@ -125,16 +125,6 @@ pub struct ConversationSearchParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct RebindCurrentChannelParams {
-    /// Agent or team ID to bind to the new thread.
-    #[serde(alias = "agentId")]
-    pub agent_id: String,
-    /// Workspace directory for the new thread.
-    #[serde(alias = "workspaceDir")]
-    pub workspace_dir: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct AutoResearchVerdictParams {
     /// Score from 0 to 10
     pub score: f32,
@@ -197,7 +187,9 @@ struct RunContext {
     thread_id: Option<String>,
     channel: Option<String>,
     account_id: Option<String>,
+    #[allow(dead_code)]
     from_id: Option<String>,
+    #[allow(dead_code)]
     delivery_thread_id: Option<String>,
     #[allow(dead_code)]
     auth_token: Option<String>,
@@ -334,17 +326,6 @@ impl GaryMcpServer {
     }
 
     #[tool(
-        description = "Create a new thread for the current bound channel conversation using the requested agent_id and workspace_dir, then rebind the current endpoint to that new thread. Requires current MCP thread/channel context and sends no message."
-    )]
-    async fn rebind_current_channel(
-        &self,
-        ctx: RequestContext<RoleServer>,
-        Parameters(params): Parameters<RebindCurrentChannelParams>,
-    ) -> Result<String, String> {
-        tools::rebind_current_channel::run(self, ctx, params).await
-    }
-
-    #[tool(
         description = "Internal AutoResearch verifier tool. Submit a structured verdict for the current verifier thread. Only callable when the request carries the AutoResearch verifier header."
     )]
     async fn auto_research_verdict(
@@ -385,7 +366,7 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, search, conversation_history, conversation_search, rebind_current_channel, stop_loop."
+                "Garyx MCP server. Tools: status, search, conversation_history, conversation_search, stop_loop."
                     .to_owned(),
             ),
         }

@@ -73,6 +73,34 @@ fn build_runtime_metadata_user_message(metadata: &HashMap<String, Value>) -> Opt
     push_runtime_line(&mut lines, "thread_id", runtime.get("thread_id"));
     push_runtime_line(&mut lines, "bot_id", runtime.get("bot_id"));
     push_runtime_line(&mut lines, "workspace_dir", runtime.get("workspace_dir"));
+    push_runtime_line(&mut lines, "channel", runtime.get("channel"));
+    push_runtime_line(&mut lines, "account_id", runtime.get("account_id"));
+    push_runtime_line(&mut lines, "from_id", runtime.get("from_id"));
+    push_runtime_line(&mut lines, "is_group", runtime.get("is_group"));
+    if let Some(bot) = runtime.get("bot").and_then(Value::as_object) {
+        push_runtime_line(&mut lines, "endpoint_key", bot.get("endpoint_key"));
+        push_runtime_line(
+            &mut lines,
+            "thread_binding_key",
+            bot.get("thread_binding_key"),
+        );
+        push_runtime_line(&mut lines, "chat_id", bot.get("chat_id"));
+        push_runtime_line(
+            &mut lines,
+            "delivery_target_type",
+            bot.get("delivery_target_type"),
+        );
+        push_runtime_line(
+            &mut lines,
+            "delivery_target_id",
+            bot.get("delivery_target_id"),
+        );
+        push_runtime_line(
+            &mut lines,
+            "delivery_thread_id",
+            bot.get("delivery_thread_id"),
+        );
+    }
     if let Some(task) = runtime.get("task").and_then(Value::as_object) {
         push_runtime_line(&mut lines, "task_id", task.get("task_id"));
     }

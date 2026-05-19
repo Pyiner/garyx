@@ -66,7 +66,19 @@ fn prepend_runtime_metadata_to_user_message_renders_stable_thread_task_and_bot_i
         json!({
             "thread_id": "thread::abc",
             "bot_id": "telegram:main",
+            "channel": "telegram",
+            "account_id": "main",
+            "from_id": "user42",
+            "is_group": true,
             "workspace_dir": "/tmp/project",
+            "bot": {
+                "endpoint_key": "telegram::main::group42",
+                "thread_binding_key": "group42",
+                "chat_id": "chat42",
+                "delivery_target_type": "chat_id",
+                "delivery_target_id": "chat42",
+                "delivery_thread_id": "group42"
+            },
             "task": {
                 "task_id": "#TASK-3",
                 "title": "Fix context prompt",
@@ -82,6 +94,13 @@ fn prepend_runtime_metadata_to_user_message_renders_stable_thread_task_and_bot_i
     assert!(rendered.contains("thread_id: thread::abc"));
     assert!(rendered.contains("bot_id: telegram:main"));
     assert!(rendered.contains("workspace_dir: /tmp/project"));
+    assert!(rendered.contains("channel: telegram"));
+    assert!(rendered.contains("account_id: main"));
+    assert!(rendered.contains("from_id: user42"));
+    assert!(rendered.contains("is_group: true"));
+    assert!(rendered.contains("endpoint_key: telegram::main::group42"));
+    assert!(rendered.contains("thread_binding_key: group42"));
+    assert!(rendered.contains("chat_id: chat42"));
     assert!(rendered.contains("task_id: #TASK-3"));
     assert!(!rendered.contains("status"));
     assert!(!rendered.contains("assignee"));

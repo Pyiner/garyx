@@ -593,11 +593,30 @@ pub(crate) enum BotAction {
         #[arg(long)]
         json: bool,
     },
-    /// Bind or rebind a bot's main endpoint to an existing thread
-    Bind {
-        /// Bot selector like telegram:main
+    /// Exact channel endpoint binding utilities
+    #[command(alias = "endpoints")]
+    Endpoint {
+        #[command(subcommand)]
+        action: BotEndpointAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum BotEndpointAction {
+    /// List known channel endpoints
+    List {
+        /// Optional bot selector like telegram:main
         #[arg(long)]
-        bot: String,
+        bot: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Bind or rebind an exact channel endpoint to an existing thread
+    Bind {
+        /// Endpoint key like telegram::main::123 or discord::main::456
+        #[arg(long)]
+        endpoint: String,
         /// Canonical thread id like thread::abc
         #[arg(long)]
         thread: String,
@@ -605,11 +624,12 @@ pub(crate) enum BotAction {
         #[arg(long)]
         json: bool,
     },
-    /// Clear a bot's current main endpoint binding
-    Unbind {
-        /// Bot selector like telegram:main
+    /// Detach an exact channel endpoint from its current thread
+    #[command(alias = "unbind")]
+    Detach {
+        /// Endpoint key like telegram::main::123 or discord::main::456
         #[arg(long)]
-        bot: String,
+        endpoint: String,
         /// Output as JSON
         #[arg(long)]
         json: bool,

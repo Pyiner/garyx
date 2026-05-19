@@ -5999,50 +5999,75 @@ fn normalize_thread_id_arg(thread_id: &str) -> Result<String, Box<dyn std::error
     Ok(thread_id.to_owned())
 }
 
-fn gateway_response_error(status: reqwest::StatusCode, body: &str) -> String {
-    if let Ok(value) = serde_json::from_str::<Value>(body)
-        && let Some(message) = value
-            .get("error")
-            .and_then(Value::as_str)
-            .or_else(|| value.get("reason").and_then(Value::as_str))
+fn normalize_endpoint_key_arg(endpoint_key: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let endpoint_key = endpoint_key.trim();
+    let parts = endpoint_key.split("::").collect::<Vec<_>>();
+    if parts.len() < 3 || parts.iter().take(3).any(|part| part.trim().is_empty()) {
+        return Err(
+            "endpoint must be an endpoint key like `channel::account_id::binding_key`".into(),
+        );
+    }
+    Ok(endpoint_key.to_owned())
+}
+
+pub(crate) async fn cmd_endpoint_list(
+    config_path: &str,
+    bot: Option<&str>,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let bot = match bot {
+        Some(bot) => Some(normalize_bot_selector_arg(bot)?),
+        None => None,
+    };
+    let gateway = gateway_endpoint(config_path)?;
+    let mut payload = fetch_gateway_json(&gateway, "/api/channel-endpoints").await?;
+    if let Some(bot) = bot.as_deref()
+        && let Some((channel, account_id)) = bot.split_once(':')
+        && let Some(endpoints) = payload.get_mut("endpoints").and_then(Value::as_array_mut)
     {
-        return format!("gateway request failed: {status} {message}");
+        endpoints.retain(|endpoint| {
+            endpoint["channel"].as_str() == Some(channel)
+                && endpoint["account_id"].as_str() == Some(account_id)
+        });
     }
-    format!("gateway request failed: {status} {body}")
+
+    if json {
+        return print_pretty_json(&payload);
+    }
+
+    let endpoints = payload
+        .get("endpoints")
+        .and_then(Value::as_array)
+        .ok_or("gateway response missing endpoints")?;
+    if endpoints.is_empty() {
+        println!("No endpoints found.");
+        return Ok(());
+    }
+    for endpoint in endpoints {
+        let endpoint_key = endpoint["endpoint_key"].as_str().unwrap_or("-");
+        let channel = endpoint["channel"].as_str().unwrap_or("-");
+        let account_id = endpoint["account_id"].as_str().unwrap_or("-");
+        let kind = endpoint["conversation_kind"].as_str().unwrap_or("unknown");
+        let thread_id = endpoint["thread_id"].as_str().unwrap_or("-");
+        let label = endpoint["display_label"].as_str().unwrap_or("-");
+        println!("{endpoint_key}");
+        println!("  Bot: {channel}:{account_id}");
+        println!("  Kind: {kind}");
+        println!("  Thread: {thread_id}");
+        println!("  Label: {label}");
+        if let Some(workspace_dir) = endpoint["workspace_dir"].as_str()
+            && !workspace_dir.trim().is_empty()
+        {
+            println!("  Workspace: {workspace_dir}");
+        }
+    }
+    Ok(())
 }
 
-async fn post_gateway_json_for_bot_command(
-    gateway: &GatewayEndpoint,
-    path: &str,
+fn print_endpoint_binding_result(
     payload: &Value,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    let url = format!("{}{}", gateway.base_url, path);
-    let response = gateway_request(reqwest::Client::new().post(&url), gateway)
-        .json(payload)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-        .map_err(|error| {
-            if error.is_connect() || error.is_timeout() {
-                format!(
-                    "gateway not running at {}; start it with `garyx gateway start`",
-                    gateway.base_url
-                )
-            } else {
-                format!("gateway request failed: {error}")
-            }
-        })?;
-    let status = response.status();
-    let body = response.text().await?;
-    if !status.is_success() {
-        return Err(gateway_response_error(status, &body).into());
-    }
-    Ok(serde_json::from_str(&body)?)
-}
-
-fn print_bot_binding_result(
-    payload: &Value,
-    fallback_bot: &str,
+    fallback_endpoint: &str,
+    action: &str,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if json {
@@ -6052,86 +6077,68 @@ fn print_bot_binding_result(
         let message = payload["error"]
             .as_str()
             .or_else(|| payload["reason"].as_str())
-            .unwrap_or("bot binding failed");
+            .unwrap_or("endpoint binding failed");
         return Err(message.into());
     }
-
-    let bot_id = payload["bot_id"].as_str().unwrap_or(fallback_bot);
-    let action = payload["action"].as_str().unwrap_or("bind");
-    println!("Bot: {bot_id}");
-    println!("Action: {action}");
-    println!(
-        "Main endpoint: {}",
-        payload["main_endpoint_status"]
-            .as_str()
-            .unwrap_or("unknown")
-    );
-    println!(
-        "Current thread status: {}",
-        payload["current_thread_status"]
-            .as_str()
-            .unwrap_or("unknown")
-    );
-    println!(
-        "Current thread: {}",
-        payload["current_thread_id"].as_str().unwrap_or("-")
-    );
-    println!(
-        "Previous thread: {}",
-        payload["previous_thread_id"].as_str().unwrap_or("-")
-    );
     println!(
         "Endpoint: {}",
-        payload["endpoint_key"].as_str().unwrap_or("-")
+        payload["endpoint_key"]
+            .as_str()
+            .unwrap_or(fallback_endpoint)
     );
-    if let Some(workspace_dir) = payload["main_endpoint"]["workspace_dir"].as_str()
-        && !workspace_dir.trim().is_empty()
+    println!("Action: {action}");
+    println!(
+        "Current thread: {}",
+        payload["thread_id"]
+            .as_str()
+            .or_else(|| payload["current_thread_id"].as_str())
+            .unwrap_or("-")
+    );
+    if let Some(previous_thread_id) = payload["previous_thread_id"].as_str()
+        && !previous_thread_id.trim().is_empty()
     {
-        println!("Workspace: {workspace_dir}");
-    }
-    if action == "bind" {
-        println!("Send command: garyx thread send bot {bot_id} <message>");
+        println!("Previous thread: {previous_thread_id}");
     }
     Ok(())
 }
 
-pub(crate) async fn cmd_bot_bind(
+pub(crate) async fn cmd_endpoint_bind(
     config_path: &str,
-    bot: &str,
+    endpoint: &str,
     thread: &str,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let bot = normalize_bot_selector_arg(bot)?;
+    let endpoint = normalize_endpoint_key_arg(endpoint)?;
     let thread = normalize_thread_id_arg(thread)?;
     let gateway = gateway_endpoint(config_path)?;
-    let payload = post_gateway_json_for_bot_command(
+    let payload = post_gateway_json(
         &gateway,
-        "/api/bot/bind",
+        "/api/channel-bindings/bind",
         &json!({
-            "botId": bot,
+            "endpointKey": endpoint,
             "threadId": thread,
         }),
     )
     .await?;
-    print_bot_binding_result(&payload, &bot, json)
+    print_endpoint_binding_result(&payload, &endpoint, "bind", json)
 }
 
-pub(crate) async fn cmd_bot_unbind(
+pub(crate) async fn cmd_endpoint_detach(
     config_path: &str,
-    bot: &str,
+    endpoint: &str,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let bot = normalize_bot_selector_arg(bot)?;
+    let endpoint = normalize_endpoint_key_arg(endpoint)?;
     let gateway = gateway_endpoint(config_path)?;
-    let payload = post_gateway_json_for_bot_command(
+    let payload = post_gateway_json(
         &gateway,
-        "/api/bot/unbind",
+        "/api/channel-bindings/detach",
         &json!({
-            "botId": bot,
+            "endpointKey": endpoint,
         }),
     )
     .await?;
-    print_bot_binding_result(&payload, &bot, json)
+    print_endpoint_binding_result(&payload, &endpoint, "detach", json)
 }
 
 fn format_local_thread_timestamp(value: Option<&str>) -> String {

@@ -70,11 +70,11 @@ The binding lookup order:
 2. Otherwise, create a fresh thread inheriting the account defaults and
    bind the endpoint to it.
 
-You can inspect, rebind, or detach bindings from the desktop app or via the
-HTTP API (`/api/channel-bindings/{bind,detach}`). For a configured bot's main
-endpoint, use `garyx bot bind --bot <channel:account_id> --thread <thread_id>`
-or `garyx bot unbind --bot <channel:account_id>` so the gateway remains the
-single writer for thread binding state.
+You can inspect, rebind, or detach exact endpoint bindings from the desktop app,
+the CLI (`garyx bot endpoint list|bind|detach`), or the HTTP API
+(`/api/channel-bindings/{bind,detach}`). Binding is endpoint-scoped so the same
+workflow covers private chats, group chats, Discord channels, and plugin
+endpoints.
 
 ## The `api` channel
 

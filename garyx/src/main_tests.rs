@@ -4,9 +4,9 @@ use clap::{CommandFactory, Parser};
 
 use crate::cli::{
     AgentAction, AutoResearchAction, AutomationAction, AutomationDataTriggerAction,
-    AutomationTriggerAction, BotAction, ChannelsAction, Cli, CommandAction, Commands, ConfigAction,
-    DbAction, DbRecordAction, DbTableAction, GatewayAction, LogsAction, TaskAction, TeamAction,
-    ThreadAction, ToolAction,
+    AutomationTriggerAction, BotAction, BotEndpointAction, ChannelsAction, Cli, CommandAction,
+    Commands, ConfigAction, DbAction, DbRecordAction, DbTableAction, GatewayAction, LogsAction,
+    TaskAction, TeamAction, ThreadAction, ToolAction,
 };
 use crate::commands::{
     OnboardCommandOptions, SearchStreamState, apply_search_stream_event, canonical_channel_id,
@@ -603,56 +603,102 @@ fn parse_bot_status() {
 }
 
 #[test]
-fn parse_bot_bind() {
-    let cli = Cli::parse_from([
-        "garyx",
-        "bot",
-        "bind",
-        "--bot",
-        "telegram:main",
-        "--thread",
-        "thread::abc",
-        "--json",
-    ]);
-    match cli.command {
-        Some(Commands::Bot {
-            action: BotAction::Bind { bot, thread, json },
-        }) => {
-            assert_eq!(bot, "telegram:main");
-            assert_eq!(thread, "thread::abc");
-            assert!(json);
-        }
-        _ => panic!("expected Bot::Bind"),
-    }
-}
-
-#[test]
-fn parse_bot_unbind() {
-    let cli = Cli::parse_from(["garyx", "bot", "unbind", "--bot", "telegram:main"]);
-    match cli.command {
-        Some(Commands::Bot {
-            action: BotAction::Unbind { bot, json },
-        }) => {
-            assert_eq!(bot, "telegram:main");
-            assert!(!json);
-        }
-        _ => panic!("expected Bot::Unbind"),
-    }
-}
-
-#[test]
 fn parse_bot_status_keeps_old_bot_entrypoints_removed() {
     for args in [
-        ["garyx", "debug", "bot", "telegram:main"],
-        ["garyx", "bot", "current", "telegram:main"],
-        ["garyx", "bot", "resolve", "telegram:main"],
-        ["garyx", "bots", "status", "telegram:main"],
+        vec!["garyx", "debug", "bot", "telegram:main"],
+        vec!["garyx", "bot", "current", "telegram:main"],
+        vec!["garyx", "bot", "resolve", "telegram:main"],
+        vec!["garyx", "bots", "status", "telegram:main"],
+        vec!["garyx", "bot", "bind", "--bot", "telegram:main"],
+        vec!["garyx", "bot", "unbind", "--bot", "telegram:main"],
     ] {
         let error = match Cli::try_parse_from(args) {
             Ok(_) => panic!("old bot entrypoint should not parse"),
             Err(error) => error,
         };
         assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+}
+
+#[test]
+fn parse_endpoint_list() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "bot",
+        "endpoint",
+        "list",
+        "--bot",
+        "telegram:main",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Bot {
+            action:
+                BotAction::Endpoint {
+                    action: BotEndpointAction::List { bot, json },
+                },
+        }) => {
+            assert_eq!(bot.as_deref(), Some("telegram:main"));
+            assert!(json);
+        }
+        _ => panic!("expected Bot::Endpoint::List"),
+    }
+}
+
+#[test]
+fn parse_endpoint_bind() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "bot",
+        "endpoint",
+        "bind",
+        "--endpoint",
+        "telegram::main::chat42",
+        "--thread",
+        "thread::abc",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Bot {
+            action:
+                BotAction::Endpoint {
+                    action:
+                        BotEndpointAction::Bind {
+                            endpoint,
+                            thread,
+                            json,
+                        },
+                },
+        }) => {
+            assert_eq!(endpoint, "telegram::main::chat42");
+            assert_eq!(thread, "thread::abc");
+            assert!(json);
+        }
+        _ => panic!("expected Bot::Endpoint::Bind"),
+    }
+}
+
+#[test]
+fn parse_endpoint_detach_alias() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "bot",
+        "endpoint",
+        "unbind",
+        "--endpoint",
+        "telegram::main::chat42",
+    ]);
+    match cli.command {
+        Some(Commands::Bot {
+            action:
+                BotAction::Endpoint {
+                    action: BotEndpointAction::Detach { endpoint, json },
+                },
+        }) => {
+            assert_eq!(endpoint, "telegram::main::chat42");
+            assert!(!json);
+        }
+        _ => panic!("expected Bot::Endpoint::Detach"),
     }
 }
 

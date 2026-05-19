@@ -177,8 +177,9 @@ The database is global for the Garyx installation and is stored at
 | `garyx logs tail [--lines N]` | Tail the gateway stderr log. |
 | `garyx logs clear` | Truncate the log file. |
 | `garyx bot status <bot_selector>` | Current bot main endpoint and bound thread status. |
-| `garyx bot bind --bot <bot_selector> --thread <thread_id>` | Bind or rebind a bot's main endpoint to an existing thread through the running gateway. |
-| `garyx bot unbind --bot <bot_selector>` | Clear a bot's current main endpoint binding through the running gateway. |
+| `garyx bot endpoint list [--bot <bot_selector>]` | List discovered channel endpoints, including groups, channels, DMs, and their bound threads. |
+| `garyx bot endpoint bind --endpoint <endpoint_key> --thread <thread_id>` | Bind or rebind an exact channel endpoint to an existing thread through the running gateway. |
+| `garyx bot endpoint detach --endpoint <endpoint_key>` | Detach an exact channel endpoint from its current thread. |
 
 ## Updates
 

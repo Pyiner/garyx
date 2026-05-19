@@ -20,9 +20,10 @@ mod main_tests;
 
 use cli::{
     AgentAction, AutoResearchAction, AutoUpdateAction, AutomationAction,
-    AutomationDataTriggerAction, AutomationTriggerAction, BotAction, ChannelsAction, Cli,
-    CommandAction, Commands, ConfigAction, DbAction, DbFieldAction, DbRecordAction, DbTableAction,
-    GatewayAction, LogsAction, PluginsAction, TaskAction, TeamAction, ThreadAction, ToolAction,
+    AutomationDataTriggerAction, AutomationTriggerAction, BotAction, BotEndpointAction,
+    ChannelsAction, Cli, CommandAction, Commands, ConfigAction, DbAction, DbFieldAction,
+    DbRecordAction, DbTableAction, GatewayAction, LogsAction, PluginsAction, TaskAction,
+    TeamAction, ThreadAction, ToolAction,
 };
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
@@ -34,21 +35,22 @@ use commands::{
     cmd_automation_create, cmd_automation_data_trigger_create, cmd_automation_data_trigger_delete,
     cmd_automation_data_trigger_list, cmd_automation_data_trigger_set_enabled,
     cmd_automation_delete, cmd_automation_get, cmd_automation_list, cmd_automation_pause,
-    cmd_automation_resume, cmd_automation_run, cmd_automation_update, cmd_bot_bind, cmd_bot_status,
-    cmd_bot_unbind, cmd_channels_add, cmd_channels_enable, cmd_channels_list, cmd_channels_login,
+    cmd_automation_resume, cmd_automation_run, cmd_automation_update, cmd_bot_status,
+    cmd_channels_add, cmd_channels_enable, cmd_channels_list, cmd_channels_login,
     cmd_channels_remove, cmd_command_delete, cmd_command_get, cmd_command_list, cmd_command_set,
     cmd_config_get, cmd_config_init, cmd_config_path, cmd_config_set, cmd_config_show,
     cmd_config_unset, cmd_config_validate, cmd_db_events, cmd_db_field_add, cmd_db_field_drop,
     cmd_db_record_delete, cmd_db_record_get, cmd_db_record_insert, cmd_db_record_update,
     cmd_db_sql, cmd_db_table_create, cmd_db_table_drop, cmd_db_table_list, cmd_db_table_schema,
-    cmd_doctor, cmd_gateway_install, cmd_gateway_reload_config, cmd_gateway_restart,
-    cmd_gateway_start, cmd_gateway_stop, cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear,
-    cmd_logs_path, cmd_logs_tail, cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign,
-    cmd_task_claim, cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history,
-    cmd_task_list, cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title,
-    cmd_task_stop, cmd_task_unassign, cmd_task_update, cmd_thread_create, cmd_thread_get,
-    cmd_thread_history, cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot,
-    cmd_thread_send_to_task, cmd_tool_image, cmd_tool_search, cmd_update, run_gateway,
+    cmd_doctor, cmd_endpoint_bind, cmd_endpoint_detach, cmd_endpoint_list, cmd_gateway_install,
+    cmd_gateway_reload_config, cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop,
+    cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail,
+    cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign, cmd_task_claim, cmd_task_create,
+    cmd_task_delete, cmd_task_get, cmd_task_history, cmd_task_list, cmd_task_promote,
+    cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_stop, cmd_task_unassign,
+    cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history, cmd_thread_list,
+    cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_tool_image,
+    cmd_tool_search, cmd_update, run_gateway,
 };
 
 struct ThreadSendDestination {
@@ -479,10 +481,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Some(Commands::Bot { action }) => match action {
             BotAction::Status { bot_id, json } => cmd_bot_status(config_path, &bot_id, json).await,
-            BotAction::Bind { bot, thread, json } => {
-                cmd_bot_bind(config_path, &bot, &thread, json).await
-            }
-            BotAction::Unbind { bot, json } => cmd_bot_unbind(config_path, &bot, json).await,
+            BotAction::Endpoint { action } => match action {
+                BotEndpointAction::List { bot, json } => {
+                    cmd_endpoint_list(config_path, bot.as_deref(), json).await
+                }
+                BotEndpointAction::Bind {
+                    endpoint,
+                    thread,
+                    json,
+                } => cmd_endpoint_bind(config_path, &endpoint, &thread, json).await,
+                BotEndpointAction::Detach { endpoint, json } => {
+                    cmd_endpoint_detach(config_path, &endpoint, json).await
+                }
+            },
         },
         Some(Commands::AutoResearch { action }) => match action {
             AutoResearchAction::Create {
