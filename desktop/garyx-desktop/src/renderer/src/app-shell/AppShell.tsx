@@ -7997,6 +7997,9 @@ export function AppShell() {
           void handleNewThread();
         }}
         onOpenBot={(group) => {
+          setBotConversationGroupId((current) =>
+            current === group.id ? current : null,
+          );
           setWorkspaceConversationPath(null);
           void handleBotClick(group);
         }}
