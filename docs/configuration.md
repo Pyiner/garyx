@@ -260,153 +260,109 @@ garyx channels login acmechat --reauthorize main
 
 ### Updating plugins
 
-`garyx plugins update [<name>]` refreshes a subprocess channel
-plugin in place. With no `<name>` it iterates every installed
-subprocess plugin (continue-on-error).
+Plugins drive their own upgrades. Each plugin runs a self-update
+tick that polls *its own* update server on its own schedule; when
+the server advertises a higher version, the plugin sends the host a
+`request_self_replace` reverse RPC carrying `{archive_url, sha256,
+version, request_id}`. The host performs the safe-swap pipeline —
+strict-greater version gate, archive sha256 verification, archive's
+embedded `plugin.toml` id/version validation, stream-idle gate, swap
+barrier, atomic rename, respawn — and returns a structured decision.
+
+The host no longer runs a per-plugin update poll loop. The
+`garyx plugins update` CLI command was retired with the loop; the
+only manual escape hatch is sideloading via `garyx plugins install
+--force <PATH>` against a local binary. Plugin authors who want a
+"force update now" knob expose it inside the plugin itself.
+
+#### Host-side master switch
+
+`~/.garyx/garyx.json::plugins.auto_update` is the kill switch. When
+`false`, the host refuses every incoming `request_self_replace` RPC
+with `{decision: "refused", reason: "master_disabled"}` and the
+plugin's tick logs a single info line and retries on its next
+interval. The flag is read once at handler-construction time; flip
+it via `garyx auto-update disable --plugin` / `garyx auto-update
+enable --plugin`, then restart the gateway for the change to
+propagate to running plugin handlers (a future iteration can swap
+the read to an `Arc<AtomicBool>` for hot-reload).
 
 ```bash
-# Update a single plugin to the latest version its manifest_url advertises.
-garyx plugins update example-plugin
-
-# Pin to an explicit version.
-garyx plugins update example-plugin --version 0.1.16
-
-# Reinstall the current version (handy after a packaging fix).
-garyx plugins update example-plugin --force
-
-# Dry-run: print "current vs latest" without downloading.
-garyx plugins update example-plugin --check
-
-# Update from a specific bundle on disk (local build) or URL.
-garyx plugins update example-plugin --from ./target/release/garyx-plugin-example-plugin
-garyx plugins update example-plugin --from https://example.test/foo-bundle.tar.gz
-
-# Update every installed plugin.
-garyx plugins update
+garyx auto-update status
+garyx auto-update disable --plugin    # host refuses request_self_replace
+garyx auto-update enable --plugin     # host accepts again
 ```
 
-Built-in channels (`telegram`, `feishu`, `weixin`) are compiled into
-the garyx binary; `garyx plugins update <builtin>` errors with a
-redirect to `garyx update`.
+#### Decision taxonomy
 
-Restart the gateway after each manual update so the new binary is
-picked up:
+Every `request_self_replace` returns one of:
 
-```bash
-garyx gateway restart --no-wake
-```
+| `decision`     | `reason`                                                                            | Plugin should                                  |
+|----------------|-------------------------------------------------------------------------------------|------------------------------------------------|
+| `applied`      | —                                                                                   | nothing — the plugin process is being killed   |
+| `refused`      | `downgrade` / `already_current`                                                     | cache the advertised version as "no upgrade"   |
+| `refused`      | `master_disabled`                                                                   | retry next tick; flag may flip back            |
+| `refused`      | `no_survives_respawn`                                                               | give up; needs operator action                 |
+| `refused`      | `id_mismatch` / `version_mismatch` / `invalid_params` / `plugin_not_registered`     | bug — log and stop retrying                    |
+| `deferred`     | `stream_active`                                                                     | retry next tick                                |
+| `swap_failed`  | `sha256` / `download` / `extract` / `manifest` / `promote` / `respawn`              | retry next tick                                |
+| `in_progress`  | —                                                                                   | retry next tick (concurrent swap in flight)   |
 
-Plugins that opt in to the silent auto-updater (see below) get this
-restart for free — the gateway hot-swaps the subprocess on the next
-auto-update tick.
+In the `applied` path the host respawns the plugin before the RPC
+response is written, so the caller never observes "applied" —
+useful only for host-side tracing.
 
-### Silent auto-update
+#### Plugin author contract
 
-When the gateway is running it also runs a background auto-updater
-that mirrors `garyx-desktop`'s built-in app updater: an initial check
-~8 seconds after boot, then a recurring check every 6 hours by
-default. For each installed plugin with a declared `[update]` block,
-it discovers the latest version and — when one is available AND the
-plugin author opted in via `[capabilities].survives_respawn = true`
-— downloads, sha256-verifies, atomically promotes, and hot-replaces
-the running subprocess via the §9.4 respawn path, all without
-restarting the gateway.
-
-Plugins that have not opted into `survives_respawn` still benefit
-from the discovery loop: the host warn-logs a one-line notice when
-a new version becomes available. The auto-updater does **not**
-download or promote the new bundle in that case — both the on-disk
-install and the running subprocess stay on the old version until
-the operator manually runs `garyx plugins update` + `garyx gateway
-restart`. The opt-in is conservative because some plugins keep
-per-account dedup state in memory; respawning them would re-deliver
-historical messages unless they persist that state across restarts.
-Plugin authors set the flag only after they've verified their
-plugin resumes cleanly from a child-process restart.
-
-Configuration knobs in `~/.garyx/garyx.json`:
-
-```json
-{
-  "plugins": {
-    "auto_update": true,
-    "auto_update_check_interval_secs": 21600
-  }
-}
-```
-
-- `auto_update` (bool, default `true`) — master switch. `false`
-  disables the background loop entirely; manual `garyx plugins
-  update` still works.
-- `auto_update_check_interval_secs` (u64, default `21600` = 6 h) —
-  seconds between checks. Clamped at a 60 s floor to keep manifest
-  hosts from being hammered.
-
-Plugin authors opting in:
+The plugin opts in to host-driven respawn by declaring it can
+survive being killed mid-flight and resumed from disk:
 
 ```toml
 [capabilities]
 delivery_model = "pull_explicit_ack"
-# I (the plugin author) certify that respawning my subprocess does
-# not duplicate inbound messages to the gateway. Typically this
-# requires persisting per-account cursors / dedup state on disk so
-# the new child resumes from the same logical position as the old.
+# Author certifies the subprocess can be killed at any time and
+# resumed cleanly from disk — typically by persisting per-account
+# cursors / dedup state across restarts. Set this only after you
+# have verified your plugin handles respawn without re-delivering
+# historical messages.
 survives_respawn = true
 ```
 
-### Declaring an update source in `plugin.toml`
+The host refuses any `request_self_replace` when this flag is
+false (`reason: no_survives_respawn`).
 
-Plugin authors who want their bundle to be updatable via `garyx
-plugins update` add an `[update]` section. The host carries the
-section verbatim into `~/.garyx/plugins/<id>/plugin.toml` during
-install, so a single declaration is enough.
+The plugin's tick is plugin-internal — implement whatever cadence,
+release-source, and version-pinning rules suit your release
+discipline. A reference implementation lives in
+[`minolab-garyx::self_update`](../../minolab-garyx/src/self_update.rs):
+6 h tick by default, env-var overridable interval, strict-greater
+version compare, target-aware archive URL fetched from a
+plugin-server endpoint.
 
-```toml
-[update]
-# Required when --version is omitted. See "manifest_url JSON schema"
-# below for the response shape.
-manifest_url = "https://example.com/garyx/plugins/{id}/latest.json"
+#### Plugin update server contract
 
-# Required. Templated archive URL.
-url_template = "https://example.com/garyx/plugins/{id}/{version}/garyx-plugin-{id}-{version}-{target}.tar.gz"
-
-# Optional. Defaults to "{url}.sha256". Empty string disables.
-checksum_url_template = "{url}.sha256"
-
-# Optional. Defaults to "{id}/garyx-plugin-{id}".
-binary_in_archive = "{id}/garyx-plugin-{id}"
-```
-
-Placeholders: `{id}`, `{version}`, `{target}` (one of
-`linux-x86_64`, `linux-aarch64`, `mac-x86_64`, `mac-aarch64`), and
-`{url}` (only valid in `checksum_url_template`, expands to the
-rendered `url_template`). Unknown placeholders fail at manifest
-load time, not at HTTP-404 time.
-
-### `manifest_url` JSON schema
-
-The host fetches `manifest_url` (HTTP GET, 30s timeout) and parses
-the response as JSON. The minimum contract:
+The host does not care where archives come from — the plugin
+fetches the `(version, archive_url, sha256)` triple itself and
+passes it through. Any HTTPS endpoint that returns
 
 ```json
 {
-  "version": "0.1.16"
+  "version": "0.1.35",
+  "archive_url": "https://your-cdn.example.test/.../garyx-plugin-foo-0.1.35-aarch64-apple-darwin.tar.gz",
+  "sha256": "56e8…aa9e8"
 }
 ```
 
-- `version` (required, string) — the latest published version. Used
-  to resolve `--version` defaults and `--check` comparisons.
-- Any other top-level field is currently ignored.
+works. The archive must be a `.tar.gz` containing a `plugin.toml`
+whose `[plugin]` id matches the calling plugin's registered id and
+whose version matches the manifest's `version` (the host checks
+both before promoting; mismatches return `refused/id_mismatch` or
+`refused/version_mismatch`).
 
-Compatibility promise from the host:
-
-1. Future fields are **additive only** — existing fields keep their
-   semantics and types.
-2. Older hosts silently ignore newer fields, so plugin authors can
-   start emitting additional metadata whenever they want without
-   waiting for a coordinated rollout.
-
-A `{"version": "..."}` document will keep working indefinitely.
+A minimal reference server can serve manifests sourced from
+per-target env vars (`PLUGIN_RELEASE_<PLUGIN_ID>_<TARGET>`)
+with no DB or auth — see your plugin author's release
+infrastructure for the actual endpoint.
 
 ## Commands
 
