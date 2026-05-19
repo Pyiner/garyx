@@ -928,9 +928,9 @@ impl DiscordStreamingCallbackShared {
         thread_id: &str,
         state: &mut DiscordStreamState,
         display_text: &str,
-    ) {
+    ) -> bool {
         if display_text.trim().is_empty() {
-            return;
+            return true;
         }
         match self
             .cfg
@@ -947,6 +947,7 @@ impl DiscordStreamingCallbackShared {
                 state.last_rendered_text = display_text.to_owned();
                 self.record_new_outbound_messages(thread_id, state, message_ids)
                     .await;
+                true
             }
             Err(error) => {
                 warn!(
@@ -956,6 +957,7 @@ impl DiscordStreamingCallbackShared {
                     error = %error,
                     "failed to send Discord streamed response"
                 );
+                false
             }
         }
     }
@@ -965,14 +967,13 @@ impl DiscordStreamingCallbackShared {
         thread_id: &str,
         state: &mut DiscordStreamState,
         display_text: &str,
-    ) {
+    ) -> bool {
         let Some(message_id) = state.message_id.as_deref() else {
-            self.send_initial_text(thread_id, state, display_text).await;
-            return;
+            return self.send_initial_text(thread_id, state, display_text).await;
         };
         if display_text.trim().is_empty() || display_text.trim() == state.last_rendered_text.trim()
         {
-            return;
+            return true;
         }
         match self
             .cfg
@@ -984,6 +985,7 @@ impl DiscordStreamingCallbackShared {
                 state.last_rendered_text = display_text.to_owned();
                 self.record_new_outbound_messages(thread_id, state, vec![edited_id])
                     .await;
+                true
             }
             Err(error) => {
                 warn!(
@@ -994,6 +996,8 @@ impl DiscordStreamingCallbackShared {
                     "failed to edit Discord streamed response"
                 );
                 state.message_id = None;
+                state.last_rendered_text.clear();
+                false
             }
         }
     }
@@ -1010,10 +1014,12 @@ impl DiscordStreamingCallbackShared {
             PluginStreamSendDecision::FlushNow { content_text } => {
                 let display_text = discord_editable_text(&content_text);
                 if state.message_id.is_none() {
-                    self.send_initial_text(thread_id, state, &display_text)
+                    let _ = self
+                        .send_initial_text(thread_id, state, &display_text)
                         .await;
                 } else {
-                    self.edit_existing_text(thread_id, state, &display_text)
+                    let _ = self
+                        .edit_existing_text(thread_id, state, &display_text)
                         .await;
                 }
                 if mark_tool_flush {
@@ -1136,8 +1142,15 @@ impl DiscordStreamingCallbackShared {
         let chunks = split_discord_message(&display_text);
         let first_chunk = chunks.first().cloned().unwrap_or_default();
         if state.message_id.is_some() {
-            self.edit_existing_text(thread_id, state, &first_chunk)
-                .await;
+            if !self
+                .edit_existing_text(thread_id, state, &first_chunk)
+                .await
+            {
+                let _ = self
+                    .send_initial_text(thread_id, state, &display_text)
+                    .await;
+                return;
+            }
             if chunks.len() > 1 {
                 match self
                     .cfg
@@ -1161,7 +1174,8 @@ impl DiscordStreamingCallbackShared {
                 }
             }
         } else {
-            self.send_initial_text(thread_id, state, &display_text)
+            let _ = self
+                .send_initial_text(thread_id, state, &display_text)
                 .await;
         }
     }
@@ -1340,6 +1354,7 @@ impl DiscordStreamingCallbackShared {
                 self.finalize_text(thread_id, &mut state).await;
                 self.send_markdown_images_from_state(thread_id, &mut state)
                     .await;
+                Self::reset_for_fresh_message(&mut state);
             }
         }
     }
@@ -2229,6 +2244,178 @@ mod tests {
             serde_json::from_slice(&requests[1].body).expect("discord edit body");
         assert_eq!(requests[1].method.as_str(), "PATCH");
         assert_eq!(edit_body["content"], "done");
+    }
+
+    #[tokio::test]
+    async fn response_callback_falls_back_to_new_message_when_final_edit_fails() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-placeholder-001"
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path(
+                "/channels/dm-channel-123/messages/discord-placeholder-001",
+            ))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "code": 10008,
+                "message": "Unknown Message"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-final-001"
+            })))
+            .mount(&server)
+            .await;
+
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-edit-fallback-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::ToolUse {
+            message: ProviderMessage::tool_use(
+                json!({"name": "Bash"}),
+                Some("tool-bash-1".to_owned()),
+                None,
+            ),
+        });
+        callback(StreamEvent::Delta {
+            text: "final text".to_owned(),
+        });
+        callback(StreamEvent::Done);
+
+        let mut requests = Vec::new();
+        for _ in 0..30 {
+            requests = server.received_requests().await.expect("received requests");
+            if requests.len() >= 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].method.as_str(), "POST");
+        assert_eq!(requests[1].method.as_str(), "PATCH");
+        assert_eq!(requests[2].method.as_str(), "POST");
+        let fallback_body: Value =
+            serde_json::from_slice(&requests[2].body).expect("discord fallback body");
+        assert_eq!(fallback_body["content"], "final text");
+    }
+
+    #[tokio::test]
+    async fn response_callback_done_resets_state_before_later_user_ack() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-final-001"
+            })))
+            .mount(&server)
+            .await;
+
+        let (callback, thread_id_tx) =
+            build_discord_response_callback(DiscordStreamingCallbackConfig {
+                sender: DiscordSender {
+                    account_id: "main".to_owned(),
+                    token: "discord-token".to_owned(),
+                    http: Client::new(),
+                    api_base: server.uri(),
+                    is_running: true,
+                },
+                router: crate::test_helpers::make_router(),
+                chat_id: "dm-channel-123".to_owned(),
+                thread_binding_key: "user-123".to_owned(),
+                reply_to_message_id: Some("message-001".to_owned()),
+            });
+        thread_id_tx
+            .send("thread::discord-done-reset-test".to_owned())
+            .expect("thread id receiver should still be alive");
+
+        callback(StreamEvent::Delta {
+            text: "old final".to_owned(),
+        });
+        callback(StreamEvent::Done);
+
+        let mut requests = Vec::new();
+        for _ in 0..20 {
+            requests = server.received_requests().await.expect("received requests");
+            if requests.len() == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(requests.len(), 1);
+
+        callback(StreamEvent::Boundary {
+            kind: StreamBoundaryKind::UserAck,
+            pending_input_id: None,
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        requests = server.received_requests().await.expect("received requests");
+        assert_eq!(
+            requests.len(),
+            1,
+            "a user ack after Done must not resend stale accumulated text"
+        );
+    }
+
+    #[tokio::test]
+    async fn discord_sender_retries_transient_create_message_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+                "message": "temporary upstream failure"
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/channels/dm-channel-123/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "discord-retry-001"
+            })))
+            .mount(&server)
+            .await;
+
+        let sender = DiscordSender {
+            account_id: "main".to_owned(),
+            token: "discord-token".to_owned(),
+            http: Client::new(),
+            api_base: server.uri(),
+            is_running: true,
+        };
+
+        let message_ids = sender
+            .send_text("dm-channel-123", "retry me", Some("message-001"))
+            .await
+            .expect("transient Discord create failure should be retried");
+
+        assert_eq!(message_ids, vec!["discord-retry-001".to_owned()]);
+        let requests = server.received_requests().await.expect("received requests");
+        assert_eq!(requests.len(), 2);
     }
 
     #[tokio::test]

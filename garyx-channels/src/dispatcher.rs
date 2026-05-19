@@ -256,9 +256,9 @@ impl TelegramSender {
 // ---------------------------------------------------------------------------
 
 pub(crate) const DISCORD_MAX_MESSAGE_LENGTH: usize = 2000;
-const DISCORD_RATE_LIMIT_MAX_RETRIES: usize = 3;
-const DISCORD_RATE_LIMIT_DEFAULT_DELAY: Duration = Duration::from_secs(1);
-const DISCORD_RATE_LIMIT_MAX_DELAY: Duration = Duration::from_secs(60);
+const DISCORD_REQUEST_MAX_RETRIES: usize = 5;
+const DISCORD_RETRY_DEFAULT_DELAY: Duration = Duration::from_secs(1);
+const DISCORD_RETRY_MAX_DELAY: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
 struct DiscordApiError {
@@ -293,10 +293,22 @@ impl DiscordApiError {
         self.status == StatusCode::TOO_MANY_REQUESTS
     }
 
-    fn retry_delay(&self) -> Duration {
-        self.retry_after
-            .unwrap_or(DISCORD_RATE_LIMIT_DEFAULT_DELAY)
-            .min(DISCORD_RATE_LIMIT_MAX_DELAY)
+    fn is_transient(&self) -> bool {
+        self.is_rate_limited() || self.status.is_server_error()
+    }
+
+    fn retry_delay(&self, attempt: usize) -> Duration {
+        if self.is_rate_limited() {
+            return self
+                .retry_after
+                .unwrap_or(DISCORD_RETRY_DEFAULT_DELAY)
+                .min(DISCORD_RETRY_MAX_DELAY);
+        }
+
+        let multiplier = 1_u32.checked_shl(attempt.min(5) as u32).unwrap_or(32);
+        DISCORD_RETRY_DEFAULT_DELAY
+            .saturating_mul(multiplier)
+            .min(DISCORD_RETRY_MAX_DELAY)
     }
 }
 
@@ -436,18 +448,31 @@ impl DiscordSender {
         let body = discord_message_payload(content, channel_id, reply_to_message_id, None);
         let mut attempt = 0;
         loop {
-            let response = self
+            let response = match self
                 .http
                 .post(discord_channel_messages_url(&self.api_base, channel_id))
                 .header("Authorization", format!("Bot {}", self.token))
                 .json(&body)
                 .send()
                 .await
-                .map_err(|error| DiscordApiError::internal(error.to_string()))?;
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    let error = DiscordApiError::internal(error.to_string());
+                    if self
+                        .sleep_before_discord_request_retry("create message", attempt, &error)
+                        .await
+                    {
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
             match parse_discord_message_response(response).await {
                 Err(error)
                     if self
-                        .sleep_before_discord_rate_limit_retry("create message", attempt, &error)
+                        .sleep_before_discord_request_retry("create message", attempt, &error)
                         .await =>
                 {
                     attempt += 1;
@@ -493,22 +518,31 @@ impl DiscordSender {
             let form = multipart::Form::new()
                 .text("payload_json", payload_json.clone())
                 .part("files[0]", part);
-            let response = self
+            let response = match self
                 .http
                 .post(discord_channel_messages_url(&self.api_base, channel_id))
                 .header("Authorization", format!("Bot {}", self.token))
                 .multipart(form)
                 .send()
                 .await
-                .map_err(|error| DiscordApiError::internal(error.to_string()))?;
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    let error = DiscordApiError::internal(error.to_string());
+                    if self
+                        .sleep_before_discord_request_retry("create file message", attempt, &error)
+                        .await
+                    {
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
             match parse_discord_message_response(response).await {
                 Err(error)
                     if self
-                        .sleep_before_discord_rate_limit_retry(
-                            "create file message",
-                            attempt,
-                            &error,
-                        )
+                        .sleep_before_discord_request_retry("create file message", attempt, &error)
                         .await =>
                 {
                     attempt += 1;
@@ -527,18 +561,31 @@ impl DiscordSender {
         let body = discord_edit_message_payload(content);
         let mut attempt = 0;
         loop {
-            let response = self
+            let response = match self
                 .http
                 .patch(discord_message_url(&self.api_base, channel_id, message_id))
                 .header("Authorization", format!("Bot {}", self.token))
                 .json(&body)
                 .send()
                 .await
-                .map_err(|error| DiscordApiError::internal(error.to_string()))?;
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    let error = DiscordApiError::internal(error.to_string());
+                    if self
+                        .sleep_before_discord_request_retry("edit message", attempt, &error)
+                        .await
+                    {
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
             match parse_discord_message_response(response).await {
                 Err(error)
                     if self
-                        .sleep_before_discord_rate_limit_retry("edit message", attempt, &error)
+                        .sleep_before_discord_request_retry("edit message", attempt, &error)
                         .await =>
                 {
                     attempt += 1;
@@ -555,17 +602,30 @@ impl DiscordSender {
     ) -> Result<(), DiscordApiError> {
         let mut attempt = 0;
         loop {
-            let response = self
+            let response = match self
                 .http
                 .delete(discord_message_url(&self.api_base, channel_id, message_id))
                 .header("Authorization", format!("Bot {}", self.token))
                 .send()
                 .await
-                .map_err(|error| DiscordApiError::internal(error.to_string()))?;
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    let error = DiscordApiError::internal(error.to_string());
+                    if self
+                        .sleep_before_discord_request_retry("delete message", attempt, &error)
+                        .await
+                    {
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
             match parse_discord_empty_response(response).await {
                 Err(error)
                     if self
-                        .sleep_before_discord_rate_limit_retry("delete message", attempt, &error)
+                        .sleep_before_discord_request_retry("delete message", attempt, &error)
                         .await =>
                 {
                     attempt += 1;
@@ -575,25 +635,27 @@ impl DiscordSender {
         }
     }
 
-    async fn sleep_before_discord_rate_limit_retry(
+    async fn sleep_before_discord_request_retry(
         &self,
         operation: &str,
         attempt: usize,
         error: &DiscordApiError,
     ) -> bool {
-        if !error.is_rate_limited() || attempt >= DISCORD_RATE_LIMIT_MAX_RETRIES {
+        if !error.is_transient() || attempt >= DISCORD_REQUEST_MAX_RETRIES {
             return false;
         }
-        let delay = error.retry_delay();
+        let delay = error.retry_delay(attempt);
         warn!(
             account_id = %self.account_id,
             operation,
+            status = %error.status,
+            code = ?error.code,
             retry_after_ms = delay.as_millis(),
             attempt = attempt + 1,
-            max_retries = DISCORD_RATE_LIMIT_MAX_RETRIES,
+            max_retries = DISCORD_REQUEST_MAX_RETRIES,
             global = error.global,
             scope = error.scope.as_deref().unwrap_or(""),
-            "Discord request rate limited; retrying after delay"
+            "Discord request failed transiently; retrying after delay"
         );
         tokio::time::sleep(delay).await;
         true

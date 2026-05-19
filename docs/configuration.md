@@ -163,7 +163,8 @@ user message is acknowledged while a response is still streaming, Discord
 finalizes the current reply segment and starts later assistant output in a new
 message; runtime-only tool placeholders are deleted during that split.
 Discord REST writes retry 429 responses using Discord's `Retry-After` /
-`retry_after` delay before surfacing a delivery failure.
+`retry_after` delay, and retry transient network or 5xx failures with backoff
+before surfacing a delivery failure.
 Child-agent and internal planning/reasoning tool events stay hidden. Local and
 remote Markdown image references are sent as Discord attachments, generated
 image results are sent as files, and inbound Discord image/file attachments are
