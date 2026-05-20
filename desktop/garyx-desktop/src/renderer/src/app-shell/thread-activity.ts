@@ -33,10 +33,15 @@ function isLiveStreamActive(liveStream: LiveStreamState | null | undefined): boo
   );
 }
 
-function canSteerLiveStream(liveStream: LiveStreamState | null | undefined): boolean {
+function canSteerActiveRun(input: {
+  liveStream: LiveStreamState | null | undefined;
+  runActive: boolean;
+  showPendingAckLoading: boolean;
+}): boolean {
   return Boolean(
-    liveStream &&
-      ["connecting", "streaming"].includes(liveStream.streamStatus),
+    input.showPendingAckLoading ||
+      isLiveStreamActive(input.liveStream) ||
+      input.runActive,
   );
 }
 
@@ -98,14 +103,21 @@ export function deriveThreadActivityModel(input: {
   const hasPendingAssistant = input.messages.some(
     (message) => message.role === "assistant" && Boolean(message.pending),
   );
-  return {
+  const model = {
     runActive,
-    canSteerQueuedPrompt: canSteerLiveStream(input.liveStream),
     showPendingAckLoading,
     showRunLoading:
       runActive &&
       !showPendingAckLoading &&
       !hasPendingAssistant,
+  };
+  return {
+    ...model,
+    canSteerQueuedPrompt: canSteerActiveRun({
+      liveStream: input.liveStream,
+      runActive: model.runActive,
+      showPendingAckLoading: model.showPendingAckLoading,
+    }),
   };
 }
 

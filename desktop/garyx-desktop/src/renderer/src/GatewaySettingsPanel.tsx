@@ -9,6 +9,7 @@ import {
   type DesktopApiProviderType,
   type CreateCustomAgentInput,
   type DesktopCustomAgent,
+  type DesktopFollowUpBehavior,
   type DesktopProviderModelOption,
   type DesktopProviderModels,
   type DesktopTeam,
@@ -1695,6 +1696,39 @@ export function GatewaySettingsPanel({
           }
           description={t('Select the language used by this Mac app. System follows macOS language and falls back to English.')}
           label={t('Language')}
+        />
+        <SettingsControlRow
+          control={
+            <ToggleGroup
+              className="h-9 rounded-[14px] bg-[#f3f3f1] p-0.5"
+              type="single"
+              value={localSettings.followUpBehavior}
+              onValueChange={(nextValue) => {
+                if (nextValue !== 'queue' && nextValue !== 'steer') {
+                  return;
+                }
+                onLocalSettingsChange((current) => ({
+                  ...current,
+                  followUpBehavior: nextValue as DesktopFollowUpBehavior,
+                }));
+              }}
+            >
+              <ToggleGroupItem
+                className="h-8 rounded-[12px] border-0 px-3 text-[12px] text-[#666663] data-[state=on]:bg-white data-[state=on]:text-[#111111] data-[state=on]:shadow-sm"
+                value="queue"
+              >
+                {t('Queue')}
+              </ToggleGroupItem>
+              <ToggleGroupItem
+                className="h-8 rounded-[12px] border-0 px-3 text-[12px] text-[#666663] data-[state=on]:bg-white data-[state=on]:text-[#111111] data-[state=on]:shadow-sm"
+                value="steer"
+              >
+                {t('Steer')}
+              </ToggleGroupItem>
+            </ToggleGroup>
+          }
+          description={t('Choose whether follow-ups sent while Garyx is running are queued or sent into the active run.')}
+          label={t('Follow-up behavior')}
         />
         <SettingsControlRow
           control={

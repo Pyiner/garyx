@@ -4518,7 +4518,7 @@ export async function openChatStream(
 }
 
 export async function sendStreamingInput(
-  _settings: DesktopSettings,
+  settings: DesktopSettings,
   input: SendMessageInput,
 ): Promise<SendStreamingInputResult> {
   const threadId = resolveInputThreadId(input);
@@ -4560,6 +4560,49 @@ export async function sendStreamingInput(
         }),
       );
     });
+  }
+  const serializedAttachments = serializeMessageAttachments(
+    input.images,
+    input.files,
+  );
+  try {
+    const payload = await requestJson<{
+      status?: unknown;
+      threadId?: unknown;
+      thread_id?: unknown;
+      sessionId?: unknown;
+      clientIntentId?: unknown;
+      client_intent_id?: unknown;
+      pendingInputId?: unknown;
+      pending_input_id?: unknown;
+    }>(settings, "/api/chat/stream-input", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        threadId,
+        clientIntentId: input.clientIntentId,
+        message: input.message,
+        attachments: serializedAttachments.attachments,
+        images: serializedAttachments.images,
+        files: serializedAttachments.files,
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const responseThreadId =
+      asString(payload.threadId) || asString(payload.thread_id) || threadId;
+    return {
+      status: asString(payload.status) || "no_active_session",
+      threadId: responseThreadId,
+      sessionId: asString(payload.sessionId) || responseThreadId,
+      clientIntentId:
+        asString(payload.clientIntentId) ||
+        asString(payload.client_intent_id) ||
+        input.clientIntentId,
+      pendingInputId:
+        asString(payload.pendingInputId) || asString(payload.pending_input_id),
+    };
+  } catch {
+    // Preserve the old local-only response when the gateway cannot be reached.
   }
   return {
     status: "no_active_session",

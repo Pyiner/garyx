@@ -1,4 +1,5 @@
 export type DesktopLanguagePreference = "system" | "en" | "zh-CN";
+export type DesktopFollowUpBehavior = "queue" | "steer";
 
 export interface DesktopSettings {
   gatewayUrl: string;
@@ -12,6 +13,7 @@ export interface DesktopSettings {
   providerGeminiEnv: string;
   threadLogsPanelWidth: number;
   languagePreference: DesktopLanguagePreference;
+  followUpBehavior: DesktopFollowUpBehavior;
 }
 
 export interface DesktopGatewayProfile {
@@ -1755,4 +1757,5 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   providerGeminiEnv: "",
   threadLogsPanelWidth: 360,
   languagePreference: "system",
+  followUpBehavior: "queue",
 };

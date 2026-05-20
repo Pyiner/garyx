@@ -16,7 +16,7 @@ use tower::ServiceExt;
 use crate::application::chat::contracts::{ChatRequest, InterruptRequest, StreamInputRequest};
 use crate::server::{AppState, AppStateBuilder};
 
-use super::{chat_health, chat_interrupt};
+use super::{chat_health, chat_interrupt, chat_stream_input};
 
 struct ReadyProvider;
 struct SlowProvider {
@@ -173,6 +173,10 @@ fn test_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/api/chat/health", axum::routing::get(chat_health))
         .route("/api/chat/interrupt", axum::routing::post(chat_interrupt))
+        .route(
+            "/api/chat/stream-input",
+            axum::routing::post(chat_stream_input),
+        )
         .with_state(state)
 }
 
@@ -260,6 +264,37 @@ async fn test_chat_interrupt_http_aborts_active_thread_run() {
     assert_eq!(json["threadId"], thread_id);
     assert_eq!(json["abortedRuns"], json!([run_id]));
     assert!(!bridge.is_run_active(run_id).await);
+}
+
+#[tokio::test]
+async fn test_chat_stream_input_http_returns_no_active_session_without_run() {
+    let state = test_state_with_provider().await;
+    let router = test_router(state);
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/chat/stream-input")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "threadId": "thread::chat-stream-input-http",
+                "clientIntentId": "intent-1",
+                "message": "follow up"
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "no_active_session");
+    assert_eq!(json["threadId"], "thread::chat-stream-input-http");
+    assert_eq!(json["clientIntentId"], "intent-1");
 }
 
 #[test]

@@ -83,6 +83,28 @@ pub async fn chat_interrupt(
     Json(payload).into_response()
 }
 
+/// POST /api/chat/stream-input - add input to an active streaming run.
+pub async fn chat_stream_input(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<StreamInputRequest>,
+) -> impl IntoResponse {
+    let thread_id = match resolve_existing_thread_key(request.thread_id) {
+        Ok(thread_id) => thread_id,
+        Err((status, payload)) => return (status, payload).into_response(),
+    };
+    let (_status, payload) = execute_chat_stream_input(
+        &state,
+        thread_id,
+        request.client_intent_id,
+        request.message,
+        request.attachments,
+        request.images,
+        request.files,
+    )
+    .await;
+    Json(payload).into_response()
+}
+
 async fn handle_chat_socket(state: Arc<AppState>, socket: WebSocket) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<serde_json::Value>();

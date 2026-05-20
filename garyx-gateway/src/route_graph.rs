@@ -320,6 +320,10 @@ fn chat_routes() -> Router<Arc<AppState>> {
             "/api/chat/interrupt",
             axum::routing::post(chat::chat_interrupt),
         )
+        .route(
+            "/api/chat/stream-input",
+            axum::routing::post(chat::chat_stream_input),
+        )
         .route("/api/chat/health", axum::routing::get(chat::chat_health))
 }
 

@@ -13,6 +13,7 @@ import {
   type DesktopBotConsoleSummary,
   type ConfiguredBot,
   type DesktopGatewayProfile,
+  type DesktopFollowUpBehavior,
   type DesktopLanguagePreference,
   type DesktopRemoteStateError,
   type DesktopThreadSummary,
@@ -230,6 +231,11 @@ function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
       ? input
       : DEFAULT_DESKTOP_SETTINGS.languagePreference;
   };
+  const normalizeFollowUpBehavior = (input: unknown): DesktopFollowUpBehavior => {
+    return input === 'steer' || input === 'queue'
+      ? input
+      : DEFAULT_DESKTOP_SETTINGS.followUpBehavior;
+  };
 
   return {
     gatewayUrl:
@@ -254,6 +260,7 @@ function normalizeSettings(value?: Partial<DesktopSettings>): DesktopSettings {
     providerGeminiEnv: normalizeMultiline(value?.providerGeminiEnv),
     threadLogsPanelWidth: normalizeThreadLogsPanelWidth(value?.threadLogsPanelWidth),
     languagePreference: normalizeLanguagePreference(value?.languagePreference),
+    followUpBehavior: normalizeFollowUpBehavior(value?.followUpBehavior),
   };
 }
 

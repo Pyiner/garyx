@@ -7282,7 +7282,7 @@ export function AppShell() {
     selectedThreadId,
   ]);
 
-  async function handleQueueCurrentPrompt() {
+  async function handleQueueCurrentPrompt(options?: { steerImmediately?: boolean }) {
     if (composerAttachmentUploadPending) {
       setError("Attachments are still uploading to gateway.");
       return;
@@ -7316,29 +7316,31 @@ export function AppShell() {
     }
     clearComposerDraft();
     setError(null);
+    if (options?.steerImmediately) {
+      await steerQueuedIntent(intent);
+    }
   }
 
-  async function handleSteerQueuedPrompt(intent: MessageIntent) {
-    const threadId = intent.threadId;
+  async function steerQueuedIntent(latestIntent: MessageIntent) {
+    const threadId = latestIntent.threadId;
     if (!canSteerQueuedPrompt) {
       return;
     }
-    const latestIntent = intentForId(intent.intentId);
-    if (!latestIntent || latestIntent.state !== "queued_local") {
+    if (latestIntent.state !== "queued_local") {
       return;
     }
 
     dispatchMessageState({
       type: "intent/request-dispatch",
       threadId: threadId,
-      intentId: intent.intentId,
+      intentId: latestIntent.intentId,
       mode: "async_steer",
       source: "queue_steer",
       removeFromQueue: false,
     });
     dispatchMessageState({
       type: "intent/dispatch-started",
-      intentId: intent.intentId,
+      intentId: latestIntent.intentId,
     });
 
     setError(null);
@@ -7465,6 +7467,14 @@ export function AppShell() {
         error: message,
       });
     }
+  }
+
+  async function handleSteerQueuedPrompt(intent: MessageIntent) {
+    const latestIntent = intentForId(intent.intentId);
+    if (!latestIntent || latestIntent.state !== "queued_local") {
+      return;
+    }
+    await steerQueuedIntent(latestIntent);
   }
 
   async function handleStartDispatch() {
@@ -7703,7 +7713,10 @@ export function AppShell() {
     });
 
     if (isActiveSendingThread && composerHasPayload) {
-      void handleQueueCurrentPrompt();
+      void handleQueueCurrentPrompt({
+        steerImmediately:
+          settingsDraft.followUpBehavior === "steer" && canSteerQueuedPrompt,
+      });
       return;
     }
     void handleStartDispatch();
