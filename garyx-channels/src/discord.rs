@@ -225,13 +225,13 @@ pub(crate) fn build_inbound_request(
         return None;
     }
 
-    let mut message = if mentioned {
+    let message = if mentioned {
         strip_discord_bot_mention(&event.content, bot_id)
     } else {
         event.content.trim().to_owned()
     };
-    if message.trim().is_empty() {
-        message = "(The user sent a message with no text content)".to_owned();
+    if message.trim().is_empty() && event.attachments.is_empty() {
+        return None;
     }
 
     let mut metadata: HashMap<String, Value> = HashMap::new();
@@ -1886,9 +1886,63 @@ mod tests {
     }
 
     #[test]
-    fn bot_authored_messages_are_ignored() {
+    fn mention_only_message_without_attachments_is_ignored() {
         let event = DiscordMessageCreateEvent {
             id: "message-004".to_owned(),
+            channel_id: "guild-channel-123".to_owned(),
+            guild_id: Some("guild-456".to_owned()),
+            content: "<@bot-999>".to_owned(),
+            author: DiscordUser {
+                id: "user-123".to_owned(),
+                username: Some("Test User".to_owned()),
+                bot: false,
+            },
+            mentions: vec![DiscordUser {
+                id: "bot-999".to_owned(),
+                username: Some("Garyx".to_owned()),
+                bot: true,
+            }],
+            message_reference: None,
+            attachments: Vec::new(),
+        };
+
+        assert!(build_inbound_request("main", &account(true), "bot-999", event).is_none());
+    }
+
+    #[test]
+    fn empty_text_message_with_attachment_routes_without_fallback_text() {
+        let event = DiscordMessageCreateEvent {
+            id: "message-005".to_owned(),
+            channel_id: "dm-channel-123".to_owned(),
+            guild_id: None,
+            content: String::new(),
+            author: DiscordUser {
+                id: "user-123".to_owned(),
+                username: Some("Test User".to_owned()),
+                bot: false,
+            },
+            mentions: Vec::new(),
+            message_reference: None,
+            attachments: vec![DiscordAttachment {
+                id: "attachment-file".to_owned(),
+                filename: "report.txt".to_owned(),
+                content_type: Some("text/plain".to_owned()),
+                size: Some(12),
+                url: "https://example.invalid/files/report.txt".to_owned(),
+            }],
+        };
+
+        let request = build_inbound_request("main", &account(true), "bot-999", event)
+            .expect("attachment-only dm should route");
+
+        assert_eq!(request.message, "");
+        assert_eq!(request.extra_metadata[NATIVE_COMMAND_TEXT_METADATA_KEY], "");
+    }
+
+    #[test]
+    fn bot_authored_messages_are_ignored() {
+        let event = DiscordMessageCreateEvent {
+            id: "message-006".to_owned(),
             channel_id: "dm-channel-123".to_owned(),
             guild_id: None,
             content: "ignore me".to_owned(),
