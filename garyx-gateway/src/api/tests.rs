@@ -834,6 +834,12 @@ async fn test_create_and_list_custom_agents() {
         .unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert!(json["agents"].as_array().unwrap().iter().any(|agent| {
+        agent["agent_id"] == "claude"
+            && agent["avatar_data_url"].is_null()
+            && agent["provider_icon"]["key"] == "claude"
+            && agent["provider_icon"]["provider_type"] == "claude_code"
+    }));
+    assert!(json["agents"].as_array().unwrap().iter().any(|agent| {
         agent["agent_id"] == "spec-review"
             && agent["provider_type"] == "codex_app_server"
             && agent["display_name"] == "Spec Review"
@@ -841,6 +847,7 @@ async fn test_create_and_list_custom_agents() {
             && agent["model_reasoning_effort"] == "xhigh"
             && agent["model_service_tier"] == "priority"
             && agent["avatar_data_url"] == "data:image/png;base64,dGVzdA=="
+            && agent["provider_icon"]["key"] == "codex"
     }));
 }
 

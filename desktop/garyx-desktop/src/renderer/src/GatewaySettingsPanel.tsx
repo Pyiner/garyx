@@ -2377,6 +2377,7 @@ export function GatewaySettingsPanel({
                         className={selectedAgentMissing ? 'agent-option-avatar--missing' : undefined}
                         kind={selectedTarget?.kind || 'agent'}
                         label={agentDisplayName}
+                        providerIcon={selectedTarget?.providerIcon}
                         providerType={selectedTarget?.providerType}
                       />
                       <span className="bot-table-agent-copy">

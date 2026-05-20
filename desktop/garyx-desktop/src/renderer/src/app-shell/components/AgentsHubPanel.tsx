@@ -16,6 +16,7 @@ import type {
   CreateCustomAgentInput,
   CreateTeamInput,
   DesktopCustomAgent,
+  DesktopProviderIconDescriptor,
   DesktopProviderModels,
   DesktopTeam,
   UpdateCustomAgentInput,
@@ -298,6 +299,7 @@ type AgentAvatarProps = {
   builtIn?: boolean;
   className: string;
   label: string;
+  providerIcon?: DesktopProviderIconDescriptor | null;
   providerType?: ProviderType | null;
   team?: boolean;
 };
@@ -308,12 +310,13 @@ function AgentAvatar({
   builtIn,
   className,
   label,
+  providerIcon,
   providerType,
   team,
 }: AgentAvatarProps) {
   const showProviderIcon =
     Boolean(builtIn && !team && !avatarDataUrl)
-    && hasProviderAgentIcon(agentId, providerType);
+    && hasProviderAgentIcon(agentId, providerType, providerIcon);
   const classes = [
     className,
     builtIn ? 'builtin' : '',
@@ -330,6 +333,7 @@ function AgentAvatar({
         <ProviderAgentIcon
           agentId={agentId}
           className="agents-hub-provider-icon"
+          providerIcon={providerIcon}
           providerType={providerType}
           size="100%"
         />
@@ -1154,6 +1158,7 @@ export function AgentsHubPanel({
                           builtIn={agent.builtIn}
                           className="agents-hub-avatar-sm"
                           label={agent.displayName || agent.agentId}
+                          providerIcon={agent.providerIcon}
                           providerType={agent.providerType}
                         />
                         <div>
@@ -1663,6 +1668,7 @@ export function AgentsHubPanel({
                   builtIn={selectedAgent?.builtIn}
                   className="agents-hub-avatar-centered large"
                   label={selectedAgent?.displayName || selectedAgent?.agentId || 'A'}
+                  providerIcon={selectedAgent?.providerIcon}
                   providerType={selectedAgent?.providerType}
                 />
                 <div className="agents-hub-detail-copy">
@@ -1953,6 +1959,7 @@ export function AgentsHubPanel({
                             builtIn={agent.builtIn}
                             className="agents-hub-avatar-centered small"
                             label={agent.displayName || agent.agentId}
+                            providerIcon={agent.providerIcon}
                             providerType={agent.providerType}
                           />
                           <div className="team-builder-agent-info">
@@ -1989,6 +1996,7 @@ export function AgentsHubPanel({
                             builtIn={agent?.builtIn}
                             className="agents-hub-avatar-centered small"
                             label={agent?.displayName || agentId}
+                            providerIcon={agent?.providerIcon}
                             providerType={agent?.providerType}
                           />
                           <div className="team-builder-agent-info">

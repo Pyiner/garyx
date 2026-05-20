@@ -16,11 +16,11 @@ use axum::response::IntoResponse;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::Utc;
 use garyx_channels::builtin_catalog::builtin_channel_descriptor;
-use garyx_models::ChannelOutboundContent;
 use garyx_models::config_loader::{
     ConfigLoadOptions, ConfigWriteOptions, load_config, write_config_value_atomic,
 };
 use garyx_models::provider::{ProviderMessage, ProviderType};
+use garyx_models::{ChannelOutboundContent, CustomAgentProfile};
 use garyx_router::{
     ChannelBinding, ThreadHistoryError, bindings_from_value, count_user_query_messages,
     default_workspace_mode_for_channel_account, history_message_count, is_thread_key,
@@ -97,6 +97,36 @@ fn provider_label(provider_type: &ProviderType) -> &'static str {
         ProviderType::GeminiLlm => "Gemini",
         ProviderType::AgentTeam => "Team",
     }
+}
+
+fn provider_icon_descriptor(provider_type: &ProviderType) -> Option<Value> {
+    let (key, label) = match provider_type {
+        ProviderType::ClaudeCode | ProviderType::ClaudeTty | ProviderType::ClaudeLlm => {
+            ("claude", "Claude")
+        }
+        ProviderType::CodexAppServer => ("codex", "Codex"),
+        ProviderType::GeminiCli | ProviderType::GeminiLlm => ("gemini", "Gemini"),
+        ProviderType::Gpt | ProviderType::AgentTeam => return None,
+    };
+    Some(json!({
+        "key": key,
+        "provider_type": provider_type,
+        "label": label,
+    }))
+}
+
+fn custom_agent_response(agent: &CustomAgentProfile) -> Value {
+    let mut value = serde_json::to_value(agent).unwrap_or_else(|_| json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object
+            .entry("avatar_data_url".to_owned())
+            .or_insert(Value::Null);
+        object.insert(
+            "provider_icon".to_owned(),
+            provider_icon_descriptor(&agent.provider_type).unwrap_or(Value::Null),
+        );
+    }
+    value
 }
 
 async fn team_bound_thread_ids(state: &Arc<AppState>, team_id: &str) -> Vec<String> {
@@ -2925,8 +2955,16 @@ fn collect_unknown_fields(
 }
 
 pub async fn list_custom_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let agents = state
+        .ops
+        .custom_agents
+        .list_agents()
+        .await
+        .into_iter()
+        .map(|agent| custom_agent_response(&agent))
+        .collect::<Vec<_>>();
     Json(json!({
-        "agents": state.ops.custom_agents.list_agents().await,
+        "agents": agents,
     }))
 }
 
@@ -2953,7 +2991,7 @@ pub async fn get_custom_agent(
     Path(agent_id): Path<String>,
 ) -> impl IntoResponse {
     match state.ops.custom_agents.get_agent(&agent_id).await {
-        Some(agent) => (StatusCode::OK, Json(json!(agent))).into_response(),
+        Some(agent) => (StatusCode::OK, Json(custom_agent_response(&agent))).into_response(),
         None => (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": "custom agent not found" })),
@@ -3008,7 +3046,7 @@ pub async fn create_custom_agent(
                 )
                     .into_response();
             }
-            (StatusCode::CREATED, Json(json!(agent))).into_response()
+            (StatusCode::CREATED, Json(custom_agent_response(&agent))).into_response()
         }
         Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
     }
@@ -3061,7 +3099,7 @@ pub async fn update_custom_agent(
                 )
                     .into_response();
             }
-            (StatusCode::OK, Json(json!(agent))).into_response()
+            (StatusCode::OK, Json(custom_agent_response(&agent))).into_response()
         }
         Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
     }

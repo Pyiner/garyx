@@ -22,6 +22,8 @@ import type {
   ConnectionStatus,
   DesktopCustomAgent,
   DesktopProviderModels,
+  DesktopProviderIconDescriptor,
+  DesktopProviderIconKey,
   DesktopProviderModelOption,
   DesktopBotConsoleSummary,
   DesktopBotConversationNode,
@@ -723,6 +725,8 @@ interface CustomAgentPayload {
   defaultWorkspaceDir?: string | null;
   avatar_data_url?: string | null;
   avatarDataUrl?: string | null;
+  provider_icon?: ProviderIconDescriptorPayload | null;
+  providerIcon?: ProviderIconDescriptorPayload | null;
   workspace_dir?: string | null;
   workspaceDir?: string | null;
   system_prompt?: string | null;
@@ -734,6 +738,13 @@ interface CustomAgentPayload {
   createdAt?: string;
   updated_at?: string;
   updatedAt?: string;
+}
+
+interface ProviderIconDescriptorPayload {
+  key?: unknown;
+  provider_type?: unknown;
+  providerType?: unknown;
+  label?: unknown;
 }
 
 interface CustomAgentsPayload {
@@ -820,6 +831,33 @@ function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
     return "google";
   }
   return "claude_code";
+}
+
+function normalizeProviderIconKey(value: unknown): DesktopProviderIconKey | null {
+  if (value === "claude" || value === "codex" || value === "gemini") {
+    return value;
+  }
+  return null;
+}
+
+function mapProviderIconDescriptor(
+  value: ProviderIconDescriptorPayload | null | undefined,
+): DesktopProviderIconDescriptor | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const key = normalizeProviderIconKey(value.key);
+  if (!key) {
+    return null;
+  }
+  return {
+    key,
+    providerType:
+      value.provider_type || value.providerType
+        ? normalizeDesktopProviderType(value.provider_type || value.providerType)
+        : null,
+    label: typeof value.label === "string" ? value.label : null,
+  };
 }
 
 function parseThreadProviderType(
@@ -2293,6 +2331,9 @@ function mapCustomAgent(value: CustomAgentPayload): DesktopCustomAgent {
       value.workspaceDir ??
       "",
     avatarDataUrl: value.avatar_data_url || value.avatarDataUrl || "",
+    providerIcon: mapProviderIconDescriptor(
+      value.provider_icon || value.providerIcon,
+    ),
     systemPrompt: value.system_prompt || value.systemPrompt || "",
     builtIn: value.built_in === true || value.builtIn === true,
     standalone: value.standalone !== false,

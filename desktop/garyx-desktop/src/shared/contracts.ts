@@ -35,6 +35,14 @@ export type DesktopApiProviderType =
   | "claude_llm"
   | "gemini_llm";
 
+export type DesktopProviderIconKey = "claude" | "codex" | "gemini";
+
+export interface DesktopProviderIconDescriptor {
+  key: DesktopProviderIconKey;
+  providerType?: DesktopApiProviderType | null;
+  label?: string | null;
+}
+
 export interface DesktopProviderModelOption {
   id: string;
   label: string;
@@ -273,6 +281,7 @@ export interface DesktopCustomAgent {
   requestTimeoutSeconds: number;
   defaultWorkspaceDir: string;
   avatarDataUrl: string;
+  providerIcon?: DesktopProviderIconDescriptor | null;
   systemPrompt: string;
   builtIn: boolean;
   standalone: boolean;

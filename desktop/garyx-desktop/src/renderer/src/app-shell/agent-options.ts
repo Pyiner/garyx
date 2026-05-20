@@ -1,4 +1,9 @@
-import type { DesktopApiProviderType, DesktopCustomAgent, DesktopTeam } from "@shared/contracts";
+import type {
+  DesktopApiProviderType,
+  DesktopCustomAgent,
+  DesktopProviderIconDescriptor,
+  DesktopTeam,
+} from "@shared/contracts";
 
 export type AgentOptionKind = "builtin" | "agent" | "team";
 
@@ -8,6 +13,7 @@ export type AgentPickerOption = {
   kind: AgentOptionKind;
   avatarDataUrl?: string | null;
   detail?: string;
+  providerIcon?: DesktopProviderIconDescriptor | null;
   providerType?: DesktopApiProviderType;
 };
 
@@ -79,6 +85,7 @@ function toAgentPickerOption(
     label: formatAgentOptionLabel(agent, labelStyle),
     kind: agent.builtIn ? "builtin" : "agent",
     avatarDataUrl: agent.avatarDataUrl,
+    providerIcon: agent.providerIcon,
     providerType: agent.providerType,
   };
 }

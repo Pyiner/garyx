@@ -275,6 +275,7 @@ function renderComposerAgentOptionIcon(option: ComposerAgentOption) {
       className="composer-agent-option-icon"
       kind={option.kind}
       label={option.label}
+      providerIcon={option.providerIcon}
       providerType={option.providerType}
     />
   );

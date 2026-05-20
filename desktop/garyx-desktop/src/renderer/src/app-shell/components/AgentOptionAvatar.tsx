@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react';
 
-import type { DesktopApiProviderType } from '@shared/contracts';
+import type {
+  DesktopApiProviderType,
+  DesktopProviderIconDescriptor,
+} from '@shared/contracts';
 
 import {
   Avatar,
@@ -23,6 +26,7 @@ type AgentOptionLike = {
   id?: string | null;
   kind?: AgentOptionKind;
   label?: string | null;
+  providerIcon?: DesktopProviderIconDescriptor | null;
   providerType?: DesktopApiProviderType | null;
   value?: string | null;
 };
@@ -33,6 +37,7 @@ type AgentOptionAvatarProps = {
   className?: string;
   kind?: AgentOptionKind;
   label?: string | null;
+  providerIcon?: DesktopProviderIconDescriptor | null;
   providerType?: DesktopApiProviderType | null;
   size?: 'sm' | 'default' | 'lg';
 };
@@ -59,11 +64,12 @@ export function AgentOptionAvatar({
   className,
   kind = 'agent',
   label,
+  providerIcon,
   providerType,
   size = 'sm',
 }: AgentOptionAvatarProps) {
   const showProviderIcon =
-    !avatarDataUrl && hasProviderAgentIcon(agentId, providerType);
+    !avatarDataUrl && hasProviderAgentIcon(agentId, providerType, providerIcon);
 
   return (
     <Avatar
@@ -80,6 +86,7 @@ export function AgentOptionAvatar({
         {showProviderIcon ? (
           <ProviderAgentIcon
             agentId={agentId}
+            providerIcon={providerIcon}
             providerType={providerType}
             size="1em"
           />
@@ -101,6 +108,7 @@ export function AgentOptionRow({
   kind,
   label,
   option,
+  providerIcon,
   providerType,
 }: AgentOptionAvatarProps & {
   children?: ReactNode;
@@ -112,6 +120,7 @@ export function AgentOptionRow({
   const resolvedDetail = detail ?? option?.detail;
   const resolvedKind = kind ?? option?.kind ?? 'agent';
   const resolvedLabel = label ?? option?.label;
+  const resolvedProviderIcon = providerIcon ?? option?.providerIcon;
   const resolvedProviderType = providerType ?? option?.providerType;
   const text = resolvedLabel || resolvedAgentId || '';
 
@@ -122,6 +131,7 @@ export function AgentOptionRow({
         avatarDataUrl={resolvedAvatarDataUrl}
         kind={resolvedKind}
         label={text}
+        providerIcon={resolvedProviderIcon}
         providerType={resolvedProviderType}
       />
       <span className="agent-option-copy">

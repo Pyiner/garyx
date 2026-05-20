@@ -2,7 +2,10 @@ import ClaudeCodeColor from '@lobehub/icons/es/ClaudeCode/components/Color';
 import CodexColor from '@lobehub/icons/es/Codex/components/Color';
 import GeminiCliColor from '@lobehub/icons/es/GeminiCLI/components/Color';
 
-import type { DesktopApiProviderType } from '@shared/contracts';
+import type {
+  DesktopApiProviderType,
+  DesktopProviderIconDescriptor,
+} from '@shared/contracts';
 
 type BuiltInAgentIconKey = 'claude' | 'codex' | 'gemini';
 
@@ -32,20 +35,26 @@ function normalizeAgentIconKey(value?: string | null): BuiltInAgentIconKey | nul
 export function getProviderAgentIconKey(
   agentId?: string | null,
   providerType?: DesktopApiProviderType | null,
+  providerIcon?: DesktopProviderIconDescriptor | null,
 ): BuiltInAgentIconKey | null {
+  if (providerIcon?.key && providerIcon.key in BUILT_IN_AGENT_ICONS) {
+    return providerIcon.key;
+  }
   return normalizeAgentIconKey(agentId) || normalizeAgentIconKey(providerType);
 }
 
 export function hasProviderAgentIcon(
   agentId?: string | null,
   providerType?: DesktopApiProviderType | null,
+  providerIcon?: DesktopProviderIconDescriptor | null,
 ): boolean {
-  return Boolean(getProviderAgentIconKey(agentId, providerType));
+  return Boolean(getProviderAgentIconKey(agentId, providerType, providerIcon));
 }
 
 type ProviderAgentIconProps = {
   agentId?: string | null;
   className?: string;
+  providerIcon?: DesktopProviderIconDescriptor | null;
   providerType?: DesktopApiProviderType | null;
   size?: number | string;
 };
@@ -53,10 +62,11 @@ type ProviderAgentIconProps = {
 export function ProviderAgentIcon({
   agentId,
   className,
+  providerIcon,
   providerType,
   size = '1em',
 }: ProviderAgentIconProps) {
-  const iconKey = getProviderAgentIconKey(agentId, providerType);
+  const iconKey = getProviderAgentIconKey(agentId, providerType, providerIcon);
   if (!iconKey) {
     return null;
   }
