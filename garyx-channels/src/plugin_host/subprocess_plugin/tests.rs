@@ -115,6 +115,7 @@ fn make_plugin(client: PluginRpcClient) -> SubprocessChannelPlugin {
             streaming: false,
             images: false,
             files: false,
+            survives_respawn: false,
         },
     );
     SubprocessChannelPlugin::new(

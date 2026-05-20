@@ -245,10 +245,15 @@ fn auth_flows_equivalent(manifest: &[AuthFlowDescriptor], runtime: &[AuthFlowDes
     manifest_sorted == runtime_sorted
 }
 
-/// Compare the five capability bits that appear in *both* manifest
-/// (`ManifestCapabilities`) and runtime (`CapabilitiesResponse`). The
-/// manifest has extra fields (`delivery_model`, `hot_reload_accounts`
-/// etc.) that the runtime does not echo back, so we ignore those.
+/// Compare the capability bits that describe intrinsic plugin
+/// behavior and appear in *both* manifest (`ManifestCapabilities`)
+/// and runtime (`CapabilitiesResponse`). The manifest has extra
+/// fields (`delivery_model`, `hot_reload_accounts`, etc.) that the
+/// runtime does not echo back, so we ignore those. `survives_respawn`
+/// is in both schemas but is operator opt-in intent rather than
+/// intrinsic behavior — an operator may legitimately want plugin.toml
+/// to differ from what the binary's `describe` advertises — so it's
+/// excluded from the drift check.
 fn capability_mismatch(
     manifest: &ManifestCapabilities,
     runtime: &CapabilitiesResponse,

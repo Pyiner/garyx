@@ -152,6 +152,8 @@ pub struct CapabilitiesResponse {
     pub images: bool,
     #[serde(default)]
     pub files: bool,
+    #[serde(default)]
+    pub survives_respawn: bool,
 }
 
 // -- Describe (host → plugin, dry-run) -------------------------------------

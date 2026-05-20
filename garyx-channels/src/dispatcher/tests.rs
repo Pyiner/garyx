@@ -979,6 +979,7 @@ mod plugin_routing {
             streaming: false,
             images: false,
             files: false,
+            survives_respawn: false,
         }
     }
 

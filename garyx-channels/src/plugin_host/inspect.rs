@@ -20,8 +20,11 @@
 //! but neither is useful as the other's primitive.
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -294,6 +297,10 @@ pub fn synthesize_manifest_toml(
     out.push_str(&format!("streaming = {}\n", report.capabilities.streaming));
     out.push_str(&format!("images = {}\n", report.capabilities.images));
     out.push_str(&format!("files = {}\n", report.capabilities.files));
+    out.push_str(&format!(
+        "survives_respawn = {}\n",
+        report.capabilities.survives_respawn
+    ));
     out.push('\n');
 
     out.push_str("[runtime]\n");
@@ -428,6 +435,159 @@ fn ensure_executable(_path: &Path) -> Result<(), InspectError> {
     // caller. If the binary is wrong the subsequent spawn will fail
     // with a clearer error than we could synthesise here.
     Ok(())
+}
+
+/// Result of [`backfill_survives_respawn_in_place`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum BackfillOutcome {
+    /// Wrote `survives_respawn = true` into the on-disk `[capabilities]`
+    /// block. The plugin manifest now permits silent self-update.
+    Wrote,
+    /// The field was already present (any value). Left untouched —
+    /// an explicit `survives_respawn = false` is an operator opt-out
+    /// and must be respected.
+    AlreadyPresent,
+}
+
+/// Patch an installed `plugin.toml` to add `survives_respawn = true`
+/// into its `[capabilities]` block when (a) the field is missing
+/// entirely (synthesized by an old garyx where the renderer dropped
+/// it) and (b) the running plugin advertises it via `describe`. Used
+/// by the host startup self-heal path so existing installs unstick
+/// themselves on first launch after upgrading garyx, without
+/// requiring the operator to re-run `garyx plugins install --force`.
+///
+/// Caller is responsible for the (b) check — this function just does
+/// the textual patch when (a) holds.
+///
+/// Write is atomic: emit to a sibling `.tmp` file then `rename`. If
+/// any step fails the original is untouched.
+pub fn backfill_survives_respawn_in_place(path: &Path) -> io::Result<BackfillOutcome> {
+    let original = fs::read_to_string(path)?;
+    let lines: Vec<&str> = original.lines().collect();
+
+    // Locate the [capabilities] section: only the first occurrence.
+    // A malformed file with duplicate `[capabilities]` headers would
+    // already be rejected by the TOML loader downstream.
+    let Some(caps_start) = lines.iter().position(|l| l.trim() == "[capabilities]") else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "plugin.toml has no [capabilities] section to backfill",
+        ));
+    };
+
+    // End of `[capabilities]` table = first subsequent line that's
+    // a new section header (`[next_table]` or `[capabilities.sub]`),
+    // or EOF. **Blank lines do NOT end a TOML table** — earlier
+    // versions of this code treated them as boundaries and would
+    // silently miss a `survives_respawn = false` opt-out that sat
+    // after a stylistic blank inside the block, then write a
+    // duplicate key and produce malformed TOML.
+    let caps_end = lines
+        .iter()
+        .enumerate()
+        .skip(caps_start + 1)
+        .find(|(_, l)| l.trim().starts_with('['))
+        .map(|(i, _)| i)
+        .unwrap_or(lines.len());
+
+    // Look for an explicit `survives_respawn = …` key anywhere in
+    // the block (not just comments mentioning the name). Operator
+    // intent to OPT OUT (`survives_respawn = false`) must be
+    // preserved verbatim.
+    for line in &lines[caps_start + 1..caps_end] {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("survives_respawn") {
+            // Require an actual `=` after optional whitespace so
+            // unrelated identifiers don't false-match: e.g.
+            // `survives_respawnish = true` leaves `ish = true`
+            // (rejected), and `survives_respawn.subkey = true`
+            // leaves `.subkey = true` (also rejected — dotted-key
+            // forms target a different namespace and aren't the
+            // scalar bool field we're managing).
+            let rest = rest.trim_start();
+            if rest.starts_with('=') {
+                return Ok(BackfillOutcome::AlreadyPresent);
+            }
+        }
+    }
+
+    // Insertion point: directly after the last actual key=value
+    // line in the block (skip trailing blanks / comments so the
+    // new line lands flush with the existing keys, matching what
+    // `synthesize_manifest_toml` would have written from scratch).
+    // Default to `caps_start + 1` when the block has no content
+    // (the header was the trailing line of the file, or the next
+    // section header sits immediately below it).
+    let mut insert_at = caps_start + 1;
+    for (i, line) in lines.iter().enumerate().take(caps_end).skip(caps_start + 1) {
+        let t = line.trim();
+        if !t.is_empty() && !t.starts_with('#') {
+            insert_at = i + 1;
+        }
+    }
+
+    // Build output. Walk every original line, append our key
+    // verbatim at `insert_at`, then continue. When `insert_at`
+    // equals `lines.len()` (capabilities is trailing with no
+    // following content) emit it after the loop.
+    let mut out = String::with_capacity(original.len() + 32);
+    for (i, line) in lines.iter().enumerate() {
+        if i == insert_at {
+            out.push_str("survives_respawn = true\n");
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if insert_at == lines.len() {
+        out.push_str("survives_respawn = true\n");
+    }
+
+    // Atomic write: stage at sibling .tmp then rename so a crash
+    // mid-write can't leave a half-written plugin.toml that the
+    // host would refuse to load on next startup. PID + nanosecond
+    // suffix prevents two concurrent garyx instances (e.g. launchd
+    // + manual `gateway run`) from racing on the same temp path,
+    // and `create_new` (O_EXCL) makes a still-impossible collision
+    // surface as EEXIST instead of silently overwriting a peer's
+    // staging file.
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "plugin.toml path has no parent directory",
+        )
+    })?;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("plugin.toml");
+    // PID handles cross-process collisions; the in-process atomic
+    // counter handles same-process concurrent calls (two threads
+    // calling backfill at the same nanosecond would otherwise read
+    // the same SystemTime and collide on `create_new` below).
+    static BACKFILL_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = BACKFILL_SEQ.fetch_add(1, Ordering::Relaxed);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = parent.join(format!(
+        ".{file_name}.backfill.{}.{}.{}.tmp",
+        std::process::id(),
+        seq,
+        nonce,
+    ));
+    {
+        use std::io::Write;
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(out.as_bytes())?;
+        f.sync_all()?;
+    }
+    fs::rename(&tmp, path)?;
+    Ok(BackfillOutcome::Wrote)
 }
 
 /// Minimal TOML string quoter: escapes `\` and `"` so an

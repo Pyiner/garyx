@@ -14,6 +14,7 @@ fn caps(outbound: bool) -> CapabilitiesResponse {
         streaming: false,
         images: false,
         files: false,
+        survives_respawn: false,
     }
 }
 

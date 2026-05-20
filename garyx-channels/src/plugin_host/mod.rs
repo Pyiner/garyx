@@ -34,7 +34,10 @@ pub mod transport;
 pub use auth_flow_bridge::SubprocessAuthFlowExecutor;
 pub use codec::{CodecError, FrameCodec, MAX_FRAME_BYTES_DEFAULT};
 pub use discoverer::{DiscoveryError, DiscoveryOutcome, ManifestDiscoverer};
-pub use inspect::{InspectError, InspectReport, inspect, synthesize_manifest_toml};
+pub use inspect::{
+    BackfillOutcome, InspectError, InspectReport, backfill_survives_respawn_in_place, inspect,
+    synthesize_manifest_toml,
+};
 pub use manifest::{
     AccountRootBehavior, AuthFlowDescriptor, DeliveryModel, ManifestCapabilities, ManifestError,
     ManifestRuntime, PluginManifest, PluginUi, PluginUpdate,

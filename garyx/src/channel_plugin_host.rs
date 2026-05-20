@@ -33,9 +33,10 @@ use garyx_bridge::MultiProviderBridge;
 use garyx_channels::dispatcher::{ChannelDispatcher, OutboundMessage, SwappableDispatcher};
 use garyx_channels::plugin::ChannelPluginManager;
 use garyx_channels::plugin_host::{
-    AccountDescriptor, AttachmentRef, HostContext, InboundHandler, ManifestDiscoverer,
-    PluginErrorCode, PluginManifest, SpawnOptions, StreamId, StreamIdGenerator, StreamRegistry,
-    TombstoneReason, preflight,
+    AccountDescriptor, AttachmentRef, BackfillOutcome, HostContext, InboundHandler,
+    ManifestDiscoverer, PluginErrorCode, PluginManifest, SpawnOptions, StreamId,
+    StreamIdGenerator, StreamRegistry, TombstoneReason, backfill_survives_respawn_in_place,
+    preflight,
 };
 use garyx_models::ChannelOutboundContent;
 use garyx_models::command_catalog::{CommandCatalogOptions, CommandSurface};
@@ -923,7 +924,7 @@ pub async fn register_manifest_plugins(
 
 async fn register_one_manifest(
     manager: &Mutex<ChannelPluginManager>,
-    manifest: PluginManifest,
+    mut manifest: PluginManifest,
     host_ctx: &HostContext,
     host_version: &str,
     config: &GaryxConfig,
@@ -934,7 +935,7 @@ async fn register_one_manifest(
     // Preflight first so a misconfigured manifest never spawns a real
     // lifecycle child. `data_dir` and `public_url` mirror what the
     // live-lifecycle path passes via HostContext.
-    match preflight(
+    let summary = match preflight(
         &manifest,
         host_version,
         &host_ctx.data_dir,
@@ -948,6 +949,7 @@ async fn register_one_manifest(
                 version = %summary.version,
                 "plugin passed preflight"
             );
+            summary
         }
         Err(err) => {
             warn!(
@@ -956,6 +958,50 @@ async fn register_one_manifest(
                 "plugin failed preflight; skipping registration"
             );
             return Err(());
+        }
+    };
+
+    // Self-heal stale plugin.toml: the renderer in garyx < 0.1.25
+    // dropped `survives_respawn` when synthesizing the manifest, so
+    // every install before that release silently opted out of silent
+    // self-update — the host would refuse every `request_self_replace`
+    // with `reason=no_survives_respawn`, stranding plugins at first-
+    // installed version. Now that the plugin's describe response tells
+    // us the bit it actually wants, backfill the on-disk file in place
+    // so the next swap attempt this session and every later one passes.
+    //
+    // The backfill is gated on (a) plugin advertising survives_respawn
+    // and (b) manifest missing it. An explicit `survives_respawn = false`
+    // in plugin.toml is left alone — that's an operator opt-out, not a
+    // stale-renderer artifact.
+    if summary.capabilities.survives_respawn && !manifest.capabilities.survives_respawn {
+        let plugin_toml_path = manifest.manifest_dir.join("plugin.toml");
+        match backfill_survives_respawn_in_place(&plugin_toml_path) {
+            Ok(BackfillOutcome::Wrote) => {
+                info!(
+                    plugin_id = %plugin_id,
+                    path = %plugin_toml_path.display(),
+                    "self-heal: backfilled survives_respawn = true into plugin.toml; silent self-update now permitted"
+                );
+                // Keep the in-memory manifest in sync so the
+                // SubprocessPluginInstallSnapshot the manager builds
+                // for `request_self_replace` checks sees the new bit
+                // immediately — without this, the first swap RPC
+                // this session would still be refused.
+                manifest.capabilities.survives_respawn = true;
+            }
+            Ok(BackfillOutcome::AlreadyPresent) => {
+                // Operator chose `survives_respawn = false` explicitly.
+                // Respect their intent.
+            }
+            Err(err) => {
+                warn!(
+                    plugin_id = %plugin_id,
+                    path = %plugin_toml_path.display(),
+                    error = %err,
+                    "self-heal failed; `garyx plugins install --force` will fix it manually"
+                );
+            }
         }
     }
 
