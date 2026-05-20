@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use chrono::Utc;
 use garyx_models::config::{GaryxConfig, TelegramAccount, telegram_account_to_plugin_entry};
 use garyx_models::provider::{
-    AgentRunRequest, ImagePayload, ProviderMessage, ProviderRunOptions, ProviderRunResult,
-    ProviderType, QueuedUserInput, StreamBoundaryKind, StreamEvent,
+    ATTACHMENTS_METADATA_KEY, AgentRunRequest, ImagePayload, PromptAttachment,
+    PromptAttachmentKind, ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType,
+    QueuedUserInput, StreamBoundaryKind, StreamEvent, attachments_to_metadata_value,
 };
 use garyx_models::{
     AgentTeamProfile, CustomAgentProfile, Principal, TaskStatus, ThreadTask,
@@ -161,6 +162,7 @@ struct QueuedInputProvider {
     release_run: Arc<Notify>,
     queue_tx: mpsc::UnboundedSender<QueuedUserInput>,
     queue_rx: Mutex<Option<mpsc::UnboundedReceiver<QueuedUserInput>>>,
+    received_inputs: std::sync::Mutex<Vec<QueuedUserInput>>,
 }
 
 struct DelayedQueuedInputProvider {
@@ -244,6 +246,7 @@ impl QueuedInputProvider {
             release_run: Arc::new(Notify::new()),
             queue_tx,
             queue_rx: Mutex::new(Some(queue_rx)),
+            received_inputs: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -261,6 +264,10 @@ impl QueuedInputProvider {
 
     fn release_run(&self) {
         self.release_run.notify_waiters();
+    }
+
+    fn received_inputs(&self) -> Vec<QueuedUserInput> {
+        self.received_inputs.lock().unwrap().clone()
     }
 }
 
@@ -697,6 +704,10 @@ impl AgentLoopProvider for QueuedInputProvider {
                 BridgeError::SessionError("queued input receiver closed".to_owned())
             })?
         };
+        self.received_inputs
+            .lock()
+            .unwrap()
+            .push(queued_input.clone());
         self.follow_up_received.notify_waiters();
         self.allow_ack.notified().await;
         on_chunk(StreamEvent::Boundary {
@@ -2443,6 +2454,103 @@ async fn test_thread_persistence_promotes_queued_input_after_user_ack() {
         final_data["provider_sdk_session_ids"]["p1"],
         "sdk-sess::tg::queued-input"
     );
+}
+
+#[tokio::test]
+async fn test_start_agent_run_preserves_metadata_attachments_for_active_stream_follow_up() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(QueuedInputProvider::new());
+    let delta_sent = provider.delta_sent();
+    let follow_up_received = provider.follow_up_received();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+    bridge.set_thread_history(make_history(store.clone()));
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "sess::tg::queued-attachment",
+                "start run",
+                "run-queued-attachment-initial",
+                "telegram",
+                "main",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .expect("provider should emit the initial streamed delta");
+
+    let attachment = PromptAttachment {
+        kind: PromptAttachmentKind::File,
+        path: "/tmp/garyx-test/inbound/spec.txt".to_owned(),
+        name: "spec.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+    };
+    let mut follow_up = run_request(
+        "sess::tg::queued-attachment",
+        "<media:file>",
+        "run-queued-attachment-follow-up",
+        "telegram",
+        "main",
+    );
+    follow_up.metadata.insert(
+        ATTACHMENTS_METADATA_KEY.to_owned(),
+        attachments_to_metadata_value(std::slice::from_ref(&attachment)),
+    );
+
+    bridge.start_agent_run(follow_up, None).await.unwrap();
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        follow_up_received.notified(),
+    )
+    .await
+    .expect("provider should receive the queued follow-up");
+
+    let received_inputs = provider.received_inputs();
+    assert_eq!(
+        received_inputs.len(),
+        1,
+        "follow-up should queue into the active provider run"
+    );
+    assert_eq!(received_inputs[0].message, "<media:file>");
+    assert_eq!(received_inputs[0].attachments, vec![attachment]);
+
+    provider.release_ack();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let Some(data) = store.get("sess::tg::queued-attachment").await else {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                continue;
+            };
+            let messages = active_or_committed_messages(&data);
+            if messages.iter().any(|message| {
+                message["role"] == "assistant"
+                    && message["content"] == "follow-up reply: <media:file>"
+            }) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("provider should ack and stream the queued attachment follow-up");
+
+    provider.release_run();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run-queued-attachment-initial").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("queued attachment run should fully complete after the provider finishes");
 }
 
 #[tokio::test]

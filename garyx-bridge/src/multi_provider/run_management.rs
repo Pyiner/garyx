@@ -1045,8 +1045,20 @@ impl MultiProviderBridge {
         // If the provider cannot accept follow-up input mid-run, interrupt the
         // in-flight run and wait for cleanup before starting the replacement
         // run. Same-thread follow-ups must never run concurrently.
+        let prompt_attachments = attachments_from_metadata(&metadata);
+        let queued_attachments = if prompt_attachments.is_empty() {
+            None
+        } else {
+            Some(prompt_attachments.clone())
+        };
         if self
-            .add_streaming_input(&thread_id, &message, images.clone(), None, None)
+            .add_streaming_input(
+                &thread_id,
+                &message,
+                images.clone(),
+                None,
+                queued_attachments,
+            )
             .await
             .is_some()
         {
@@ -1064,7 +1076,6 @@ impl MultiProviderBridge {
                     .with_field("message", json!(summarize_text(&message, 160))),
             )
             .await;
-            let prompt_attachments = attachments_from_metadata(&metadata);
             emit_gateway_event(
                 &gateway_event_tx,
                 build_user_message_event(
@@ -1139,7 +1150,6 @@ impl MultiProviderBridge {
                 ),
         )
         .await;
-        let prompt_attachments = attachments_from_metadata(&metadata);
         emit_gateway_event(
             &gateway_event_tx,
             build_user_message_event(
