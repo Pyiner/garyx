@@ -271,7 +271,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/bin/sh -c 'exec \"$(getent passwd %u | cut -d: -f7)\" -lic \"exec {binary_arg} gateway run --host {host} --port {port}\"'
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStopSec=10
 {workspace_line}EnvironmentFile=-{env_file}
