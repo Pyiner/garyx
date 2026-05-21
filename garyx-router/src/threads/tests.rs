@@ -522,6 +522,11 @@ fn workspace_mode_serializes_public_local_name() {
         serde_json::from_value::<WorkspaceMode>(json!("local")).unwrap(),
         WorkspaceMode::Local
     );
+    // Backward-compat: `"direct"` was the pre-rename serde value for Local.
+    assert_eq!(
+        serde_json::from_value::<WorkspaceMode>(json!("direct")).unwrap(),
+        WorkspaceMode::Local
+    );
 }
 
 #[test]
