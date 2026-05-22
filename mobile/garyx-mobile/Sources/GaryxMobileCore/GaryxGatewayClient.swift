@@ -96,6 +96,50 @@ public struct GaryxThreadsPage: Decodable, Equatable, Sendable {
     public var offset: Int
 }
 
+public struct GaryxThreadPinsPage: Decodable, Equatable, Sendable {
+    public var threadIds: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case threadIds
+        case threadIdsSnake = "thread_ids"
+        case pins
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawIds = try container.decodeIfPresent([String].self, forKey: .threadIdsSnake)
+            ?? container.decodeIfPresent([String].self, forKey: .threadIds)
+            ?? container.decodeIfPresent([GaryxThreadPinRecord].self, forKey: .pins)?.map(\.threadId)
+            ?? []
+        threadIds = Self.normalizedThreadIds(rawIds)
+    }
+
+    private static func normalizedThreadIds(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var ids: [String] = []
+        for value in values {
+            let id = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, seen.insert(id).inserted else { continue }
+            ids.append(id)
+        }
+        return ids
+    }
+}
+
+private struct GaryxThreadPinRecord: Decodable, Equatable, Sendable {
+    var threadId: String
+
+    enum CodingKeys: String, CodingKey {
+        case threadId
+        case threadIdSnake = "thread_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        threadId = try container.decodeFirstString(.threadIdSnake, .threadId) ?? ""
+    }
+}
+
 public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var id: String
     public var title: String
@@ -3271,6 +3315,20 @@ public final class GaryxGatewayClient {
                 URLQueryItem(name: "offset", value: String(offset)),
             ]
         )
+    }
+
+    public func listThreadPins() async throws -> GaryxThreadPinsPage {
+        try await get("/api/thread-pins")
+    }
+
+    public func setThreadPinned(threadId: String, pinned: Bool) async throws -> GaryxThreadPinsPage {
+        if pinned {
+            return try await put(
+                "/api/thread-pins/\(threadId.urlPathEncoded)",
+                body: GaryxEmptyBody()
+            )
+        }
+        return try await delete("/api/thread-pins/\(threadId.urlPathEncoded)")
     }
 
     public func threadHistory(

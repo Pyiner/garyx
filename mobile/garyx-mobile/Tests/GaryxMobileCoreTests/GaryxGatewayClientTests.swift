@@ -246,6 +246,39 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(summary.lastMessagePreview, "ready")
     }
 
+    func testThreadPinsPageDecodesGatewayShape() throws {
+        let page = try JSONDecoder().decode(
+            GaryxThreadPinsPage.self,
+            from: Data(
+                """
+                {
+                  "thread_ids": ["thread::one", " thread::two ", "thread::one", ""]
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(page.threadIds, ["thread::one", "thread::two"])
+    }
+
+    func testThreadPinsPageDecodesPinsFallback() throws {
+        let page = try JSONDecoder().decode(
+            GaryxThreadPinsPage.self,
+            from: Data(
+                """
+                {
+                  "pins": [
+                    { "thread_id": "thread::from-snake", "pinned_at": "2026-05-22T00:00:00.000Z" },
+                    { "threadId": "thread::from-camel", "pinned_at": "2026-05-22T00:00:01.000Z" }
+                  ]
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(page.threadIds, ["thread::from-snake", "thread::from-camel"])
+    }
+
     func testMobileDashboardPayloadsDecodeGatewayShapes() throws {
         let agents = try JSONDecoder().decode(
             GaryxAgentsPage.self,

@@ -25,6 +25,8 @@ The package currently covers:
 - `GET /api/status`, `GET /api/chat/health`, `GET /api/threads`,
   `POST /api/threads`, `PATCH /api/threads/:id`, and
   `DELETE /api/threads/:id`.
+- `GET /api/thread-pins` plus `PUT`/`DELETE /api/thread-pins/:id` for shared
+  gateway-backed pinned threads.
 - `GET /api/threads/history`, `GET /api/threads/:id/logs`, and
   `POST /api/chat/interrupt`.
 - `GET /api/custom-agents`, `GET /api/custom-agents/models`, generated avatar
