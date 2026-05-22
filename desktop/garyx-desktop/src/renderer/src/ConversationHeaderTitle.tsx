@@ -1,9 +1,22 @@
-import { useMemo, type KeyboardEvent, type RefObject } from 'react';
+import { useMemo, type FormEvent, type RefObject } from 'react';
+import { Archive, MoreHorizontal, Pencil, Pin, X } from 'lucide-react';
 
 import type { DesktopBotConsoleSummary } from '@shared/contracts';
 
 import { ChannelLogo } from './channel-logo';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from './components/ui/dialog';
 import { useI18n } from './i18n';
 
 type ConversationHeaderTitleProps = {
@@ -16,10 +29,15 @@ type ConversationHeaderTitleProps = {
   isAutomationView: boolean;
   isBotsView: boolean;
   isSkillsView: boolean;
+  isThreadPinned: boolean;
+  archiveThreadDisabled: boolean;
   onBeginEdit: () => void;
+  onArchiveThread: () => void;
   onCancelEdit: () => void;
   onSaveTitle: () => void;
+  onTogglePinnedThread: () => void;
   onTitleDraftChange: (value: string) => void;
+  savingTitle: boolean;
   titleDraft: string;
   titleInputRef: RefObject<HTMLInputElement | null>;
 };
@@ -34,10 +52,15 @@ export function ConversationHeaderTitle({
   isAutomationView,
   isBotsView,
   isSkillsView,
+  isThreadPinned,
+  archiveThreadDisabled,
   onBeginEdit,
+  onArchiveThread,
   onCancelEdit,
   onSaveTitle,
+  onTogglePinnedThread,
   onTitleDraftChange,
+  savingTitle,
   titleDraft,
   titleInputRef,
 }: ConversationHeaderTitleProps) {
@@ -70,44 +93,29 @@ export function ConversationHeaderTitle({
         ? t('Bots')
         : activeThreadTitle || t('Select a thread');
 
-  const handleTitleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      onSaveTitle();
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      onCancelEdit();
-    }
+  const handleRenameSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSaveTitle();
   };
+
   return (
     <div className="conversation-header-copy">
       <div className="conversation-heading-stack">
         <div className="conversation-heading-row">
-          {canEditThreadTitle && editingThreadTitle ? (
-            <input
-              ref={titleInputRef}
-              aria-label={t('Thread title')}
-              className="conversation-title-input"
-              onBlur={onSaveTitle}
-              onChange={(event) => {
-                onTitleDraftChange(event.target.value);
-              }}
-              onKeyDown={handleTitleKeyDown}
-              size={Math.max(titleDraft.length + 2, 8)}
-              value={titleDraft}
-            />
-          ) : canEditThreadTitle ? (
-            <button
-              className="conversation-title-button"
-              onClick={onBeginEdit}
-              title={t('Click to rename thread')}
-              type="button"
-            >
-              <span className="conversation-title-text">
+          {canEditThreadTitle ? (
+            <div className="conversation-title-group">
+              {isThreadPinned ? (
+                <Pin
+                  aria-hidden
+                  className="conversation-title-pin"
+                  size={17}
+                  strokeWidth={2}
+                />
+              ) : null}
+              <span className="conversation-title-text" title={fallbackTitle}>
                 {fallbackTitle}
               </span>
-            </button>
+            </div>
           ) : (
             <h2 title={staticTitleHint}>{staticTitle}</h2>
           )}
@@ -132,6 +140,115 @@ export function ConversationHeaderTitle({
                 {activeThreadBot.title}
               </span>
             </span>
+          ) : null}
+          {canEditThreadTitle ? (
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    aria-label={t('Thread actions')}
+                    className="conversation-title-menu-trigger"
+                    title={t('Thread actions')}
+                    type="button"
+                  >
+                    <MoreHorizontal aria-hidden size={18} strokeWidth={2} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="start"
+                  className="thread-title-menu-content"
+                  sideOffset={8}
+                >
+                  <DropdownMenuItem
+                    className="thread-title-menu-item"
+                    onSelect={onTogglePinnedThread}
+                  >
+                    <Pin aria-hidden />
+                    <span>
+                      {isThreadPinned ? t('Unpin conversation') : t('Pin conversation')}
+                    </span>
+                    <span className="thread-title-menu-shortcut">⌥⌘P</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="thread-title-menu-item"
+                    onSelect={onBeginEdit}
+                  >
+                    <Pencil aria-hidden />
+                    <span>{t('Rename conversation')}</span>
+                    <span className="thread-title-menu-shortcut">⌥⌘R</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="thread-title-menu-item"
+                    disabled={archiveThreadDisabled}
+                    onSelect={onArchiveThread}
+                  >
+                    <Archive aria-hidden />
+                    <span>{t('Archive conversation')}</span>
+                    <span className="thread-title-menu-shortcut">⇧⌘A</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Dialog
+                open={editingThreadTitle}
+                onOpenChange={(open) => {
+                  if (!open) {
+                    onCancelEdit();
+                  }
+                }}
+              >
+                <DialogContent
+                  className="thread-rename-dialog"
+                  showCloseButton={false}
+                  size="narrow"
+                >
+                  <form className="thread-rename-form" onSubmit={handleRenameSubmit}>
+                    <button
+                      aria-label={t('Close')}
+                      className="thread-rename-close"
+                      onClick={onCancelEdit}
+                      type="button"
+                    >
+                      <X aria-hidden size={18} strokeWidth={2} />
+                    </button>
+                    <div className="thread-rename-copy">
+                      <DialogTitle className="thread-rename-title">
+                        {t('Rename conversation')}
+                      </DialogTitle>
+                      <DialogDescription className="thread-rename-description">
+                        {t('Keep it short and easy to recognize')}
+                      </DialogDescription>
+                    </div>
+                    <input
+                      ref={titleInputRef}
+                      aria-label={t('Thread title')}
+                      className="thread-rename-input"
+                      disabled={savingTitle}
+                      onChange={(event) => {
+                        onTitleDraftChange(event.target.value);
+                      }}
+                      value={titleDraft}
+                    />
+                    <div className="thread-rename-actions">
+                      <button
+                        className="thread-rename-button thread-rename-button-secondary"
+                        disabled={savingTitle}
+                        onClick={onCancelEdit}
+                        type="button"
+                      >
+                        {t('Cancel')}
+                      </button>
+                      <button
+                        className="thread-rename-button thread-rename-button-primary"
+                        disabled={savingTitle}
+                        type="submit"
+                      >
+                        {t('Save')}
+                      </button>
+                    </div>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </>
           ) : null}
         </div>
       </div>

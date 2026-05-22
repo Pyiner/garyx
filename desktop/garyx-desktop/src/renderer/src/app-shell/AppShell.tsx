@@ -8191,12 +8191,27 @@ export function AppShell() {
                 isAutomationView={isAutomationView}
                 isBotsView={isBotsView}
                 isSkillsView={isSkillsView}
+                isThreadPinned={selectedThreadPinned}
+                archiveThreadDisabled={Boolean(
+                  !selectedThreadId ||
+                    activeAutomationThread ||
+                    isRuntimeBusy(activeRuntime?.state),
+                )}
                 onBeginEdit={beginThreadTitleEdit}
+                onArchiveThread={() => {
+                  void handleDeleteThread();
+                }}
                 onCancelEdit={cancelThreadTitleEdit}
                 onSaveTitle={() => {
                   void handleSaveTitle({ closeEditor: true });
                 }}
+                onTogglePinnedThread={() => {
+                  if (selectedThreadId) {
+                    togglePinnedThread(selectedThreadId);
+                  }
+                }}
                 onTitleDraftChange={setTitleDraft}
+                savingTitle={savingTitle}
                 titleDraft={titleDraft}
                 titleInputRef={threadTitleInputRef}
               />
@@ -8208,7 +8223,6 @@ export function AppShell() {
                 isAutomationView={isAutomationView}
                 isBotsView={isBotsView}
                 isSkillsView={isSkillsView}
-                isThreadPinned={selectedThreadPinned}
                 selectedThreadId={selectedThreadId}
                 teamSummary={activeTeamSummary}
                 threadInfo={activeThreadInfo}
@@ -8223,11 +8237,6 @@ export function AppShell() {
                 }}
                 onOpenThreads={() => {
                   setContentView("thread");
-                }}
-                onTogglePinnedThread={() => {
-                  if (selectedThreadId) {
-                    togglePinnedThread(selectedThreadId);
-                  }
                 }}
                 onToggleInspector={() => {
                   setThreadLogsOpen(false);

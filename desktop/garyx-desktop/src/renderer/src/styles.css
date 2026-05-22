@@ -2579,6 +2579,22 @@ code {
   min-width: 0;
 }
 
+.conversation-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: min(620px, 48vw);
+  color: var(--color-token-text-primary);
+}
+
+.conversation-title-pin {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--color-token-text-primary) 58%, transparent);
+  fill: currentColor;
+  transform: rotate(-11deg);
+}
+
 .conversation-bot-binding-status {
   display: inline-flex;
   align-items: center;
@@ -2642,10 +2658,80 @@ code {
 .conversation-title-text {
   min-width: 0;
   overflow: hidden;
-  font-size: var(--text-base);
-  font-weight: var(--font-weight-medium);
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
   line-height: 1.2;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-title-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--color-token-text-primary) 5%, transparent);
+  color: color-mix(in srgb, var(--color-token-text-primary) 56%, transparent);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.conversation-title-menu-trigger:hover,
+.conversation-title-menu-trigger[data-state="open"] {
+  background: color-mix(in srgb, var(--color-token-text-primary) 8%, transparent);
+  color: var(--color-token-text-primary);
+}
+
+.conversation-title-menu-trigger:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-token-text-primary) 10%, transparent);
+}
+
+.thread-title-menu-content {
+  width: min(252px, calc(100vw - 32px));
+  padding: 6px;
+  border: 1px solid rgba(26, 28, 31, 0.06);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow:
+    0 18px 48px rgba(0, 0, 0, 0.13),
+    0 3px 12px rgba(0, 0, 0, 0.08);
+}
+
+.thread-title-menu-item {
+  min-height: 38px;
+  gap: 10px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-md);
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+}
+
+.thread-title-menu-item svg {
+  width: 18px;
+  height: 18px;
+  color: color-mix(in srgb, var(--color-token-text-primary) 62%, transparent);
+  stroke-width: 2;
+}
+
+.thread-title-menu-item[data-highlighted] {
+  background: color-mix(in srgb, var(--color-token-text-primary) 6%, transparent);
+}
+
+.thread-title-menu-shortcut {
+  margin-left: auto;
+  color: color-mix(in srgb, var(--color-token-text-primary) 42%, transparent);
+  font-size: var(--text-md);
+  font-weight: var(--font-weight-normal);
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
@@ -5804,6 +5890,152 @@ button.new-thread-mode-trigger[data-state="open"] {
 .app-dialog-body {
   min-height: 0;
   overflow: auto;
+}
+
+.thread-rename-dialog[data-slot="dialog-content"] {
+  --app-dialog-card-width: min(660px, var(--app-dialog-available-width));
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid rgba(26, 28, 31, 0.065);
+  border-radius: 28px;
+  background: #ffffff;
+  box-shadow:
+    0 28px 80px rgba(0, 0, 0, 0.18),
+    0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+.thread-rename-form {
+  position: relative;
+  display: grid;
+  gap: 22px;
+  padding: 36px 32px 30px;
+}
+
+.thread-rename-close {
+  position: absolute;
+  top: 28px;
+  right: 31px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-token-text-primary) 62%, transparent);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.thread-rename-close:hover {
+  background: color-mix(in srgb, var(--color-token-text-primary) 6%, transparent);
+  color: var(--color-token-text-primary);
+}
+
+.thread-rename-copy {
+  display: grid;
+  gap: 8px;
+  padding-right: 40px;
+}
+
+.thread-rename-title[data-slot="dialog-title"] {
+  margin: 0;
+  color: var(--color-token-text-primary);
+  font-size: 26px;
+  font-weight: var(--font-weight-bold);
+  line-height: 1.08;
+}
+
+.thread-rename-description[data-slot="dialog-description"] {
+  color: color-mix(in srgb, var(--color-token-text-primary) 47%, transparent);
+  font-size: 16px;
+  font-weight: var(--font-weight-normal);
+  line-height: 1.25;
+}
+
+.thread-rename-input {
+  width: 100%;
+  height: 59px;
+  padding: 0 18px;
+  border: 1px solid rgba(26, 28, 31, 0.12);
+  border-radius: 16px;
+  background: #ffffff;
+  color: var(--color-token-text-primary);
+  font-size: 18px;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.2;
+  box-shadow:
+    inset 0 1px 1px rgba(0, 0, 0, 0.03),
+    0 1px 2px rgba(0, 0, 0, 0.02);
+}
+
+.thread-rename-input:focus {
+  border-color: rgba(26, 28, 31, 0.18);
+  box-shadow:
+    inset 0 1px 1px rgba(0, 0, 0, 0.03),
+    0 0 0 3px rgba(26, 28, 31, 0.045);
+}
+
+.thread-rename-input:disabled {
+  opacity: 0.62;
+}
+
+.thread-rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
+.thread-rename-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 98px;
+  height: 50px;
+  padding: 0 24px;
+  border-radius: 15px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    opacity var(--duration-fast) var(--ease-standard);
+}
+
+.thread-rename-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.thread-rename-button-secondary {
+  border: 1px solid rgba(26, 28, 31, 0.09);
+  background: #ffffff;
+  color: var(--color-token-text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.thread-rename-button-secondary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-token-text-primary) 3%, white);
+  border-color: rgba(26, 28, 31, 0.13);
+}
+
+.thread-rename-button-primary {
+  border: 1px solid #111111;
+  background: #111111;
+  color: #ffffff;
+}
+
+.thread-rename-button-primary:hover:not(:disabled) {
+  background: #242424;
+  border-color: #242424;
 }
 
 .toast-viewport {
