@@ -1835,6 +1835,23 @@ final class GaryxMobileModel: ObservableObject {
         await loadSelectedThreadHistory()
     }
 
+    func openNewThreadDraft() {
+        selectedThreadRecoveryTask?.cancel()
+        selectedThreadRecoveryTask = nil
+        selectedThreadRecoveryThreadId = nil
+        selectedThreadHistoryRequestId = nil
+        isLoadingSelectedThreadHistory = false
+        clearPendingBotDraft()
+        selectedThread = nil
+        draftThreadTitle = ""
+        draft = ""
+        composerAttachments = []
+        messages = []
+        activePanel = .chat
+        setSidebarVisible(false)
+        lastError = nil
+    }
+
     func createThread() async {
         clearPendingBotDraft()
         await createThread(workspaceOverride: nil)

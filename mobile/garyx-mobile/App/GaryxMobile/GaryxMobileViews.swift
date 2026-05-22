@@ -519,7 +519,7 @@ struct GaryxThreadSidebar: View {
                     model.openSettings()
                 },
                 onTapChat: {
-                    Task { await startNewChat() }
+                    startNewChat()
                 }
             )
             .background(GaryxTheme.background.ignoresSafeArea(edges: .bottom))
@@ -597,9 +597,8 @@ struct GaryxThreadSidebar: View {
         await model.refreshRemoteState()
     }
 
-    private func startNewChat() async {
-        model.activePanel = .chat
-        await model.createThread()
+    private func startNewChat() {
+        model.openNewThreadDraft()
     }
 }
 
@@ -1773,7 +1772,7 @@ struct GaryxConversationHeader: View {
                         openRenamePrompt()
                     }
                     Button("New Thread", systemImage: "square.and.pencil") {
-                        Task { await model.createThread() }
+                        model.openNewThreadDraft()
                     }
                     Button("Delete", systemImage: "trash", role: .destructive) {
                         Task { await model.deleteSelectedThread() }
