@@ -2181,21 +2181,10 @@ struct GaryxEmptyConversationView: View {
     @State private var workspacePathDraft = ""
 
     var body: some View {
-        VStack(spacing: 20) {
-            GaryxAppLogo(size: 76, cornerRadius: 20, fontSize: 23)
-                .garyxAdaptiveGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-
-            VStack(spacing: 8) {
-                Text("New Thread")
-                    .font(GaryxFont.title3(weight: .semibold))
-                    .foregroundStyle(.primary)
-
-                Text("Start a new thread")
-                    .font(GaryxFont.callout())
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(spacing: 18) {
+            Text("New Thread")
+                .font(GaryxFont.title3(weight: .semibold))
+                .foregroundStyle(.primary)
 
             workspacePicker
         }
