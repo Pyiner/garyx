@@ -128,7 +128,7 @@ impl RecordingTaskProvider {
 }
 
 #[test]
-fn endpoint_conversation_details_marks_feishu_group_with_group_name() {
+fn endpoint_conversation_details_marks_feishu_group_from_scope() {
     let endpoint = garyx_router::KnownChannelEndpoint {
         endpoint_key: "feishu::main::oc_group::oc_group".to_owned(),
         channel: "feishu".to_owned(),
@@ -146,21 +146,14 @@ fn endpoint_conversation_details_marks_feishu_group_with_group_name() {
         last_delivery_at: None,
     };
 
-    let details = endpoint_conversation_details(
-        &endpoint,
-        Some(&FeishuChatSummary {
-            name: Some("bot 测试".to_owned()),
-            chat_mode: Some("group".to_owned()),
-            chat_type: Some("private".to_owned()),
-        }),
-    );
+    let details = endpoint_conversation_details(&endpoint);
 
     assert_eq!(details.kind, "group");
-    assert_eq!(details.label, "bot 测试");
+    assert_eq!(details.label, "garyx");
 }
 
 #[test]
-fn endpoint_conversation_details_marks_feishu_topic_with_group_name() {
+fn endpoint_conversation_details_marks_feishu_topic_from_scope() {
     let endpoint = garyx_router::KnownChannelEndpoint {
         endpoint_key: "feishu::main::ou_user::om_topic".to_owned(),
         channel: "feishu".to_owned(),
@@ -178,17 +171,10 @@ fn endpoint_conversation_details_marks_feishu_topic_with_group_name() {
         last_delivery_at: None,
     };
 
-    let details = endpoint_conversation_details(
-        &endpoint,
-        Some(&FeishuChatSummary {
-            name: Some("bot 测试".to_owned()),
-            chat_mode: Some("group".to_owned()),
-            chat_type: Some("private".to_owned()),
-        }),
-    );
+    let details = endpoint_conversation_details(&endpoint);
 
     assert_eq!(details.kind, "topic");
-    assert_eq!(details.label, "bot 测试");
+    assert_eq!(details.label, "garyx");
 }
 
 #[test]
@@ -210,14 +196,7 @@ fn endpoint_conversation_details_keeps_feishu_private_as_private() {
         last_delivery_at: None,
     };
 
-    let details = endpoint_conversation_details(
-        &endpoint,
-        Some(&FeishuChatSummary {
-            name: None,
-            chat_mode: Some("p2p".to_owned()),
-            chat_type: Some("p2p".to_owned()),
-        }),
-    );
+    let details = endpoint_conversation_details(&endpoint);
 
     assert_eq!(details.kind, "private");
     assert_eq!(details.label, "garyx");
@@ -242,7 +221,7 @@ fn endpoint_conversation_details_marks_discord_dm_as_private() {
         last_delivery_at: None,
     };
 
-    let details = endpoint_conversation_details(&endpoint, None);
+    let details = endpoint_conversation_details(&endpoint);
 
     assert_eq!(details.kind, "private");
     assert_eq!(details.label, "Test User");
@@ -267,7 +246,7 @@ fn endpoint_conversation_details_marks_discord_channel_as_group() {
         last_delivery_at: None,
     };
 
-    let details = endpoint_conversation_details(&endpoint, None);
+    let details = endpoint_conversation_details(&endpoint);
 
     assert_eq!(details.kind, "group");
     assert_eq!(details.label, "general");

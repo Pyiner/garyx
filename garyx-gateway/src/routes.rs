@@ -6,12 +6,10 @@ use axum::{
 };
 use chrono::Utc;
 use garyx_channels::plugin::{PluginAccountUi, PluginConversationEndpoint, PluginMainEndpoint};
-use garyx_channels::{FeishuChatSummary, FeishuSender};
+use garyx_models::config::ChannelsConfig;
 #[cfg(test)]
 use garyx_models::config::TelegramAccount;
-use garyx_models::config::{ChannelsConfig, feishu_account_from_plugin_entry};
 use garyx_models::provider::ProviderType;
-#[cfg(test)]
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
     ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode, bindings_from_value,
@@ -21,9 +19,8 @@ use garyx_router::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use tracing::warn;
 
 use crate::agent_identity::create_thread_for_agent_reference;
 use crate::provider_session_locator::recover_local_provider_session;
@@ -253,12 +250,8 @@ fn endpoint_is_topic(endpoint: &garyx_router::KnownChannelEndpoint) -> bool {
 
 fn endpoint_conversation_details(
     endpoint: &garyx_router::KnownChannelEndpoint,
-    feishu_summary: Option<&FeishuChatSummary>,
 ) -> EndpointConversationDetails {
     let fallback_label = default_endpoint_conversation_label(endpoint);
-    let feishu_label = feishu_summary
-        .and_then(|summary| trimmed_nonempty(summary.name.as_deref()))
-        .unwrap_or_else(|| fallback_label.clone());
 
     let kind = if endpoint.channel == "discord" {
         let binding_key = endpoint.binding_key.trim();
@@ -269,18 +262,14 @@ fn endpoint_conversation_details(
             "private"
         }
     } else if endpoint.channel == "feishu" {
-        match feishu_summary.and_then(|summary| summary.chat_mode.as_deref()) {
-            Some("group") => {
-                if endpoint_is_topic(endpoint) {
-                    "topic"
-                } else {
-                    "group"
-                }
-            }
-            Some("p2p") => "private",
-            _ if endpoint_is_topic(endpoint) => "topic",
-            _ if endpoint_scope(endpoint).is_some() => "group",
-            _ => "private",
+        if endpoint.delivery_target_type == DELIVERY_TARGET_TYPE_OPEN_ID {
+            "private"
+        } else if endpoint_is_topic(endpoint) {
+            "topic"
+        } else if endpoint.delivery_target_type == DELIVERY_TARGET_TYPE_CHAT_ID {
+            "group"
+        } else {
+            "private"
         }
     } else if endpoint_is_topic(endpoint) {
         "topic"
@@ -296,12 +285,10 @@ fn endpoint_conversation_details(
         }
     };
 
-    let label = match kind {
-        "group" | "topic" => feishu_label,
-        _ => fallback_label,
-    };
-
-    EndpointConversationDetails { kind, label }
+    EndpointConversationDetails {
+        kind,
+        label: fallback_label,
+    }
 }
 
 fn resolved_main_endpoint_conversation_details(
@@ -336,11 +323,8 @@ fn resolved_main_endpoint_conversation_details(
     EndpointConversationDetails { kind, label }
 }
 
-fn channel_endpoint_response_value(
-    endpoint: &garyx_router::KnownChannelEndpoint,
-    feishu_summary: Option<&FeishuChatSummary>,
-) -> Value {
-    let conversation = endpoint_conversation_details(endpoint, feishu_summary);
+fn channel_endpoint_response_value(endpoint: &garyx_router::KnownChannelEndpoint) -> Value {
+    let conversation = endpoint_conversation_details(endpoint);
     json!({
         "endpoint_key": endpoint.endpoint_key,
         "channel": endpoint.channel,
@@ -366,9 +350,8 @@ fn channel_endpoint_response_value(
 
 fn plugin_conversation_endpoint_value(
     endpoint: &garyx_router::KnownChannelEndpoint,
-    feishu_summary: Option<&FeishuChatSummary>,
 ) -> PluginConversationEndpoint {
-    let conversation = endpoint_conversation_details(endpoint, feishu_summary);
+    let conversation = endpoint_conversation_details(endpoint);
     PluginConversationEndpoint {
         endpoint_key: endpoint.endpoint_key.clone(),
         channel: endpoint.channel.clone(),
@@ -388,73 +371,6 @@ fn plugin_conversation_endpoint_value(
         conversation_kind: Some(conversation.kind.to_owned()),
         conversation_label: Some(conversation.label),
     }
-}
-
-async fn resolve_feishu_chat_summaries(
-    state: &AppState,
-    endpoints: &[garyx_router::KnownChannelEndpoint],
-) -> BTreeMap<String, FeishuChatSummary> {
-    let config = state.config_snapshot();
-    let Some(feishu) = config.channels.plugin_channel("feishu") else {
-        return BTreeMap::new();
-    };
-    let mut attempted = BTreeSet::new();
-    let mut summaries = BTreeMap::new();
-
-    for endpoint in endpoints {
-        if endpoint.channel != "feishu" {
-            continue;
-        }
-        let chat_id = endpoint.chat_id.trim();
-        if chat_id.is_empty() || !chat_id.starts_with("oc_") {
-            continue;
-        }
-        let key = format!("{}::{chat_id}", endpoint.account_id);
-        if !attempted.insert(key.clone()) {
-            continue;
-        }
-        let Some(account_entry) = feishu.accounts.get(&endpoint.account_id) else {
-            continue;
-        };
-        let account = match feishu_account_from_plugin_entry(account_entry) {
-            Ok(account) => account,
-            Err(error) => {
-                warn!(
-                    account_id = %endpoint.account_id,
-                    error = %error,
-                    "failed to decode feishu plugin account entry"
-                );
-                continue;
-            }
-        };
-        let api_base = match account.domain {
-            garyx_models::config::FeishuDomain::Lark => "https://open.larksuite.com/open-apis",
-            garyx_models::config::FeishuDomain::Feishu => "https://open.feishu.cn/open-apis",
-        };
-        let sender = FeishuSender::new(
-            endpoint.account_id.clone(),
-            account.app_id.clone(),
-            account.app_secret.clone(),
-            api_base.to_owned(),
-            false,
-        );
-        match sender.fetch_chat_summary(chat_id).await {
-            Ok(Some(summary)) => {
-                summaries.insert(key, summary);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(
-                    account_id = %endpoint.account_id,
-                    chat_id,
-                    error = %error,
-                    "failed to fetch feishu chat summary for channel endpoints"
-                );
-            }
-        }
-    }
-
-    summaries
 }
 
 fn bot_display_name(name: Option<&str>, account_id: &str) -> String {
@@ -519,19 +435,11 @@ async fn resolve_account_ui_with_endpoints(
     channel: &str,
     account_id: &str,
     endpoints: &[garyx_router::KnownChannelEndpoint],
-    feishu_summaries: &BTreeMap<String, FeishuChatSummary>,
 ) -> Option<PluginAccountUi> {
     let plugin_endpoints: Vec<PluginConversationEndpoint> = endpoints
         .iter()
         .filter(|endpoint| endpoint.channel == channel && endpoint.account_id == account_id)
-        .map(|endpoint| {
-            let feishu_summary = if endpoint.channel == "feishu" {
-                feishu_summaries.get(&format!("{}::{}", endpoint.account_id, endpoint.chat_id))
-            } else {
-                None
-            };
-            plugin_conversation_endpoint_value(endpoint, feishu_summary)
-        })
+        .map(plugin_conversation_endpoint_value)
         .collect();
 
     let plugin = channel_plugin_for(state, channel).await?;
@@ -543,24 +451,17 @@ async fn resolve_account_ui_with_endpoints(
 fn resolve_default_open_endpoint_from_account_ui(
     account_ui: Option<&PluginAccountUi>,
     endpoints: &[garyx_router::KnownChannelEndpoint],
-    feishu_summaries: &BTreeMap<String, FeishuChatSummary>,
 ) -> Option<Value> {
     let endpoint_key = account_ui.and_then(|ui| ui.default_open_endpoint_key.as_deref())?;
     let endpoint = endpoints
         .iter()
         .find(|candidate| candidate.endpoint_key == endpoint_key)?;
-    let feishu_summary = if endpoint.channel == "feishu" {
-        feishu_summaries.get(&format!("{}::{}", endpoint.account_id, endpoint.chat_id))
-    } else {
-        None
-    };
-    Some(channel_endpoint_response_value(endpoint, feishu_summary))
+    Some(channel_endpoint_response_value(endpoint))
 }
 
 fn conversation_nodes_from_account_ui(
     account_ui: Option<&PluginAccountUi>,
     endpoints: &[garyx_router::KnownChannelEndpoint],
-    feishu_summaries: &BTreeMap<String, FeishuChatSummary>,
 ) -> Option<Vec<Value>> {
     let account_ui = account_ui?;
     let endpoint_map: HashMap<&str, &garyx_router::KnownChannelEndpoint> = endpoints
@@ -572,14 +473,9 @@ fn conversation_nodes_from_account_ui(
         let Some(endpoint) = endpoint_map.get(node.endpoint_key.as_str()).copied() else {
             continue;
         };
-        let feishu_summary = if endpoint.channel == "feishu" {
-            feishu_summaries.get(&format!("{}::{}", endpoint.account_id, endpoint.chat_id))
-        } else {
-            None
-        };
         nodes.push(json!({
             "id": node.id,
-            "endpoint": channel_endpoint_response_value(endpoint, feishu_summary),
+            "endpoint": channel_endpoint_response_value(endpoint),
             "kind": node.kind,
             "title": node.title,
             "badge": node.badge,
@@ -1629,12 +1525,8 @@ pub async fn delete_thread(
 /// GET /api/channel-endpoints - list known channel endpoints
 pub async fn list_channel_endpoints(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
-    let feishu_summaries = resolve_feishu_chat_summaries(&state, &endpoints).await;
     Json(json!({
-        "endpoints": endpoints.iter().map(|endpoint| {
-            let key = format!("{}::{}", endpoint.account_id, endpoint.chat_id);
-            channel_endpoint_response_value(endpoint, feishu_summaries.get(&key))
-        }).collect::<Vec<_>>(),
+        "endpoints": endpoints.iter().map(channel_endpoint_response_value).collect::<Vec<_>>(),
     }))
 }
 
@@ -1659,7 +1551,6 @@ pub async fn workspace_git_status(
 pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config_snapshot();
     let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
-    let feishu_summaries = resolve_feishu_chat_summaries(&state, &endpoints).await;
     let mut bots = Vec::new();
 
     for account in configured_channel_accounts(&config.channels) {
@@ -1672,7 +1563,6 @@ pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl In
             &account.channel,
             &account.account_id,
             &endpoints,
-            &feishu_summaries,
         )
         .await;
         let main_endpoint = resolve_main_endpoint_with_endpoints(
@@ -1687,11 +1577,7 @@ pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl In
         } else if let Some(endpoint) = main_endpoint.as_ref() {
             Some(endpoint.to_value())
         } else {
-            resolve_default_open_endpoint_from_account_ui(
-                account_ui.as_ref(),
-                &endpoints,
-                &feishu_summaries,
-            )
+            resolve_default_open_endpoint_from_account_ui(account_ui.as_ref(), &endpoints)
         };
         let default_open_thread_id = default_open_endpoint
             .as_ref()
@@ -1724,7 +1610,6 @@ pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl In
 pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config_snapshot();
     let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
-    let feishu_summaries = resolve_feishu_chat_summaries(&state, &endpoints).await;
     let mut groups = BTreeMap::<String, Value>::new();
 
     for account in configured_channel_accounts(&config.channels) {
@@ -1738,7 +1623,6 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
             &account.channel,
             &account.account_id,
             &endpoints,
-            &feishu_summaries,
         )
         .await;
         let main_endpoint = resolve_main_endpoint_with_endpoints(
@@ -1753,11 +1637,7 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
         } else if let Some(endpoint) = main_endpoint.as_ref() {
             Some(endpoint.to_value())
         } else {
-            resolve_default_open_endpoint_from_account_ui(
-                account_ui.as_ref(),
-                &endpoints,
-                &feishu_summaries,
-            )
+            resolve_default_open_endpoint_from_account_ui(account_ui.as_ref(), &endpoints)
         };
         let default_open_thread_id = default_open_endpoint
             .as_ref()
@@ -1791,7 +1671,6 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
                 "conversation_nodes": conversation_nodes_from_account_ui(
                     account_ui.as_ref(),
                     &endpoints,
-                    &feishu_summaries,
                 ).unwrap_or_default(),
                 "endpoints": [],
             }),
@@ -1850,11 +1729,7 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
                 .entry("endpoints".to_owned())
                 .or_insert_with(|| Value::Array(Vec::new()));
             if let Some(items) = endpoints_value.as_array_mut() {
-                let key = format!("{}::{}", endpoint.account_id, endpoint.chat_id);
-                items.push(channel_endpoint_response_value(
-                    endpoint,
-                    feishu_summaries.get(&key),
-                ));
+                items.push(channel_endpoint_response_value(endpoint));
             }
         }
     }
