@@ -461,8 +461,10 @@ struct GaryxThreadSidebar: View {
             .background(GaryxTheme.background)
             .garyxAdaptiveTopBar {
                 GaryxSidebarHeaderView(
+                    drilldownContext: sidebarHeaderContext,
                     showsCloseButton: showsInlineCloseButton,
                     isSyncing: model.isLoadingThreads || model.isLoadingRemoteState,
+                    onBack: { closeDrilldown() },
                     onClose: { closeSidebar() },
                     onRefresh: {
                         Task { await refreshAll() }
@@ -549,8 +551,33 @@ struct GaryxThreadSidebar: View {
         }
     }
 
+    private var sidebarHeaderContext: GaryxSidebarHeaderContext? {
+        switch activeDrilldown {
+        case .pinned:
+            GaryxSidebarHeaderContext(title: "Pinned", subtitle: nil)
+        case .unscopedThreads:
+            GaryxSidebarHeaderContext(title: "Threads", subtitle: nil)
+        case let .bot(id):
+            model.mobileBotGroups
+                .first { $0.id == id }
+                .map { GaryxSidebarHeaderContext(title: $0.title, subtitle: $0.compactDetailLine) }
+        case let .workspace(path):
+            model.sidebarWorkspaceThreadGroups
+                .first { $0.path == path }
+                .map { GaryxSidebarHeaderContext(title: $0.name, subtitle: $0.path) }
+        case nil:
+            nil
+        }
+    }
+
     private func closeSidebar() {
         model.setSidebarVisible(false)
+    }
+
+    private func closeDrilldown() {
+        withAnimation(GaryxMobileMotion.sidebarDrilldown) {
+            activeDrilldown = nil
+        }
     }
 
     private func reconcileActiveDrilldown() {
@@ -583,22 +610,66 @@ struct GaryxThreadSidebar: View {
     }
 }
 
+struct GaryxSidebarHeaderContext: Equatable {
+    let title: String
+    let subtitle: String?
+}
+
 struct GaryxSidebarHeaderView: View {
+    let drilldownContext: GaryxSidebarHeaderContext?
     let showsCloseButton: Bool
     let isSyncing: Bool
+    let onBack: () -> Void
     let onClose: () -> Void
     let onRefresh: () -> Void
     let onNewChat: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            Text("Gary X")
-                .font(GaryxFont.system(size: 26, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
+        HStack(alignment: .center, spacing: 10) {
+            if let drilldownContext {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                        .font(GaryxFont.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        .background {
+                            Circle()
+                                .fill(Color(.systemBackground).opacity(0.42))
+                                .background(.ultraThinMaterial, in: Circle())
+                        }
+                        .overlay {
+                            Circle()
+                                .stroke(Color.primary.opacity(0.032), lineWidth: 1)
+                        }
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Back")
 
-            Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(drilldownContext.title)
+                        .font(GaryxFont.system(size: 23, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if let subtitle = drilldownContext.subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("Gary X")
+                    .font(GaryxFont.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+
+                Spacer(minLength: 0)
+            }
 
             HStack(spacing: 10) {
                 if isSyncing {
@@ -626,7 +697,15 @@ struct GaryxSidebarHeaderView: View {
             .padding(.vertical, 6)
             .padding(.leading, 12)
             .padding(.trailing, 8)
-            .background(Color(.secondarySystemBackground).opacity(0.92), in: Capsule())
+            .background {
+                Capsule()
+                    .fill(Color(.systemBackground).opacity(0.42))
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .overlay {
+                Capsule()
+                    .stroke(Color.primary.opacity(0.03), lineWidth: 1)
+            }
 
             if showsCloseButton {
                 Button(action: onClose) {
@@ -634,7 +713,15 @@ struct GaryxSidebarHeaderView: View {
                         .font(GaryxFont.system(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
                         .frame(width: 44, height: 44)
-                        .background(Color(.secondarySystemBackground), in: Circle())
+                        .background {
+                            Circle()
+                                .fill(Color(.systemBackground).opacity(0.42))
+                                .background(.ultraThinMaterial, in: Circle())
+                        }
+                        .overlay {
+                            Circle()
+                                .stroke(Color.primary.opacity(0.032), lineWidth: 1)
+                        }
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
@@ -790,13 +877,7 @@ private struct GaryxPinnedThreadsSection: View {
         if activeDrilldown == .pinned || !model.pinnedThreads.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 if activeDrilldown == .pinned {
-                    GaryxPinnedThreadsDetailSection(
-                        onBack: {
-                            withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                                activeDrilldown = nil
-                            }
-                        }
-                    )
+                    GaryxPinnedThreadsDetailSection()
                 } else {
                     GaryxSidebarDisclosureRow(
                         title: "Pinned",
@@ -822,13 +903,7 @@ private struct GaryxUnscopedThreadsSection: View {
         if activeDrilldown == .unscopedThreads || !model.sidebarUnscopedThreads.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 if activeDrilldown == .unscopedThreads {
-                    GaryxUnscopedThreadsDetailSection(
-                        onBack: {
-                            withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                                activeDrilldown = nil
-                            }
-                        }
-                    )
+                    GaryxUnscopedThreadsDetailSection()
                 } else {
                     GaryxSidebarDisclosureRow(
                         title: "Threads",
@@ -848,17 +923,9 @@ private struct GaryxUnscopedThreadsSection: View {
 
 private struct GaryxUnscopedThreadsDetailSection: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    let onBack: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarBackRow(title: "Threads", onBack: onBack) {
-                Image(systemName: "bubble.left.and.text.bubble.right.fill")
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
-            }
-
             GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
                 .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                 .padding(.bottom, 4)
@@ -877,17 +944,9 @@ private struct GaryxUnscopedThreadsDetailSection: View {
 
 private struct GaryxPinnedThreadsDetailSection: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    let onBack: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarBackRow(title: "Pinned", onBack: onBack) {
-                Image(systemName: "pin.fill")
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
-            }
-
             GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
                 .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                 .padding(.bottom, 4)
@@ -921,12 +980,7 @@ private struct GaryxSidebarBotsSection: View {
         VStack(alignment: .leading, spacing: 0) {
             if let selectedGroup {
                 GaryxBotThreadDetailSection(
-                    group: selectedGroup,
-                    onBack: {
-                        withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                            activeDrilldown = nil
-                        }
-                    }
+                    group: selectedGroup
                 )
             } else {
                 if !groups.isEmpty {
@@ -1116,7 +1170,6 @@ private extension GaryxMobileBotGroup {
 private struct GaryxBotThreadDetailSection: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let group: GaryxMobileBotGroup
-    let onBack: () -> Void
 
     private var entries: [GaryxBotSidebarConversationEntry] {
         group.sidebarChildConversationEntries(visibleThreadIds: model.sidebarVisibleThreadIds)
@@ -1124,15 +1177,6 @@ private struct GaryxBotThreadDetailSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarBackRow(title: group.title, onBack: onBack) {
-                GaryxChannelLogoView(
-                    channel: group.channel,
-                    label: group.title,
-                    iconDataUrl: group.iconDataUrl,
-                    diameter: GaryxSidebarMetrics.iconFrame
-                )
-            }
-
             GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
                 .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                 .padding(.bottom, 4)
@@ -1223,12 +1267,7 @@ private struct GaryxWorkspaceThreadGroupsSection: View {
             VStack(alignment: .leading, spacing: 0) {
                 if let selectedGroup {
                     GaryxWorkspaceThreadDetailSection(
-                        group: selectedGroup,
-                        onBack: {
-                            withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                                activeDrilldown = nil
-                            }
-                        }
+                        group: selectedGroup
                     )
                 } else {
                     GaryxSidebarSectionHeader(title: "Workspaces", systemImage: "folder.fill")
@@ -1315,21 +1354,9 @@ private struct GaryxWorkspaceThreadGroupView: View {
 
 private struct GaryxWorkspaceThreadDetailSection: View {
     let group: GaryxSidebarWorkspaceThreadGroup
-    let onBack: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarBackRow(
-                title: group.name,
-                subtitle: group.path,
-                onBack: onBack
-            ) {
-                Image(systemName: "folder.fill")
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
-            }
-
             GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
                 .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                 .padding(.bottom, 4)
@@ -1399,60 +1426,6 @@ private struct GaryxSidebarDisclosureRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
-    }
-}
-
-private struct GaryxSidebarBackRow<Icon: View>: View {
-    let title: String
-    var subtitle: String?
-    let onBack: () -> Void
-    let icon: () -> Icon
-
-    init(
-        title: String,
-        subtitle: String? = nil,
-        onBack: @escaping () -> Void,
-        @ViewBuilder icon: @escaping () -> Icon
-    ) {
-        self.title = title
-        self.subtitle = subtitle
-        self.onBack = onBack
-        self.icon = icon
-    }
-
-    var body: some View {
-        Button(action: onBack) {
-            HStack(spacing: 10) {
-                Image(systemName: "chevron.left")
-                    .font(GaryxFont.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
-
-                icon()
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(GaryxFont.subheadline(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    if let subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(GaryxFont.caption())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-            .frame(minHeight: GaryxSidebarMetrics.rowHeight)
-            .padding(.bottom, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Back")
     }
 }
 
