@@ -21,7 +21,8 @@ use crate::server::AppState;
 const MAX_DIRECTORY_ENTRIES: usize = 500;
 const MAX_TEXT_PREVIEW_BYTES: usize = 512 * 1024;
 const MAX_BINARY_PREVIEW_BYTES: usize = 12 * 1024 * 1024;
-const MAX_UPLOAD_FILE_BYTES: usize = 25 * 1024 * 1024;
+pub(crate) const MAX_UPLOAD_FILE_BYTES: usize = 25 * 1024 * 1024;
+pub(crate) const MAX_UPLOAD_BODY_BYTES: usize = 96 * 1024 * 1024;
 const MAX_UPLOAD_FILES: usize = 24;
 const MACOS_PROTECTED_WORKSPACE_MESSAGE: &str =
     "macOS protected app-data folders are not shown in the workspace file browser";

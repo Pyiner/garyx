@@ -1,8 +1,13 @@
 use super::*;
+use axum::{
+    Json, Router, body::Body, extract::DefaultBodyLimit, http::Request, response::IntoResponse,
+    routing::post,
+};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tempfile::tempdir;
+use tower::ServiceExt;
 
 #[tokio::test]
 async fn builds_sorted_directory_listing() {
@@ -93,6 +98,41 @@ async fn uploads_files_into_workspace_directory() {
         .await
         .unwrap();
     assert_eq!(saved, "hello world");
+}
+
+#[tokio::test]
+async fn upload_route_accepts_large_phone_photo_payloads() {
+    async fn accept_upload(Json(body): Json<UploadChatAttachmentsBody>) -> impl IntoResponse {
+        (
+            StatusCode::OK,
+            Json(json!({ "fileCount": body.files.len() })),
+        )
+    }
+
+    let payload = json!({
+        "files": [{
+            "kind": "image",
+            "name": "photo.jpg",
+            "mediaType": "image/jpeg",
+            "dataBase64": BASE64.encode(vec![7_u8; 2_200_000]),
+        }]
+    })
+    .to_string();
+    assert!(payload.len() > 2 * 1024 * 1024);
+
+    let router = Router::new().route(
+        "/upload",
+        post(accept_upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY_BYTES)),
+    );
+    let request = Request::builder()
+        .method("POST")
+        .uri("/upload")
+        .header("content-type", "application/json")
+        .body(Body::from(payload))
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[cfg(unix)]

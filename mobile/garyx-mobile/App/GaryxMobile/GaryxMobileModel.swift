@@ -312,7 +312,7 @@ struct GaryxMobileComposerAttachment: Identifiable, Equatable {
     }
 }
 
-struct GaryxMobileSelectedImage: Equatable {
+struct GaryxMobileSelectedImage: Equatable, Sendable {
     var name: String
     var mediaType: String
     var data: Data
@@ -2165,43 +2165,39 @@ final class GaryxMobileModel: ObservableObject {
 
     func attachImages(_ images: [GaryxMobileSelectedImage]) async {
         guard !images.isEmpty else { return }
-        do {
-            let localImages = images.map { image in
+        for image in images {
+            do {
                 let encoded = image.data.base64EncodedString()
-                return (
-                    blob: GaryxUploadChatAttachmentBlob(
-                        kind: "image",
-                        name: image.name,
-                        mediaType: image.mediaType,
-                        dataBase64: encoded
-                    ),
-                    preview: GaryxPendingUploadPreview(
-                        name: image.name,
-                        mediaType: image.mediaType,
-                        previewDataUrl: Self.dataUrl(mediaType: image.mediaType, base64: encoded)
+                let uploaded = try await client().uploadChatAttachments(
+                    GaryxUploadChatAttachmentsRequest(
+                        files: [
+                            GaryxUploadChatAttachmentBlob(
+                                kind: "image",
+                                name: image.name,
+                                mediaType: image.mediaType,
+                                dataBase64: encoded
+                            ),
+                        ]
                     )
                 )
-            }
-            let uploaded = try await client().uploadChatAttachments(
-                GaryxUploadChatAttachmentsRequest(files: localImages.map(\.blob))
-            )
-            var previews = localImages.map(\.preview)
-            composerAttachments.append(
-                contentsOf: uploaded.files.map { file in
-                    let preview = Self.matchedUploadPreview(for: file, from: &previews)
-                    let fallbackMediaType = preview?.mediaType ?? "image/jpeg"
-                    return GaryxMobileComposerAttachment(
+                guard let file = uploaded.files.first else {
+                    throw GaryxGatewayError.encodingFailed("Gateway did not return an uploaded image.")
+                }
+                let fallbackMediaType = image.mediaType.isEmpty ? "image/jpeg" : image.mediaType
+                composerAttachments.append(
+                    GaryxMobileComposerAttachment(
                         id: "\(file.path)-\(UUID().uuidString)",
                         kind: file.kind.isEmpty ? "image" : file.kind,
                         name: file.name,
                         mediaType: file.mediaType.isEmpty ? fallbackMediaType : file.mediaType,
                         path: file.path,
-                        previewDataUrl: preview?.previewDataUrl
+                        previewDataUrl: Self.dataUrl(mediaType: fallbackMediaType, base64: encoded)
                     )
-                }
-            )
-        } catch {
-            lastError = displayMessage(for: error)
+                )
+            } catch {
+                lastError = displayMessage(for: error)
+                return
+            }
         }
     }
 

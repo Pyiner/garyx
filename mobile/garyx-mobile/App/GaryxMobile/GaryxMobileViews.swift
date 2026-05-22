@@ -3184,18 +3184,105 @@ struct GaryxComposer: View {
                     ?? item.supportedContentTypes.first
                 let mediaType = contentType?.preferredMIMEType ?? "image/jpeg"
                 let fileExtension = contentType?.preferredFilenameExtension ?? "jpg"
-                images.append(
-                    GaryxMobileSelectedImage(
-                        name: "photo-\(index + 1).\(fileExtension)",
+                guard let image = await Task.detached(priority: .utility, operation: {
+                    Self.preparedPhotoUpload(
+                        data: data,
+                        index: index,
                         mediaType: mediaType,
-                        data: data
+                        fileExtension: fileExtension
                     )
-                )
+                }).value else {
+                    model.lastError = "That image is too large to prepare for upload."
+                    continue
+                }
+                images.append(image)
             } catch {
                 model.lastError = error.localizedDescription
             }
         }
         await model.attachImages(images)
+    }
+
+    nonisolated private static func preparedPhotoUpload(
+        data: Data,
+        index: Int,
+        mediaType: String,
+        fileExtension: String
+    ) -> GaryxMobileSelectedImage? {
+        if let jpegData = compressedJPEGPhotoData(from: data) {
+            return GaryxMobileSelectedImage(
+                name: "photo-\(index + 1).jpg",
+                mediaType: "image/jpeg",
+                data: jpegData
+            )
+        }
+        guard data.count <= maxPreparedPhotoBytes else {
+            return nil
+        }
+        let normalizedExtension = fileExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GaryxMobileSelectedImage(
+            name: "photo-\(index + 1).\(normalizedExtension.isEmpty ? "jpg" : normalizedExtension)",
+            mediaType: mediaType.isEmpty ? "image/jpeg" : mediaType,
+            data: data
+        )
+    }
+
+    nonisolated private static func compressedJPEGPhotoData(from data: Data) -> Data? {
+        for maxPixelSize in preparedPhotoPixelSizes {
+            guard let image = thumbnailImage(from: data, maxPixelSize: maxPixelSize) else {
+                continue
+            }
+            for quality in preparedPhotoJPEGQualities {
+                guard let jpegData = image.jpegData(compressionQuality: quality) else {
+                    continue
+                }
+                if jpegData.count <= maxPreparedPhotoBytes {
+                    return jpegData
+                }
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func thumbnailImage(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        if let source = CGImageSourceCreateWithData(data as CFData, options) {
+            let thumbnailOptions: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: Int(maxPixelSize),
+            ]
+            if let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) {
+                return UIImage(cgImage: image)
+            }
+        }
+
+        guard let image = UIImage(data: data) else {
+            return nil
+        }
+        let maxSide = max(image.size.width, image.size.height)
+        guard maxSide > maxPixelSize else {
+            return image
+        }
+        let scale = maxPixelSize / maxSide
+        let targetSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+    }
+
+    nonisolated private static var preparedPhotoPixelSizes: [CGFloat] {
+        [2048, 1600, 1280, 1024]
+    }
+
+    nonisolated private static var preparedPhotoJPEGQualities: [CGFloat] {
+        [0.82, 0.72, 0.62, 0.52, 0.42, 0.34]
+    }
+
+    nonisolated private static var maxPreparedPhotoBytes: Int {
+        1_350_000
     }
 }
 

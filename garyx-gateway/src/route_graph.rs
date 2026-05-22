@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::Router;
+use axum::{Router, extract::DefaultBodyLimit};
 
 use crate::server::AppState;
 use crate::{
@@ -280,11 +280,15 @@ fn thread_routes() -> Router<Arc<AppState>> {
         )
         .route(
             "/api/workspace-files/upload",
-            axum::routing::post(workspace_files::upload_workspace_files),
+            axum::routing::post(workspace_files::upload_workspace_files).layer(
+                DefaultBodyLimit::max(workspace_files::MAX_UPLOAD_BODY_BYTES),
+            ),
         )
         .route(
             "/api/chat/attachments/upload",
-            axum::routing::post(workspace_files::upload_chat_attachments),
+            axum::routing::post(workspace_files::upload_chat_attachments).layer(
+                DefaultBodyLimit::max(workspace_files::MAX_UPLOAD_BODY_BYTES),
+            ),
         )
         .route(
             "/api/tools/image",
