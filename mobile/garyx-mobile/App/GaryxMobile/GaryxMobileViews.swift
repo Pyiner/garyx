@@ -6516,6 +6516,7 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+#if compiler(>=6.2)
         if #available(iOS 26, *) {
             switch style {
             case .automatic:
@@ -6523,13 +6524,24 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
             case .regular:
                 content.glassEffect(resolvedGlass, in: shape)
             }
-        } else if let tint {
+        } else {
+            fallback(content: content)
+        }
+#else
+        fallback(content: content)
+#endif
+    }
+
+    @ViewBuilder
+    private func fallback(content: Content) -> some View {
+        if let tint {
             content.background(tint, in: shape)
         } else {
             content.background(fallbackMaterial, in: shape)
         }
     }
 
+#if compiler(>=6.2)
     @available(iOS 26, *)
     private var resolvedGlass: Glass {
         var glass = Glass.regular
@@ -6541,6 +6553,7 @@ private struct GaryxAdaptiveGlassModifier<S: Shape>: ViewModifier {
         }
         return glass
     }
+#endif
 }
 
 enum GaryxAdaptiveGlassStyle {
@@ -6558,6 +6571,7 @@ struct GaryxAdaptiveGlassContainer<Content: View>: View {
     }
 
     var body: some View {
+#if compiler(>=6.2)
         if #available(iOS 26, *) {
             GlassEffectContainer(spacing: spacing) {
                 content()
@@ -6565,6 +6579,9 @@ struct GaryxAdaptiveGlassContainer<Content: View>: View {
         } else {
             content()
         }
+#else
+        content()
+#endif
     }
 }
 
@@ -6572,11 +6589,15 @@ private struct GaryxSoftScrollEdgeModifier: ViewModifier {
     let edges: Edge.Set
 
     func body(content: Content) -> some View {
+#if compiler(>=6.2)
         if #available(iOS 26, *) {
             content.scrollEdgeEffectStyle(.soft, for: edges)
         } else {
             content
         }
+#else
+        content
+#endif
     }
 }
 
