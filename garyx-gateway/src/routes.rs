@@ -12,10 +12,11 @@ use garyx_models::config::TelegramAccount;
 use garyx_models::provider::ProviderType;
 use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_OPEN_ID};
 use garyx_router::{
-    ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode, bindings_from_value,
-    detach_endpoint_from_thread, history_message_count, is_hidden_thread_value, is_thread_key,
-    list_known_channel_endpoints, thread_kind_from_value, update_thread_record,
-    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
+    ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode,
+    active_run_snapshot_run_id, bindings_from_value, detach_endpoint_from_thread,
+    history_message_count, is_hidden_thread_value, is_thread_key, list_known_channel_endpoints,
+    thread_kind_from_value, update_thread_record, workspace_dir_from_value,
+    workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -1019,6 +1020,9 @@ fn thread_summary(thread_id: &str, data: &Value) -> Value {
         .and_then(|entries| entries.last())
         .cloned()
         .unwrap_or(Value::Null);
+    let active_run_id = active_run_snapshot_run_id(data)
+        .map(Value::String)
+        .unwrap_or(Value::Null);
 
     json!({
         "thread_id": thread_id,
@@ -1036,6 +1040,7 @@ fn thread_summary(thread_id: &str, data: &Value) -> Value {
         "provider_type": provider_type,
         "worktree": worktree,
         "recent_run_id": recent_run_id,
+        "active_run_id": active_run_id,
     })
 }
 

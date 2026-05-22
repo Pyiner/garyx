@@ -68,8 +68,8 @@ function smokeLabel(key) {
 
 const SMOKE_TEXT = {
   newThread: smokeLabel('New Thread'),
-  startNewThread: smokeLabel('Start a new thread'),
-  resumeExistingSession: smokeLabel('Resume existing session'),
+  startNewThread: ['What do you want Garyx to build?'],
+  resumeExistingSession: smokeLabel('Resume'),
   send: smokeLabel('Send'),
   settings: smokeLabel('Settings'),
   language: smokeLabel('Language'),

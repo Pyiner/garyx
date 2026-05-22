@@ -322,7 +322,7 @@ fn clear_active_run_snapshot(thread_value: &mut Value) -> bool {
     should_remove_history.0
 }
 
-async fn repair_inactive_active_run_snapshot(
+pub(crate) async fn repair_inactive_active_run_snapshot(
     state: &Arc<AppState>,
     thread_id: &str,
     thread_value: &mut Value,

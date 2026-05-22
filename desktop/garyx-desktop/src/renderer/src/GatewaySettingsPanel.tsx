@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { RefreshCw, Trash } from 'lucide-react';
+import QRCode from 'qrcode';
+import { Copy, RefreshCw, Smartphone, Trash } from 'lucide-react';
 
 import {
   DEFAULT_DESKTOP_SETTINGS,
@@ -908,6 +909,25 @@ function classNames(...values: Array<string | false | null | undefined>): string
   return values.filter(Boolean).join(' ');
 }
 
+function buildGaryxMobileConnectLink(settings: DesktopSettings): string {
+  const params = new URLSearchParams();
+  params.set('gatewayUrl', settings.gatewayUrl.trim());
+  params.set('gatewayAuthToken', settings.gatewayAuthToken.trim());
+  return `garyx://mobile/connect?${params.toString()}`;
+}
+
+function describeMobileGatewayUrl(gatewayUrl: string, t: Translate): string {
+  try {
+    const parsed = new URL(gatewayUrl.trim());
+    if (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') {
+      return t('Use your Mac LAN IP for a real phone; loopback only works in the simulator.');
+    }
+  } catch {
+    return t('Enter a gateway URL before sharing with mobile.');
+  }
+  return t('Scan from Gary X on iPhone to reuse this gateway token.');
+}
+
 function configuredChannelAccountsFromDraft(
   channels: unknown,
 ): Array<{ kind: string; accountId: string; account: any }> {
@@ -1017,6 +1037,96 @@ function SettingsControlRow({
         {description ? <p className="settings-control-row-description">{description}</p> : null}
       </div>
       <div className="settings-control-row-control">{control}</div>
+    </div>
+  );
+}
+
+function MobileConnectPanel({ settings }: { settings: DesktopSettings }) {
+  const { t } = useI18n();
+  const connectLink = useMemo(() => buildGaryxMobileConnectLink(settings), [settings]);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const hasGatewayUrl = settings.gatewayUrl.trim().length > 0;
+  const hasGatewayToken = settings.gatewayAuthToken.trim().length > 0;
+  const ready = hasGatewayUrl && hasGatewayToken;
+  const urlHint = describeMobileGatewayUrl(settings.gatewayUrl, t);
+
+  useEffect(() => {
+    let cancelled = false;
+    setQrDataUrl(null);
+    if (!ready) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    QRCode.toDataURL(connectLink, { margin: 1, width: 176 })
+      .then((url) => {
+        if (!cancelled) {
+          setQrDataUrl(url);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setQrDataUrl(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectLink, ready]);
+
+  useEffect(() => {
+    if (!copied) {
+      return undefined;
+    }
+    const timeout = window.setTimeout(() => setCopied(false), 1600);
+    return () => window.clearTimeout(timeout);
+  }, [copied]);
+
+  async function copyConnectLink() {
+    if (!ready) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(connectLink);
+      setCopied(true);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="garyx-mobile-connect-panel">
+      <div className="garyx-mobile-connect-copy">
+        <div className="garyx-mobile-connect-title">
+          <Smartphone aria-hidden size={16} strokeWidth={1.7} />
+          <span>{t('Gary X Mobile')}</span>
+        </div>
+        <p>{t('Reuse this Mac app gateway token on your phone. Provider API keys stay on the gateway host.')}</p>
+        <code>{settings.gatewayUrl.trim() || t('Not configured')}</code>
+        <span className={classNames('garyx-mobile-connect-hint', !ready && 'danger')}>
+          {!hasGatewayToken ? t('Gateway token is required before mobile can connect.') : urlHint}
+        </span>
+        <div className="garyx-mobile-connect-actions">
+          <Button
+            className="rounded-xl bg-[#111111] text-white shadow-none hover:bg-[#222222]"
+            disabled={!ready}
+            onClick={() => void copyConnectLink()}
+            size="sm"
+            type="button"
+          >
+            <Copy aria-hidden size={14} strokeWidth={1.7} />
+            {copied ? t('Copied') : t('Copy Mobile Link')}
+          </Button>
+        </div>
+      </div>
+      <div className={classNames('garyx-mobile-connect-qr', !ready && 'disabled')}>
+        {ready && qrDataUrl ? (
+          <img alt={t('Gary X Mobile connect QR')} src={qrDataUrl} />
+        ) : (
+          <span>{ready ? t('Rendering QR code...') : t('Mobile QR')}</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -1755,6 +1865,7 @@ export function GatewaySettingsPanel({
           />
         ) : null}
       </div>
+      <MobileConnectPanel settings={localSettings} />
     </div>
   );
 

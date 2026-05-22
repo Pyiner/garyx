@@ -425,6 +425,51 @@ async fn thread_summary_does_not_fetch_transcript_when_snapshot_cache_is_empty()
 }
 
 #[tokio::test]
+async fn thread_summary_emits_active_run_id() {
+    let (_state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::active-run-summary";
+    let summary = thread_summary(
+        thread_id,
+        &json!({
+            "history": {
+                "active_run_snapshot": {
+                    "run_id": "run-active"
+                }
+            }
+        }),
+    );
+
+    assert_eq!(summary["active_run_id"], "run-active");
+}
+
+#[tokio::test]
+async fn thread_summary_omits_active_run_id_when_snapshot_is_missing() {
+    let (_state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::inactive-run-summary";
+    let summary = thread_summary(thread_id, &json!({ "history": {} }));
+
+    assert_eq!(summary["active_run_id"], json!(null));
+}
+
+#[tokio::test]
+async fn thread_summary_omits_blank_active_run_id() {
+    let (_state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::blank-active-run-summary";
+    let summary = thread_summary(
+        thread_id,
+        &json!({
+            "history": {
+                "active_run_snapshot": {
+                    "run_id": "   "
+                }
+            }
+        }),
+    );
+
+    assert_eq!(summary["active_run_id"], json!(null));
+}
+
+#[tokio::test]
 async fn thread_logs_route_returns_full_and_delta_chunks() {
     let (state, logger, _dir) = test_state().await;
     let (thread_id, _) = create_thread_record(

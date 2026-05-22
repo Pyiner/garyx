@@ -1,0 +1,396 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		40152566B17D3F9A06148DEF /* GaryxMobileViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD6BA59D8E78E5491AF5F418 /* GaryxMobileViews.swift */; };
+		805BDED169657C7D5671CF08 /* GaryxMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11AA316074A9CD9CA50B90CF /* GaryxMobileApp.swift */; };
+		848AA2C0D10E5E6F3259FF33 /* GaryxMobileModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28A514B7A668CBFA3E45581C /* GaryxMobileModel.swift */; };
+		9EE78F51D327CCA045128DE0 /* GaryxMobileSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6D641F9FD93A8CC6D0371DB /* GaryxMobileSettings.swift */; };
+		B312AAA3A73883FD5559840A /* GaryxGatewayClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B755A88B709E9FC317101B90 /* GaryxGatewayClient.swift */; };
+		BEDBF052D2538F4513AD93BF /* GaryxMobileConnectLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8575D6575E8F57D66F2676B /* GaryxMobileConnectLink.swift */; };
+		C7D2A6A163DC8876DABBB484 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 5BAE4C9689893DAB571DFBB1 /* PrivacyInfo.xcprivacy */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		11AA316074A9CD9CA50B90CF /* GaryxMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileApp.swift; sourceTree = "<group>"; };
+		28A514B7A668CBFA3E45581C /* GaryxMobileModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileModel.swift; sourceTree = "<group>"; };
+		54C062092D7F46A13B65E609 /* GaryxMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = GaryxMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5BAE4C9689893DAB571DFBB1 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		B755A88B709E9FC317101B90 /* GaryxGatewayClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxGatewayClient.swift; sourceTree = "<group>"; };
+		C6D641F9FD93A8CC6D0371DB /* GaryxMobileSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileSettings.swift; sourceTree = "<group>"; };
+		C8575D6575E8F57D66F2676B /* GaryxMobileConnectLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileConnectLink.swift; sourceTree = "<group>"; };
+		D97E066072087A1089BFFA23 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		FD6BA59D8E78E5491AF5F418 /* GaryxMobileViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GaryxMobileViews.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		7AEA40746329254D12B681CC = {
+			isa = PBXGroup;
+			children = (
+				DBE102C0208EE2FD4CF1AC45 /* GaryxMobile */,
+				DEE4D222ECBEDA3465B020AB /* GaryxMobileCore */,
+				B80FC9E64347CBE35DF61E17 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B80FC9E64347CBE35DF61E17 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				54C062092D7F46A13B65E609 /* GaryxMobile.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		DBE102C0208EE2FD4CF1AC45 /* GaryxMobile */ = {
+			isa = PBXGroup;
+			children = (
+				11AA316074A9CD9CA50B90CF /* GaryxMobileApp.swift */,
+				28A514B7A668CBFA3E45581C /* GaryxMobileModel.swift */,
+				C6D641F9FD93A8CC6D0371DB /* GaryxMobileSettings.swift */,
+				FD6BA59D8E78E5491AF5F418 /* GaryxMobileViews.swift */,
+				D97E066072087A1089BFFA23 /* Info.plist */,
+				5BAE4C9689893DAB571DFBB1 /* PrivacyInfo.xcprivacy */,
+			);
+			name = GaryxMobile;
+			path = App/GaryxMobile;
+			sourceTree = "<group>";
+		};
+		DEE4D222ECBEDA3465B020AB /* GaryxMobileCore */ = {
+			isa = PBXGroup;
+			children = (
+				B755A88B709E9FC317101B90 /* GaryxGatewayClient.swift */,
+				C8575D6575E8F57D66F2676B /* GaryxMobileConnectLink.swift */,
+			);
+			name = GaryxMobileCore;
+			path = Sources/GaryxMobileCore;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		06646E081C216D36CA710486 /* GaryxMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3CD5FACE30AFC20BE6857F21 /* Build configuration list for PBXNativeTarget "GaryxMobile" */;
+			buildPhases = (
+				D544977FE0E174ACE5526090 /* Sources */,
+				C65256449A0D439C8A09BD18 /* Resources */,
+				3EC6298CD31A923A0A5DAA17 /* Copy App Icons */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = GaryxMobile;
+			packageProductDependencies = (
+			);
+			productName = GaryxMobile;
+			productReference = 54C062092D7F46A13B65E609 /* GaryxMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		4A02628BC12AEC1AB9A0BEA3 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					06646E081C216D36CA710486 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = A66DEAF75527E7E706B22C8F /* Build configuration list for PBXProject "GaryxMobile" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 7AEA40746329254D12B681CC;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				06646E081C216D36CA710486 /* GaryxMobile */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C65256449A0D439C8A09BD18 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C7D2A6A163DC8876DABBB484 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		3EC6298CD31A923A0A5DAA17 /* Copy App Icons */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-20@2x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-20@3x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-29@2x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-29@3x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-40@2x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-40@3x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-60@2x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-60@3x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-76@1x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-76@2x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-83.5@2x.png",
+				"$(SRCROOT)/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+			);
+			name = "Copy App Icons";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-20@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-20@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-29@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-29@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-40@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-40@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-60@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-60@3x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-76@1x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-76@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-83.5@2x.png",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/icon-1024.png",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nicon_dir=\"$SRCROOT/App/GaryxMobile/Assets.xcassets/AppIcon.appiconset\"\nresources_dir=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\ncp \"$icon_dir\"/icon-*.png \"$resources_dir\"/\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		D544977FE0E174ACE5526090 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B312AAA3A73883FD5559840A /* GaryxGatewayClient.swift in Sources */,
+				805BDED169657C7D5671CF08 /* GaryxMobileApp.swift in Sources */,
+				BEDBF052D2538F4513AD93BF /* GaryxMobileConnectLink.swift in Sources */,
+				848AA2C0D10E5E6F3259FF33 /* GaryxMobileModel.swift in Sources */,
+				9EE78F51D327CCA045128DE0 /* GaryxMobileSettings.swift in Sources */,
+				40152566B17D3F9A06148DEF /* GaryxMobileViews.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		73FB948FA9166B5560629A3E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/GaryxMobile/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.garyx.mobile;
+				PRODUCT_NAME = "Gary X";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		831DE8B21AD3C5F887DB92FD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		B66B662A0340EC8B5965A989 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = App/GaryxMobile/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.garyx.mobile;
+				PRODUCT_NAME = "Gary X";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		BC91F52173FA85105F47EE78 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		3CD5FACE30AFC20BE6857F21 /* Build configuration list for PBXNativeTarget "GaryxMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				73FB948FA9166B5560629A3E /* Debug */,
+				B66B662A0340EC8B5965A989 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A66DEAF75527E7E706B22C8F /* Build configuration list for PBXProject "GaryxMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BC91F52173FA85105F47EE78 /* Debug */,
+				831DE8B21AD3C5F887DB92FD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 4A02628BC12AEC1AB9A0BEA3 /* Project object */;
+}

@@ -10031,6 +10031,97 @@ button.composer-provider-trigger[data-state="open"] > svg:last-child {
   justify-content: flex-start;
 }
 
+.garyx-mobile-connect-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 176px;
+  gap: 18px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid #e7e7e5;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.garyx-mobile-connect-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.garyx-mobile-connect-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #151515;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.garyx-mobile-connect-copy p {
+  margin: 0;
+  max-width: 58ch;
+  color: #62625e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.garyx-mobile-connect-copy code {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  color: #242421;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid #ededeb;
+  border-radius: 8px;
+  background: #f7f7f4;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.garyx-mobile-connect-hint {
+  color: #767671;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.garyx-mobile-connect-hint.danger {
+  color: #9f2f26;
+}
+
+.garyx-mobile-connect-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.garyx-mobile-connect-qr {
+  width: 176px;
+  height: 176px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #ededeb;
+  border-radius: 8px;
+  background: #f7f7f4;
+  color: #8d8d87;
+  font-size: 12px;
+  text-align: center;
+}
+
+.garyx-mobile-connect-qr.disabled {
+  background: #fafaf8;
+}
+
+.garyx-mobile-connect-qr img {
+  width: 156px;
+  height: 156px;
+  display: block;
+}
+
 .settings-control-row-control > input,
 .settings-control-row-control > select,
 .settings-control-row-control > textarea {
@@ -15209,6 +15300,15 @@ button.codex-list-row {
 
   .gateway-summary-url {
     text-align: left;
+  }
+
+  .garyx-mobile-connect-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .garyx-mobile-connect-qr {
+    width: 100%;
+    max-width: 176px;
   }
 
   .settings-section-header {

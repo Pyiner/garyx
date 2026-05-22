@@ -73,6 +73,7 @@ desktop/**/test-artifacts/
 desktop/**/.playwright-cli/
 !desktop/garyx-desktop/src/renderer/src/lib/
 !desktop/garyx-desktop/src/renderer/src/lib/utils.ts
+mobile/**/.build/
 
 # Rust build artifacts
 target/

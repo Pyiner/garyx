@@ -94,6 +94,37 @@ UI iteration because code changes take effect without rebuilding a package.
 Packaging is optional unless the user asks for a packaged app or the change
 needs installed-app validation.
 
+## Mobile UI
+
+- The Mac app is the source of truth for mobile information architecture,
+  labels, field meaning, icon semantics, and Gateway-backed data models. The
+  mobile app may adapt layout and interaction for iOS, but it must not invent
+  new top-level concepts or move settings-only surfaces into the primary
+  sidebar.
+- Mobile Garyx management pages should use native iOS patterns: grouped lists,
+  compact rows, section headers, top navigation actions, segmented controls
+  where a page has two peer categories, and left-swipe row actions for
+  secondary actions.
+- Do not port desktop management cards or exposed action button bars into the
+  mobile app. Actions such as edit, delete, enable, pause, run, and detach
+  should usually live behind row swipe actions unless they are the primary
+  action for the current screen.
+- Agent and team rows should use the same avatar data as the Mac app when
+  available, with compact circular fallbacks rather than generic list icons.
+- Mobile sidebars should keep workspace navigation as a two-stage flow: list
+  workspace folders first, then show the selected workspace's threads in that
+  workspace detail layer. Do not dump every workspace's sessions inline at once.
+- Mobile sidebar root content should not render inline loading rows or raw
+  thread/session lists. Use one unobtrusive global loading indicator and keep
+  conversation/thread lists inside bot or workspace drilldown layers.
+- Mobile management screens should not expose create/edit forms inline by
+  default. Use top navigation actions to open full-screen add/edit flows, not
+  compact sheets or always-visible forms, and keep the main page focused on
+  current state and lists.
+- Mobile UI screenshots used for product review should be captured against the
+  running local gateway by default. Debug snapshot fixtures are only for isolated
+  layout checks and must be called out explicitly when used.
+
 ## Desktop Transcript And File Tree Rules
 
 - Treat transcript history as user-turn based: one user message plus the

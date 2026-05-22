@@ -761,6 +761,38 @@ Settings view.
 Thread history is persisted through transcript records; backend selection is no
 longer exposed as a gateway setting.
 
+### Gary X Mobile
+
+The iOS app is a direct Garyx gateway client. It does not run model providers
+and does not copy provider API keys to the phone. It reuses the desktop app's
+gateway connection shape:
+
+- `gatewayUrl`: the URL the phone can reach.
+- `gatewayAuthToken`: the token created by `garyx gateway token`.
+
+For a physical phone, the gateway must be reachable from the LAN. A managed
+macOS gateway service is installed to listen on `0.0.0.0`; if you run the
+gateway manually, pass `--host 0.0.0.0` or set `gateway.host` accordingly.
+Use the Mac's LAN address in the mobile URL, for example
+`http://192.168.1.20:31337`. `http://127.0.0.1:31337` only works from the iOS
+simulator running on the same Mac.
+
+The desktop app's Desktop Settings view can generate a Gary X Mobile QR/link:
+
+```text
+garyx://mobile/connect?gatewayUrl=...&gatewayAuthToken=...
+```
+
+Opening that link on iOS imports the gateway URL and stores the gateway token
+in the iOS Keychain.
+
+The mobile app mirrors the Mac app's operational surfaces through gateway APIs:
+thread chat/history, active agent or team selection for new threads, task
+creation and status changes, automation run-now and pause/enable controls,
+Skills visibility, and gateway settings. It intentionally keeps deeper
+provider, MCP, channel, and Skill editing on the Mac app where the local
+runtime and secrets live.
+
 The desktop Providers tab shows a fixed provider table rather than an arbitrary
 add-provider form. `Claude Code`, `Codex`, and `Gemini CLI` are always listed at
 the top as built-in provider agents; their Configure dialogs edit desktop-local

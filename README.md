@@ -107,6 +107,7 @@ garyx plugins install ./path/to/garyx-plugin-example
 | Inspect gateway issues | `garyx status`, `garyx doctor`, `garyx logs tail` |
 | Update the CLI | `garyx update` |
 | Update channel plugins | `garyx plugins update [<plugin_id>]` |
+| Work on the mobile client | `cd mobile/garyx-mobile && swift test` |
 
 ## Architecture
 
@@ -208,6 +209,11 @@ npm run dist:dir
 ```
 
 `npm run dist:dir` builds and installs `Garyx.app` into `/Applications`.
+
+## Mobile client
+
+The mobile work-in-progress lives in `mobile/garyx-mobile`. It is the
+Garyx-owned iOS client for the managed gateway.
 
 ## Development
 
