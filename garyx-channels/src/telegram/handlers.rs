@@ -687,10 +687,8 @@ impl TelegramChannel {
         {
             let queued = context
                 .bridge
-                .add_streaming_input_for_route(
+                .add_streaming_input(
                     thread_id,
-                    "telegram",
-                    &context.account_id,
                     &dispatch_message,
                     None,
                     None,

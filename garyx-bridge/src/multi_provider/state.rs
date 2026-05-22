@@ -91,27 +91,6 @@ pub(super) struct BridgeRunIndex {
     pub(super) active_runs: HashMap<String, String>,
     /// `run_id -> thread_id`
     pub(super) run_sessions: HashMap<String, String>,
-    /// `run_id -> originating channel/account route`.
-    pub(super) active_routes: HashMap<String, ActiveRunRoute>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ActiveRunRoute {
-    pub(super) channel: String,
-    pub(super) account_id: String,
-}
-
-impl ActiveRunRoute {
-    pub(super) fn new(channel: impl Into<String>, account_id: impl Into<String>) -> Self {
-        Self {
-            channel: channel.into(),
-            account_id: account_id.into(),
-        }
-    }
-
-    pub(super) fn matches(&self, channel: &str, account_id: &str) -> bool {
-        self.channel == channel.trim() && self.account_id == account_id.trim()
-    }
 }
 
 pub(super) fn default_max_concurrent_runs() -> usize {
