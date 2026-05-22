@@ -16,6 +16,24 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
     }
 
+    func testHTTPStatusErrorExtractsGatewayMessage() {
+        XCTAssertEqual(
+            GaryxGatewayError.httpStatus(404, #"{"error":"thread not found"}"#).errorDescription,
+            "thread not found"
+        )
+    }
+
+    func testPathSegmentEncodingEscapesSlash() {
+        XCTAssertEqual(
+            GaryxGatewayClient.encodePathSegment("thread/with/slash"),
+            "thread%2Fwith%2Fslash"
+        )
+        XCTAssertEqual(
+            GaryxGatewayClient.encodePathSegment("thread::a&b"),
+            "thread%3A%3Aa%26b"
+        )
+    }
+
     func testMobileConnectLinkRoundTripsGatewaySettings() throws {
         let url = try XCTUnwrap(
             GaryxMobileConnectLink.make(

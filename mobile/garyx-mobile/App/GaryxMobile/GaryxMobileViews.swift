@@ -1731,13 +1731,6 @@ struct GaryxConversationHeader: View {
                                 builtIn: target.builtIn,
                                 diameter: 22
                             )
-
-                            Text(model.selectedThreadAgentLabel)
-                                .font(GaryxFont.callout(weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                                .frame(maxWidth: 84, alignment: .leading)
                         }
 
                         Text(model.selectedThread?.title ?? model.draftThreadTitle)

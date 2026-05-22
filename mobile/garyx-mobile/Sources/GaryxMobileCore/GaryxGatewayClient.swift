@@ -26,10 +26,23 @@ public enum GaryxGatewayError: Error, Equatable, LocalizedError {
         case .invalidHTTPResponse:
             return "The Garyx gateway returned a non-HTTP response."
         case .httpStatus(let status, let body):
-            return body.isEmpty ? "The Garyx gateway returned HTTP \(status)." : body
+            let message = GaryxGatewayError.message(fromHTTPBody: body)
+            return message.isEmpty ? "The Garyx gateway returned HTTP \(status)." : message
         case .encodingFailed(let message):
             return message
         }
+    }
+
+    static func message(fromHTTPBody body: String) -> String {
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        guard let data = trimmed.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let error = object["error"] as? String,
+              !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return trimmed
+        }
+        return error
     }
 }
 
@@ -3227,6 +3240,10 @@ public final class GaryxGatewayClient {
         self.decoder = decoder
     }
 
+    static func encodePathSegment(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: garyxURLPathSegmentAllowed) ?? value
+    }
+
     public func status() async throws -> GaryxSystemStatus {
         try await get("/api/status")
     }
@@ -4011,6 +4028,10 @@ private extension String {
     }
 
     var urlPathEncoded: String {
-        addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? self
+        GaryxGatewayClient.encodePathSegment(self)
     }
 }
+
+private let garyxURLPathSegmentAllowed: CharacterSet = {
+    CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+}()

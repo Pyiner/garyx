@@ -1032,6 +1032,40 @@ async fn create_thread_worktree_rejects_git_repo_without_head_as_bad_request() {
 }
 
 #[tokio::test]
+async fn update_thread_accepts_encoded_thread_path_segment() {
+    let (state, _logger, _dir) = test_state().await;
+    let thread_id = "thread::with/slash";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Before",
+            }),
+        )
+        .await;
+
+    let router = build_router(state);
+    let request = authed_request()
+        .method("PATCH")
+        .uri("/api/threads/thread%3A%3Awith%2Fslash")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({ "label": "After" }).to_string()))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["thread_id"], thread_id);
+    assert_eq!(payload["label"], "After");
+}
+
+#[tokio::test]
 async fn delete_thread_removes_thread_log_file() {
     let (state, logger, _dir) = test_state().await;
     let (thread_id, _) = create_thread_record(
