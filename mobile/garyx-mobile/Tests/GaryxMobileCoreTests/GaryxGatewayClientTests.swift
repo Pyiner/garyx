@@ -210,6 +210,22 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(summary.worktreePath, "/workspace/.garyx/worktrees/thread-test")
     }
 
+    func testThreadSummaryUsesNewThreadPlaceholderWhenUnlabeled() throws {
+        let summary = try JSONDecoder().decode(
+            GaryxThreadSummary.self,
+            from: Data(
+                """
+                {
+                  "thread_id": "thread::unlabeled"
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(summary.id, "thread::unlabeled")
+        XCTAssertEqual(summary.title, "New Thread")
+    }
+
     func testThreadSummaryDecodesTeamHints() throws {
         let data = Data(
             """
@@ -927,6 +943,20 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(researchObject?["workspace_dir"] as? String, "/workspace/project")
         XCTAssertEqual(researchObject?["max_iterations"] as? Int, 3)
         XCTAssertEqual(researchObject?["time_budget_secs"] as? Int, 1200)
+
+        let thread = GaryxCreateThreadRequest(
+            workspaceDir: "/workspace/project",
+            workspaceMode: "local",
+            agentId: "codex",
+            metadata: ["client": "garyx-mobile"]
+        )
+        let threadObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(thread)
+        ) as? [String: Any]
+
+        XCTAssertNil(threadObject?["label"])
+        XCTAssertEqual(threadObject?["workspaceDir"] as? String, "/workspace/project")
+        XCTAssertEqual(threadObject?["agentId"] as? String, "codex")
     }
 
     func testMacParityAgentTeamAndChannelPayloadsDecodeGatewayShapes() throws {

@@ -1885,7 +1885,6 @@ final class GaryxMobileModel: ObservableObject {
             let workspaceMode = workspaceModeForNewThread(workspace: workspace)
             let thread = try await client().createThread(
                 GaryxCreateThreadRequest(
-                    label: "New Thread",
                     workspaceDir: workspace.isEmpty ? nil : workspace,
                     workspaceMode: workspaceMode,
                     agentId: agentId.isEmpty ? nil : agentId,
@@ -4403,7 +4402,6 @@ final class GaryxMobileModel: ObservableObject {
         let workspaceMode = pendingWorkspace.isEmpty ? workspaceModeForNewThread(workspace: workspace) : "local"
         let thread = try await client().createThread(
             GaryxCreateThreadRequest(
-                label: "New Thread",
                 workspaceDir: workspace.isEmpty ? nil : workspace,
                 workspaceMode: workspaceMode,
                 agentId: agentId.isEmpty ? nil : agentId,

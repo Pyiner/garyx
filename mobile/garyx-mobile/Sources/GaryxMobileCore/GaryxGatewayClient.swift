@@ -140,7 +140,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let resolvedId = try container.decodeFirstString(.id, .threadId, .threadKey)
         id = resolvedId ?? ""
-        title = try container.decodeFirstString(.title, .label) ?? id
+        title = try container.decodeFirstString(.title, .label) ?? "New Thread"
         createdAt = try container.decodeFirstString(.createdAt)
         updatedAt = try container.decodeFirstString(.updatedAt)
         lastMessagePreview = try container.decodeFirstString(
