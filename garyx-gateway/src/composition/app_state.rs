@@ -25,6 +25,7 @@ use crate::auto_research::AutoResearchStore;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::event_stream_hub::EventStreamHub;
+use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
@@ -64,6 +65,7 @@ pub struct OpsState {
     pub agent_team_group_store: Arc<dyn garyx_bridge::providers::agent_team::GroupStore>,
     pub wikis: Arc<WikiStore>,
     pub app_db: Arc<AppDbService>,
+    pub garyx_db: Arc<GaryxDbService>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
     pub thread_list_snapshot: Mutex<Option<ThreadListSnapshotCache>>,
 }
@@ -389,6 +391,7 @@ impl AppState {
                 agent_team_group_store: self.ops.agent_team_group_store.clone(),
                 wikis: self.ops.wikis.clone(),
                 app_db: self.ops.app_db.clone(),
+                garyx_db: self.ops.garyx_db.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),
                 thread_list_snapshot: Mutex::new(None),
             },

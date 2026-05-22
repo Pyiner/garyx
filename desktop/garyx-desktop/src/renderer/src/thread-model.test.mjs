@@ -34,6 +34,7 @@ function makeState(overrides = {}) {
     workspaces: [],
     hiddenWorkspacePaths: [],
     selectedWorkspacePath: null,
+    pinnedThreadIds: [],
     threads: [],
     sessions: [],
     endpoints: [],

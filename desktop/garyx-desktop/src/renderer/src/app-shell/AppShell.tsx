@@ -483,50 +483,6 @@ function formatThreadTimestamp(value?: string | null): string {
   return `${Math.floor(diffDay / 365)}y`;
 }
 
-const PINNED_THREAD_IDS_STORAGE_KEY = "garyx.desktop.pinnedThreadIds";
-
-function normalizePinnedThreadIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  const seen = new Set<string>();
-  const ids: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const id = entry.trim();
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    ids.push(id);
-  }
-  return ids;
-}
-
-function readPinnedThreadIds(): string[] {
-  try {
-    return normalizePinnedThreadIds(
-      JSON.parse(window.localStorage.getItem(PINNED_THREAD_IDS_STORAGE_KEY) || "[]"),
-    );
-  } catch {
-    return [];
-  }
-}
-
-function writePinnedThreadIds(ids: string[]) {
-  try {
-    window.localStorage.setItem(
-      PINNED_THREAD_IDS_STORAGE_KEY,
-      JSON.stringify(normalizePinnedThreadIds(ids)),
-    );
-  } catch {
-    // Local storage may be unavailable in constrained renderer contexts.
-  }
-}
-
 function botLabel(channel: string, accountId: string): string {
   return accountId?.trim() || channelDisplayName(channel);
 }
@@ -1683,9 +1639,6 @@ export function AppShell() {
   const [botConversationGroupId, setBotConversationGroupId] = useState<string | null>(null);
   const [workspaceConversationPath, setWorkspaceConversationPath] =
     useState<string | null>(null);
-  const [pinnedThreadIds, setPinnedThreadIds] = useState<string[]>(() =>
-    readPinnedThreadIds(),
-  );
   const sidebarResizeStateRef = useRef<{
     startX: number;
     startWidth: number;
@@ -1713,9 +1666,6 @@ export function AppShell() {
   const [contentView, setContentViewRaw] = useState<ContentView>(() =>
     initialContentView(initialRouteValue),
   );
-  useEffect(() => {
-    writePinnedThreadIds(pinnedThreadIds);
-  }, [pinnedThreadIds]);
   useEffect(() => {
     if (contentView !== "thread" || !selectedThreadId) {
       setThreadEntrySelectionSource(null);
@@ -2356,6 +2306,7 @@ export function AppShell() {
     }
     return summaries;
   }, [activeThread, desktopState]);
+  const pinnedThreadIds = desktopState?.pinnedThreadIds || [];
   const pinnedThreadIdSet = useMemo(
     () => new Set(pinnedThreadIds),
     [pinnedThreadIds],
@@ -2363,15 +2314,6 @@ export function AppShell() {
   const selectedThreadPinned = selectedThreadId
     ? pinnedThreadIdSet.has(selectedThreadId)
     : false;
-  useEffect(() => {
-    if (!desktopState) {
-      return;
-    }
-    setPinnedThreadIds((current) => {
-      const next = current.filter((threadId) => threadSummaryById.has(threadId));
-      return next.length === current.length ? current : next;
-    });
-  }, [desktopState, threadSummaryById]);
   const activeThreadTeamView = deriveThreadTeamView(activeThread);
   const desktopAgentMap = new Map(
     desktopAgents.map((agent) => [agent.agentId, agent] as const),
@@ -2905,13 +2847,57 @@ export function AppShell() {
       visibleThreadEntrySelectionSource,
     ],
   );
+  function pinnedThreadIdsWith(
+    ids: string[],
+    threadId: string,
+    pinned: boolean,
+  ): string[] {
+    const normalizedId = threadId.trim();
+    if (!normalizedId) {
+      return ids;
+    }
+    const withoutThread = ids.filter((id) => id !== normalizedId);
+    return pinned ? [normalizedId, ...withoutThread] : withoutThread;
+  }
+
+  async function setThreadPinned(threadId: string, pinned: boolean) {
+    const normalizedId = threadId.trim();
+    if (!normalizedId) {
+      return;
+    }
+    setDesktopState((current) =>
+      current
+        ? {
+            ...current,
+            pinnedThreadIds: pinnedThreadIdsWith(
+              current.pinnedThreadIds || [],
+              normalizedId,
+              pinned,
+            ),
+          }
+        : current,
+    );
+    try {
+      const nextState = await window.garyxDesktop.setThreadPinned({
+        threadId: normalizedId,
+        pinned,
+      });
+      setDesktopState(nextState);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : pinned
+            ? t("Failed to pin thread")
+            : t("Failed to unpin thread"),
+      );
+      void refreshDesktopState().catch(() => null);
+    }
+  }
+
   function togglePinnedThread(threadId: string) {
-    setPinnedThreadIds((current) => {
-      if (current.includes(threadId)) {
-        return current.filter((id) => id !== threadId);
-      }
-      return [threadId, ...current];
-    });
+    const pinned = (desktopState?.pinnedThreadIds || []).includes(threadId);
+    void setThreadPinned(threadId, !pinned);
   }
   useEffect(() => {
     if (shouldShowConversationRail) {

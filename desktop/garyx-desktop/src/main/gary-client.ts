@@ -407,6 +407,15 @@ interface ThreadsPayload {
   sessions?: ThreadSummaryPayload[];
 }
 
+interface ThreadPinsPayload {
+  thread_ids?: string[];
+  threadIds?: string[];
+  pins?: Array<{
+    thread_id?: string;
+    threadId?: string;
+  }>;
+}
+
 interface ChannelEndpointsPayload {
   endpoints?: Array<{
     endpoint_key?: string;
@@ -2887,6 +2896,55 @@ export async function fetchThreads(
       ? payload.sessions
       : [];
   return threads.map(mapThreadSummary);
+}
+
+function mapThreadPinIds(payload: ThreadPinsPayload): string[] {
+  const rawIds = Array.isArray(payload.thread_ids)
+    ? payload.thread_ids
+    : Array.isArray(payload.threadIds)
+      ? payload.threadIds
+      : Array.isArray(payload.pins)
+        ? payload.pins.map((pin) => pin.thread_id || pin.threadId || "")
+        : [];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const rawId of rawIds) {
+    if (typeof rawId !== "string") {
+      continue;
+    }
+    const id = rawId.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+export async function fetchThreadPins(
+  settings: DesktopSettings,
+): Promise<string[]> {
+  const payload = await requestJson<ThreadPinsPayload>(settings, "/api/thread-pins", {
+    signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
+  });
+  return mapThreadPinIds(payload);
+}
+
+export async function setRemoteThreadPinned(
+  settings: DesktopSettings,
+  threadId: string,
+  pinned: boolean,
+): Promise<string[]> {
+  const payload = await requestJson<ThreadPinsPayload>(
+    settings,
+    `/api/thread-pins/${encodeURIComponent(threadId)}`,
+    {
+      method: pinned ? "PUT" : "DELETE",
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  return mapThreadPinIds(payload);
 }
 
 export async function createRemoteThread(

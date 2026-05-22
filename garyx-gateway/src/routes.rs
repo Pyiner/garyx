@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use crate::agent_identity::create_thread_for_agent_reference;
+use crate::garyx_db::{GaryxDbError, PinnedThreadRecord};
 use crate::provider_session_locator::recover_local_provider_session;
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
@@ -1044,6 +1045,40 @@ fn thread_summary(thread_id: &str, data: &Value) -> Value {
     })
 }
 
+fn thread_pin_ids(records: &[PinnedThreadRecord]) -> Vec<String> {
+    records
+        .iter()
+        .map(|record| record.thread_id.clone())
+        .collect()
+}
+
+fn thread_pins_payload(records: &[PinnedThreadRecord]) -> Value {
+    let thread_ids = records
+        .iter()
+        .map(|record| Value::String(record.thread_id.clone()))
+        .collect::<Vec<_>>();
+    json!({
+        "thread_ids": thread_ids,
+        "pins": records,
+    })
+}
+
+fn garyx_db_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
+    let (status, code) = match &error {
+        GaryxDbError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BadRequest"),
+        GaryxDbError::LockPoisoned | GaryxDbError::Io(_) | GaryxDbError::Sqlite(_) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "InternalError")
+        }
+    };
+    (
+        status,
+        Json(json!({
+            "error": code,
+            "message": error.to_string(),
+        })),
+    )
+}
+
 /// Build the read-only `team` block for a thread metadata response when the
 /// thread's `agent_id` resolves to an AgentTeam. Returns `None` for
 /// standalone-agent threads (including threads without an `agent_id`).
@@ -1175,6 +1210,71 @@ pub async fn get_thread(
             StatusCode::NOT_FOUND,
             Json(json!({"error": "thread not found"})),
         ),
+    }
+}
+
+/// GET /api/thread-pins - list pinned thread ids in display order.
+pub async fn list_thread_pins(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match state.ops.garyx_db.list_pinned_threads() {
+        Ok(records) => (StatusCode::OK, Json(thread_pins_payload(&records))).into_response(),
+        Err(error) => garyx_db_error_response(error).into_response(),
+    }
+}
+
+/// PUT /api/thread-pins/:key - mark a thread as pinned.
+pub async fn pin_thread(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> impl IntoResponse {
+    let Some(thread_id) = ensure_existing_thread_id(&state, &key).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({"pinned": false, "error": "thread not found"})),
+        )
+            .into_response();
+    };
+    match state.ops.garyx_db.pin_thread(&thread_id) {
+        Ok(record) => match state.ops.garyx_db.list_pinned_threads() {
+            Ok(records) => (
+                StatusCode::OK,
+                Json(json!({
+                    "pinned": true,
+                    "pin": record,
+                    "thread_ids": thread_pin_ids(&records),
+                    "pins": records,
+                })),
+            )
+                .into_response(),
+            Err(error) => garyx_db_error_response(error).into_response(),
+        },
+        Err(error) => garyx_db_error_response(error).into_response(),
+    }
+}
+
+/// DELETE /api/thread-pins/:key - remove a thread pin.
+pub async fn unpin_thread(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+) -> impl IntoResponse {
+    let thread_id = ensure_existing_thread_id(&state, &key)
+        .await
+        .unwrap_or_else(|| key.trim().to_owned());
+    match state.ops.garyx_db.unpin_thread(&thread_id) {
+        Ok(removed) => match state.ops.garyx_db.list_pinned_threads() {
+            Ok(records) => (
+                StatusCode::OK,
+                Json(json!({
+                    "pinned": false,
+                    "removed": removed,
+                    "thread_id": thread_id,
+                    "thread_ids": thread_pin_ids(&records),
+                    "pins": records,
+                })),
+            )
+                .into_response(),
+            Err(error) => garyx_db_error_response(error).into_response(),
+        },
+        Err(error) => garyx_db_error_response(error).into_response(),
     }
 }
 
@@ -1450,6 +1550,7 @@ pub async fn delete_thread(
         .delete_thread_history(&thread_id)
         .await;
     let _ = state.ops.thread_logs.delete_thread(&thread_id).await;
+    let _ = state.ops.garyx_db.unpin_thread(&thread_id);
     rebuild_thread_indexes(&state).await;
     state.invalidate_gateway_sync_caches().await;
     (

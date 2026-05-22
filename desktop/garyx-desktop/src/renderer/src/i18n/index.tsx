@@ -114,6 +114,8 @@ const zhCN: Record<string, string> = {
   'Open {name} thread': '打开 {name} 线程',
   'Opening folder': '正在打开文件夹',
   'Opening folder…': '正在打开文件夹…',
+  'Failed to pin thread': '置顶线程失败',
+  'Failed to unpin thread': '取消置顶线程失败',
   'Pin thread': '置顶线程',
   'Pinned': '置顶',
   'Paste a Claude, Codex, or Gemini session ID. Garyx will recover its workspace and bind a thread to it.': '粘贴 Claude、Codex 或 Gemini 的 session ID。Garyx 会恢复它的工作区并绑定一个线程。',
