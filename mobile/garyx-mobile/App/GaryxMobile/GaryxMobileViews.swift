@@ -11,6 +11,15 @@ enum GaryxMobileMotion {
     static let rowSwipe = Animation.interactiveSpring(response: 0.22, dampingFraction: 0.92, blendDuration: 0.04)
 }
 
+private func garyxDismissKeyboard() {
+    UIApplication.shared.sendAction(
+        #selector(UIResponder.resignFirstResponder),
+        to: nil,
+        from: nil,
+        for: nil
+    )
+}
+
 struct GaryxRootView: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
@@ -1617,44 +1626,27 @@ struct GaryxThreadHistoryLoadingView: View {
 
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @FocusState private var isComposerFocused: Bool
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 14) {
-                    if model.messages.isEmpty, model.isLoadingSelectedThreadHistory {
-                        GaryxThreadHistoryLoadingView()
-                            .padding(.top, 96)
-                    } else if model.messages.isEmpty {
-                        if model.showsTailThinkingIndicator {
-                            GaryxThinkingLabel()
-                                .padding(.top, 96)
-                        } else {
-                            GaryxEmptyConversationView()
-                                .padding(.top, 96)
-                        }
-                    } else {
-                        ForEach(model.messages) { message in
-                            GaryxMessageBubble(message: message)
-                                .id(message.id)
-                        }
-                        if model.showsTailThinkingIndicator {
-                            GaryxThinkingLabel()
-                                .id("tail-thinking")
-                        }
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 18)
-                .padding(.bottom, 12)
+            VStack(spacing: 0) {
+                messageScroll
+
+                GaryxComposer(isFocused: $isComposerFocused)
+                    .background(Color.clear)
             }
-            .refreshable {
-                await model.loadSelectedThreadHistory()
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: model.messages) { _, newValue in
                 guard let last = newValue.last else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo(last.id, anchor: .bottom)
+                }
+            }
+            .onChange(of: isComposerFocused) { _, isFocused in
+                guard isFocused else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    scrollToConversationTail(proxy)
                 }
             }
         }
@@ -1663,11 +1655,73 @@ struct GaryxConversationView: View {
             GaryxConversationHeader()
                 .modifier(GaryxSidebarHeaderBackdropModifier())
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            GaryxComposer()
-                .background(Color.clear)
-        }
         .garyxAdaptiveSoftScrollEdge(for: .top)
+    }
+
+    private var messageScroll: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                if model.messages.isEmpty, model.isLoadingSelectedThreadHistory {
+                    GaryxThreadHistoryLoadingView()
+                        .padding(.top, 96)
+                } else if model.messages.isEmpty {
+                    if model.showsTailThinkingIndicator {
+                        GaryxThinkingLabel()
+                            .padding(.top, 96)
+                    } else {
+                        GaryxEmptyConversationView()
+                            .padding(.top, 96)
+                    }
+                } else {
+                    ForEach(model.messages) { message in
+                        GaryxMessageBubble(message: message)
+                            .id(message.id)
+                    }
+                    if model.showsTailThinkingIndicator {
+                        GaryxThinkingLabel()
+                            .id("tail-thinking")
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 18)
+            .padding(.bottom, 12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .scrollDisabled(isComposerFocused)
+        .scrollDismissesKeyboard(.never)
+        .refreshable {
+            await model.loadSelectedThreadHistory()
+        }
+        .overlay {
+            if isComposerFocused {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        dismissComposerKeyboard()
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+                            .onChanged { _ in
+                                dismissComposerKeyboard()
+                            }
+                    )
+            }
+        }
+    }
+
+    private func scrollToConversationTail(_ proxy: ScrollViewProxy) {
+        if model.showsTailThinkingIndicator {
+            proxy.scrollTo("tail-thinking", anchor: .bottom)
+        } else if let last = model.messages.last {
+            proxy.scrollTo(last.id, anchor: .bottom)
+        }
+    }
+
+    private func dismissComposerKeyboard() {
+        guard isComposerFocused else { return }
+        isComposerFocused = false
+        garyxDismissKeyboard()
     }
 }
 
@@ -1769,17 +1823,8 @@ struct GaryxConversationHeader: View {
     }
 
     private func openSidebar() {
-        hideKeyboard()
+        garyxDismissKeyboard()
         model.setSidebarVisible(true)
-    }
-
-    private func hideKeyboard() {
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil
-        )
     }
 }
 
@@ -2887,7 +2932,7 @@ private enum GaryxComposerLayout {
 
 struct GaryxComposer: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @FocusState private var isFocused: Bool
+    let isFocused: FocusState<Bool>.Binding
     @State private var isPickingAttachments = false
     @State private var isPickingPhotos = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
@@ -2979,7 +3024,7 @@ struct GaryxComposer: View {
                 .id(GaryxComposerLayout.draftFieldIdentity)
                 .font(GaryxFont.subheadline())
                 .foregroundStyle(.primary)
-                .focused($isFocused)
+                .focused(isFocused)
                 .lineLimit(1...4)
                 .submitLabel(.send)
                 .onSubmit {
@@ -2992,7 +3037,7 @@ struct GaryxComposer: View {
         .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
         .contentShape(Rectangle())
         .onTapGesture {
-            isFocused = true
+            isFocused.wrappedValue = true
         }
     }
 
@@ -3129,7 +3174,7 @@ struct GaryxComposer: View {
     private func insertSlashCommand(_ command: GaryxSlashCommand) {
         let normalizedName = command.name.hasPrefix("/") ? command.name : "/\(command.name)"
         model.draft = normalizedName + " "
-        isFocused = true
+        isFocused.wrappedValue = true
     }
 
     private func configuredBot(for group: GaryxMobileBotGroup) -> GaryxConfiguredBot? {

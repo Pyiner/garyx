@@ -121,6 +121,10 @@ needs installed-app validation.
   conversation/thread lists inside bot or workspace drilldown layers.
 - Mobile sidebar primary navigation should keep only Automation at the root;
   Tasks, Auto Research, Agents, and Skills belong under Settings.
+- Mobile chat keyboard handling should treat the message area and composer as
+  one vertical stack: the keyboard shrinks/moves both together, the composer
+  remains attached below the messages, and the first tap or drag in the message
+  area dismisses the keyboard before message scrolling resumes.
 - Mobile management screens should not expose create/edit forms inline by
   default. Use top navigation actions to open full-screen add/edit flows, not
   compact sheets or always-visible forms, and keep the main page focused on
