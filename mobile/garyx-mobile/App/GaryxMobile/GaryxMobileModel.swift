@@ -3864,9 +3864,14 @@ final class GaryxMobileModel: ObservableObject {
             case .tool:
                 if local.isStreaming || local.toolTraceGroup?.isActive == true {
                     if let localGroup = local.toolTraceGroup,
-                       let remoteIndex = merged.firstIndex(where: { remote in
+                       let remoteIndex = merged.indices.first(where: { remoteIndex in
+                           let remote = merged[remoteIndex]
                            guard let remoteGroup = remote.toolTraceGroup else { return false }
-                           return Self.toolTraceGroupsOverlap(remoteGroup, localGroup)
+                           return Self.toolTraceGroupsOverlap(
+                               remoteGroup,
+                               localGroup,
+                               allowFingerprint: Self.isInCurrentTurn(index: remoteIndex, messages: merged)
+                           )
                        }) {
                         if var remoteGroup = merged[remoteIndex].toolTraceGroup {
                             remoteGroup = Self.mergedToolTraceGroup(remoteGroup, with: localGroup)
@@ -3907,11 +3912,19 @@ final class GaryxMobileModel: ObservableObject {
 
     private static func toolTraceGroupsOverlap(
         _ left: GaryxMobileToolTraceGroup,
-        _ right: GaryxMobileToolTraceGroup
+        _ right: GaryxMobileToolTraceGroup,
+        allowFingerprint: Bool
     ) -> Bool {
-        let leftKeys = Set(left.entries.compactMap(toolTraceMergeKey))
-        let rightKeys = Set(right.entries.compactMap(toolTraceMergeKey))
+        let leftKeys = Set(left.entries.compactMap { toolTraceMergeKey($0, includeFingerprint: allowFingerprint) })
+        let rightKeys = Set(right.entries.compactMap { toolTraceMergeKey($0, includeFingerprint: allowFingerprint) })
         return !leftKeys.isDisjoint(with: rightKeys)
+    }
+
+    private static func isInCurrentTurn(index: Int, messages: [GaryxMobileMessage]) -> Bool {
+        guard let lastUserIndex = messages.lastIndex(where: { $0.role == .user }) else {
+            return true
+        }
+        return index > lastUserIndex
     }
 
     private static func mergedToolTraceGroup(
@@ -3933,10 +3946,16 @@ final class GaryxMobileModel: ObservableObject {
         return merged
     }
 
-    private static func toolTraceMergeKey(_ entry: GaryxMobileToolTraceEntry) -> String? {
+    private static func toolTraceMergeKey(
+        _ entry: GaryxMobileToolTraceEntry,
+        includeFingerprint: Bool = true
+    ) -> String? {
         if let toolUseId = entry.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !toolUseId.isEmpty {
             return "id:\(toolUseId)"
+        }
+        guard includeFingerprint else {
+            return nil
         }
         let normalizedTool = entry.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let input = entry.inputText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
