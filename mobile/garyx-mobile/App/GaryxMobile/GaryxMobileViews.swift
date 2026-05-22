@@ -476,9 +476,6 @@ struct GaryxThreadSidebar: View {
             .onAppear {
                 reconcileActiveDrilldown()
             }
-            .onChange(of: model.pinnedThreads.map(\.id)) { _, _ in
-                reconcileActiveDrilldown()
-            }
             .onChange(of: model.sidebarUnscopedThreads.map(\.id)) { _, _ in
                 reconcileActiveDrilldown()
             }
@@ -529,8 +526,6 @@ struct GaryxThreadSidebar: View {
     @ViewBuilder
     private var sidebarThreadSections: some View {
         switch activeDrilldown {
-        case .pinned:
-            GaryxPinnedThreadsSection(activeDrilldown: $activeDrilldown)
         case .unscopedThreads:
             GaryxUnscopedThreadsSection(activeDrilldown: $activeDrilldown)
         case .bot:
@@ -538,7 +533,7 @@ struct GaryxThreadSidebar: View {
         case .workspace:
             GaryxWorkspaceThreadGroupsSection(activeDrilldown: $activeDrilldown)
         case nil:
-            GaryxPinnedThreadsSection(activeDrilldown: $activeDrilldown)
+            GaryxPinnedThreadsSection()
             GaryxSidebarBotsSection(activeDrilldown: $activeDrilldown)
             GaryxWorkspaceThreadGroupsSection(activeDrilldown: $activeDrilldown)
         }
@@ -546,8 +541,6 @@ struct GaryxThreadSidebar: View {
 
     private var sidebarHeaderContext: GaryxSidebarHeaderContext? {
         switch activeDrilldown {
-        case .pinned:
-            GaryxSidebarHeaderContext(title: "Pinned", subtitle: nil)
         case .unscopedThreads:
             GaryxSidebarHeaderContext(title: "Threads", subtitle: nil)
         case let .bot(id):
@@ -575,8 +568,6 @@ struct GaryxThreadSidebar: View {
 
     private func reconcileActiveDrilldown() {
         switch activeDrilldown {
-        case .pinned where model.pinnedThreads.isEmpty:
-            activeDrilldown = nil
         case .unscopedThreads where model.sidebarUnscopedThreads.isEmpty:
             activeDrilldown = nil
         case let .bot(id):
@@ -762,7 +753,6 @@ private struct GaryxSidebarWorkspaceThreadGroup: Identifiable {
 }
 
 private enum GaryxSidebarDrilldown: Equatable {
-    case pinned
     case unscopedThreads
     case bot(String)
     case workspace(String)
@@ -824,26 +814,11 @@ private func garyxThreadSort(_ lhs: GaryxThreadSummary, _ rhs: GaryxThreadSummar
 
 private struct GaryxPinnedThreadsSection: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @Binding var activeDrilldown: GaryxSidebarDrilldown?
 
     var body: some View {
-        if activeDrilldown == .pinned || !model.pinnedThreads.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                if activeDrilldown == .pinned {
-                    GaryxPinnedThreadsDetailSection()
-                } else {
-                    GaryxSidebarDisclosureRow(
-                        title: "Pinned",
-                        systemName: "pin.fill"
-                    ) {
-                        withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                            activeDrilldown = .pinned
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-            .padding(.bottom, 10)
+        if !model.pinnedThreads.isEmpty {
+            GaryxPinnedThreadsDetailSection()
+                .padding(.bottom, 10)
         }
     }
 }
@@ -900,21 +875,16 @@ private struct GaryxPinnedThreadsDetailSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
+            GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
                 .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                 .padding(.bottom, 4)
 
-            if model.pinnedThreads.isEmpty {
-                GaryxSidebarEmptyState()
-                    .padding(.vertical, 12)
-            } else {
-                ForEach(model.pinnedThreads) { thread in
-                    GaryxSidebarThreadButton(
-                        thread: thread,
-                        showsPinnedMarker: true,
-                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
-                    )
-                }
+            ForEach(model.pinnedThreads) { thread in
+                GaryxSidebarThreadButton(
+                    thread: thread,
+                    showsPinnedMarker: true,
+                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                )
             }
         }
         .transition(.opacity)

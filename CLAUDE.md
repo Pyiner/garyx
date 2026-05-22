@@ -114,6 +114,8 @@ needs installed-app validation.
 - Mobile sidebars should keep workspace navigation as a two-stage flow: list
   workspace folders first, then show the selected workspace's threads in that
   workspace detail layer. Do not dump every workspace's sessions inline at once.
+- Pinned mobile threads are the root-sidebar exception: render pinned threads
+  inline as a compact section rather than hiding them behind a drilldown row.
 - Mobile sidebar root content should not render inline loading rows or raw
   thread/session lists. Use one unobtrusive global loading indicator and keep
   conversation/thread lists inside bot or workspace drilldown layers.
