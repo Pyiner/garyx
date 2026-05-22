@@ -25,7 +25,6 @@ import {
   type DesktopAutomationSummary,
   type DesktopBotConsoleSummary,
   type DesktopCustomAgent,
-  type DesktopRemoteStateError,
   type DesktopTeam,
   type GatewaySettingsPayload,
   type GatewaySettingsSource,
@@ -195,6 +194,10 @@ import {
   workspaceDirectoryKey,
   workspaceFileAbsolutePath,
 } from "./workspace-helpers";
+import {
+  isTransientGatewayErrorMessage,
+  summarizeRemoteStateErrors,
+} from "./gateway-errors";
 import { buildAgentOptions, buildAgentTargetOptions } from "./agent-options";
 import {
   I18nProvider,
@@ -1475,51 +1478,6 @@ function shouldRetryStartupHydration(
     (status.threadCount || status.sessionCount || 0) > 0 ||
     state.workspaces.some((workspace) => workspace.available)
   );
-}
-
-function isTransientGatewayErrorMessage(
-  message: string | null | undefined,
-): boolean {
-  const normalized = message?.trim().toLowerCase() || "";
-  if (!normalized) {
-    return false;
-  }
-  return [
-    "unable to reach gary gateway",
-    "failed to fetch",
-    "fetch failed",
-    "networkerror",
-    "network request failed",
-    "network request timed out",
-    "network timeout",
-    "timed out",
-    "connection refused",
-    "connection reset",
-    "socket hang up",
-    "econnrefused",
-    "econnreset",
-    "enotfound",
-    "ehostunreach",
-  ].some((needle) => normalized.includes(needle));
-}
-
-function summarizeRemoteStateErrors(
-  errors: DesktopRemoteStateError[] | null | undefined,
-): { key: string; message: string } | null {
-  const activeErrors = (errors || []).filter((entry) => entry.message.trim());
-  if (!activeErrors.length) {
-    return null;
-  }
-  const labels = activeErrors.map((entry) => entry.label);
-  const firstMessage = activeErrors[0]?.message.trim() || "unknown error";
-  const detail =
-    firstMessage.length > 96 ? `${firstMessage.slice(0, 93)}...` : firstMessage;
-  return {
-    key: activeErrors
-      .map((entry) => `${entry.source}:${entry.message}`)
-      .join("|"),
-    message: `Gateway sync incomplete: ${labels.join(", ")} failed. ${detail}`,
-  };
 }
 
 function gatewaySetupMessageForAuthError(

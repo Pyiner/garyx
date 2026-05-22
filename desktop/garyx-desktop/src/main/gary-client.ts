@@ -125,6 +125,7 @@ const DEFAULT_THREAD_HISTORY_PAGE_SIZE = 100;
 const DEFAULT_THREAD_HISTORY_USER_QUERY_LIMIT = 10;
 const MAX_THREAD_HISTORY_PAGE_SIZE = 500;
 const MAX_THREAD_HISTORY_USER_QUERY_LIMIT = 50;
+const REMOTE_STATE_FETCH_TIMEOUT_MS = 30_000;
 const LOCAL_GATEWAY_HOSTS = new Set([
   "127.0.0.1",
   "localhost",
@@ -2877,7 +2878,7 @@ export async function fetchThreads(
   settings: DesktopSettings,
 ): Promise<DesktopThreadSummary[]> {
   const payload = await requestJson<ThreadsPayload>(settings, "/api/threads", {
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
   });
 
   const threads = Array.isArray(payload.threads)
@@ -3003,7 +3004,7 @@ export async function fetchChannelEndpoints(
     settings,
     "/api/channel-endpoints",
     {
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
     },
   );
 
@@ -3831,7 +3832,7 @@ export async function fetchConfiguredBots(
   const payload = await requestJson<{ bots?: ConfiguredBotPayload[] }>(
     settings,
     "/api/configured-bots",
-    { signal: AbortSignal.timeout(8000) },
+    { signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS) },
   );
   return Array.isArray(payload.bots) ? payload.bots : [];
 }
@@ -3842,7 +3843,7 @@ export async function fetchBotConsoles(
   const payload = await requestJson<{ bots?: BotConsoleSummaryPayload[] }>(
     settings,
     "/api/bot-consoles",
-    { signal: AbortSignal.timeout(8000) },
+    { signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS) },
   );
   return Array.isArray(payload.bots)
     ? payload.bots.map(mapBotConsoleSummary)
@@ -3856,7 +3857,7 @@ export async function fetchAutomations(
     settings,
     "/api/automations",
     {
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
     },
   );
 
