@@ -1384,6 +1384,7 @@ const DEEP_LINK_GATEWAY_RETRY_DELAYS_MS = [0, 300, 650, 1_100, 1_700, 2_500];
 const TRANSIENT_STATUS_MS = 3200;
 const ERROR_TOAST_MS = 4400;
 const GATEWAY_HEALTHY_POLL_MS = 12000;
+const SILENT_DESKTOP_STATE_REFRESH_MS = 15000;
 const GATEWAY_RETRY_BACKOFF_MS = [2500, 4000, 6500, 10000, 15000];
 
 function savedContentView(): ContentView {
@@ -4098,6 +4099,48 @@ export function AppShell() {
       window.clearTimeout(timeoutId);
     };
   }, [connection?.ok, settingsDraft.gatewayUrl]);
+
+  useEffect(() => {
+    if (!connection?.ok || loading) {
+      return;
+    }
+
+    let cancelled = false;
+    let refreshing = false;
+
+    const refreshSilently = async () => {
+      if (cancelled || document.hidden || refreshing) {
+        return;
+      }
+
+      refreshing = true;
+      try {
+        await refreshDesktopState();
+      } catch (refreshError) {
+        console.debug("Silent desktop state refresh failed.", refreshError);
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      void refreshSilently();
+    }, SILENT_DESKTOP_STATE_REFRESH_MS);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        void refreshSilently();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [connection?.ok, loading]);
 
   useEffect(() => {
     const previousOk = previousConnectionOkRef.current;
