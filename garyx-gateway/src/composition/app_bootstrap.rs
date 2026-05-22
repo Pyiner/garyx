@@ -455,6 +455,8 @@ impl AppStateBuilder {
                 agent_team_group_store: group_store,
                 wikis: self.wikis,
                 app_db: self.app_db,
+                channel_endpoint_snapshot: Mutex::new(None),
+                thread_list_snapshot: Mutex::new(None),
             },
             integration: IntegrationState {
                 bridge: self.bridge,

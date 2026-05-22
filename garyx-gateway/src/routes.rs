@@ -885,6 +885,7 @@ pub(crate) async fn bind_channel_endpoint_key_to_thread(
     match bind_result {
         Ok(previous_thread_id) => {
             rebuild_thread_indexes(state).await;
+            state.invalidate_gateway_sync_caches().await;
             Ok(ChannelEndpointBindResult {
                 thread_id,
                 previous_thread_id,
@@ -943,6 +944,7 @@ pub(crate) async fn detach_channel_endpoint_key(
                 router.rebuild_routing_index(&endpoint.channel).await;
             }
             rebuild_thread_indexes(state).await;
+            state.invalidate_gateway_sync_caches().await;
             Ok(ChannelEndpointDetachResult {
                 previous_thread_id,
                 endpoint_key: requested_endpoint_key,
@@ -1166,35 +1168,20 @@ pub async fn list_threads(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListThreadsParams>,
 ) -> impl IntoResponse {
-    let keys = state
-        .threads
-        .thread_store
-        .list_keys(params.prefix.as_deref())
-        .await;
+    let entries = state.cached_thread_list_entries().await;
     let mut candidates = Vec::new();
-    for key in keys {
-        if !is_thread_key(&key) {
+    for entry in entries {
+        if let Some(prefix) = params.prefix.as_deref()
+            && !entry.key.starts_with(prefix)
+        {
             continue;
         }
-        let Some(data) = state.threads.thread_store.get(&key).await else {
-            continue;
-        };
+        let data = entry.data;
         if !params.include_hidden && is_hidden_thread_value(&data) {
             continue;
         }
-        candidates.push((key, data));
+        candidates.push((entry.key, data));
     }
-
-    candidates.sort_by(|(left_key, left), (right_key, right)| {
-        let right_updated = right
-            .get("updated_at")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let left_updated = left.get("updated_at").and_then(Value::as_str).unwrap_or("");
-        right_updated
-            .cmp(left_updated)
-            .then_with(|| left_key.as_str().cmp(right_key.as_str()))
-    });
 
     let total = candidates.len();
     let limit = params.limit.min(MAX_THREAD_LIMIT);
@@ -1374,6 +1361,7 @@ pub async fn create_thread(
                 );
             }
             rebuild_thread_indexes(&state).await;
+            state.invalidate_gateway_sync_caches().await;
             (
                 StatusCode::CREATED,
                 Json(thread_summary_with_history(&state, &thread_id, &data).await),
@@ -1421,6 +1409,7 @@ pub async fn update_thread(
                 .bridge
                 .set_thread_workspace_binding(&thread_id, workspace_dir_from_value(&data))
                 .await;
+            state.invalidate_gateway_sync_caches().await;
             (
                 StatusCode::OK,
                 Json(thread_summary_with_history(&state, &thread_id, &data).await),
@@ -1516,6 +1505,7 @@ pub async fn delete_thread(
         .await;
     let _ = state.ops.thread_logs.delete_thread(&thread_id).await;
     rebuild_thread_indexes(&state).await;
+    state.invalidate_gateway_sync_caches().await;
     (
         StatusCode::OK,
         Json(json!({"deleted": true, "thread_id": thread_id})),
@@ -1524,7 +1514,7 @@ pub async fn delete_thread(
 
 /// GET /api/channel-endpoints - list known channel endpoints
 pub async fn list_channel_endpoints(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
+    let endpoints = state.cached_channel_endpoints().await;
     Json(json!({
         "endpoints": endpoints.iter().map(channel_endpoint_response_value).collect::<Vec<_>>(),
     }))
@@ -1550,7 +1540,7 @@ pub async fn workspace_git_status(
 /// GET /api/configured-bots - list all configured channel bot accounts from config
 pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config_snapshot();
-    let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
+    let endpoints = state.cached_channel_endpoints().await;
     let mut bots = Vec::new();
 
     for account in configured_channel_accounts(&config.channels) {
@@ -1609,7 +1599,7 @@ pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl In
 /// GET /api/bot-consoles - list aggregated bot console summaries
 pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config_snapshot();
-    let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
+    let endpoints = state.cached_channel_endpoints().await;
     let mut groups = BTreeMap::<String, Value>::new();
 
     for account in configured_channel_accounts(&config.channels) {

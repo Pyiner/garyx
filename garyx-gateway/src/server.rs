@@ -31,9 +31,10 @@ impl Gateway {
     /// Serve the gateway, blocking until `shutdown_signal` fires.
     pub async fn serve(self, addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
         start_gateway_runtime(self.state.clone());
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        self.state.spawn_gateway_sync_cache_warmup();
         tracing::info!("Gateway listening on {}", addr);
 
-        let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(
             listener,
             self.router

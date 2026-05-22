@@ -5,14 +5,18 @@ use garyx_channels::{
 };
 use garyx_models::config::GaryxConfig;
 use garyx_models::thread_logs::ThreadLogSink;
-use garyx_router::{MessageLedgerStore, MessageRouter, ThreadHistoryRepository, ThreadStore};
+use garyx_router::{
+    KnownChannelEndpoint, MessageLedgerStore, MessageRouter, ThreadHistoryRepository, ThreadStore,
+    is_thread_key, list_known_channel_endpoints,
+};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 #[cfg(test)]
 use tokio::sync::broadcast;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::agent_teams::AgentTeamStore;
 use crate::api::RestartTracker;
@@ -60,7 +64,27 @@ pub struct OpsState {
     pub agent_team_group_store: Arc<dyn garyx_bridge::providers::agent_team::GroupStore>,
     pub wikis: Arc<WikiStore>,
     pub app_db: Arc<AppDbService>,
+    pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
+    pub thread_list_snapshot: Mutex<Option<ThreadListSnapshotCache>>,
 }
+
+pub struct ChannelEndpointSnapshotCache {
+    endpoints: Vec<KnownChannelEndpoint>,
+    expires_at: Instant,
+}
+
+#[derive(Clone)]
+pub struct ThreadListEntrySnapshot {
+    pub key: String,
+    pub data: Value,
+}
+
+pub struct ThreadListSnapshotCache {
+    entries: Vec<ThreadListEntrySnapshot>,
+    expires_at: Instant,
+}
+
+const GATEWAY_SYNC_SNAPSHOT_TTL: Duration = Duration::from_secs(5);
 
 pub struct IntegrationState {
     pub bridge: Arc<MultiProviderBridge>,
@@ -119,6 +143,122 @@ impl AppState {
     /// immediately.
     pub fn channel_plugin_manager(&self) -> Arc<Mutex<ChannelPluginManager>> {
         self.integration.channel_plugin_manager.clone()
+    }
+
+    pub async fn cached_thread_list_entries(&self) -> Vec<ThreadListEntrySnapshot> {
+        let now = Instant::now();
+        let mut cache = self.ops.thread_list_snapshot.lock().await;
+        if let Some(snapshot) = cache.as_ref()
+            && snapshot.expires_at > now
+        {
+            debug!(
+                thread_count = snapshot.entries.len(),
+                "thread list snapshot cache hit"
+            );
+            return snapshot.entries.clone();
+        }
+
+        let started = Instant::now();
+        let keys = self.threads.thread_store.list_keys(None).await;
+        let mut entries = Vec::new();
+        for key in keys {
+            if !is_thread_key(&key) {
+                continue;
+            }
+            let Some(data) = self.threads.thread_store.get(&key).await else {
+                continue;
+            };
+            entries.push(ThreadListEntrySnapshot { key, data });
+        }
+        entries.sort_by(|left, right| {
+            let right_updated = right
+                .data
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let left_updated = left
+                .data
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            right_updated
+                .cmp(left_updated)
+                .then_with(|| left.key.as_str().cmp(right.key.as_str()))
+        });
+
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        debug!(
+            elapsed_ms,
+            thread_count = entries.len(),
+            "thread list snapshot refreshed"
+        );
+        *cache = Some(ThreadListSnapshotCache {
+            entries: entries.clone(),
+            expires_at: Instant::now() + GATEWAY_SYNC_SNAPSHOT_TTL,
+        });
+        entries
+    }
+
+    pub async fn cached_channel_endpoints(&self) -> Vec<KnownChannelEndpoint> {
+        let now = Instant::now();
+        let mut cache = self.ops.channel_endpoint_snapshot.lock().await;
+        if let Some(snapshot) = cache.as_ref()
+            && snapshot.expires_at > now
+        {
+            debug!(
+                endpoint_count = snapshot.endpoints.len(),
+                "channel endpoint snapshot cache hit"
+            );
+            return snapshot.endpoints.clone();
+        }
+
+        let started = Instant::now();
+        let endpoints = list_known_channel_endpoints(&self.threads.thread_store).await;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        debug!(
+            elapsed_ms,
+            endpoint_count = endpoints.len(),
+            "channel endpoint snapshot refreshed"
+        );
+        *cache = Some(ChannelEndpointSnapshotCache {
+            endpoints: endpoints.clone(),
+            expires_at: Instant::now() + GATEWAY_SYNC_SNAPSHOT_TTL,
+        });
+        endpoints
+    }
+
+    pub async fn invalidate_thread_list_cache(&self) {
+        let mut cache = self.ops.thread_list_snapshot.lock().await;
+        if cache.take().is_some() {
+            debug!("thread list snapshot cache invalidated");
+        }
+    }
+
+    pub async fn invalidate_channel_endpoint_cache(&self) {
+        let mut cache = self.ops.channel_endpoint_snapshot.lock().await;
+        if cache.take().is_some() {
+            debug!("channel endpoint snapshot cache invalidated");
+        }
+    }
+
+    pub async fn invalidate_gateway_sync_caches(&self) {
+        self.invalidate_thread_list_cache().await;
+        self.invalidate_channel_endpoint_cache().await;
+    }
+
+    pub fn spawn_gateway_sync_cache_warmup(self: &Arc<Self>) {
+        let state = Arc::clone(self);
+        tokio::spawn(async move {
+            let started = Instant::now();
+            let threads = state.cached_thread_list_entries().await.len();
+            let endpoints = state.cached_channel_endpoints().await.len();
+            debug!(
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                thread_count = threads,
+                endpoint_count = endpoints,
+                "gateway sync snapshots warmed"
+            );
+        });
     }
 
     pub async fn apply_runtime_config(&self, config: GaryxConfig) -> Result<(), BridgeError> {
@@ -249,6 +389,8 @@ impl AppState {
                 agent_team_group_store: self.ops.agent_team_group_store.clone(),
                 wikis: self.ops.wikis.clone(),
                 app_db: self.ops.app_db.clone(),
+                channel_endpoint_snapshot: Mutex::new(None),
+                thread_list_snapshot: Mutex::new(None),
             },
             integration: IntegrationState {
                 bridge: self.integration.bridge.clone(),
