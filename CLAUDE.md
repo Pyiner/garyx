@@ -125,6 +125,10 @@ needs installed-app validation.
   one vertical stack: the keyboard shrinks/moves both together, the composer
   remains attached below the messages, and the first tap or drag in the message
   area dismisses the keyboard before message scrolling resumes.
+- Mobile chat transcript rendering should derive display rows from a pure
+  user-turn model that mirrors the Mac app: completed final assistant answers
+  stay outside turn collapsibles, intermediate activity folds under the turn,
+  and tool groups default collapsed unless the containing turn is expanded.
 - Mobile management screens should not expose create/edit forms inline by
   default. Use top navigation actions to open full-screen add/edit flows, not
   compact sheets or always-visible forms, and keep the main page focused on

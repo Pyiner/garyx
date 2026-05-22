@@ -166,163 +166,6 @@ struct GaryxMobileBotGroup: Identifiable, Equatable {
     let iconDataUrl: String?
 }
 
-struct GaryxMobileMessage: Identifiable, Equatable {
-    enum Role: Equatable {
-        case user
-        case assistant
-        case system
-        case tool
-    }
-
-    let id: String
-    var role: Role
-    var text: String
-    var attachments: [GaryxMobileMessageAttachment] = []
-    var timestamp: String?
-    var isStreaming: Bool
-    var statusText: String? = nil
-    var clientIntentId: String? = nil
-    var pendingInputId: String? = nil
-    var toolTraceGroup: GaryxMobileToolTraceGroup? = nil
-}
-
-struct GaryxMobileMessageAttachment: Identifiable, Equatable {
-    var id: String
-    var kind: String
-    var name: String
-    var mediaType: String
-    var path: String?
-    var dataUrl: String?
-    var remoteUrl: String?
-
-    var isImage: Bool {
-        kind.caseInsensitiveCompare("image") == .orderedSame || mediaType.hasPrefix("image/")
-    }
-
-    var contentDescriptor: GaryxContentAttachmentDescriptor {
-        GaryxContentAttachmentDescriptor(
-            id: id,
-            kind: kind,
-            name: name,
-            mediaType: mediaType,
-            path: path,
-            dataUrl: dataUrl,
-            remoteUrl: remoteUrl
-        )
-    }
-}
-
-enum GaryxMobileToolTraceStatus: String, Equatable {
-    case running
-    case completed
-    case failed
-
-    var label: String {
-        switch self {
-        case .running:
-            "running"
-        case .completed:
-            "done"
-        case .failed:
-            "error"
-        }
-    }
-}
-
-struct GaryxMobileToolTraceGroup: Equatable {
-    var entries: [GaryxMobileToolTraceEntry]
-    var live: Bool = false
-
-    var isActive: Bool {
-        live && entries.contains { $0.status == .running }
-    }
-
-    var defaultExpanded: Bool {
-        isActive
-    }
-
-    var summary: String {
-        guard !entries.isEmpty else { return "Tool activity" }
-        if entries.count == 1, let first = entries.first {
-            return first.groupSummary
-        }
-        let commandCount = entries.filter(\.isCommand).count
-        if commandCount == entries.count {
-            return "Ran \(entries.count) commands"
-        }
-        return "Used \(entries.count) tools"
-    }
-}
-
-struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
-    var id: String
-    var toolUseId: String?
-    var toolName: String
-    var title: String
-    var inputText: String?
-    var resultText: String?
-    var summaryText: String?
-    var inputLabel: String
-    var resultLabel: String
-    var status: GaryxMobileToolTraceStatus
-    var isError: Bool
-    var timestamp: String?
-
-    var isCommand: Bool {
-        let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized == "exec_command" || normalized == "command" || normalized.contains("command")
-    }
-
-    var groupSummary: String {
-        if status == .running {
-            return isCommand ? "Running command" : "Using \(title)"
-        }
-        if status == .failed {
-            return "\(title) failed"
-        }
-        return isCommand ? "Ran command" : "Used \(title)"
-    }
-
-    var previewText: String? {
-        summaryText?.garyxSingleLineTruncated(limit: 120)
-    }
-
-    mutating func absorb(result: GaryxMobileToolTraceEntry) {
-        if toolUseId == nil {
-            toolUseId = result.toolUseId
-        }
-        if toolName == "tool", result.toolName != "tool" {
-            toolName = result.toolName
-            title = result.title
-        }
-        resultText = result.resultText ?? result.inputText ?? resultText
-        summaryText = result.summaryText ?? summaryText
-        resultLabel = result.resultLabel
-        isError = result.isError
-        status = result.isError ? .failed : .completed
-        timestamp = result.timestamp ?? timestamp
-    }
-}
-
-struct GaryxMobileComposerAttachment: Identifiable, Equatable {
-    var id: String
-    var kind: String
-    var name: String
-    var mediaType: String
-    var path: String
-    var previewDataUrl: String?
-
-    var promptAttachment: GaryxPromptAttachment {
-        GaryxPromptAttachment(kind: kind, path: path, name: name, mediaType: mediaType)
-    }
-}
-
-struct GaryxMobileSelectedImage: Equatable, Sendable {
-    var name: String
-    var mediaType: String
-    var data: Data
-}
-
 private struct GaryxPendingUploadPreview {
     var name: String
     var mediaType: String
@@ -1214,6 +1057,7 @@ final class GaryxMobileModel: ObservableObject {
                         GaryxMobileToolTraceEntry(
                             id: "debug-tool-read",
                             toolUseId: "toolu-read",
+                            parentToolUseId: nil,
                             toolName: "Read",
                             title: "Read",
                             inputText: "{ \"file\": \"mobile/garyx-mobile/App/GaryxMobile/GaryxMobileViews.swift\" }",
@@ -1223,11 +1067,13 @@ final class GaryxMobileModel: ObservableObject {
                             resultLabel: "result",
                             status: .completed,
                             isError: false,
-                            timestamp: "08:25"
+                            timestamp: "08:25",
+                            primaryPathBadge: "GaryxMobileViews.swift"
                         ),
                         GaryxMobileToolTraceEntry(
                             id: "debug-tool-build",
                             toolUseId: "toolu-build",
+                            parentToolUseId: nil,
                             toolName: "exec_command",
                             title: "Bash",
                             inputText: "swift test",
@@ -1237,7 +1083,8 @@ final class GaryxMobileModel: ObservableObject {
                             resultLabel: "output",
                             status: .completed,
                             isError: false,
-                            timestamp: "08:26"
+                            timestamp: "08:26",
+                            primaryPathBadge: nil
                         )
                     ]
                 )
@@ -4384,11 +4231,40 @@ final class GaryxMobileModel: ObservableObject {
             return true
         }
 
-        if let match = group.entries.lastIndex(where: { $0.status == .running && $0.resultText == nil }) {
+        let fallbackMatches = group.entries.indices.filter {
+            canMergeToolResultFallback(result, into: group.entries[$0])
+        }
+        if let match = fallbackMatches.last {
             group.entries[match].absorb(result: result)
             return true
         }
 
+        return false
+    }
+
+    private func canMergeToolResultFallback(
+        _ result: GaryxMobileToolTraceEntry,
+        into candidate: GaryxMobileToolTraceEntry
+    ) -> Bool {
+        guard candidate.status == .running, candidate.resultText == nil else {
+            return false
+        }
+        let resultTool = result.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let candidateTool = candidate.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !resultTool.isEmpty, resultTool == candidateTool {
+            return true
+        }
+        if candidateTool == "tool" || resultTool == "tool" {
+            return true
+        }
+        if result.title.caseInsensitiveCompare(candidate.title) == .orderedSame {
+            return true
+        }
+        if let resultSummary = result.summaryText,
+           let candidateSummary = candidate.summaryText,
+           resultSummary == candidateSummary {
+            return true
+        }
         return false
     }
 
@@ -4909,10 +4785,12 @@ private enum GaryxMobileToolTraceEventKind {
 
 private struct GaryxMobileToolTracePayload {
     var toolUseId: String?
+    var parentToolUseId: String?
     var toolName: String?
     var contentText: String?
     var summaryText: String?
     var timestamp: String?
+    var primaryPathBadge: String?
     var isError: Bool
 
     static func fromEvent(_ value: GaryxJSONValue?, eventKind: GaryxMobileToolTraceEventKind) -> GaryxMobileToolTracePayload {
@@ -4941,10 +4819,12 @@ private struct GaryxMobileToolTracePayload {
         guard let object = decodedValue?.objectValue else {
             return GaryxMobileToolTracePayload(
                 toolUseId: nil,
+                parentToolUseId: nil,
                 toolName: fallbackToolName?.garyxTrimmedNilIfEmpty,
                 contentText: fallbackText?.garyxTrimmedNilIfEmpty,
                 summaryText: fallbackText?.garyxSafeToolSummary,
                 timestamp: fallbackTimestamp,
+                primaryPathBadge: nil,
                 isError: false
             )
         }
@@ -4955,6 +4835,9 @@ private struct GaryxMobileToolTracePayload {
         let toolUseId = object.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
             ?? payloadObject?.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
             ?? nestedContent?.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
+        let parentToolUseId = object.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
+            ?? payloadObject?.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
+            ?? nestedContent?.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
         let toolName = object.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title"])
             ?? payloadObject?.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title", "type"])
             ?? nestedContent?.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title"])
@@ -4972,6 +4855,10 @@ private struct GaryxMobileToolTracePayload {
             eventKind: eventKind
         ) ?? fallbackText?.garyxSafeToolSummary
         let timestamp = object.stringValue(forKeys: ["timestamp", "createdAt", "created_at"]) ?? fallbackTimestamp
+        let primaryPathBadge = Self.primaryPathBadge(
+            payload: payloadObject,
+            nestedContent: nestedContent
+        )
         let isError = object.boolValue(forKeys: ["isError", "is_error", "error"])
             ?? payloadObject?.boolValue(forKeys: ["isError", "is_error", "error"])
             ?? nestedContent?.boolValue(forKeys: ["isError", "is_error", "error"])
@@ -4979,12 +4866,26 @@ private struct GaryxMobileToolTracePayload {
 
         return GaryxMobileToolTracePayload(
             toolUseId: toolUseId,
+            parentToolUseId: parentToolUseId,
             toolName: toolName,
             contentText: content,
             summaryText: summary,
             timestamp: timestamp,
+            primaryPathBadge: primaryPathBadge,
             isError: isError
         )
+    }
+
+    private static func primaryPathBadge(
+        payload: [String: GaryxJSONValue]?,
+        nestedContent: [String: GaryxJSONValue]?
+    ) -> String? {
+        let input = payload?.objectValue(forKeys: ["input", "arguments", "params"])
+            ?? nestedContent?.objectValue(forKeys: ["input", "arguments", "params"])
+            ?? payload
+            ?? nestedContent
+        return input?.stringValue(forKeys: ["file_path", "filePath", "path", "file"])
+            .map { $0.garyxPathTail }
     }
 
     private static func summaryText(
@@ -5063,6 +4964,7 @@ private extension GaryxMobileToolTraceEntry {
         self.init(
             id: "\(message.id):\(eventKind.idSuffix)",
             toolUseId: payload.toolUseId,
+            parentToolUseId: payload.parentToolUseId,
             toolName: payload.normalizedToolName,
             title: GaryxMobileToolTraceEntry.title(for: payload.normalizedToolName),
             inputText: eventKind == .toolUse ? payload.contentText : nil,
@@ -5072,7 +4974,8 @@ private extension GaryxMobileToolTraceEntry {
             resultLabel: "Result",
             status: eventKind == .toolResult ? (payload.isError ? .failed : .completed) : .running,
             isError: payload.isError,
-            timestamp: payload.timestamp
+            timestamp: payload.timestamp,
+            primaryPathBadge: payload.primaryPathBadge
         )
     }
 
@@ -5082,6 +4985,7 @@ private extension GaryxMobileToolTraceEntry {
         self.init(
             id: "\(eventKind.idSuffix):\(generatedId):\(UUID().uuidString)",
             toolUseId: payload.toolUseId,
+            parentToolUseId: payload.parentToolUseId,
             toolName: payload.normalizedToolName,
             title: GaryxMobileToolTraceEntry.title(for: payload.normalizedToolName),
             inputText: eventKind == .toolUse ? payload.contentText : nil,
@@ -5091,7 +4995,8 @@ private extension GaryxMobileToolTraceEntry {
             resultLabel: "Result",
             status: eventKind == .toolUse ? .running : (payload.isError ? .failed : .completed),
             isError: payload.isError,
-            timestamp: payload.timestamp
+            timestamp: payload.timestamp,
+            primaryPathBadge: payload.primaryPathBadge
         )
     }
 
