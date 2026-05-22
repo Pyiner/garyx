@@ -218,7 +218,6 @@ struct GaryxShellView: View {
 
     private let sidebarWidth: CGFloat = 330
     private let sidebarEdgeGestureWidth: CGFloat = 64
-    private let sidebarTopGestureExclusion: CGFloat = 112
 
     var body: some View {
         GeometryReader { proxy in
@@ -265,6 +264,8 @@ struct GaryxShellView: View {
         return ZStack(alignment: .topLeading) {
             GaryxMainPanelView()
                 .frame(width: containerSize.width, height: containerSize.height)
+                .contentShape(Rectangle())
+                .simultaneousGesture(openingSidebarGesture(sidebarWidth: width))
                 .zIndex(0)
 
             (colorScheme == .dark ? Color.white : Color.black)
@@ -282,12 +283,6 @@ struct GaryxShellView: View {
                 .frame(maxHeight: .infinity)
                 .offset(x: drawerOffset)
                 .allowsHitTesting(revealWidth > width * 0.82)
-                .shadow(
-                    color: Color.black.opacity(0.14 * min(1, revealWidth / max(width, 1))),
-                    radius: 18,
-                    x: 8,
-                    y: 0
-                )
                 .zIndex(2)
 
             if revealWidth > 1 {
@@ -301,16 +296,17 @@ struct GaryxShellView: View {
             }
 
             if !model.sidebarVisible {
-                Color.clear
-                    .frame(
-                        width: sidebarEdgeGestureWidth,
-                        height: max(0, containerSize.height - sidebarTopGestureExclusion)
-                    )
-                    .offset(y: sidebarTopGestureExclusion)
-                    .contentShape(Rectangle())
-                    .gesture(openingSidebarGesture(sidebarWidth: width))
-                    .zIndex(3)
-                    .accessibilityHidden(true)
+                Button {
+                    finishGesture(open: true)
+                } label: {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: 78, height: 178)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .zIndex(4)
+                .accessibilityHidden(true)
             }
         }
         .background(GaryxTheme.background)
@@ -1790,36 +1786,56 @@ struct GaryxConversationHeader: View {
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
             HStack(spacing: 12) {
-                Button {
-                    openSidebar()
-                } label: {
-                    GaryxHeaderMenuIcon()
-                }
-                .buttonStyle(.plain)
-                .highPriorityGesture(TapGesture().onEnded { openSidebar() })
-                .accessibilityLabel("Menu")
+                GaryxSidebarMenuButton(action: openSidebar)
 
                 if model.selectedThread == nil {
                     GaryxHeaderAgentControl()
                         .layoutPriority(1)
                 } else {
-                    VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        if let target = model.selectedThreadAgentTarget {
+                            GaryxAgentAvatarView(
+                                agentId: target.id,
+                                avatarDataUrl: target.avatarDataUrl,
+                                kind: target.kind,
+                                label: target.title,
+                                providerType: target.providerType,
+                                builtIn: target.builtIn,
+                                diameter: 22
+                            )
+
+                            Text(model.selectedThreadAgentLabel)
+                                .font(GaryxFont.callout(weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: 84, alignment: .leading)
+                        }
+
                         TextField("Thread title", text: $model.draftThreadTitle)
                             .font(GaryxFont.callout(weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
+                            .truncationMode(.tail)
                             .submitLabel(.done)
                             .focused($isTitleFieldFocused)
                             .onSubmit {
                                 Task { await model.renameSelectedThread() }
                             }
-
-                        GaryxHeaderAgentControl()
+                            .layoutPriority(1)
                     }
-                    .padding(.vertical, 7)
-                    .padding(.horizontal, 14)
-                    .frame(maxWidth: 238, alignment: .leading)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .padding(.horizontal, 12)
+                    .frame(height: 44, alignment: .leading)
+                    .frame(maxWidth: 282, alignment: .leading)
+                    .background {
+                        Capsule()
+                            .fill(Color(.systemBackground).opacity(0.42))
+                            .background(.ultraThinMaterial, in: Capsule())
+                    }
+                    .overlay {
+                        Capsule()
+                            .stroke(Color.primary.opacity(0.03), lineWidth: 1)
+                    }
                     .layoutPriority(1)
                 }
 
@@ -2017,6 +2033,7 @@ private struct GaryxAgentPickerPopover: View {
                     kind: target.kind,
                     label: target.title,
                     providerType: target.providerType,
+                    builtIn: target.builtIn,
                     diameter: 30
                 )
 
@@ -2064,6 +2081,7 @@ private struct GaryxAgentPickerLabel: View {
                     kind: target.kind,
                     label: target.title,
                     providerType: target.providerType,
+                    builtIn: target.builtIn,
                     diameter: avatarDiameter
                 )
             } else {
@@ -2076,7 +2094,9 @@ private struct GaryxAgentPickerLabel: View {
                 .font(labelFont)
                 .foregroundStyle(labelForeground)
                 .lineLimit(1)
+                .truncationMode(.tail)
                 .minimumScaleFactor(0.8)
+                .layoutPriority(1)
 
             if showsChevron {
                 Image(systemName: "chevron.down")
@@ -2086,15 +2106,24 @@ private struct GaryxAgentPickerLabel: View {
         }
         .padding(.horizontal, horizontalPadding)
         .frame(height: labelHeight, alignment: .leading)
-        .frame(maxWidth: maxWidth, alignment: .leading)
-        .background(background)
+        .if(isProminent) { view in
+            view.background {
+                Capsule()
+                    .fill(Color(.systemBackground).opacity(0.42))
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+        }
+        .overlay {
+            Capsule()
+                .stroke(Color.primary.opacity(isProminent ? 0.03 : 0), lineWidth: 1)
+        }
         .contentShape(Capsule())
     }
 
     private var avatarDiameter: CGFloat {
         switch style {
         case .prominent:
-            31
+            29
         case .compact:
             16
         }
@@ -2139,18 +2168,9 @@ private struct GaryxAgentPickerLabel: View {
     private var labelHeight: CGFloat {
         switch style {
         case .prominent:
-            50
+            44
         case .compact:
             19
-        }
-    }
-
-    private var maxWidth: CGFloat? {
-        switch style {
-        case .prominent:
-            300
-        case .compact:
-            178
         }
     }
 
@@ -2172,21 +2192,12 @@ private struct GaryxAgentPickerLabel: View {
         }
     }
 
-    private var background: some View {
-        Capsule()
-            .fill(backgroundColor)
-            .overlay {
-                Capsule()
-                    .stroke(Color.primary.opacity(style == .prominent ? 0.04 : 0), lineWidth: 1)
-            }
-    }
-
-    private var backgroundColor: Color {
+    private var isProminent: Bool {
         switch style {
         case .prominent:
-            Color(.secondarySystemBackground).opacity(0.94)
+            true
         case .compact:
-            Color.clear
+            false
         }
     }
 }
@@ -3841,6 +3852,7 @@ struct GaryxAgentCard: View {
                     kind: .agent,
                     avatarDataUrl: agent.avatarDataUrl,
                     providerType: agent.providerType,
+                    builtIn: agent.builtIn,
                     selected: model.selectedAgentTargetId == agent.id
                 )
             }
@@ -5368,6 +5380,7 @@ struct GaryxSettingsProviderContent: View {
                                 kind: target.kind,
                                 avatarDataUrl: target.avatarDataUrl,
                                 providerType: target.providerType,
+                                builtIn: target.builtIn,
                                 selected: model.selectedAgentTargetId == target.id
                             )
                         }
@@ -5421,14 +5434,9 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         .background(GaryxTheme.background)
         .garyxAdaptiveTopBar {
             HStack(spacing: 10) {
-                Button {
+                GaryxSidebarMenuButton {
                     model.setSidebarVisible(true)
-                } label: {
-                    GaryxHeaderMenuIcon()
                 }
-                .buttonStyle(.plain)
-                .highPriorityGesture(TapGesture().onEnded { model.setSidebarVisible(true) })
-                .accessibilityLabel("Menu")
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
@@ -5806,12 +5814,75 @@ struct GaryxChannelLogoView: View {
     }
 }
 
+private enum GaryxProviderAvatar {
+    case codex
+    case openAI
+    case claude
+    case gemini
+    case generic
+
+    var symbol: String? {
+        switch self {
+        case .codex:
+            "chevron.left.forwardslash.chevron.right"
+        case .openAI:
+            "circle.hexagongrid.fill"
+        case .claude:
+            "sparkles"
+        case .gemini:
+            "diamond.fill"
+        case .generic:
+            nil
+        }
+    }
+
+    var background: Color {
+        switch self {
+        case .codex:
+            Color(red: 0.08, green: 0.10, blue: 0.12)
+        case .openAI:
+            Color(red: 0.10, green: 0.47, blue: 0.40)
+        case .claude:
+            Color(red: 0.50, green: 0.37, blue: 0.26)
+        case .gemini:
+            Color(red: 0.23, green: 0.38, blue: 0.86)
+        case .generic:
+            Color(.secondarySystemBackground)
+        }
+    }
+
+    var foreground: Color {
+        switch self {
+        case .generic:
+            Color(.secondaryLabel)
+        default:
+            Color.white
+        }
+    }
+
+    func iconSize(for diameter: CGFloat) -> CGFloat {
+        switch self {
+        case .codex:
+            diameter * 0.32
+        case .openAI:
+            diameter * 0.42
+        case .claude:
+            diameter * 0.40
+        case .gemini:
+            diameter * 0.34
+        case .generic:
+            diameter * 0.36
+        }
+    }
+}
+
 struct GaryxAgentAvatarView: View {
     let agentId: String
     let avatarDataUrl: String
     let kind: GaryxMobileAgentTarget.Kind
     let label: String
     let providerType: String
+    var builtIn: Bool = false
     var diameter: CGFloat = 34
 
     var body: some View {
@@ -5870,9 +5941,9 @@ struct GaryxAgentAvatarView: View {
             Image(systemName: "person.2.fill")
                 .font(GaryxFont.system(size: diameter * 0.36, weight: .semibold))
                 .foregroundStyle(fallbackForeground)
-        } else if let symbol = providerSymbol {
+        } else if let symbol = providerAvatar.symbol {
             Image(systemName: symbol)
-                .font(GaryxFont.system(size: diameter * 0.38, weight: .bold))
+                .font(GaryxFont.system(size: providerAvatar.iconSize(for: diameter), weight: .semibold))
                 .foregroundStyle(fallbackForeground)
         } else {
             Text(agentInitials)
@@ -5881,18 +5952,21 @@ struct GaryxAgentAvatarView: View {
         }
     }
 
-    private var providerSymbol: String? {
+    private var providerAvatar: GaryxProviderAvatar {
         let source = "\(agentId) \(providerType)".lowercased()
         if source.contains("codex") {
-            return "chevron.left.forwardslash.chevron.right"
+            return .codex
+        }
+        if source.contains("openai") || source.contains("gpt") {
+            return .openAI
         }
         if source.contains("claude") || source.contains("anthropic") {
-            return "sparkle"
+            return .claude
         }
         if source.contains("gemini") || source.contains("google") {
-            return "diamond.fill"
+            return .gemini
         }
-        return nil
+        return .generic
     }
 
     private var agentInitials: String {
@@ -5909,6 +5983,10 @@ struct GaryxAgentAvatarView: View {
     }
 
     private var fallbackBackground: Color {
+        if builtIn, kind == .agent {
+            return providerAvatar.background
+        }
+
         let colors = [
             Color(red: 0.88, green: 0.95, blue: 0.90),
             Color(red: 0.90, green: 0.92, blue: 0.98),
@@ -5920,7 +5998,13 @@ struct GaryxAgentAvatarView: View {
     }
 
     private var fallbackForeground: Color {
-        kind == .team ? Color(.systemGray) : GaryxTheme.accent
+        if kind == .team {
+            return Color(.systemGray)
+        }
+        if builtIn {
+            return providerAvatar.foreground
+        }
+        return GaryxTheme.accent
     }
 }
 
@@ -5931,6 +6015,7 @@ struct GaryxAgentIdentityRow: View {
     let kind: GaryxMobileAgentTarget.Kind
     let avatarDataUrl: String
     let providerType: String
+    var builtIn: Bool = false
     let selected: Bool
 
     var body: some View {
@@ -5940,7 +6025,8 @@ struct GaryxAgentIdentityRow: View {
                 avatarDataUrl: avatarDataUrl,
                 kind: kind,
                 label: title,
-                providerType: providerType
+                providerType: providerType,
+                builtIn: builtIn
             )
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
@@ -6325,20 +6411,47 @@ struct GaryxToolbarIcon: View {
         }
         .frame(width: 36, height: 36)
         .contentShape(Circle())
-        .garyxAdaptiveGlass(.regular, isInteractive: true, in: Circle())
+        .background {
+            Circle()
+                .fill(Color(.systemBackground).opacity(0.42))
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .overlay {
+            Circle()
+                .stroke(Color.primary.opacity(0.03), lineWidth: 1)
+        }
+    }
+}
+
+struct GaryxSidebarMenuButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            GaryxHeaderMenuIcon()
+                .frame(width: 48, height: 48)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture().onEnded { _ in action() })
+        .accessibilityLabel("Open menu")
     }
 }
 
 struct GaryxHeaderMenuIcon: View {
     var body: some View {
         Image(systemName: "line.3.horizontal")
-            .font(GaryxFont.system(size: 18, weight: .bold))
+            .font(GaryxFont.system(size: 17, weight: .semibold))
             .foregroundStyle(.primary)
-            .frame(width: 54, height: 54)
-            .background(Color(.secondarySystemBackground).opacity(0.94), in: Circle())
+            .frame(width: 44, height: 44)
+            .background {
+                Circle()
+                    .fill(Color(.systemBackground).opacity(0.42))
+                    .background(.ultraThinMaterial, in: Circle())
+            }
             .overlay {
                 Circle()
-                    .stroke(Color.primary.opacity(0.04), lineWidth: 1)
+                    .stroke(Color.primary.opacity(0.032), lineWidth: 1)
             }
             .contentShape(Circle())
     }

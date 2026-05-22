@@ -139,6 +139,7 @@ struct GaryxMobileAgentTarget: Identifiable, Equatable {
     let kind: Kind
     let avatarDataUrl: String
     let providerType: String
+    let builtIn: Bool
 }
 
 struct GaryxMobileBotGroup: Identifiable, Equatable {
@@ -769,7 +770,8 @@ final class GaryxMobileModel: ObservableObject {
                     subtitle: "",
                     kind: .agent,
                     avatarDataUrl: $0.avatarDataUrl,
-                    providerType: $0.providerType
+                    providerType: $0.providerType,
+                    builtIn: $0.builtIn
                 )
             }
         let teamItems = teams.map {
@@ -779,7 +781,8 @@ final class GaryxMobileModel: ObservableObject {
                 subtitle: "\($0.memberAgentIds.count) agents",
                 kind: .team,
                 avatarDataUrl: $0.avatarDataUrl,
-                providerType: ""
+                providerType: "",
+                builtIn: false
             )
         }
         return agentItems + teamItems
