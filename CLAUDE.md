@@ -119,6 +119,8 @@ needs installed-app validation.
 - Mobile sidebar root content should not render inline loading rows or raw
   thread/session lists. Use one unobtrusive global loading indicator and keep
   conversation/thread lists inside bot or workspace drilldown layers.
+- Mobile sidebar primary navigation should keep only Automation at the root;
+  Tasks, Auto Research, Agents, and Skills belong under Settings.
 - Mobile management screens should not expose create/edit forms inline by
   default. Use top navigation actions to open full-screen add/edit flows, not
   compact sheets or always-visible forms, and keep the main page focused on

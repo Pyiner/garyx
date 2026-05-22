@@ -88,6 +88,7 @@ enum GaryxMobilePanel: String, CaseIterable, Identifiable {
 }
 
 enum GaryxMobileSettingsTab: String, CaseIterable, Identifiable {
+    case manage
     case gateway
     case provider
     case channels
@@ -98,6 +99,8 @@ enum GaryxMobileSettingsTab: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
+        case .manage:
+            "Manage"
         case .gateway:
             "Gateway"
         case .provider:
@@ -113,6 +116,8 @@ enum GaryxMobileSettingsTab: String, CaseIterable, Identifiable {
 
     var iconName: String {
         switch self {
+        case .manage:
+            "slider.horizontal.3"
         case .gateway:
             "server.rack"
         case .provider:
@@ -357,7 +362,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var activeRunThreadId: String?
     @Published private(set) var remoteBusyThreadIds: Set<String> = []
     @Published var activePanel: GaryxMobilePanel = .chat
-    @Published var activeSettingsTab: GaryxMobileSettingsTab = .gateway
+    @Published var activeSettingsTab: GaryxMobileSettingsTab = .manage
     @Published var lastError: String?
     @Published var showsSettings = false
     @Published var sidebarVisible = false
@@ -1029,7 +1034,7 @@ final class GaryxMobileModel: ObservableObject {
         setSidebarVisible(false)
     }
 
-    func openSettings(tab: GaryxMobileSettingsTab = .gateway) {
+    func openSettings(tab: GaryxMobileSettingsTab = .manage) {
         activeSettingsTab = tab
         openPanel(.settings)
     }

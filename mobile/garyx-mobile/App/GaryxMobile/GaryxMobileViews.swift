@@ -683,10 +683,6 @@ struct GaryxSidebarNavigationList: View {
 
     private let panels: [GaryxMobilePanel] = [
         .automations,
-        .tasks,
-        .autoResearch,
-        .agents,
-        .skills,
     ]
 
     var body: some View {
@@ -5039,7 +5035,7 @@ struct GaryxMobileSettingsPanel: View {
                 GaryxAddToolbarButton(label: "Add Server") {
                     showsCreateMcp = true
                 }
-            case .provider, .channels:
+            case .manage, .provider, .channels:
                 EmptyView()
             }
         }
@@ -5102,6 +5098,8 @@ struct GaryxSettingsTabContent: View {
 
     var body: some View {
         switch model.activeSettingsTab {
+        case .manage:
+            GaryxSettingsManageContent()
         case .gateway:
             GaryxSettingsGatewayContent()
         case .provider:
@@ -5112,6 +5110,85 @@ struct GaryxSettingsTabContent: View {
             GaryxCommandsContent()
         case .mcp:
             GaryxMcpServersContent()
+        }
+    }
+}
+
+struct GaryxSettingsManageContent: View {
+    private let panels: [GaryxMobilePanel] = [
+        .tasks,
+        .autoResearch,
+        .agents,
+        .skills,
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GaryxSectionBlock(title: "Manage") {
+                GaryxCompactListGroup {
+                    ForEach(Array(panels.enumerated()), id: \.element.id) { index, panel in
+                        GaryxSettingsPanelLinkRow(panel: panel)
+                        if index < panels.count - 1 {
+                            GaryxCompactRowDivider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct GaryxSettingsPanelLinkRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let panel: GaryxMobilePanel
+
+    var body: some View {
+        Button {
+            model.openPanel(panel)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: panel.iconName)
+                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(panel.label)
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(panel.label)
+    }
+
+    private var subtitle: String {
+        switch panel {
+        case .tasks:
+            "\(model.activeTaskCount) active / \(model.tasks.count) total"
+        case .autoResearch:
+            "\(model.runningResearchCount) active / \(model.autoResearchRuns.count) total"
+        case .agents:
+            "\(model.agents.count) agents / \(model.teams.count) teams"
+        case .skills:
+            "\(model.skills.filter(\.enabled).count) enabled / \(model.skills.count) total"
+        default:
+            ""
         }
     }
 }
