@@ -724,7 +724,7 @@ export interface DesktopBotConsoleSummary {
 }
 
 export interface DesktopRemoteStateError {
-  source: "threads" | "endpoints" | "configured_bots" | "bot_consoles" | "automations";
+  source: "threads" | "thread_pins" | "endpoints" | "configured_bots" | "bot_consoles" | "automations";
   label: string;
   message: string;
 }
@@ -735,6 +735,7 @@ export interface DesktopState {
   workspaces: DesktopWorkspace[];
   hiddenWorkspacePaths: string[];
   selectedWorkspacePath: string | null;
+  pinnedThreadIds: string[];
   threads: DesktopThreadSummary[];
   sessions: DesktopThreadSummary[];
   endpoints: DesktopChannelEndpoint[];
@@ -1233,6 +1234,11 @@ export interface DeleteThreadInput {
   sessionId?: string;
 }
 
+export interface SetThreadPinnedInput {
+  threadId: string;
+  pinned: boolean;
+}
+
 export interface CreateAutomationInput {
   label: string;
   prompt: string;
@@ -1676,6 +1682,7 @@ export interface GaryxDesktopApi {
   }>;
   renameThread: (input: RenameThreadInput) => Promise<DesktopState>;
   deleteThread: (input: DeleteThreadInput) => Promise<DesktopState>;
+  setThreadPinned: (input: SetThreadPinnedInput) => Promise<DesktopState>;
   getThreadHistory: (
     input: string | GetThreadHistoryInput,
   ) => Promise<ThreadTranscript>;

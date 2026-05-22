@@ -318,7 +318,6 @@ final class GaryxMobileModel: ObservableObject {
         newThreadWorkspaceMode = Self.normalizedWorkspaceMode(
             defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceMode)
         )
-        pinnedThreadIds = defaults.stringArray(forKey: GaryxMobileSettingsKeys.pinnedThreadIds) ?? []
         loadGatewayScopedUserState(fallbackToLegacy: true)
 
         #if DEBUG
@@ -1336,25 +1335,69 @@ final class GaryxMobileModel: ObservableObject {
     #endif
 
     func isThreadPinned(_ threadId: String) -> Bool {
-        pinnedThreadIds.contains(threadId)
+        pinnedThreadIds.contains(threadId.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     func togglePinnedThread(_ threadId: String) {
-        if pinnedThreadIds.contains(threadId) {
-            pinnedThreadIds.removeAll { $0 == threadId }
-        } else {
-            pinnedThreadIds.insert(threadId, at: 0)
-        }
-        savePinnedThreadIds()
+        let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return }
+        let pinned = !isThreadPinned(normalizedId)
+        Task { await setThreadPinned(normalizedId, pinned: pinned) }
     }
 
     func unpinThread(_ threadId: String) {
-        pinnedThreadIds.removeAll { $0 == threadId }
-        savePinnedThreadIds()
+        let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return }
+        Task { await setThreadPinned(normalizedId, pinned: false) }
     }
 
-    private func savePinnedThreadIds() {
-        defaults.set(pinnedThreadIds, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.pinnedThreadIds))
+    func setThreadPinned(_ threadId: String, pinned: Bool) async {
+        let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return }
+        let previousIds = pinnedThreadIds
+        pinnedThreadIds = Self.pinnedThreadIdsWith(
+            pinnedThreadIds,
+            threadId: normalizedId,
+            pinned: pinned
+        )
+        do {
+            let page = try await client().setThreadPinned(threadId: normalizedId, pinned: pinned)
+            applyPinnedThreadIds(page.threadIds)
+        } catch {
+            pinnedThreadIds = previousIds
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    private func applyPinnedThreadIds(_ ids: [String]) {
+        pinnedThreadIds = Self.normalizedPinnedThreadIds(ids)
+    }
+
+    private func removePinnedThreadIdLocally(_ threadId: String) {
+        let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        pinnedThreadIds.removeAll { $0 == normalizedId }
+    }
+
+    private static func pinnedThreadIdsWith(
+        _ ids: [String],
+        threadId: String,
+        pinned: Bool
+    ) -> [String] {
+        let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return normalizedPinnedThreadIds(ids) }
+        let remaining = normalizedPinnedThreadIds(ids).filter { $0 != normalizedId }
+        return pinned ? [normalizedId] + remaining : remaining
+    }
+
+    private static func normalizedPinnedThreadIds(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        var normalized: [String] = []
+        for rawId in ids {
+            let id = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, seen.insert(id).inserted else { continue }
+            normalized.append(id)
+        }
+        return normalized
     }
 
     func saveGatewaySettings() {
@@ -1388,7 +1431,6 @@ final class GaryxMobileModel: ObservableObject {
         let agentKey = scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId)
         let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
         let workspaceModeKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
-        let pinnedKey = scopedSettingsKey(GaryxMobileSettingsKeys.pinnedThreadIds)
         selectedAgentTargetId = defaults.string(forKey: agentKey)
             ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId) : nil)
             ?? "claude"
@@ -1399,9 +1441,6 @@ final class GaryxMobileModel: ObservableObject {
             defaults.string(forKey: workspaceModeKey)
                 ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceMode) : nil)
         )
-        pinnedThreadIds = defaults.stringArray(forKey: pinnedKey)
-            ?? (fallbackToLegacy ? defaults.stringArray(forKey: GaryxMobileSettingsKeys.pinnedThreadIds) : nil)
-            ?? []
     }
 
     private func saveGatewayScopedUserState() {
@@ -1414,7 +1453,6 @@ final class GaryxMobileModel: ObservableObject {
             Self.normalizedWorkspaceMode(newThreadWorkspaceMode),
             forKey: scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
         )
-        defaults.set(pinnedThreadIds, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.pinnedThreadIds))
     }
 
     private func resetGatewayRuntimeState() {
@@ -1430,6 +1468,7 @@ final class GaryxMobileModel: ObservableObject {
         remoteBusyThreadIds = []
         connectionState = .disconnected
         threads = []
+        pinnedThreadIds = []
         selectedThread = nil
         messages = []
         messagesByThread = [:]
@@ -1640,8 +1679,12 @@ final class GaryxMobileModel: ObservableObject {
         defer { isLoadingThreads = false }
         do {
             let previousSelectedId = selectedThread?.id
-            let page = try await client().listThreads(limit: 80)
+            let gatewayClient = try client()
+            async let threadsPage = gatewayClient.listThreads(limit: 80)
+            async let threadPinsPage = gatewayClient.listThreadPins()
+            let (page, pinsPage) = try await (threadsPage, threadPinsPage)
             threads = page.threads
+            applyPinnedThreadIds(pinsPage.threadIds)
             var refreshedBusyIds = remoteBusyThreadIds
             for thread in page.threads {
                 if !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
@@ -1806,7 +1849,7 @@ final class GaryxMobileModel: ObservableObject {
         }
         do {
             _ = try await client().deleteThread(threadId: thread.id)
-            unpinThread(thread.id)
+            removePinnedThreadIdLocally(thread.id)
             if selectedThread?.id == thread.id {
                 self.selectedThread = nil
                 draftThreadTitle = ""

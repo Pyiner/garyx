@@ -171,6 +171,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:get-workspace-git-status", input),
   renameThread: (input) => ipcRenderer.invoke("garyx:rename-thread", input),
   deleteThread: (input) => ipcRenderer.invoke("garyx:delete-thread", input),
+  setThreadPinned: (input) =>
+    ipcRenderer.invoke("garyx:set-thread-pinned", input),
   getThreadHistory: (input) =>
     ipcRenderer.invoke("garyx:get-thread-history", input),
   getThreadLogs: (threadId, cursor) =>

@@ -32,9 +32,11 @@ import {
   fetchBotConsoles,
   fetchChannelEndpoints,
   fetchConfiguredBots,
+  fetchThreadPins,
   fetchThreads,
   mapChannelEndpoint,
   runRemoteAutomationNow,
+  setRemoteThreadPinned,
   updateRemoteAutomation,
   updateRemoteThread,
 } from './gary-client';
@@ -178,6 +180,26 @@ function normalizeNewThreadTitle(value?: string | null): string | undefined {
     return undefined;
   }
   return trimmed;
+}
+
+function normalizePinnedThreadIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string') {
+      continue;
+    }
+    const id = entry.trim();
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
 }
 
 function normalizeWorkspacePathInput(value?: string | null): string | null {
@@ -499,6 +521,7 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
         )
       : [],
     selectedWorkspacePath: value?.selectedWorkspacePath ?? null,
+    pinnedThreadIds: normalizePinnedThreadIds(value?.pinnedThreadIds),
     threads,
     sessions: threads,
     endpoints: [],
@@ -676,9 +699,10 @@ async function fetchRemoteSlice<T>(
 }
 
 async function mergeRemoteDesktopState(localState: DesktopState): Promise<DesktopState> {
-  const [threadsResult, endpointsResult, configuredBotsResult, botConsolesResult, automationsResult] =
+  const [threadsResult, pinsResult, endpointsResult, configuredBotsResult, botConsolesResult, automationsResult] =
     await Promise.all([
       fetchRemoteSlice('threads', 'threads', localState.threads, () => fetchThreads(localState.settings)),
+      fetchRemoteSlice('thread_pins', 'thread pins', localState.pinnedThreadIds, () => fetchThreadPins(localState.settings)),
       fetchRemoteSlice('endpoints', 'endpoints', localState.endpoints, () => fetchChannelEndpoints(localState.settings)),
       fetchRemoteSlice(
         'configured_bots',
@@ -691,12 +715,14 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
     ]);
   const remoteErrors = [
     threadsResult.error,
+    pinsResult.error,
     endpointsResult.error,
     configuredBotsResult.error,
     botConsolesResult.error,
     automationsResult.error,
   ].filter((error): error is DesktopRemoteStateError => Boolean(error));
   const remoteThreads = threadsResult.value;
+  const remotePinnedThreadIds = pinsResult.value;
   const remoteEndpoints = endpointsResult.value;
   const remoteConfiguredBots = configuredBotsResult.value;
   const remoteBotConsoles = botConsolesResult.value;
@@ -779,6 +805,10 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
     ...thread,
     workspacePath: thread.workspacePath?.trim() || null,
   }));
+  const threadIds = new Set(threads.map((thread) => thread.id));
+  const pinnedThreadIds = normalizePinnedThreadIds(remotePinnedThreadIds).filter((threadId) => {
+    return threadIds.has(threadId);
+  });
 
   const endpoints: DesktopChannelEndpoint[] = remoteEndpoints;
   const configuredBots: ConfiguredBot[] = configuredBotsResult.ok
@@ -808,6 +838,7 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
     ...localState,
     workspaces,
     threads,
+    pinnedThreadIds,
     endpoints,
     configuredBots,
     botConsoles,
@@ -1107,6 +1138,16 @@ export async function removeDesktopWorkspace(workspacePath: string): Promise<Des
         : local.selectedWorkspacePath,
   });
   await writeState(next);
+  return getDesktopState();
+}
+
+export async function setDesktopThreadPinned(input: {
+  threadId: string;
+  pinned: boolean;
+}): Promise<DesktopState> {
+  const current = await getDesktopState();
+  const thread = requireThread(current, input.threadId);
+  await setRemoteThreadPinned(current.settings, thread.id, input.pinned);
   return getDesktopState();
 }
 

@@ -201,6 +201,7 @@ import {
   updateDesktopAutomation,
   removeDesktopWorkspace,
   setDesktopBotBinding,
+  setDesktopThreadPinned,
 } from "./store";
 import { readMemoryDocument, saveMemoryDocument } from "./memory-documents";
 import {
@@ -1156,6 +1157,13 @@ function registerIpcHandlers(): void {
     "garyx:delete-thread",
     async (_event, input: DeleteThreadInput) => {
       return deleteDesktopThread(input.threadId || input.sessionId || "");
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:set-thread-pinned",
+    async (_event, input: { threadId: string; pinned: boolean }) => {
+      return setDesktopThreadPinned(input);
     },
   );
 

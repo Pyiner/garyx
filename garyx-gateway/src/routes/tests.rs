@@ -661,6 +661,106 @@ async fn create_thread_rejects_invalid_sdk_session_provider_hint() {
 }
 
 #[tokio::test]
+async fn thread_pin_routes_persist_state_in_garyx_db() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::pin-route";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Pin Route",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            }),
+        )
+        .await;
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("PUT")
+        .uri(format!("/api/thread-pins/{thread_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let request = authed_request()
+        .uri("/api/thread-pins")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["thread_ids"], json!([thread_id]));
+
+    let request = authed_request()
+        .method("DELETE")
+        .uri(format!("/api/thread-pins/{thread_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let request = authed_request()
+        .uri("/api/thread-pins")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["thread_ids"], json!([]));
+}
+
+#[tokio::test]
+async fn delete_thread_removes_garyx_db_pin() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delete-pinned-route";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Delete Pinned Route",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+            }),
+        )
+        .await;
+    state
+        .ops
+        .garyx_db
+        .pin_thread(thread_id)
+        .expect("pin test thread");
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("DELETE")
+        .uri(format!("/api/threads/{thread_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_pinned_threads()
+            .expect("list pins")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn create_thread_rejects_unknown_sdk_session_id_for_requested_provider() {
     let (state, _logger, _dir) = test_state().await;
     let router = build_router(state);

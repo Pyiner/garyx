@@ -53,6 +53,14 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(api::thread_history),
         )
         .route(
+            "/api/thread-pins",
+            axum::routing::get(routes::list_thread_pins),
+        )
+        .route(
+            "/api/thread-pins/{key}",
+            axum::routing::put(routes::pin_thread).delete(routes::unpin_thread),
+        )
+        .route(
             "/api/threads/{key}",
             axum::routing::get(routes::get_thread)
                 .patch(routes::update_thread)

@@ -39,6 +39,7 @@ use crate::auto_research::AutoResearchStore;
 use crate::cron::CronService;
 use crate::custom_agents::CustomAgentStore;
 use crate::event_stream_hub::EventStreamHub;
+use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
@@ -74,6 +75,17 @@ fn load_store_or_warn<T>(
     }
 }
 
+fn default_garyx_db_service() -> crate::garyx_db::GaryxDbResult<GaryxDbService> {
+    #[cfg(test)]
+    {
+        GaryxDbService::memory()
+    }
+    #[cfg(not(test))]
+    {
+        GaryxDbService::open(garyx_models::local_paths::default_garyx_database_path())
+    }
+}
+
 /// Builder that owns gateway dependency injection and emits a fully wired [`AppState`].
 pub struct AppStateBuilder {
     config: GaryxConfig,
@@ -95,6 +107,7 @@ pub struct AppStateBuilder {
     agent_teams: Arc<AgentTeamStore>,
     wikis: Arc<WikiStore>,
     app_db: Arc<AppDbService>,
+    garyx_db: Arc<GaryxDbService>,
 }
 
 impl AppStateBuilder {
@@ -171,6 +184,10 @@ impl AppStateBuilder {
             app_db: Arc::new(
                 AppDbService::open(default_app_database_path())
                     .unwrap_or_else(|error| panic!("failed to open app database: {error}")),
+            ),
+            garyx_db: Arc::new(
+                default_garyx_db_service()
+                    .unwrap_or_else(|error| panic!("failed to open garyx database: {error}")),
             ),
         }
     }
@@ -282,6 +299,11 @@ impl AppStateBuilder {
 
     pub fn with_app_db(mut self, app_db: Arc<AppDbService>) -> Self {
         self.app_db = app_db;
+        self
+    }
+
+    pub fn with_garyx_db(mut self, garyx_db: Arc<GaryxDbService>) -> Self {
+        self.garyx_db = garyx_db;
         self
     }
 
@@ -455,6 +477,7 @@ impl AppStateBuilder {
                 agent_team_group_store: group_store,
                 wikis: self.wikis,
                 app_db: self.app_db,
+                garyx_db: self.garyx_db,
                 channel_endpoint_snapshot: Mutex::new(None),
                 thread_list_snapshot: Mutex::new(None),
             },
