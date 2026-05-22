@@ -463,15 +463,8 @@ struct GaryxThreadSidebar: View {
                 GaryxSidebarHeaderView(
                     drilldownContext: sidebarHeaderContext,
                     showsCloseButton: showsInlineCloseButton,
-                    isSyncing: model.isLoadingThreads || model.isLoadingRemoteState,
                     onBack: { closeDrilldown() },
-                    onClose: { closeSidebar() },
-                    onRefresh: {
-                        Task { await refreshAll() }
-                    },
-                    onNewChat: {
-                        Task { await startNewChat() }
-                    }
+                    onClose: { closeSidebar() }
                 )
                 .modifier(GaryxSidebarHeaderBackdropModifier())
             }
@@ -618,11 +611,8 @@ struct GaryxSidebarHeaderContext: Equatable {
 struct GaryxSidebarHeaderView: View {
     let drilldownContext: GaryxSidebarHeaderContext?
     let showsCloseButton: Bool
-    let isSyncing: Bool
     let onBack: () -> Void
     let onClose: () -> Void
-    let onRefresh: () -> Void
-    let onNewChat: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -669,42 +659,6 @@ struct GaryxSidebarHeaderView: View {
                     .minimumScaleFactor(0.75)
 
                 Spacer(minLength: 0)
-            }
-
-            HStack(spacing: 10) {
-                if isSyncing {
-                    ProgressView()
-                        .scaleEffect(0.72)
-                        .frame(width: 28, height: 28)
-                        .accessibilityLabel("Syncing")
-                }
-
-                Menu {
-                    Button("New Thread", systemImage: "square.and.pencil", action: onNewChat)
-                    Button("Refresh", systemImage: "arrow.clockwise", action: onRefresh)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(GaryxFont.system(size: 18, weight: .bold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 30, height: 30)
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("More")
-
-                GaryxAppLogo(size: 34, cornerRadius: 17, fontSize: 12)
-            }
-            .padding(.vertical, 6)
-            .padding(.leading, 12)
-            .padding(.trailing, 8)
-            .background {
-                Capsule()
-                    .fill(Color(.systemBackground).opacity(0.42))
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
-            .overlay {
-                Capsule()
-                    .stroke(Color.primary.opacity(0.03), lineWidth: 1)
             }
 
             if showsCloseButton {
@@ -1754,7 +1708,8 @@ struct GaryxConversationView: View {
 
 struct GaryxConversationHeader: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @FocusState private var isTitleFieldFocused: Bool
+    @State private var showsRenamePrompt = false
+    @State private var renameDraftTitle = ""
 
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
@@ -1785,16 +1740,11 @@ struct GaryxConversationHeader: View {
                                 .frame(maxWidth: 84, alignment: .leading)
                         }
 
-                        TextField("Thread title", text: $model.draftThreadTitle)
+                        Text(model.selectedThread?.title ?? model.draftThreadTitle)
                             .font(GaryxFont.callout(weight: .medium))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .truncationMode(.tail)
-                            .submitLabel(.done)
-                            .focused($isTitleFieldFocused)
-                            .onSubmit {
-                                Task { await model.renameSelectedThread() }
-                            }
                             .layoutPriority(1)
                     }
                     .padding(.horizontal, 12)
@@ -1827,9 +1777,7 @@ struct GaryxConversationHeader: View {
                         Task { await model.loadSelectedThreadHistory() }
                     }
                     Button("Rename", systemImage: "pencil") {
-                        DispatchQueue.main.async {
-                            isTitleFieldFocused = true
-                        }
+                        openRenamePrompt()
                     }
                     Button("New Thread", systemImage: "square.and.pencil") {
                         Task { await model.createThread() }
@@ -1846,6 +1794,20 @@ struct GaryxConversationHeader: View {
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 8)
+        .alert("Rename Thread", isPresented: $showsRenamePrompt) {
+            TextField("Thread title", text: $renameDraftTitle)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                Task {
+                    await model.renameSelectedThread(to: renameDraftTitle)
+                }
+            }
+        }
+    }
+
+    private func openRenamePrompt() {
+        renameDraftTitle = model.selectedThread?.title ?? model.draftThreadTitle
+        showsRenamePrompt = true
     }
 
     private func openSidebar() {

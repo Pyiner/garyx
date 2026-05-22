@@ -1952,13 +1952,14 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
-    func renameSelectedThread() async {
+    func renameSelectedThread(to proposedTitle: String? = nil) async {
         guard let selectedThread else { return }
-        let title = draftThreadTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = (proposedTitle ?? draftThreadTitle).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty, title != selectedThread.title else { return }
         do {
             let updated = try await client().updateThread(threadId: selectedThread.id, label: title)
             self.selectedThread = updated
+            draftThreadTitle = updated.title
             if let index = threads.firstIndex(where: { $0.id == updated.id }) {
                 threads[index] = updated
             }
