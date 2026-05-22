@@ -105,7 +105,7 @@ enum GaryxMobileTurnRenderer {
         func flush(isTrailingTurn: Bool) {
             let activityRows = buildActivityRows(
                 steps: currentSteps,
-                key: currentKey ?? currentUserBlock?.id,
+                key: currentUserBlock?.id ?? currentKey,
                 precedingUserTimestamp: precedingUserTimestamp,
                 deferTrailingFinalAssistant: deferTrailingFinalAssistant,
                 isTrailingTurn: isTrailingTurn

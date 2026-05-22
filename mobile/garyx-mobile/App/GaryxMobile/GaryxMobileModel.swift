@@ -3863,6 +3863,19 @@ final class GaryxMobileModel: ObservableObject {
                 }
             case .tool:
                 if local.isStreaming || local.toolTraceGroup?.isActive == true {
+                    if let localGroup = local.toolTraceGroup,
+                       let remoteIndex = merged.firstIndex(where: { remote in
+                           guard let remoteGroup = remote.toolTraceGroup else { return false }
+                           return Self.toolTraceGroupsOverlap(remoteGroup, localGroup)
+                       }) {
+                        if var remoteGroup = merged[remoteIndex].toolTraceGroup {
+                            remoteGroup = Self.mergedToolTraceGroup(remoteGroup, with: localGroup)
+                            merged[remoteIndex].toolTraceGroup = remoteGroup
+                            merged[remoteIndex].text = remoteGroup.summary
+                            merged[remoteIndex].isStreaming = remoteGroup.isActive
+                        }
+                        continue
+                    }
                     merged.append(local)
                 }
             case .system:
@@ -3890,6 +3903,48 @@ final class GaryxMobileModel: ObservableObject {
     private static func normalizedMergeText(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\r\n", with: "\n")
+    }
+
+    private static func toolTraceGroupsOverlap(
+        _ left: GaryxMobileToolTraceGroup,
+        _ right: GaryxMobileToolTraceGroup
+    ) -> Bool {
+        let leftKeys = Set(left.entries.compactMap(toolTraceMergeKey))
+        let rightKeys = Set(right.entries.compactMap(toolTraceMergeKey))
+        return !leftKeys.isDisjoint(with: rightKeys)
+    }
+
+    private static func mergedToolTraceGroup(
+        _ remote: GaryxMobileToolTraceGroup,
+        with local: GaryxMobileToolTraceGroup
+    ) -> GaryxMobileToolTraceGroup {
+        var merged = remote
+        merged.live = remote.live || local.live
+        for localEntry in local.entries {
+            if let localKey = toolTraceMergeKey(localEntry),
+               let index = merged.entries.firstIndex(where: { toolTraceMergeKey($0) == localKey }) {
+                if localEntry.status != .running {
+                    merged.entries[index].absorb(result: localEntry)
+                }
+                continue
+            }
+            merged.entries.append(localEntry)
+        }
+        return merged
+    }
+
+    private static func toolTraceMergeKey(_ entry: GaryxMobileToolTraceEntry) -> String? {
+        if let toolUseId = entry.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !toolUseId.isEmpty {
+            return "id:\(toolUseId)"
+        }
+        let normalizedTool = entry.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let input = entry.inputText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let summary = entry.summaryText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalizedTool.isEmpty, !input.isEmpty || !summary.isEmpty else {
+            return nil
+        }
+        return "fp:\(normalizedTool):\(input):\(summary):\(entry.isError)"
     }
 
     private static func userMergeKey(_ message: GaryxMobileMessage) -> String {
@@ -4128,7 +4183,9 @@ final class GaryxMobileModel: ObservableObject {
 
         for item in transcript {
             if item.role == .toolUse || item.role == .toolResult {
-                let entry = GaryxMobileToolTraceEntry(transcript: item)
+                guard let entry = GaryxMobileToolTraceEntry(transcript: item) else {
+                    continue
+                }
                 var group = pendingToolGroup ?? GaryxMobileToolTraceGroup(entries: [], live: false)
                 if item.role == .toolResult, mergeToolResult(entry, into: &group) {
                     pendingToolGroup = group
@@ -4166,7 +4223,9 @@ final class GaryxMobileModel: ObservableObject {
     private func appendToolTraceEvent(_ eventKind: GaryxMobileToolTraceEventKind, threadId: String, message: GaryxJSONValue?) {
         removeEmptyActiveAssistantPlaceholder(for: threadId)
         activeAssistantMessageIdsByThread[threadId] = nil
-        let entry = GaryxMobileToolTraceEntry(eventKind: eventKind, value: message)
+        guard let entry = GaryxMobileToolTraceEntry(eventKind: eventKind, value: message) else {
+            return
+        }
 
         mutateMessages(for: threadId) { messages in
             if eventKind == .toolResult {
@@ -4230,6 +4289,9 @@ final class GaryxMobileModel: ObservableObject {
             group.entries[match].absorb(result: result)
             return true
         }
+        if result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return false
+        }
 
         let fallbackMatches = group.entries.indices.filter {
             canMergeToolResultFallback(result, into: group.entries[$0])
@@ -4247,6 +4309,13 @@ final class GaryxMobileModel: ObservableObject {
         into candidate: GaryxMobileToolTraceEntry
     ) -> Bool {
         guard candidate.status == .running, candidate.resultText == nil else {
+            return false
+        }
+        if let resultToolUseId = result.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !resultToolUseId.isEmpty,
+           let candidateToolUseId = candidate.toolUseId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !candidateToolUseId.isEmpty,
+           resultToolUseId != candidateToolUseId {
             return false
         }
         let resultTool = result.toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -4791,6 +4860,8 @@ private struct GaryxMobileToolTracePayload {
     var summaryText: String?
     var timestamp: String?
     var primaryPathBadge: String?
+    var source: String?
+    var itemType: String?
     var isError: Bool
 
     static func fromEvent(_ value: GaryxJSONValue?, eventKind: GaryxMobileToolTraceEventKind) -> GaryxMobileToolTracePayload {
@@ -4825,6 +4896,8 @@ private struct GaryxMobileToolTracePayload {
                 summaryText: fallbackText?.garyxSafeToolSummary,
                 timestamp: fallbackTimestamp,
                 primaryPathBadge: nil,
+                source: nil,
+                itemType: fallbackToolName?.garyxTrimmedNilIfEmpty,
                 isError: false
             )
         }
@@ -4835,6 +4908,10 @@ private struct GaryxMobileToolTracePayload {
         let metadata = object.objectValue(forKeys: ["metadata"])
             ?? payloadObject?.objectValue(forKeys: ["metadata"])
             ?? nestedContent?.objectValue(forKeys: ["metadata"])
+        let source = metadata?.stringValue(forKeys: ["source", "provider", "providerType", "provider_type"])
+            ?? object.stringValue(forKeys: ["source", "provider", "providerType", "provider_type"])
+            ?? payloadObject?.stringValue(forKeys: ["source", "provider", "providerType", "provider_type"])
+            ?? nestedContent?.stringValue(forKeys: ["source", "provider", "providerType", "provider_type"])
         let toolUseId = object.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
             ?? payloadObject?.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
             ?? nestedContent?.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
@@ -4846,6 +4923,11 @@ private struct GaryxMobileToolTracePayload {
             ?? payloadObject?.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title", "type"])
             ?? nestedContent?.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title"])
             ?? fallbackToolName?.garyxTrimmedNilIfEmpty
+        let itemType = object.stringValue(forKeys: ["type", "item_type", "itemType"])
+            ?? payloadObject?.stringValue(forKeys: ["type", "item_type", "itemType"])
+            ?? nestedContent?.stringValue(forKeys: ["type", "item_type", "itemType"])
+            ?? metadata?.stringValue(forKeys: ["type", "item_type", "itemType"])
+            ?? toolName
         let detailKeys = eventKind == .toolUse
             ? ["input", "arguments", "params", "content", "command", "path", "file_path", "text"]
             : ["result", "output", "content", "stdout", "stderr", "text", "message"]
@@ -4876,6 +4958,8 @@ private struct GaryxMobileToolTracePayload {
             summaryText: summary,
             timestamp: timestamp,
             primaryPathBadge: primaryPathBadge,
+            source: source,
+            itemType: itemType,
             isError: isError
         )
     }
@@ -4962,8 +5046,11 @@ private struct GaryxMobileToolTracePayload {
 }
 
 private extension GaryxMobileToolTraceEntry {
-    init(transcript message: GaryxTranscriptMessage) {
+    init?(transcript message: GaryxTranscriptMessage) {
         let payload = GaryxMobileToolTracePayload.fromTranscript(message)
+        guard payload.shouldRender else {
+            return nil
+        }
         let eventKind: GaryxMobileToolTraceEventKind = message.role == .toolResult ? .toolResult : .toolUse
         self.init(
             id: "\(message.id):\(eventKind.idSuffix)",
@@ -4983,8 +5070,11 @@ private extension GaryxMobileToolTraceEntry {
         )
     }
 
-    init(eventKind: GaryxMobileToolTraceEventKind, value: GaryxJSONValue?) {
+    init?(eventKind: GaryxMobileToolTraceEventKind, value: GaryxJSONValue?) {
         let payload = GaryxMobileToolTracePayload.fromEvent(value, eventKind: eventKind)
+        guard payload.shouldRender else {
+            return nil
+        }
         let generatedId = payload.toolUseId ?? UUID().uuidString
         self.init(
             id: "\(eventKind.idSuffix):\(generatedId):\(UUID().uuidString)",
@@ -5029,6 +5119,14 @@ private extension GaryxMobileToolTraceEntry {
 }
 
 private extension GaryxMobileToolTracePayload {
+    var shouldRender: Bool {
+        let normalizedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let isCodex = normalizedSource == "codex" || normalizedSource == "codex_app_server"
+        let normalizedItemType = itemType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedToolName = toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return !(isCodex && (normalizedItemType == "reasoning" || normalizedToolName == "reasoning"))
+    }
+
     var normalizedToolName: String {
         toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().nilIfEmpty ?? "tool"
     }
