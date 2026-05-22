@@ -63,6 +63,7 @@ import type {
   DeleteTaskInput,
   ListAutoResearchRunsInput,
   ListCandidatesInput,
+  ListDreamsInput,
   ListTasksInput,
   ListWorkspaceFilesInput,
   MarkAutomationSeenInput,
@@ -78,6 +79,7 @@ import type {
   RunAutomationNowInput,
   SaveSkillFileInput,
   SaveMemoryDocumentInput,
+  ScanDreamsInput,
   SelectAutomationInput,
   SelectWorkspaceInput,
   SendMessageInput,
@@ -132,9 +134,11 @@ import {
   fetchGatewaySettings,
   fetchThreadHistory,
   fetchThreadLogs,
+  getDream,
   getWorkspaceGitStatus,
   getAutoResearchRun,
   interruptThread,
+  listDreams,
   listTasks,
   listAutoResearchCandidates,
   listAutoResearchRuns,
@@ -156,6 +160,7 @@ import {
   sendStreamingInput,
   deleteAutoResearchRun,
   selectAutoResearchCandidate,
+  scanDreams,
   stopAutoResearchRun,
   stopTask,
   toggleMcpServer,
@@ -701,6 +706,21 @@ function registerIpcHandlers(): void {
   ipcMain.handle("garyx:list-tasks", async (_event, input?: ListTasksInput) => {
     const settings = await resolveSettings();
     return listTasks(settings, input || {});
+  });
+
+  ipcMain.handle("garyx:list-dreams", async (_event, input?: ListDreamsInput) => {
+    const settings = await resolveSettings();
+    return listDreams(settings, input || {});
+  });
+
+  ipcMain.handle("garyx:scan-dreams", async (_event, input?: ScanDreamsInput) => {
+    const settings = await resolveSettings();
+    return scanDreams(settings, input || {});
+  });
+
+  ipcMain.handle("garyx:get-dream", async (_event, dreamId: string) => {
+    const settings = await resolveSettings();
+    return getDream(settings, dreamId);
   });
 
   ipcMain.handle(

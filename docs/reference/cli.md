@@ -94,6 +94,17 @@ Common flags on `channels add`:
 | `garyx thread send task <task_ref> [message]` | Resolve a task to its backing thread, then send a message into that thread. |
 | `garyx thread send bot <selector> [message]` | Resolve a bot's bound main thread inside the gateway, then send with that channel context. |
 
+## Dreams
+
+| Command | Use it for |
+| --- | --- |
+| `garyx dream list [--since-hours N] [--json]` | List recent topic summaries with the thread spans they came from. |
+| `garyx dream scan [--since-hours N] [--mode auto|claude|heuristic] [--json]` | Scan recent user messages, persist refreshed Dreams topics, and print the scan result. |
+| `garyx dream show <dream_id> [--json]` | Show one persisted Dreams topic and its thread spans. |
+
+`garyx dreams` is an alias for the same command group. Scans use the running
+gateway and store their results in the local Garyx SQLite database.
+
 ## Tasks
 
 | Command | Use it for |

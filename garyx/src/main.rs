@@ -22,8 +22,8 @@ use cli::{
     AgentAction, AutoResearchAction, AutoUpdateAction, AutomationAction,
     AutomationDataTriggerAction, AutomationTriggerAction, BotAction, BotEndpointAction,
     ChannelsAction, Cli, CommandAction, Commands, ConfigAction, DbAction, DbFieldAction,
-    DbRecordAction, DbTableAction, GatewayAction, LogsAction, PluginsAction, TaskAction,
-    TeamAction, ThreadAction, ToolAction,
+    DbRecordAction, DbTableAction, DreamAction, GatewayAction, LogsAction, PluginsAction,
+    TaskAction, TeamAction, ThreadAction, ToolAction,
 };
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
@@ -42,15 +42,16 @@ use commands::{
     cmd_config_show, cmd_config_unset, cmd_config_validate, cmd_db_events, cmd_db_field_add,
     cmd_db_field_drop, cmd_db_record_delete, cmd_db_record_get, cmd_db_record_insert,
     cmd_db_record_update, cmd_db_sql, cmd_db_table_create, cmd_db_table_drop, cmd_db_table_list,
-    cmd_db_table_schema, cmd_doctor, cmd_endpoint_bind, cmd_endpoint_detach, cmd_endpoint_list,
-    cmd_gateway_install, cmd_gateway_reload_config, cmd_gateway_restart, cmd_gateway_start,
-    cmd_gateway_stop, cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path,
-    cmd_logs_tail, cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign, cmd_task_claim,
-    cmd_task_create, cmd_task_delete, cmd_task_get, cmd_task_history, cmd_task_list,
-    cmd_task_promote, cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_stop,
-    cmd_task_unassign, cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history,
-    cmd_thread_list, cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task,
-    cmd_tool_image, cmd_tool_search, cmd_update, run_gateway,
+    cmd_db_table_schema, cmd_doctor, cmd_dream_list, cmd_dream_scan, cmd_dream_show,
+    cmd_endpoint_bind, cmd_endpoint_detach, cmd_endpoint_list, cmd_gateway_install,
+    cmd_gateway_reload_config, cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop,
+    cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail,
+    cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign, cmd_task_claim, cmd_task_create,
+    cmd_task_delete, cmd_task_get, cmd_task_history, cmd_task_list, cmd_task_promote,
+    cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_stop, cmd_task_unassign,
+    cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history, cmd_thread_list,
+    cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_tool_image,
+    cmd_tool_search, cmd_update, run_gateway,
 };
 
 struct ThreadSendDestination {
@@ -998,6 +999,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json,
             } => {
                 cmd_thread_create(config_path, title, workspace_dir, agent_id, worktree, json).await
+            }
+        },
+        Some(Commands::Dream { action }) => match action {
+            DreamAction::List {
+                from,
+                to,
+                since_hours,
+                limit,
+                json,
+            } => {
+                cmd_dream_list(
+                    config_path,
+                    from.as_deref(),
+                    to.as_deref(),
+                    since_hours,
+                    limit,
+                    json,
+                )
+                .await
+            }
+            DreamAction::Scan {
+                from,
+                to,
+                since_hours,
+                mode,
+                limit,
+                json,
+            } => {
+                cmd_dream_scan(
+                    config_path,
+                    from.as_deref(),
+                    to.as_deref(),
+                    since_hours,
+                    &mode,
+                    limit,
+                    json,
+                )
+                .await
+            }
+            DreamAction::Show { dream_id, json } => {
+                cmd_dream_show(config_path, &dream_id, json).await
             }
         },
         Some(Commands::Task { action }) => match action {

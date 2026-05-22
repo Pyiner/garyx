@@ -14,6 +14,7 @@ pub mod cron;
 mod custom_agents;
 pub mod dashboard;
 mod delivery_target;
+pub mod dreams;
 pub mod garyx_db;
 pub mod gateway_auth;
 pub mod health;

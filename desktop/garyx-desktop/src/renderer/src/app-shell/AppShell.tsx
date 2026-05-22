@@ -73,6 +73,7 @@ import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
 import { AddBotDialog } from "./components/AddBotDialog";
+import { DreamsPanel } from "./components/DreamsPanel";
 import { BotConversationSidebar } from "../BotConversationSidebar";
 import { WorkspaceConversationSidebar } from "../WorkspaceConversationSidebar";
 import { ComposerForm } from "../ComposerForm";
@@ -226,7 +227,8 @@ type ThreadEntrySelectionSource =
   | "pinned"
   | "bot-root"
   | "bot-conversation"
-  | "workspace-conversation";
+  | "workspace-conversation"
+  | "dreams";
 
 type ThreadHistoryPaginationState = {
   hasMoreBefore: boolean;
@@ -1355,6 +1357,7 @@ function savedContentView(): ContentView {
     "teams",
     "skills",
     "tasks",
+    "dreams",
     "settings",
   ];
   return saved && valid.includes(saved as ContentView)
@@ -2808,6 +2811,7 @@ export function AppShell() {
   const isTeamsView = contentView === "teams";
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
+  const isDreamsView = contentView === "dreams";
   const shouldShowConversationRail = contentView === "thread";
   const visibleSelectedThreadId = shouldShowConversationRail ? selectedThreadId : null;
   const visibleThreadEntrySelectionSource = shouldShowConversationRail
@@ -2977,6 +2981,7 @@ export function AppShell() {
     "conversation",
     isSettingsView ? "settings-view" : null,
     isTasksView ? "tasks-view" : null,
+    isDreamsView ? "dreams-view" : null,
   ]
     .filter(Boolean)
     .join(" ");
@@ -2993,6 +2998,7 @@ export function AppShell() {
     !isAutomationView &&
     !isSkillsView &&
     !isTasksView &&
+    !isDreamsView &&
     !isBotsView &&
     !isAgentsView &&
     !isTeamsView,
@@ -7999,6 +8005,7 @@ export function AppShell() {
         isSettingsView={isSettingsView}
         isSkillsView={isSkillsView}
         isTasksView={isTasksView}
+        isDreamsView={isDreamsView}
         onBackToThreads={() => {
           setContentView("thread");
         }}
@@ -8075,6 +8082,9 @@ export function AppShell() {
         }}
         onOpenTasks={() => {
           setContentView("tasks");
+        }}
+        onOpenDreams={() => {
+          setContentView("dreams");
         }}
         onRequestRemoveWorkspace={(workspace) => {
           void handleRequestRemoveWorkspace(workspace);
@@ -8177,7 +8187,7 @@ export function AppShell() {
         </main>
       ) : (
         <main className={conversationClassName}>
-          {isTasksView ? null : showStaticWindowToolbar ? (
+          {isTasksView || isDreamsView ? null : showStaticWindowToolbar ? (
             <div aria-hidden="true" className="settings-window-toolbar" />
           ) : (
             <header className="conversation-header">
@@ -8430,6 +8440,12 @@ export function AppShell() {
                 onToast={pushToast}
                 workspaces={workspacePickerWorkspaces}
                 workspaceMutation={workspaceMutation}
+              />
+            ) : isDreamsView ? (
+              <DreamsPanel
+                onOpenThread={(threadId) => {
+                  void openExistingThread(threadId, "dreams");
+                }}
               />
             ) : isBotsView ? (
               <BotConsolePage

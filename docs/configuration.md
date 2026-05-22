@@ -446,6 +446,34 @@ Telegram owns its BotCommands publishing and refreshes the projected menu on
 startup and every 10 minutes; the gateway no longer exposes a manual Telegram
 command-sync endpoint.
 
+## Dreams
+
+Dreams are persisted topic summaries extracted from recent user messages. They
+are stored in the local Garyx SQLite database and can point back to one or more
+thread spans, so desktop and mobile clients can open the source thread from a
+topic.
+
+The gateway exposes:
+
+```text
+GET /api/dreams
+POST /api/dreams/scan
+GET /api/dreams/{dream_id}
+```
+
+The CLI exposes the same surface:
+
+```bash
+garyx dream list --since-hours 24
+garyx dream scan --since-hours 24 --mode auto
+garyx dream show <dream_id>
+```
+
+`auto` scan mode uses a temporary Claude Code extraction pass when available
+and falls back to the deterministic heuristic splitter if Claude cannot produce
+usable JSON. The temporary extractor runs without workspace settings, MCP
+config, or built-in tools.
+
 ## Automations
 
 Scheduled automations are managed from the CLI:

@@ -197,6 +197,65 @@ export interface DesktopTasksPage {
   hasMore: boolean;
 }
 
+export interface DesktopDreamSpan {
+  spanId: string;
+  dreamId: string;
+  threadId: string;
+  workspacePath?: string | null;
+  startSeq: number;
+  endSeq: number;
+  startAt: string;
+  endAt: string;
+  excerpt: string;
+  messageCount: number;
+}
+
+export interface DesktopDreamTopic {
+  dreamId: string;
+  title: string;
+  summary: string;
+  firstMessageAt: string;
+  lastMessageAt: string;
+  updatedAt: string;
+  source: string;
+  confidence: number;
+  messageCount: number;
+  spanCount: number;
+  spans: DesktopDreamSpan[];
+}
+
+export interface DesktopDreamScan {
+  runId: string;
+  scannedFrom: string;
+  scannedTo: string;
+  createdAt: string;
+  source: string;
+  status: string;
+  topicsCount: number;
+  spansCount: number;
+  error?: string | null;
+}
+
+export interface DesktopDreamsPage {
+  dreams: DesktopDreamTopic[];
+  count: number;
+  from: string;
+  to: string;
+  latestScan?: DesktopDreamScan | null;
+  scan?: DesktopDreamScan | null;
+}
+
+export interface ListDreamsInput {
+  from?: string | null;
+  to?: string | null;
+  sinceHours?: number;
+  limit?: number;
+}
+
+export interface ScanDreamsInput extends ListDreamsInput {
+  mode?: "auto" | "claude" | "heuristic";
+}
+
 export interface ListTasksInput {
   status?: DesktopTaskStatus | null;
   assignee?: string | null;
@@ -1559,6 +1618,9 @@ export interface GaryxDesktopApi {
   stopTask: (input: StopTaskInput) => Promise<void>;
   deleteTask: (input: DeleteTaskInput) => Promise<void>;
   updateTaskTitle: (input: UpdateTaskTitleInput) => Promise<void>;
+  listDreams: (input?: ListDreamsInput) => Promise<DesktopDreamsPage>;
+  scanDreams: (input?: ScanDreamsInput) => Promise<DesktopDreamsPage>;
+  getDream: (dreamId: string) => Promise<DesktopDreamTopic | null>;
   listSkills: () => Promise<DesktopSkillInfo[]>;
   listCustomAgents: () => Promise<DesktopCustomAgent[]>;
   listProviderModels: (

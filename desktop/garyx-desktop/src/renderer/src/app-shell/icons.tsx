@@ -3,6 +3,7 @@ import {
   Command,
   Cpu,
   ListTodo,
+  MoonStar,
   Router,
   Settings2,
   SlidersHorizontal,
@@ -153,6 +154,12 @@ export function AutoResearchIcon() {
       </g>
       <circle cx="10" cy="10" r="1.2" fill="currentColor"/>
     </svg>
+  );
+}
+
+export function DreamsIcon() {
+  return (
+    <SettingsRailIcon glyph={MoonStar} />
   );
 }
 

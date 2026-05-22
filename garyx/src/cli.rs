@@ -184,6 +184,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: ThreadAction,
     },
+    /// Dream topic map across recent threads
+    #[command(alias = "dreams")]
+    Dream {
+        #[command(subcommand)]
+        action: DreamAction,
+    },
     /// Task overlay utilities
     #[command(alias = "tasks")]
     Task {
@@ -1398,6 +1404,58 @@ pub(crate) enum ThreadAction {
         /// single-agent mode.
         #[arg(long)]
         agent_id: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DreamAction {
+    /// List persisted dream topics for a time window
+    #[command(alias = "ls")]
+    List {
+        /// RFC3339 lower bound. Defaults to --since-hours before now.
+        #[arg(long)]
+        from: Option<String>,
+        /// RFC3339 upper bound. Defaults to now.
+        #[arg(long)]
+        to: Option<String>,
+        /// Look back this many hours when --from is omitted.
+        #[arg(long, default_value_t = 24)]
+        since_hours: i64,
+        /// Maximum topics to show
+        #[arg(long, default_value_t = 80)]
+        limit: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Scan recent user messages and replace dream topics in that window
+    Scan {
+        /// RFC3339 lower bound. Defaults to --since-hours before now.
+        #[arg(long)]
+        from: Option<String>,
+        /// RFC3339 upper bound. Defaults to now.
+        #[arg(long)]
+        to: Option<String>,
+        /// Look back this many hours when --from is omitted.
+        #[arg(long, default_value_t = 24)]
+        since_hours: i64,
+        /// Extraction mode: auto, claude, or heuristic
+        #[arg(long, default_value = "auto", value_parser = ["auto", "claude", "heuristic"])]
+        mode: String,
+        /// Maximum user messages to inspect
+        #[arg(long, default_value_t = 600)]
+        limit: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one dream topic and its thread spans
+    Show {
+        /// Dream id
+        dream_id: String,
         /// Output as JSON
         #[arg(long)]
         json: bool,

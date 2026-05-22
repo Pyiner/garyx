@@ -5,8 +5,8 @@ use clap::{CommandFactory, Parser};
 use crate::cli::{
     AgentAction, AutoResearchAction, AutomationAction, AutomationDataTriggerAction,
     AutomationTriggerAction, BotAction, BotEndpointAction, ChannelsAction, Cli, CommandAction,
-    Commands, ConfigAction, DbAction, DbRecordAction, DbTableAction, GatewayAction, LogsAction,
-    TaskAction, TeamAction, ThreadAction, ToolAction,
+    Commands, ConfigAction, DbAction, DbRecordAction, DbTableAction, DreamAction, GatewayAction,
+    LogsAction, TaskAction, TeamAction, ThreadAction, ToolAction,
 };
 use crate::commands::{
     OnboardCommandOptions, SearchStreamState, apply_search_stream_event, canonical_channel_id,
@@ -533,6 +533,40 @@ fn parse_config_claude_cli() {
             assert!(json);
         }
         _ => panic!("expected Config::ClaudeCli"),
+    }
+}
+
+#[test]
+fn parse_dream_scan() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "dream",
+        "scan",
+        "--since-hours",
+        "12",
+        "--mode",
+        "heuristic",
+        "--limit",
+        "50",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Dream {
+            action:
+                DreamAction::Scan {
+                    since_hours,
+                    mode,
+                    limit,
+                    json,
+                    ..
+                },
+        }) => {
+            assert_eq!(since_hours, 12);
+            assert_eq!(mode, "heuristic");
+            assert_eq!(limit, 50);
+            assert!(json);
+        }
+        _ => panic!("expected Dream::Scan"),
     }
 }
 

@@ -140,6 +140,211 @@ private struct GaryxThreadPinRecord: Decodable, Equatable, Sendable {
     }
 }
 
+public struct GaryxDreamsPage: Decodable, Equatable, Sendable {
+    public var dreams: [GaryxDreamTopic]
+    public var count: Int
+    public var from: String
+    public var to: String
+    public var latestScan: GaryxDreamScan?
+    public var scan: GaryxDreamScan?
+
+    enum CodingKeys: String, CodingKey {
+        case dreams
+        case count
+        case from
+        case to
+        case latestScan
+        case latestScanSnake = "latest_scan"
+        case scan
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dreams = try container.decodeIfPresent([GaryxDreamTopic].self, forKey: .dreams) ?? []
+        count = try container.decodeIfPresent(Int.self, forKey: .count) ?? dreams.count
+        from = try container.decodeFirstString(.from) ?? ""
+        to = try container.decodeFirstString(.to) ?? ""
+        latestScan = try container.decodeIfPresent(GaryxDreamScan.self, forKey: .latestScanSnake)
+            ?? container.decodeIfPresent(GaryxDreamScan.self, forKey: .latestScan)
+        scan = try container.decodeIfPresent(GaryxDreamScan.self, forKey: .scan)
+    }
+}
+
+public struct GaryxDreamTopic: Decodable, Identifiable, Equatable, Sendable {
+    public var id: String { dreamId }
+    public var dreamId: String
+    public var title: String
+    public var summary: String
+    public var firstMessageAt: String
+    public var lastMessageAt: String
+    public var updatedAt: String
+    public var source: String
+    public var confidence: Double
+    public var messageCount: Int
+    public var spanCount: Int
+    public var spans: [GaryxDreamSpan]
+
+    enum CodingKeys: String, CodingKey {
+        case dreamId
+        case dreamIdSnake = "dream_id"
+        case title
+        case summary
+        case firstMessageAt
+        case firstMessageAtSnake = "first_message_at"
+        case lastMessageAt
+        case lastMessageAtSnake = "last_message_at"
+        case updatedAt
+        case updatedAtSnake = "updated_at"
+        case source
+        case confidence
+        case messageCount
+        case messageCountSnake = "message_count"
+        case spanCount
+        case spanCountSnake = "span_count"
+        case spans
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        dreamId = try container.decodeFirstString(.dreamIdSnake, .dreamId) ?? ""
+        title = try container.decodeFirstString(.title) ?? "Untitled Dream"
+        summary = try container.decodeFirstString(.summary) ?? ""
+        firstMessageAt = try container.decodeFirstString(.firstMessageAtSnake, .firstMessageAt) ?? ""
+        lastMessageAt = try container.decodeFirstString(.lastMessageAtSnake, .lastMessageAt) ?? ""
+        updatedAt = try container.decodeFirstString(.updatedAtSnake, .updatedAt) ?? ""
+        source = try container.decodeFirstString(.source) ?? "unknown"
+        confidence = try container.decodeIfPresent(Double.self, forKey: .confidence) ?? 0
+        messageCount = try container.decodeIfPresent(Int.self, forKey: .messageCountSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .messageCount)
+            ?? 0
+        spanCount = try container.decodeIfPresent(Int.self, forKey: .spanCountSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .spanCount)
+            ?? 0
+        spans = try container.decodeIfPresent([GaryxDreamSpan].self, forKey: .spans) ?? []
+    }
+}
+
+public struct GaryxDreamSpan: Decodable, Identifiable, Equatable, Sendable {
+    public var id: String { spanId }
+    public var spanId: String
+    public var dreamId: String
+    public var threadId: String
+    public var workspacePath: String?
+    public var startSeq: Int
+    public var endSeq: Int
+    public var startAt: String
+    public var endAt: String
+    public var excerpt: String
+    public var messageCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case spanId
+        case spanIdSnake = "span_id"
+        case dreamId
+        case dreamIdSnake = "dream_id"
+        case threadId
+        case threadIdSnake = "thread_id"
+        case workspacePath
+        case workspaceDir = "workspace_dir"
+        case startSeq
+        case startSeqSnake = "start_seq"
+        case endSeq
+        case endSeqSnake = "end_seq"
+        case startAt
+        case startAtSnake = "start_at"
+        case endAt
+        case endAtSnake = "end_at"
+        case excerpt
+        case messageCount
+        case messageCountSnake = "message_count"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        spanId = try container.decodeFirstString(.spanIdSnake, .spanId) ?? ""
+        dreamId = try container.decodeFirstString(.dreamIdSnake, .dreamId) ?? ""
+        threadId = try container.decodeFirstString(.threadIdSnake, .threadId) ?? ""
+        workspacePath = try container.decodeFirstString(.workspaceDir, .workspacePath)
+        startSeq = try container.decodeIfPresent(Int.self, forKey: .startSeqSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .startSeq)
+            ?? 0
+        endSeq = try container.decodeIfPresent(Int.self, forKey: .endSeqSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .endSeq)
+            ?? 0
+        startAt = try container.decodeFirstString(.startAtSnake, .startAt) ?? ""
+        endAt = try container.decodeFirstString(.endAtSnake, .endAt) ?? ""
+        excerpt = try container.decodeFirstString(.excerpt) ?? ""
+        messageCount = try container.decodeIfPresent(Int.self, forKey: .messageCountSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .messageCount)
+            ?? 0
+    }
+}
+
+public struct GaryxDreamScan: Decodable, Equatable, Sendable {
+    public var runId: String
+    public var scannedFrom: String
+    public var scannedTo: String
+    public var createdAt: String
+    public var source: String
+    public var status: String
+    public var topicsCount: Int
+    public var spansCount: Int
+    public var error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case runId
+        case runIdSnake = "run_id"
+        case scannedFrom
+        case scannedFromSnake = "scanned_from"
+        case scannedTo
+        case scannedToSnake = "scanned_to"
+        case createdAt
+        case createdAtSnake = "created_at"
+        case source
+        case status
+        case topicsCount
+        case topicsCountSnake = "topics_count"
+        case spansCount
+        case spansCountSnake = "spans_count"
+        case error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        runId = try container.decodeFirstString(.runIdSnake, .runId) ?? ""
+        scannedFrom = try container.decodeFirstString(.scannedFromSnake, .scannedFrom) ?? ""
+        scannedTo = try container.decodeFirstString(.scannedToSnake, .scannedTo) ?? ""
+        createdAt = try container.decodeFirstString(.createdAtSnake, .createdAt) ?? ""
+        source = try container.decodeFirstString(.source) ?? "unknown"
+        status = try container.decodeFirstString(.status) ?? "unknown"
+        topicsCount = try container.decodeIfPresent(Int.self, forKey: .topicsCountSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .topicsCount)
+            ?? 0
+        spansCount = try container.decodeIfPresent(Int.self, forKey: .spansCountSnake)
+            ?? container.decodeIfPresent(Int.self, forKey: .spansCount)
+            ?? 0
+        error = try container.decodeFirstString(.error)
+    }
+}
+
+public struct GaryxDreamScanRequest: Encodable, Equatable, Sendable {
+    public var sinceHours: Int
+    public var mode: String
+    public var limit: Int
+
+    enum CodingKeys: String, CodingKey {
+        case sinceHours = "since_hours"
+        case mode
+        case limit
+    }
+
+    public init(sinceHours: Int = 24, mode: String = "auto", limit: Int = 600) {
+        self.sinceHours = sinceHours
+        self.mode = mode
+        self.limit = limit
+    }
+}
+
 public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var id: String
     public var title: String
@@ -3367,6 +3572,22 @@ public final class GaryxGatewayClient {
             )
         }
         return try await delete("/api/thread-pins/\(threadId.urlPathEncoded)")
+    }
+
+    public func listDreams(sinceHours: Int = 24, limit: Int = 80) async throws -> GaryxDreamsPage {
+        try await get(
+            "/api/dreams",
+            queryItems: [
+                URLQueryItem(name: "since_hours", value: String(max(1, sinceHours))),
+                URLQueryItem(name: "limit", value: String(max(1, limit))),
+            ]
+        )
+    }
+
+    public func scanDreams(
+        request: GaryxDreamScanRequest = GaryxDreamScanRequest()
+    ) async throws -> GaryxDreamsPage {
+        try await post("/api/dreams/scan", body: request)
     }
 
     public func threadHistory(

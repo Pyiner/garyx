@@ -19,6 +19,7 @@ const SIMPLE_VIEW_SEGMENTS: Record<string, Exclude<ContentView, 'thread' | 'auto
   teams: 'teams',
   skills: 'skills',
   tasks: 'tasks',
+  dreams: 'dreams',
 };
 
 const SETTINGS_TAB_IDS = new Set<string>([

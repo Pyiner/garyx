@@ -7,7 +7,9 @@ use axum::body::Body;
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 use garyx_models::config::{ApiAccount, GaryxConfig};
-use garyx_models::provider::{ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent};
+use garyx_models::provider::{
+    ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
+};
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink};
 use garyx_router::MessageRouter;
 use std::path::Path;
@@ -757,6 +759,84 @@ async fn delete_thread_removes_garyx_db_pin() {
             .list_pinned_threads()
             .expect("list pins")
             .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn dream_scan_route_persists_thread_topic_spans() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::dream-route";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Dream Route",
+                "created_at": "2026-05-21T09:00:00Z",
+                "updated_at": "2026-05-21T10:10:00Z",
+                "workspace_dir": "/workspace/test"
+            }),
+        )
+        .await;
+    let mut first = ProviderMessage::user_text("Review pinned threads in the gateway");
+    first.timestamp = Some("2026-05-21T10:00:00Z".to_owned());
+    let mut second = ProviderMessage::user_text("另外实现梦境的一天主题列表");
+    second.timestamp = Some("2026-05-21T10:06:00Z".to_owned());
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_committed_messages(
+            thread_id,
+            Some("run::dream-route"),
+            &[
+                serde_json::to_value(first).expect("first message serializes"),
+                serde_json::to_value(second).expect("second message serializes"),
+            ],
+        )
+        .await
+        .expect("append transcript");
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/dreams/scan")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "from": "2026-05-21T00:00:00Z",
+                "to": "2026-05-21T23:59:59Z",
+                "mode": "heuristic"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["matched_messages"], json!(2));
+    assert_eq!(payload["count"], json!(2));
+    assert_eq!(payload["dreams"][0]["spans"][0]["thread_id"], thread_id);
+
+    let dream_id = payload["dreams"][0]["dream_id"].as_str().unwrap();
+    let request = authed_request()
+        .uri(format!("/api/dreams/{dream_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let detail: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        detail["dream"]["spans"][0]["workspace_dir"],
+        json!("/workspace/test")
     );
 }
 

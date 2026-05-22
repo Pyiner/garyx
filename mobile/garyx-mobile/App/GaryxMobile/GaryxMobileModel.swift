@@ -24,6 +24,7 @@ enum GaryxMobileConnectionState: Equatable {
 
 enum GaryxMobilePanel: String, CaseIterable, Identifiable {
     case chat
+    case dreams
     case tasks
     case workspaces
     case automations
@@ -41,6 +42,8 @@ enum GaryxMobilePanel: String, CaseIterable, Identifiable {
         switch self {
         case .chat:
             "Chat"
+        case .dreams:
+            "Dreams"
         case .tasks:
             "Tasks"
         case .workspaces:
@@ -68,6 +71,8 @@ enum GaryxMobilePanel: String, CaseIterable, Identifiable {
         switch self {
         case .chat:
             "bubble.left.and.text.bubble.right.fill"
+        case .dreams:
+            "moon.stars.fill"
         case .tasks:
             "checklist.checked"
         case .workspaces:
@@ -232,6 +237,9 @@ final class GaryxMobileModel: ObservableObject {
     @Published var sidebarVisible = false
     @Published var activeSidebarDrilldown: GaryxSidebarDrilldown?
     @Published var pinnedThreadIds: [String] = []
+    @Published var dreams: [GaryxDreamTopic] = []
+    @Published var latestDreamScan: GaryxDreamScan?
+    @Published var isScanningDreams = false
     @Published var agents: [GaryxAgentSummary] = []
     @Published var teams: [GaryxTeamSummary] = []
     @Published var skills: [GaryxSkillSummary] = []
@@ -1769,6 +1777,7 @@ final class GaryxMobileModel: ObservableObject {
             async let teamsResult = gateway.listTeams()
             async let skillsResult = gateway.listSkills()
             async let tasksResult = gateway.listTasks(includeDone: true, limit: 120)
+            async let dreamsResult = gateway.listDreams(sinceHours: 24, limit: 80)
             async let automationsResult = gateway.listAutomations()
             async let slashCommandsResult = gateway.listSlashCommands()
             async let mcpServersResult = gateway.listMcpServers()
@@ -1782,6 +1791,7 @@ final class GaryxMobileModel: ObservableObject {
             let nextTeams = try? await teamsResult
             let nextSkills = try? await skillsResult
             let nextTasksPage = try? await tasksResult
+            let nextDreamsPage = try? await dreamsResult
             let nextAutomations = try? await automationsResult
             let nextSlashCommands = try? await slashCommandsResult
             let nextMcpServers = try? await mcpServersResult
@@ -1797,6 +1807,10 @@ final class GaryxMobileModel: ObservableObject {
             skills = nextSkills ?? skills
             if let page = nextTasksPage {
                 tasks = page.tasks
+            }
+            if let page = nextDreamsPage {
+                dreams = page.dreams
+                latestDreamScan = page.scan ?? page.latestScan
             }
             automations = nextAutomations ?? automations
             slashCommands = nextSlashCommands ?? slashCommands
@@ -2932,6 +2946,36 @@ final class GaryxMobileModel: ObservableObject {
                 || body.contains("AlreadyATask")
         }
         return false
+    }
+
+    func refreshDreams() async {
+        guard hasGatewaySettings else { return }
+        do {
+            let page = try await client().listDreams(sinceHours: 24, limit: 80)
+            dreams = page.dreams
+            latestDreamScan = page.scan ?? page.latestScan
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func scanDreams() async {
+        guard hasGatewaySettings, !isScanningDreams else { return }
+        isScanningDreams = true
+        defer { isScanningDreams = false }
+        do {
+            let page = try await client().scanDreams(
+                request: GaryxDreamScanRequest(sinceHours: 24, mode: "auto", limit: 600)
+            )
+            dreams = page.dreams
+            latestDreamScan = page.scan ?? page.latestScan
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func openDreamSpan(_ span: GaryxDreamSpan) async {
+        await openThread(id: span.threadId)
     }
 
     func runAutomation(_ automation: GaryxAutomationSummary) async {

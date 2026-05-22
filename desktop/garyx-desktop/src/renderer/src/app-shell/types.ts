@@ -23,7 +23,7 @@ export type UiTranscriptMessage = TranscriptMessage & {
 
 export type MessageMap = Record<string, UiTranscriptMessage[]>;
 export type PendingThreadInputMap = Record<string, PendingThreadInput[]>;
-export type ContentView = 'thread' | 'browser' | 'bots' | 'automation' | 'auto_research' | 'agents' | 'teams' | 'skills' | 'tasks' | 'settings';
+export type ContentView = 'thread' | 'browser' | 'bots' | 'automation' | 'auto_research' | 'agents' | 'teams' | 'skills' | 'tasks' | 'dreams' | 'settings';
 
 export type LiveStreamStatus =
   | 'connecting'
