@@ -2642,6 +2642,70 @@ async fn test_add_streaming_input_retries_until_provider_ready() {
 }
 
 #[tokio::test]
+async fn test_same_thread_cross_account_follow_up_does_not_queue_into_active_run() {
+    let bridge = MultiProviderBridge::new();
+    let provider = Arc::new(DelayedQueuedInputProvider::new());
+    let delta_sent = provider.delta_sent();
+    let follow_up_received = provider.follow_up_received();
+    bridge.register_provider("p1", provider.clone()).await;
+    bridge.set_default_provider_key("p1").await;
+
+    bridge
+        .start_agent_run(
+            run_request(
+                "sess::tg::shared-thread",
+                "start run",
+                "run-shared-thread-1",
+                "telegram",
+                "chat",
+            ),
+            None,
+        )
+        .await
+        .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), delta_sent.notified())
+        .await
+        .expect("provider should emit the initial streamed delta");
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        bridge
+            .start_agent_run(
+                run_request(
+                    "sess::tg::shared-thread",
+                    "cross-account follow-up",
+                    "run-shared-thread-2",
+                    "telegram",
+                    "main",
+                ),
+                None,
+            )
+            .await
+    })
+    .await
+    .expect("cross-account same-thread follow-up should finish before timeout")
+    .unwrap();
+
+    tokio::time::timeout(std::time::Duration::from_millis(300), follow_up_received.notified())
+    .await
+    .expect_err("cross-account follow-up must not queue into the active run");
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while provider.run_invocations() < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("cross-account follow-up should start a replacement run");
+
+    assert_eq!(
+        provider.run_invocations(),
+        2,
+        "cross-account same-thread follow-up should not reuse the original active run"
+    );
+}
+
+#[tokio::test]
 async fn test_start_agent_run_retries_follow_up_into_active_stream() {
     let bridge = MultiProviderBridge::new();
     let provider = Arc::new(DelayedQueuedInputProvider::new());

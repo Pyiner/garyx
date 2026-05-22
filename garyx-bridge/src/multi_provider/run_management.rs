@@ -28,7 +28,7 @@ use super::persistence::{
     ThreadPersistenceCommand, save_failed_thread_messages, save_partial_thread_messages,
     save_thread_messages,
 };
-use super::state::ActiveThreadPersistence;
+use super::state::{ActiveRunRoute, ActiveThreadPersistence};
 use crate::garyx_native_provider::SESSION_MESSAGES_METADATA_KEY;
 
 const STREAMING_INPUT_QUEUE_RETRY_INTERVAL: Duration = Duration::from_millis(50);
@@ -667,6 +667,20 @@ async fn active_run_id_for_thread(inner: &super::state::Inner, thread_id: &str) 
         .map(|(run_id, _)| run_id.clone())
 }
 
+async fn active_run_route_for_thread(
+    inner: &super::state::Inner,
+    thread_id: &str,
+) -> Option<(String, ActiveRunRoute)> {
+    let run_index = inner.run_index.read().await;
+    let run_id = run_index
+        .run_sessions
+        .iter()
+        .find(|(_, candidate_thread_id)| candidate_thread_id.as_str() == thread_id)
+        .map(|(run_id, _)| run_id.clone())?;
+    let route = run_index.active_routes.get(&run_id)?.clone();
+    Some((run_id, route))
+}
+
 async fn has_active_streaming_run_for_thread(inner: &super::state::Inner, thread_id: &str) -> bool {
     if active_run_id_for_thread(inner, thread_id).await.is_some() {
         return true;
@@ -1046,7 +1060,15 @@ impl MultiProviderBridge {
         // in-flight run and wait for cleanup before starting the replacement
         // run. Same-thread follow-ups must never run concurrently.
         if self
-            .add_streaming_input(&thread_id, &message, images.clone(), None, None)
+            .add_streaming_input_for_route(
+                &thread_id,
+                &channel,
+                &account_id,
+                &message,
+                images.clone(),
+                None,
+                None,
+            )
             .await
             .is_some()
         {
@@ -1160,6 +1182,10 @@ impl MultiProviderBridge {
             run_index
                 .run_sessions
                 .insert(run_id.to_owned(), thread_id.to_owned());
+            run_index.active_routes.insert(
+                run_id.to_owned(),
+                ActiveRunRoute::new(channel.clone(), account_id.clone()),
+            );
         }
         self.inner
             .thread_affinity
@@ -1695,6 +1721,7 @@ impl MultiProviderBridge {
             let mut run_index = inner.run_index.write().await;
             run_index.active_runs.remove(&run_id_owned);
             run_index.run_sessions.remove(&run_id_owned);
+            run_index.active_routes.remove(&run_id_owned);
             drop(run_index);
             let mut persistence = inner.active_thread_persistence.lock().await;
             let should_remove = persistence
@@ -2113,6 +2140,7 @@ impl MultiProviderBridge {
         let mut run_index = self.inner.run_index.write().await;
         run_index.active_runs.remove(&run_id);
         run_index.run_sessions.remove(&run_id);
+        run_index.active_routes.remove(&run_id);
         drop(run_index);
 
         outcome
@@ -2128,6 +2156,64 @@ impl MultiProviderBridge {
         files: Option<Vec<FilePayload>>,
         attachments: Option<Vec<PromptAttachment>>,
     ) -> Option<QueuedStreamingInput> {
+        self.add_streaming_input_with_expected_route(
+            thread_id,
+            message,
+            images,
+            files,
+            attachments,
+            None,
+        )
+        .await
+    }
+
+    pub async fn add_streaming_input_for_route(
+        &self,
+        thread_id: &str,
+        channel: &str,
+        account_id: &str,
+        message: &str,
+        images: Option<Vec<ImagePayload>>,
+        files: Option<Vec<FilePayload>>,
+        attachments: Option<Vec<PromptAttachment>>,
+    ) -> Option<QueuedStreamingInput> {
+        self.add_streaming_input_with_expected_route(
+            thread_id,
+            message,
+            images,
+            files,
+            attachments,
+            Some((channel, account_id)),
+        )
+        .await
+    }
+
+    async fn add_streaming_input_with_expected_route(
+        &self,
+        thread_id: &str,
+        message: &str,
+        images: Option<Vec<ImagePayload>>,
+        files: Option<Vec<FilePayload>>,
+        attachments: Option<Vec<PromptAttachment>>,
+        expected_route: Option<(&str, &str)>,
+    ) -> Option<QueuedStreamingInput> {
+        if let Some((channel, account_id)) = expected_route
+            && let Some((active_run_id, active_route)) =
+                active_run_route_for_thread(&self.inner, thread_id).await
+            && !active_route.matches(channel, account_id)
+        {
+            tracing::info!(
+                thread_id = %thread_id,
+                active_run_id = %active_run_id,
+                active_channel = %active_route.channel,
+                active_account_id = %active_route.account_id,
+                incoming_channel = %channel,
+                incoming_account_id = %account_id,
+                "refusing to queue streaming input into active run for a different channel account"
+            );
+            return None;
+        }
+
         let provider_key = self
             .inner
             .thread_affinity
@@ -2274,6 +2360,7 @@ impl MultiProviderBridge {
         let mut run_index = self.inner.run_index.write().await;
         run_index.active_runs.remove(run_id);
         run_index.run_sessions.remove(run_id);
+        run_index.active_routes.remove(run_id);
 
         task_cancelled || provider_aborted
     }
