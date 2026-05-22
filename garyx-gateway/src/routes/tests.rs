@@ -381,7 +381,7 @@ async fn test_state() -> (Arc<AppState>, Arc<ThreadFileLogger>, TempDir) {
 }
 
 #[tokio::test]
-async fn thread_summary_uses_transcript_when_snapshot_cache_is_empty() {
+async fn thread_summary_does_not_fetch_transcript_when_snapshot_cache_is_empty() {
     let (state, _logger, _dir) = test_state().await;
     let thread_id = "thread::summary-transcript";
     state
@@ -419,9 +419,9 @@ async fn thread_summary_uses_transcript_when_snapshot_cache_is_empty() {
         .get(thread_id)
         .await
         .expect("thread data");
-    let summary = thread_summary_with_history(&state, thread_id, &data).await;
-    assert_eq!(summary["last_user_message"], "hello from transcript");
-    assert_eq!(summary["last_assistant_message"], "reply from transcript");
+    let summary = thread_summary(thread_id, &data);
+    assert!(summary["last_user_message"].is_null());
+    assert!(summary["last_assistant_message"].is_null());
 }
 
 #[tokio::test]
@@ -2255,10 +2255,9 @@ async fn thread_metadata_projects_known_child_thread_ids_from_group_store() {
 }
 
 #[tokio::test]
-async fn thread_summary_emits_team_block_for_team_bound_thread() {
-    // Contract: the `/api/threads` list endpoint's per-thread summary
-    // must carry the same `team` block the detail endpoint emits, so the
-    // desktop client can render team branding without a second request.
+async fn thread_summary_omits_team_block_for_team_bound_thread() {
+    // `/api/threads` summaries stay lightweight. Team metadata is available
+    // from the thread detail/history endpoints when a thread is opened.
     use garyx_bridge::providers::agent_team::Group;
     let (state, _logger, _dir) = test_state().await;
     seed_product_ship_team(&state).await;
@@ -2287,15 +2286,10 @@ async fn thread_summary_emits_team_block_for_team_bound_thread() {
         .get(thread_id)
         .await
         .expect("thread data");
-    let summary = thread_summary_with_history(&state, thread_id, &data).await;
-    let team = summary
-        .get("team")
-        .expect("team-bound thread summary must carry `team`");
-    assert_eq!(team["team_id"], "product-ship");
-    assert_eq!(team["display_name"], "Product Ship");
-    assert_eq!(
-        team["child_thread_ids"]["coder"],
-        Value::String("th::child-coder-42".to_owned()),
+    let summary = thread_summary(thread_id, &data);
+    assert!(
+        summary.get("team").is_none(),
+        "list summary must not emit `team`, got: {summary}"
     );
 }
 
@@ -2325,7 +2319,7 @@ async fn thread_summary_omits_team_block_for_standalone_agent_thread() {
         .get(thread_id)
         .await
         .expect("thread data");
-    let summary = thread_summary_with_history(&state, thread_id, &data).await;
+    let summary = thread_summary(thread_id, &data);
     assert!(
         summary.get("team").is_none(),
         "standalone-agent summary must not emit `team`, got: {summary}"

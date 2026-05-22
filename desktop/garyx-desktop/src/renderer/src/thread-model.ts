@@ -313,12 +313,10 @@ export interface ThreadTeamView {
 /**
  * Derive team-branding info for a thread from its summary.
  *
- * The full `team` block (including `child_thread_ids`) flows from the gateway
- * through `DesktopThreadSummary.team` and is now supplied by both the list
- * endpoint (`/api/threads`) and the detail endpoints. The `teamId` hint is
- * kept as a belt-and-suspenders fallback for snapshots that were cached
- * before the list endpoint started emitting `team` (and for any future
- * entry point that only populates the hints).
+ * The full `team` block (including `child_thread_ids`) flows from detail /
+ * history responses through `DesktopThreadSummary.team`. The list endpoint
+ * intentionally stays lightweight, so the `teamId` hint remains as a
+ * belt-and-suspenders fallback for snapshots that only populate hints.
  *
  * Sub-agent peek tabs require the full `team.child_thread_ids` map, so they
  * only light up once at least one sub-agent has been dispatched.

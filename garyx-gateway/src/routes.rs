@@ -1039,59 +1039,6 @@ fn thread_summary(thread_id: &str, data: &Value) -> Value {
     })
 }
 
-async fn thread_summary_with_history(
-    state: &Arc<AppState>,
-    thread_id: &str,
-    data: &Value,
-) -> Value {
-    let mut summary = thread_summary(thread_id, data);
-    let Some(object) = summary.as_object_mut() else {
-        return summary;
-    };
-
-    let missing_user_preview = object.get("last_user_message").is_none_or(Value::is_null);
-    if missing_user_preview
-        && let Ok(Some(text)) = state
-            .threads
-            .history
-            .latest_message_text_for_role(thread_id, "user")
-            .await
-        && let Some(summary_text) = summarize_text(Some(text.as_str()), 160)
-    {
-        object.insert("last_user_message".to_owned(), Value::String(summary_text));
-    }
-
-    let missing_assistant_preview = object
-        .get("last_assistant_message")
-        .is_none_or(Value::is_null);
-    if missing_assistant_preview
-        && let Ok(Some(text)) = state
-            .threads
-            .history
-            .latest_message_text_for_role(thread_id, "assistant")
-            .await
-        && let Some(summary_text) = summarize_text(Some(text.as_str()), 160)
-    {
-        object.insert(
-            "last_assistant_message".to_owned(),
-            Value::String(summary_text),
-        );
-    }
-
-    // Attach the read-only `team` block whenever the thread's agent_id
-    // resolves to an AgentTeam. This is a pure projection (`get_team` +
-    // `group_store.load` are cheap lookups) and matches what
-    // `thread_metadata_response` does for GET /api/threads/:key, so the
-    // desktop client can render team branding / sub-agent peek tabs from
-    // the list endpoint without a second round-trip. Summary responses
-    // include `team` whenever the thread's agent_id is a team.
-    if let Some(block) = team_block_for_thread(state, thread_id, data).await {
-        object.insert("team".to_owned(), block);
-    }
-
-    summary
-}
-
 /// Build the read-only `team` block for a thread metadata response when the
 /// thread's `agent_id` resolves to an AgentTeam. Returns `None` for
 /// standalone-agent threads (including threads without an `agent_id`).
@@ -1190,7 +1137,7 @@ pub async fn list_threads(
         candidates.into_iter().skip(offset).take(limit).collect();
     let mut page = Vec::with_capacity(page_candidates.len());
     for (key, data) in page_candidates {
-        page.push(thread_summary_with_history(&state, &key, &data).await);
+        page.push(thread_summary(&key, &data));
     }
     let count = page.len();
 
@@ -1362,10 +1309,7 @@ pub async fn create_thread(
             }
             rebuild_thread_indexes(&state).await;
             state.invalidate_gateway_sync_caches().await;
-            (
-                StatusCode::CREATED,
-                Json(thread_summary_with_history(&state, &thread_id, &data).await),
-            )
+            (StatusCode::CREATED, Json(thread_summary(&thread_id, &data)))
         }
         Err(error)
             if error.starts_with("unknown agent_id:")
@@ -1410,10 +1354,7 @@ pub async fn update_thread(
                 .set_thread_workspace_binding(&thread_id, workspace_dir_from_value(&data))
                 .await;
             state.invalidate_gateway_sync_caches().await;
-            (
-                StatusCode::OK,
-                Json(thread_summary_with_history(&state, &thread_id, &data).await),
-            )
+            (StatusCode::OK, Json(thread_summary(&thread_id, &data)))
         }
         Err(error) if error.contains("thread not found") => {
             (StatusCode::NOT_FOUND, Json(json!({ "error": error })))

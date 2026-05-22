@@ -595,12 +595,12 @@ export interface ToggleMcpServerInput {
  * Mirrors the Rust response shape — field names stay in snake_case for wire
  * fidelity because they flow straight through from the gateway JSON.
  *
- * Emitted by the gateway's thread metadata endpoint (GET /api/threads/:key
- * nested under the thread object; GET /api/threads/history as a top-level
- * sibling of `thread`/`messages`) AND by the list endpoint (GET /api/threads)
- * on every team-bound summary. Absent/null when the thread isn't bound to a
- * Team. The `teamId` + `teamName` hints remain for backward compatibility
- * but the full block is now the authoritative source for team branding.
+ * Emitted by thread detail/history responses (GET /api/threads/:key nested
+ * under the thread object; GET /api/threads/history as a top-level sibling of
+ * `thread`/`messages`). The thread list stays lightweight and does not fetch
+ * this block. Absent/null when the thread isn't bound to a Team. The `teamId`
+ * + `teamName` hints remain for backward compatibility but the full block is
+ * the authoritative source for team branding once details are loaded.
  */
 export interface ThreadTeamBlock {
   team_id: string;
@@ -628,10 +628,8 @@ export interface DesktopThreadSummary {
   recentRunId?: string | null;
   worktree?: ThreadWorktreeInfo | null;
   /**
-   * Full team block when this thread is bound to a Team. The gateway's list
-   * endpoint (`/api/threads`) and thread metadata endpoints both supply it for
-   * team threads; older snapshots cached pre-upgrade may still be missing
-   * it, hence the optional typing.
+   * Full team block when this thread is bound to a Team. It is filled by
+   * thread detail/history responses; list-only snapshots may omit it.
    */
   team?: ThreadTeamBlock | null;
 }
