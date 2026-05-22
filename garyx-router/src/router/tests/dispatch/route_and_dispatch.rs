@@ -140,7 +140,7 @@ async fn test_route_and_dispatch_basic() {
 }
 
 #[tokio::test]
-async fn test_route_and_dispatch_forwards_claude_tty_requested_provider() {
+async fn test_route_and_dispatch_maps_legacy_claude_tty_provider_to_claude_code() {
     let mut router = make_router();
     let dispatcher = MockDispatcher::new();
 
@@ -168,7 +168,7 @@ async fn test_route_and_dispatch_forwards_claude_tty_requested_provider() {
 
     let requested = dispatcher.requested_providers.lock().await;
     assert_eq!(requested.len(), 1);
-    assert_eq!(requested[0], Some(ProviderType::ClaudeTty));
+    assert_eq!(requested[0], Some(ProviderType::ClaudeCode));
 }
 
 #[tokio::test]

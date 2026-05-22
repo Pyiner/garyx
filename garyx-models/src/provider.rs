@@ -13,9 +13,8 @@ use uuid::Uuid;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderType {
+    #[serde(alias = "claude", alias = "claude_tty", alias = "claude-tty")]
     ClaudeCode,
-    /// Claude Code interactive terminal mode driven through a PTY.
-    ClaudeTty,
     CodexAppServer,
     GeminiCli,
     /// OpenAI GPT model backend served through Garyx's in-process agent loop.
@@ -25,7 +24,12 @@ pub enum ProviderType {
     #[serde(rename = "anthropic", alias = "claude_llm", alias = "claude_model")]
     ClaudeLlm,
     /// Google Gemini model backend served through Garyx's in-process agent loop.
-    #[serde(rename = "google", alias = "gemini_llm", alias = "google_gemini", alias = "gemini_model")]
+    #[serde(
+        rename = "google",
+        alias = "gemini_llm",
+        alias = "google_gemini",
+        alias = "gemini_model"
+    )]
     GeminiLlm,
     /// Meta-provider that orchestrates a Team as a group chat over regular
     /// per-sub-agent threads. Selected when a thread's `agent_id` resolves to
@@ -37,7 +41,6 @@ impl ProviderType {
     pub fn as_slug(&self) -> &'static str {
         match self {
             Self::ClaudeCode => "claude_code",
-            Self::ClaudeTty => "claude_tty",
             Self::CodexAppServer => "codex_app_server",
             Self::GeminiCli => "gemini_cli",
             Self::Gpt => "gpt",
@@ -49,17 +52,14 @@ impl ProviderType {
 
     pub fn from_slug(value: &str) -> Option<Self> {
         match value.trim() {
-            "claude" | "claude_code" => Some(Self::ClaudeCode),
-            "claude-tty" | "claude_tty" => Some(Self::ClaudeTty),
+            "claude" | "claude_code" | "claude-tty" | "claude_tty" => Some(Self::ClaudeCode),
             "codex" | "codex_app_server" => Some(Self::CodexAppServer),
             "gemini" | "gemini_cli" => Some(Self::GeminiCli),
             "gpt" | "openai" | "openai_gpt" | "garyx" | "garyx_native" | "native" => {
                 Some(Self::Gpt)
             }
             "anthropic" | "claude_llm" | "claude_model" => Some(Self::ClaudeLlm),
-            "google" | "gemini_llm" | "google_gemini" | "gemini_model" => {
-                Some(Self::GeminiLlm)
-            }
+            "google" | "gemini_llm" | "google_gemini" | "gemini_model" => Some(Self::GeminiLlm),
             "agent_team" => Some(Self::AgentTeam),
             _ => None,
         }
@@ -346,6 +346,15 @@ pub struct ClaudeCodeConfig {
     #[serde(default = "default_claude_provider_type")]
     pub provider_type: ProviderType,
 
+    /// Claude Agent SDK executable selection. `cctty` uses Garyx's bundled
+    /// terminal wrapper; `native` uses the original Claude Code CLI.
+    #[serde(default = "default_claude_cli_mode")]
+    pub claude_cli_mode: String,
+
+    /// Optional explicit executable path for the selected Claude SDK CLI mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_cli_path: Option<String>,
+
     #[serde(default)]
     pub default_model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -385,6 +394,9 @@ pub struct ClaudeCodeConfig {
 fn default_claude_provider_type() -> ProviderType {
     ProviderType::ClaudeCode
 }
+pub fn default_claude_cli_mode() -> String {
+    "cctty".to_owned()
+}
 fn default_disallowed_tools() -> Vec<String> {
     vec![
         "EnterPlanMode".to_owned(),
@@ -403,6 +415,8 @@ impl Default for ClaudeCodeConfig {
     fn default() -> Self {
         Self {
             provider_type: ProviderType::ClaudeCode,
+            claude_cli_mode: default_claude_cli_mode(),
+            claude_cli_path: None,
             default_model: String::new(),
             max_turns: None,
             timeout_seconds: 0.0,

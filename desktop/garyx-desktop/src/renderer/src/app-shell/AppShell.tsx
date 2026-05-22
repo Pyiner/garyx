@@ -1528,9 +1528,6 @@ function presentProviderReadyError(
   if (providerType === "google" || providerType === "gemini_llm") {
     return "Gemini model provider is not ready on this Mac. Check the gateway status and Gemini auth configuration.";
   }
-  if (providerType === "claude_tty") {
-    return "Claude TTY is not ready on this Mac. Check the local Claude CLI auth and environment settings.";
-  }
   if (providerType === "claude_code") {
     return "Claude Code is not ready on this Mac. Check the local Claude CLI auth and environment settings.";
   }
@@ -1546,7 +1543,6 @@ function inferProviderTypeForThread(
   const runtimeProvider = threadInfoByThread[threadId]?.providerType;
   if (
     runtimeProvider === "claude_code" ||
-    runtimeProvider === "claude_tty" ||
     runtimeProvider === "codex_app_server" ||
     runtimeProvider === "gemini_cli" ||
     runtimeProvider === "gpt" ||

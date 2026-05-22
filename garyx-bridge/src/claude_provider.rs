@@ -34,10 +34,105 @@ const ABORT_TIMEOUT_SECS: u64 = 10;
 const STREAM_IDLE_TIMEOUT_SECS: u64 = 3600; // 1 hour
 const POST_RESULT_DRAIN_TIMEOUT_SECS: u64 = 2;
 const CLAUDE_MISSING_RESULT_ERROR: &str = "claude SDK stream ended without a result message";
+const CCTTY_BINARY_NAME: &str = "cctty";
+const GARYX_CCTTY_PATH_ENV: &str = "GARYX_CCTTY_PATH";
+const GARYX_CLAUDE_CLI_PATH_ENV: &str = "GARYX_CLAUDE_CLI_PATH";
+const GARYX_CLAUDE_CLI_MODE_ENV: &str = "GARYX_CLAUDE_CLI_MODE";
+const CLAUDE_CLI_MODE_CCTTY: &str = "cctty";
+const CLAUDE_CLI_MODE_NATIVE: &str = "native";
 
 // ---------------------------------------------------------------------------
 // Error classification helpers
 // ---------------------------------------------------------------------------
+
+fn executable_file_exists(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn executable_on_path(name: &str) -> Option<PathBuf> {
+    let path_env = std::env::var_os("PATH")?;
+    std::env::split_paths(&path_env)
+        .map(|dir| dir.join(name))
+        .find(|candidate| executable_file_exists(candidate))
+}
+
+fn explicit_claude_cli_path(config: &ClaudeCodeConfig) -> Option<PathBuf> {
+    config
+        .claude_cli_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            config
+                .env
+                .get(GARYX_CLAUDE_CLI_PATH_ENV)
+                .map(String::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            std::env::var_os(GARYX_CLAUDE_CLI_PATH_ENV)
+                .or_else(|| std::env::var_os(GARYX_CCTTY_PATH_ENV))
+                .and_then(|value| {
+                    let path = PathBuf::from(value);
+                    (!path.as_os_str().is_empty()).then_some(path)
+                })
+        })
+}
+
+fn bundled_cctty_path() -> Option<PathBuf> {
+    let current_exe = std::env::current_exe().ok()?;
+    let dir = current_exe.parent()?;
+    let candidate = dir.join(CCTTY_BINARY_NAME);
+    executable_file_exists(&candidate).then_some(candidate)
+}
+
+fn claude_sdk_cli_mode(config: &ClaudeCodeConfig) -> String {
+    let env_mode = config
+        .env
+        .get(GARYX_CLAUDE_CLI_MODE_ENV)
+        .cloned()
+        .or_else(|| std::env::var(GARYX_CLAUDE_CLI_MODE_ENV).ok());
+    env_mode
+        .as_deref()
+        .unwrap_or(config.claude_cli_mode.as_str())
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn resolve_claude_sdk_cli_path(config: &ClaudeCodeConfig) -> Option<PathBuf> {
+    if let Some(path) = explicit_claude_cli_path(config) {
+        return Some(path);
+    }
+
+    match claude_sdk_cli_mode(config).as_str() {
+        CLAUDE_CLI_MODE_NATIVE => None,
+        _ => bundled_cctty_path().or_else(|| executable_on_path(CCTTY_BINARY_NAME)),
+    }
+}
+
+fn claude_sdk_cli_mode_label(config: &ClaudeCodeConfig) -> &'static str {
+    match claude_sdk_cli_mode(config).as_str() {
+        CLAUDE_CLI_MODE_NATIVE => CLAUDE_CLI_MODE_NATIVE,
+        _ => CLAUDE_CLI_MODE_CCTTY,
+    }
+}
 
 #[cfg(test)]
 fn is_retryable_error(msg: &str) -> bool {
@@ -796,6 +891,7 @@ impl ClaudeCliProvider {
         let mut env = self.config.env.clone();
         env.extend(task_cli_env(&options.metadata));
         env.extend(metadata_string_map(&options.metadata, "desktop_claude_env"));
+        let cli_path = resolve_claude_sdk_cli_path(&self.config);
 
         // Permission mode
         let permission_mode = match self.config.permission_mode.as_str() {
@@ -824,6 +920,7 @@ impl ClaudeCliProvider {
             disallowed_tools: self.config.disallowed_tools.clone(),
             model,
             cwd,
+            cli_path,
             env,
             extra_args,
             max_buffer_size: Some(MAX_BUFFER_SIZE),
@@ -1395,41 +1492,50 @@ impl AgentLoopProvider for ClaudeCliProvider {
     }
 
     async fn initialize(&mut self) -> Result<(), BridgeError> {
-        // Verify the claude binary is available by checking if it can be found
-        let check = tokio::process::Command::new("which")
-            .arg("claude")
-            .output()
-            .await;
-
-        match check {
-            Ok(output) if output.status.success() => {
-                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                tracing::info!(
-                    claude_bin = %path,
-                    model = %self.config.default_model,
-                    permission_mode = %self.config.permission_mode,
-                    workspace_dir = ?self.config.workspace_dir,
-                    "Claude SDK provider initialized"
-                );
+        let cli_mode = claude_sdk_cli_mode_label(&self.config);
+        if let Some(path) = resolve_claude_sdk_cli_path(&self.config) {
+            if !executable_file_exists(&path) {
+                return Err(BridgeError::Internal(format!(
+                    "Claude SDK CLI path is not executable: {}",
+                    path.display()
+                )));
             }
-            _ => {
-                // Try claude directly
-                let version_check = tokio::process::Command::new("claude")
-                    .arg("--version")
-                    .output()
-                    .await;
+            tracing::info!(
+                claude_sdk_cli = %path.display(),
+                claude_sdk_cli_mode = cli_mode,
+                model = %self.config.default_model,
+                permission_mode = %self.config.permission_mode,
+                workspace_dir = ?self.config.workspace_dir,
+                "Claude SDK provider initialized"
+            );
+        } else if cli_mode == CLAUDE_CLI_MODE_NATIVE {
+            let check = tokio::process::Command::new("which")
+                .arg("claude")
+                .output()
+                .await;
 
-                match version_check {
-                    Ok(output) if output.status.success() => {
-                        tracing::info!("Claude SDK provider initialized (claude on PATH)");
-                    }
-                    _ => {
-                        return Err(BridgeError::Internal(
-                            "claude binary not found in PATH".to_owned(),
-                        ));
-                    }
+            match check {
+                Ok(output) if output.status.success() => {
+                    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    tracing::warn!(
+                        claude_bin = %path,
+                        claude_sdk_cli_mode = cli_mode,
+                        model = %self.config.default_model,
+                        permission_mode = %self.config.permission_mode,
+                        workspace_dir = ?self.config.workspace_dir,
+                        "Claude SDK provider initialized with native Claude CLI"
+                    );
+                }
+                _ => {
+                    return Err(BridgeError::Internal(
+                        "Claude SDK CLI not found: configure claude_cli_mode=native with claude on PATH, or install the cctty sidecar next to garyx".to_owned(),
+                    ));
                 }
             }
+        } else {
+            return Err(BridgeError::Internal(
+                "cctty CLI not found: install the cctty sidecar next to garyx, put cctty on PATH, configure claude_cli_path, or set claude_cli_mode=native to use the original Claude CLI".to_owned(),
+            ));
         }
 
         self.ready = true;

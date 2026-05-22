@@ -594,7 +594,7 @@ fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<Provide
         .map(Some)
         .ok_or_else(|| {
             format!(
-                "Unsupported sdkSessionProviderHint '{value}'. Use claude, claude_tty, codex, gemini, gpt, anthropic, or google."
+                "Unsupported sdkSessionProviderHint '{value}'. Use claude, codex, gemini, gpt, anthropic, or google."
             )
         })
 }
@@ -602,7 +602,6 @@ fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<Provide
 fn provider_hint_label(value: &ProviderType) -> &'static str {
     match value {
         ProviderType::ClaudeCode => "Claude",
-        ProviderType::ClaudeTty => "Claude TTY",
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::Gpt => "GPT",

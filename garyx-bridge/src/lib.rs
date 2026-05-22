@@ -1,5 +1,4 @@
 pub mod claude_provider;
-pub mod claude_tty_provider;
 pub mod codex_provider;
 mod gary_prompt;
 pub mod garyx_native_provider;

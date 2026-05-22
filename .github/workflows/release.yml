@@ -74,6 +74,12 @@ jobs:
         if: contains(matrix.target, 'linux')
         run: cargo zigbuild --release --target ${{ matrix.target }}.2.17
 
+      - name: Build cctty sidecar
+        shell: bash
+        run: |
+          TARGET=${{ matrix.target }} OUT_DIR=target/${{ matrix.target }}/release \
+            bash scripts/build-cctty-sidecar.sh
+
       - name: Package
         shell: bash
         run: |
@@ -81,6 +87,7 @@ jobs:
           ARCHIVE="garyx-${VERSION}-${{ matrix.target }}"
           mkdir -p "$ARCHIVE"
           cp target/${{ matrix.target }}/release/garyx "$ARCHIVE/"
+          cp target/${{ matrix.target }}/release/cctty "$ARCHIVE/"
           cp README.md LICENSE "$ARCHIVE/"
           tar czf "${ARCHIVE}.tar.gz" "$ARCHIVE"
           shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
@@ -90,6 +97,7 @@ jobs:
         if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: |
           ./target/${{ matrix.target }}/release/garyx --version
+          ./target/${{ matrix.target }}/release/cctty --version
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

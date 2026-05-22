@@ -16,6 +16,23 @@ pub(super) fn default_provider_config(provider_type: ProviderType) -> AgentProvi
     }
 }
 
+fn configured_default_provider_config(
+    config: &GaryxConfig,
+    provider_type: ProviderType,
+    keys: &[&str],
+) -> AgentProviderConfig {
+    for key in keys {
+        if let Some(value) = config.agents.get(*key)
+            && let Ok(mut agent_cfg) = serde_json::from_value::<AgentProviderConfig>(value.clone())
+            && ProviderType::from_slug(&agent_cfg.provider_type) == Some(provider_type.clone())
+        {
+            agent_cfg.provider_type = provider_type.as_slug().to_owned();
+            return agent_cfg;
+        }
+    }
+    default_provider_config(provider_type)
+}
+
 impl MultiProviderBridge {
     /// Initialize all registered providers.
     pub async fn initialize(&self) -> Result<(), BridgeError> {
@@ -46,30 +63,18 @@ impl MultiProviderBridge {
     pub async fn reload_from_config(&self, config: &GaryxConfig) -> Result<(), BridgeError> {
         let default_workspace = None;
 
-        // 1. Create default Claude Code provider.
-        let default_agent_cfg = default_provider_config(ProviderType::ClaudeCode);
+        // 1. Create default Claude Code provider. cctty/native is configured
+        // inside this provider as the Agent SDK executable, not as a separate
+        // provider type.
+        let default_agent_cfg = configured_default_provider_config(
+            config,
+            ProviderType::ClaudeCode,
+            &["claude", "claude_code", "claude_tty"],
+        );
         let default_key = self
             .get_or_create_provider(&default_agent_cfg, &default_workspace)
             .await?;
         tracing::info!(provider_key = %default_key, "registered default provider");
-
-        let claude_tty_default_agent_cfg = default_provider_config(ProviderType::ClaudeTty);
-        let claude_tty_default_key = match self
-            .get_or_create_provider(&claude_tty_default_agent_cfg, &default_workspace)
-            .await
-        {
-            Ok(key) => {
-                tracing::info!(provider_key = %key, "registered claude tty provider");
-                Some(key)
-            }
-            Err(error) => {
-                tracing::debug!(
-                    error = %error,
-                    "optional claude tty provider unavailable"
-                );
-                None
-            }
-        };
 
         let codex_default_agent_cfg = default_provider_config(ProviderType::CodexAppServer);
         let codex_default_key = match self
@@ -148,9 +153,6 @@ impl MultiProviderBridge {
 
         let mut desired_provider_keys: HashSet<String> = desired_routes.values().cloned().collect();
         desired_provider_keys.insert(default_key.clone());
-        if let Some(ref key) = claude_tty_default_key {
-            desired_provider_keys.insert(key.clone());
-        }
         if let Some(ref key) = codex_default_key {
             desired_provider_keys.insert(key.clone());
         }
@@ -334,8 +336,9 @@ impl MultiProviderBridge {
         }
         match normalized {
             "codex" => Some(default_provider_config(ProviderType::CodexAppServer)),
-            "claude" => Some(default_provider_config(ProviderType::ClaudeCode)),
-            "claude-tty" | "claude_tty" => Some(default_provider_config(ProviderType::ClaudeTty)),
+            "claude" | "claude-tty" | "claude_tty" => {
+                Some(default_provider_config(ProviderType::ClaudeCode))
+            }
             "gemini" => Some(default_provider_config(ProviderType::GeminiCli)),
             _ => None,
         }
@@ -439,8 +442,7 @@ impl MultiProviderBridge {
         }
         match normalized {
             "codex" => Some(ProviderType::CodexAppServer),
-            "claude" => Some(ProviderType::ClaudeCode),
-            "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeTty),
+            "claude" | "claude-tty" | "claude_tty" => Some(ProviderType::ClaudeCode),
             "gemini" => Some(ProviderType::GeminiCli),
             _ => None,
         }

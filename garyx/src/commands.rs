@@ -104,6 +104,7 @@ const GITHUB_RELEASE_REPO: &str = "Pyiner/garyx";
 pub(crate) const GITHUB_RELEASE_REPO_DEFAULT: &str = GITHUB_RELEASE_REPO;
 #[cfg(any(target_os = "macos", test))]
 const MACOS_CLI_CODESIGN_IDENTIFIER: &str = "com.garyx.gateway";
+const MACOS_CCTTY_CODESIGN_IDENTIFIER: &str = "com.garyx.cctty";
 const DEFAULT_CHANNEL_AGENT_ID: &str = "claude";
 
 #[derive(Debug, Deserialize)]
@@ -212,22 +213,42 @@ pub(crate) fn replacement_binary_path(
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn macos_cli_codesign_args(binary_path: &Path) -> Vec<std::ffi::OsString> {
+fn macos_cli_codesign_args_with_identifier(
+    binary_path: &Path,
+    identifier: &str,
+) -> Vec<std::ffi::OsString> {
     let mut args = vec![
         std::ffi::OsString::from("--force"),
         std::ffi::OsString::from("--sign"),
         std::ffi::OsString::from("-"),
         std::ffi::OsString::from("--identifier"),
-        std::ffi::OsString::from(MACOS_CLI_CODESIGN_IDENTIFIER),
+        std::ffi::OsString::from(identifier),
     ];
     args.push(binary_path.as_os_str().to_os_string());
     args
 }
 
+#[cfg(any(target_os = "macos", test))]
+#[cfg(test)]
+fn macos_cli_codesign_args(binary_path: &Path) -> Vec<std::ffi::OsString> {
+    macos_cli_codesign_args_with_identifier(binary_path, MACOS_CLI_CODESIGN_IDENTIFIER)
+}
+
 #[cfg(target_os = "macos")]
 fn ad_hoc_codesign_macos_binary(binary_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    ad_hoc_codesign_macos_binary_with_identifier(binary_path, MACOS_CLI_CODESIGN_IDENTIFIER)
+}
+
+#[cfg(target_os = "macos")]
+fn ad_hoc_codesign_macos_binary_with_identifier(
+    binary_path: &Path,
+    identifier: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let output = std::process::Command::new("/usr/bin/codesign")
-        .args(macos_cli_codesign_args(binary_path))
+        .args(macos_cli_codesign_args_with_identifier(
+            binary_path,
+            identifier,
+        ))
         .output()?;
     if output.status.success() {
         return Ok(());
@@ -247,6 +268,14 @@ fn ad_hoc_codesign_macos_binary(binary_path: &Path) -> Result<(), Box<dyn std::e
 
 #[cfg(not(target_os = "macos"))]
 fn ad_hoc_codesign_macos_binary(_binary_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ad_hoc_codesign_macos_binary_with_identifier(
+    _binary_path: &Path,
+    _identifier: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
@@ -708,6 +737,86 @@ pub(crate) fn cmd_config_unset(
     Ok(())
 }
 
+pub(crate) async fn cmd_config_claude_cli(
+    config_path: &str,
+    mode: Option<String>,
+    path: Option<String>,
+    clear_path: bool,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let loaded = load_config_or_default(config_path, ConfigRuntimeOverrides::default())?;
+    let config_path = loaded.path;
+    let mut value = serde_json::to_value(loaded.config)?;
+    let root = value
+        .as_object_mut()
+        .ok_or("config root is not an object")?;
+    let agents = root
+        .entry("agents".to_owned())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or("config.agents is not an object")?;
+    let claude = agents
+        .entry("claude".to_owned())
+        .or_insert_with(|| json!({ "provider_type": "claude_code" }));
+    if !claude.is_object() {
+        *claude = json!({ "provider_type": "claude_code" });
+    }
+    let claude = claude.as_object_mut().expect("claude config object");
+    claude.insert("provider_type".to_owned(), json!("claude_code"));
+
+    if let Some(mode) = mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        claude.insert("claude_cli_mode".to_owned(), json!(mode));
+    }
+    if clear_path {
+        claude.remove("claude_cli_path");
+    } else if let Some(path) = path.as_deref().map(str::trim) {
+        if path.is_empty() {
+            claude.remove("claude_cli_path");
+        } else {
+            claude.insert("claude_cli_path".to_owned(), json!(path));
+        }
+    }
+
+    let validated: GaryxConfig = serde_json::from_value(value.clone())?;
+    save_config_struct(&config_path, &validated)?;
+    notify_gateway_reload_quiet(&config_path).await;
+
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                value
+                    .get("agents")
+                    .and_then(|agents| agents.get("claude"))
+                    .unwrap_or(&Value::Null)
+            )?
+        );
+    } else {
+        let configured = value
+            .get("agents")
+            .and_then(|agents| agents.get("claude"))
+            .and_then(Value::as_object);
+        let mode = configured
+            .and_then(|object| object.get("claude_cli_mode"))
+            .and_then(Value::as_str)
+            .unwrap_or("cctty");
+        let path = configured
+            .and_then(|object| object.get("claude_cli_path"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if path.is_empty() {
+            println!("Claude Agent SDK CLI: mode={mode}, path=<auto>");
+        } else {
+            println!("Claude Agent SDK CLI: mode={mode}, path={path}");
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn cmd_config_init(
     config_path: &str,
     force: bool,
@@ -1060,8 +1169,7 @@ pub(crate) async fn try_swap_garyx_binary(
         .to_path_buf();
 
     let archive_name = format!("garyx-{requested_version}-{target}.tar.gz");
-    let base_url =
-        format!("https://github.com/{repo}/releases/download/v{requested_version}");
+    let base_url = format!("https://github.com/{repo}/releases/download/v{requested_version}");
 
     let client = reqwest::Client::builder()
         .user_agent(format!("garyx-cli/{VERSION}"))
@@ -1098,6 +1206,10 @@ pub(crate) async fn try_swap_garyx_binary(
         .path()
         .join(format!("garyx-{requested_version}-{target}"))
         .join("garyx");
+    let extracted_cctty = tempdir
+        .path()
+        .join(format!("garyx-{requested_version}-{target}"))
+        .join("cctty");
     if !extracted_binary.is_file() {
         return Err(format!(
             "release archive did not contain expected binary at {}",
@@ -1117,7 +1229,26 @@ pub(crate) async fn try_swap_garyx_binary(
         fs::set_permissions(&staged_path, perms)?;
     }
     ad_hoc_codesign_macos_binary(&staged_path)?;
+    let cctty_destination = parent.join("cctty");
+    let cctty_staged_path = if extracted_cctty.is_file() {
+        let staged = parent.join(format!(".cctty-update-{}.tmp", Uuid::new_v4().simple()));
+        fs::copy(&extracted_cctty, &staged)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&staged)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&staged, perms)?;
+        }
+        ad_hoc_codesign_macos_binary_with_identifier(&staged, MACOS_CCTTY_CODESIGN_IDENTIFIER)?;
+        Some(staged)
+    } else {
+        None
+    };
     fs::rename(&staged_path, destination_path)?;
+    if let Some(staged) = cctty_staged_path {
+        fs::rename(staged, cctty_destination)?;
+    }
 
     Ok(SwapOutcome {
         from_version: VERSION.to_owned(),
@@ -1283,7 +1414,8 @@ pub(crate) async fn cmd_auto_update_disable(
     gateway: bool,
     plugin: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (gw_after, plugin_after) = set_auto_update_flags(config_path, gateway, plugin, false).await?;
+    let (gw_after, plugin_after) =
+        set_auto_update_flags(config_path, gateway, plugin, false).await?;
     println!(
         "auto-update updated: gateway={} plugin={}",
         if gw_after { "ENABLED" } else { "disabled" },
@@ -1297,7 +1429,8 @@ pub(crate) async fn cmd_auto_update_enable(
     gateway: bool,
     plugin: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (gw_after, plugin_after) = set_auto_update_flags(config_path, gateway, plugin, true).await?;
+    let (gw_after, plugin_after) =
+        set_auto_update_flags(config_path, gateway, plugin, true).await?;
     println!(
         "auto-update updated: gateway={} plugin={}",
         if gw_after { "ENABLED" } else { "disabled" },
@@ -3296,7 +3429,10 @@ fn build_agent_mutation_body(
             Some(ProviderType::ClaudeLlm) => "ANTHROPIC_API_KEY",
             Some(ProviderType::GeminiLlm) => "GEMINI_API_KEY",
             _ => {
-                return Err("--provider-api-key is only supported for gpt, anthropic, or google providers".into());
+                return Err(
+                    "--provider-api-key is only supported for gpt, anthropic, or google providers"
+                        .into(),
+                );
             }
         };
         body["provider_env"] = json!({ env_name: api_key });
@@ -6162,7 +6298,6 @@ fn provider_type_display(value: Option<&str>) -> &'static str {
         "gemini_cli" => "Gemini",
         "gpt" => "GPT",
         "garyx_native" => "GPT",
-        "claude_tty" => "Claude TTY",
         "claude_code" => "Claude",
         _ => "-",
     }
@@ -7995,7 +8130,6 @@ fn provider_type_label(provider_type: &ProviderType) -> &'static str {
         ProviderType::ClaudeLlm => "Claude",
         ProviderType::GeminiLlm => "Gemini",
         ProviderType::AgentTeam => "Team",
-        ProviderType::ClaudeTty => "Claude TTY",
         ProviderType::ClaudeCode => "Claude",
     }
 }

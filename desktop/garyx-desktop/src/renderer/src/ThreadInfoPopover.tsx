@@ -32,9 +32,6 @@ function buildResumeCommand(threadId: string | null, threadInfo: ThreadRuntimeIn
     case 'claude_code':
       command = `claude --permission-mode bypassPermissions --resume ${shellEscape(sessionId)}`;
       break;
-    case 'claude_tty':
-      command = `claude --resume ${shellEscape(sessionId)}`;
-      break;
     case 'codex_app_server':
       command = `codex -a never -s danger-full-access resume ${shellEscape(sessionId)}`;
       break;

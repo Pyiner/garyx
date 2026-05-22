@@ -7,12 +7,8 @@ fn test_provider_type_serde() {
     assert_eq!(json, "\"claude_code\"");
     let back: ProviderType = serde_json::from_str(&json).unwrap();
     assert_eq!(back, ProviderType::ClaudeCode);
-
-    let pt = ProviderType::ClaudeTty;
-    let json = serde_json::to_string(&pt).unwrap();
-    assert_eq!(json, "\"claude_tty\"");
-    let back: ProviderType = serde_json::from_str(&json).unwrap();
-    assert_eq!(back, ProviderType::ClaudeTty);
+    let legacy: ProviderType = serde_json::from_str("\"claude_tty\"").unwrap();
+    assert_eq!(legacy, ProviderType::ClaudeCode);
 
     let pt = ProviderType::GeminiCli;
     let json = serde_json::to_string(&pt).unwrap();
@@ -55,7 +51,6 @@ fn test_provider_type_serde() {
 fn test_provider_type_slug_round_trip() {
     for provider_type in [
         ProviderType::ClaudeCode,
-        ProviderType::ClaudeTty,
         ProviderType::CodexAppServer,
         ProviderType::GeminiCli,
         ProviderType::Gpt,
@@ -75,11 +70,11 @@ fn test_provider_type_slug_round_trip() {
     );
     assert_eq!(
         ProviderType::from_slug("claude-tty"),
-        Some(ProviderType::ClaudeTty)
+        Some(ProviderType::ClaudeCode)
     );
     assert_eq!(
         ProviderType::from_slug(" claude_tty "),
-        Some(ProviderType::ClaudeTty)
+        Some(ProviderType::ClaudeCode)
     );
     assert_eq!(ProviderType::from_slug("unknown-provider"), None);
     assert_eq!(ProviderType::from_slug("gpt"), Some(ProviderType::Gpt));
@@ -91,7 +86,10 @@ fn test_provider_type_slug_round_trip() {
         ProviderType::from_slug("anthropic"),
         Some(ProviderType::ClaudeLlm)
     );
-    assert_eq!(ProviderType::from_slug("google"), Some(ProviderType::GeminiLlm));
+    assert_eq!(
+        ProviderType::from_slug("google"),
+        Some(ProviderType::GeminiLlm)
+    );
     assert_eq!(
         ProviderType::from_slug("google_gemini"),
         Some(ProviderType::GeminiLlm)

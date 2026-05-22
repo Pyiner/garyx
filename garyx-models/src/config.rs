@@ -234,6 +234,10 @@ pub struct AgentProviderConfig {
     pub env: HashMap<String, String>,
 
     // Claude-specific
+    #[serde(default = "crate::provider::default_claude_cli_mode")]
+    pub claude_cli_mode: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub claude_cli_path: String,
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
     #[serde(default = "default_mcp_base_url")]
@@ -300,6 +304,8 @@ impl Default for AgentProviderConfig {
             max_turns: None,
             timeout_seconds: 0.0,
             env: HashMap::new(),
+            claude_cli_mode: crate::provider::default_claude_cli_mode(),
+            claude_cli_path: String::new(),
             permission_mode: default_permission_mode(),
             mcp_base_url: default_mcp_base_url(),
             model: String::new(),

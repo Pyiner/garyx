@@ -333,6 +333,54 @@ fn test_build_sdk_options_defaults() {
 }
 
 #[test]
+fn test_build_sdk_options_prefers_configured_claude_cli_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let cli_path = dir.path().join("cctty");
+    fs::write(&cli_path, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&cli_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&cli_path, perms).unwrap();
+    }
+
+    let provider = ClaudeCliProvider::new(ClaudeCodeConfig {
+        claude_cli_mode: "cctty".to_owned(),
+        claude_cli_path: Some(cli_path.to_string_lossy().into_owned()),
+        ..ClaudeCodeConfig::default()
+    });
+    let opts = ProviderRunOptions {
+        thread_id: "test".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+
+    let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
+    assert_eq!(sdk_opts.cli_path.as_deref(), Some(cli_path.as_path()));
+}
+
+#[test]
+fn test_build_sdk_options_native_mode_uses_sdk_default_cli_discovery() {
+    let provider = ClaudeCliProvider::new(ClaudeCodeConfig {
+        claude_cli_mode: "native".to_owned(),
+        ..ClaudeCodeConfig::default()
+    });
+    let opts = ProviderRunOptions {
+        thread_id: "test".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+
+    let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
+    assert!(sdk_opts.cli_path.is_none());
+}
+
+#[test]
 fn test_build_sdk_options_maps_auto_to_default_permissions() {
     let config = ClaudeCodeConfig {
         permission_mode: "auto".to_owned(),

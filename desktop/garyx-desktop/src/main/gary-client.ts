@@ -813,9 +813,6 @@ function baseUrl(settings: DesktopSettings): string {
 }
 
 function normalizeDesktopProviderType(value: unknown): DesktopApiProviderType {
-  if (value === "claude_tty") {
-    return "claude_tty";
-  }
   if (value === "codex_app_server") {
     return "codex_app_server";
   }
@@ -877,6 +874,9 @@ function parseThreadProviderType(
     value === "garyx_native" ||
     value === "agent_team"
   ) {
+    if (value === "claude_tty") {
+      return "claude_code";
+    }
     if (value === "garyx_native") {
       return "gpt";
     }
@@ -897,8 +897,6 @@ function providerLabelForThread(
   switch (value) {
     case "claude_code":
       return "Claude";
-    case "claude_tty":
-      return "Claude TTY";
     case "codex_app_server":
       return "Codex";
     case "gemini_cli":

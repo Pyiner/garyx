@@ -1131,9 +1131,9 @@ async fn test_provider_type_for_team_returns_agent_team_meta_provider() {
             profiles.push(custom_agent(
                 "interactive-claude",
                 "Interactive Claude",
-                ProviderType::ClaudeTty,
+                ProviderType::ClaudeCode,
                 "",
-                "Use Claude interactive mode.",
+                "Use Claude Code.",
             ));
             profiles
         })
@@ -1161,11 +1161,11 @@ async fn test_provider_type_for_team_returns_agent_team_meta_provider() {
     );
     assert_eq!(
         bridge.provider_type_for_agent("interactive-claude").await,
-        Some(ProviderType::ClaudeTty)
+        Some(ProviderType::ClaudeCode)
     );
     assert_eq!(
         bridge.provider_type_for_agent("claude-tty").await,
-        Some(ProviderType::ClaudeTty)
+        Some(ProviderType::ClaudeCode)
     );
     assert_eq!(bridge.provider_type_for_agent("gpt").await, None);
     assert_eq!(bridge.provider_type_for_agent("anthropic").await, None);
@@ -1245,16 +1245,12 @@ async fn test_resolve_provider_for_request_prefers_requested_type() {
 }
 
 #[tokio::test]
-async fn test_start_run_honors_claude_tty_requested_provider_metadata() {
+async fn test_start_run_treats_legacy_claude_tty_request_as_claude_code() {
     let bridge = MultiProviderBridge::new();
     let claude_sdk = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
-    let claude_tty = Arc::new(MockProvider::new(ProviderType::ClaudeTty));
 
     bridge
         .register_provider("claude_code", claude_sdk.clone())
-        .await;
-    bridge
-        .register_provider("claude_tty", claude_tty.clone())
         .await;
     bridge.set_default_provider_key("claude_code").await;
 
@@ -1263,7 +1259,7 @@ async fn test_start_run_honors_claude_tty_requested_provider_metadata() {
         .start_agent_run(
             AgentRunRequest::new(
                 "sess::claude-tty-metadata",
-                "use interactive claude",
+                "use claude",
                 "run-claude-tty-metadata",
                 "api",
                 "main",
@@ -1275,8 +1271,7 @@ async fn test_start_run_honors_claude_tty_requested_provider_metadata() {
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    assert_eq!(claude_sdk.metadata_snapshots().len(), 0);
-    assert_eq!(claude_tty.metadata_snapshots().len(), 1);
+    assert_eq!(claude_sdk.metadata_snapshots().len(), 1);
 }
 
 #[tokio::test]
@@ -2928,7 +2923,7 @@ async fn test_start_run_restores_thread_bound_sdk_session_id_by_provider_type() 
 }
 
 #[tokio::test]
-async fn test_start_run_restores_claude_sdk_session_id_across_backend_switch() {
+async fn test_start_run_restores_claude_sdk_session_id_from_legacy_tty_record() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     store
         .set(
@@ -2943,12 +2938,8 @@ async fn test_start_run_restores_claude_sdk_session_id_across_backend_switch() {
 
     let bridge = MultiProviderBridge::new();
     let claude_sdk = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
-    let claude_tty = Arc::new(MockProvider::new(ProviderType::ClaudeTty));
     bridge
         .register_provider("claude_code", claude_sdk.clone())
-        .await;
-    bridge
-        .register_provider("claude_tty", claude_tty.clone())
         .await;
     bridge.set_default_provider_key("claude_code").await;
     bridge.set_thread_store(store).await;
@@ -2957,20 +2948,19 @@ async fn test_start_run_restores_claude_sdk_session_id_across_backend_switch() {
         .start_agent_run(
             run_request(
                 "sess::claude-backend-switch",
-                "resume with the tty backend",
+                "resume with claude",
                 "run-claude-backend-switch",
                 "api",
                 "main",
             )
-            .with_requested_provider(Some(ProviderType::ClaudeTty)),
+            .with_requested_provider(ProviderType::from_slug("claude_tty")),
             None,
         )
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    assert_eq!(claude_sdk.metadata_snapshots().len(), 0);
-    let snapshots = claude_tty.metadata_snapshots();
+    let snapshots = claude_sdk.metadata_snapshots();
     assert_eq!(snapshots.len(), 1);
     assert_eq!(
         snapshots[0].get("sdk_session_id"),
@@ -2981,7 +2971,7 @@ async fn test_start_run_restores_claude_sdk_session_id_across_backend_switch() {
 }
 
 #[tokio::test]
-async fn test_start_run_restores_claude_sdk_session_id_when_switching_back_to_sdk() {
+async fn test_start_run_restores_claude_sdk_session_id_when_legacy_tty_was_default() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     store
         .set(
@@ -2996,14 +2986,10 @@ async fn test_start_run_restores_claude_sdk_session_id_when_switching_back_to_sd
 
     let bridge = MultiProviderBridge::new();
     let claude_sdk = Arc::new(MockProvider::new(ProviderType::ClaudeCode));
-    let claude_tty = Arc::new(MockProvider::new(ProviderType::ClaudeTty));
     bridge
         .register_provider("claude_code", claude_sdk.clone())
         .await;
-    bridge
-        .register_provider("claude_tty", claude_tty.clone())
-        .await;
-    bridge.set_default_provider_key("claude_tty").await;
+    bridge.set_default_provider_key("claude_code").await;
     bridge.set_thread_store(store).await;
 
     bridge
@@ -3022,7 +3008,6 @@ async fn test_start_run_restores_claude_sdk_session_id_when_switching_back_to_sd
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    assert_eq!(claude_tty.metadata_snapshots().len(), 0);
     let snapshots = claude_sdk.metadata_snapshots();
     assert_eq!(snapshots.len(), 1);
     assert_eq!(

@@ -574,11 +574,6 @@ fn persisted_provider_type(session_data: &Value) -> Option<ProviderType> {
 
 fn provider_types_share_native_session(left: &ProviderType, right: &ProviderType) -> bool {
     left == right
-        || matches!(
-            (left, right),
-            (ProviderType::ClaudeCode, ProviderType::ClaudeTty)
-                | (ProviderType::ClaudeTty, ProviderType::ClaudeCode)
-        )
 }
 
 fn resolve_persisted_sdk_session_id_for_provider(

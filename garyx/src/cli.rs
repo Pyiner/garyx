@@ -320,6 +320,21 @@ pub(crate) enum ConfigAction {
         /// Dotted JSON path
         path: String,
     },
+    /// Configure which CLI the Claude Agent SDK launches
+    ClaudeCli {
+        /// SDK CLI mode: cctty uses Garyx's TTY wrapper; native uses Claude Code directly
+        #[arg(long, value_parser = ["cctty", "native"])]
+        mode: Option<String>,
+        /// Explicit CLI path for the selected mode
+        #[arg(long)]
+        path: Option<String>,
+        /// Clear the explicit CLI path
+        #[arg(long, conflicts_with = "path")]
+        clear_path: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Initialize config file from defaults
     Init {
         /// Overwrite existing config file
@@ -1138,7 +1153,7 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, gpt, anthropic, or google
+        /// Provider type: claude_code, codex_app_server, gemini_cli, gpt, anthropic, or google
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.
@@ -1174,7 +1189,7 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, gpt, anthropic, or google
+        /// Provider type: claude_code, codex_app_server, gemini_cli, gpt, anthropic, or google
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.
@@ -1210,7 +1225,7 @@ pub(crate) enum AgentAction {
         /// Display name
         #[arg(long, alias = "name")]
         display_name: String,
-        /// Provider type: claude_code, claude_tty, codex_app_server, gemini_cli, gpt, anthropic, or google
+        /// Provider type: claude_code, codex_app_server, gemini_cli, gpt, anthropic, or google
         #[arg(long, default_value = "claude_code")]
         provider: String,
         /// Optional model override. Omit to use the provider default.

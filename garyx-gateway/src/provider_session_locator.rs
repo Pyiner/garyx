@@ -150,7 +150,6 @@ fn matches_provider_hint(
 fn claude_session_provider_type(provider_hint: Option<&ProviderType>) -> Option<ProviderType> {
     match provider_hint {
         None | Some(ProviderType::ClaudeCode) => Some(ProviderType::ClaudeCode),
-        Some(ProviderType::ClaudeTty) => Some(ProviderType::ClaudeTty),
         Some(_) => None,
     }
 }

@@ -33,7 +33,7 @@ fn locate_claude_session_binding_reads_project_cwd_from_transcript() {
 }
 
 #[test]
-fn locate_claude_session_binding_preserves_tty_provider_hint() {
+fn locate_claude_session_binding_treats_legacy_tty_hint_as_claude() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = temp.path().join("workspace");
     fs::create_dir_all(&workspace).unwrap();
@@ -55,12 +55,15 @@ fn locate_claude_session_binding_preserves_tty_provider_hint() {
         codex_session_roots: Vec::new(),
         gemini_tmp_dir: None,
     };
-    let binding =
-        locate_local_provider_session_with_roots(session_id, Some(ProviderType::ClaudeTty), &roots)
-            .expect("lookup")
-            .expect("binding");
+    let binding = locate_local_provider_session_with_roots(
+        session_id,
+        ProviderType::from_slug("claude_tty"),
+        &roots,
+    )
+    .expect("lookup")
+    .expect("binding");
 
-    assert_eq!(binding.provider_type, ProviderType::ClaudeTty);
+    assert_eq!(binding.provider_type, ProviderType::ClaudeCode);
     assert_eq!(binding.agent_id, "claude");
 }
 

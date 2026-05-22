@@ -507,6 +507,36 @@ fn parse_config_set() {
 }
 
 #[test]
+fn parse_config_claude_cli() {
+    let cli = Cli::parse_from([
+        "garyx",
+        "config",
+        "claude-cli",
+        "--mode",
+        "native",
+        "--clear-path",
+        "--json",
+    ]);
+    match cli.command {
+        Some(Commands::Config {
+            action:
+                ConfigAction::ClaudeCli {
+                    mode,
+                    path,
+                    clear_path,
+                    json,
+                },
+        }) => {
+            assert_eq!(mode.as_deref(), Some("native"));
+            assert_eq!(path, None);
+            assert!(clear_path);
+            assert!(json);
+        }
+        _ => panic!("expected Config::ClaudeCli"),
+    }
+}
+
+#[test]
 fn parse_channels_enable() {
     let cli = Cli::parse_from(["garyx", "channels", "enable", "telegram", "main"]);
     match cli.command {

@@ -493,10 +493,37 @@ Use a built-in provider agent:
 { "agent_id": "claude" }
 ```
 
-Custom agents can set `provider_type` to `claude_code`, `claude_tty`,
-`codex_app_server`, `gemini_cli`, `gpt`, `anthropic`, or `google`.
-`claude_tty` uses the local Claude CLI's interactive terminal mode inside the
-gateway and keeps the same thread/session model as the regular Claude provider.
+Custom agents can set `provider_type` to `claude_code`, `codex_app_server`,
+`gemini_cli`, `gpt`, `anthropic`, or `google`. `claude_tty` is deprecated and
+is treated as `claude_code` when encountered in older records.
+
+Claude has one provider path: the Claude Agent SDK. Configure which executable
+the SDK launches with `agents.claude`:
+
+```json
+{
+  "agents": {
+    "claude": {
+      "provider_type": "claude_code",
+      "claude_cli_mode": "cctty",
+      "claude_cli_path": ""
+    }
+  }
+}
+```
+
+`claude_cli_mode` accepts `cctty` or `native`. `cctty` is the default and uses
+the `cctty` sidecar shipped next to the `garyx` binary; `native` lets the SDK
+discover and launch the original `claude` executable. `claude_cli_path` is
+optional and overrides the executable path for either mode. The same setting is
+available from the Mac app's Providers > Claude Code Configure dialog and from
+the CLI:
+
+```bash
+garyx config claude-cli --mode cctty
+garyx config claude-cli --mode native --clear-path
+garyx config claude-cli --mode cctty --path /opt/garyx/bin/cctty
+```
 
 Custom agents may also set `model`, `model_reasoning_effort`, and
 `model_service_tier`. These values are injected into the thread runtime metadata

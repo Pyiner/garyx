@@ -89,7 +89,6 @@ fn provider_type_value(thread_value: &Value) -> Option<ProviderType> {
 fn provider_label(provider_type: &ProviderType) -> &'static str {
     match provider_type {
         ProviderType::ClaudeCode => "Claude",
-        ProviderType::ClaudeTty => "Claude TTY",
         ProviderType::CodexAppServer => "Codex",
         ProviderType::GeminiCli => "Gemini",
         ProviderType::Gpt => "GPT",
@@ -101,9 +100,7 @@ fn provider_label(provider_type: &ProviderType) -> &'static str {
 
 fn provider_icon_descriptor(provider_type: &ProviderType) -> Option<Value> {
     let (key, label) = match provider_type {
-        ProviderType::ClaudeCode | ProviderType::ClaudeTty | ProviderType::ClaudeLlm => {
-            ("claude", "Claude")
-        }
+        ProviderType::ClaudeCode | ProviderType::ClaudeLlm => ("claude", "Claude"),
         ProviderType::CodexAppServer => ("codex", "Codex"),
         ProviderType::GeminiCli | ProviderType::GeminiLlm => ("gemini", "Gemini"),
         ProviderType::Gpt | ProviderType::AgentTeam => return None,

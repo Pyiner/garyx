@@ -201,6 +201,8 @@ type FixedModelProviderRow = {
 
 type ModelProviderConfigDraft = {
   key: FixedModelProviderKey;
+  claudeCliMode: 'cctty' | 'native';
+  claudeCliPath: string;
   claudeEnv: string;
   codexAuthMode: DesktopSettings['providerCodexAuthMode'];
   codexApiKey: string;
@@ -401,9 +403,6 @@ function providerTypeValue(provider: any): string {
 
 function providerTypeLabel(provider: any): string {
   const value = providerTypeValue(provider);
-  if (value === 'claude_tty') {
-    return 'claude tty';
-  }
   if (value === 'codex_app_server') {
     return 'codex';
   }
@@ -442,9 +441,7 @@ function preferredStandaloneAgentId(
   }
 
   let normalizedProviderType: DesktopCustomAgent['providerType'] = 'claude_code';
-  if (providerType === 'claude_tty') {
-    normalizedProviderType = 'claude_tty';
-  } else if (providerType === 'codex_app_server') {
+  if (providerType === 'codex_app_server') {
     normalizedProviderType = 'codex_app_server';
   } else if (providerType === 'gemini_cli') {
     normalizedProviderType = 'gemini_cli';
@@ -793,10 +790,28 @@ function configuredProviderAgent(
     || null;
 }
 
+function claudeAgentConfig(gatewayDraft: any): Record<string, any> {
+  const agentsConfig = gatewayDraft && typeof gatewayDraft === 'object' && gatewayDraft.agents && typeof gatewayDraft.agents === 'object'
+    ? gatewayDraft.agents
+    : {};
+  const value = agentsConfig.claude || agentsConfig.claude_code || {};
+  return value && typeof value === 'object' ? value : {};
+}
+
+function normalizeClaudeCliMode(value: unknown): 'cctty' | 'native' {
+  return String(value || '').trim().toLowerCase() === 'native' ? 'native' : 'cctty';
+}
+
+function claudeCliModeLabel(value: 'cctty' | 'native', t: Translate): string {
+  return value === 'native' ? t('Native Claude CLI') : t('cctty TTY wrapper');
+}
+
 function emptyModelProviderConfigDraft(key: FixedModelProviderKey = 'claude_code'): ModelProviderConfigDraft {
   const row = fixedModelProviderRow(key);
   return {
     key,
+    claudeCliMode: 'cctty',
+    claudeCliPath: '',
     claudeEnv: '',
     codexAuthMode: 'cli',
     codexApiKey: '',
@@ -814,11 +829,15 @@ function modelProviderDraftFromState(
   key: FixedModelProviderKey,
   localSettings: DesktopSettings,
   agents: DesktopCustomAgent[],
+  gatewayDraft: any,
 ): ModelProviderConfigDraft {
   const row = fixedModelProviderRow(key);
   const agent = configuredProviderAgent(agents, key);
+  const claudeConfig = claudeAgentConfig(gatewayDraft);
   return {
     key,
+    claudeCliMode: normalizeClaudeCliMode(claudeConfig.claude_cli_mode),
+    claudeCliPath: String(claudeConfig.claude_cli_path || ''),
     claudeEnv: localSettings.providerClaudeEnv,
     codexAuthMode: localSettings.providerCodexAuthMode,
     codexApiKey: localSettings.providerCodexApiKey,
@@ -1234,7 +1253,6 @@ function AgentProviderFields({
               <SelectContent className="rounded-[14px] border-[#e7e7e5] bg-white shadow-[0_12px_32px_rgba(0,0,0,0.08)]">
                 <SelectGroup>
                   <SelectItem value="claude_code">claude_code</SelectItem>
-                  <SelectItem value="claude_tty">claude_tty</SelectItem>
                   <SelectItem value="codex_app_server">codex_app_server</SelectItem>
                   <SelectItem value="gemini_cli">gemini_cli</SelectItem>
                 </SelectGroup>
@@ -1627,11 +1645,12 @@ export function GatewaySettingsPanel({
     model: string;
   } {
     if (row.key === 'claude_code') {
+      const mode = normalizeClaudeCliMode(claudeAgentConfig(gatewayDraft).claude_cli_mode);
       return {
         status: t('Default'),
         auth: claudeEnvLineCount
-          ? t('{count} env vars', { count: claudeEnvLineCount })
-          : t('CLI / env'),
+          ? `${claudeCliModeLabel(mode, t)} · ${t('{count} env vars', { count: claudeEnvLineCount })}`
+          : claudeCliModeLabel(mode, t),
         model: row.defaultModel,
       };
     }
@@ -1667,7 +1686,7 @@ export function GatewaySettingsPanel({
 
   function openProviderConfigDialog(key: FixedModelProviderKey) {
     const row = fixedModelProviderRow(key);
-    const draft = modelProviderDraftFromState(key, localSettings, agents);
+    const draft = modelProviderDraftFromState(key, localSettings, agents, gatewayDraft);
     setProviderConfigDraft(applyProviderCatalogDefaults(draft, row, providerModelsByType[row.providerType]));
     setProviderConfigKey(key);
   }
@@ -1688,7 +1707,28 @@ export function GatewaySettingsPanel({
           ...localSettings,
           providerClaudeEnv: providerConfigDraft.claudeEnv,
         };
-        if (await onSaveLocalSettingsDraft(nextSettings, { reloadGatewaySettings: false })) {
+        const savedLocal = await onSaveLocalSettingsDraft(nextSettings, { reloadGatewaySettings: false });
+        if (!savedLocal) {
+          return;
+        }
+        onMutateGatewayDraft((next) => {
+          next.agents = next.agents || {};
+          const current = next.agents.claude && typeof next.agents.claude === 'object'
+            ? next.agents.claude
+            : {};
+          next.agents.claude = {
+            ...current,
+            provider_type: 'claude_code',
+            claude_cli_mode: providerConfigDraft.claudeCliMode,
+          };
+          const cliPath = providerConfigDraft.claudeCliPath.trim();
+          if (cliPath) {
+            next.agents.claude.claude_cli_path = cliPath;
+          } else {
+            delete next.agents.claude.claude_cli_path;
+          }
+        });
+        if (await onSaveGatewaySettings({ refreshDesktopState: 'background' })) {
           closeProviderConfigDialog();
         }
         return;
@@ -2008,30 +2048,71 @@ export function GatewaySettingsPanel({
 
           <div className="commands-dialog-body provider-config-dialog-body">
             {providerConfigRow?.key === 'claude_code' ? (
-              <div className="commands-field">
-                <div className="commands-field-header">
-                  <Label className="commands-field-label" htmlFor="provider-claude-env">{t('Environment')}</Label>
-                  <span className="commands-field-hint">{t('One variable per line.')}</span>
+              <>
+                <div className="commands-field">
+                  <Label className="commands-field-label">{t('Agent SDK CLI')}</Label>
+                  <Select
+                    value={providerConfigDraft.claudeCliMode}
+                    onValueChange={(value) => {
+                      setProviderConfigDraft((current) => ({
+                        ...current,
+                        claudeCliMode: value === 'native' ? 'native' : 'cctty',
+                      }));
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="cctty">{t('cctty TTY wrapper')}</SelectItem>
+                        <SelectItem value="native">{t('Native Claude CLI')}</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                 </div>
-                <Textarea
-                  className="provider-env-editor"
-                  id="provider-claude-env"
-                  placeholder={[
-                    'ANTHROPIC_API_KEY=sk-ant-...',
-                    'CLAUDE_CODE_USE_BEDROCK=1',
-                    'AWS_REGION=us-east-1',
-                    'AWS_PROFILE=default',
-                  ].join('\n')}
-                  spellCheck={false}
-                  value={providerConfigDraft.claudeEnv}
-                  onChange={(event) => {
-                    setProviderConfigDraft((current) => ({
-                      ...current,
-                      claudeEnv: event.target.value,
-                    }));
-                  }}
-                />
-              </div>
+                <div className="commands-field">
+                  <div className="commands-field-header">
+                    <Label className="commands-field-label" htmlFor="provider-claude-cli-path">{t('CLI path')}</Label>
+                    <span className="commands-field-hint">{t('Leave empty to use bundled cctty or PATH.')}</span>
+                  </div>
+                  <Input
+                    id="provider-claude-cli-path"
+                    placeholder={providerConfigDraft.claudeCliMode === 'native' ? 'claude' : 'cctty'}
+                    value={providerConfigDraft.claudeCliPath}
+                    onChange={(event) => {
+                      setProviderConfigDraft((current) => ({
+                        ...current,
+                        claudeCliPath: event.target.value,
+                      }));
+                    }}
+                  />
+                </div>
+                <div className="commands-field">
+                  <div className="commands-field-header">
+                    <Label className="commands-field-label" htmlFor="provider-claude-env">{t('Environment')}</Label>
+                    <span className="commands-field-hint">{t('One variable per line.')}</span>
+                  </div>
+                  <Textarea
+                    className="provider-env-editor"
+                    id="provider-claude-env"
+                    placeholder={[
+                      'ANTHROPIC_API_KEY=sk-ant-...',
+                      'CLAUDE_CODE_USE_BEDROCK=1',
+                      'AWS_REGION=us-east-1',
+                      'AWS_PROFILE=default',
+                    ].join('\n')}
+                    spellCheck={false}
+                    value={providerConfigDraft.claudeEnv}
+                    onChange={(event) => {
+                      setProviderConfigDraft((current) => ({
+                        ...current,
+                        claudeEnv: event.target.value,
+                      }));
+                    }}
+                  />
+                </div>
+              </>
             ) : null}
 
             {providerConfigRow?.key === 'codex_app_server' ? (

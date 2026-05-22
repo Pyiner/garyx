@@ -6,7 +6,6 @@ use garyx_models::provider::{
 };
 
 use crate::claude_provider::ClaudeCliProvider;
-use crate::claude_tty_provider::ClaudeTtyProvider;
 use crate::codex_provider::CodexAgentProvider;
 use crate::garyx_native_provider::GaryxNativeProvider;
 use crate::gemini_provider::GeminiCliProvider;
@@ -17,11 +16,14 @@ fn build_claude_config(
     agent_cfg: &AgentProviderConfig,
     default_workspace: &Option<String>,
 ) -> ClaudeCodeConfig {
+    let claude_cli_path = agent_cfg.claude_cli_path.trim();
     ClaudeCodeConfig {
         workspace_dir: agent_cfg
             .workspace_dir
             .clone()
             .or_else(|| default_workspace.clone()),
+        claude_cli_mode: agent_cfg.claude_cli_mode.clone(),
+        claude_cli_path: (!claude_cli_path.is_empty()).then(|| claude_cli_path.to_owned()),
         permission_mode: agent_cfg.permission_mode.clone(),
         mcp_base_url: agent_cfg.mcp_base_url.clone(),
         default_model: agent_cfg.default_model.clone(),
@@ -166,49 +168,46 @@ pub(super) async fn create_provider(
     agent_cfg: &AgentProviderConfig,
     default_workspace: &Option<String>,
 ) -> Result<Arc<dyn AgentLoopProvider>, BridgeError> {
-    match agent_cfg.provider_type.as_str() {
-        "claude_tty" => {
-            let config = build_claude_config(agent_cfg, default_workspace);
-            let mut provider = ClaudeTtyProvider::new(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        "codex_app_server" => {
-            let config = build_codex_config(agent_cfg, default_workspace);
-            let mut provider = CodexAgentProvider::new(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        "gemini_cli" => {
-            let config = build_gemini_config(agent_cfg, default_workspace);
-            let mut provider = GeminiCliProvider::new(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        "gpt" | "openai" | "openai_gpt" | "garyx_native" | "garyx" | "native" => {
-            let config = build_garyx_native_config(agent_cfg, default_workspace);
-            let mut provider = GaryxNativeProvider::new_gpt(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        "anthropic" | "claude_llm" | "claude_model" => {
-            let config = build_garyx_native_config(agent_cfg, default_workspace);
-            let mut provider = GaryxNativeProvider::new_claude(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        "google" | "gemini_llm" | "google_gemini" | "gemini_model" => {
-            let config = build_garyx_native_config(agent_cfg, default_workspace);
-            let mut provider = GaryxNativeProvider::new_gemini(config);
-            provider.initialize().await?;
-            Ok(Arc::new(provider))
-        }
-        _ => {
-            // Default to Claude Code
+    match ProviderType::from_slug(&agent_cfg.provider_type).unwrap_or(ProviderType::ClaudeCode) {
+        ProviderType::ClaudeCode => {
             let config = build_claude_config(agent_cfg, default_workspace);
             let mut provider = ClaudeCliProvider::new(config);
             provider.initialize().await?;
             Ok(Arc::new(provider))
         }
+        ProviderType::CodexAppServer => {
+            let config = build_codex_config(agent_cfg, default_workspace);
+            let mut provider = CodexAgentProvider::new(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        ProviderType::GeminiCli => {
+            let config = build_gemini_config(agent_cfg, default_workspace);
+            let mut provider = GeminiCliProvider::new(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        ProviderType::Gpt => {
+            let config = build_garyx_native_config(agent_cfg, default_workspace);
+            let mut provider = GaryxNativeProvider::new_gpt(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        ProviderType::ClaudeLlm => {
+            let config = build_garyx_native_config(agent_cfg, default_workspace);
+            let mut provider = GaryxNativeProvider::new_claude(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        ProviderType::GeminiLlm => {
+            let config = build_garyx_native_config(agent_cfg, default_workspace);
+            let mut provider = GaryxNativeProvider::new_gemini(config);
+            provider.initialize().await?;
+            Ok(Arc::new(provider))
+        }
+        ProviderType::AgentTeam => Err(BridgeError::Internal(
+            "agent_team is a meta-provider and cannot be created from AgentProviderConfig"
+                .to_owned(),
+        )),
     }
 }

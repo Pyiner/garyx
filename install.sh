@@ -46,9 +46,15 @@ main() {
   tar xzf "${tmpdir}/${archive}" -C "$tmpdir"
 
   install_binary "${tmpdir}/garyx-${version}-${target}/garyx" "${INSTALL_DIR}/garyx"
+  if [ -f "${tmpdir}/garyx-${version}-${target}/cctty" ]; then
+    install_binary "${tmpdir}/garyx-${version}-${target}/cctty" "${INSTALL_DIR}/cctty"
+  fi
 
   echo ""
   echo "Installed garyx to ${INSTALL_DIR}/garyx"
+  if [ -x "${INSTALL_DIR}/cctty" ]; then
+    echo "Installed cctty to ${INSTALL_DIR}/cctty"
+  fi
   echo ""
 
   if ! path_contains "$INSTALL_DIR"; then

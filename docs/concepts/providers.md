@@ -1,18 +1,23 @@
 # Providers
 
 A **provider** is the thing that actually executes a model run on behalf of
-an agent. Garyx ships with four:
+an agent. Garyx ships with three CLI-backed providers:
 
 | Provider key | Backed by | Auth model |
 | --- | --- | --- |
-| `claude_code` | [Claude Code CLI](https://github.com/anthropics/claude-code) | OAuth long-lived token via `claude setup-token` (recommended) or interactive `claude auth login`. |
-| `claude_tty` | Claude Code interactive CLI driven through a gateway PTY | Same Claude Code auth as `claude_code`; runs the interactive path and reads Claude's JSONL transcript for structured output. |
+| `claude_code` | Claude Agent SDK launching either bundled `cctty` or native [Claude Code CLI](https://github.com/anthropics/claude-code) | OAuth long-lived token via `claude setup-token` (recommended) or interactive `claude auth login`. |
 | `codex_app_server` | [Codex CLI](https://github.com/openai/codex) app-server | OpenAI account login via `codex login`. |
 | `gemini_cli` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google account login via `gemini auth login`. |
 
 Providers are not pinned per agent — Garyx auto-detects which CLIs are
-installed at startup and registers `claude_code`, `claude_tty`,
-`codex_app_server`, and `gemini_cli` when their backing CLIs are available.
+installed at startup and registers `claude_code`, `codex_app_server`, and
+`gemini_cli` when their backing CLIs are available.
+
+`claude_tty` is no longer a provider. Garyx now keeps one Claude Agent SDK
+path and chooses the executable launched by that SDK. By default the executable
+is the bundled `cctty` sidecar, which drives interactive Claude Code through a
+terminal while preserving the SDK protocol. Set `agents.claude.claude_cli_mode`
+to `native` to launch the original Claude Code CLI directly.
 
 ## How runs find a provider
 
@@ -21,9 +26,8 @@ When a message lands on a thread:
 1. Look up the thread's agent (`agent_id`).
 2. Resolve the agent's provider preference: each agent has a default
    provider, with optional fallbacks.
-3. Spawn the provider CLI. SDK-backed providers use their structured stream
-   transport; `claude_tty` writes user input into an interactive PTY and tails
-   Claude's persisted transcript.
+3. Spawn the provider CLI. Claude uses the Agent SDK transport; the configured
+   SDK executable is either `cctty` or native `claude`.
 4. Stream `assistant_delta` events back to the channel that triggered the
    run.
 

@@ -111,7 +111,7 @@ pub(crate) async fn list_provider_models(
             ),
             Err(error) => unsupported(provider_type, "gemini_acp", Some(error)),
         },
-        ProviderType::ClaudeCode | ProviderType::ClaudeTty | ProviderType::CodexAppServer => {
+        ProviderType::ClaudeCode | ProviderType::CodexAppServer => {
             unsupported(provider_type, "provider", None)
         }
         ProviderType::Gpt => match fetch_gpt_codex_models(config).await {
@@ -372,7 +372,9 @@ fn native_reasoning_efforts(
         .collect()
 }
 
-fn native_reasoning_effort_metadata(id: &str) -> Option<(&'static str, &'static str, &'static str)> {
+fn native_reasoning_effort_metadata(
+    id: &str,
+) -> Option<(&'static str, &'static str, &'static str)> {
     match id {
         "off" => Some(("off", "Off", "Disable explicit thinking controls.")),
         "minimal" => Some((
@@ -945,7 +947,13 @@ mod tests {
                 .iter()
                 .any(|effort| effort.id == "xhigh")
         );
-        assert_eq!(response.reasoning_efforts.last().map(|effort| effort.id.as_str()), Some("high"));
+        assert_eq!(
+            response
+                .reasoning_efforts
+                .last()
+                .map(|effort| effort.id.as_str()),
+            Some("high")
+        );
     }
 
     #[tokio::test]

@@ -130,9 +130,6 @@ function providerOptionLabel(providerType: DesktopApiProviderType): string {
   if (providerType === 'google' || providerType === 'gemini_llm') {
     return 'Gemini';
   }
-  if (providerType === 'claude_tty') {
-    return 'Claude TTY';
-  }
   return 'Claude';
 }
 
