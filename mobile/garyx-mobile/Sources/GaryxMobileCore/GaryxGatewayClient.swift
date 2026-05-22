@@ -3317,6 +3317,10 @@ public final class GaryxGatewayClient {
         )
     }
 
+    public func getThread(threadId: String) async throws -> GaryxThreadSummary {
+        try await get("/api/threads/\(threadId.urlPathEncoded)")
+    }
+
     public func listThreadPins() async throws -> GaryxThreadPinsPage {
         try await get("/api/thread-pins")
     }
@@ -3831,13 +3835,13 @@ public final class GaryxGatewayClient {
         let requestedQuery = pathParts.dropFirst().first.map(String.init)
         var requestedQueryComponents = URLComponents()
         requestedQueryComponents.percentEncodedQuery = requestedQuery
-        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let nextPath = requestedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        components.path = [basePath, nextPath]
+        components.percentEncodedPath = [basePath, nextPath]
             .filter { !$0.isEmpty }
             .joined(separator: "/")
-        if !components.path.hasPrefix("/") {
-            components.path = "/" + components.path
+        if !components.percentEncodedPath.hasPrefix("/") {
+            components.percentEncodedPath = "/" + components.percentEncodedPath
         }
         let mergedQueryItems = (requestedQueryComponents.queryItems ?? []) + queryItems
         components.queryItems = mergedQueryItems.isEmpty ? nil : mergedQueryItems

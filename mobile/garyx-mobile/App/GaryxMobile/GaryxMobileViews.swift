@@ -226,7 +226,7 @@ struct GaryxShellView: View {
     @State private var sidebarDragOffset: CGFloat = 0
 
     private let sidebarWidth: CGFloat = 330
-    private let sidebarEdgeGestureWidth: CGFloat = 64
+    private let sidebarEdgeGestureWidth: CGFloat = 24
 
     var body: some View {
         GeometryReader { proxy in
@@ -269,6 +269,7 @@ struct GaryxShellView: View {
     private func drawerBody(width: CGFloat, containerSize: CGSize) -> some View {
         let revealWidth = sidebarRevealWidth(for: width)
         let drawerOffset = revealWidth - width
+        let closeStripX = max(0, min(revealWidth, max(0, containerSize.width - 28)))
 
         return ZStack(alignment: .topLeading) {
             GaryxMainPanelView()
@@ -297,25 +298,11 @@ struct GaryxShellView: View {
             if revealWidth > 1 {
                 Color.clear
                     .frame(width: 28, height: containerSize.height)
-                    .offset(x: revealWidth)
+                    .offset(x: closeStripX)
                     .contentShape(Rectangle())
                     .gesture(closingSidebarGesture(sidebarWidth: width))
                     .zIndex(3)
                     .accessibilityHidden(true)
-            }
-
-            if !model.sidebarVisible {
-                Button {
-                    finishGesture(open: true)
-                } label: {
-                    Rectangle()
-                        .fill(Color.clear)
-                        .frame(width: 78, height: 178)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .zIndex(4)
-                .accessibilityHidden(true)
             }
         }
         .background(GaryxTheme.background)
@@ -376,7 +363,7 @@ struct GaryxShellView: View {
         let vertical = value.translation.height
         return value.startLocation.x <= sidebarEdgeGestureWidth
             && horizontal > 0
-            && abs(horizontal) > abs(vertical) * 1.15
+            && abs(horizontal) > abs(vertical) * 1.35
     }
 
     private func isClosingSidebarGesture(_ value: DragGesture.Value) -> Bool {
@@ -1178,7 +1165,7 @@ private struct GaryxBotThreadDetailSection: View {
             return []
         }
         return [
-            GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
+            GaryxSwipeAction(title: "Archive", systemImage: "archivebox", tone: .destructive) {
                 Task { await model.archiveBotConversationEndpoint(entry.endpoint) }
             }
         ]
@@ -1396,7 +1383,7 @@ private struct GaryxSidebarThreadButton: View {
         ]
         if model.canDeleteThread(thread) {
             actions.append(
-                GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
+                GaryxSwipeAction(title: "Archive", systemImage: "archivebox", tone: .destructive) {
                     Task { await model.deleteThread(thread) }
                 }
             )
@@ -1638,9 +1625,9 @@ struct GaryxConversationView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: model.messages) { _, newValue in
-                guard let last = newValue.last else { return }
+                guard !newValue.isEmpty || model.showsTailThinkingIndicator else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(last.id, anchor: .bottom)
+                    scrollToConversationTail(proxy)
                 }
             }
             .onChange(of: isComposerFocused) { _, isFocused in
@@ -1685,6 +1672,9 @@ struct GaryxConversationView: View {
                             .id("tail-thinking")
                     }
                 }
+                Color.clear
+                    .frame(height: 1)
+                    .id("conversation-bottom-anchor")
             }
             .padding(.horizontal, 16)
             .padding(.top, 18)
@@ -1716,8 +1706,8 @@ struct GaryxConversationView: View {
     private func scrollToConversationTail(_ proxy: ScrollViewProxy) {
         if model.showsTailThinkingIndicator {
             proxy.scrollTo("tail-thinking", anchor: .bottom)
-        } else if let last = model.messages.last {
-            proxy.scrollTo(last.id, anchor: .bottom)
+        } else {
+            proxy.scrollTo("conversation-bottom-anchor", anchor: .bottom)
         }
     }
 
@@ -1797,7 +1787,7 @@ struct GaryxConversationHeader: View {
                     Button("New Thread", systemImage: "square.and.pencil") {
                         model.openNewThreadDraft()
                     }
-                    Button("Delete", systemImage: "trash", role: .destructive) {
+                    Button("Archive", systemImage: "archivebox", role: .destructive) {
                         Task { await model.deleteSelectedThread() }
                     }
                 } label: {
@@ -3126,6 +3116,7 @@ struct GaryxAttachmentChip: View {
 
 struct GaryxTasksView: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var showsCreateTask = false
 
     var body: some View {
         GaryxPanelScaffold(
@@ -3148,6 +3139,15 @@ struct GaryxTasksView: View {
                     }
                 }
             }
+        } actions: {
+            GaryxAddToolbarButton(label: "New Task") {
+                showsCreateTask = true
+            }
+        }
+        .fullScreenCover(isPresented: $showsCreateTask) {
+            GaryxFormSheet(title: "New Task") {
+                GaryxCreateTaskCard()
+            }
         }
     }
 }
@@ -3167,9 +3167,89 @@ struct GaryxTaskList: View {
     }
 }
 
+struct GaryxCreateTaskCard: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    @State private var workspacePath = ""
+    @State private var startImmediately = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GaryxFieldLabel("Task")
+            TextField("Title", text: $model.draftTaskTitle)
+                .garyxInputStyle()
+            TextField("Details", text: $model.draftTaskBody, axis: .vertical)
+                .lineLimit(3...8)
+                .garyxInputStyle()
+
+            GaryxFieldLabel("Assignee")
+                .padding(.top, 4)
+            Menu {
+                ForEach(model.agentTargets) { target in
+                    Button {
+                        model.setSelectedAgentTarget(target.id)
+                    } label: {
+                        Label(target.title, systemImage: target.kind == .team ? "person.3" : "person")
+                    }
+                }
+            } label: {
+                GaryxAgentPickerLabel(
+                    target: model.selectedAgentTarget,
+                    title: model.selectedAgentLabel,
+                    showsChevron: true,
+                    style: .compact
+                )
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GaryxTheme.input, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(model.agentTargets.isEmpty)
+
+            GaryxFieldLabel("Workspace")
+                .padding(.top, 4)
+            TextField("Workspace directory", text: $workspacePath)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .garyxInputStyle()
+
+            Toggle("Start immediately", isOn: $startImmediately)
+                .font(GaryxFont.callout(weight: .medium))
+
+            Button {
+                Task {
+                    model.setNewThreadWorkspace(workspacePath)
+                    await model.createTaskFromDraft(start: startImmediately)
+                    if model.draftTaskTitle.isEmpty, model.draftTaskBody.isEmpty {
+                        dismiss()
+                    }
+                }
+            } label: {
+                Label("Create Task", systemImage: "plus")
+            }
+            .buttonStyle(GaryxPrimaryCompactButtonStyle())
+            .disabled(!canCreate)
+        }
+        .garyxCardStyle()
+        .onAppear {
+            workspacePath = model.newThreadWorkspace
+        }
+    }
+
+    private var canCreate: Bool {
+        !model.draftTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !model.draftTaskBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 struct GaryxTaskListRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let task: GaryxTaskSummary
+    @State private var showsAssignSheet = false
+    @State private var showsDeleteConfirmation = false
+    @State private var showsMoreActions = false
+    @State private var showsRenamePrompt = false
+    @State private var renameDraftTitle = ""
 
     var body: some View {
         GaryxSwipeActionRow(actions: taskSwipeActions) {
@@ -3213,6 +3293,45 @@ struct GaryxTaskListRow: View {
             .padding(10)
             .contentShape(Rectangle())
         }
+        .fullScreenCover(isPresented: $showsAssignSheet) {
+            GaryxFormSheet(title: "Assign Task") {
+                GaryxTaskAssignCard(task: task)
+            }
+        }
+        .alert("Rename Task", isPresented: $showsRenamePrompt) {
+            TextField("Task title", text: $renameDraftTitle)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                Task { await model.updateTaskTitle(task, title: renameDraftTitle) }
+            }
+        }
+        .confirmationDialog("Task Actions", isPresented: $showsMoreActions, titleVisibility: .visible) {
+            Button("Rename") {
+                openRenamePrompt()
+            }
+            if !model.agentTargets.isEmpty {
+                Button("Assign") {
+                    showsAssignSheet = true
+                }
+            }
+            if task.assignee != nil || !task.assigneeLabel.isEmpty {
+                Button("Unassign") {
+                    Task { await model.unassignTask(task) }
+                }
+            }
+            Button("Delete", role: .destructive) {
+                showsDeleteConfirmation = true
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Delete task?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteTask(task) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the task from the task list.")
+        }
     }
 
     private var taskSwipeActions: [GaryxSwipeAction] {
@@ -3236,19 +3355,65 @@ struct GaryxTaskListRow: View {
                 Task { await model.updateTask(task, to: task.status.next) }
             }
         )
-        if task.assignee != nil || !task.assigneeLabel.isEmpty {
-            actions.append(
-                GaryxSwipeAction(title: "Unassign", systemImage: "person.crop.circle.badge.xmark") {
-                    Task { await model.unassignTask(task) }
-                }
-            )
-        }
         actions.append(
-            GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                Task { await model.deleteTask(task) }
+            GaryxSwipeAction(title: "More", systemImage: "ellipsis.circle") {
+                showsMoreActions = true
             }
         )
         return actions
+    }
+
+    private func openRenamePrompt() {
+        renameDraftTitle = task.title
+        showsRenamePrompt = true
+    }
+}
+
+struct GaryxTaskAssignCard: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let task: GaryxTaskSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GaryxFieldLabel("Assign To")
+            if model.agentTargets.isEmpty {
+                GaryxEmptyPanelView(
+                    icon: "person.crop.circle.badge.exclamationmark",
+                    title: "No agents available.",
+                    text: ""
+                )
+            } else {
+                GaryxCompactListGroup {
+                    ForEach(Array(model.agentTargets.enumerated()), id: \.element.id) { index, target in
+                        Button {
+                            Task {
+                                await model.assignTask(task, agentId: target.id)
+                                dismiss()
+                            }
+                        } label: {
+                            GaryxAgentIdentityRow(
+                                id: target.id,
+                                title: target.title,
+                                subtitle: target.subtitle,
+                                kind: target.kind,
+                                avatarDataUrl: target.avatarDataUrl,
+                                providerType: target.providerType,
+                                builtIn: target.builtIn,
+                                selected: task.assignee?.agentId == target.id
+                                    || task.assigneeLabel == target.id
+                                    || task.runtimeAgentId == target.id
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        if index < model.agentTargets.count - 1 {
+                            GaryxCompactRowDivider()
+                        }
+                    }
+                }
+            }
+        }
+        .garyxCardStyle()
     }
 }
 
@@ -3393,12 +3558,13 @@ struct GaryxAutomationCard: View {
 
     private var automationSwipeActions: [GaryxSwipeAction] {
         var actions: [GaryxSwipeAction] = []
-        actions.append(
-            GaryxSwipeAction(title: "Run", systemImage: "play.fill", tone: .accent) {
-                guard automation.enabled else { return }
-                Task { await model.runAutomation(automation) }
-            }
-        )
+        if automation.enabled {
+            actions.append(
+                GaryxSwipeAction(title: "Run", systemImage: "play.fill", tone: .accent) {
+                    Task { await model.runAutomation(automation) }
+                }
+            )
+        }
         actions.append(
             GaryxSwipeAction(title: automation.enabled ? "Pause" : "Resume", systemImage: automation.enabled ? "pause.fill" : "play.fill") {
                 Task { await model.toggleAutomation(automation) }
@@ -3960,6 +4126,7 @@ struct GaryxSkillCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let skill: GaryxSkillSummary
     @State private var showsEditForm = false
+    @State private var showsDeleteConfirmation = false
     @State private var name = ""
     @State private var description = ""
 
@@ -4012,6 +4179,14 @@ struct GaryxSkillCard: View {
                 .garyxCardStyle()
             }
         }
+        .confirmationDialog("Delete skill?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteSkill(skill) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the skill directory.")
+        }
     }
 
     private var skillSwipeActions: [GaryxSwipeAction] {
@@ -4027,7 +4202,7 @@ struct GaryxSkillCard: View {
                 showsEditForm = true
             },
             GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                Task { await model.deleteSkill(skill) }
+                showsDeleteConfirmation = true
             }
         ]
     }
@@ -4104,6 +4279,7 @@ struct GaryxSkillEntryRow: View {
     let skillId: String
     let node: GaryxSkillEntryNode
     let depth: Int
+    @State private var showsDeleteConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -4122,7 +4298,7 @@ struct GaryxSkillEntryRow: View {
                 .buttonStyle(.plain)
                 Spacer(minLength: 0)
                 Button(role: .destructive) {
-                    Task { await model.deleteSkillEntry(skillId: skillId, path: node.path) }
+                    showsDeleteConfirmation = true
                 } label: {
                     Image(systemName: "trash")
                 }
@@ -4133,6 +4309,14 @@ struct GaryxSkillEntryRow: View {
             ForEach(node.children) { child in
                 GaryxSkillEntryRow(skillId: skillId, node: child, depth: depth + 1)
             }
+        }
+        .confirmationDialog("Delete skill entry?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteSkillEntry(skillId: skillId, path: node.path) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(node.path)
         }
     }
 }
@@ -4413,6 +4597,7 @@ struct GaryxMcpServerCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let server: GaryxMcpServer
     @State private var showsEditForm = false
+    @State private var showsDeleteConfirmation = false
     @State private var name = ""
     @State private var command = ""
     @State private var args = ""
@@ -4504,6 +4689,14 @@ struct GaryxMcpServerCard: View {
                 .garyxCardStyle()
             }
         }
+        .confirmationDialog("Delete MCP server?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteMcpServer(server) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(server.name)
+        }
     }
 
     private var serverSwipeActions: [GaryxSwipeAction] {
@@ -4516,7 +4709,7 @@ struct GaryxMcpServerCard: View {
                 showsEditForm = true
             },
             GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                Task { await model.deleteMcpServer(server) }
+                showsDeleteConfirmation = true
             }
         ]
     }
@@ -5541,11 +5734,13 @@ struct GaryxSwipeActionRow<Content: View>: View {
                                     .minimumScaleFactor(0.75)
                             }
                             .foregroundStyle(.white)
-                            .frame(width: actionButtonWidth)
-                            .frame(maxHeight: .infinity)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .padding(.vertical, 8)
-                            .background(action.tone.background)
+                            .contentShape(Rectangle())
                         }
+                        .frame(width: actionButtonWidth)
+                        .frame(maxHeight: .infinity)
+                        .background(action.tone.background)
                         .buttonStyle(.plain)
                     }
                 }

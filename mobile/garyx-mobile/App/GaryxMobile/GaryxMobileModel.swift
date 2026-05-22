@@ -1602,9 +1602,7 @@ final class GaryxMobileModel: ObservableObject {
         saveGatewayScopedUserState()
         resetGatewayRuntimeState()
         gatewayURL = payload.gatewayUrl
-        if !payload.gatewayAuthToken.isEmpty {
-            gatewayAuthToken = payload.gatewayAuthToken
-        }
+        gatewayAuthToken = payload.gatewayAuthToken
         loadGatewayScopedUserState(fallbackToLegacy: false)
         await connectAndRefresh()
     }
@@ -1665,6 +1663,7 @@ final class GaryxMobileModel: ObservableObject {
             configuredBots = (try? await configuredBotsResult) ?? configuredBots
             botConsoles = (try? await botConsolesResult) ?? botConsoles
             channelPlugins = (try? await channelPluginsResult) ?? channelPlugins
+            await mergeMissingSidebarRequiredThreads(using: gateway, extraThreadIds: [selectedThread?.id])
             ensureSelectedAgentTarget()
             ensureSelectedWorkspace()
             await refreshProviderModelsForVisibleAgents()
@@ -1683,10 +1682,20 @@ final class GaryxMobileModel: ObservableObject {
             async let threadsPage = gatewayClient.listThreads(limit: 80)
             async let threadPinsPage = gatewayClient.listThreadPins()
             let (page, pinsPage) = try await (threadsPage, threadPinsPage)
-            threads = page.threads
             applyPinnedThreadIds(pinsPage.threadIds)
+            var nextThreads = page.threads
+            let requiredThreadIds = sidebarRequiredThreadIds(
+                pinnedThreadIds: pinsPage.threadIds,
+                extraThreadIds: [previousSelectedId]
+            )
+            nextThreads += await fetchMissingThreadSummaries(
+                using: gatewayClient,
+                requiredThreadIds: requiredThreadIds,
+                existingThreadIds: Set(nextThreads.map(\.id))
+            )
+            threads = Self.mergedThreadSummaries(nextThreads)
             var refreshedBusyIds = remoteBusyThreadIds
-            for thread in page.threads {
+            for thread in threads {
                 if !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
                     if activeTasksByThread[thread.id] == nil {
                         refreshedBusyIds.insert(thread.id)
@@ -2464,10 +2473,10 @@ final class GaryxMobileModel: ObservableObject {
                 GaryxTaskCreateRequest(
                     title: title.isEmpty ? nil : title,
                     body: body.isEmpty ? nil : body,
-                    assignee: target.isEmpty ? nil : .agent(target),
+                    assignee: start && !target.isEmpty ? .agent(target) : nil,
                     start: start,
                     runtime: GaryxTaskRuntimeRequest(
-                        agentId: target.isEmpty ? nil : target,
+                        agentId: start && !target.isEmpty ? target : nil,
                         workspaceDir: workspace.isEmpty ? nil : workspace
                     )
                 )
@@ -2604,6 +2613,15 @@ final class GaryxMobileModel: ObservableObject {
         if let thread = threads.first(where: { $0.id == id }) {
             await selectThread(thread)
             activePanel = .chat
+            return
+        }
+        do {
+            let thread = try await client().getThread(threadId: id)
+            threads = Self.mergedThreadSummaries(threads + [thread])
+            await selectThread(thread)
+            activePanel = .chat
+        } catch {
+            lastError = displayMessage(for: error)
         }
     }
 
@@ -4745,6 +4763,85 @@ final class GaryxMobileModel: ObservableObject {
         }
         selectedWorkspacePath = paths.first ?? ""
         draftWorkspacePath = selectedWorkspacePath
+    }
+
+    private func mergeMissingSidebarRequiredThreads(
+        using gatewayClient: GaryxGatewayClient,
+        extraThreadIds: [String?] = []
+    ) async {
+        let missingThreads = await fetchMissingThreadSummaries(
+            using: gatewayClient,
+            requiredThreadIds: sidebarRequiredThreadIds(
+                pinnedThreadIds: pinnedThreadIds,
+                extraThreadIds: extraThreadIds
+            ),
+            existingThreadIds: Set(threads.map(\.id))
+        )
+        if !missingThreads.isEmpty {
+            threads = Self.mergedThreadSummaries(threads + missingThreads)
+        }
+    }
+
+    private func fetchMissingThreadSummaries(
+        using gatewayClient: GaryxGatewayClient,
+        requiredThreadIds: [String],
+        existingThreadIds: Set<String>
+    ) async -> [GaryxThreadSummary] {
+        var visibleThreadIds = existingThreadIds
+        var missingThreads: [GaryxThreadSummary] = []
+        for threadId in requiredThreadIds where !visibleThreadIds.contains(threadId) {
+            if let thread = try? await gatewayClient.getThread(threadId: threadId) {
+                missingThreads.append(thread)
+                visibleThreadIds.insert(thread.id)
+            }
+        }
+        return missingThreads
+    }
+
+    private func sidebarRequiredThreadIds(
+        pinnedThreadIds: [String],
+        extraThreadIds: [String?] = []
+    ) -> [String] {
+        var seen = Set<String>()
+        var ids: [String] = []
+
+        func append(_ value: String?) {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return }
+            ids.append(trimmed)
+        }
+
+        pinnedThreadIds.forEach { append($0) }
+        extraThreadIds.forEach { append($0) }
+        channelEndpoints.forEach { append($0.threadId) }
+        configuredBots.forEach { bot in
+            append(bot.mainThreadId)
+            append(bot.defaultOpenThreadId)
+        }
+        botConsoles.forEach { console in
+            append(console.mainThreadId)
+            append(console.defaultOpenThreadId)
+            console.conversationNodes.forEach { append($0.endpoint.threadId) }
+        }
+
+        return ids
+    }
+
+    private static func mergedThreadSummaries(_ values: [GaryxThreadSummary]) -> [GaryxThreadSummary] {
+        var indexesById: [String: Int] = [:]
+        var merged: [GaryxThreadSummary] = []
+        for value in values {
+            guard !value.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                continue
+            }
+            if let index = indexesById[value.id] {
+                merged[index] = value
+            } else {
+                indexesById[value.id] = merged.count
+                merged.append(value)
+            }
+        }
+        return merged
     }
 
     private func refreshProviderModelsForVisibleAgents() async {

@@ -700,6 +700,58 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
     }
 
+    func testGetThreadUsesMetadataEndpointAndEncodesThreadId() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+                "/garyx/api/threads/thread%3A%3Atest%2Fchild"
+            )
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test token")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(
+                    """
+                    {
+                      "thread_id": "thread::test/child",
+                      "label": "Pinned child thread"
+                    }
+                    """.utf8
+                )
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx")),
+                authToken: "test token"
+            ),
+            session: session
+        )
+
+        let thread = try await client.getThread(threadId: "thread::test/child")
+
+        XCTAssertEqual(thread.id, "thread::test/child")
+        XCTAssertEqual(thread.title, "Pinned child thread")
+    }
+
     func testStreamEventDecodesAssistantDelta() throws {
         let client = GaryxGatewayClient(
             configuration: GaryxGatewayConfiguration(
@@ -1259,4 +1311,33 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(botObject?["botId"] as? String, "telegram:main")
         XCTAssertEqual(botObject?["threadId"] as? String, "thread::test")
     }
+}
+
+private final class GaryxURLProtocolStub: URLProtocol {
+    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let requestHandler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try requestHandler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }
