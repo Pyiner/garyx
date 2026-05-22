@@ -4800,7 +4800,7 @@ private struct GaryxMobileToolTracePayload {
     static func fromTranscript(_ message: GaryxTranscriptMessage) -> GaryxMobileToolTracePayload {
         let eventKind: GaryxMobileToolTraceEventKind = message.role == .toolResult ? .toolResult : .toolUse
         return from(
-            value: GaryxJSONValue.decoded(from: message.text),
+            value: message.message ?? message.content ?? GaryxJSONValue.decoded(from: message.text),
             eventKind: eventKind,
             fallbackText: message.text,
             fallbackToolName: message.kind,
@@ -4832,12 +4832,16 @@ private struct GaryxMobileToolTracePayload {
         let payloadValue = object.unwrappedToolPayloadValue ?? decodedValue ?? .object(object)
         let payloadObject = payloadValue.objectValue
         let nestedContent = payloadObject ?? object.objectValue(forKeys: ["content", "message", "payload"])
+        let metadata = object.objectValue(forKeys: ["metadata"])
+            ?? payloadObject?.objectValue(forKeys: ["metadata"])
+            ?? nestedContent?.objectValue(forKeys: ["metadata"])
         let toolUseId = object.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
             ?? payloadObject?.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
             ?? nestedContent?.stringValue(forKeys: ["toolUseId", "tool_use_id", "id"])
         let parentToolUseId = object.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
             ?? payloadObject?.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
             ?? nestedContent?.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
+            ?? metadata?.stringValue(forKeys: ["parentToolUseId", "parent_tool_use_id"])
         let toolName = object.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title"])
             ?? payloadObject?.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title", "type"])
             ?? nestedContent?.stringValue(forKeys: ["toolName", "tool_name", "name", "tool", "title"])

@@ -78,7 +78,8 @@ struct GaryxMobileToolTraceGroup: Equatable {
     var summary: String {
         guard !entries.isEmpty else { return "Tool activity" }
         let commandCount = entries.filter(\.isCommand).count
-        let fileCount = Set(entries.compactMap(\.primaryPathBadge)).count
+        let editEntries = entries.filter(\.isFileEdit)
+        let fileCount = Set(editEntries.compactMap(\.primaryPathBadge)).count
         var parts: [String] = []
         if fileCount > 0 {
             parts.append("Edited \(fileCount) file\(fileCount == 1 ? "" : "s")")
@@ -86,7 +87,7 @@ struct GaryxMobileToolTraceGroup: Equatable {
         if commandCount > 0 {
             parts.append("Ran \(commandCount) command\(commandCount == 1 ? "" : "s")")
         }
-        let otherCount = entries.count - commandCount - fileCount
+        let otherCount = entries.count - commandCount - editEntries.count
         if otherCount > 0 || parts.isEmpty {
             parts.append("Used \(max(otherCount, entries.count)) tool\(max(otherCount, entries.count) == 1 ? "" : "s")")
         }
@@ -117,6 +118,16 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
             || normalized == "bashtool"
             || normalized == "commandexecution"
             || normalized.contains("command")
+    }
+
+    var isFileEdit: Bool {
+        let normalized = toolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "write"
+            || normalized == "edit"
+            || normalized == "multiedit"
+            || normalized == "apply_patch"
+            || normalized.contains("edit")
+            || normalized.contains("patch")
     }
 
     var groupSummary: String {
