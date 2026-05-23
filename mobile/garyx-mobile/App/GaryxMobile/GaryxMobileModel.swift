@@ -1564,7 +1564,9 @@ final class GaryxMobileModel: ObservableObject {
         let nextId = Self.stableGatewayProfileId(for: normalizedURL)
         let currentURL = normalizedGatewayURL(gatewayURL)
         let currentProfileId = currentGatewayProfile?.id
-        let affectsCurrentProfile = currentProfileId == profile.id || currentProfileId == nextId
+        let affectsCurrentProfile = currentProfileId == profile.id
+            || currentProfileId == nextId
+            || currentURL.lowercased() == normalizedURL.lowercased()
         let currentURLChanged = currentURL.lowercased() != normalizedURL.lowercased()
         let activeTokenChanged = gatewayAuthToken != trimmedToken
         var nextProfile = profile
