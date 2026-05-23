@@ -220,6 +220,8 @@ const noop = () => {};
 const noopAsync = async () => {};
 const noopAsyncBoolean = async () => false;
 const IDLE_UPDATE_STATUS: DesktopUpdateStatus = { phase: 'idle' };
+const FOLLOW_UP_BEHAVIOR_TOGGLE_ITEM_CLASS =
+  'relative h-8 !rounded-[12px] border-0 px-3 text-[12px] text-[#666663] data-[state=on]:z-10 data-[state=on]:bg-white data-[state=on]:text-[#111111] data-[state=on]:shadow-sm';
 const MODEL_PROVIDER_ROWS: FixedModelProviderRow[] = [
   {
     key: 'claude_code',
@@ -1864,13 +1866,13 @@ export function GatewaySettingsPanel({
               }}
             >
               <ToggleGroupItem
-                className="h-8 rounded-[12px] border-0 px-3 text-[12px] text-[#666663] data-[state=on]:bg-white data-[state=on]:text-[#111111] data-[state=on]:shadow-sm"
+                className={FOLLOW_UP_BEHAVIOR_TOGGLE_ITEM_CLASS}
                 value="queue"
               >
                 {t('Queue')}
               </ToggleGroupItem>
               <ToggleGroupItem
-                className="h-8 rounded-[12px] border-0 px-3 text-[12px] text-[#666663] data-[state=on]:bg-white data-[state=on]:text-[#111111] data-[state=on]:shadow-sm"
+                className={FOLLOW_UP_BEHAVIOR_TOGGLE_ITEM_CLASS}
                 value="steer"
               >
                 {t('Steer')}
