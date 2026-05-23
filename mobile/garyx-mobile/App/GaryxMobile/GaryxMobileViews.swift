@@ -7328,23 +7328,14 @@ struct GaryxToolbarIcon: View {
         Group {
             if let systemName {
                 Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .font(GaryxFont.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
             } else if let customContent {
                 customContent()
             }
         }
-        .frame(width: 36, height: 36)
-        .contentShape(Circle())
-        .background {
-            Circle()
-                .fill(Color(.systemBackground).opacity(0.42))
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .overlay {
-            Circle()
-                .stroke(Color.primary.opacity(0.03), lineWidth: 1)
-        }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
     }
 }
 
@@ -7365,20 +7356,11 @@ struct GaryxSidebarMenuButton: View {
 
 struct GaryxHeaderMenuIcon: View {
     var body: some View {
-        Image(systemName: "line.3.horizontal")
-            .font(GaryxFont.system(size: 17, weight: .semibold))
-            .foregroundStyle(.primary)
+        Image(systemName: "sidebar.left")
+            .font(GaryxFont.system(size: 18, weight: .semibold))
+            .foregroundStyle(Color.accentColor)
             .frame(width: 44, height: 44)
-            .background {
-                Circle()
-                    .fill(Color(.systemBackground).opacity(0.42))
-                    .background(.ultraThinMaterial, in: Circle())
-            }
-            .overlay {
-                Circle()
-                    .stroke(Color.primary.opacity(0.032), lineWidth: 1)
-            }
-            .contentShape(Circle())
+            .contentShape(Rectangle())
     }
 }
 
