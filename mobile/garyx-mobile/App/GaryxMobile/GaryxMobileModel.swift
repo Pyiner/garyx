@@ -3249,7 +3249,8 @@ final class GaryxMobileModel: ObservableObject {
         let prompt = draftAutomationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let workspace = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !label.isEmpty, !prompt.isEmpty, !workspace.isEmpty else { return false }
-        let hours = max(1, Int(draftAutomationIntervalHours) ?? 24)
+        let trimmedHours = draftAutomationIntervalHours.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let hours = Int(trimmedHours), hours > 0 else { return false }
         do {
             let automation = try await client().createAutomation(
                 GaryxAutomationCreateRequest(

@@ -3864,13 +3864,19 @@ struct GaryxCreateAutomationCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                GaryxFieldLabel("New Automation")
-                Spacer()
-                Text(model.selectedWorkspacePath.isEmpty ? "Choose workspace" : model.selectedWorkspacePath.lastPathComponent)
+            GaryxFieldLabel("New Automation")
+            if workspacePaths.isEmpty {
+                Text("No workspaces available")
                     .font(GaryxFont.caption(weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            } else {
+                Picker("Workspace", selection: workspaceSelection) {
+                    ForEach(workspacePaths, id: \.self) { path in
+                        Text(path.lastPathComponent).tag(path)
+                    }
+                }
+                .pickerStyle(.menu)
+                .garyxInputStyle()
             }
 
             TextField("Name", text: $model.draftAutomationLabel)
@@ -3897,10 +3903,51 @@ struct GaryxCreateAutomationCard: View {
                     Label("Create", systemImage: "plus")
                 }
                 .buttonStyle(GaryxPrimaryCompactButtonStyle())
-                .disabled(model.selectedWorkspacePath.isEmpty)
+                .disabled(!canCreate)
             }
         }
         .garyxCardStyle()
+        .onAppear(perform: ensureWorkspaceSelection)
+    }
+
+    private var workspacePaths: [String] {
+        model.knownWorkspacePaths
+    }
+
+    private var workspaceSelection: Binding<String> {
+        Binding {
+            effectiveWorkspacePath
+        } set: { value in
+            model.selectedWorkspacePath = value
+        }
+    }
+
+    private var effectiveWorkspacePath: String {
+        let selected = model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty, workspacePaths.contains(selected) {
+            return selected
+        }
+        return workspacePaths.first ?? ""
+    }
+
+    private var canCreate: Bool {
+        !model.draftAutomationLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.draftAutomationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !effectiveWorkspacePath.isEmpty
+            && positiveInteger(model.draftAutomationIntervalHours) != nil
+    }
+
+    private func ensureWorkspaceSelection() {
+        let nextSelection = effectiveWorkspacePath
+        if model.selectedWorkspacePath != nextSelection {
+            model.selectedWorkspacePath = nextSelection
+        }
+    }
+
+    private func positiveInteger(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = Int(trimmed), parsed > 0 else { return nil }
+        return parsed
     }
 }
 
