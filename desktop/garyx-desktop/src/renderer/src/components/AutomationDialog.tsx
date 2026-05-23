@@ -170,10 +170,11 @@ function AutomationThreadPicker({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="group flex min-h-12 w-full items-center gap-3 rounded-md border border-input bg-background px-3 py-2 text-left shadow-xs transition-colors outline-none hover:bg-[#fafaf9] focus-visible:ring-2 focus-visible:ring-ring/35"
+          className="group flex min-h-12 w-full items-start gap-3 rounded-md border border-input bg-background px-3 py-2 text-left shadow-xs transition-colors outline-none hover:bg-[#fafaf9] focus-visible:ring-2 focus-visible:ring-ring/35"
         >
           <ThreadPickerAvatar
             agentId={selectedThread?.agentId}
+            className="mt-0.5"
             fallbackLabel={selectedThread ? threadTitle(selectedThread) : missingThreadId || t('Thread')}
             option={selectedAgent}
             teamId={selectedThread?.teamId}
@@ -192,7 +193,7 @@ function AutomationThreadPicker({
           </span>
           <ChevronDown
             aria-hidden
-            className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
+            className="size-4 shrink-0 self-center text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
             strokeWidth={1.8}
           />
         </button>
@@ -248,11 +249,13 @@ function AutomationThreadPicker({
 
 function ThreadPickerAvatar({
   agentId,
+  className,
   fallbackLabel,
   option,
   teamId,
 }: {
   agentId?: string | null;
+  className?: string;
   fallbackLabel: string;
   option?: AutomationAgentOption | null;
   teamId?: string | null;
@@ -261,7 +264,7 @@ function ThreadPickerAvatar({
     <AgentOptionAvatar
       agentId={option?.id ?? agentId ?? teamId}
       avatarDataUrl={option?.avatarDataUrl}
-      className="mt-0.5"
+      className={className}
       kind={option?.kind ?? (teamId ? 'team' : 'agent')}
       label={option?.label ?? fallbackLabel}
       providerIcon={option?.providerIcon}
@@ -292,6 +295,7 @@ function ThreadPickerRow({
     <div className="flex min-w-0 flex-1 items-start gap-3">
       <ThreadPickerAvatar
         agentId={thread?.agentId}
+        className="mt-0.5"
         fallbackLabel={title}
         option={option}
         teamId={thread?.teamId}
