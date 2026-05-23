@@ -4419,6 +4419,7 @@ final class GaryxMobileModel: ObservableObject {
                     id: messageId,
                     role: .user,
                     text: visibleText,
+                    attachments: local.attachments,
                     timestamp: local.timestamp,
                     isStreaming: false,
                     statusText: local.statusText,

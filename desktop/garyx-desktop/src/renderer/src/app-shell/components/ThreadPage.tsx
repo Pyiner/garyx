@@ -628,14 +628,9 @@ export function ThreadPage({
                       aria-label={t("Garyx is working")}
                       className="message-loading"
                     >
-                      <p className="message-loading-label">
+                      <p className="message-loading-label message-loading-label--thinking">
                         {displayTranscriptMessageText(entry.message)}
                       </p>
-                      <span aria-hidden="true" className="message-loading-dots">
-                        <span />
-                        <span />
-                        <span />
-                      </span>
                     </div>
                   ) : (
                     <RichMessageContent

@@ -1293,57 +1293,46 @@ private struct GaryxWorkspaceThreadGroupsSection: View {
 }
 
 private struct GaryxWorkspaceThreadGroupView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
     let group: GaryxSidebarWorkspaceThreadGroup
     let isSelected: Bool
     let onSelect: () -> Void
 
     var body: some View {
-        GaryxSwipeActionRow(actions: workspaceActions) {
-            Button(action: onSelect) {
-                HStack(spacing: 10) {
-                    Image(systemName: isSelected ? "folder.fill" : "folder")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
-                        .foregroundStyle(isSelected ? .primary : .secondary)
-                        .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "folder.fill" : "folder")
+                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
 
-                    Text(group.name)
-                        .font(GaryxFont.subheadline(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                Text(group.name)
+                    .font(GaryxFont.subheadline(weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
 
-                    Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-                    Image(systemName: "chevron.right")
-                        .font(GaryxFont.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
-                .frame(height: GaryxSidebarMetrics.rowHeight)
-                .background {
-                    if isSelected {
-                        Color(.tertiarySystemFill).opacity(0.56)
-                            .clipShape(
-                                RoundedRectangle(
-                                    cornerRadius: GaryxSidebarMetrics.rowCornerRadius,
-                                    style: .continuous
-                                )
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
+            .frame(height: GaryxSidebarMetrics.rowHeight)
+            .background {
+                if isSelected {
+                    Color(.tertiarySystemFill).opacity(0.56)
+                        .clipShape(
+                            RoundedRectangle(
+                                cornerRadius: GaryxSidebarMetrics.rowCornerRadius,
+                                style: .continuous
                             )
-                    }
+                        )
                 }
-                .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
+            .contentShape(Rectangle())
         }
-    }
-
-    private var workspaceActions: [GaryxSwipeAction] {
-        [
-            GaryxSwipeAction(title: "New", systemImage: "square.and.pencil", tone: .accent) {
-                Task { await model.createThread(inWorkspace: group.path) }
-            }
-        ]
+        .buttonStyle(.plain)
     }
 }
 
@@ -1886,6 +1875,12 @@ struct GaryxConversationHeader: View {
                     .padding(.horizontal, 12)
                     .frame(height: 44, alignment: .leading)
                     .frame(maxWidth: 282, alignment: .leading)
+                    .garyxAdaptiveGlass(
+                        .regular,
+                        isInteractive: false,
+                        fallbackMaterial: .ultraThinMaterial,
+                        in: Capsule()
+                    )
                     .layoutPriority(1)
                 }
 
@@ -2431,7 +2426,15 @@ struct GaryxMessageBubble: View {
     }
 
     private var displayText: String {
-        message.text.isEmpty && message.isStreaming ? "Thinking" : message.text
+        if message.text.isEmpty, message.isStreaming { return "Thinking" }
+        if !message.attachments.isEmpty,
+           let summary = GaryxStructuredContentRenderer.attachmentSummary(
+            from: message.attachments.map(\.contentDescriptor)
+           ),
+           message.text == summary {
+            return ""
+        }
+        return message.text
     }
 
     private var userBubbleBackground: Color {
@@ -3071,7 +3074,7 @@ struct GaryxComposer: View {
                             Button {
                                 Task { await model.bindBotToSelectedThread(configuredBot) }
                             } label: {
-                                Label(group.title, systemImage: "link")
+                                botMenuLabel(for: group)
                             }
                         }
                     }
@@ -3103,6 +3106,30 @@ struct GaryxComposer: View {
             $0.channel.caseInsensitiveCompare(group.channel) == .orderedSame
                 && $0.accountId == group.accountId
         }
+    }
+
+    @ViewBuilder
+    private func botMenuLabel(for group: GaryxMobileBotGroup) -> some View {
+        if let image = Self.decodedMenuIcon(from: group.iconDataUrl) {
+            Label {
+                Text(group.title)
+            } icon: {
+                Image(uiImage: image)
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+            }
+        } else {
+            Label(group.title, systemImage: "bubble.left.and.bubble.right")
+        }
+    }
+
+    private static func decodedMenuIcon(from raw: String?) -> UIImage? {
+        let stripped = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stripped.isEmpty else { return nil }
+        let encoded = stripped.split(separator: ",", maxSplits: 1).last.map(String.init) ?? stripped
+        guard let data = Data(base64Encoded: encoded) else { return nil }
+        return UIImage(data: data)
     }
 
     private func attachPhotos(_ items: [PhotosPickerItem]) async {
@@ -3223,8 +3250,43 @@ struct GaryxAttachmentChip: View {
     let attachment: GaryxMobileComposerAttachment
 
     var body: some View {
+        if attachment.kind == "image", let thumbnail = decodedThumbnail {
+            imageChip(thumbnail: thumbnail)
+        } else {
+            fileChip
+        }
+    }
+
+    private func imageChip(thumbnail: UIImage) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Image(uiImage: thumbnail)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+
+            Button {
+                model.removeComposerAttachment(attachment)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(GaryxFont.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .padding(4)
+                    .background(Color.black.opacity(0.65), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove attachment")
+            .padding(4)
+        }
+    }
+
+    private var fileChip: some View {
         HStack(spacing: 7) {
-            Image(systemName: attachment.kind == "image" ? "photo" : "doc")
+            Image(systemName: "doc")
                 .font(GaryxFont.caption(weight: .semibold))
             Text(attachment.name)
                 .font(GaryxFont.caption(weight: .semibold))
@@ -3242,6 +3304,14 @@ struct GaryxAttachmentChip: View {
         .padding(.horizontal, 10)
         .frame(height: 30)
         .background(Color(.tertiarySystemFill), in: Capsule())
+    }
+
+    private var decodedThumbnail: UIImage? {
+        let raw = (attachment.previewDataUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        let encoded = raw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? raw
+        guard let data = Data(base64Encoded: encoded) else { return nil }
+        return UIImage(data: data)
     }
 }
 
