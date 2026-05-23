@@ -8571,14 +8571,13 @@ struct GaryxSidebarMenuButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .simultaneousGesture(TapGesture().onEnded { _ in action() })
         .accessibilityLabel("Open menu")
     }
 }
 
 struct GaryxHeaderMenuIcon: View {
     var body: some View {
-        Image(systemName: "line.3.horizontal")
+        Image(systemName: "sidebar.left")
             .font(GaryxFont.system(size: 17, weight: .semibold))
             .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
