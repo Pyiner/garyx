@@ -144,8 +144,8 @@ requested window.
 | --- | --- |
 | `garyx automation list` | List scheduled automations. |
 | `garyx automation get <automation_id>` | Show one automation. |
-| `garyx automation create --label <label> [--prompt <text>] [schedule flags]` | Create a scheduled prompt. Reads stdin when `--prompt` is omitted. |
-| `garyx automation update <automation_id> [--label <label>] [--prompt <text>] [schedule flags]` | Update prompt, agent, workspace, schedule, or enabled state. |
+| `garyx automation create --label <label> [--prompt <text>] [--workspace-dir <path> \| --thread-id <thread_id>] [schedule flags]` | Create a scheduled prompt. Reads stdin when `--prompt` is omitted. `--workspace-dir` creates a fresh automation thread per run; `--thread-id` sends each run into an existing thread. |
+| `garyx automation update <automation_id> [--label <label>] [--prompt <text>] [--workspace-dir <path> \| --thread-id <thread_id>] [schedule flags]` | Update prompt, agent, workspace, target thread, schedule, or enabled state. |
 | `garyx automation run <automation_id>` | Run an automation immediately. |
 | `garyx automation pause / resume <automation_id>` | Disable or enable an automation. |
 | `garyx automation activity <automation_id>` | Show recent automation runs. |

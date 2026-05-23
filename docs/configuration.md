@@ -507,12 +507,21 @@ Scheduled automations are managed from the CLI:
 ```bash
 garyx automation list
 garyx automation create --label "Daily triage" --prompt "Summarize repo state" --workspace-dir /path/to/repo --every-hours 24
+garyx automation create --label "Thread check-in" --prompt "Post the scheduled update" --thread-id thread::example --every-hours 24
 garyx automation update <automation-id> --daily-time 09:30 --weekday mon --weekday fri --timezone Asia/Shanghai
+garyx automation update <automation-id> --thread-id thread::example
 garyx automation pause <automation-id>
 garyx automation resume <automation-id>
 garyx automation run <automation-id>
 garyx automation delete <automation-id>
 ```
+
+By default a scheduled automation creates a fresh automation thread for each
+run using `--workspace-dir`. Passing `--thread-id` instead binds the automation
+to an existing Garyx thread; each scheduled or manual run sends the configured
+prompt into that thread and keeps the transcript in one conversation. When an
+automation is bound to a thread, the thread's workspace is used unless an
+explicit workspace is provided.
 
 The MCP surface intentionally does not expose automation management tools.
 
