@@ -3711,7 +3711,7 @@ final class GaryxMobileModel: ObservableObject {
                     label: label,
                     prompt: prompt,
                     agentId: selectedAgentTargetId,
-                    workspaceDir: workspace.isEmpty ? nil : workspace,
+                    workspaceDir: targetThreadId.isEmpty && !workspace.isEmpty ? workspace : nil,
                     targetThreadId: targetThreadId.isEmpty ? nil : targetThreadId,
                     schedule: .interval(hours: hours),
                     enabled: true

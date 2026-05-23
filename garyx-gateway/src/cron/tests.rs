@@ -1068,6 +1068,65 @@ async fn test_bound_automation_run_reuses_existing_thread() {
 }
 
 #[tokio::test]
+async fn test_bound_automation_missing_target_thread_fails_without_cleanup() {
+    let tmp = TempDir::new().unwrap();
+    let svc = CronService::new(tmp.path().to_path_buf());
+    let _ = ensure_dirs(tmp.path()).await;
+
+    let missing_thread_id = "thread::missing-bound-automation";
+    svc.add(CronJobConfig {
+        id: "automation-missing-bound".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Automation Missing Bound".to_owned()),
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("ping".to_owned()),
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: Some(missing_thread_id.to_owned()),
+        delete_after_run: false,
+        enabled: true,
+    })
+    .await
+    .unwrap();
+
+    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
+    svc.set_dispatch_runtime(
+        store.clone(),
+        Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
+            store.clone(),
+            garyx_models::config::GaryxConfig::default(),
+        ))),
+        Arc::new(MultiProviderBridge::new()),
+        Arc::new(ChannelDispatcherImpl::new()),
+        Arc::new(NoopThreadLogSink),
+        HashMap::new(),
+        Arc::new(crate::custom_agents::CustomAgentStore::new()),
+        Arc::new(crate::agent_teams::AgentTeamStore::new()),
+    )
+    .await;
+
+    let run = svc.run_now("automation-missing-bound").await.unwrap();
+
+    assert_eq!(run.status, JobRunStatus::Failed);
+    assert_eq!(run.thread_id.as_deref(), Some(missing_thread_id));
+    assert!(
+        run.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("cron target thread not found")
+    );
+    let job = svc
+        .get("automation-missing-bound")
+        .await
+        .expect("automation job after failed run");
+    assert_eq!(job.thread_id.as_deref(), Some(missing_thread_id));
+    assert!(store.get(missing_thread_id).await.is_none());
+}
+
+#[tokio::test]
 async fn test_failed_automation_run_now_cleans_up_failed_thread() {
     let tmp = TempDir::new().unwrap();
     let svc = CronService::new(tmp.path().to_path_buf());

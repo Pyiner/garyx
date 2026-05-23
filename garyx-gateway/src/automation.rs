@@ -17,7 +17,7 @@ use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, TaskRuntimeInput, TaskService, WorkspaceMode,
 };
 use garyx_router::{is_thread_key, workspace_dir_from_value};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -71,7 +71,7 @@ pub struct UpdateAutomationBody {
     pub agent_id: Option<String>,
     #[serde(default)]
     pub workspace_dir: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_present_option")]
     pub target_thread_id: Option<Option<String>>,
     #[serde(default)]
     pub schedule: Option<AutomationScheduleView>,
@@ -126,6 +126,14 @@ pub struct AutomationActivityEntry {
 
 fn default_activity_limit() -> usize {
     DEFAULT_ACTIVITY_LIMIT
+}
+
+fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 fn invalid(message: impl Into<String>) -> (StatusCode, Json<Value>) {
@@ -775,6 +783,11 @@ pub async fn create_automation(
             Ok(value) => value,
             Err(error) => return invalid(error),
         };
+    let explicit_workspace_dir = body
+        .workspace_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let workspace_dir = match resolve_automation_workspace_input(
         body.workspace_dir.as_deref(),
         target_thread.as_ref(),
@@ -783,6 +796,11 @@ pub async fn create_automation(
         Ok(value) => value,
         Err(error) => return invalid(error),
     };
+    let job_workspace_dir = if target_thread.is_some() && explicit_workspace_dir.is_none() {
+        None
+    } else {
+        Some(workspace_dir.as_str())
+    };
 
     let automation_id = new_automation_id();
     let cfg = match build_automation_job(
@@ -790,7 +808,7 @@ pub async fn create_automation(
         &label,
         &prompt,
         &agent_id,
-        Some(&workspace_dir),
+        job_workspace_dir,
         target_thread
             .as_ref()
             .map(|target| target.thread_id.as_str()),
@@ -861,6 +879,11 @@ pub async fn update_automation(
             workspace_dir: None,
         }),
     };
+    let explicit_workspace_dir = body
+        .workspace_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let target_thread_changed = body.target_thread_id.is_some();
     let fallback_workspace_dir = if target_thread_changed {
         target_thread
@@ -878,6 +901,11 @@ pub async fn update_automation(
         Ok(value) => value,
         Err(error) => return invalid(error),
     };
+    let job_workspace_dir = if target_thread.is_some() && explicit_workspace_dir.is_none() {
+        None
+    } else {
+        Some(workspace_dir.as_str())
+    };
     let schedule = match body.schedule.clone() {
         Some(value) => value,
         None => match automation_schedule(&current) {
@@ -892,7 +920,7 @@ pub async fn update_automation(
         &label,
         &prompt,
         &agent_id,
-        Some(&workspace_dir),
+        job_workspace_dir,
         target_thread
             .as_ref()
             .map(|target| target.thread_id.as_str()),

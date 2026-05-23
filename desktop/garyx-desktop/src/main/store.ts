@@ -1267,11 +1267,15 @@ export async function createDesktopAutomation(
     targetThread?.workspacePath || null,
     targetThreadId,
   );
+  const explicitWorkspacePath = normalizeWorkspacePathInput(input.workspacePath);
+  const remoteWorkspacePath = targetThreadId
+    ? explicitWorkspacePath || undefined
+    : workspacePath;
   const created = await createRemoteAutomation(current.settings, {
     label: input.label.trim(),
     prompt: input.prompt.trim(),
     agentId: input.agentId.trim(),
-    workspacePath,
+    workspacePath: remoteWorkspacePath,
     targetThreadId: targetThreadId || null,
     schedule: input.schedule,
   });
@@ -1325,11 +1329,15 @@ export async function updateDesktopAutomation(input: {
     fallbackWorkspacePath,
     targetThreadId,
   );
+  const explicitWorkspacePath = normalizeWorkspacePathInput(input.workspacePath);
+  const remoteWorkspacePath = targetThreadId
+    ? explicitWorkspacePath || undefined
+    : workspacePath;
   const updated = await updateRemoteAutomation(current.settings, input.automationId, {
     label: input.label?.trim(),
     prompt: input.prompt?.trim(),
     agentId: input.agentId?.trim(),
-    workspacePath,
+    workspacePath: remoteWorkspacePath,
     targetThreadId: hasTargetThreadInput ? targetThreadId || null : undefined,
     schedule: input.schedule,
     enabled: input.enabled,

@@ -225,11 +225,11 @@ export function useAutomationController({
 
     try {
       const result = automationDialog.mode === 'create'
-          ? await window.garyxDesktop.createAutomation({
+        ? await window.garyxDesktop.createAutomation({
             label,
             prompt,
             agentId: automationDialog.draft.agentId,
-            workspacePath: workspacePath || undefined,
+            workspacePath: targetThreadId ? undefined : workspacePath || undefined,
             targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,
           })
@@ -238,7 +238,7 @@ export function useAutomationController({
             label,
             prompt,
             agentId: automationDialog.draft.agentId,
-            workspacePath: workspacePath || undefined,
+            workspacePath: targetThreadId ? undefined : workspacePath || undefined,
             targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,
           });

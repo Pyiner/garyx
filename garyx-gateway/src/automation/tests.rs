@@ -1,16 +1,22 @@
 use super::{
-    automation_agent_id, build_automation_job, compile_schedule, infer_schedule_view,
-    parse_time_hm, render_data_trigger_template, resolve_automation_agent_id,
-    run_data_triggers_for_db_event, to_summary,
+    UpdateAutomationBody, automation_agent_id, build_automation_job, compile_schedule,
+    infer_schedule_view, is_automation_job, parse_time_hm, render_data_trigger_template,
+    resolve_automation_agent_id, run_data_triggers_for_db_event, to_summary, update_automation,
 };
 use crate::app_db::{
     AppDbEvent, AppDbFieldSpec, AppDbService, CreateDataTriggerBody, CreateTableBody,
 };
-use crate::cron::{CronJob, JobRunStatus};
+use crate::cron::{CronJob, CronService, JobRunStatus};
 use crate::server::{AppStateBuilder, create_app_state};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use chrono::Utc;
 use garyx_models::config::AutomationScheduleView;
-use garyx_models::config::{CronAction, CronJobKind, CronSchedule, GaryxConfig};
+use garyx_models::config::{CronAction, CronJobConfig, CronJobKind, CronSchedule, GaryxConfig};
 use garyx_models::{Principal, TaskStatus, ThreadTask};
 use std::sync::Arc;
 
@@ -139,6 +145,54 @@ fn build_automation_job_preserves_target_thread() {
 }
 
 #[test]
+fn update_automation_body_decodes_target_thread_tristate() {
+    let absent: UpdateAutomationBody =
+        serde_json::from_value(serde_json::json!({ "label": "Digest" })).unwrap();
+    assert!(absent.target_thread_id.is_none());
+
+    let clear: UpdateAutomationBody =
+        serde_json::from_value(serde_json::json!({ "targetThreadId": null })).unwrap();
+    assert!(matches!(clear.target_thread_id, Some(None)));
+
+    let set: UpdateAutomationBody =
+        serde_json::from_value(serde_json::json!({ "targetThreadId": "thread::target" })).unwrap();
+    assert_eq!(
+        set.target_thread_id
+            .as_ref()
+            .and_then(|value| value.as_deref()),
+        Some("thread::target")
+    );
+}
+
+#[test]
+fn thread_only_prompt_jobs_are_automation_jobs() {
+    let job = CronJob {
+        id: "automation::thread-only".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Thread Only".to_owned()),
+        schedule: CronSchedule::Interval {
+            interval_secs: 3600,
+        },
+        ui_schedule: Some(AutomationScheduleView::Interval { hours: 1 }),
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("Summarize this thread.".to_owned()),
+        workspace_dir: None,
+        agent_id: Some("codex".to_owned()),
+        thread_id: Some("thread::target".to_owned()),
+        delete_after_run: false,
+        enabled: true,
+        next_run: Utc::now(),
+        last_status: JobRunStatus::NeverRun,
+        run_count: 0,
+        created_at: Utc::now(),
+        last_run_at: None,
+    };
+
+    assert!(is_automation_job(&job));
+}
+
+#[test]
 fn automation_summary_defaults_agent_to_claude_for_legacy_jobs() {
     let job = CronJob {
         id: "automation::legacy".to_owned(),
@@ -197,6 +251,117 @@ fn automation_summary_exposes_bound_target_thread() {
     assert_eq!(summary.target_thread_id.as_deref(), Some("thread::target"));
     assert_eq!(summary.thread_id.as_deref(), Some("thread::target"));
     assert_eq!(summary.workspace_dir, "");
+}
+
+#[tokio::test]
+async fn update_automation_null_target_thread_clears_binding() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    service
+        .add(CronJobConfig {
+            id: "automation::bound".to_owned(),
+            kind: CronJobKind::AutomationPrompt,
+            label: Some("Bound".to_owned()),
+            schedule: CronSchedule::Interval {
+                interval_secs: 3600,
+            },
+            ui_schedule: Some(AutomationScheduleView::Interval { hours: 1 }),
+            action: CronAction::AgentTurn,
+            target: None,
+            message: Some("Summarize this thread.".to_owned()),
+            workspace_dir: None,
+            agent_id: Some("claude".to_owned()),
+            thread_id: Some("thread::target".to_owned()),
+            delete_after_run: false,
+            enabled: true,
+        })
+        .await
+        .unwrap();
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_cron_service(service.clone())
+        .build();
+    let body: UpdateAutomationBody = serde_json::from_value(serde_json::json!({
+        "targetThreadId": null,
+        "workspaceDir": "/tmp/repo"
+    }))
+    .unwrap();
+
+    let response = update_automation(
+        State(state),
+        Path("automation::bound".to_owned()),
+        Json(body),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated = service
+        .get("automation::bound")
+        .await
+        .expect("automation still exists");
+    assert!(updated.thread_id.is_none());
+    assert_eq!(updated.workspace_dir.as_deref(), Some("/tmp/repo"));
+}
+
+#[tokio::test]
+async fn update_automation_switches_target_thread_without_workspace_snapshot() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    service
+        .add(CronJobConfig {
+            id: "automation::bound".to_owned(),
+            kind: CronJobKind::AutomationPrompt,
+            label: Some("Bound".to_owned()),
+            schedule: CronSchedule::Interval {
+                interval_secs: 3600,
+            },
+            ui_schedule: Some(AutomationScheduleView::Interval { hours: 1 }),
+            action: CronAction::AgentTurn,
+            target: None,
+            message: Some("Summarize this thread.".to_owned()),
+            workspace_dir: Some("/tmp/stale-snapshot".to_owned()),
+            agent_id: Some("claude".to_owned()),
+            thread_id: Some("thread::target-one".to_owned()),
+            delete_after_run: false,
+            enabled: true,
+        })
+        .await
+        .unwrap();
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_cron_service(service.clone())
+        .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::target-two",
+            serde_json::json!({
+                "workspace_dir": "/tmp/target-two",
+                "metadata": {
+                    "agent_id": "claude"
+                }
+            }),
+        )
+        .await;
+    let body: UpdateAutomationBody =
+        serde_json::from_value(serde_json::json!({ "targetThreadId": "thread::target-two" }))
+            .unwrap();
+
+    let response = update_automation(
+        State(state),
+        Path("automation::bound".to_owned()),
+        Json(body),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let updated = service
+        .get("automation::bound")
+        .await
+        .expect("automation still exists");
+    assert_eq!(updated.thread_id.as_deref(), Some("thread::target-two"));
+    assert!(updated.workspace_dir.is_none());
 }
 
 #[tokio::test]

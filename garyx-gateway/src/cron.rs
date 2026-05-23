@@ -1179,8 +1179,19 @@ impl CronService {
         };
 
         let automation_job = is_automation_prompt_job(job);
+        let thread_bound_automation =
+            automation_job && Self::trimmed_non_empty(job.thread_id.as_deref()).is_some();
         let thread_workspace_dir = thread_record.as_ref().and_then(workspace_dir_from_value);
         let job_workspace_dir = Self::trimmed_non_empty(job.workspace_dir.as_deref());
+        let effective_workspace_dir = if thread_bound_automation {
+            thread_workspace_dir
+                .clone()
+                .or_else(|| job_workspace_dir.clone())
+        } else {
+            job_workspace_dir
+                .clone()
+                .or_else(|| thread_workspace_dir.clone())
+        };
         let mut metadata = HashMap::new();
         if let Some(thread_record) = thread_record.as_ref() {
             for (key, value) in thread_metadata_from_value(thread_record) {
@@ -1238,9 +1249,7 @@ impl CronService {
                     delivery.account_id.clone(),
                     Some(delivery.chat_id.clone()),
                     delivery.thread_id.clone(),
-                    job_workspace_dir
-                        .clone()
-                        .or_else(|| thread_workspace_dir.clone()),
+                    effective_workspace_dir.clone(),
                 )
             } else {
                 let default_channel = if automation_job { "api" } else { "cron" };
@@ -1250,7 +1259,7 @@ impl CronService {
                     default_account.to_owned(),
                     None,
                     job.thread_id.clone(),
-                    job_workspace_dir.or(thread_workspace_dir),
+                    effective_workspace_dir,
                 )
             };
 
