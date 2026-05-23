@@ -40,10 +40,13 @@ function buildAutomationDraft(
   const defaultAgentId = standaloneAgents.find((agent) => agent.agentId === 'claude')?.agentId
     || standaloneAgents[0]?.agentId
     || 'claude';
+  const targetThreadId = automation?.targetThreadId?.trim() || '';
   return {
     label: automation?.label || '',
     prompt: automation?.prompt || '',
     agentId: automation?.agentId || defaultAgentId,
+    targetMode: targetThreadId ? 'existing_thread' : 'new_thread',
+    targetThreadId,
     workspacePath: automation?.workspacePath || workspaces[0]?.path || '',
     schedule: automation?.schedule || defaultAutomationSchedule(),
   };
@@ -187,8 +190,15 @@ export function useAutomationController({
       setError('Choose an agent or team for this automation.');
       return;
     }
+    const targetThreadId = automationDialog.draft.targetMode === 'existing_thread'
+      ? automationDialog.draft.targetThreadId.trim()
+      : '';
     const workspacePath = automationDialog.draft.workspacePath.trim();
-    if (!workspacePath) {
+    if (automationDialog.draft.targetMode === 'existing_thread' && !targetThreadId) {
+      setError('Choose the thread this automation should post into.');
+      return;
+    }
+    if (automationDialog.draft.targetMode === 'new_thread' && !workspacePath) {
       setError('Choose a directory for this automation.');
       return;
     }
@@ -219,7 +229,8 @@ export function useAutomationController({
             label,
             prompt,
             agentId: automationDialog.draft.agentId,
-            workspacePath,
+            workspacePath: workspacePath || undefined,
+            targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,
           })
         : await window.garyxDesktop.updateAutomation({
@@ -227,7 +238,8 @@ export function useAutomationController({
             label,
             prompt,
             agentId: automationDialog.draft.agentId,
-            workspacePath,
+            workspacePath: workspacePath || undefined,
+            targetThreadId: targetThreadId || null,
             schedule: automationDialog.draft.schedule,
           });
       setDesktopState(result.state);
@@ -286,7 +298,7 @@ export function useAutomationController({
         delete next[automation.id];
         return next;
       });
-      if (selectedThreadId === automation.threadId) {
+      if (selectedThreadId === automation.threadId || selectedThreadId === automation.targetThreadId) {
         setSelectedThreadId(nextState.threads[0]?.id || null);
       }
     } catch (automationError) {
@@ -313,7 +325,7 @@ export function useAutomationController({
       const result = await window.garyxDesktop.runAutomationNow({
         automationId: automation.id,
       });
-      const latestThreadId = result.activity.threadId || automation.threadId;
+      const latestThreadId = result.activity.threadId || automation.targetThreadId || automation.threadId;
       setDesktopState({
         ...result.state,
         automations: result.state.automations.map((entry) => {
@@ -378,7 +390,7 @@ export function useAutomationController({
     if (!automation) {
       return;
     }
-    const latestThreadId = automation.threadId.trim();
+    const latestThreadId = (automation.targetThreadId || automation.threadId).trim();
     if (!latestThreadId) {
       setError('This automation has not produced a latest run thread yet. Run it once first.');
       return;

@@ -1129,6 +1129,7 @@ async fn cmd_automation_create_posts_disabled_interval_payload() {
         Some("Summarize repo state".to_owned()),
         Some("codex".to_owned()),
         Some(dir.path().to_string_lossy().to_string()),
+        None,
         crate::cli::AutomationScheduleArgs {
             every_hours: Some(6),
             ..Default::default()
@@ -1212,6 +1213,7 @@ async fn cmd_automation_update_patches_requested_fields() {
         config_path.to_str().expect("config path"),
         "automation::created",
         Some("Weekly triage".to_owned()),
+        None,
         None,
         None,
         None,

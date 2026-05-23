@@ -128,6 +128,8 @@ export interface DesktopAutomationSummary {
   agentId: string;
   enabled: boolean;
   workspacePath: string;
+  // Existing thread this automation pushes scheduled prompts into, when set.
+  targetThreadId: string;
   // Latest execution thread for this automation. Empty until it has run at least once.
   threadId: string;
   nextRun: string;
@@ -1307,6 +1309,7 @@ export interface CreateAutomationInput {
   prompt: string;
   agentId: string;
   workspacePath?: string;
+  targetThreadId?: string | null;
   schedule: DesktopAutomationSchedule;
 }
 
@@ -1316,6 +1319,7 @@ export interface UpdateAutomationInput {
   prompt?: string;
   agentId?: string;
   workspacePath?: string;
+  targetThreadId?: string | null;
   schedule?: DesktopAutomationSchedule;
   enabled?: boolean;
 }

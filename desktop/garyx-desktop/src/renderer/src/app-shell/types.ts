@@ -62,6 +62,8 @@ export type AutomationDraft = {
   label: string;
   prompt: string;
   agentId: string;
+  targetMode: 'new_thread' | 'existing_thread';
+  targetThreadId: string;
   workspacePath: string;
   schedule: DesktopAutomationSchedule;
 };

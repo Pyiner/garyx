@@ -2479,6 +2479,9 @@ fn print_automation_summary(value: &Value) {
         "Workspace: {}",
         value["workspaceDir"].as_str().unwrap_or("-")
     );
+    if let Some(target_thread_id) = value["targetThreadId"].as_str() {
+        println!("Target thread: {target_thread_id}");
+    }
     println!(
         "Schedule: {}",
         format_automation_schedule(&value["schedule"])
@@ -2578,13 +2581,21 @@ pub(crate) async fn cmd_automation_create(
     prompt: Option<String>,
     agent_id: Option<String>,
     workspace_dir: Option<String>,
+    thread_id: Option<String>,
     schedule: AutomationScheduleArgs,
     disabled: bool,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let label = trim_required_cli(&label, "label")?;
     let prompt = read_shortcut_prompt(prompt)?;
-    let workspace_dir = resolve_automation_workspace_dir(workspace_dir)?;
+    let thread_id = trim_optional_cli(thread_id);
+    let workspace_dir = if thread_id.is_some() {
+        workspace_dir
+            .map(|value| resolve_automation_workspace_dir(Some(value)))
+            .transpose()?
+    } else {
+        Some(resolve_automation_workspace_dir(workspace_dir)?)
+    };
     let schedule = automation_schedule_from_cli_args(&schedule, true)?
         .expect("required automation schedule should be present");
     let gateway = gateway_endpoint(config_path)?;
@@ -2592,10 +2603,15 @@ pub(crate) async fn cmd_automation_create(
     let mut body = json!({
         "label": label,
         "prompt": prompt,
-        "workspaceDir": workspace_dir,
         "schedule": schedule,
         "enabled": !disabled,
     });
+    if let Some(workspace_dir) = workspace_dir {
+        body["workspaceDir"] = json!(workspace_dir);
+    }
+    if let Some(thread_id) = thread_id {
+        body["targetThreadId"] = json!(thread_id);
+    }
     if let Some(agent_id) = trim_optional_cli(agent_id) {
         body["agentId"] = json!(agent_id);
     }
@@ -2615,6 +2631,7 @@ pub(crate) async fn cmd_automation_update(
     prompt: Option<String>,
     agent_id: Option<String>,
     workspace_dir: Option<String>,
+    thread_id: Option<String>,
     schedule: AutomationScheduleArgs,
     enable: bool,
     disable: bool,
@@ -2643,6 +2660,9 @@ pub(crate) async fn cmd_automation_update(
             "workspaceDir".to_owned(),
             json!(resolve_automation_workspace_dir(Some(workspace_dir))?),
         );
+    }
+    if let Some(thread_id) = trim_optional_cli(thread_id) {
+        body.insert("targetThreadId".to_owned(), json!(thread_id));
     }
     if let Some(schedule) = automation_schedule_from_cli_args(&schedule, false)? {
         body.insert("schedule".to_owned(), json!(schedule));

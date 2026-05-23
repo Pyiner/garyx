@@ -412,7 +412,7 @@ async fn test_load_updates_automation_fields_from_config() {
     assert_eq!(job.label.as_deref(), Some("New Label"));
     assert_eq!(job.message.as_deref(), Some("new prompt"));
     assert_eq!(job.workspace_dir.as_deref(), Some("/tmp/new-workspace"));
-    assert!(job.thread_id.is_none());
+    assert_eq!(job.thread_id.as_deref(), Some("thread::manual"));
     assert_eq!(
         job.ui_schedule,
         Some(garyx_models::config::AutomationScheduleView::Interval { hours: 1 })
@@ -994,6 +994,77 @@ async fn test_successful_automation_run_persists_thread_id() {
         .expect("reloaded automation job");
 
     assert!(reloaded_job.thread_id.is_none());
+}
+
+#[tokio::test]
+async fn test_bound_automation_run_reuses_existing_thread() {
+    let tmp = TempDir::new().unwrap();
+    let svc = CronService::new(tmp.path().to_path_buf());
+    let _ = ensure_dirs(tmp.path()).await;
+
+    let target_thread_id = "thread::bound-automation";
+    svc.add(CronJobConfig {
+        id: "automation-bound".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Automation Bound".to_owned()),
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("ping".to_owned()),
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: Some(target_thread_id.to_owned()),
+        delete_after_run: false,
+        enabled: true,
+    })
+    .await
+    .unwrap();
+
+    let store: Arc<dyn ThreadStore> = Arc::new(garyx_router::InMemoryThreadStore::new());
+    store
+        .set(
+            target_thread_id,
+            serde_json::json!({
+                "workspace_dir": "/tmp/bound-automation",
+                "metadata": {
+                    "agent_id": "claude"
+                }
+            }),
+        )
+        .await;
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider("automation-success", Arc::new(SuccessfulAutomationProvider))
+        .await;
+    svc.set_dispatch_runtime(
+        store.clone(),
+        Arc::new(tokio::sync::Mutex::new(MessageRouter::new(
+            store.clone(),
+            garyx_models::config::GaryxConfig::default(),
+        ))),
+        bridge,
+        Arc::new(ChannelDispatcherImpl::new()),
+        Arc::new(NoopThreadLogSink),
+        HashMap::new(),
+        Arc::new(crate::custom_agents::CustomAgentStore::new()),
+        Arc::new(crate::agent_teams::AgentTeamStore::new()),
+    )
+    .await;
+
+    let run = svc.run_now("automation-bound").await.unwrap();
+    assert_eq!(run.status, JobRunStatus::Success);
+    assert_eq!(run.thread_id.as_deref(), Some(target_thread_id));
+
+    let reloaded = CronService::new(tmp.path().to_path_buf());
+    reloaded.load(&CronConfig::default()).await.unwrap();
+    let reloaded_job = reloaded
+        .get("automation-bound")
+        .await
+        .expect("reloaded automation job");
+
+    assert_eq!(reloaded_job.thread_id.as_deref(), Some(target_thread_id));
+    assert!(store.get(target_thread_id).await.is_some());
 }
 
 #[tokio::test]

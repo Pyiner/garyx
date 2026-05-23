@@ -819,6 +819,9 @@ pub(crate) enum AutomationAction {
         /// Workspace directory for the automation thread; defaults to the current directory
         #[arg(long)]
         workspace_dir: Option<String>,
+        /// Existing thread to receive each scheduled prompt
+        #[arg(long)]
+        thread_id: Option<String>,
         #[command(flatten)]
         schedule: AutomationScheduleArgs,
         /// Create disabled, then enable later with `garyx automation resume`
@@ -843,6 +846,9 @@ pub(crate) enum AutomationAction {
         /// Workspace directory for the automation thread
         #[arg(long)]
         workspace_dir: Option<String>,
+        /// Existing thread to receive each scheduled prompt
+        #[arg(long)]
+        thread_id: Option<String>,
         #[command(flatten)]
         schedule: AutomationScheduleArgs,
         /// Enable the automation

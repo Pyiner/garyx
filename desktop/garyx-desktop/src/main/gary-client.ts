@@ -454,6 +454,8 @@ interface AutomationSummaryPayload {
   enabled?: boolean;
   workspace_dir?: string | null;
   workspaceDir?: string | null;
+  target_thread_id?: string | null;
+  targetThreadId?: string | null;
   thread_id?: string | null;
   threadId?: string | null;
   next_run?: string | null;
@@ -2039,6 +2041,7 @@ function mapAutomationSummary(
       typeof agentId === "string" && agentId.trim() ? agentId.trim() : "claude",
     enabled: value.enabled !== false,
     workspacePath: value.workspaceDir || value.workspace_dir || "",
+    targetThreadId: value.targetThreadId || value.target_thread_id || "",
     threadId: value.threadId || value.thread_id || "",
     nextRun: value.nextRun || value.next_run || new Date(0).toISOString(),
     lastRunAt: value.lastRunAt ?? value.last_run_at ?? null,
@@ -4342,7 +4345,8 @@ export async function createRemoteAutomation(
     label: string;
     prompt: string;
     agentId: string;
-    workspacePath: string;
+    workspacePath?: string;
+    targetThreadId?: string | null;
     schedule: DesktopAutomationSchedule;
   },
 ): Promise<DesktopAutomationSummary> {
@@ -4356,7 +4360,8 @@ export async function createRemoteAutomation(
         label: input.label,
         prompt: input.prompt,
         agentId: input.agentId,
-        workspaceDir: input.workspacePath,
+        workspaceDir: input.workspacePath || undefined,
+        targetThreadId: input.targetThreadId || undefined,
         schedule: input.schedule,
       }),
     },
@@ -4372,6 +4377,7 @@ export async function updateRemoteAutomation(
     prompt?: string;
     agentId?: string;
     workspacePath?: string;
+    targetThreadId?: string | null;
     schedule?: DesktopAutomationSchedule;
     enabled?: boolean;
   },
@@ -4387,6 +4393,7 @@ export async function updateRemoteAutomation(
         prompt: input.prompt,
         agentId: input.agentId,
         workspaceDir: input.workspacePath,
+        targetThreadId: input.targetThreadId,
         schedule: input.schedule,
         enabled: input.enabled,
       }),

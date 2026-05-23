@@ -4487,7 +4487,7 @@ struct GaryxAutomationCard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(automation.label)
                             .font(GaryxFont.body(weight: .semibold))
-                        Text(automation.workspacePath.isEmpty ? automation.agentId : automation.workspacePath.lastPathComponent)
+                        Text(automationTargetLabel)
                             .font(GaryxFont.caption(weight: .medium))
                             .foregroundStyle(.secondary)
                     }
@@ -4571,7 +4571,7 @@ struct GaryxAutomationCard: View {
                 Task { await model.toggleAutomation(automation) }
             }
         )
-        if let threadId = automation.threadId, !threadId.isEmpty {
+        if let threadId = automationOpenThreadId {
             actions.append(
                 GaryxSwipeAction(title: "Open", systemImage: "arrow.up.right") {
                     Task { await model.openThread(id: threadId) }
@@ -4590,6 +4590,27 @@ struct GaryxAutomationCard: View {
             }
         )
         return actions
+    }
+
+    private var automationOpenThreadId: String? {
+        let target = automation.targetThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !target.isEmpty {
+            return target
+        }
+        let latest = automation.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return latest.isEmpty ? nil : latest
+    }
+
+    private var automationTargetLabel: String {
+        if let targetThreadId = automationOpenThreadId,
+           let thread = model.threads.first(where: { $0.id == targetThreadId }) {
+            return "Thread · \(thread.title)"
+        }
+        if let targetThreadId = automationOpenThreadId,
+           automation.targetThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) == targetThreadId {
+            return "Thread · \(targetThreadId)"
+        }
+        return automation.workspacePath.isEmpty ? automation.agentId : automation.workspacePath.lastPathComponent
     }
 
     private func fillDraft() {
@@ -4627,7 +4648,27 @@ struct GaryxCreateAutomationCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             GaryxFieldLabel("New Automation")
-            if workspacePaths.isEmpty {
+            Picker("Run In", selection: $model.draftAutomationTargetsExistingThread) {
+                Text("New Thread").tag(false)
+                Text("Existing Thread").tag(true)
+            }
+            .pickerStyle(.segmented)
+
+            if model.draftAutomationTargetsExistingThread {
+                if threadOptions.isEmpty {
+                    Text("No existing threads loaded")
+                        .font(GaryxFont.caption(weight: .semibold))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Thread", selection: threadSelection) {
+                        ForEach(threadOptions, id: \.id) { thread in
+                            Text(thread.title).tag(thread.id)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .garyxInputStyle()
+                }
+            } else if workspacePaths.isEmpty {
                 Text("No workspaces available")
                     .font(GaryxFont.caption(weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -4669,11 +4710,18 @@ struct GaryxCreateAutomationCard: View {
             }
         }
         .garyxCardStyle()
-        .onAppear(perform: ensureWorkspaceSelection)
+        .onAppear(perform: ensureTargetSelection)
+        .onChange(of: model.draftAutomationTargetsExistingThread) { _ in
+            ensureTargetSelection()
+        }
     }
 
     private var workspacePaths: [String] {
         model.knownWorkspacePaths
+    }
+
+    private var threadOptions: [GaryxThreadSummary] {
+        model.threads
     }
 
     private var workspaceSelection: Binding<String> {
@@ -4681,6 +4729,19 @@ struct GaryxCreateAutomationCard: View {
             effectiveWorkspacePath
         } set: { value in
             model.selectedWorkspacePath = value
+        }
+    }
+
+    private var threadSelection: Binding<String> {
+        Binding {
+            effectiveThreadId
+        } set: { value in
+            model.draftAutomationTargetThreadId = value
+            if let thread = model.threads.first(where: { $0.id == value }),
+               let workspacePath = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !workspacePath.isEmpty {
+                model.selectedWorkspacePath = workspacePath
+            }
         }
     }
 
@@ -4692,17 +4753,37 @@ struct GaryxCreateAutomationCard: View {
         return workspacePaths.first ?? ""
     }
 
+    private var effectiveThreadId: String {
+        let selected = model.draftAutomationTargetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty, threadOptions.contains(where: { $0.id == selected }) {
+            return selected
+        }
+        return threadOptions.first?.id ?? ""
+    }
+
     private var canCreate: Bool {
         !model.draftAutomationLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !model.draftAutomationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !effectiveWorkspacePath.isEmpty
+            && (model.draftAutomationTargetsExistingThread ? !effectiveThreadId.isEmpty : !effectiveWorkspacePath.isEmpty)
             && positiveInteger(model.draftAutomationIntervalHours) != nil
     }
 
-    private func ensureWorkspaceSelection() {
-        let nextSelection = effectiveWorkspacePath
-        if model.selectedWorkspacePath != nextSelection {
-            model.selectedWorkspacePath = nextSelection
+    private func ensureTargetSelection() {
+        if model.draftAutomationTargetsExistingThread {
+            let nextThreadId = effectiveThreadId
+            if model.draftAutomationTargetThreadId != nextThreadId {
+                model.draftAutomationTargetThreadId = nextThreadId
+            }
+            if let thread = model.threads.first(where: { $0.id == nextThreadId }),
+               let workspacePath = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !workspacePath.isEmpty {
+                model.selectedWorkspacePath = workspacePath
+            }
+        } else {
+            let nextSelection = effectiveWorkspacePath
+            if model.selectedWorkspacePath != nextSelection {
+                model.selectedWorkspacePath = nextSelection
+            }
         }
     }
 

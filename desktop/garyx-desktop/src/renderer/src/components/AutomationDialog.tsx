@@ -2,6 +2,7 @@ import React from 'react';
 
 import type {
   DesktopAutomationSchedule,
+  DesktopThreadSummary,
 } from '@shared/contracts';
 import type { AutomationAgentOption } from '@renderer/app-shell/types';
 
@@ -44,6 +45,8 @@ export type AutomationDraft = {
   label: string;
   prompt: string;
   agentId: string;
+  targetMode: 'new_thread' | 'existing_thread';
+  targetThreadId: string;
   workspacePath: string;
   schedule: DesktopAutomationSchedule;
 };
@@ -57,6 +60,7 @@ export type AutomationDialogState = {
 export interface AutomationDialogProps {
   state: AutomationDialogState;
   agentOptions: AutomationAgentOption[];
+  threadOptions: DesktopThreadSummary[];
   saving: boolean;
   onDraftChange: (mutator: (draft: AutomationDraft) => AutomationDraft) => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
@@ -105,6 +109,7 @@ const WEEKDAYS = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su'] as const;
 export function AutomationDialog({
   state,
   agentOptions,
+  threadOptions,
   saving,
   onDraftChange,
   onSubmit,
@@ -181,18 +186,107 @@ export function AutomationDialog({
           </Field>
 
           <Field>
-            <FieldLabel htmlFor="automation-workspace-dir">
-              {t('Directory')}
-            </FieldLabel>
-            <DirectoryInput
-              id="automation-workspace-dir"
-              onChange={(value) =>
-                onDraftChange((d) => ({ ...d, workspacePath: value }))
-              }
-              placeholder={t('/path/to/project')}
-              value={draft.workspacePath}
-            />
+            <FieldLabel>{t('Run In')}</FieldLabel>
+            <ToggleGroup
+              className="automation-schedule-toggle"
+              type="single"
+              value={draft.targetMode}
+              onValueChange={(value) => {
+                if (value === 'new_thread') {
+                  onDraftChange((d) => ({ ...d, targetMode: 'new_thread', targetThreadId: '' }));
+                } else if (value === 'existing_thread') {
+                  onDraftChange((d) => {
+                    const fallbackThread = threadOptions.find((thread) => thread.id === d.targetThreadId)
+                      || threadOptions[0];
+                    return {
+                      ...d,
+                      targetMode: 'existing_thread',
+                      targetThreadId: fallbackThread?.id || d.targetThreadId,
+                      workspacePath: fallbackThread?.workspacePath || d.workspacePath,
+                    };
+                  });
+                }
+              }}
+              size="sm"
+              variant="outline"
+            >
+              <ToggleGroupItem value="new_thread">
+                {t('New Thread')}
+              </ToggleGroupItem>
+              <ToggleGroupItem value="existing_thread">
+                {t('Existing Thread')}
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <FieldDescription>
+              {draft.targetMode === 'existing_thread'
+                ? t('Each run posts the prompt into the selected thread.')
+                : t('Each run creates a fresh automation thread in the selected directory.')}
+            </FieldDescription>
           </Field>
+
+          {draft.targetMode === 'existing_thread' ? (
+            <Field>
+              <FieldLabel>{t('Thread')}</FieldLabel>
+              <Select
+                value={draft.targetThreadId || undefined}
+                onValueChange={(value) =>
+                  onDraftChange((d) => {
+                    const thread = threadOptions.find((entry) => entry.id === value);
+                    return {
+                      ...d,
+                      targetThreadId: value,
+                      workspacePath: thread?.workspacePath || d.workspacePath,
+                    };
+                  })
+                }
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder={t('Choose thread')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectLabel>{t('Recent Threads')}</SelectLabel>
+                    {draft.targetThreadId && !threadOptions.some((thread) => thread.id === draft.targetThreadId) ? (
+                      <SelectItem value={draft.targetThreadId}>
+                        {draft.targetThreadId}
+                      </SelectItem>
+                    ) : null}
+                    {threadOptions.map((thread) => (
+                      <SelectItem key={thread.id} value={thread.id}>
+                        <div className="flex min-w-0 flex-col">
+                          <span className="truncate">{thread.title || thread.id}</span>
+                          {thread.workspacePath ? (
+                            <span className="truncate text-[11px] text-muted-foreground">
+                              {thread.workspacePath}
+                            </span>
+                          ) : null}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              {!threadOptions.length ? (
+                <FieldDescription>
+                  {t('No existing threads are loaded yet.')}
+                </FieldDescription>
+              ) : null}
+            </Field>
+          ) : (
+            <Field>
+              <FieldLabel htmlFor="automation-workspace-dir">
+                {t('Directory')}
+              </FieldLabel>
+              <DirectoryInput
+                id="automation-workspace-dir"
+                onChange={(value) =>
+                  onDraftChange((d) => ({ ...d, workspacePath: value }))
+                }
+                placeholder={t('/path/to/project')}
+                value={draft.workspacePath}
+              />
+            </Field>
+          )}
 
           <Field>
             <FieldLabel>{t('Prompt')}</FieldLabel>

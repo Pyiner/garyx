@@ -110,13 +110,32 @@ fn build_automation_job_persists_selected_agent() {
         "Digest",
         "Summarize recent updates.",
         "codex",
-        "/tmp/repo",
+        Some("/tmp/repo"),
+        None,
         AutomationScheduleView::Interval { hours: 6 },
         true,
     )
     .expect("automation job");
 
     assert_eq!(cfg.agent_id.as_deref(), Some("codex"));
+}
+
+#[test]
+fn build_automation_job_preserves_target_thread() {
+    let cfg = build_automation_job(
+        "automation::thread-digest",
+        "Thread Digest",
+        "Summarize this thread.",
+        "codex",
+        None,
+        Some("thread::target"),
+        AutomationScheduleView::Interval { hours: 6 },
+        true,
+    )
+    .expect("automation job");
+
+    assert_eq!(cfg.thread_id.as_deref(), Some("thread::target"));
+    assert!(cfg.workspace_dir.is_none());
 }
 
 #[test]
@@ -147,6 +166,37 @@ fn automation_summary_defaults_agent_to_claude_for_legacy_jobs() {
     assert_eq!(automation_agent_id(&job), "claude");
     let summary = to_summary(&job, None).expect("summary");
     assert_eq!(summary.agent_id, "claude");
+}
+
+#[test]
+fn automation_summary_exposes_bound_target_thread() {
+    let job = CronJob {
+        id: "automation::bound".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Bound".to_owned()),
+        schedule: CronSchedule::Interval {
+            interval_secs: 3600,
+        },
+        ui_schedule: Some(AutomationScheduleView::Interval { hours: 1 }),
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("Summarize this thread.".to_owned()),
+        workspace_dir: None,
+        agent_id: Some("codex".to_owned()),
+        thread_id: Some("thread::target".to_owned()),
+        delete_after_run: false,
+        enabled: true,
+        next_run: Utc::now(),
+        last_status: JobRunStatus::NeverRun,
+        run_count: 0,
+        created_at: Utc::now(),
+        last_run_at: None,
+    };
+
+    let summary = to_summary(&job, None).expect("summary");
+    assert_eq!(summary.target_thread_id.as_deref(), Some("thread::target"));
+    assert_eq!(summary.thread_id.as_deref(), Some("thread::target"));
+    assert_eq!(summary.workspace_dir, "");
 }
 
 #[tokio::test]

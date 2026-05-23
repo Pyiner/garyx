@@ -14,7 +14,10 @@ use garyx_models::config::{
 };
 use garyx_models::provider::{AgentRunRequest, StreamBoundaryKind, StreamEvent};
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, is_canonical_thread_id};
-use garyx_router::{MessageRouter, ThreadEnsureOptions, ThreadStore, delete_thread_record};
+use garyx_router::{
+    MessageRouter, ThreadEnsureOptions, ThreadStore, delete_thread_record,
+    thread_metadata_from_value, workspace_dir_from_value,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -107,11 +110,7 @@ impl CronJob {
             message: cfg.message.clone(),
             workspace_dir: cfg.workspace_dir.clone(),
             agent_id: cfg.agent_id.clone(),
-            thread_id: if uses_automation_thread_config(cfg) {
-                None
-            } else {
-                cfg.thread_id.clone()
-            },
+            thread_id: cfg.thread_id.clone(),
             delete_after_run: cfg.delete_after_run,
             enabled: cfg.enabled,
             next_run,
@@ -263,18 +262,16 @@ fn has_non_empty_cron_text(value: Option<&str>) -> bool {
         .is_some_and(|candidate| !candidate.is_empty())
 }
 
-fn uses_automation_thread_config(cfg: &CronJobConfig) -> bool {
-    cfg.kind == CronJobKind::AutomationPrompt
-        && cfg.action == CronAction::AgentTurn
-        && has_non_empty_cron_text(cfg.message.as_deref())
-        && has_non_empty_cron_text(cfg.workspace_dir.as_deref())
-}
-
-fn uses_automation_thread_job(job: &CronJob) -> bool {
+fn is_automation_prompt_job(job: &CronJob) -> bool {
     job.kind == CronJobKind::AutomationPrompt
         && job.action == CronAction::AgentTurn
         && has_non_empty_cron_text(job.message.as_deref())
+}
+
+fn uses_generated_automation_thread_job(job: &CronJob) -> bool {
+    is_automation_prompt_job(job)
         && has_non_empty_cron_text(job.workspace_dir.as_deref())
+        && !has_non_empty_cron_text(job.thread_id.as_deref())
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +466,7 @@ impl CronService {
         // Load from disk first.
         let disk_jobs = load_jobs(&self.data_dir).await?;
         let mut map = HashMap::new();
-        for mut job in disk_jobs {
+        for job in disk_jobs {
             if let Err(error) = validate_cron_schedule(&job.schedule) {
                 tracing::warn!(
                     job_id = %job.id,
@@ -478,9 +475,6 @@ impl CronService {
                 );
                 let _ = delete_job_file(&self.data_dir, &job.id).await;
                 continue;
-            }
-            if uses_automation_thread_job(&job) {
-                job.thread_id = None;
             }
             map.insert(job.id.clone(), job);
         }
@@ -508,11 +502,7 @@ impl CronService {
                 existing.message = cfg_job.message.clone();
                 existing.workspace_dir = cfg_job.workspace_dir.clone();
                 existing.agent_id = cfg_job.agent_id.clone();
-                existing.thread_id = if uses_automation_thread_config(cfg_job) {
-                    None
-                } else {
-                    cfg_job.thread_id.clone()
-                };
+                existing.thread_id = cfg_job.thread_id.clone();
                 existing.delete_after_run = cfg_job.delete_after_run;
                 existing.enabled = cfg_job.enabled;
                 if schedule_changed {
@@ -661,11 +651,7 @@ impl CronService {
             job.message = cfg.message;
             job.workspace_dir = cfg.workspace_dir;
             job.agent_id = cfg.agent_id;
-            job.thread_id = if uses_automation_thread_job(job) {
-                None
-            } else {
-                cfg.thread_id
-            };
+            job.thread_id = cfg.thread_id;
             job.delete_after_run = cfg.delete_after_run;
             job.enabled = cfg.enabled;
             job.next_run = CronJob::compute_next_run(&job.schedule, Utc::now());
@@ -709,10 +695,11 @@ impl CronService {
         if !job.enabled {
             return None;
         }
+        let should_cleanup_prepared_thread = uses_generated_automation_thread_job(&job);
         let (record, prepared_thread_id) =
             match Self::prepare_job_for_execution(&self.jobs, id, &self.dispatch_runtime).await {
                 Ok(prepared_job) => {
-                    let prepared_thread_id = if uses_automation_thread_job(&prepared_job) {
+                    let prepared_thread_id = if should_cleanup_prepared_thread {
                         prepared_job.thread_id.clone()
                     } else {
                         None
@@ -877,7 +864,7 @@ impl CronService {
                 .ok_or_else(|| format!("cron job not found: {id}"))?
         };
 
-        if !uses_automation_thread_job(&current) {
+        if !uses_generated_automation_thread_job(&current) {
             return Ok(current);
         }
 
@@ -974,10 +961,11 @@ impl CronService {
             else {
                 continue;
             };
+            let should_cleanup_prepared_thread = uses_generated_automation_thread_job(&job);
             let (record, prepared_thread_id) =
                 match Self::prepare_job_for_execution(jobs, &id, dispatch_runtime).await {
                     Ok(prepared_job) => {
-                        let prepared_thread_id = if uses_automation_thread_job(&prepared_job) {
+                        let prepared_thread_id = if should_cleanup_prepared_thread {
                             prepared_job.thread_id.clone()
                         } else {
                             None
@@ -1150,13 +1138,18 @@ impl CronService {
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
-        let (thread_key, delivery_ctx) = if let Some(thread_id) = job
+        let (thread_key, delivery_ctx, thread_record) = if let Some(thread_id) = job
             .thread_id
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            (thread_id.to_owned(), None)
+            let thread_record = runtime
+                .thread_store
+                .get(thread_id)
+                .await
+                .ok_or_else(|| format!("cron target thread not found: {thread_id}"))?;
+            (thread_id.to_owned(), None, Some(thread_record))
         } else if let Some(target) = configured_target {
             if target.starts_with("thread:") || target.contains("::") {
                 let key = if target.starts_with("thread::") {
@@ -1169,22 +1162,31 @@ impl CronService {
                     resolve_delivery_target_with_recovery(&runtime.router, &thread_target)
                         .await
                         .map(|(_, ctx)| ctx);
-                (key, delivery)
+                let thread_record = runtime.thread_store.get(&key).await;
+                (key, delivery, thread_record)
             } else {
                 let resolved = resolve_delivery_target_with_recovery(&runtime.router, target)
                     .await
                     .ok_or_else(|| format!("unable to resolve cron delivery target: {target}"))?;
-                (resolved.0, Some(resolved.1))
+                let thread_record = runtime.thread_store.get(&resolved.0).await;
+                (resolved.0, Some(resolved.1), thread_record)
             }
         } else {
             let delivery = resolve_delivery_target_with_recovery(&runtime.router, "last")
                 .await
                 .map(|(_, ctx)| ctx);
-            (format!("cron::{}", job.id), delivery)
+            (format!("cron::{}", job.id), delivery, None)
         };
 
-        let automation_job = uses_automation_thread_job(job);
+        let automation_job = is_automation_prompt_job(job);
+        let thread_workspace_dir = thread_record.as_ref().and_then(workspace_dir_from_value);
+        let job_workspace_dir = Self::trimmed_non_empty(job.workspace_dir.as_deref());
         let mut metadata = HashMap::new();
+        if let Some(thread_record) = thread_record.as_ref() {
+            for (key, value) in thread_metadata_from_value(thread_record) {
+                metadata.entry(key).or_insert(value);
+            }
+        }
         metadata.insert(
             "source".to_owned(),
             serde_json::json!(if automation_job { "automation" } else { "cron" }),
@@ -1201,8 +1203,22 @@ impl CronService {
         );
         metadata.insert(
             "target".to_owned(),
-            serde_json::json!(configured_target.unwrap_or("last")),
+            serde_json::json!(
+                configured_target
+                    .or_else(|| job.thread_id.as_deref())
+                    .unwrap_or("last")
+            ),
         );
+        metadata.insert(
+            "resolved_thread_id".to_owned(),
+            serde_json::json!(thread_key.clone()),
+        );
+        if let Some(workspace_dir) = thread_workspace_dir.as_ref() {
+            metadata.insert(
+                "workspace_dir".to_owned(),
+                serde_json::json!(workspace_dir.clone()),
+            );
+        }
 
         let (channel, account_id, chat_id, thread_id, workspace_dir) =
             if let Some(delivery) = &delivery_ctx {
@@ -1222,7 +1238,9 @@ impl CronService {
                     delivery.account_id.clone(),
                     Some(delivery.chat_id.clone()),
                     delivery.thread_id.clone(),
-                    job.workspace_dir.clone(),
+                    job_workspace_dir
+                        .clone()
+                        .or_else(|| thread_workspace_dir.clone()),
                 )
             } else {
                 let default_channel = if automation_job { "api" } else { "cron" };
@@ -1232,7 +1250,7 @@ impl CronService {
                     default_account.to_owned(),
                     None,
                     job.thread_id.clone(),
-                    job.workspace_dir.clone(),
+                    job_workspace_dir.or(thread_workspace_dir),
                 )
             };
 

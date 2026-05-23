@@ -284,6 +284,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var draftAutomationLabel = ""
     @Published var draftAutomationPrompt = ""
     @Published var draftAutomationIntervalHours = "24"
+    @Published var draftAutomationTargetsExistingThread = false
+    @Published var draftAutomationTargetThreadId = ""
     @Published var draftAgentId = ""
     @Published var draftAgentName = ""
     @Published var draftAgentProvider = "codex_app_server"
@@ -3202,6 +3204,8 @@ final class GaryxMobileModel: ObservableObject {
             await refreshRemoteState()
             if !run.threadId.isEmpty {
                 await openThread(id: run.threadId)
+            } else if let targetThreadId = automation.targetThreadId, !targetThreadId.isEmpty {
+                await openThread(id: targetThreadId)
             }
         } catch {
             lastError = displayMessage(for: error)
@@ -3694,7 +3698,11 @@ final class GaryxMobileModel: ObservableObject {
         let label = draftAutomationLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = draftAutomationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let workspace = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !label.isEmpty, !prompt.isEmpty, !workspace.isEmpty else { return false }
+        let targetThreadId = draftAutomationTargetsExistingThread
+            ? draftAutomationTargetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        guard !label.isEmpty, !prompt.isEmpty else { return false }
+        guard !targetThreadId.isEmpty || !workspace.isEmpty else { return false }
         let trimmedHours = draftAutomationIntervalHours.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let hours = Int(trimmedHours), hours > 0 else { return false }
         do {
@@ -3703,13 +3711,16 @@ final class GaryxMobileModel: ObservableObject {
                     label: label,
                     prompt: prompt,
                     agentId: selectedAgentTargetId,
-                    workspaceDir: workspace,
+                    workspaceDir: workspace.isEmpty ? nil : workspace,
+                    targetThreadId: targetThreadId.isEmpty ? nil : targetThreadId,
                     schedule: .interval(hours: hours),
                     enabled: true
                 )
             )
             draftAutomationLabel = ""
             draftAutomationPrompt = ""
+            draftAutomationTargetThreadId = ""
+            draftAutomationTargetsExistingThread = false
             automations.insert(automation, at: 0)
             activePanel = .automations
             return true

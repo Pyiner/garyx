@@ -46,6 +46,20 @@ function getWorkspaceLabel(
   );
 }
 
+function getTargetLabel(
+  state: DesktopState | null,
+  automation: DesktopAutomationSummary,
+  workspaceLabel: string,
+  t: Translate,
+): string {
+  const targetThreadId = automation.targetThreadId?.trim();
+  if (!targetThreadId) {
+    return workspaceLabel;
+  }
+  const thread = state?.threads.find((entry) => entry.id === targetThreadId);
+  return t('Thread: {name}', { name: thread?.title || targetThreadId });
+}
+
 function getAgentLabel(
   agents: DesktopCustomAgent[],
   automation: DesktopAutomationSummary,
@@ -171,6 +185,7 @@ export function AutomationListPage({
         <div className="codex-list-card" style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto' }}>
           {automations.map((automation) => {
             const wsLabel = getWorkspaceLabel(desktopState, automation, t);
+            const targetLabel = getTargetLabel(desktopState, automation, wsLabel, t);
             const agentLabel = getAgentLabel(agents, automation);
             const workspace = selectedWorkspace(desktopState, automation.workspacePath);
             const nextTitle = automation.schedule.kind === 'once' ? t('Run At') : t('Next');
@@ -204,7 +219,7 @@ export function AutomationListPage({
                       <span className="codex-sync-pill fail">{t('Workspace unavailable')}</span>
                     )}
                     <span className="codex-command-row-desc">
-                      {wsLabel}
+                      {targetLabel}
                       {automation.lastRunAt ? ` · ${t('Last')}: ${formatTimestamp(automation.lastRunAt)}` : ''}
                       {nextRunLabel ? ` · ${nextTitle}: ${nextRunLabel}` : ''}
                     </span>
@@ -244,7 +259,7 @@ export function AutomationListPage({
                   </button>
                   <button
                     className="codex-section-action"
-                    disabled={!automation.threadId}
+                    disabled={!automation.threadId && !automation.targetThreadId}
                     onClick={() => onOpenThread(automation)}
                     type="button"
                   >

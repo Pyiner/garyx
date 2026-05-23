@@ -1180,6 +1180,7 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
     public var agentId: String
     public var enabled: Bool
     public var workspacePath: String
+    public var targetThreadId: String?
     public var threadId: String?
     public var nextRun: String
     public var lastRunAt: String?
@@ -1195,6 +1196,8 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         case enabled
         case workspaceDir = "workspace_dir"
         case workspaceDirCamel = "workspaceDir"
+        case targetThreadId = "target_thread_id"
+        case targetThreadIdCamel = "targetThreadId"
         case threadId = "thread_id"
         case threadIdCamel = "threadId"
         case nextRun = "next_run"
@@ -1214,6 +1217,7 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         agentId = try container.decodeFirstString(.agentId, .agentIdCamel) ?? "claude"
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         workspacePath = try container.decodeFirstString(.workspaceDir, .workspaceDirCamel) ?? ""
+        targetThreadId = try container.decodeFirstString(.targetThreadId, .targetThreadIdCamel)
         threadId = try container.decodeFirstString(.threadId, .threadIdCamel)
         nextRun = try container.decodeFirstString(.nextRun, .nextRunCamel) ?? ""
         lastRunAt = try container.decodeFirstString(.lastRunAt, .lastRunAtCamel)
@@ -1307,7 +1311,8 @@ public struct GaryxAutomationCreateRequest: Encodable, Equatable, Sendable {
     public var label: String
     public var prompt: String
     public var agentId: String?
-    public var workspaceDir: String
+    public var workspaceDir: String?
+    public var targetThreadId: String?
     public var schedule: GaryxAutomationSchedule
     public var enabled: Bool?
 
@@ -1315,7 +1320,8 @@ public struct GaryxAutomationCreateRequest: Encodable, Equatable, Sendable {
         label: String,
         prompt: String,
         agentId: String? = nil,
-        workspaceDir: String,
+        workspaceDir: String? = nil,
+        targetThreadId: String? = nil,
         schedule: GaryxAutomationSchedule = .interval(hours: 24),
         enabled: Bool? = nil
     ) {
@@ -1323,6 +1329,7 @@ public struct GaryxAutomationCreateRequest: Encodable, Equatable, Sendable {
         self.prompt = prompt
         self.agentId = agentId
         self.workspaceDir = workspaceDir
+        self.targetThreadId = targetThreadId
         self.schedule = schedule
         self.enabled = enabled
     }
@@ -1333,6 +1340,7 @@ public struct GaryxAutomationUpdateRequest: Encodable, Equatable, Sendable {
     public var prompt: String?
     public var agentId: String?
     public var workspaceDir: String?
+    public var targetThreadId: String?
     public var schedule: GaryxAutomationSchedule?
     public var enabled: Bool?
 
@@ -1341,6 +1349,7 @@ public struct GaryxAutomationUpdateRequest: Encodable, Equatable, Sendable {
         prompt: String? = nil,
         agentId: String? = nil,
         workspaceDir: String? = nil,
+        targetThreadId: String? = nil,
         schedule: GaryxAutomationSchedule? = nil,
         enabled: Bool? = nil
     ) {
@@ -1348,6 +1357,7 @@ public struct GaryxAutomationUpdateRequest: Encodable, Equatable, Sendable {
         self.prompt = prompt
         self.agentId = agentId
         self.workspaceDir = workspaceDir
+        self.targetThreadId = targetThreadId
         self.schedule = schedule
         self.enabled = enabled
     }

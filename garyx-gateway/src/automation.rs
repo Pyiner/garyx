@@ -13,10 +13,10 @@ use garyx_models::config::{
 };
 use garyx_models::local_paths::default_session_data_dir;
 use garyx_models::{Principal, TaskNotificationTarget};
-use garyx_router::is_thread_key;
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, TaskRuntimeInput, TaskService, WorkspaceMode,
 };
+use garyx_router::{is_thread_key, workspace_dir_from_value};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -51,7 +51,10 @@ pub struct CreateAutomationBody {
     pub prompt: String,
     #[serde(default)]
     pub agent_id: Option<String>,
-    pub workspace_dir: String,
+    #[serde(default)]
+    pub workspace_dir: Option<String>,
+    #[serde(default)]
+    pub target_thread_id: Option<String>,
     pub schedule: AutomationScheduleView,
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -68,6 +71,8 @@ pub struct UpdateAutomationBody {
     pub agent_id: Option<String>,
     #[serde(default)]
     pub workspace_dir: Option<String>,
+    #[serde(default)]
+    pub target_thread_id: Option<Option<String>>,
     #[serde(default)]
     pub schedule: Option<AutomationScheduleView>,
     #[serde(default)]
@@ -91,6 +96,8 @@ pub struct AutomationSummary {
     pub agent_id: String,
     pub enabled: bool,
     pub workspace_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_thread_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
     pub next_run: String,
@@ -437,12 +444,26 @@ pub(crate) async fn resolve_automation_agent_id(
 }
 
 fn automation_workspace(job: &CronJob) -> Result<String, String> {
-    trim_required(
-        job.workspace_dir
-            .as_deref()
-            .ok_or_else(|| format!("automation {} is missing workspace_dir", job.id))?,
-        "workspace_dir",
-    )
+    let workspace_dir = job
+        .workspace_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(workspace_dir) = workspace_dir {
+        return Ok(workspace_dir.to_owned());
+    }
+    if automation_target_thread(job).is_some() {
+        return Ok(String::new());
+    }
+    Err(format!("automation {} is missing workspace_dir", job.id))
+}
+
+fn automation_target_thread(job: &CronJob) -> Option<String> {
+    job.thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| is_thread_key(value))
+        .map(ToOwned::to_owned)
 }
 
 fn latest_automation_thread(latest_run: Option<&RunRecord>) -> Option<String> {
@@ -487,6 +508,7 @@ fn automation_next_run(job: &CronJob) -> String {
 }
 
 fn to_summary(job: &CronJob, latest_run: Option<&RunRecord>) -> Result<AutomationSummary, String> {
+    let target_thread_id = automation_target_thread(job);
     Ok(AutomationSummary {
         id: job.id.clone(),
         label: automation_label(job),
@@ -494,7 +516,8 @@ fn to_summary(job: &CronJob, latest_run: Option<&RunRecord>) -> Result<Automatio
         agent_id: automation_agent_id(job),
         enabled: job.enabled,
         workspace_dir: automation_workspace(job)?,
-        thread_id: latest_automation_thread(latest_run),
+        target_thread_id: target_thread_id.clone(),
+        thread_id: target_thread_id.or_else(|| latest_automation_thread(latest_run)),
         next_run: automation_next_run(job),
         last_run_at: job.last_run_at.map(|value| value.to_rfc3339()),
         last_status: job.last_status.clone(),
@@ -563,11 +586,66 @@ fn is_automation_job(job: &CronJob) -> bool {
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
-        && job
+        && (job
             .workspace_dir
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
+            || automation_target_thread(job).is_some())
+}
+
+struct AutomationTargetThread {
+    thread_id: String,
+    workspace_dir: Option<String>,
+}
+
+async fn resolve_automation_target_thread(
+    state: &Arc<AppState>,
+    candidate: Option<&str>,
+) -> Result<Option<AutomationTargetThread>, String> {
+    let Some(thread_id) = candidate.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if !is_thread_key(thread_id) {
+        return Err("targetThreadId must be an existing thread id".to_owned());
+    }
+    let Some(thread_data) = state.threads.thread_store.get(thread_id).await else {
+        return Err(format!("target thread not found: {thread_id}"));
+    };
+    Ok(Some(AutomationTargetThread {
+        thread_id: thread_id.to_owned(),
+        workspace_dir: workspace_dir_from_value(&thread_data),
+    }))
+}
+
+fn resolve_automation_workspace_input(
+    workspace_dir: Option<&str>,
+    target_thread: Option<&AutomationTargetThread>,
+    fallback_workspace_dir: Option<&str>,
+) -> Result<String, String> {
+    if let Some(workspace_dir) = workspace_dir
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(workspace_dir.to_owned());
+    }
+    if let Some(fallback_workspace_dir) = fallback_workspace_dir
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(fallback_workspace_dir.to_owned());
+    }
+    if let Some(target_workspace_dir) = target_thread
+        .and_then(|target| target.workspace_dir.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(target_workspace_dir.to_owned());
+    }
+    if target_thread.is_some() {
+        return Ok(String::new());
+    }
+    Err("workspace_dir is required unless targetThreadId is set".to_owned())
 }
 
 async fn cron_service(
@@ -599,10 +677,19 @@ pub(crate) fn build_automation_job(
     label: &str,
     prompt: &str,
     agent_id: &str,
-    workspace_dir: &str,
+    workspace_dir: Option<&str>,
+    target_thread_id: Option<&str>,
     schedule: AutomationScheduleView,
     enabled: bool,
 ) -> Result<CronJobConfig, String> {
+    let workspace_dir = workspace_dir
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let target_thread_id = target_thread_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     Ok(CronJobConfig {
         id: automation_id.to_owned(),
         kind: CronJobKind::AutomationPrompt,
@@ -612,9 +699,9 @@ pub(crate) fn build_automation_job(
         action: CronAction::AgentTurn,
         target: None,
         message: Some(prompt.to_owned()),
-        workspace_dir: Some(workspace_dir.to_owned()),
+        workspace_dir,
         agent_id: Some(agent_id.to_owned()),
-        thread_id: None,
+        thread_id: target_thread_id,
         delete_after_run: false,
         enabled,
     })
@@ -683,7 +770,16 @@ pub async fn create_automation(
         Ok(value) => value,
         Err(error) => return invalid(error),
     };
-    let workspace_dir = match trim_required(&body.workspace_dir, "workspace_dir") {
+    let target_thread =
+        match resolve_automation_target_thread(&state, body.target_thread_id.as_deref()).await {
+            Ok(value) => value,
+            Err(error) => return invalid(error),
+        };
+    let workspace_dir = match resolve_automation_workspace_input(
+        body.workspace_dir.as_deref(),
+        target_thread.as_ref(),
+        None,
+    ) {
         Ok(value) => value,
         Err(error) => return invalid(error),
     };
@@ -694,7 +790,10 @@ pub async fn create_automation(
         &label,
         &prompt,
         &agent_id,
-        &workspace_dir,
+        Some(&workspace_dir),
+        target_thread
+            .as_ref()
+            .map(|target| target.thread_id.as_str()),
         body.schedule.clone(),
         body.enabled.unwrap_or(true),
     ) {
@@ -749,15 +848,35 @@ pub async fn update_automation(
         Ok(value) => value,
         Err(error) => return invalid(error),
     };
-    let workspace_dir = match body.workspace_dir.as_deref() {
-        Some(value) => match trim_required(value, "workspace_dir") {
-            Ok(value) => value,
-            Err(error) => return invalid(error),
-        },
-        None => match automation_workspace(&current) {
-            Ok(value) => value,
-            Err(error) => return internal(error),
-        },
+    let target_thread = match &body.target_thread_id {
+        Some(Some(thread_id)) => {
+            match resolve_automation_target_thread(&state, Some(thread_id.as_str())).await {
+                Ok(value) => value,
+                Err(error) => return invalid(error),
+            }
+        }
+        Some(None) => None,
+        None => automation_target_thread(&current).map(|thread_id| AutomationTargetThread {
+            thread_id,
+            workspace_dir: None,
+        }),
+    };
+    let target_thread_changed = body.target_thread_id.is_some();
+    let fallback_workspace_dir = if target_thread_changed {
+        target_thread
+            .as_ref()
+            .and_then(|target| target.workspace_dir.as_deref())
+            .or(current.workspace_dir.as_deref())
+    } else {
+        current.workspace_dir.as_deref()
+    };
+    let workspace_dir = match resolve_automation_workspace_input(
+        body.workspace_dir.as_deref(),
+        target_thread.as_ref(),
+        fallback_workspace_dir,
+    ) {
+        Ok(value) => value,
+        Err(error) => return invalid(error),
     };
     let schedule = match body.schedule.clone() {
         Some(value) => value,
@@ -773,7 +892,10 @@ pub async fn update_automation(
         &label,
         &prompt,
         &agent_id,
-        &workspace_dir,
+        Some(&workspace_dir),
+        target_thread
+            .as_ref()
+            .map(|target| target.thread_id.as_str()),
         schedule,
         enabled,
     ) {
@@ -845,16 +967,21 @@ pub async fn automation_activity(
     Path(id): Path<String>,
     Query(params): Query<ActivityParams>,
 ) -> impl IntoResponse {
-    let (service, _job) = match automation_job(&state, &id).await {
+    let (service, job) = match automation_job(&state, &id).await {
         Ok(value) => value,
         Err(error) => return error,
     };
     let limit = params.limit.clamp(1, MAX_ACTIVITY_LIMIT);
     let runs = service.list_runs_for_job(&id, limit, params.offset).await;
-    let latest_thread_id = latest_automation_thread(runs.first());
+    let target_thread_id = automation_target_thread(&job);
+    let latest_thread_id = latest_automation_thread(runs.first()).or(target_thread_id.clone());
     let mut items = Vec::with_capacity(runs.len());
     for run in &runs {
-        let thread_id = run.thread_id.clone().or_else(|| latest_thread_id.clone());
+        let thread_id = run
+            .thread_id
+            .clone()
+            .or_else(|| target_thread_id.clone())
+            .or_else(|| latest_thread_id.clone());
         items.push(to_activity_entry(&state, thread_id.as_deref(), run).await);
     }
 

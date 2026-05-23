@@ -428,6 +428,7 @@ final class GaryxGatewayClientTests: XCTestCase {
                       "agent_id": "codex",
                       "enabled": true,
                       "workspace_dir": "/workspace/project",
+                      "target_thread_id": "thread::target",
                       "thread_id": "thread::automation",
                       "next_run": "2026-03-01T09:00:00Z",
                       "last_status": "success"
@@ -468,6 +469,7 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(tasks.tasks.first?.updatedAt, "2026-03-01T09:30:00Z")
         XCTAssertEqual(tasks.tasks.first?.updatedBy?.agentId, "codex")
         XCTAssertEqual(automations.automations.first?.workspacePath, "/workspace/project")
+        XCTAssertEqual(automations.automations.first?.targetThreadId, "thread::target")
         XCTAssertEqual(skills.skills.first?.name, "Mobile Skill")
     }
 
@@ -1069,6 +1071,7 @@ final class GaryxGatewayClientTests: XCTestCase {
                       "agentId": "codex",
                       "enabled": true,
                       "workspaceDir": "/workspace/project",
+                      "targetThreadId": "thread::target",
                       "nextRun": "2026-03-01T09:00:00Z",
                       "lastStatus": "success",
                       "schedule": { "kind": "interval", "hours": 6 }
@@ -1193,6 +1196,7 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
 
         XCTAssertEqual(automations.automations.first?.schedule.hours, 6)
+        XCTAssertEqual(automations.automations.first?.targetThreadId, "thread::target")
         XCTAssertEqual(workspace.entries.first?.path, "Sources/App.swift")
         XCTAssertTrue(gitStatus.canUseWorktree)
         XCTAssertEqual(gitStatus.currentBranch, "main")
@@ -1209,6 +1213,7 @@ final class GaryxGatewayClientTests: XCTestCase {
             prompt: "Review open work.",
             agentId: "codex",
             workspaceDir: "/workspace/project",
+            targetThreadId: "thread::target",
             schedule: .interval(hours: 6),
             enabled: true
         )
@@ -1219,6 +1224,7 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         XCTAssertEqual(automationObject?["agentId"] as? String, "codex")
         XCTAssertEqual(automationObject?["workspaceDir"] as? String, "/workspace/project")
+        XCTAssertEqual(automationObject?["targetThreadId"] as? String, "thread::target")
         XCTAssertEqual(automationSchedule?["kind"] as? String, "interval")
         XCTAssertEqual(automationSchedule?["hours"] as? Int, 6)
 

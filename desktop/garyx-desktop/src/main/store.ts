@@ -833,6 +833,8 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
   const automations = remoteAutomations.map((automation) => ({
     ...automation,
     workspacePath: automation.workspacePath?.trim() || '',
+    targetThreadId: automation.targetThreadId?.trim() || '',
+    threadId: automation.threadId?.trim() || automation.targetThreadId?.trim() || '',
   }));
   const next = withSortedEntities({
     ...localState,
@@ -1232,6 +1234,7 @@ function requireAutomation(state: DesktopState, automationId: string): DesktopAu
 function resolveAutomationWorkspacePath(
   input: { workspacePath?: string | null },
   fallbackPath?: string | null,
+  targetThreadId?: string | null,
 ): string {
   const explicitPath = normalizeWorkspacePathInput(input.workspacePath);
   if (explicitPath) {
@@ -1241,19 +1244,35 @@ function resolveAutomationWorkspacePath(
   if (fallback) {
     return fallback;
   }
+  if (targetThreadId?.trim()) {
+    return '';
+  }
   throw new Error('Choose a directory for this automation.');
+}
+
+function normalizeAutomationTargetThreadId(value?: string | null): string {
+  return value?.trim() || '';
 }
 
 export async function createDesktopAutomation(
   input: CreateAutomationInput,
 ): Promise<{ state: DesktopState; automation: DesktopAutomationSummary }> {
   const current = await getDesktopState();
-  const workspacePath = resolveAutomationWorkspacePath(input);
+  const targetThreadId = normalizeAutomationTargetThreadId(input.targetThreadId);
+  const targetThread = targetThreadId
+    ? current.threads.find((thread) => thread.id === targetThreadId)
+    : null;
+  const workspacePath = resolveAutomationWorkspacePath(
+    input,
+    targetThread?.workspacePath || null,
+    targetThreadId,
+  );
   const created = await createRemoteAutomation(current.settings, {
     label: input.label.trim(),
     prompt: input.prompt.trim(),
     agentId: input.agentId.trim(),
     workspacePath,
+    targetThreadId: targetThreadId || null,
     schedule: input.schedule,
   });
   const local = await getLocalDesktopState();
@@ -1269,6 +1288,7 @@ export async function createDesktopAutomation(
       ...created,
       agentId: input.agentId.trim(),
       workspacePath,
+      targetThreadId,
     },
   };
 }
@@ -1279,17 +1299,38 @@ export async function updateDesktopAutomation(input: {
   prompt?: string;
   agentId?: string;
   workspacePath?: string | null;
+  targetThreadId?: string | null;
   schedule?: CreateAutomationInput['schedule'];
   enabled?: boolean;
 }): Promise<{ state: DesktopState; automation: DesktopAutomationSummary }> {
   const current = await getDesktopState();
   const existing = requireAutomation(current, input.automationId);
-  const workspacePath = resolveAutomationWorkspacePath(input, existing.workspacePath);
+  const hasTargetThreadInput = Object.prototype.hasOwnProperty.call(input, 'targetThreadId');
+  const existingTargetThreadId = normalizeAutomationTargetThreadId(existing.targetThreadId);
+  const targetThreadId = hasTargetThreadInput
+    ? normalizeAutomationTargetThreadId(input.targetThreadId)
+    : existingTargetThreadId;
+  const targetThread = targetThreadId
+    ? current.threads.find((thread) => thread.id === targetThreadId)
+    : null;
+  const targetThreadChanged = hasTargetThreadInput && targetThreadId !== existingTargetThreadId;
+  const fallbackWorkspacePath =
+    input.workspacePath === undefined
+      ? targetThreadChanged
+        ? targetThread?.workspacePath || existing.workspacePath
+        : existing.workspacePath || targetThread?.workspacePath
+      : targetThread?.workspacePath;
+  const workspacePath = resolveAutomationWorkspacePath(
+    input,
+    fallbackWorkspacePath,
+    targetThreadId,
+  );
   const updated = await updateRemoteAutomation(current.settings, input.automationId, {
     label: input.label?.trim(),
     prompt: input.prompt?.trim(),
     agentId: input.agentId?.trim(),
     workspacePath,
+    targetThreadId: hasTargetThreadInput ? targetThreadId || null : undefined,
     schedule: input.schedule,
     enabled: input.enabled,
   });
@@ -1306,6 +1347,7 @@ export async function updateDesktopAutomation(input: {
       ...updated,
       agentId: input.agentId?.trim() || existing.agentId,
       workspacePath,
+      targetThreadId,
     },
   };
 }

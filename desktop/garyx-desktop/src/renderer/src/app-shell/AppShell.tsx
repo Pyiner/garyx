@@ -8715,6 +8715,7 @@ export function AppShell() {
           <AutomationDialog
             state={automationDialog}
             agentOptions={automationAgentOptions}
+            threadOptions={desktopState?.threads || []}
             saving={
               automationMutation === "create" ||
               automationMutation === `edit:${automationDialog.automationId || ""}`
