@@ -76,13 +76,11 @@ for arch in $ARCHS; do
   echo ""
   echo "==> building ${target}.${GLIBC}"
   cargo zigbuild --release -p garyx --target "${target}.${GLIBC}"
-  TARGET="$target" OUT_DIR="target/${target}/release" bash scripts/build-cctty-sidecar.sh
 
   staging="dist/garyx-${VERSION}-${target}"
   rm -rf "$staging"
   mkdir -p "$staging"
   cp "target/${target}/release/garyx" "$staging/"
-  cp "target/${target}/release/cctty" "$staging/"
   cp README.md LICENSE "$staging/" 2>/dev/null || true
 
   archive="${staging}.tar.gz"

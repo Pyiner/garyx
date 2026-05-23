@@ -40,6 +40,25 @@ fn test_build_command_streaming() {
 }
 
 #[test]
+fn test_build_command_inserts_cli_prefix_args_before_sdk_args() {
+    let opts = ClaudeAgentOptions {
+        cli_prefix_args: vec!["__cctty".into()],
+        model: Some("claude-sonnet-4-5".into()),
+        ..Default::default()
+    };
+    let transport = SubprocessTransport::new(opts, true);
+    let cmd = transport.build_command(None);
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert_eq!(args.first().map(String::as_str), Some("__cctty"));
+    assert!(args.contains(&"--model".to_string()));
+}
+
+#[test]
 fn test_build_command_oneshot() {
     let opts = ClaudeAgentOptions::default();
     let transport = SubprocessTransport::new(opts, false);

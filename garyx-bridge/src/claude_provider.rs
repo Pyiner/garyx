@@ -34,12 +34,12 @@ const ABORT_TIMEOUT_SECS: u64 = 10;
 const STREAM_IDLE_TIMEOUT_SECS: u64 = 3600; // 1 hour
 const POST_RESULT_DRAIN_TIMEOUT_SECS: u64 = 2;
 const CLAUDE_MISSING_RESULT_ERROR: &str = "claude SDK stream ended without a result message";
-const CCTTY_BINARY_NAME: &str = "cctty";
 const GARYX_CCTTY_PATH_ENV: &str = "GARYX_CCTTY_PATH";
 const GARYX_CLAUDE_CLI_PATH_ENV: &str = "GARYX_CLAUDE_CLI_PATH";
 const GARYX_CLAUDE_CLI_MODE_ENV: &str = "GARYX_CLAUDE_CLI_MODE";
 const CLAUDE_CLI_MODE_CCTTY: &str = "cctty";
 const CLAUDE_CLI_MODE_NATIVE: &str = "native";
+const EMBEDDED_CCTTY_ARG: &str = "__cctty";
 
 // ---------------------------------------------------------------------------
 // Error classification helpers
@@ -61,13 +61,6 @@ fn executable_file_exists(path: &Path) -> bool {
     {
         true
     }
-}
-
-fn executable_on_path(name: &str) -> Option<PathBuf> {
-    let path_env = std::env::var_os("PATH")?;
-    std::env::split_paths(&path_env)
-        .map(|dir| dir.join(name))
-        .find(|candidate| executable_file_exists(candidate))
 }
 
 fn explicit_claude_cli_path(config: &ClaudeCodeConfig) -> Option<PathBuf> {
@@ -96,13 +89,6 @@ fn explicit_claude_cli_path(config: &ClaudeCodeConfig) -> Option<PathBuf> {
         })
 }
 
-fn bundled_cctty_path() -> Option<PathBuf> {
-    let current_exe = std::env::current_exe().ok()?;
-    let dir = current_exe.parent()?;
-    let candidate = dir.join(CCTTY_BINARY_NAME);
-    executable_file_exists(&candidate).then_some(candidate)
-}
-
 fn claude_sdk_cli_mode(config: &ClaudeCodeConfig) -> String {
     let env_mode = config
         .env
@@ -121,6 +107,11 @@ fn claude_sdk_cli_mode(config: &ClaudeCodeConfig) -> String {
     mode.to_ascii_lowercase()
 }
 
+fn uses_embedded_cctty(config: &ClaudeCodeConfig) -> bool {
+    claude_sdk_cli_mode(config) != CLAUDE_CLI_MODE_NATIVE
+        && explicit_claude_cli_path(config).is_none()
+}
+
 fn resolve_claude_sdk_cli_path(config: &ClaudeCodeConfig) -> Option<PathBuf> {
     if let Some(path) = explicit_claude_cli_path(config) {
         return Some(path);
@@ -128,8 +119,15 @@ fn resolve_claude_sdk_cli_path(config: &ClaudeCodeConfig) -> Option<PathBuf> {
 
     match claude_sdk_cli_mode(config).as_str() {
         CLAUDE_CLI_MODE_NATIVE => None,
-        _ => bundled_cctty_path().or_else(|| executable_on_path(CCTTY_BINARY_NAME)),
+        _ => std::env::current_exe().ok(),
     }
+}
+
+fn resolve_claude_sdk_cli_prefix_args(config: &ClaudeCodeConfig) -> Vec<String> {
+    uses_embedded_cctty(config)
+        .then(|| EMBEDDED_CCTTY_ARG.to_owned())
+        .into_iter()
+        .collect()
 }
 
 fn claude_sdk_cli_mode_label(config: &ClaudeCodeConfig) -> &'static str {
@@ -897,6 +895,7 @@ impl ClaudeCliProvider {
         env.extend(task_cli_env(&options.metadata));
         env.extend(metadata_string_map(&options.metadata, "desktop_claude_env"));
         let cli_path = resolve_claude_sdk_cli_path(&self.config);
+        let cli_prefix_args = resolve_claude_sdk_cli_prefix_args(&self.config);
 
         // Permission mode
         let permission_mode = match self.config.permission_mode.as_str() {
@@ -926,6 +925,7 @@ impl ClaudeCliProvider {
             model,
             cwd,
             cli_path,
+            cli_prefix_args,
             env,
             extra_args,
             max_buffer_size: Some(MAX_BUFFER_SIZE),
@@ -1505,8 +1505,10 @@ impl AgentLoopProvider for ClaudeCliProvider {
                     path.display()
                 )));
             }
+            let cli_prefix_args = resolve_claude_sdk_cli_prefix_args(&self.config);
             tracing::info!(
                 claude_sdk_cli = %path.display(),
+                claude_sdk_cli_prefix_args = ?cli_prefix_args,
                 claude_sdk_cli_mode = cli_mode,
                 model = %self.config.default_model,
                 permission_mode = %self.config.permission_mode,
@@ -1533,13 +1535,13 @@ impl AgentLoopProvider for ClaudeCliProvider {
                 }
                 _ => {
                     return Err(BridgeError::Internal(
-                        "Claude SDK CLI not found: install claude on PATH, configure claude_cli_path, or set claude_cli_mode=cctty with the cctty sidecar installed".to_owned(),
+                        "Claude SDK CLI not found: install claude on PATH, configure claude_cli_path, or set claude_cli_mode=cctty to use Garyx's embedded cctty runner".to_owned(),
                     ));
                 }
             }
         } else {
             return Err(BridgeError::Internal(
-                "cctty CLI not found: install the cctty sidecar next to garyx, put cctty on PATH, configure claude_cli_path, or set claude_cli_mode=native to use the original Claude CLI".to_owned(),
+                "embedded cctty runner could not resolve the current garyx executable; configure claude_cli_path or set claude_cli_mode=native to use the original Claude CLI".to_owned(),
             ));
         }
 

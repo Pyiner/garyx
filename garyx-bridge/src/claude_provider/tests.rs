@@ -360,6 +360,7 @@ fn test_build_sdk_options_prefers_configured_claude_cli_path() {
 
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     assert_eq!(sdk_opts.cli_path.as_deref(), Some(cli_path.as_path()));
+    assert!(sdk_opts.cli_prefix_args.is_empty());
 }
 
 #[test]
@@ -378,6 +379,27 @@ fn test_build_sdk_options_native_mode_uses_sdk_default_cli_discovery() {
 
     let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
     assert!(sdk_opts.cli_path.is_none());
+    assert!(sdk_opts.cli_prefix_args.is_empty());
+}
+
+#[test]
+fn test_build_sdk_options_cctty_mode_uses_embedded_runner() {
+    let provider = ClaudeCliProvider::new(ClaudeCodeConfig {
+        claude_cli_mode: "cctty".to_owned(),
+        claude_cli_path: None,
+        ..ClaudeCodeConfig::default()
+    });
+    let opts = ProviderRunOptions {
+        thread_id: "test".to_owned(),
+        message: "hello".to_owned(),
+        workspace_dir: None,
+        images: None,
+        metadata: HashMap::new(),
+    };
+
+    let sdk_opts = provider.build_sdk_options(&opts, None, "run-1");
+    assert_eq!(sdk_opts.cli_path, std::env::current_exe().ok());
+    assert_eq!(sdk_opts.cli_prefix_args, vec!["__cctty"]);
 }
 
 #[test]

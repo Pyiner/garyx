@@ -20,6 +20,7 @@ garyx-router = { workspace = true }
 garyx-bridge = { workspace = true }
 garyx-channels = { workspace = true }
 garyx-gateway = { workspace = true }
+cctty = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

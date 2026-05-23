@@ -15,6 +15,9 @@ mod plugins_cli;
 mod runtime_assembler;
 mod service_manager;
 
+const EMBEDDED_CCTTY_ARG: &str = "__cctty";
+const EMBEDDED_CCTTY_MCP_PROXY_ARG: &str = "__cctty-mcp-proxy";
+
 #[cfg(test)]
 mod main_tests;
 
@@ -208,6 +211,10 @@ fn validate_bot_selector(bot: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if run_embedded_cctty_if_requested().await? {
+        return Ok(());
+    }
+
     if let Err(error) = migrate_legacy_homes() {
         eprintln!("failed to migrate legacy state into ~/.garyx: {error}");
     }
@@ -1176,4 +1183,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     }
+}
+
+async fn run_embedded_cctty_if_requested() -> Result<bool, Box<dyn std::error::Error>> {
+    let mut argv: Vec<String> = std::env::args().collect();
+    match argv.get(1).map(String::as_str) {
+        Some(EMBEDDED_CCTTY_ARG) => {
+            argv.remove(1);
+        }
+        Some(EMBEDDED_CCTTY_MCP_PROXY_ARG) => {}
+        _ => return Ok(false),
+    }
+
+    let exit_code = match cctty::run_cli(argv).await {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("cctty: {error}");
+            error.exit_code()
+        }
+    };
+    std::process::exit(exit_code);
 }

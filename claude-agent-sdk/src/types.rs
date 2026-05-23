@@ -295,6 +295,7 @@ pub struct ClaudeAgentOptions {
     pub permission_prompt_tool_name: Option<String>,
     pub cwd: Option<PathBuf>,
     pub cli_path: Option<PathBuf>,
+    pub cli_prefix_args: Vec<String>,
     pub env: HashMap<String, String>,
     pub extra_args: HashMap<String, Option<String>>,
     pub max_buffer_size: Option<usize>,
@@ -330,6 +331,7 @@ impl std::fmt::Debug for ClaudeAgentOptions {
             )
             .field("cwd", &self.cwd)
             .field("cli_path", &self.cli_path)
+            .field("cli_prefix_args", &self.cli_prefix_args)
             .field("env", &self.env)
             .field("extra_args", &self.extra_args)
             .field("max_buffer_size", &self.max_buffer_size)
@@ -367,6 +369,7 @@ impl Default for ClaudeAgentOptions {
             permission_prompt_tool_name: None,
             cwd: None,
             cli_path: None,
+            cli_prefix_args: Vec::new(),
             env: HashMap::new(),
             extra_args: HashMap::new(),
             max_buffer_size: None,

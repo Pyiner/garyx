@@ -328,7 +328,7 @@ pub(crate) enum ConfigAction {
     },
     /// Configure which CLI the Claude Agent SDK launches
     ClaudeCli {
-        /// SDK CLI mode: cctty uses Garyx's TTY wrapper; native uses Claude Code directly
+        /// SDK CLI mode: cctty uses Garyx's embedded TTY wrapper; native uses Claude Code directly
         #[arg(long, value_parser = ["cctty", "native"])]
         mode: Option<String>,
         /// Explicit CLI path for the selected mode

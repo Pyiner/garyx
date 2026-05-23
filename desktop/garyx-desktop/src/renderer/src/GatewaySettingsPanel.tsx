@@ -2074,7 +2074,7 @@ export function GatewaySettingsPanel({
                 <div className="commands-field">
                   <div className="commands-field-header">
                     <Label className="commands-field-label" htmlFor="provider-claude-cli-path">{t('CLI path')}</Label>
-                    <span className="commands-field-hint">{t('Leave empty to use the selected CLI from PATH.')}</span>
+                    <span className="commands-field-hint">{t('Leave empty to use native Claude from PATH or embedded cctty.')}</span>
                   </div>
                   <Input
                     id="provider-claude-cli-path"

@@ -270,6 +270,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cctty"
+version = "0.1.0"
+source = "git+https://github.com/Pyiner/cctty.git?rev=ef60376002b44e19e35087e06c033fc78b452c33#ef60376002b44e19e35087e06c033fc78b452c33"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+ "which",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -783,6 +797,7 @@ version = "0.1.26"
 dependencies = [
  "async-trait",
  "axum",
+ "cctty",
  "chrono",
  "clap",
  "dialoguer",

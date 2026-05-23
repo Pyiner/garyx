@@ -542,15 +542,15 @@ the SDK launches with `agents.claude`:
 
 `claude_cli_mode` accepts `native` or `cctty`. `native` is the default and lets
 the SDK discover and launch the original `claude` executable; `cctty` uses
-Garyx's optional terminal-wrapper sidecar when it is installed next to the
-`garyx` binary or available on PATH. `claude_cli_path` is optional and overrides
-the executable path for either mode. The same setting is available from the Mac
-app's Providers > Claude Code Configure dialog and from the CLI:
+Garyx's embedded terminal-wrapper runner through the installed `garyx` binary.
+`claude_cli_path` is optional and overrides the executable path for either mode,
+for example when testing an external wrapper. The same setting is available
+from the Mac app's Providers > Claude Code Configure dialog and from the CLI:
 
 ```bash
 garyx config claude-cli --mode native --clear-path
 garyx config claude-cli --mode cctty
-garyx config claude-cli --mode cctty --path /opt/garyx/bin/cctty
+garyx config claude-cli --mode cctty --path /opt/garyx/bin/custom-cctty
 ```
 
 Custom agents may also set `model`, `model_reasoning_effort`, and

@@ -65,6 +65,9 @@ impl SubprocessTransport {
     fn build_command(&self, prompt: Option<&str>) -> Command {
         let mut cmd = Command::new(&self.cli_path);
         cmd.kill_on_drop(true);
+        for arg in &self.options.cli_prefix_args {
+            cmd.arg(arg);
+        }
         for arg in self.options.to_cli_args() {
             cmd.arg(arg);
         }

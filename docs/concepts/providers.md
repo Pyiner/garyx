@@ -5,7 +5,7 @@ an agent. Garyx ships with three CLI-backed providers:
 
 | Provider key | Backed by | Auth model |
 | --- | --- | --- |
-| `claude_code` | Claude Agent SDK launching either bundled `cctty` or native [Claude Code CLI](https://github.com/anthropics/claude-code) | OAuth long-lived token via `claude setup-token` (recommended) or interactive `claude auth login`. |
+| `claude_code` | Claude Agent SDK launching either Garyx's embedded `cctty` runner or native [Claude Code CLI](https://github.com/anthropics/claude-code) | OAuth long-lived token via `claude setup-token` (recommended) or interactive `claude auth login`. |
 | `codex_app_server` | [Codex CLI](https://github.com/openai/codex) app-server | OpenAI account login via `codex login`. |
 | `gemini_cli` | [Gemini CLI](https://github.com/google-gemini/gemini-cli) | Google account login via `gemini auth login`. |
 
@@ -16,7 +16,7 @@ installed at startup and registers `claude_code`, `codex_app_server`, and
 `claude_tty` is no longer a provider. Garyx now keeps one Claude Agent SDK
 path and chooses the executable launched by that SDK. By default the executable
 is the native Claude Code CLI (`claude`). Set `agents.claude.claude_cli_mode`
-to `cctty` to launch Garyx's optional terminal-wrapper sidecar instead.
+to `cctty` to launch Garyx's embedded terminal-wrapper runner instead.
 
 ## How runs find a provider
 
@@ -26,7 +26,7 @@ When a message lands on a thread:
 2. Resolve the agent's provider preference: each agent has a default
    provider, with optional fallbacks.
 3. Spawn the provider CLI. Claude uses the Agent SDK transport; the configured
-   SDK executable is either `cctty` or native `claude`.
+   SDK executable is either the embedded `cctty` runner or native `claude`.
 4. Stream `assistant_delta` events back to the channel that triggered the
    run.
 
