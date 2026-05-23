@@ -542,6 +542,8 @@ struct GaryxThreadSidebar: View {
             GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
             GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
         }
+
+        GaryxSidebarThreadPaginationRow()
     }
 
     private var sidebarHeaderContext: GaryxSidebarHeaderContext? {
@@ -868,6 +870,39 @@ private struct GaryxUnscopedThreadsDetailSection: View {
             }
         }
         .transition(.opacity)
+    }
+}
+
+private struct GaryxSidebarThreadPaginationRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+
+    var body: some View {
+        if model.hasMoreThreadSummaries || model.isLoadingMoreThreads {
+            Button {
+                Task { await model.loadMoreThreads() }
+            } label: {
+                HStack(spacing: 8) {
+                    if model.isLoadingMoreThreads {
+                        ProgressView()
+                            .scaleEffect(0.68)
+                    } else {
+                        Image(systemName: "chevron.down")
+                            .font(GaryxFont.system(size: 12, weight: .semibold))
+                    }
+
+                    Text(model.isLoadingMoreThreads ? "Loading threads" : "Load More Threads")
+                        .font(GaryxFont.caption(weight: .semibold))
+                }
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isLoadingMoreThreads)
+            .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
+            .padding(.bottom, 10)
+        }
     }
 }
 

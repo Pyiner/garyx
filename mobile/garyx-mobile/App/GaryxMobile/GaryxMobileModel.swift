@@ -189,6 +189,7 @@ struct GaryxGatewayProfile: Identifiable, Codable, Equatable {
 
 @MainActor
 final class GaryxMobileModel: ObservableObject {
+    private static let threadListPageLimit = 80
     private static let threadHistoryPageLimit = 120
     private static let threadHistoryUserQueryLimit = 10
 
@@ -203,6 +204,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var draft = ""
     @Published var composerAttachments: [GaryxMobileComposerAttachment] = []
     @Published var isLoadingThreads = false
+    @Published var isLoadingMoreThreads = false
+    @Published var hasMoreThreadSummaries = false
     @Published var isLoadingSelectedThreadHistory = false
     @Published var isLoadingOlderThreadHistory = false
     @Published var selectedThreadHasMoreHistoryBefore = false
@@ -307,6 +310,7 @@ final class GaryxMobileModel: ObservableObject {
     private var selectedThreadRecoveryTask: Task<Void, Never>?
     private var selectedThreadRecoveryThreadId: String?
     private var selectedThreadHistoryRequestId: UUID?
+    private var nextThreadListOffset = 0
     private var selectedThreadNextHistoryBeforeIndex: Int?
     private var sceneRefreshTask: Task<Void, Never>?
     private var pendingBotId: String?
@@ -617,6 +621,12 @@ final class GaryxMobileModel: ObservableObject {
         isLoadingOlderThreadHistory = false
         selectedThreadHasMoreHistoryBefore = false
         selectedThreadNextHistoryBeforeIndex = nil
+    }
+
+    private func resetThreadListPagination() {
+        isLoadingMoreThreads = false
+        hasMoreThreadSummaries = false
+        nextThreadListOffset = 0
     }
 
     private func syncVisibleMessages(for threadId: String) {
@@ -1002,6 +1012,7 @@ final class GaryxMobileModel: ObservableObject {
         connectionState = .ready(version: "debug")
         isSending = false
         isLoadingThreads = false
+        resetThreadListPagination()
         isLoadingRemoteState = false
         resetSelectedThreadHistoryPagination()
         lastError = nil
@@ -1780,10 +1791,11 @@ final class GaryxMobileModel: ObservableObject {
         do {
             let previousSelectedId = selectedThread?.id
             let gatewayClient = try client()
-            async let threadsPage = gatewayClient.listThreads(limit: 80)
+            async let threadsPage = gatewayClient.listThreads(limit: Self.threadListPageLimit)
             async let threadPinsPage = gatewayClient.listThreadPins()
             let (page, pinsPage) = try await (threadsPage, threadPinsPage)
             applyPinnedThreadIds(pinsPage.threadIds)
+            updateThreadListPagination(from: page)
             var nextThreads = page.threads
             let requiredThreadIds = sidebarRequiredThreadIds(
                 pinnedThreadIds: pinsPage.threadIds,
@@ -1795,19 +1807,7 @@ final class GaryxMobileModel: ObservableObject {
                 existingThreadIds: Set(nextThreads.map(\.id))
             )
             threads = Self.mergedThreadSummaries(nextThreads)
-            var refreshedBusyIds = remoteBusyThreadIds
-            for thread in threads {
-                if !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
-                    if activeTasksByThread[thread.id] == nil {
-                        refreshedBusyIds.insert(thread.id)
-                    } else {
-                        refreshedBusyIds.remove(thread.id)
-                    }
-                } else if activeTasksByThread[thread.id] == nil {
-                    refreshedBusyIds.remove(thread.id)
-                }
-            }
-            remoteBusyThreadIds = refreshedBusyIds
+            refreshRemoteBusyIdsForVisibleThreads()
             if let previousSelectedId,
                let updatedSelection = threads.first(where: { $0.id == previousSelectedId }) {
                 selectedThread = updatedSelection
@@ -1821,6 +1821,49 @@ final class GaryxMobileModel: ObservableObject {
         } catch {
             lastError = displayMessage(for: error)
         }
+    }
+
+    func loadMoreThreads() async {
+        guard hasGatewaySettings,
+              hasMoreThreadSummaries,
+              !isLoadingThreads,
+              !isLoadingMoreThreads else {
+            return
+        }
+        let offset = nextThreadListOffset
+        guard offset > 0 else { return }
+        isLoadingMoreThreads = true
+        defer { isLoadingMoreThreads = false }
+        do {
+            let page = try await client().listThreads(limit: Self.threadListPageLimit, offset: offset)
+            updateThreadListPagination(from: page)
+            threads = Self.mergedThreadSummaries(threads + page.threads)
+            refreshRemoteBusyIdsForVisibleThreads()
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    private func updateThreadListPagination(from page: GaryxThreadsPage) {
+        let returnedEnd = page.offset + page.count
+        nextThreadListOffset = returnedEnd
+        hasMoreThreadSummaries = returnedEnd < page.total
+    }
+
+    private func refreshRemoteBusyIdsForVisibleThreads() {
+        var refreshedBusyIds = remoteBusyThreadIds
+        for thread in threads {
+            if !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+                if activeTasksByThread[thread.id] == nil {
+                    refreshedBusyIds.insert(thread.id)
+                } else {
+                    refreshedBusyIds.remove(thread.id)
+                }
+            } else if activeTasksByThread[thread.id] == nil {
+                refreshedBusyIds.remove(thread.id)
+            }
+        }
+        remoteBusyThreadIds = refreshedBusyIds
     }
 
     func selectThread(_ thread: GaryxThreadSummary) async {
