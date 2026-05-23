@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check, ChevronDown, MessageSquare } from 'lucide-react';
+import { Check, ChevronDown } from 'lucide-react';
 
 import type {
   DesktopAutomationSchedule,
@@ -42,7 +42,10 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
-import { AgentOptionRow } from '@/app-shell/components/AgentOptionAvatar';
+import {
+  AgentOptionAvatar,
+  AgentOptionRow,
+} from '@/app-shell/components/AgentOptionAvatar';
 import { useI18n } from '@/i18n';
 
 // ---------------------------------------------------------------------------
@@ -118,17 +121,6 @@ function compactPath(value?: string | null): string {
   return `…/${parts.slice(-2).join('/')}`;
 }
 
-function shortTime(value?: string | null): string {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date);
-}
-
 function threadTitle(thread: DesktopThreadSummary): string {
   return thread.title?.trim() || thread.id;
 }
@@ -137,24 +129,40 @@ function threadSubtitle(thread: DesktopThreadSummary): string {
   return compactPath(thread.workspacePath) || thread.id;
 }
 
-function threadDetail(thread: DesktopThreadSummary): string {
-  const preview = thread.lastMessagePreview?.trim();
-  const updated = shortTime(thread.updatedAt);
-  if (preview && updated) return `${preview} · ${updated}`;
-  return preview || updated || thread.id;
+function threadAgentOption(
+  thread: DesktopThreadSummary | null,
+  agentOptions: AutomationAgentOption[],
+): AutomationAgentOption | null {
+  if (!thread) return null;
+  const teamId = thread.teamId?.trim();
+  if (teamId) {
+    const team = agentOptions.find((option) => option.kind === 'team' && option.id === teamId);
+    if (team) return team;
+  }
+  const agentId = thread.agentId?.trim();
+  if (agentId) {
+    const agent = agentOptions.find((option) => option.id === agentId);
+    if (agent) return agent;
+  }
+  return null;
 }
 
 function AutomationThreadPicker({
+  agentOptions,
+  fallbackAgent,
   value,
   threads,
   onChange,
 }: {
+  agentOptions: AutomationAgentOption[];
+  fallbackAgent?: AutomationAgentOption | null;
   value: string;
   threads: DesktopThreadSummary[];
   onChange: (value: string) => void;
 }) {
   const { t } = useI18n();
   const selectedThread = threads.find((thread) => thread.id === value) || null;
+  const selectedAgent = threadAgentOption(selectedThread, agentOptions) ?? fallbackAgent;
   const missingThreadId = value.trim() && !selectedThread ? value.trim() : '';
 
   return (
@@ -162,11 +170,14 @@ function AutomationThreadPicker({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="group flex min-h-[58px] w-full items-center gap-3 rounded-xl border border-input bg-background px-3 py-2 text-left shadow-xs transition-colors outline-none hover:bg-[#fbfbfa] focus-visible:ring-2 focus-visible:ring-ring/35"
+          className="group flex min-h-12 w-full items-center gap-3 rounded-md border border-input bg-background px-3 py-2 text-left shadow-xs transition-colors outline-none hover:bg-[#fafaf9] focus-visible:ring-2 focus-visible:ring-ring/35"
         >
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#f4f4f2] text-muted-foreground">
-            <MessageSquare aria-hidden size={15} strokeWidth={1.8} />
-          </span>
+          <ThreadPickerAvatar
+            agentId={selectedThread?.agentId}
+            fallbackLabel={selectedThread ? threadTitle(selectedThread) : missingThreadId || t('Thread')}
+            option={selectedAgent}
+            teamId={selectedThread?.teamId}
+          />
           <span className="min-w-0 flex-1">
             <span className="block truncate text-[13px] font-medium leading-5 text-foreground">
               {selectedThread ? threadTitle(selectedThread) : missingThreadId || t('Choose thread')}
@@ -198,7 +209,8 @@ function AutomationThreadPicker({
           >
             <ThreadPickerRow
               active
-              detail={t('Thread not loaded')}
+              agentOptions={agentOptions}
+              fallbackAgent={fallbackAgent}
               subtitle={missingThreadId}
               title={missingThreadId}
             />
@@ -215,7 +227,9 @@ function AutomationThreadPicker({
               >
                 <ThreadPickerRow
                   active={active}
-                  detail={threadDetail(thread)}
+                  agentOptions={agentOptions}
+                  fallbackAgent={fallbackAgent}
+                  thread={thread}
                   subtitle={threadSubtitle(thread)}
                   title={threadTitle(thread)}
                 />
@@ -232,31 +246,62 @@ function AutomationThreadPicker({
   );
 }
 
+function ThreadPickerAvatar({
+  agentId,
+  fallbackLabel,
+  option,
+  teamId,
+}: {
+  agentId?: string | null;
+  fallbackLabel: string;
+  option?: AutomationAgentOption | null;
+  teamId?: string | null;
+}) {
+  return (
+    <AgentOptionAvatar
+      agentId={option?.id ?? agentId ?? teamId}
+      avatarDataUrl={option?.avatarDataUrl}
+      className="mt-0.5"
+      kind={option?.kind ?? (teamId ? 'team' : 'agent')}
+      label={option?.label ?? fallbackLabel}
+      providerIcon={option?.providerIcon}
+      providerType={option?.providerType}
+      size="sm"
+    />
+  );
+}
+
 function ThreadPickerRow({
   active,
-  detail,
+  agentOptions,
+  fallbackAgent,
   subtitle,
+  thread,
   title,
 }: {
   active: boolean;
-  detail: string;
+  agentOptions: AutomationAgentOption[];
+  fallbackAgent?: AutomationAgentOption | null;
   subtitle: string;
+  thread?: DesktopThreadSummary | null;
   title: string;
 }) {
+  const option = threadAgentOption(thread ?? null, agentOptions) ?? fallbackAgent;
+
   return (
     <div className="flex min-w-0 flex-1 items-start gap-3">
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-[#f4f4f2] text-muted-foreground">
-        <MessageSquare aria-hidden size={14} strokeWidth={1.8} />
-      </span>
+      <ThreadPickerAvatar
+        agentId={thread?.agentId}
+        fallbackLabel={title}
+        option={option}
+        teamId={thread?.teamId}
+      />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-medium leading-5 text-foreground">
           {title}
         </span>
         <span className="block truncate text-[11px] leading-4 text-muted-foreground">
           {subtitle}
-        </span>
-        <span className="block truncate text-[11px] leading-4 text-muted-foreground/80">
-          {detail}
         </span>
       </span>
       <span className="mt-1 flex size-4 shrink-0 items-center justify-center text-foreground">
@@ -392,6 +437,8 @@ export function AutomationDialog({
             <Field>
               <FieldLabel>{t('Thread')}</FieldLabel>
               <AutomationThreadPicker
+                agentOptions={agentOptions}
+                fallbackAgent={agentOptions.find((option) => option.id === draft.agentId)}
                 value={draft.targetThreadId || ''}
                 threads={threadOptions}
                 onChange={(value) =>
