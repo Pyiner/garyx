@@ -7329,7 +7329,7 @@ struct GaryxToolbarIcon: View {
             if let systemName {
                 Image(systemName: systemName)
                     .font(GaryxFont.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.primary)
             } else if let customContent {
                 customContent()
             }
@@ -7358,7 +7358,7 @@ struct GaryxHeaderMenuIcon: View {
     var body: some View {
         Image(systemName: "sidebar.left")
             .font(GaryxFont.system(size: 18, weight: .semibold))
-            .foregroundStyle(Color.accentColor)
+            .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
     }
