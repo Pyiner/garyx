@@ -5039,21 +5039,32 @@ struct GaryxCreateAutoResearchCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                GaryxFieldLabel("Create Auto Research Run")
-                Spacer()
-                Text(model.selectedWorkspacePath.isEmpty ? "No workspace" : model.selectedWorkspacePath.lastPathComponent)
-                    .font(GaryxFont.caption(weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
+            GaryxFieldLabel("Create Auto Research Run")
             TextField("Goal", text: $model.draftAutoResearchGoal, axis: .vertical)
                 .lineLimit(2...5)
                 .garyxInputStyle()
+            if workspacePaths.isEmpty {
+                Text("No workspaces available")
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else {
+                Picker("Workspace", selection: $model.selectedWorkspacePath) {
+                    ForEach(workspacePaths, id: \.self) { path in
+                        Text(path.lastPathComponent).tag(path)
+                    }
+                }
+                .pickerStyle(.menu)
+                .garyxInputStyle()
+            }
             HStack {
                 TextField("Iterations", text: $model.draftAutoResearchIterations)
                     .keyboardType(.numberPad)
                     .garyxInputStyle()
-                    .frame(maxWidth: 120)
+                TextField("Budget min", text: $model.draftAutoResearchTimeBudgetMinutes)
+                    .keyboardType(.numberPad)
+                    .garyxInputStyle()
+            }
+            HStack {
                 Spacer(minLength: 0)
                 Button {
                     Task {
@@ -5065,9 +5076,36 @@ struct GaryxCreateAutoResearchCard: View {
                     Label("Start", systemImage: "play.fill")
                 }
                 .buttonStyle(GaryxPrimaryCompactButtonStyle())
+                .disabled(!canStart)
             }
         }
         .garyxCardStyle()
+        .onAppear(perform: ensureWorkspaceSelection)
+    }
+
+    private var workspacePaths: [String] {
+        model.knownWorkspacePaths
+    }
+
+    private var canStart: Bool {
+        !model.draftAutoResearchGoal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && workspacePaths.contains(model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines))
+            && positiveInteger(model.draftAutoResearchIterations) != nil
+            && positiveInteger(model.draftAutoResearchTimeBudgetMinutes) != nil
+    }
+
+    private func ensureWorkspaceSelection() {
+        let selected = model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty, workspacePaths.contains(selected) {
+            return
+        }
+        model.selectedWorkspacePath = workspacePaths.first ?? ""
+    }
+
+    private func positiveInteger(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = Int(trimmed), parsed > 0 else { return nil }
+        return parsed
     }
 }
 

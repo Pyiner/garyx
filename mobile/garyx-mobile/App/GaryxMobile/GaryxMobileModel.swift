@@ -285,6 +285,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var draftMcpHeaders = ""
     @Published var draftAutoResearchGoal = ""
     @Published var draftAutoResearchIterations = "3"
+    @Published var draftAutoResearchTimeBudgetMinutes = "15"
 
     private let defaults: UserDefaults
     private let keychain: GaryxMobileKeychain
@@ -3314,15 +3315,22 @@ final class GaryxMobileModel: ObservableObject {
 
     func createAutoResearchRunFromDraft() async -> Bool {
         let goal = draftAutoResearchGoal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !goal.isEmpty else { return false }
         let workspace = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let iterations = max(1, Int(draftAutoResearchIterations) ?? 3)
+        let iterationsText = draftAutoResearchIterations.trimmingCharacters(in: .whitespacesAndNewlines)
+        let timeBudgetText = draftAutoResearchTimeBudgetMinutes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !goal.isEmpty,
+              !workspace.isEmpty,
+              let iterations = Int(iterationsText), iterations > 0,
+              let timeBudgetMinutes = Int(timeBudgetText), timeBudgetMinutes > 0 else {
+            return false
+        }
         do {
             let run = try await client().createAutoResearchRun(
                 GaryxAutoResearchCreateRequest(
                     goal: goal,
-                    workspaceDir: workspace.isEmpty ? nil : workspace,
-                    maxIterations: iterations
+                    workspaceDir: workspace,
+                    maxIterations: iterations,
+                    timeBudgetSecs: timeBudgetMinutes * 60
                 )
             )
             draftAutoResearchGoal = ""
