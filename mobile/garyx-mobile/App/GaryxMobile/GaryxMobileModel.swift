@@ -465,6 +465,29 @@ final class GaryxMobileModel: ObservableObject {
         "\(channel.trimmingCharacters(in: .whitespacesAndNewlines)):\(accountId.trimmingCharacters(in: .whitespacesAndNewlines))"
     }
 
+    private static func removeChannelAccount(
+        from settings: inout [String: GaryxJSONValue],
+        channel: String,
+        accountId: String
+    ) -> Bool {
+        guard var channels = settings["channels"]?.objectValue else { return false }
+        let channelKey = channels.keys.first {
+            $0.caseInsensitiveCompare(channel.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+        }
+        guard let channelKey,
+              var channelConfig = channels[channelKey]?.objectValue,
+              var accounts = channelConfig["accounts"]?.objectValue,
+              accounts.keys.contains(accountId) else {
+            return false
+        }
+
+        accounts.removeValue(forKey: accountId)
+        channelConfig["accounts"] = .object(accounts)
+        channels[channelKey] = .object(channelConfig)
+        settings["channels"] = .object(channels)
+        return true
+    }
+
     private static func channelDisplayName(_ channel: String) -> String {
         let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines)
         switch normalized.lowercased() {
@@ -3968,6 +3991,34 @@ final class GaryxMobileModel: ObservableObject {
     func unbindBot(_ bot: GaryxConfiguredBot) async {
         do {
             botStatusesById[bot.id] = try await client().unbindBot(botId: bot.id)
+            await refreshRemoteState()
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func deleteConfiguredBotAccount(_ bot: GaryxConfiguredBot) async {
+        do {
+            var settings = try await client().gatewaySettings()
+            guard Self.removeChannelAccount(
+                from: &settings,
+                channel: bot.channel,
+                accountId: bot.accountId
+            ) else {
+                lastError = "Bot account not found"
+                return
+            }
+            _ = try await client().saveGatewaySettings(settings, merge: false)
+            configuredBots.removeAll { $0.id == bot.id }
+            channelEndpoints.removeAll { endpoint in
+                endpoint.channel.caseInsensitiveCompare(bot.channel) == .orderedSame
+                    && endpoint.accountId == bot.accountId
+            }
+            botConsoles.removeAll {
+                $0.channel.caseInsensitiveCompare(bot.channel) == .orderedSame
+                    && $0.accountId == bot.accountId
+            }
+            botStatusesById.removeValue(forKey: bot.id)
             await refreshRemoteState()
         } catch {
             lastError = displayMessage(for: error)

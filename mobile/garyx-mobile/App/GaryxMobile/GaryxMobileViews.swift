@@ -6636,43 +6636,63 @@ struct GaryxBotsContent: View {
 struct GaryxBotGroupRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let group: GaryxMobileBotGroup
+    @State private var showsAccountActions = false
+    @State private var showsDeleteConfirmation = false
 
     var body: some View {
         GaryxSwipeActionRow(actions: swipeActions) {
-                HStack(alignment: .center, spacing: 10) {
-                    GaryxChannelLogoView(
-                        channel: group.channel,
-                        label: group.title,
-                        iconDataUrl: group.iconDataUrl,
-                        diameter: 28
-                    )
+            HStack(alignment: .center, spacing: 10) {
+                GaryxChannelLogoView(
+                    channel: group.channel,
+                    label: group.title,
+                    iconDataUrl: group.iconDataUrl,
+                    diameter: 28
+                )
 
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(group.title)
-                            .font(GaryxFont.subheadline(weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Text(group.compactDetailLine)
-                            .font(GaryxFont.caption())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    Spacer(minLength: 6)
-
-                    if group.endpointCount > 0 {
-                        Text("\(group.boundEndpointCount)/\(group.endpointCount)")
-                            .font(GaryxFont.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Color(.tertiarySystemFill), in: Capsule())
-                            .accessibilityLabel("\(group.boundEndpointCount) of \(group.endpointCount) endpoints linked")
-                    }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(group.title)
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(group.compactDetailLine)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 8)
+
+                Spacer(minLength: 6)
+
+                if group.endpointCount > 0 {
+                    Text("\(group.boundEndpointCount)/\(group.endpointCount)")
+                        .font(GaryxFont.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                        .accessibilityLabel("\(group.boundEndpointCount) of \(group.endpointCount) endpoints linked")
+                }
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 8)
+        }
+        .confirmationDialog("Bot Actions", isPresented: $showsAccountActions, titleVisibility: .visible) {
+            if configuredBot != nil {
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    showsDeleteConfirmation = true
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Delete bot account?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                if let configuredBot {
+                    Task { await model.deleteConfiguredBotAccount(configuredBot) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the channel account from the gateway configuration.")
         }
     }
 
@@ -6695,13 +6715,18 @@ struct GaryxBotGroupRow: View {
                     }
                 )
             }
-            if group.boundEndpointCount > 0 || group.defaultOpenThreadId?.isEmpty == false {
+            if !mainThreadId.isEmpty {
                 actions.append(
                     GaryxSwipeAction(title: "Unbind", systemImage: "link.badge.minus") {
                         Task { await model.unbindBot(configuredBot) }
                     }
                 )
             }
+            actions.append(
+                GaryxSwipeAction(title: "More", systemImage: "ellipsis.circle") {
+                    showsAccountActions = true
+                }
+            )
         }
         return actions
     }
