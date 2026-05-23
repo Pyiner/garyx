@@ -6593,6 +6593,10 @@ struct GaryxSavedGatewayProfileRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let profile: GaryxGatewayProfile
     let isCurrent: Bool
+    @State private var showsEditForm = false
+    @State private var label = ""
+    @State private var gatewayUrl = ""
+    @State private var token = ""
 
     var body: some View {
         GaryxSwipeActionRow(actions: profileSwipeActions) {
@@ -6628,6 +6632,40 @@ struct GaryxSavedGatewayProfileRow: View {
                 Task { await model.activateGatewayProfile(profile) }
             }
         }
+        .onAppear(perform: fillDraft)
+        .fullScreenCover(isPresented: $showsEditForm) {
+            GaryxFormSheet(title: "Edit Gateway") {
+                VStack(alignment: .leading, spacing: 12) {
+                    GaryxFieldLabel("Gateway")
+                    TextField("Name", text: $label)
+                        .garyxInputStyle()
+                    TextField("Gateway URL", text: $gatewayUrl)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxInputStyle()
+                    SecureField("Gateway Token", text: $token)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxInputStyle()
+                    Button {
+                        if model.updateGatewayProfile(
+                            profile,
+                            label: label,
+                            gatewayUrl: gatewayUrl,
+                            token: token
+                        ) {
+                            showsEditForm = false
+                        }
+                    } label: {
+                        Label("Save Gateway", systemImage: "checkmark")
+                    }
+                    .buttonStyle(GaryxPrimaryCompactButtonStyle())
+                    .disabled(gatewayUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .garyxCardStyle()
+            }
+        }
     }
 
     private var profileSwipeActions: [GaryxSwipeAction] {
@@ -6635,10 +6673,20 @@ struct GaryxSavedGatewayProfileRow: View {
             GaryxSwipeAction(title: "Switch", systemImage: "arrow.triangle.2.circlepath", tone: .accent) {
                 Task { await model.activateGatewayProfile(profile) }
             },
+            GaryxSwipeAction(title: "Edit", systemImage: "pencil") {
+                fillDraft()
+                showsEditForm = true
+            },
             GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
                 model.removeGatewayProfile(profile)
             }
         ]
+    }
+
+    private func fillDraft() {
+        label = profile.label
+        gatewayUrl = profile.gatewayUrl
+        token = model.gatewayProfileToken(profile)
     }
 }
 

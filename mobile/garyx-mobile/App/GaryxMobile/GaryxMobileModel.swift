@@ -1543,6 +1543,68 @@ final class GaryxMobileModel: ObservableObject {
         await connectAndRefresh()
     }
 
+    func gatewayProfileToken(_ profile: GaryxGatewayProfile) -> String {
+        keychain.readGatewayProfileToken(profileId: profile.id)
+    }
+
+    @discardableResult
+    func updateGatewayProfile(
+        _ profile: GaryxGatewayProfile,
+        label: String,
+        gatewayUrl: String,
+        token: String
+    ) -> Bool {
+        let normalizedURL = normalizedGatewayURL(gatewayUrl)
+        guard parsedGatewayURL(from: normalizedURL) != nil else {
+            lastError = "Invalid gateway URL"
+            return false
+        }
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextId = Self.stableGatewayProfileId(for: normalizedURL)
+        let existingToken = keychain.readGatewayProfileToken(profileId: profile.id)
+        let wasCurrent = currentGatewayProfile?.id == profile.id
+        let urlChanged = profile.gatewayUrl.lowercased() != normalizedURL.lowercased()
+        let tokenChanged = existingToken != trimmedToken
+        var nextProfile = profile
+        nextProfile.id = nextId
+        nextProfile.label = trimmedLabel.isEmpty ? Self.gatewayProfileLabel(for: normalizedURL) : trimmedLabel
+        nextProfile.gatewayUrl = normalizedURL
+        nextProfile.updatedAt = Date()
+        nextProfile.hasToken = !trimmedToken.isEmpty
+
+        gatewayProfiles.removeAll { candidate in
+            candidate.id == profile.id
+                || candidate.gatewayUrl.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    == normalizedURL.lowercased()
+        }
+        gatewayProfiles = Self.normalizedGatewayProfiles([nextProfile] + gatewayProfiles)
+        persistGatewayProfiles()
+        if profile.id != nextId {
+            keychain.deleteGatewayProfileToken(profileId: profile.id)
+        }
+        keychain.saveGatewayProfileToken(trimmedToken, profileId: nextId)
+
+        if wasCurrent {
+            saveGatewayScopedUserState()
+            if urlChanged || tokenChanged {
+                resetGatewayRuntimeState()
+            }
+            gatewayURL = normalizedURL
+            gatewayAuthToken = trimmedToken
+            defaults.set(gatewayURL, forKey: GaryxMobileSettingsKeys.gatewayUrl)
+            defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayURL)
+            defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayToken)
+            keychain.saveGatewayAuthToken(gatewayAuthToken)
+            if urlChanged {
+                loadGatewayScopedUserState(fallbackToLegacy: false)
+            }
+        }
+        gatewaySettingsStatus = "Updated \(nextProfile.label)"
+        lastError = nil
+        return true
+    }
+
     func removeGatewayProfile(_ profile: GaryxGatewayProfile) {
         gatewayProfiles.removeAll { $0.id == profile.id }
         persistGatewayProfiles()
