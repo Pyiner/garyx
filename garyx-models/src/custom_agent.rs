@@ -109,9 +109,17 @@ impl CustomAgentProfile {
     }
 }
 
-const BUILTIN_CLAUDE_AVATAR_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACKElEQVR42s2Xy2sTURTGf/emD4kaW2lBsU3VxhGbDkalkIKvFCULN4aAXWmp0OpfIIgi6l/gSgVxJSioCx8bpVEsghJDK2pSRU2ysNZaLK0hrZGWjAtBrdR0JvOoZzVw55zvu2fuufN9AoNx6mCHVmr97JWHwkg9YQWoGTLSLnC9ucIOYCPdkE6Al6opnQAvVVs6Bf4vDMkih3Ry9/NhiXLAvUor7eEoXkXFvcxDYTrPcPo18b5bvH+VMDQZFUbZb9/XyZ4DPQjxe6rcy1egBIIogSCxG5d5fPeq7nqGCPjUNvZ29gLw7kWcvuuXmBj7ROMGP/t7juGpraMj2s1Qop/x0Y/6rmIj7T984hxNG1XGhrNcONlLsVj8tdbcuo1QpIvEgzuknvUzOztjbQcqq6pp9LUAkIw/mgMOkE4OkE4OlD8FC4VnZR3S5QJg8stn68dwwW8lXH88C+cJ5L+Oo2k/j0tN/SrnCRSmpxjJvgXA37YTKeemNjRv4siZ82zZEaaisko3AdeuzetO6315KjeJGgyx1FPLaq+P0Q8ZZr4XaFJUokePU79mLUogyMsnMb7lc9aPIcDuyCFCka551zRN4/61izy9d9OYJDNKYr1/K+3hKA2+FqqXuMnnJhjJvCEeu0126Lm9VzFAJjVIJjXo7CG09XdsVEpbqRFluXreKoH6/ygip7rwN4Y0a63MegNphb8zY0yEndZMz2akFQbTTK5YbHv+A82Ryy/aLtp+AAAAAElFTkSuQmCC";
-const BUILTIN_CODEX_AVATAR_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACYklEQVR42s2X3UuTcRTHP8/DFouRduG0QDIo60K7iU3oD2je6CLzZdJeRFC6iqhcRle9EZQvTVlvTp11UYiVuVC7CszILRdC6CLobkm4IC8GefOwLrLFxM1tz/bMc/k7v9/ve94453wF0hTdntJoMn34R0hI5z8hG6ByjBFzBZ7qWyEXwOlEQ1QCPNmfohLgyf4WlQJPhCGSZxGV9H4zLFFp8I1GyE7B7MxbHB0X5KcgE9ldWEj5wQP4/R8zNyDV8O9Qq6k/Vcekdzx2ZjDoiUajzAc+UV93EmdvN5UVFWmlQbXVpZKSYuw2K3arBZ2uCEmSYroqg56lYJBIJIJmp4ZmcyPN5kbmfH4G3ENMTk3H3d9MEhpQVraPTkcHptoa1GoVweAXhj0jTHhf/zegyoDP9zf8o6NjrKyEOWGqodpoZHDgAd+Xlxn2PKav35V4FiRKgeV0Mz1dt/m1ukrn5Su8HJ+I06vVKr59DXL23HnGX3njdAUFu7hx7SrmpgYkSWJv6f70i3Dm3Sxjz1+g1Wp5eN/F3PsZLjkucvhQOQBHKivRaDT4/fOxGqk2Hueeq4+FgB9zUwOhUIjrN28ln4ZbFaFOV0SL3YbdaqG4WBfz6Ex7G+1trRw1HIuLGMCHOR8D7iGmpt9kXgOxMRr+yZ2uHpzOfkymWlpbbOv51+Nb9x5g7fcaT5+N8sg9yOLiUuobUaZd8PNCgO7eu3hGnshqZEK+WvG/JWX7TMO8GpDuKp3NHVHMdJ/P1oK6vWpAiShsxBDlUiu53EDMBr+TQ0yEXFKzVJwRs0Ew5bwV8k3P/wDare9iAccUEAAAAABJRU5ErkJggg==";
-const BUILTIN_GEMINI_AVATAR_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACIklEQVR42s2XQUgUYRTHf9+3M2PuuusOtgvpwQQhECSCCHO7RJBI1KFbCLHkLeiQRkS3OhVEQrcgjDpHHsJu0SFcuglRQZQWlWzZ4pprmznjToeNFMv1+3ZnR99tmHnv///em/e+9xdoWu+Zd16l95nRTqETT/gBWgsZWS9wVV9RD2CdbMggwCvFlEGAV4otgwLfCEOyxSaDPP3/sEQ14O27TE4djbO/q5GWZoNlxyM37/L8ZZEHTxbI5hzlzjB02ff3Rrl4OoFlrnaVZQqawha7Wy2OHYoxNJLl9fSSXglUrKujgUvpMvj0zDLnb2bpO/eeE0MfuD+eByAalgwP7FSOaeikP33cxggJvi+ucPbaDIViCYBF4PbDOeLREKYhGHu6oPwvKJfANAQHuyMAjE8U/oKvtev3vlXfBZtZwjaQf77+9MXxrSOUM+CtKVSptPqQtA3GbrT/W64rn3n78Zd/GcjNuzhuGbijzfJ/EG1mjuuReVEEoK8nSixSdp3Nu6QGp0gNTjE8kq0fAYC7j/I4rocdC3HrQiv79jRimYKW5hCpvREG+uPaBITuFDxyoInL6QQ7Gjbm/mzyB1fvzFJcKqmtZLok2pImJw/H6OkOk7QNpICvcytMvvnJ44kCrxSnYGa0U4igL6L1BLbHday7Svu5I8pq93m/FtTtsxEFlYX1GLJWaVWrNpB+6LtahImopzRTOYz0Q2DW4iu2Wp7/BqspyjyJ+p+sAAAAAElFTkSuQmCC";
+const BUILTIN_CLAUDE_AVATAR_PNG: &[u8] =
+    include_bytes!("../assets/builtin_agent_avatars/claude.png");
+const BUILTIN_CODEX_AVATAR_PNG: &[u8] = include_bytes!("../assets/builtin_agent_avatars/codex.png");
+const BUILTIN_GEMINI_AVATAR_PNG: &[u8] =
+    include_bytes!("../assets/builtin_agent_avatars/gemini.png");
+
+fn builtin_avatar_data_url(bytes: &[u8]) -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
+    format!("data:image/png;base64,{}", BASE64.encode(bytes))
+}
 
 pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
     let now = chrono::Utc::now().to_rfc3339();
@@ -130,7 +138,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             max_tool_iterations: default_garyx_native_max_tool_iterations(),
             request_timeout_seconds: default_native_request_timeout_u32(),
             default_workspace_dir: None,
-            avatar_data_url: Some(BUILTIN_CLAUDE_AVATAR_DATA_URL.to_owned()),
+            avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_CLAUDE_AVATAR_PNG)),
             system_prompt: String::new(),
             built_in: true,
             standalone: true,
@@ -151,7 +159,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             max_tool_iterations: default_garyx_native_max_tool_iterations(),
             request_timeout_seconds: default_native_request_timeout_u32(),
             default_workspace_dir: None,
-            avatar_data_url: Some(BUILTIN_CODEX_AVATAR_DATA_URL.to_owned()),
+            avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_CODEX_AVATAR_PNG)),
             system_prompt: String::new(),
             built_in: true,
             standalone: true,
@@ -172,7 +180,7 @@ pub fn builtin_provider_agent_profiles() -> Vec<CustomAgentProfile> {
             max_tool_iterations: default_garyx_native_max_tool_iterations(),
             request_timeout_seconds: default_native_request_timeout_u32(),
             default_workspace_dir: None,
-            avatar_data_url: Some(BUILTIN_GEMINI_AVATAR_DATA_URL.to_owned()),
+            avatar_data_url: Some(builtin_avatar_data_url(BUILTIN_GEMINI_AVATAR_PNG)),
             system_prompt: String::new(),
             built_in: true,
             standalone: true,

@@ -1,3 +1,5 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+
 use super::*;
 
 #[test]
@@ -110,4 +112,28 @@ fn builtin_provider_profiles_do_not_include_gpt_agent() {
             .all(|profile| profile.agent_id != "gpt" && profile.provider_type != ProviderType::Gpt),
         "GPT is a provider option, not a built-in agent"
     );
+}
+
+#[test]
+fn builtin_provider_profiles_include_desktop_provider_avatars() {
+    let profiles = builtin_provider_agent_profiles();
+    for agent_id in ["claude", "codex", "gemini"] {
+        let avatar_data_url = profiles
+            .iter()
+            .find(|profile| profile.agent_id == agent_id)
+            .and_then(|profile| profile.avatar_data_url.as_deref())
+            .expect("built-in provider avatar");
+        let encoded = avatar_data_url
+            .strip_prefix("data:image/png;base64,")
+            .expect("png avatar data URL");
+        let bytes = BASE64.decode(encoded).expect("valid base64 png");
+        assert!(
+            bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "built-in provider avatar should be PNG data"
+        );
+        assert!(
+            bytes.len() >= 600,
+            "built-in provider avatar should contain the desktop provider icon artwork"
+        );
+    }
 }
