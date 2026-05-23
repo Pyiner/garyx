@@ -432,6 +432,20 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(notificationTarget?["kind"] as? String, "none")
     }
 
+    func testTaskCreateRequestEncodesBotNotificationTarget() throws {
+        let request = GaryxTaskCreateRequest(
+            title: "Notify bot",
+            notificationTarget: .bot(channel: "telegram", accountId: "test-bot")
+        )
+
+        let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        let notificationTarget = object?["notification_target"] as? [String: Any]
+
+        XCTAssertEqual(notificationTarget?["kind"] as? String, "bot")
+        XCTAssertEqual(notificationTarget?["channel"] as? String, "telegram")
+        XCTAssertEqual(notificationTarget?["account_id"] as? String, "test-bot")
+    }
+
     func testTaskCreateResponseMergesEnvelopeAndNestedTask() throws {
         let data = Data(
             """

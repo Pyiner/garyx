@@ -3179,6 +3179,7 @@ struct GaryxCreateTaskCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var workspacePath = ""
     @State private var startImmediately = true
+    @State private var notificationTargetId = "none"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -3220,13 +3221,51 @@ struct GaryxCreateTaskCard: View {
                 .autocorrectionDisabled()
                 .garyxInputStyle()
 
+            GaryxFieldLabel("Notification")
+                .padding(.top, 4)
+            Menu {
+                Button {
+                    notificationTargetId = "none"
+                } label: {
+                    Label("Do not notify", systemImage: notificationTargetId == "none" ? "checkmark" : "bell.slash")
+                }
+                if !model.mobileBotGroups.isEmpty {
+                    Divider()
+                    ForEach(model.mobileBotGroups) { group in
+                        Button {
+                            notificationTargetId = group.id
+                        } label: {
+                            Label(group.title, systemImage: notificationTargetId == group.id ? "checkmark" : "bell")
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(notificationTargetLabel)
+                        .font(GaryxFont.callout(weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(GaryxFont.system(size: 10, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 42)
+                .background(GaryxTheme.input, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
             Toggle("Start immediately", isOn: $startImmediately)
                 .font(GaryxFont.callout(weight: .medium))
 
             Button {
                 Task {
                     model.setNewThreadWorkspace(workspacePath)
-                    await model.createTaskFromDraft(start: startImmediately)
+                    await model.createTaskFromDraft(
+                        start: startImmediately,
+                        notificationTarget: notificationTargetRequest
+                    )
                     if model.draftTaskTitle.isEmpty, model.draftTaskBody.isEmpty {
                         dismiss()
                     }
@@ -3246,6 +3285,19 @@ struct GaryxCreateTaskCard: View {
     private var canCreate: Bool {
         !model.draftTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !model.draftTaskBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var selectedNotificationGroup: GaryxMobileBotGroup? {
+        model.mobileBotGroups.first { $0.id == notificationTargetId }
+    }
+
+    private var notificationTargetLabel: String {
+        selectedNotificationGroup?.title ?? "Do not notify"
+    }
+
+    private var notificationTargetRequest: GaryxTaskNotificationTargetRequest {
+        guard let group = selectedNotificationGroup else { return .none }
+        return .bot(channel: group.channel, accountId: group.accountId)
     }
 }
 

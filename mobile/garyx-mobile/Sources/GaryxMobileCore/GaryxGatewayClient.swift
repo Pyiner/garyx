@@ -864,14 +864,24 @@ public struct GaryxTaskRuntimeRequest: Encodable, Equatable, Sendable {
 
 public enum GaryxTaskNotificationTargetRequest: Encodable, Equatable, Sendable {
     case none
+    case bot(channel: String, accountId: String)
 
     enum CodingKeys: String, CodingKey {
         case kind
+        case channel
+        case accountId = "account_id"
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode("none", forKey: .kind)
+        switch self {
+        case .none:
+            try container.encode("none", forKey: .kind)
+        case .bot(let channel, let accountId):
+            try container.encode("bot", forKey: .kind)
+            try container.encode(channel, forKey: .channel)
+            try container.encode(accountId, forKey: .accountId)
+        }
     }
 }
 

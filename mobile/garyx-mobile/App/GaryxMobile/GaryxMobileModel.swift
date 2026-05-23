@@ -2482,7 +2482,10 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
-    func createTaskFromDraft(start: Bool = true) async {
+    func createTaskFromDraft(
+        start: Bool = true,
+        notificationTarget: GaryxTaskNotificationTargetRequest = .none
+    ) async {
         let title = draftTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = draftTaskBody.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty || !body.isEmpty else { return }
@@ -2499,7 +2502,8 @@ final class GaryxMobileModel: ObservableObject {
                     runtime: GaryxTaskRuntimeRequest(
                         agentId: start && !target.isEmpty ? target : nil,
                         workspaceDir: workspace.isEmpty ? nil : workspace
-                    )
+                    ),
+                    notificationTarget: notificationTarget
                 )
             )
             draftTaskTitle = ""
