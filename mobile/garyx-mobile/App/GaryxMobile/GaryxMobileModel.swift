@@ -822,6 +822,14 @@ final class GaryxMobileModel: ObservableObject {
         tasks.filter { $0.status != .done }.count
     }
 
+    var selectedThreadTask: GaryxTaskSummary? {
+        guard let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadId.isEmpty else {
+            return nil
+        }
+        return taskSummary(forThreadId: threadId)
+    }
+
     var enabledAutomationCount: Int {
         automations.filter(\.enabled).count
     }
@@ -2483,11 +2491,36 @@ final class GaryxMobileModel: ObservableObject {
             )
             draftTaskTitle = ""
             draftTaskBody = ""
-            tasks.insert(task, at: 0)
+            upsertTask(task)
             if !task.threadId.isEmpty {
                 await openThread(id: task.threadId)
             }
         } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func promoteSelectedThreadToTask() async {
+        guard let thread = selectedThread else { return }
+        let title = thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            var task = try await client().promoteTask(
+                GaryxTaskPromoteRequest(
+                    threadId: thread.id,
+                    title: title.isEmpty ? nil : title
+                )
+            )
+            if task.threadId.isEmpty {
+                task.threadId = thread.id
+            }
+            upsertTask(task)
+            activePanel = .tasks
+        } catch {
+            if Self.isAlreadyTaskError(error),
+               await reconcileTaskForThread(thread.id) != nil {
+                activePanel = .tasks
+                return
+            }
             lastError = displayMessage(for: error)
         }
     }
@@ -2551,6 +2584,43 @@ final class GaryxMobileModel: ObservableObject {
         } catch {
             lastError = displayMessage(for: error)
         }
+    }
+
+    private func upsertTask(_ task: GaryxTaskSummary) {
+        if let index = tasks.firstIndex(where: { $0.id == task.id }) {
+            tasks[index] = task
+        } else {
+            tasks.insert(task, at: 0)
+        }
+    }
+
+    private func taskSummary(forThreadId threadId: String) -> GaryxTaskSummary? {
+        let threadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !threadId.isEmpty else { return nil }
+        return tasks.first { $0.threadId == threadId }
+    }
+
+    private func reconcileTaskForThread(_ threadId: String) async -> GaryxTaskSummary? {
+        if let task = taskSummary(forThreadId: threadId) {
+            return task
+        }
+        do {
+            let page = try await client().listTasks(includeDone: true, limit: 200)
+            tasks = page.tasks
+            return taskSummary(forThreadId: threadId)
+        } catch {
+            lastError = displayMessage(for: error)
+            return nil
+        }
+    }
+
+    private static func isAlreadyTaskError(_ error: Error) -> Bool {
+        if case let GaryxGatewayError.httpStatus(_, body) = error {
+            return body.contains("\"code\":\"AlreadyATask\"")
+                || body.contains("\"code\": \"AlreadyATask\"")
+                || body.contains("AlreadyATask")
+        }
+        return false
     }
 
     func runAutomation(_ automation: GaryxAutomationSummary) async {
