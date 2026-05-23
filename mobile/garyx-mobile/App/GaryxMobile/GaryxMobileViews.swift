@@ -3249,6 +3249,7 @@ struct GaryxTaskListRow: View {
     @State private var showsDeleteConfirmation = false
     @State private var showsMoreActions = false
     @State private var showsRenamePrompt = false
+    @State private var showsStatusActions = false
     @State private var renameDraftTitle = ""
 
     var body: some View {
@@ -3324,6 +3325,16 @@ struct GaryxTaskListRow: View {
             }
             Button("Cancel", role: .cancel) {}
         }
+        .confirmationDialog("Set Status", isPresented: $showsStatusActions, titleVisibility: .visible) {
+            ForEach(GaryxTaskStatus.allCases.filter { $0 != task.status }, id: \.rawValue) { status in
+                Button {
+                    Task { await model.updateTask(task, to: status) }
+                } label: {
+                    Label(status.label, systemImage: status.systemImage)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .confirmationDialog("Delete task?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task { await model.deleteTask(task) }
@@ -3351,8 +3362,8 @@ struct GaryxTaskListRow: View {
             )
         }
         actions.append(
-            GaryxSwipeAction(title: task.status.nextActionLabel, systemImage: task.status.nextActionIcon) {
-                Task { await model.updateTask(task, to: task.status.next) }
+            GaryxSwipeAction(title: "Status", systemImage: "slider.horizontal.3") {
+                showsStatusActions = true
             }
         )
         actions.append(
@@ -7015,42 +7026,16 @@ private extension GaryxTaskStatus {
         }
     }
 
-    var nextActionLabel: String {
+    var systemImage: String {
         switch self {
         case .todo:
-            "Start"
+            "circle"
         case .inProgress:
-            "Send to Review"
+            "play.circle.fill"
         case .inReview:
-            "Done"
+            "arrowshape.turn.up.right.circle.fill"
         case .done:
-            "Reopen"
-        }
-    }
-
-    var nextActionIcon: String {
-        switch self {
-        case .todo:
-            "play.fill"
-        case .inProgress:
-            "arrowshape.turn.up.right.fill"
-        case .inReview:
-            "checkmark"
-        case .done:
-            "arrow.counterclockwise"
-        }
-    }
-
-    var next: GaryxTaskStatus {
-        switch self {
-        case .todo:
-            .inProgress
-        case .inProgress:
-            .inReview
-        case .inReview:
-            .done
-        case .done:
-            .todo
+            "checkmark.circle.fill"
         }
     }
 
