@@ -336,7 +336,12 @@ struct GaryxShellView: View {
                     )
                 }
                 guard sidebarDragAxis == .horizontal else { return }
-                sidebarDragOffset = max(0, min(sidebarWidth, value.translation.width))
+                switch model.mainPanelLeadingEdgeAction {
+                case .openSidebar:
+                    sidebarDragOffset = max(0, min(sidebarWidth, value.translation.width))
+                case .settingsOverview:
+                    sidebarDragOffset = 0
+                }
             }
             .onEnded { value in
                 defer {
@@ -348,7 +353,18 @@ struct GaryxShellView: View {
                 }
                 let shouldOpen = value.translation.width > sidebarWidth * 0.22
                     || value.predictedEndTranslation.width > sidebarWidth * 0.35
-                finishGesture(open: shouldOpen)
+                switch model.mainPanelLeadingEdgeAction {
+                case .openSidebar:
+                    finishGesture(open: shouldOpen)
+                case .settingsOverview:
+                    resetSidebarDrag()
+                    if shouldOpen {
+                        hideKeyboard()
+                        withAnimation(GaryxMobileMotion.sidebarDrilldown) {
+                            model.performMainPanelLeadingEdgeAction()
+                        }
+                    }
+                }
             }
     }
 
@@ -658,76 +674,44 @@ struct GaryxSidebarHeaderView: View {
     let onClose: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            if let drilldownContext {
-                Button(action: onBack) {
-                    Image(systemName: "chevron.left")
-                        .font(GaryxFont.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .background {
-                            Circle()
-                                .fill(Color(.systemBackground).opacity(0.42))
-                                .background(.ultraThinMaterial, in: Circle())
-                        }
-                        .overlay {
-                            Circle()
-                                .stroke(Color.primary.opacity(0.032), lineWidth: 1)
-                        }
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Back")
+        GaryxAdaptiveGlassContainer(spacing: 10) {
+            HStack(alignment: .center, spacing: 12) {
+                if let drilldownContext {
+                    Button(action: onBack) {
+                        GaryxToolbarIcon(systemName: "chevron.left")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back")
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(drilldownContext.title)
-                        .font(GaryxFont.system(size: 23, weight: .semibold))
+                    GaryxPanelHeaderTitle(
+                        title: drilldownContext.title,
+                        subtitle: drilldownContext.subtitle ?? ""
+                    )
+                    .layoutPriority(1)
+                } else {
+                    Text("Gary X")
+                        .font(GaryxFont.system(size: 26, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.75)
 
-                    if let subtitle = drilldownContext.subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(GaryxFont.caption())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                Text("Gary X")
-                    .font(GaryxFont.system(size: 26, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
 
                 Spacer(minLength: 0)
-            }
 
-            if showsCloseButton {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 44, height: 44)
-                        .background {
-                            Circle()
-                                .fill(Color(.systemBackground).opacity(0.42))
-                                .background(.ultraThinMaterial, in: Circle())
-                        }
-                        .overlay {
-                            Circle()
-                                .stroke(Color.primary.opacity(0.032), lineWidth: 1)
-                        }
-                        .contentShape(Circle())
+                if showsCloseButton {
+                    Button(action: onClose) {
+                        GaryxToolbarIcon(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Close menu")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close menu")
             }
         }
-        .padding(.horizontal, 26)
-        .padding(.top, 6)
-        .padding(.bottom, 14)
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
     }
 }
 
@@ -7470,7 +7454,7 @@ struct GaryxMobileSettingsPanel: View {
     private var settingsLeadingAction: (() -> Void)? {
         guard model.activeSettingsTab != .manage else { return nil }
         return {
-            model.activeSettingsTab = .manage
+            model.showSettingsOverview()
         }
     }
 }
@@ -8195,50 +8179,75 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         }
         .background(background)
         .garyxAdaptiveTopBar {
-            HStack(spacing: 10) {
-                if let leadingAction {
-                    Button {
-                        leadingAction()
-                    } label: {
-                        GaryxToolbarIcon(systemName: leadingActionSystemName)
+            GaryxAdaptiveGlassContainer(spacing: 10) {
+                HStack(spacing: 12) {
+                    if let leadingAction {
+                        Button {
+                            leadingAction()
+                        } label: {
+                            GaryxToolbarIcon(systemName: leadingActionSystemName)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(leadingActionLabel ?? "Back")
+                    } else {
+                        GaryxSidebarMenuButton {
+                            model.setSidebarVisible(true)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(leadingActionLabel ?? "Back")
-                } else {
-                    GaryxSidebarMenuButton {
-                        model.setSidebarVisible(true)
+
+                    GaryxPanelHeaderTitle(title: title, subtitle: subtitle)
+                        .layoutPriority(1)
+
+                    Spacer(minLength: 0)
+
+                    if let onRefresh {
+                        Button {
+                            Task { await onRefresh() }
+                        } label: {
+                            GaryxToolbarIcon(systemName: "arrow.clockwise")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Refresh")
                     }
+
+                    actions
                 }
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(GaryxFont.body(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer()
-
-                if let onRefresh {
-                    Button {
-                        Task { await onRefresh() }
-                    } label: {
-                        GaryxToolbarIcon(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Refresh")
-                }
-
-                actions
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
+            .padding(.top, 10)
             .padding(.bottom, 8)
         }
+    }
+}
+
+struct GaryxPanelHeaderTitle: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(GaryxFont.callout(weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            if !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(subtitle)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 44, alignment: .leading)
+        .frame(maxWidth: 282, alignment: .leading)
+        .garyxAdaptiveGlass(
+            .regular,
+            isInteractive: false,
+            fallbackMaterial: .ultraThinMaterial,
+            in: Capsule()
+        )
     }
 }
 

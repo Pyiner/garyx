@@ -142,6 +142,11 @@ enum GaryxMobileSettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+enum GaryxMobileLeadingEdgeAction {
+    case openSidebar
+    case settingsOverview
+}
+
 struct GaryxMobileAgentTarget: Identifiable, Equatable {
     enum Kind: Equatable {
         case agent
@@ -1098,6 +1103,26 @@ final class GaryxMobileModel: ObservableObject {
     func openSettings(tab: GaryxMobileSettingsTab = .manage) {
         activeSettingsTab = tab
         openPanel(.settings)
+    }
+
+    var mainPanelLeadingEdgeAction: GaryxMobileLeadingEdgeAction {
+        if activePanel == .settings, activeSettingsTab != .manage {
+            return .settingsOverview
+        }
+        return .openSidebar
+    }
+
+    func performMainPanelLeadingEdgeAction() {
+        switch mainPanelLeadingEdgeAction {
+        case .openSidebar:
+            setSidebarVisible(true)
+        case .settingsOverview:
+            showSettingsOverview()
+        }
+    }
+
+    func showSettingsOverview() {
+        activeSettingsTab = .manage
     }
 
     #if DEBUG
