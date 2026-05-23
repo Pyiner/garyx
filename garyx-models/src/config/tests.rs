@@ -20,6 +20,7 @@ fn test_gateway_defaults() {
 fn test_agent_provider_defaults() {
     let ap = AgentProviderConfig::default();
     assert_eq!(ap.provider_type, "claude_code");
+    assert_eq!(ap.claude_cli_mode, "native");
     assert_eq!(ap.max_turns, None);
     assert_eq!(ap.permission_mode, "bypassPermissions");
     assert_eq!(ap.default_model, "");

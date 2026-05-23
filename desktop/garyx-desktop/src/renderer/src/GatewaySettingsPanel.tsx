@@ -799,7 +799,7 @@ function claudeAgentConfig(gatewayDraft: any): Record<string, any> {
 }
 
 function normalizeClaudeCliMode(value: unknown): 'cctty' | 'native' {
-  return String(value || '').trim().toLowerCase() === 'native' ? 'native' : 'cctty';
+  return String(value || '').trim().toLowerCase() === 'cctty' ? 'cctty' : 'native';
 }
 
 function claudeCliModeLabel(value: 'cctty' | 'native', t: Translate): string {
@@ -810,7 +810,7 @@ function emptyModelProviderConfigDraft(key: FixedModelProviderKey = 'claude_code
   const row = fixedModelProviderRow(key);
   return {
     key,
-    claudeCliMode: 'cctty',
+    claudeCliMode: 'native',
     claudeCliPath: '',
     claudeEnv: '',
     codexAuthMode: 'cli',
@@ -2065,8 +2065,8 @@ export function GatewaySettingsPanel({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        <SelectItem value="cctty">{t('cctty TTY wrapper')}</SelectItem>
                         <SelectItem value="native">{t('Native Claude CLI')}</SelectItem>
+                        <SelectItem value="cctty">{t('cctty TTY wrapper')}</SelectItem>
                       </SelectGroup>
                     </SelectContent>
                   </Select>
@@ -2074,7 +2074,7 @@ export function GatewaySettingsPanel({
                 <div className="commands-field">
                   <div className="commands-field-header">
                     <Label className="commands-field-label" htmlFor="provider-claude-cli-path">{t('CLI path')}</Label>
-                    <span className="commands-field-hint">{t('Leave empty to use bundled cctty or PATH.')}</span>
+                    <span className="commands-field-hint">{t('Leave empty to use the selected CLI from PATH.')}</span>
                   </div>
                   <Input
                     id="provider-claude-cli-path"

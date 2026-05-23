@@ -346,8 +346,8 @@ pub struct ClaudeCodeConfig {
     #[serde(default = "default_claude_provider_type")]
     pub provider_type: ProviderType,
 
-    /// Claude Agent SDK executable selection. `cctty` uses Garyx's bundled
-    /// terminal wrapper; `native` uses the original Claude Code CLI.
+    /// Claude Agent SDK executable selection. `native` uses the original
+    /// Claude Code CLI; `cctty` uses Garyx's optional terminal wrapper.
     #[serde(default = "default_claude_cli_mode")]
     pub claude_cli_mode: String,
 
@@ -395,7 +395,7 @@ fn default_claude_provider_type() -> ProviderType {
     ProviderType::ClaudeCode
 }
 pub fn default_claude_cli_mode() -> String {
-    "cctty".to_owned()
+    "native".to_owned()
 }
 fn default_disallowed_tools() -> Vec<String> {
     vec![

@@ -11,7 +11,7 @@ use claude_agent_sdk::{
 use garyx_models::provider::{
     ClaudeCodeConfig, ImagePayload, PromptAttachment, ProviderMessage, ProviderRunOptions,
     ProviderRunResult, ProviderType, QueuedUserInput, StreamBoundaryKind, StreamEvent,
-    attachments_from_metadata, build_prompt_message_with_attachments,
+    attachments_from_metadata, build_prompt_message_with_attachments, default_claude_cli_mode,
 };
 use serde_json::Value;
 use tokio::sync::Mutex;
@@ -109,11 +109,16 @@ fn claude_sdk_cli_mode(config: &ClaudeCodeConfig) -> String {
         .get(GARYX_CLAUDE_CLI_MODE_ENV)
         .cloned()
         .or_else(|| std::env::var(GARYX_CLAUDE_CLI_MODE_ENV).ok());
-    env_mode
+    let raw_mode = env_mode
         .as_deref()
         .unwrap_or(config.claude_cli_mode.as_str())
-        .trim()
-        .to_ascii_lowercase()
+        .trim();
+    let mode = if raw_mode.is_empty() {
+        default_claude_cli_mode()
+    } else {
+        raw_mode.to_owned()
+    };
+    mode.to_ascii_lowercase()
 }
 
 fn resolve_claude_sdk_cli_path(config: &ClaudeCodeConfig) -> Option<PathBuf> {
@@ -1528,7 +1533,7 @@ impl AgentLoopProvider for ClaudeCliProvider {
                 }
                 _ => {
                     return Err(BridgeError::Internal(
-                        "Claude SDK CLI not found: configure claude_cli_mode=native with claude on PATH, or install the cctty sidecar next to garyx".to_owned(),
+                        "Claude SDK CLI not found: install claude on PATH, configure claude_cli_path, or set claude_cli_mode=cctty with the cctty sidecar installed".to_owned(),
                     ));
                 }
             }

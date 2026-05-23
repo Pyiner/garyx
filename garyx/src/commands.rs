@@ -52,7 +52,9 @@ use garyx_models::local_paths::{
     default_agent_teams_state_path, default_custom_agents_state_path, default_log_file_path,
     gary_home_dir,
 };
-use garyx_models::provider::{AgentRunRequest, ProviderMessage, StreamEvent};
+use garyx_models::provider::{
+    AgentRunRequest, ProviderMessage, StreamEvent, default_claude_cli_mode,
+};
 use garyx_models::{
     AgentTeamProfile, CustomAgentProfile, ProviderType, builtin_provider_agent_profiles,
 };
@@ -803,7 +805,10 @@ pub(crate) async fn cmd_config_claude_cli(
         let mode = configured
             .and_then(|object| object.get("claude_cli_mode"))
             .and_then(Value::as_str)
-            .unwrap_or("cctty");
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_claude_cli_mode);
         let path = configured
             .and_then(|object| object.get("claude_cli_path"))
             .and_then(Value::as_str)

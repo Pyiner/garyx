@@ -15,9 +15,8 @@ installed at startup and registers `claude_code`, `codex_app_server`, and
 
 `claude_tty` is no longer a provider. Garyx now keeps one Claude Agent SDK
 path and chooses the executable launched by that SDK. By default the executable
-is the bundled `cctty` sidecar, which drives interactive Claude Code through a
-terminal while preserving the SDK protocol. Set `agents.claude.claude_cli_mode`
-to `native` to launch the original Claude Code CLI directly.
+is the native Claude Code CLI (`claude`). Set `agents.claude.claude_cli_mode`
+to `cctty` to launch Garyx's optional terminal-wrapper sidecar instead.
 
 ## How runs find a provider
 

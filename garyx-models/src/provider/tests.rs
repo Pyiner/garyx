@@ -214,6 +214,7 @@ fn test_provider_message_text_helpers() {
 fn test_claude_code_config_defaults() {
     let cfg = ClaudeCodeConfig::default();
     assert_eq!(cfg.provider_type, ProviderType::ClaudeCode);
+    assert_eq!(cfg.claude_cli_mode, "native");
     assert_eq!(cfg.permission_mode, "bypassPermissions");
     assert_eq!(cfg.mcp_base_url, "http://127.0.0.1:31337");
 }
