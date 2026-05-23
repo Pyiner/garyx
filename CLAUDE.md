@@ -199,6 +199,17 @@ cd desktop/garyx-desktop && npm run build:ui
 cd desktop/garyx-desktop && npm run test:smoke
 ```
 
+For mobile Swift validation, run SwiftPM tests from the mobile package and
+build the app target against the iOS simulator SDK. If the scheme-level
+simulator build fails before compilation because Xcode cannot resolve an
+eligible destination, use the target-level build to validate the same app
+target:
+
+```bash
+cd mobile/garyx-mobile && swift test
+cd mobile/garyx-mobile && xcodebuild -project GaryxMobile.xcodeproj -target GaryxMobile -sdk iphonesimulator -configuration Debug build
+```
+
 When a packaged app is requested, or when validating packaging, install, release,
 or startup behavior, run the packaging flow and launch the installed app:
 
