@@ -25,6 +25,7 @@ enum GaryxMobileConnectionState: Equatable {
 enum GaryxMobilePanel: String, CaseIterable, Identifiable {
     case chat
     case tasks
+    case workspaces
     case automations
     case agents
     case skills
@@ -42,6 +43,8 @@ enum GaryxMobilePanel: String, CaseIterable, Identifiable {
             "Chat"
         case .tasks:
             "Tasks"
+        case .workspaces:
+            "Workspaces"
         case .automations:
             "Automation"
         case .agents:
@@ -67,6 +70,8 @@ enum GaryxMobilePanel: String, CaseIterable, Identifiable {
             "bubble.left.and.text.bubble.right.fill"
         case .tasks:
             "checklist.checked"
+        case .workspaces:
+            "folder"
         case .automations:
             "clock.arrow.circlepath"
         case .agents:
@@ -245,6 +250,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var workspaceListing: GaryxWorkspaceFileListing?
     @Published var workspacePreview: GaryxWorkspaceFilePreview?
     @Published var workspaceGitStatuses: [String: GaryxWorkspaceGitStatus] = [:]
+    @Published var isUploadingWorkspaceFiles = false
+    @Published var workspaceUploadStatus: String?
     @Published var slashCommands: [GaryxSlashCommand] = []
     @Published var mcpServers: [GaryxMcpServer] = []
     @Published var autoResearchRuns: [GaryxAutoResearchRun] = []
@@ -1545,6 +1552,8 @@ final class GaryxMobileModel: ObservableObject {
         workspaceListing = nil
         workspacePreview = nil
         workspaceGitStatuses = [:]
+        isUploadingWorkspaceFiles = false
+        workspaceUploadStatus = nil
         selectedSkillEditor = nil
         selectedSkillDocument = nil
         selectedSkillFileContent = ""
@@ -3236,6 +3245,13 @@ final class GaryxMobileModel: ObservableObject {
         draftWorkspacePath = path
         selectedWorkspaceDirectory = ""
         workspacePreview = nil
+        workspaceUploadStatus = nil
+        await refreshSelectedWorkspace()
+    }
+
+    func prepareWorkspaceBrowser() async {
+        ensureSelectedWorkspace()
+        guard !selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         await refreshSelectedWorkspace()
     }
 
@@ -3288,6 +3304,62 @@ final class GaryxMobileModel: ObservableObject {
         selectedWorkspaceDirectory = parent == "." ? "" : parent
         workspacePreview = nil
         await refreshSelectedWorkspace()
+    }
+
+    func uploadFilesToSelectedWorkspace(from urls: [URL]) async {
+        let workspace = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workspace.isEmpty, !urls.isEmpty else { return }
+        let directory = selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        isUploadingWorkspaceFiles = true
+        workspaceUploadStatus = nil
+        defer { isUploadingWorkspaceFiles = false }
+        do {
+            var files: [GaryxUploadFileBlob] = []
+            for url in urls {
+                let didStartAccess = url.startAccessingSecurityScopedResource()
+                defer {
+                    if didStartAccess {
+                        url.stopAccessingSecurityScopedResource()
+                    }
+                }
+                let values = try url.resourceValues(forKeys: [.isDirectoryKey, .nameKey, .contentTypeKey])
+                if values.isDirectory == true {
+                    continue
+                }
+                let data = try Data(contentsOf: url)
+                let name = (values.name ?? url.lastPathComponent).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { continue }
+                let mediaType = values.contentType?.preferredMIMEType
+                    ?? UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType
+                files.append(
+                    GaryxUploadFileBlob(
+                        name: name,
+                        mediaType: mediaType,
+                        dataBase64: data.base64EncodedString()
+                    )
+                )
+            }
+            guard !files.isEmpty else {
+                workspaceUploadStatus = "No files selected"
+                return
+            }
+            let result = try await client().uploadWorkspaceFiles(
+                GaryxUploadWorkspaceFilesRequest(
+                    workspaceDir: workspace,
+                    path: directory.isEmpty ? nil : directory,
+                    files: files
+                )
+            )
+            workspaceUploadStatus = files.count == 1 ? "Uploaded \(files[0].name)" : "Uploaded \(files.count) files"
+            await refreshSelectedWorkspace()
+            if let firstPath = result.uploadedPaths.first?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !firstPath.isEmpty {
+                workspacePreview = try? await client().previewWorkspaceFile(workspaceDir: workspace, path: firstPath)
+            }
+        } catch {
+            workspaceUploadStatus = nil
+            lastError = displayMessage(for: error)
+        }
     }
 
     func createAutomationFromDraft() async -> Bool {
