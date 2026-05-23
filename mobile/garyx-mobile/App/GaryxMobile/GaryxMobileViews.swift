@@ -4495,6 +4495,9 @@ struct GaryxAutomationCard: View {
     @State private var label = ""
     @State private var prompt = ""
     @State private var intervalHours = ""
+    @State private var targetsExistingThread = false
+    @State private var targetThreadId = ""
+    @State private var workspacePath = ""
 
     var body: some View {
         GaryxSwipeActionRow(actions: automationSwipeActions) {
@@ -4535,6 +4538,52 @@ struct GaryxAutomationCard: View {
                     TextField("Prompt", text: $prompt, axis: .vertical)
                         .lineLimit(2...5)
                         .garyxInputStyle()
+
+                    GaryxFieldLabel("Run In")
+                    Picker("Run In", selection: $targetsExistingThread) {
+                        Text("New Thread").tag(false)
+                        Text("Existing Thread").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+
+                    if targetsExistingThread {
+                        if model.threads.isEmpty && effectiveEditThreadId.isEmpty {
+                            Text("No existing threads loaded")
+                                .font(GaryxFont.caption(weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Picker("Thread", selection: editThreadSelection) {
+                                if !targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                                   !model.threads.contains(where: { $0.id == targetThreadId }) {
+                                    Text(targetThreadId).tag(targetThreadId)
+                                }
+                                ForEach(model.threads, id: \.id) { thread in
+                                    Text(thread.title).tag(thread.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .garyxInputStyle()
+                        }
+                        Text("Each run posts the prompt into the selected thread.")
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                    } else if editWorkspaceOptions.isEmpty {
+                        Text("No workspaces available")
+                            .font(GaryxFont.caption(weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Picker("Workspace", selection: editWorkspaceSelection) {
+                            ForEach(editWorkspaceOptions, id: \.self) { path in
+                                Text(path.lastPathComponent).tag(path)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .garyxInputStyle()
+                        Text("Each run creates a fresh automation thread in the selected workspace.")
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                    }
+
                     if automation.schedule.kind == .interval {
                         TextField("Every", text: $intervalHours)
                             .keyboardType(.numberPad)
@@ -4555,7 +4604,10 @@ struct GaryxAutomationCard: View {
                                 automation,
                                 label: label,
                                 prompt: prompt,
-                                intervalHours: intervalHours
+                                intervalHours: intervalHours,
+                                targetsExistingThread: targetsExistingThread,
+                                targetThreadId: effectiveEditThreadId,
+                                workspacePath: effectiveEditWorkspacePath
                             )
                             showsEditForm = false
                         }
@@ -4563,8 +4615,12 @@ struct GaryxAutomationCard: View {
                         Label("Save", systemImage: "checkmark")
                     }
                     .buttonStyle(GaryxPrimaryCompactButtonStyle())
+                    .disabled(!canSave)
                 }
                 .garyxCardStyle()
+                .onChange(of: targetsExistingThread) { _, _ in
+                    ensureEditTargetSelection()
+                }
             }
         }
         .confirmationDialog("Delete automation?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
@@ -4637,6 +4693,92 @@ struct GaryxAutomationCard: View {
         label = automation.label
         prompt = automation.prompt
         intervalHours = String(automation.schedule.hours ?? 24)
+        let target = automation.targetThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        targetsExistingThread = !target.isEmpty
+        targetThreadId = target
+        let targetWorkspace = target.isEmpty
+            ? ""
+            : model.threads.first(where: { $0.id == target })?.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let automationWorkspace = automation.workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        workspacePath = automationWorkspace.isEmpty ? targetWorkspace : automationWorkspace
+        ensureEditTargetSelection()
+    }
+
+    private var editWorkspaceOptions: [String] {
+        var seen = Set<String>()
+        return ([workspacePath] + model.knownWorkspacePaths)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
+    }
+
+    private var editWorkspaceSelection: Binding<String> {
+        Binding {
+            effectiveEditWorkspacePath
+        } set: { value in
+            workspacePath = value
+        }
+    }
+
+    private var editThreadSelection: Binding<String> {
+        Binding {
+            effectiveEditThreadId
+        } set: { value in
+            targetThreadId = value
+            if let thread = model.threads.first(where: { $0.id == value }),
+               let nextWorkspace = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !nextWorkspace.isEmpty {
+                workspacePath = nextWorkspace
+            }
+        }
+    }
+
+    private var effectiveEditWorkspacePath: String {
+        let selected = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty, editWorkspaceOptions.contains(selected) {
+            return selected
+        }
+        return editWorkspaceOptions.first ?? ""
+    }
+
+    private var effectiveEditThreadId: String {
+        let selected = targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty {
+            return selected
+        }
+        return model.threads.first?.id ?? ""
+    }
+
+    private var canSave: Bool {
+        !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (targetsExistingThread ? !effectiveEditThreadId.isEmpty : !effectiveEditWorkspacePath.isEmpty)
+            && (automation.schedule.kind != .interval || positiveInteger(intervalHours) != nil)
+    }
+
+    private func ensureEditTargetSelection() {
+        if targetsExistingThread {
+            let nextThreadId = effectiveEditThreadId
+            if targetThreadId != nextThreadId {
+                targetThreadId = nextThreadId
+            }
+            if let thread = model.threads.first(where: { $0.id == nextThreadId }),
+               let nextWorkspace = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !nextWorkspace.isEmpty {
+                workspacePath = nextWorkspace
+            }
+        } else {
+            let nextWorkspace = effectiveEditWorkspacePath
+            if workspacePath != nextWorkspace {
+                workspacePath = nextWorkspace
+            }
+        }
+    }
+
+    private func positiveInteger(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = Int(trimmed), parsed > 0 else { return nil }
+        return parsed
     }
 }
 
@@ -4731,7 +4873,7 @@ struct GaryxCreateAutomationCard: View {
         }
         .garyxCardStyle()
         .onAppear(perform: ensureTargetSelection)
-        .onChange(of: model.draftAutomationTargetsExistingThread) { _ in
+        .onChange(of: model.draftAutomationTargetsExistingThread) { _, _ in
             ensureTargetSelection()
         }
     }

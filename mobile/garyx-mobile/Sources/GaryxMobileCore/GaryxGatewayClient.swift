@@ -1341,6 +1341,7 @@ public struct GaryxAutomationUpdateRequest: Encodable, Equatable, Sendable {
     public var agentId: String?
     public var workspaceDir: String?
     public var targetThreadId: String?
+    public var clearsTargetThreadId: Bool
     public var schedule: GaryxAutomationSchedule?
     public var enabled: Bool?
 
@@ -1350,6 +1351,7 @@ public struct GaryxAutomationUpdateRequest: Encodable, Equatable, Sendable {
         agentId: String? = nil,
         workspaceDir: String? = nil,
         targetThreadId: String? = nil,
+        clearsTargetThreadId: Bool = false,
         schedule: GaryxAutomationSchedule? = nil,
         enabled: Bool? = nil
     ) {
@@ -1358,8 +1360,34 @@ public struct GaryxAutomationUpdateRequest: Encodable, Equatable, Sendable {
         self.agentId = agentId
         self.workspaceDir = workspaceDir
         self.targetThreadId = targetThreadId
+        self.clearsTargetThreadId = clearsTargetThreadId
         self.schedule = schedule
         self.enabled = enabled
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case prompt
+        case agentId
+        case workspaceDir
+        case targetThreadId
+        case schedule
+        case enabled
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(label, forKey: .label)
+        try container.encodeIfPresent(prompt, forKey: .prompt)
+        try container.encodeIfPresent(agentId, forKey: .agentId)
+        try container.encodeIfPresent(workspaceDir, forKey: .workspaceDir)
+        if let targetThreadId {
+            try container.encode(targetThreadId, forKey: .targetThreadId)
+        } else if clearsTargetThreadId {
+            try container.encodeNil(forKey: .targetThreadId)
+        }
+        try container.encodeIfPresent(schedule, forKey: .schedule)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
     }
 }
 

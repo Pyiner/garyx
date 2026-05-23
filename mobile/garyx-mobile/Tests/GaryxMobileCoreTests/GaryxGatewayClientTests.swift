@@ -1228,6 +1228,28 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(automationSchedule?["kind"] as? String, "interval")
         XCTAssertEqual(automationSchedule?["hours"] as? Int, 6)
 
+        let unchangedAutomationUpdate = GaryxAutomationUpdateRequest(label: "Interval Review")
+        let unchangedAutomationUpdateObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(unchangedAutomationUpdate)
+        ) as? [String: Any]
+        XCTAssertFalse(unchangedAutomationUpdateObject?.keys.contains("targetThreadId") ?? true)
+
+        let boundAutomationUpdate = GaryxAutomationUpdateRequest(targetThreadId: "thread::target")
+        let boundAutomationUpdateObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(boundAutomationUpdate)
+        ) as? [String: Any]
+        XCTAssertEqual(boundAutomationUpdateObject?["targetThreadId"] as? String, "thread::target")
+
+        let clearedAutomationUpdate = GaryxAutomationUpdateRequest(
+            workspaceDir: "/workspace/project",
+            clearsTargetThreadId: true
+        )
+        let clearedAutomationUpdateObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(clearedAutomationUpdate)
+        ) as? [String: Any]
+        XCTAssertTrue(clearedAutomationUpdateObject?["targetThreadId"] is NSNull)
+        XCTAssertEqual(clearedAutomationUpdateObject?["workspaceDir"] as? String, "/workspace/project")
+
         let mcp = GaryxMcpServerRequest(
             name: "test-server",
             transport: "stdio",

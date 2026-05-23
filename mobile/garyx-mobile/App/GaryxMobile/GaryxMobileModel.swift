@@ -3228,21 +3228,36 @@ final class GaryxMobileModel: ObservableObject {
         _ automation: GaryxAutomationSummary,
         label: String,
         prompt: String,
-        intervalHours: String
+        intervalHours: String,
+        targetsExistingThread: Bool,
+        targetThreadId: String,
+        workspacePath: String
     ) async {
         let nextLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextTargetThreadId = targetsExistingThread
+            ? targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        let nextWorkspacePath = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         let hours = max(1, Int(intervalHours.trimmingCharacters(in: .whitespacesAndNewlines)) ?? automation.schedule.hours ?? 24)
         let nextSchedule: GaryxAutomationSchedule? = automation.schedule.kind == .interval
             ? .interval(hours: hours)
             : nil
         guard !nextLabel.isEmpty, !nextPrompt.isEmpty else { return }
+        if targetsExistingThread {
+            guard !nextTargetThreadId.isEmpty else { return }
+        } else {
+            guard !nextWorkspacePath.isEmpty else { return }
+        }
         do {
             let updated = try await client().updateAutomation(
                 id: automation.id,
                 request: GaryxAutomationUpdateRequest(
                     label: nextLabel,
                     prompt: nextPrompt,
+                    workspaceDir: nextTargetThreadId.isEmpty ? nextWorkspacePath : nil,
+                    targetThreadId: nextTargetThreadId.isEmpty ? nil : nextTargetThreadId,
+                    clearsTargetThreadId: nextTargetThreadId.isEmpty,
                     schedule: nextSchedule
                 )
             )
