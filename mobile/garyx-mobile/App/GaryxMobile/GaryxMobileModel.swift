@@ -2253,7 +2253,10 @@ final class GaryxMobileModel: ObservableObject {
         attachments: [GaryxMobileComposerAttachment],
         in thread: GaryxThreadSummary
     ) async {
-        guard let activeTask = activeTasksByThread[thread.id] else { return }
+        guard let activeTask = activeTasksByThread[thread.id] else {
+            await queueRemoteInput(text, attachments: attachments, in: thread)
+            return
+        }
         let clientIntentId = "mobile-\(UUID().uuidString)"
         let visibleUserText = Self.visibleUserText(text: text, attachments: attachments)
         let userMessage = GaryxMobileMessage(
@@ -2268,12 +2271,13 @@ final class GaryxMobileModel: ObservableObject {
         mutateMessages(for: thread.id) { messages in
             messages.append(userMessage)
         }
-        pendingQueuedInputsByIntentId[clientIntentId] = GaryxPendingQueuedInput(
+        let queued = GaryxPendingQueuedInput(
             threadId: thread.id,
             text: text,
             attachments: attachments,
             clientIntentId: clientIntentId
         )
+        pendingQueuedInputsByIntentId[clientIntentId] = queued
         do {
             let command = try client().encodeWebSocketCommand(
                 .input(
@@ -2285,9 +2289,13 @@ final class GaryxMobileModel: ObservableObject {
             )
             try await activeTask.send(.string(command))
         } catch {
-            pendingQueuedInputsByIntentId.removeValue(forKey: clientIntentId)
-            markLatestLocalUserFailed(for: thread.id, message: displayMessage(for: error))
-            lastError = displayMessage(for: error)
+            if let claimed = pendingQueuedInputsByIntentId.removeValue(forKey: clientIntentId) {
+                cancelActiveSocket(for: thread.id)
+                await submitQueuedInputViaGateway(claimed)
+            } else {
+                markLatestLocalUserFailed(for: thread.id, message: displayMessage(for: error))
+                lastError = displayMessage(for: error)
+            }
         }
     }
 
@@ -2317,32 +2325,37 @@ final class GaryxMobileModel: ObservableObject {
             clientIntentId: clientIntentId
         )
         pendingQueuedInputsByIntentId[clientIntentId] = queued
+        await submitQueuedInputViaGateway(queued)
+    }
+
+    private func submitQueuedInputViaGateway(_ queued: GaryxPendingQueuedInput) async {
+        pendingQueuedInputsByIntentId[queued.clientIntentId] = queued
         do {
             let result = try await client().streamInput(
                 GaryxStreamInputRequest(
-                    threadId: thread.id,
-                    clientIntentId: clientIntentId,
-                    message: text,
-                    attachments: attachments.map(\.promptAttachment)
+                    threadId: queued.threadId,
+                    clientIntentId: queued.clientIntentId,
+                    message: queued.text,
+                    attachments: queued.attachments.map(\.promptAttachment)
                 )
             )
             if Self.isSuccessfulStreamInputStatus(result.status) {
                 bindLocalPendingInput(
-                    threadId: thread.id,
-                    clientIntentId: result.clientIntentId ?? clientIntentId,
+                    threadId: queued.threadId,
+                    clientIntentId: result.clientIntentId ?? queued.clientIntentId,
                     pendingInputId: result.pendingInputId
                 )
-                remoteBusyThreadIds.insert(thread.id)
+                remoteBusyThreadIds.insert(queued.threadId)
             } else if Self.shouldFallbackStreamInputStatus(result.status) {
-                if let claimed = pendingQueuedInputsByIntentId.removeValue(forKey: clientIntentId) {
+                if let claimed = pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId) {
                     await dispatchQueuedInputFallback(claimed)
                 }
             } else {
-                pendingQueuedInputsByIntentId.removeValue(forKey: clientIntentId)
+                pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId)
                 let failureMessage = result.status.isEmpty ? "Input was not queued" : result.status
                 let markedInput = markLocalInputFailed(
-                    threadId: thread.id,
-                    clientIntentId: result.clientIntentId ?? clientIntentId,
+                    threadId: queued.threadId,
+                    clientIntentId: result.clientIntentId ?? queued.clientIntentId,
                     pendingInputId: result.pendingInputId,
                     message: failureMessage
                 )
@@ -2351,11 +2364,11 @@ final class GaryxMobileModel: ObservableObject {
                 }
             }
         } catch {
-            if pendingQueuedInputsByIntentId.removeValue(forKey: clientIntentId) != nil {
+            if pendingQueuedInputsByIntentId.removeValue(forKey: queued.clientIntentId) != nil {
                 let message = displayMessage(for: error)
                 markLocalInputFailed(
-                    threadId: thread.id,
-                    clientIntentId: clientIntentId,
+                    threadId: queued.threadId,
+                    clientIntentId: queued.clientIntentId,
                     pendingInputId: nil,
                     message: message
                 )
