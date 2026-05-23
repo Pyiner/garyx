@@ -61,8 +61,6 @@
 				28A514B7A668CBFA3E45581C /* GaryxMobileModel.swift */,
 				C6D641F9FD93A8CC6D0371DB /* GaryxMobileSettings.swift */,
 				AA0000000000000000000001 /* GaryxMobileToolTraceViews.swift */,
-				AA0000000000000000000002 /* GaryxMobileTranscriptModel.swift */,
-				AA0000000000000000000003 /* GaryxMobileTurnRenderModel.swift */,
 				AA0000000000000000000004 /* GaryxMobileTurnViews.swift */,
 				FD6BA59D8E78E5491AF5F418 /* GaryxMobileViews.swift */,
 				D97E066072087A1089BFFA23 /* Info.plist */,
@@ -77,6 +75,8 @@
 			children = (
 				B755A88B709E9FC317101B90 /* GaryxGatewayClient.swift */,
 				C8575D6575E8F57D66F2676B /* GaryxMobileConnectLink.swift */,
+				AA0000000000000000000002 /* GaryxMobileTranscriptModel.swift */,
+				AA0000000000000000000003 /* GaryxMobileTurnRenderModel.swift */,
 			);
 			name = GaryxMobileCore;
 			path = Sources/GaryxMobileCore;
