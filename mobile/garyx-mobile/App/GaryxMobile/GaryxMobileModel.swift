@@ -1562,10 +1562,11 @@ final class GaryxMobileModel: ObservableObject {
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextId = Self.stableGatewayProfileId(for: normalizedURL)
-        let existingToken = keychain.readGatewayProfileToken(profileId: profile.id)
-        let wasCurrent = currentGatewayProfile?.id == profile.id
-        let urlChanged = profile.gatewayUrl.lowercased() != normalizedURL.lowercased()
-        let tokenChanged = existingToken != trimmedToken
+        let currentURL = normalizedGatewayURL(gatewayURL)
+        let currentProfileId = currentGatewayProfile?.id
+        let affectsCurrentProfile = currentProfileId == profile.id || currentProfileId == nextId
+        let currentURLChanged = currentURL.lowercased() != normalizedURL.lowercased()
+        let activeTokenChanged = gatewayAuthToken != trimmedToken
         var nextProfile = profile
         nextProfile.id = nextId
         nextProfile.label = trimmedLabel.isEmpty ? Self.gatewayProfileLabel(for: normalizedURL) : trimmedLabel
@@ -1585,9 +1586,9 @@ final class GaryxMobileModel: ObservableObject {
         }
         keychain.saveGatewayProfileToken(trimmedToken, profileId: nextId)
 
-        if wasCurrent {
+        if affectsCurrentProfile {
             saveGatewayScopedUserState()
-            if urlChanged || tokenChanged {
+            if currentURLChanged || activeTokenChanged {
                 resetGatewayRuntimeState()
             }
             gatewayURL = normalizedURL
@@ -1596,7 +1597,7 @@ final class GaryxMobileModel: ObservableObject {
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayURL)
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayToken)
             keychain.saveGatewayAuthToken(gatewayAuthToken)
-            if urlChanged {
+            if currentURLChanged {
                 loadGatewayScopedUserState(fallbackToLegacy: false)
             }
         }
@@ -3383,16 +3384,19 @@ final class GaryxMobileModel: ObservableObject {
         guard !goal.isEmpty,
               !workspace.isEmpty,
               let iterations = Int(iterationsText), iterations > 0,
-              let timeBudgetMinutes = Int(timeBudgetText), timeBudgetMinutes > 0 else {
+              let timeBudgetMinutes = Int(timeBudgetText),
+              timeBudgetMinutes > 0,
+              timeBudgetMinutes <= Int.max / 60 else {
             return false
         }
+        let timeBudgetSecs = timeBudgetMinutes * 60
         do {
             let run = try await client().createAutoResearchRun(
                 GaryxAutoResearchCreateRequest(
                     goal: goal,
                     workspaceDir: workspace,
                     maxIterations: iterations,
-                    timeBudgetSecs: timeBudgetMinutes * 60
+                    timeBudgetSecs: timeBudgetSecs
                 )
             )
             draftAutoResearchGoal = ""

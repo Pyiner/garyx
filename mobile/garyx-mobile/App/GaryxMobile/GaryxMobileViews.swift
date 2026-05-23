@@ -5048,7 +5048,7 @@ struct GaryxCreateAutoResearchCard: View {
                     .font(GaryxFont.caption(weight: .medium))
                     .foregroundStyle(.secondary)
             } else {
-                Picker("Workspace", selection: $model.selectedWorkspacePath) {
+                Picker("Workspace", selection: workspaceSelection) {
                     ForEach(workspacePaths, id: \.self) { path in
                         Text(path.lastPathComponent).tag(path)
                     }
@@ -5087,24 +5087,44 @@ struct GaryxCreateAutoResearchCard: View {
         model.knownWorkspacePaths
     }
 
+    private var workspaceSelection: Binding<String> {
+        Binding {
+            effectiveWorkspacePath
+        } set: { value in
+            model.selectedWorkspacePath = value
+        }
+    }
+
+    private var effectiveWorkspacePath: String {
+        let selected = model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty, workspacePaths.contains(selected) {
+            return selected
+        }
+        return workspacePaths.first ?? ""
+    }
+
     private var canStart: Bool {
         !model.draftAutoResearchGoal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && workspacePaths.contains(model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines))
+            && !effectiveWorkspacePath.isEmpty
             && positiveInteger(model.draftAutoResearchIterations) != nil
-            && positiveInteger(model.draftAutoResearchTimeBudgetMinutes) != nil
+            && positiveAutoResearchBudgetMinutes(model.draftAutoResearchTimeBudgetMinutes) != nil
     }
 
     private func ensureWorkspaceSelection() {
-        let selected = model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty, workspacePaths.contains(selected) {
-            return
+        let nextSelection = effectiveWorkspacePath
+        if model.selectedWorkspacePath != nextSelection {
+            model.selectedWorkspacePath = nextSelection
         }
-        model.selectedWorkspacePath = workspacePaths.first ?? ""
     }
 
     private func positiveInteger(_ value: String) -> Int? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let parsed = Int(trimmed), parsed > 0 else { return nil }
+        return parsed
+    }
+
+    private func positiveAutoResearchBudgetMinutes(_ value: String) -> Int? {
+        guard let parsed = positiveInteger(value), parsed <= Int.max / 60 else { return nil }
         return parsed
     }
 }
