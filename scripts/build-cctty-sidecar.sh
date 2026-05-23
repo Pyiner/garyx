@@ -9,6 +9,7 @@ OUT_DIR="${OUT_DIR:-${REPO_ROOT}/target/release}"
 CCTTY_REF="${CCTTY_REF:-ef60376002b44e19e35087e06c033fc78b452c33}"
 CCTTY_GIT="${CCTTY_GIT:-https://github.com/Pyiner/cctty.git}"
 CCTTY_SOURCE_DIR="${CCTTY_SOURCE_DIR:-}"
+MANAGED_CCTTY_SOURCE=0
 
 if [[ -z "$CCTTY_SOURCE_DIR" && -f "${REPO_ROOT}/../cctty/Cargo.toml" ]]; then
   CCTTY_SOURCE_DIR="${REPO_ROOT}/../cctty"
@@ -16,12 +17,17 @@ fi
 
 if [[ -z "$CCTTY_SOURCE_DIR" ]]; then
   CCTTY_SOURCE_DIR="${REPO_ROOT}/target/cctty-src"
+  MANAGED_CCTTY_SOURCE=1
   if [[ ! -d "$CCTTY_SOURCE_DIR/.git" ]]; then
     rm -rf "$CCTTY_SOURCE_DIR"
     git clone "$CCTTY_GIT" "$CCTTY_SOURCE_DIR"
   fi
   git -C "$CCTTY_SOURCE_DIR" fetch --tags "$CCTTY_GIT" "$CCTTY_REF"
   git -C "$CCTTY_SOURCE_DIR" checkout --detach "$CCTTY_REF"
+fi
+
+if [[ "$MANAGED_CCTTY_SOURCE" == "1" ]] && ! grep -q '^\[workspace\]' "$CCTTY_SOURCE_DIR/Cargo.toml"; then
+  printf '\n[workspace]\n' >> "$CCTTY_SOURCE_DIR/Cargo.toml"
 fi
 
 BUILD_TARGET_DIR="${REPO_ROOT}/target/cctty-sidecar"
