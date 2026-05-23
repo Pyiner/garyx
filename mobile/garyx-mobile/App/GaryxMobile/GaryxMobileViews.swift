@@ -4932,11 +4932,20 @@ struct GaryxBotsView: View {
     var body: some View {
         GaryxPanelScaffold(
             title: "Bots",
-            subtitle: "\(model.mobileBotGroups.count) bots",
+            subtitle: subtitle,
             onRefresh: { await model.refreshRemoteState() }
         ) {
             GaryxBotsContent()
         }
+    }
+
+    private var subtitle: String {
+        let groups = model.mobileBotGroups
+        let endpointCount = groups.reduce(0) { $0 + $1.endpointCount }
+        guard endpointCount > 0 else {
+            return "\(groups.count) bots"
+        }
+        return "\(groups.count) bots · \(endpointCount) endpoints"
     }
 }
 
@@ -4964,7 +4973,7 @@ struct GaryxBotsContent: View {
                                 GaryxBotEndpointRow(endpoint: endpoint)
                             }
                             if index < groups.count - 1 {
-                                GaryxCompactRowDivider()
+                                GaryxCompactGroupDivider()
                             }
                         }
                     }
@@ -4975,13 +4984,24 @@ struct GaryxBotsContent: View {
 
     private func sortedEndpoints(for group: GaryxMobileBotGroup) -> [GaryxChannelEndpoint] {
         group.endpoints.sorted { lhs, rhs in
-            let leftActivity = lhs.lastInboundAt ?? lhs.lastDeliveryAt ?? ""
-            let rightActivity = rhs.lastInboundAt ?? rhs.lastDeliveryAt ?? ""
+            let leftActivity = endpointActivityDate(lhs) ?? .distantPast
+            let rightActivity = endpointActivityDate(rhs) ?? .distantPast
             if leftActivity != rightActivity {
                 return leftActivity > rightActivity
             }
-            return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
+            let labelOrder = lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel)
+            if labelOrder != .orderedSame {
+                return labelOrder == .orderedAscending
+            }
+            return lhs.endpointKey.localizedCaseInsensitiveCompare(rhs.endpointKey) == .orderedAscending
         }
+    }
+
+    private func endpointActivityDate(_ endpoint: GaryxChannelEndpoint) -> Date? {
+        if let date = garyxThreadDate(from: endpoint.lastInboundAt ?? "") {
+            return date
+        }
+        return garyxThreadDate(from: endpoint.lastDeliveryAt ?? "")
     }
 }
 
@@ -5012,6 +5032,16 @@ struct GaryxBotGroupRow: View {
                     }
 
                     Spacer(minLength: 6)
+
+                    if group.endpointCount > 0 {
+                        Text("\(group.boundEndpointCount)/\(group.endpointCount)")
+                            .font(GaryxFont.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color(.tertiarySystemFill), in: Capsule())
+                            .accessibilityLabel("\(group.boundEndpointCount) of \(group.endpointCount) endpoints linked")
+                    }
                 }
                 .padding(.horizontal, 9)
                 .padding(.vertical, 8)
@@ -5059,13 +5089,14 @@ struct GaryxBotGroupRow: View {
 struct GaryxBotEndpointRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let endpoint: GaryxChannelEndpoint
+    @State private var showsBindConfirmation = false
 
     var body: some View {
         GaryxSwipeActionRow(actions: endpointActions) {
             HStack(alignment: .center, spacing: 10) {
                 Image(systemName: endpointIconName)
-                    .font(GaryxFont.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
                     .frame(width: 26, height: 26)
                     .background(Color(.tertiarySystemFill), in: Circle())
 
@@ -5084,9 +5115,19 @@ struct GaryxBotEndpointRow: View {
                 Spacer(minLength: 6)
 
                 GaryxStatusPill(text: statusText, tone: statusTone)
+                    .padding(.leading, 12)
             }
-            .padding(.horizontal, 9)
+            .padding(.leading, 34)
+            .padding(.trailing, 9)
             .padding(.vertical, 8)
+        }
+        .confirmationDialog("Bind endpoint?", isPresented: $showsBindConfirmation, titleVisibility: .visible) {
+            Button("Bind to \(selectedThreadTitle)") {
+                Task { await model.bindEndpointToSelectedThread(endpoint) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(endpointTitle) will be linked to \(selectedThreadTitle).")
         }
     }
 
@@ -5102,8 +5143,8 @@ struct GaryxBotEndpointRow: View {
         }
         if let selectedThreadId, selectedThreadId != threadId {
             actions.append(
-                GaryxSwipeAction(title: "Bind", systemImage: "link", tone: .accent) {
-                    Task { await model.bindEndpointToSelectedThread(endpoint) }
+                GaryxSwipeAction(title: "Bind", systemImage: "link") {
+                    showsBindConfirmation = true
                 }
             )
         }
@@ -5123,9 +5164,9 @@ struct GaryxBotEndpointRow: View {
 
     private var endpointDetail: String {
         if !boundThreadId.isEmpty {
-            return firstNonEmpty(endpoint.threadLabel, endpoint.conversationLabel, boundThreadId)
+            return "Linked · \(firstNonEmpty(endpoint.threadLabel, endpoint.conversationLabel, boundThreadId))"
         }
-        return "Unbound · \(endpoint.endpointKey)"
+        return "Unlinked · \(firstNonEmpty(endpoint.conversationLabel, conversationKindLabel, channelLabel, endpoint.endpointKey))"
     }
 
     private var boundThreadId: String {
@@ -5137,15 +5178,45 @@ struct GaryxBotEndpointRow: View {
         return threadId.isEmpty ? nil : threadId
     }
 
+    private var selectedThreadTitle: String {
+        firstNonEmpty(model.selectedThread?.title, selectedThreadId, "selected thread")
+    }
+
     private var statusText: String {
-        if let selectedThreadId, selectedThreadId == boundThreadId {
-            return "Current"
-        }
-        return boundThreadId.isEmpty ? "Unbound" : "Bound"
+        boundThreadId.isEmpty ? "Unlinked" : "Linked"
     }
 
     private var statusTone: GaryxStatusPill.Tone {
         boundThreadId.isEmpty ? .muted : .good
+    }
+
+    private var conversationKindLabel: String {
+        let kind = endpoint.conversationKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if kind.contains("group") || kind.contains("room") {
+            return "Group chat"
+        }
+        if kind.contains("direct") || kind.contains("private") || kind.contains("dm") {
+            return "Direct chat"
+        }
+        if kind.contains("channel") {
+            return "Channel"
+        }
+        return kind.isEmpty ? "" : kind.capitalized
+    }
+
+    private var channelLabel: String {
+        let channel = endpoint.channel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !channel.isEmpty else { return "" }
+        switch channel.lowercased() {
+        case "api":
+            return "API"
+        case "telegram":
+            return "Telegram"
+        case "discord":
+            return "Discord"
+        default:
+            return channel.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 
     private var endpointIconName: String {
@@ -5796,6 +5867,20 @@ struct GaryxCompactRowDivider: View {
         Divider()
             .overlay(GaryxTheme.hairline)
             .padding(.leading, 10)
+    }
+}
+
+struct GaryxCompactGroupDivider: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .overlay(GaryxTheme.hairline)
+            Color(.systemGroupedBackground)
+                .opacity(0.58)
+                .frame(height: 7)
+            Divider()
+                .overlay(GaryxTheme.hairline)
+        }
     }
 }
 
