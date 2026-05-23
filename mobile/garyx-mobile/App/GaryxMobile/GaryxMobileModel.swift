@@ -759,21 +759,27 @@ final class GaryxMobileModel: ObservableObject {
             iconDataUrlByChannel[plugin.id.lowercased()] = plugin.iconDataUrl ?? ""
         }
         var configuredByGroup: [String: GaryxConfiguredBot] = [:]
+        var groups: [String: GaryxMobileBotGroup] = [:]
+        var order: [String] = []
+        var orderedKeys = Set<String>()
+
+        func rememberOrder(_ key: String) {
+            if orderedKeys.insert(key).inserted {
+                order.append(key)
+            }
+        }
+
         for bot in configuredBots {
             let key = Self.botGroupKey(channel: bot.channel, accountId: bot.accountId)
             if configuredByGroup[key] == nil {
                 configuredByGroup[key] = bot
             }
+            rememberOrder(key)
         }
-
-        var groups: [String: GaryxMobileBotGroup] = [:]
-        var order: [String] = []
 
         func remember(_ group: GaryxMobileBotGroup) {
             let key = Self.botGroupKey(channel: group.channel, accountId: group.accountId)
-            if groups[key] == nil {
-                order.append(key)
-            }
+            rememberOrder(key)
             groups[key] = group
         }
 

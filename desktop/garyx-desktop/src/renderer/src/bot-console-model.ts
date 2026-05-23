@@ -162,8 +162,8 @@ export function buildBotSidebarThreadEntries(
   }
 
   const entries = [...deduped.values()].sort((left, right) => {
-    return (right.latestActivity || '').localeCompare(left.latestActivity || '')
-      || left.title.localeCompare(right.title);
+    return left.title.localeCompare(right.title)
+      || left.id.localeCompare(right.id);
   });
 
   const titleCounts = new Map<string, number>();
@@ -345,9 +345,8 @@ export function buildBotGroups(
             mainThreadId: group.mainThreadId || botMainThreads[group.id] || group.mainEndpoint?.threadId || null,
           }),
       endpoints: [...group.endpoints].sort((left, right) => {
-        const rightActivity = latestEndpointActivity(right) || '';
-        const leftActivity = latestEndpointActivity(left) || '';
-        return rightActivity.localeCompare(leftActivity) || left.displayLabel.localeCompare(right.displayLabel);
+        return left.displayLabel.localeCompare(right.displayLabel)
+          || left.endpointKey.localeCompare(right.endpointKey);
       }),
     }))
     .sort((left, right) => {

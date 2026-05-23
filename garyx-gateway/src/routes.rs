@@ -20,7 +20,7 @@ use garyx_router::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::agent_identity::create_thread_for_agent_reference;
@@ -348,6 +348,31 @@ fn channel_endpoint_response_value(endpoint: &garyx_router::KnownChannelEndpoint
         "conversation_kind": conversation.kind,
         "conversation_label": conversation.label,
     })
+}
+
+fn sort_channel_endpoint_values_by_identity(items: &mut [Value]) {
+    items.sort_by(|left, right| {
+        left.get("display_label")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(
+                right
+                    .get("display_label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .then_with(|| {
+                left.get("endpoint_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .cmp(
+                        right
+                            .get("endpoint_key")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    )
+            })
+    });
 }
 
 fn plugin_conversation_endpoint_value(
@@ -1646,7 +1671,8 @@ pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl In
 pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let config = state.config_snapshot();
     let endpoints = state.cached_channel_endpoints().await;
-    let mut groups = BTreeMap::<String, Value>::new();
+    let mut groups = Vec::<Value>::new();
+    let mut group_indexes = HashMap::<String, usize>::new();
 
     for account in configured_channel_accounts(&config.channels) {
         if !account.enabled {
@@ -1681,9 +1707,8 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
         let display_name = bot_display_name(account.name.as_deref(), &account.account_id);
-        groups.insert(
-            id.clone(),
-            json!({
+        group_indexes.insert(id.clone(), groups.len());
+        groups.push(json!({
                 "id": id,
                 "channel": account.channel,
                 "account_id": account.account_id,
@@ -1709,8 +1734,7 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
                     &endpoints,
                 ).unwrap_or_default(),
                 "endpoints": [],
-            }),
-        );
+            }));
     }
 
     for endpoint in endpoints
@@ -1718,7 +1742,10 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
         .filter(|endpoint| endpoint.thread_id.is_some())
     {
         let id = format!("{}::{}", endpoint.channel, endpoint.account_id);
-        let Some(entry) = groups.get_mut(&id) else {
+        let Some(index) = group_indexes.get(&id).copied() else {
+            continue;
+        };
+        let Some(entry) = groups.get_mut(index) else {
             continue;
         };
         let activity = endpoint
@@ -1770,21 +1797,13 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
         }
     }
 
-    let mut bots: Vec<Value> = groups.into_values().collect();
-    bots.sort_by(|left, right| {
-        right["latest_activity"]
-            .as_str()
-            .unwrap_or_default()
-            .cmp(left["latest_activity"].as_str().unwrap_or_default())
-            .then_with(|| {
-                left["title"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .cmp(right["title"].as_str().unwrap_or_default())
-            })
-    });
+    for group in &mut groups {
+        if let Some(items) = group.get_mut("endpoints").and_then(Value::as_array_mut) {
+            sort_channel_endpoint_values_by_identity(items);
+        }
+    }
 
-    Json(json!({ "bots": bots }))
+    Json(json!({ "bots": groups }))
 }
 
 /// GET /api/skills - list skills from local and project registries.

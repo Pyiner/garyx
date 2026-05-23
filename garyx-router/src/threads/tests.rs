@@ -74,6 +74,45 @@ async fn list_known_channel_endpoints_backfills_delivery_target_from_binding_key
 }
 
 #[tokio::test]
+async fn list_known_channel_endpoints_orders_by_endpoint_key_not_activity() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    for (thread_id, binding_key, label, updated_at) in [
+        ("thread::z-room", "z-room", "Z Room", "2026-03-07T12:00:00Z"),
+        ("thread::a-room", "a-room", "A Room", "2026-03-07T10:00:00Z"),
+    ] {
+        store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "label": label,
+                    "updated_at": updated_at,
+                    "channel_bindings": [{
+                        "channel": "telegram",
+                        "account_id": "main",
+                        "binding_key": binding_key,
+                        "chat_id": binding_key,
+                        "display_label": label,
+                        "last_inbound_at": updated_at
+                    }]
+                }),
+            )
+            .await;
+    }
+
+    let endpoints = list_known_channel_endpoints(&store).await;
+    let endpoint_keys: Vec<_> = endpoints
+        .iter()
+        .map(|endpoint| endpoint.endpoint_key.as_str())
+        .collect();
+
+    assert_eq!(
+        endpoint_keys,
+        vec!["telegram::main::a-room", "telegram::main::z-room"]
+    );
+}
+
+#[tokio::test]
 async fn detached_endpoint_remains_known_without_thread_binding() {
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
     store

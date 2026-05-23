@@ -1097,7 +1097,7 @@ private extension GaryxMobileBotGroup {
                     )
                 )
             }
-            return entries
+            return entries.sorted(by: garyxBotConversationEntrySort)
         }
 
         for endpoint in endpoints {
@@ -1129,8 +1129,19 @@ private extension GaryxMobileBotGroup {
             )
         }
 
-        return entries
+        return entries.sorted(by: garyxBotConversationEntrySort)
     }
+}
+
+private func garyxBotConversationEntrySort(
+    _ lhs: GaryxBotSidebarConversationEntry,
+    _ rhs: GaryxBotSidebarConversationEntry
+) -> Bool {
+    let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+    if titleOrder != .orderedSame {
+        return titleOrder == .orderedAscending
+    }
+    return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
 }
 
 private func garyxBotChannelDisplayName(_ channel: String) -> String {
@@ -6687,24 +6698,12 @@ struct GaryxBotsContent: View {
 
     private func sortedEndpoints(for group: GaryxMobileBotGroup) -> [GaryxChannelEndpoint] {
         group.endpoints.sorted { lhs, rhs in
-            let leftActivity = endpointActivityDate(lhs) ?? .distantPast
-            let rightActivity = endpointActivityDate(rhs) ?? .distantPast
-            if leftActivity != rightActivity {
-                return leftActivity > rightActivity
-            }
             let labelOrder = lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel)
             if labelOrder != .orderedSame {
                 return labelOrder == .orderedAscending
             }
             return lhs.endpointKey.localizedCaseInsensitiveCompare(rhs.endpointKey) == .orderedAscending
         }
-    }
-
-    private func endpointActivityDate(_ endpoint: GaryxChannelEndpoint) -> Date? {
-        if let date = garyxThreadDate(from: endpoint.lastInboundAt ?? "") {
-            return date
-        }
-        return garyxThreadDate(from: endpoint.lastDeliveryAt ?? "")
     }
 }
 

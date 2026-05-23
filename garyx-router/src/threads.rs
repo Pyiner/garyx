@@ -808,14 +808,7 @@ pub async fn list_known_channel_endpoints(
         }
     }
     let mut endpoints: Vec<_> = endpoints.into_values().collect();
-    endpoints.sort_by(|left, right| {
-        right
-            .last_inbound_at
-            .cmp(&left.last_inbound_at)
-            .then_with(|| right.last_delivery_at.cmp(&left.last_delivery_at))
-            .then_with(|| right.thread_updated_at.cmp(&left.thread_updated_at))
-            .then_with(|| left.endpoint_key.cmp(&right.endpoint_key))
-    });
+    endpoints.sort_by(|left, right| left.endpoint_key.cmp(&right.endpoint_key));
     endpoints
 }
 

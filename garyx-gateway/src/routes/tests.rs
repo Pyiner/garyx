@@ -2412,6 +2412,129 @@ async fn bot_consoles_route_aggregates_configured_bots_and_endpoints() {
 }
 
 #[tokio::test]
+async fn bot_consoles_route_uses_configured_bot_order_not_activity_order() {
+    let mut config = test_config();
+    for (account_id, name) in [("alpha", "Alpha Bot"), ("beta", "Beta Bot")] {
+        config
+            .channels
+            .plugin_channel_mut("telegram")
+            .accounts
+            .insert(
+                account_id.to_owned(),
+                garyx_models::config::telegram_account_to_plugin_entry(
+                    &garyx_models::config::TelegramAccount {
+                        token: format!("token-{account_id}"),
+                        enabled: true,
+                        name: Some(name.to_owned()),
+                        agent_id: "claude".to_owned(),
+                        workspace_dir: None,
+                        owner_target: None,
+                        groups: std::collections::HashMap::new(),
+                    },
+                ),
+            );
+    }
+
+    let log_dir = tempdir().unwrap();
+    let logger = Arc::new(ThreadFileLogger::new(log_dir.path()));
+    let state = AppStateBuilder::new(config)
+        .with_thread_log_sink(logger)
+        .build();
+
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::alpha-z-room",
+            serde_json::json!({
+                "thread_id": "thread::alpha-z-room",
+                "label": "Alpha Z Room",
+                "updated_at": "2026-03-16T02:00:00Z",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "alpha",
+                    "binding_key": "alpha-z",
+                    "chat_id": "alpha-z",
+                    "display_label": "Z Room",
+                    "last_inbound_at": "2026-03-16T02:00:00Z"
+                }]
+            }),
+        )
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::alpha-a-room",
+            serde_json::json!({
+                "thread_id": "thread::alpha-a-room",
+                "label": "Alpha A Room",
+                "updated_at": "2026-03-16T01:00:00Z",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "alpha",
+                    "binding_key": "alpha-a",
+                    "chat_id": "alpha-a",
+                    "display_label": "A Room",
+                    "last_inbound_at": "2026-03-16T01:00:00Z"
+                }]
+            }),
+        )
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::beta-latest",
+            serde_json::json!({
+                "thread_id": "thread::beta-latest",
+                "label": "Beta Latest",
+                "updated_at": "2026-03-16T03:00:00Z",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "beta",
+                    "binding_key": "beta-latest",
+                    "chat_id": "beta-latest",
+                    "display_label": "Beta Room",
+                    "last_inbound_at": "2026-03-16T03:00:00Z"
+                }]
+            }),
+        )
+        .await;
+
+    let router = build_router(state);
+    let request = authed_request()
+        .uri("/api/bot-consoles")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let bots = payload["bots"].as_array().unwrap();
+    let account_ids: Vec<_> = bots
+        .iter()
+        .filter(|entry| entry["channel"] == "telegram")
+        .map(|entry| entry["account_id"].as_str().unwrap())
+        .collect();
+
+    assert_eq!(account_ids, vec!["alpha", "beta"]);
+    let alpha = bots
+        .iter()
+        .find(|entry| entry["channel"] == "telegram" && entry["account_id"] == "alpha")
+        .unwrap();
+    let alpha_endpoint_labels: Vec<_> = alpha["endpoints"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["display_label"].as_str().unwrap())
+        .collect();
+    assert_eq!(alpha_endpoint_labels, vec!["A Room", "Z Room"]);
+}
+
+#[tokio::test]
 async fn bot_consoles_route_ignores_unconfigured_endpoint_accounts() {
     let config = test_config();
     let log_dir = tempdir().unwrap();

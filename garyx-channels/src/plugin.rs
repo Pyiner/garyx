@@ -1537,11 +1537,6 @@ fn build_discord_account_ui(
                 conversation_kind_rank(discord_endpoint_kind(left))
                     .cmp(&conversation_kind_rank(discord_endpoint_kind(right)))
             })
-            .then_with(|| {
-                endpoint_snapshot_activity(right)
-                    .unwrap_or("")
-                    .cmp(endpoint_snapshot_activity(left).unwrap_or(""))
-            })
             .then_with(|| left.endpoint_key.cmp(&right.endpoint_key))
     });
 
@@ -1612,11 +1607,6 @@ fn build_builtin_account_ui(
                         right.conversation_kind.as_deref().unwrap_or("unknown"),
                     ),
                 )
-            })
-            .then_with(|| {
-                endpoint_snapshot_activity(right)
-                    .unwrap_or("")
-                    .cmp(endpoint_snapshot_activity(left).unwrap_or(""))
             })
             .then_with(|| left.endpoint_key.cmp(&right.endpoint_key))
     });
