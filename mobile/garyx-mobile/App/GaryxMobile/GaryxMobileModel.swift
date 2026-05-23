@@ -1846,9 +1846,10 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func openBotGroup(_ group: GaryxMobileBotGroup) async {
-        let mainThreadId = group.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !mainThreadId.isEmpty {
-            await openThread(id: mainThreadId)
+        let openThreadId = group.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+            ?? group.defaultOpenThreadId?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        if let openThreadId {
+            await openThread(id: openThreadId)
             return
         }
 

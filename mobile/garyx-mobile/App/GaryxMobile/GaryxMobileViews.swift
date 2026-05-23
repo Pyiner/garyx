@@ -949,7 +949,8 @@ private struct GaryxSidebarBotRow: View {
 
     private var rootCanOpen: Bool {
         let mainThreadId = group.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return group.rootBehavior != "expand_only" || !mainThreadId.isEmpty
+        let defaultOpenThreadId = group.defaultOpenThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return group.rootBehavior != "expand_only" || !mainThreadId.isEmpty || !defaultOpenThreadId.isEmpty
     }
 
     private var rowCanOpen: Bool {
@@ -1784,18 +1785,18 @@ struct GaryxConversationHeader: View {
                                 model.openPanel(.tasks)
                             }
                         }
+                        Button("Rename", systemImage: "pencil") {
+                            openRenamePrompt()
+                        }
+                        Button("Archive", systemImage: "archivebox", role: .destructive) {
+                            Task { await model.deleteSelectedThread() }
+                        }
                     }
                     Button("Refresh", systemImage: "arrow.clockwise") {
                         Task { await model.loadSelectedThreadHistory() }
                     }
-                    Button("Rename", systemImage: "pencil") {
-                        openRenamePrompt()
-                    }
                     Button("New Thread", systemImage: "square.and.pencil") {
                         model.openNewThreadDraft()
-                    }
-                    Button("Archive", systemImage: "archivebox", role: .destructive) {
-                        Task { await model.deleteSelectedThread() }
                     }
                 } label: {
                     GaryxToolbarIcon(systemName: "ellipsis")
