@@ -143,6 +143,10 @@ needs installed-app validation.
   user-turn model that mirrors the Mac app: completed final assistant answers
   stay outside turn collapsibles, intermediate activity folds under the turn,
   and tool groups default collapsed unless the containing turn is expanded.
+- Mobile chat live updates should mirror the Mac app's layered model: keep the
+  global gateway stream for push events, and run a selected-thread history
+  reconcile loop while the app is active so passive inbound messages still
+  appear if a stream event is missed.
 - While a mobile thread is running, show the bottom Thinking indicator when no
   assistant/tool activity is present yet; do not synthesize an empty Working
   turn row for a trailing user-only turn. Running Working rows should show an

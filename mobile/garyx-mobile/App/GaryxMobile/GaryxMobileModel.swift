@@ -202,6 +202,9 @@ final class GaryxMobileModel: ObservableObject {
     private static let threadListPageLimit = 80
     private static let threadHistoryPageLimit = 120
     private static let threadHistoryUserQueryLimit = 10
+    private static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
+    private static let gatewayReconnectInitialDelayNanos: UInt64 = 1_000_000_000
+    private static let gatewayReconnectMaxDelayNanos: UInt64 = 10_000_000_000
 
     @Published var gatewayURL: String
     @Published var gatewayAuthToken: String
@@ -321,6 +324,11 @@ final class GaryxMobileModel: ObservableObject {
     private var globalEventStreamTask: Task<Void, Never>?
     private var globalEventStreamGeneration: UUID?
     private var globalEventStreamActive = false
+    private var gatewayReconnectTask: Task<Void, Never>?
+    private var gatewayReconnectGeneration: UUID?
+    private var selectedThreadReconcileTask: Task<Void, Never>?
+    private var selectedThreadReconcileThreadId: String?
+    private var selectedThreadActivitySignatures: [String: String] = [:]
     private var messagesByThread: [String: [GaryxMobileMessage]] = [:]
     private var activeAssistantMessageIdsByThread: [String: String] = [:]
     private var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]
@@ -754,10 +762,6 @@ final class GaryxMobileModel: ObservableObject {
         let endpointsByGroup = Dictionary(grouping: channelEndpoints) { endpoint in
             Self.botGroupKey(channel: endpoint.channel, accountId: endpoint.accountId)
         }
-        var iconDataUrlByChannel: [String: String] = [:]
-        for plugin in channelPlugins {
-            iconDataUrlByChannel[plugin.id.lowercased()] = plugin.iconDataUrl ?? ""
-        }
         var configuredByGroup: [String: GaryxConfiguredBot] = [:]
         var groups: [String: GaryxMobileBotGroup] = [:]
         var order: [String] = []
@@ -784,9 +788,7 @@ final class GaryxMobileModel: ObservableObject {
         }
 
         func iconDataUrl(for channel: String) -> String? {
-            let value = iconDataUrlByChannel[channel.lowercased()]?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return value.isEmpty ? nil : value
+            GaryxChannelIconResolver.iconDataUrl(for: channel, plugins: channelPlugins)
         }
 
         func nonEmpty(_ value: String?) -> String? {
@@ -1561,6 +1563,11 @@ final class GaryxMobileModel: ObservableObject {
         resetThreadListPagination()
         sceneRefreshTask?.cancel()
         sceneRefreshTask = nil
+        gatewayReconnectTask?.cancel()
+        gatewayReconnectTask = nil
+        gatewayReconnectGeneration = nil
+        cancelSelectedThreadReconcileLoop()
+        selectedThreadActivitySignatures = [:]
         cancelGlobalEventStream()
         cancelActiveSocket()
         isSending = false
@@ -1711,16 +1718,28 @@ final class GaryxMobileModel: ObservableObject {
             let selectedThreadId = selectedThread?.id
             sceneRefreshTask = Task { [weak self] in
                 guard let self else { return }
-                startGlobalEventStream()
-                await refreshThreads()
-                guard !Task.isCancelled else { return }
-                if let selectedThreadId, selectedThread?.id == selectedThreadId {
-                    await loadSelectedThreadHistory()
+                switch connectionState {
+                case .ready:
+                    startGlobalEventStream()
+                    startSelectedThreadReconcileLoop()
+                    await refreshThreads()
+                    guard !Task.isCancelled else { return }
+                    if let selectedThreadId, selectedThread?.id == selectedThreadId {
+                        await loadSelectedThreadHistory()
+                    }
+                case .checking:
+                    break
+                case .disconnected, .failed:
+                    startGatewayReconnectLoop(immediate: true)
                 }
             }
         case .background:
             sceneRefreshTask?.cancel()
             sceneRefreshTask = nil
+            gatewayReconnectTask?.cancel()
+            gatewayReconnectTask = nil
+            gatewayReconnectGeneration = nil
+            cancelSelectedThreadReconcileLoop()
             cancelGlobalEventStream()
             let runningThreadIds = Array(activeTasksByThread.keys)
             if !runningThreadIds.isEmpty {
@@ -1776,6 +1795,13 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func connectAndRefresh() async {
+        gatewayReconnectTask?.cancel()
+        gatewayReconnectTask = nil
+        gatewayReconnectGeneration = nil
+        await connectAndRefresh(scheduleReconnectOnFailure: true)
+    }
+
+    private func connectAndRefresh(scheduleReconnectOnFailure: Bool) async {
         gatewayURL = normalizedGatewayURL(gatewayURL)
         gatewayAuthToken = gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
         connectionState = .checking
@@ -1791,10 +1817,20 @@ final class GaryxMobileModel: ObservableObject {
             startGlobalEventStream()
             await refreshThreads()
             await refreshRemoteState()
+            startSelectedThreadReconcileLoop()
         } catch {
             cancelGlobalEventStream()
-            connectionState = .failed(displayMessage(for: error))
-            lastError = displayMessage(for: error)
+            cancelSelectedThreadReconcileLoop()
+            let message = displayMessage(for: error)
+            connectionState = .failed(message)
+            if scheduleReconnectOnFailure {
+                lastError = message
+            } else {
+                gatewaySettingsStatus = "Reconnecting gateway"
+            }
+            if scheduleReconnectOnFailure {
+                startGatewayReconnectLoop()
+            }
         }
     }
 
@@ -1928,6 +1964,7 @@ final class GaryxMobileModel: ObservableObject {
                 selectedThread = nil
                 draftThreadTitle = ""
                 messages = []
+                cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
             }
         } catch {
@@ -1992,6 +2029,7 @@ final class GaryxMobileModel: ObservableObject {
             selectedThreadRecoveryTask?.cancel()
             selectedThreadRecoveryTask = nil
             selectedThreadRecoveryThreadId = nil
+            cancelSelectedThreadReconcileLoop()
             resetSelectedThreadHistoryPagination()
         }
         selectedThread = thread
@@ -2003,12 +2041,14 @@ final class GaryxMobileModel: ObservableObject {
             messages = cachedMessages(for: thread.id)
         }
         await loadSelectedThreadHistory()
+        startSelectedThreadReconcileLoop()
     }
 
     func openNewThreadDraft() {
         selectedThreadRecoveryTask?.cancel()
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
+        cancelSelectedThreadReconcileLoop()
         selectedThreadHistoryRequestId = nil
         isLoadingSelectedThreadHistory = false
         resetSelectedThreadHistoryPagination()
@@ -2104,6 +2144,7 @@ final class GaryxMobileModel: ObservableObject {
         pendingBotId = Self.botSelectorId(channel: group.channel, accountId: group.accountId)
         pendingBotWorkspace = workspace.isEmpty ? nil : workspace
         pendingBotAgentId = agentId.isEmpty ? nil : agentId
+        cancelSelectedThreadReconcileLoop()
         selectedThread = nil
         resetSelectedThreadHistoryPagination()
         draftThreadTitle = ""
@@ -2132,6 +2173,7 @@ final class GaryxMobileModel: ObservableObject {
                 self.selectedThread = nil
                 draftThreadTitle = ""
                 messages = []
+                cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
             }
             messagesByThread[thread.id] = nil
@@ -2182,6 +2224,7 @@ final class GaryxMobileModel: ObservableObject {
                 userQueryLimit: Self.threadHistoryUserQueryLimit
             )
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
+            selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
             updateSelectedThreadHistoryPagination(
                 threadId: threadId,
@@ -2199,6 +2242,7 @@ final class GaryxMobileModel: ObservableObject {
                 reconcileActiveAssistant: true
             )
             scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
+            startSelectedThreadReconcileLoop()
         } catch {
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
             if cachedMessages(for: threadId).isEmpty {
@@ -2343,6 +2387,7 @@ final class GaryxMobileModel: ObservableObject {
             )
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
+            selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
             updateSelectedThreadHistoryPagination(
                 threadId: threadId,
@@ -2365,6 +2410,90 @@ final class GaryxMobileModel: ObservableObject {
         } catch {
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
+            let message = displayMessage(for: error)
+            if Self.isTransientGatewayErrorMessage(message) {
+                gatewaySettingsStatus = "Waiting to sync with gateway"
+            } else {
+                lastError = message
+            }
+        }
+    }
+
+    private func startSelectedThreadReconcileLoop() {
+        guard hasGatewaySettings,
+              case .ready = connectionState,
+              let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadId.isEmpty else {
+            cancelSelectedThreadReconcileLoop()
+            return
+        }
+        if selectedThreadReconcileThreadId == threadId, selectedThreadReconcileTask != nil {
+            return
+        }
+        cancelSelectedThreadReconcileLoop()
+        selectedThreadReconcileThreadId = threadId
+        selectedThreadReconcileTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.selectedThreadReconcileIntervalNanos)
+                if Task.isCancelled { break }
+                await reconcileSelectedThreadFromGatewayIfChanged(threadId: threadId)
+            }
+        }
+    }
+
+    private func cancelSelectedThreadReconcileLoop() {
+        selectedThreadReconcileTask?.cancel()
+        selectedThreadReconcileTask = nil
+        selectedThreadReconcileThreadId = nil
+    }
+
+    private func reconcileSelectedThreadFromGatewayIfChanged(threadId: String) async {
+        guard selectedThread?.id == threadId,
+              hasGatewaySettings,
+              case .ready = connectionState,
+              !isLoadingSelectedThreadHistory else {
+            return
+        }
+        if activeTasksByThread[threadId] != nil {
+            return
+        }
+        let observedHistoryRequestId = selectedThreadHistoryRequestId
+        do {
+            let transcript = try await client().threadHistory(
+                threadId: threadId,
+                limit: Self.threadHistoryPageLimit,
+                userQueryLimit: Self.threadHistoryUserQueryLimit
+            )
+            guard selectedThread?.id == threadId,
+                  selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
+            let signature = GaryxThreadActivitySignature.make(from: transcript)
+            if selectedThreadActivitySignatures[threadId] == signature {
+                updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+                return
+            }
+            selectedThreadActivitySignatures[threadId] = signature
+            updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+            updateSelectedThreadHistoryPagination(
+                threadId: threadId,
+                transcript: transcript,
+                preservingLoadedOlderPages: true
+            )
+            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
+            setMessages(
+                mergedMessages(
+                    remoteMessages,
+                    withLocal: cachedMessages(for: threadId),
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
+                ),
+                for: threadId,
+                reconcileActiveAssistant: true
+            )
+            if !remoteBusyThreadIds.contains(threadId) {
+                await refreshThreads()
+            }
+        } catch {
+            guard selectedThread?.id == threadId else { return }
             let message = displayMessage(for: error)
             if Self.isTransientGatewayErrorMessage(message) {
                 gatewaySettingsStatus = "Waiting to sync with gateway"
@@ -4108,6 +4237,7 @@ final class GaryxMobileModel: ObservableObject {
                 selectedThread = nil
                 draftThreadTitle = ""
                 messages = []
+                cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
             }
             messagesByThread[threadId] = nil
@@ -4357,6 +4487,7 @@ final class GaryxMobileModel: ObservableObject {
                   let transcript = try? transcript(fromSnapshotPayload: payload) else {
                 return
             }
+            selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
             scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
             if activeTasksByThread[threadId] != nil {
@@ -5245,6 +5376,41 @@ final class GaryxMobileModel: ObservableObject {
         globalEventStreamTask = nil
         globalEventStreamGeneration = nil
         globalEventStreamActive = false
+    }
+
+    private func startGatewayReconnectLoop(immediate: Bool = false) {
+        guard hasGatewaySettings, canConnectGateway else { return }
+        guard gatewayReconnectTask == nil else { return }
+        let generation = UUID()
+        gatewayReconnectGeneration = generation
+        gatewayReconnectTask = Task { [weak self] in
+            guard let self else { return }
+            var delay = immediate ? UInt64(0) : Self.gatewayReconnectInitialDelayNanos
+            while !Task.isCancelled {
+                if delay > 0 {
+                    try? await Task.sleep(nanoseconds: delay)
+                }
+                if Task.isCancelled { break }
+                guard gatewayReconnectGeneration == generation,
+                      hasGatewaySettings,
+                      canConnectGateway else { break }
+                if case .ready = connectionState {
+                    break
+                }
+                await connectAndRefresh(scheduleReconnectOnFailure: false)
+                guard gatewayReconnectGeneration == generation else { break }
+                if case .ready = connectionState {
+                    break
+                }
+                delay = delay == 0
+                    ? Self.gatewayReconnectInitialDelayNanos
+                    : min(delay * 2, Self.gatewayReconnectMaxDelayNanos)
+            }
+            if gatewayReconnectGeneration == generation {
+                gatewayReconnectTask = nil
+                gatewayReconnectGeneration = nil
+            }
+        }
     }
 
     private func runGlobalEventStream(generation: UUID) async {
