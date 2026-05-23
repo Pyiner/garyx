@@ -2643,14 +2643,35 @@ struct GaryxMessageFileAttachmentView: View {
 
 struct GaryxThinkingLabel: View {
     var body: some View {
-        HStack(spacing: 10) {
-            ProgressView()
-                .scaleEffect(0.72)
-            Text("Thinking")
-                .font(GaryxFont.body())
-                .foregroundStyle(GaryxTheme.secondaryText)
+        GaryxShimmerText(text: "Thinking", font: GaryxFont.body())
+            .frame(minHeight: 22)
+    }
+}
+
+struct GaryxShimmerText: View {
+    let text: String
+    var font: Font = GaryxFont.body()
+    var baseColor: Color = GaryxTheme.secondaryText
+    var peakColor: Color = Color(.label)
+    var duration: Double = 2.6
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let normalized = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: duration) / duration
+            let phase = CGFloat(normalized) * 2.0 - 0.5
+
+            Text(text)
+                .font(font)
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [baseColor, peakColor, baseColor],
+                        startPoint: UnitPoint(x: phase - 0.5, y: 0.5),
+                        endPoint: UnitPoint(x: phase + 0.5, y: 0.5)
+                    )
+                )
         }
-        .frame(minHeight: 22)
+        .accessibilityLabel(text)
     }
 }
 

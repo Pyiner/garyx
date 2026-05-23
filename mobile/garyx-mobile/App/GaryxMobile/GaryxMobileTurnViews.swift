@@ -89,10 +89,19 @@ struct GaryxTurnSummaryView<Content: View>: View {
             } label: {
                 HStack(spacing: 8) {
                     TimelineView(.periodic(from: Date(), by: 1)) { context in
-                        Text(summaryLabel(now: context.date))
-                            .font(GaryxFont.footnote(weight: .medium))
-                            .foregroundStyle(isRunning ? GaryxTheme.accent : GaryxTheme.secondaryText)
+                        let label = summaryLabel(now: context.date)
+                        if isRunning {
+                            GaryxShimmerText(
+                                text: label,
+                                font: GaryxFont.footnote(weight: .medium)
+                            )
                             .lineLimit(1)
+                        } else {
+                            Text(label)
+                                .font(GaryxFont.footnote(weight: .medium))
+                                .foregroundStyle(GaryxTheme.secondaryText)
+                                .lineLimit(1)
+                        }
                     }
                     .fixedSize(horizontal: true, vertical: false)
 
