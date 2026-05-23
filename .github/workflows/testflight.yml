@@ -1,0 +1,173 @@
+name: TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      configure_app:
+        description: Register/update the App Store Connect app, beta group, and testers before uploading.
+        required: true
+        default: true
+        type: boolean
+      upload_build:
+        description: Build and upload an iOS archive to TestFlight.
+        required: true
+        default: true
+        type: boolean
+      build_number:
+        description: Optional CFBundleVersion. Defaults to the GitHub run number.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  testflight:
+    name: Register Garyx and upload TestFlight build
+    runs-on: macos-14
+    env:
+      GARYX_APP_NAME: ${{ vars.GARYX_APP_NAME || 'Garyx' }}
+      GARYX_APP_SKU: ${{ vars.GARYX_APP_SKU || 'garyx-ios' }}
+      IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID || 'com.garyx.mobile' }}
+      TESTFLIGHT_GROUP_NAME: ${{ vars.TESTFLIGHT_GROUP_NAME || 'Garyx Experimental' }}
+      TESTFLIGHT_TESTER_EMAILS: ${{ secrets.TESTFLIGHT_TESTER_EMAILS }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Check required TestFlight secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            APPLE_TEAM_ID \
+            APP_STORE_CONNECT_API_KEY_ID \
+            APP_STORE_CONNECT_API_ISSUER_ID \
+            APP_STORE_CONNECT_API_KEY_P8; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required GitHub secret(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Write App Store Connect API key
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_dir="$RUNNER_TEMP/appstoreconnect"
+          mkdir -p "$key_dir" "$HOME/.appstoreconnect/private_keys"
+          key_path="$key_dir/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          printf '%s' "$APP_STORE_CONNECT_API_KEY_P8" > "$key_path"
+          python3 - "$key_path" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          if "\\n" in text and "-----BEGIN" in text and "\n" not in text.strip().split("-----BEGIN", 1)[1]:
+              text = text.replace("\\n", "\n")
+          path.write_text(text)
+          PY
+          chmod 600 "$key_path"
+          cp "$key_path" "$HOME/.appstoreconnect/private_keys/"
+          echo "APP_STORE_CONNECT_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Register App Store Connect app and TestFlight testers
+        if: inputs.configure_app
+        shell: bash
+        run: node scripts/appstore-connect/setup-testflight.mjs
+
+      - name: Resolve build number
+        if: inputs.upload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          build_number="${{ inputs.build_number }}"
+          if [[ -z "$build_number" ]]; then
+            build_number="${GITHUB_RUN_NUMBER}"
+          fi
+          echo "GARYX_IOS_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
+
+      - name: Archive Garyx iOS app
+        if: inputs.upload_build
+        shell: bash
+        working-directory: mobile/garyx-mobile
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project GaryxMobile.xcodeproj \
+            -scheme GaryxMobile \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/GaryxMobile.xcarchive" \
+            archive \
+            PRODUCT_BUNDLE_IDENTIFIER="$IOS_BUNDLE_ID" \
+            PRODUCT_NAME="Garyx" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CURRENT_PROJECT_VERSION="$GARYX_IOS_BUILD_NUMBER" \
+            CODE_SIGN_STYLE=Automatic \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$APP_STORE_CONNECT_API_KEY_PATH" \
+            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID"
+
+      - name: Export IPA
+        if: inputs.upload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          export_options="$RUNNER_TEMP/ExportOptions.plist"
+          cat > "$export_options" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>uploadSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild \
+            -exportArchive \
+            -archivePath "$RUNNER_TEMP/GaryxMobile.xcarchive" \
+            -exportPath "$RUNNER_TEMP/GaryxMobileExport" \
+            -exportOptionsPlist "$export_options" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$APP_STORE_CONNECT_API_KEY_PATH" \
+            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
+            -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID"
+
+      - name: Upload IPA to TestFlight
+        if: inputs.upload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa_path="$(find "$RUNNER_TEMP/GaryxMobileExport" -maxdepth 1 -name '*.ipa' -print -quit)"
+          if [[ -z "$ipa_path" ]]; then
+            echo "No IPA exported." >&2
+            exit 1
+          fi
+          xcrun altool \
+            --upload-app \
+            --type ios \
+            --file "$ipa_path" \
+            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
+            --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
