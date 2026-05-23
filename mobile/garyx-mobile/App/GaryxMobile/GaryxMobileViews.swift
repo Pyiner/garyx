@@ -475,6 +475,8 @@ struct GaryxMainPanelView: View {
                     GaryxWorkspacesView()
                 case .automations:
                     GaryxAutomationsView()
+                case .workspaceBots:
+                    GaryxWorkspaceBotsView()
                 case .agents:
                     GaryxAgentsView()
                 case .skills:
@@ -520,49 +522,24 @@ struct GaryxThreadSidebar: View {
                 GaryxSidebarHeaderView(
                     drilldownContext: sidebarHeaderContext,
                     showsCloseButton: showsInlineCloseButton,
-                    onBack: { closeDrilldown() },
+                    onBack: {},
                     onClose: { closeSidebar() }
                 )
             }
             .task {
-                if model.threads.isEmpty {
+                if model.threads.isEmpty && !model.isLoadingThreads {
                     await model.refreshThreads()
                 }
             }
-            .onAppear {
-                reconcileActiveDrilldown()
-            }
-            .onChange(of: model.sidebarUnscopedThreads.map(\.id)) { _, _ in
-                reconcileActiveDrilldown()
-            }
-            .onChange(of: model.sidebarBotDrilldownFingerprints) { _, _ in
-                reconcileActiveDrilldown()
-            }
-            .onChange(of: model.sidebarWorkspaceThreadGroups.map(\.path)) { _, _ in
-                reconcileActiveDrilldown()
-            }
-    }
-
-    private var activeDrilldown: GaryxSidebarDrilldown? {
-        model.activeSidebarDrilldown
-    }
-
-    private var activeDrilldownBinding: Binding<GaryxSidebarDrilldown?> {
-        Binding(
-            get: { model.activeSidebarDrilldown },
-            set: { model.activeSidebarDrilldown = $0 }
-        )
     }
 
     private var threadListWithBottomBar: some View {
         ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if activeDrilldown == nil {
-                    GaryxSidebarNavigationList()
-                        .padding(.horizontal, GaryxSidebarMetrics.outerHorizontalPadding)
-                        .padding(.top, 6)
-                        .padding(.bottom, 14)
-                }
+                GaryxSidebarNavigationList()
+                    .padding(.horizontal, GaryxSidebarMetrics.outerHorizontalPadding)
+                    .padding(.top, 6)
+                    .padding(.bottom, 14)
 
                 sidebarThreadSections
 
@@ -592,64 +569,17 @@ struct GaryxThreadSidebar: View {
 
     @ViewBuilder
     private var sidebarThreadSections: some View {
-        switch activeDrilldown {
-        case .unscopedThreads:
-            GaryxUnscopedThreadsSection(activeDrilldown: activeDrilldownBinding)
-        case .bot:
-            GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
-        case .workspace:
-            GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
-        case nil:
-            GaryxPinnedThreadsSection()
-            GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
-            GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
-        }
-
+        GaryxPinnedThreadsSection()
+        GaryxRecentThreadsSection()
         GaryxSidebarThreadPaginationRow()
     }
 
     private var sidebarHeaderContext: GaryxSidebarHeaderContext? {
-        switch activeDrilldown {
-        case .unscopedThreads:
-            GaryxSidebarHeaderContext(title: "Threads", subtitle: nil)
-        case let .bot(id):
-            model.mobileBotGroups
-                .first { $0.id == id }
-                .map { GaryxSidebarHeaderContext(title: $0.title, subtitle: $0.compactDetailLine) }
-        case let .workspace(path):
-            model.sidebarWorkspaceThreadGroups
-                .first { $0.path == path }
-                .map { GaryxSidebarHeaderContext(title: $0.name, subtitle: $0.path) }
-        case nil:
-            nil
-        }
+        nil
     }
 
     private func closeSidebar() {
         model.setSidebarVisible(false)
-    }
-
-    private func closeDrilldown() {
-        withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-            model.activeSidebarDrilldown = nil
-        }
-    }
-
-    private func reconcileActiveDrilldown() {
-        switch activeDrilldown {
-        case .unscopedThreads where model.sidebarUnscopedThreads.isEmpty:
-            model.activeSidebarDrilldown = nil
-        case let .bot(id):
-            guard let group = model.mobileBotGroups.first(where: { $0.id == id }),
-                  !group.sidebarChildConversationEntries(visibleThreadIds: model.sidebarVisibleThreadIds).isEmpty else {
-                model.activeSidebarDrilldown = nil
-                break
-            }
-        case let .workspace(path) where !model.sidebarWorkspaceThreadGroups.contains(where: { $0.path == path }):
-            model.activeSidebarDrilldown = nil
-        default:
-            break
-        }
     }
 
     private func refreshAll() async {
@@ -786,21 +716,11 @@ private struct GaryxSidebarWorkspaceThreadGroup: Identifiable {
 }
 
 enum GaryxSidebarDrilldown: Equatable {
-    case unscopedThreads
     case bot(String)
     case workspace(String)
 }
 
 private extension GaryxMobileModel {
-    var sidebarUnscopedThreads: [GaryxThreadSummary] {
-        threads
-            .filter { thread in
-                let workspace = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return workspace.isEmpty
-            }
-            .sorted(by: garyxThreadSort)
-    }
-
     var sidebarWorkspaceThreadGroups: [GaryxSidebarWorkspaceThreadGroup] {
         let grouped = Dictionary(grouping: threads) { thread in
             thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -823,17 +743,6 @@ private extension GaryxMobileModel {
     var sidebarVisibleThreadIds: Set<String> {
         Set(threads.map(\.id))
     }
-
-    var sidebarBotDrilldownFingerprints: [String] {
-        let visibleThreadIds = sidebarVisibleThreadIds
-        return mobileBotGroups.map { group in
-            let childIds = group.sidebarChildConversationEntries(visibleThreadIds: visibleThreadIds)
-                .map(\.id)
-                .joined(separator: ",")
-            return "\(group.id):\(childIds)"
-        }
-    }
-
 }
 
 private func garyxThreadSort(_ lhs: GaryxThreadSummary, _ rhs: GaryxThreadSummary) -> Bool {
@@ -843,6 +752,36 @@ private func garyxThreadSort(_ lhs: GaryxThreadSummary, _ rhs: GaryxThreadSummar
         return left > right
     }
     return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+}
+
+private struct GaryxRecentThreadsSection: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+
+    var body: some View {
+        let threads = model.recentThreads.filter { !model.isThreadPinned($0.id) }
+        VStack(alignment: .leading, spacing: 0) {
+            GaryxSidebarSectionHeader(title: "Recent", systemImage: "clock.fill")
+                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                .padding(.bottom, 4)
+
+            if threads.isEmpty {
+                if model.isLoadingThreads {
+                    GaryxSidebarLoadingRow(title: "Loading recent threads")
+                } else {
+                    GaryxSidebarEmptyRow(title: "No recent threads")
+                }
+            } else {
+                ForEach(threads) { thread in
+                    GaryxSidebarThreadButton(
+                        thread: thread,
+                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                    )
+                }
+            }
+        }
+        .padding(.bottom, 10)
+        .transition(.opacity)
+    }
 }
 
 private struct GaryxPinnedThreadsSection: View {
@@ -856,50 +795,54 @@ private struct GaryxPinnedThreadsSection: View {
     }
 }
 
-private struct GaryxUnscopedThreadsSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    @Binding var activeDrilldown: GaryxSidebarDrilldown?
-
-    var body: some View {
-        if activeDrilldown == .unscopedThreads || !model.sidebarUnscopedThreads.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                if activeDrilldown == .unscopedThreads {
-                    GaryxUnscopedThreadsDetailSection()
-                } else {
-                    GaryxSidebarDisclosureRow(
-                        title: "Threads",
-                        systemName: "bubble.left.and.text.bubble.right.fill"
-                    ) {
-                        withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                            activeDrilldown = .unscopedThreads
-                        }
-                    }
-                }
-            }
-            .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-            .padding(.bottom, 10)
-        }
-    }
-}
-
-private struct GaryxUnscopedThreadsDetailSection: View {
+private struct GaryxPinnedThreadsDetailSection: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
+            GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
                 .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
                 .padding(.bottom, 4)
 
-            ForEach(model.sidebarUnscopedThreads) { thread in
+            ForEach(model.pinnedThreads) { thread in
                 GaryxSidebarThreadButton(
                     thread: thread,
-                    showsWorkspaceMeta: false,
+                    showsPinnedMarker: true,
                     trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
                 )
             }
         }
         .transition(.opacity)
+    }
+}
+
+private struct GaryxSidebarLoadingRow: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .scaleEffect(0.68)
+            Text(title)
+                .font(GaryxFont.caption(weight: .semibold))
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 44)
+        .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
+    }
+}
+
+private struct GaryxSidebarEmptyRow: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(GaryxFont.caption(weight: .medium))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minHeight: 44)
+            .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
     }
 }
 
@@ -933,27 +876,6 @@ private struct GaryxSidebarThreadPaginationRow: View {
             .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
             .padding(.bottom, 10)
         }
-    }
-}
-
-private struct GaryxPinnedThreadsDetailSection: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            GaryxSidebarSectionHeader(title: "Pinned", systemImage: "pin.fill")
-                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                .padding(.bottom, 4)
-
-            ForEach(model.pinnedThreads) { thread in
-                GaryxSidebarThreadButton(
-                    thread: thread,
-                    showsPinnedMarker: true,
-                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
-                )
-            }
-        }
-        .transition(.opacity)
     }
 }
 
@@ -1563,6 +1485,18 @@ struct GaryxSidebarThreadRowView: View {
                     .frame(maxWidth: 72, alignment: .trailing)
             }
 
+            if isRunning {
+                Text("Running")
+                    .font(GaryxFont.system(size: 10, weight: .semibold))
+                    .foregroundStyle(GaryxTheme.accent)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(GaryxTheme.accent.opacity(0.12))
+                    )
+            }
+
             if isSelected {
                 Circle()
                     .fill(GaryxTheme.accent)
@@ -1574,6 +1508,12 @@ struct GaryxSidebarThreadRowView: View {
                     .lineLimit(1)
             }
         }
+    }
+
+    private var isRunning: Bool {
+        let state = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let activeRunId = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return state == "running" || !activeRunId.isEmpty
     }
 }
 
@@ -4484,6 +4424,12 @@ struct GaryxAutomationsView: View {
             onRefresh: { await model.refreshRemoteState() }
         ) {
             VStack(alignment: .leading, spacing: 18) {
+                GaryxSectionBlock(title: "Browse") {
+                    GaryxCompactListGroup {
+                        GaryxSettingsPanelLinkRow(panel: .workspaceBots)
+                    }
+                }
+
                 if let run = model.lastAutomationRun {
                     GaryxNotice(
                         title: "Last run \(run.status)",
@@ -4835,6 +4781,93 @@ private func garyxAutomationScheduleSummary(_ schedule: GaryxAutomationSchedule)
         return "\(schedule.weekdays.map { $0.uppercased() }.joined(separator: ", ")) at \(time) \(timezone)"
     case .once:
         return "Once at \(nonEmpty(schedule.at) ?? "scheduled time")"
+    }
+}
+
+struct GaryxWorkspaceBotsView: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @State private var activeDrilldown: GaryxSidebarDrilldown?
+
+    var body: some View {
+        GaryxPanelScaffold(
+            title: title,
+            subtitle: subtitle,
+            onRefresh: { await refresh() },
+            leadingActionLabel: activeDrilldown == nil ? "Automation" : "Workspace & Bots",
+            leadingAction: { goBack() }
+        ) {
+            VStack(alignment: .leading, spacing: 16) {
+                switch activeDrilldown {
+                case .bot:
+                    GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
+                case .workspace:
+                    GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
+                case nil:
+                    GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
+                    GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
+                    if model.mobileBotGroups.isEmpty && model.sidebarWorkspaceThreadGroups.isEmpty {
+                        GaryxEmptyPanelView(
+                            icon: "folder",
+                            title: "No workspaces or bots yet",
+                            text: ""
+                        )
+                    }
+                }
+            }
+        }
+        .task {
+            await refresh()
+        }
+    }
+
+    private var activeDrilldownBinding: Binding<GaryxSidebarDrilldown?> {
+        Binding(
+            get: { activeDrilldown },
+            set: { activeDrilldown = $0 }
+        )
+    }
+
+    private var title: String {
+        switch activeDrilldown {
+        case let .bot(id):
+            model.mobileBotGroups.first { $0.id == id }?.title ?? "Bot"
+        case let .workspace(path):
+            model.sidebarWorkspaceThreadGroups.first { $0.path == path }?.name ?? "Workspace"
+        case nil:
+            "Workspace & Bots"
+        }
+    }
+
+    private var subtitle: String {
+        switch activeDrilldown {
+        case let .bot(id):
+            return model.mobileBotGroups.first { $0.id == id }?.compactDetailLine ?? "Bot threads"
+        case let .workspace(path):
+            return model.sidebarWorkspaceThreadGroups.first { $0.path == path }?.path ?? "Workspace threads"
+        case nil:
+            return "\(model.mobileBotGroups.count) bots · \(visibleWorkspaceCount) workspaces"
+        }
+    }
+
+    private func refresh() async {
+        await model.refreshRemoteState()
+        await model.refreshWorkspaceAndBotThreads()
+    }
+
+    private var visibleWorkspaceCount: Int {
+        model.knownWorkspacePaths
+            .filter(GaryxMobileModel.isVisibleMobileWorkspacePath)
+            .count
+    }
+
+    private func goBack() {
+        if activeDrilldown != nil {
+            withAnimation(GaryxMobileMotion.sidebarDrilldown) {
+                activeDrilldown = nil
+            }
+            return
+        }
+        model.openPanel(.automations)
     }
 }
 
@@ -7495,7 +7528,6 @@ struct GaryxSettingsOverviewContent: View {
 
     private var managementPanels: [GaryxMobilePanel] {
         [
-            .workspaces,
             model.dreamsAutoScanEnabled ? .dreams : nil,
             .tasks,
             .autoResearch,
@@ -7628,6 +7660,8 @@ struct GaryxSettingsPanelLinkRow: View {
             "\(model.activeTaskCount) active / \(model.tasks.count) total"
         case .autoResearch:
             "\(model.runningResearchCount) active / \(model.autoResearchRuns.count) total"
+        case .workspaceBots:
+            "\(model.mobileBotGroups.count) bots / \(visibleWorkspaceCount) workspaces"
         case .agents:
             "\(model.agents.count) agents / \(model.teams.count) teams"
         case .skills:
@@ -7635,6 +7669,12 @@ struct GaryxSettingsPanelLinkRow: View {
         default:
             ""
         }
+    }
+
+    private var visibleWorkspaceCount: Int {
+        model.knownWorkspacePaths
+            .filter(GaryxMobileModel.isVisibleMobileWorkspacePath)
+            .count
     }
 }
 

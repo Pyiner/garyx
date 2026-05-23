@@ -24,7 +24,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::agent_identity::create_thread_for_agent_reference;
-use crate::garyx_db::{GaryxDbError, PinnedThreadRecord};
+use crate::garyx_db::{
+    GaryxDbError, GaryxDbResult, PinnedThreadRecord, RecentThreadDraft, RecentThreadRecord,
+};
 use crate::provider_session_locator::recover_local_provider_session;
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
@@ -585,6 +587,10 @@ pub async fn runtime_info(State(state): State<Arc<AppState>>) -> impl IntoRespon
 
 const DEFAULT_THREAD_LIMIT: usize = 100;
 const MAX_THREAD_LIMIT: usize = 1000;
+const DEFAULT_RECENT_THREAD_LIMIT: usize = 80;
+const MAX_RECENT_THREAD_LIMIT: usize = 200;
+const MAX_RECENT_THREAD_STORAGE: usize = 1000;
+const RECENT_THREAD_MISSING_TIMESTAMP: &str = "1970-01-01T00:00:00.000Z";
 
 #[derive(Deserialize)]
 pub struct ListThreadsParams {
@@ -602,6 +608,16 @@ pub struct ListThreadsParams {
 }
 
 #[derive(Deserialize)]
+pub struct ListRecentThreadsParams {
+    /// Maximum number of recent threads to return.
+    #[serde(default = "default_recent_thread_limit")]
+    pub limit: usize,
+    /// Offset for pagination.
+    #[serde(default)]
+    pub offset: usize,
+}
+
+#[derive(Deserialize)]
 pub struct ThreadLogParams {
     #[serde(default)]
     pub cursor: Option<u64>,
@@ -609,6 +625,10 @@ pub struct ThreadLogParams {
 
 fn default_thread_limit() -> usize {
     DEFAULT_THREAD_LIMIT
+}
+
+fn default_recent_thread_limit() -> usize {
+    DEFAULT_RECENT_THREAD_LIMIT
 }
 
 fn parse_sdk_session_provider_hint(value: Option<&str>) -> Result<Option<ProviderType>, String> {
@@ -1087,6 +1107,157 @@ fn thread_pins_payload(records: &[PinnedThreadRecord]) -> Value {
     })
 }
 
+fn recent_threads_payload(
+    records: &[RecentThreadRecord],
+    limit: usize,
+    offset: usize,
+    total: usize,
+) -> Value {
+    json!({
+        "threads": records,
+        "count": records.len(),
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+        "has_more": offset.saturating_add(records.len()) < total,
+    })
+}
+
+fn recent_thread_run_state(active_run_id: Option<&str>, recent_run_id: Option<&str>) -> String {
+    if active_run_id
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return "running".to_owned();
+    }
+    if recent_run_id
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return "completed".to_owned();
+    }
+    "idle".to_owned()
+}
+
+fn recent_thread_draft_from_summary(summary: &Value) -> Option<RecentThreadDraft> {
+    let thread_id = summary
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_owned();
+    let title = summary
+        .get("label")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("New Thread")
+        .to_owned();
+    let workspace_dir = summary
+        .get("workspace_dir")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let thread_type = summary
+        .get("thread_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("chat")
+        .to_owned();
+    let provider_type = summary
+        .get("provider_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let agent_id = summary
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let message_count = summary
+        .get("message_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .min(u32::MAX as u64) as u32;
+    let last_message_preview = summary
+        .get("last_user_message")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            summary
+                .get("last_assistant_message")
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .unwrap_or("")
+        .to_owned();
+    let recent_run_id = summary
+        .get("recent_run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let active_run_id = summary
+        .get("active_run_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let updated_at = summary
+        .get("updated_at")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let created_at = summary
+        .get("created_at")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let last_active_at = updated_at
+        .clone()
+        .or(created_at)
+        .unwrap_or_else(|| RECENT_THREAD_MISSING_TIMESTAMP.to_owned());
+    let run_state = recent_thread_run_state(active_run_id.as_deref(), recent_run_id.as_deref());
+
+    Some(RecentThreadDraft {
+        thread_id,
+        title,
+        workspace_dir,
+        thread_type,
+        provider_type,
+        agent_id,
+        message_count,
+        last_message_preview,
+        recent_run_id,
+        active_run_id,
+        run_state,
+        updated_at,
+        last_active_at,
+    })
+}
+
+async fn sync_recent_threads_from_router(state: &Arc<AppState>) -> GaryxDbResult<()> {
+    let mut drafts = Vec::new();
+    for entry in state.cached_thread_list_entries().await {
+        if is_hidden_thread_value(&entry.data) {
+            continue;
+        }
+        let summary = thread_summary(&entry.key, &entry.data);
+        if let Some(draft) = recent_thread_draft_from_summary(&summary) {
+            drafts.push(draft);
+        }
+    }
+    state
+        .ops
+        .garyx_db
+        .sync_recent_threads_snapshot(drafts, MAX_RECENT_THREAD_STORAGE)
+}
+
 fn garyx_db_error_response(error: GaryxDbError) -> (StatusCode, Json<Value>) {
     let (status, code) = match &error {
         GaryxDbError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BadRequest"),
@@ -1212,6 +1383,30 @@ pub async fn list_threads(
         "limit": limit,
         "offset": offset,
     }))
+}
+
+/// GET /api/recent-threads - list recently active threads for compact clients.
+pub async fn list_recent_threads(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ListRecentThreadsParams>,
+) -> impl IntoResponse {
+    let limit = params.limit.min(MAX_RECENT_THREAD_LIMIT);
+    if let Err(error) = sync_recent_threads_from_router(&state).await {
+        return garyx_db_error_response(error).into_response();
+    }
+    let total = match state.ops.garyx_db.count_recent_threads() {
+        Ok(total) => total,
+        Err(error) => return garyx_db_error_response(error).into_response(),
+    };
+    let offset = params.offset.min(total);
+    match state.ops.garyx_db.list_recent_threads(limit, offset) {
+        Ok(records) => (
+            StatusCode::OK,
+            Json(recent_threads_payload(&records, limit, offset, total)),
+        )
+            .into_response(),
+        Err(error) => garyx_db_error_response(error).into_response(),
+    }
 }
 
 /// GET /api/threads/:key - get thread metadata
@@ -1586,6 +1781,7 @@ pub async fn delete_thread(
         .await;
     let _ = state.ops.thread_logs.delete_thread(&thread_id).await;
     let _ = state.ops.garyx_db.unpin_thread(&thread_id);
+    let _ = state.ops.garyx_db.remove_recent_thread(&thread_id);
     rebuild_thread_indexes(&state).await;
     state.invalidate_gateway_sync_caches().await;
     (

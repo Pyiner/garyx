@@ -764,6 +764,259 @@ async fn delete_thread_removes_garyx_db_pin() {
 }
 
 #[tokio::test]
+async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
+    let state = AppStateBuilder::new(test_config()).build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::recent-older",
+            json!({
+                "thread_id": "thread::recent-older",
+                "label": "Recent Older",
+                "created_at": "2026-05-23T08:00:00.000Z",
+                "updated_at": "2026-05-23T09:00:00.000Z",
+                "workspace_dir": "/work/test-older",
+                "provider_type": "claude",
+                "agent_id": "agent::test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "older user preview"
+                    }
+                ],
+                "history": {
+                    "message_count": 3,
+                    "recent_committed_run_ids": ["run::older"]
+                }
+            }),
+        )
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::recent-running",
+            json!({
+                "thread_id": "thread::recent-running",
+                "label": "Recent Running",
+                "created_at": "2026-05-23T08:30:00.000Z",
+                "updated_at": "2026-05-23T10:00:00.000Z",
+                "workspace_dir": "/work/test-running",
+                "provider_type": "codex",
+                "agent_id": "agent::running",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "running assistant preview"
+                    }
+                ],
+                "history": {
+                    "message_count": 4,
+                    "active_run_snapshot": {
+                        "run_id": "run::active"
+                    }
+                }
+            }),
+        )
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::recent-no-timestamp",
+            json!({
+                "thread_id": "thread::recent-no-timestamp",
+                "label": "No Timestamp"
+            }),
+        )
+        .await;
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .uri("/api/recent-threads?limit=10&offset=0")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["count"], 3);
+    assert_eq!(payload["total"], 3);
+    assert_eq!(payload["offset"], 0);
+    assert_eq!(payload["has_more"], false);
+    assert_eq!(payload["threads"][0]["thread_id"], "thread::recent-running");
+    assert_eq!(payload["threads"][0]["title"], "Recent Running");
+    assert_eq!(payload["threads"][0]["workspace_dir"], "/work/test-running");
+    assert_eq!(payload["threads"][0]["provider_type"], "codex");
+    assert_eq!(payload["threads"][0]["agent_id"], "agent::running");
+    assert_eq!(payload["threads"][0]["message_count"], 4);
+    assert_eq!(
+        payload["threads"][0]["last_message_preview"],
+        "running assistant preview"
+    );
+    assert_eq!(payload["threads"][0]["active_run_id"], "run::active");
+    assert_eq!(payload["threads"][0]["run_state"], "running");
+    assert_eq!(payload["threads"][1]["thread_id"], "thread::recent-older");
+    assert_eq!(payload["threads"][1]["provider_type"], "claude");
+    assert_eq!(payload["threads"][1]["agent_id"], "agent::test");
+    assert_eq!(payload["threads"][1]["message_count"], 3);
+    assert_eq!(
+        payload["threads"][1]["last_message_preview"],
+        "older user preview"
+    );
+    assert_eq!(payload["threads"][1]["recent_run_id"], "run::older");
+    assert_eq!(payload["threads"][1]["run_state"], "completed");
+    assert_eq!(
+        payload["threads"][2]["thread_id"],
+        "thread::recent-no-timestamp"
+    );
+    assert_eq!(
+        payload["threads"][2]["last_active_at"],
+        "1970-01-01T00:00:00.000Z"
+    );
+
+    let persisted = state
+        .ops
+        .garyx_db
+        .list_recent_threads(10, 0)
+        .expect("list persisted recent threads");
+    assert_eq!(
+        persisted
+            .iter()
+            .map(|thread| thread.thread_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "thread::recent-running",
+            "thread::recent-older",
+            "thread::recent-no-timestamp"
+        ],
+    );
+}
+
+#[tokio::test]
+async fn recent_threads_route_removes_hidden_threads_from_projection() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::hidden-recent-route";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Hidden Recent Route",
+                "created_at": "2026-05-23T08:00:00.000Z",
+                "updated_at": "2026-05-23T09:00:00.000Z"
+            }),
+        )
+        .await;
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .uri("/api/recent-threads?limit=10")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        state
+            .ops
+            .garyx_db
+            .list_recent_threads(10, 0)
+            .expect("list synced recent threads")
+            .len(),
+        1,
+    );
+
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Hidden Recent Route",
+                "hidden": true
+            }),
+        )
+        .await;
+    state.invalidate_thread_list_cache().await;
+
+    let request = authed_request()
+        .uri("/api/recent-threads?limit=10")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_recent_threads(10, 0)
+            .expect("list hidden-cleaned recent threads")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn delete_thread_removes_garyx_db_recent_thread() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::delete-recent-route";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Delete Recent Route",
+                "created_at": "2026-05-23T08:00:00.000Z",
+                "updated_at": "2026-05-23T09:00:00.000Z"
+            }),
+        )
+        .await;
+    state
+        .ops
+        .garyx_db
+        .upsert_recent_thread(crate::garyx_db::RecentThreadDraft {
+            thread_id: thread_id.to_owned(),
+            title: "Delete Recent Route".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 0,
+            last_message_preview: String::new(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: Some("2026-05-23T09:00:00.000Z".to_owned()),
+            last_active_at: "2026-05-23T09:00:00.000Z".to_owned(),
+        })
+        .expect("seed recent thread");
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("DELETE")
+        .uri(format!("/api/threads/{thread_id}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .list_recent_threads(10, 0)
+            .expect("list recent threads")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn dream_scan_route_persists_thread_topic_spans() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::dream-route";

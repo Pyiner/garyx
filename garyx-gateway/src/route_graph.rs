@@ -49,6 +49,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(routes::list_threads).post(routes::create_thread),
         )
         .route(
+            "/api/recent-threads",
+            axum::routing::get(routes::list_recent_threads),
+        )
+        .route(
             "/api/threads/history",
             axum::routing::get(api::thread_history),
         )

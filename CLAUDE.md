@@ -143,6 +143,9 @@ needs installed-app validation.
   conversation/thread lists inside bot or workspace drilldown layers.
 - Mobile sidebar primary navigation should keep only Automation at the root;
   Tasks, Auto Research, Agents, and Skills belong under Settings.
+- Mobile workspace and bot browsing belongs under Automation as the
+  `Workspace & Bots` surface. Do not put workspace or bot drilldowns back into
+  the root sidebar.
 - Mobile chat keyboard handling should treat the message area and composer as
   one vertical stack: the keyboard shrinks/moves both together, the composer
   remains attached below the messages, and the first tap or drag in the message

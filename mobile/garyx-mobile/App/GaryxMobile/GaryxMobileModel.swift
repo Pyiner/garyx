@@ -33,6 +33,7 @@ enum GaryxMobilePanel: String, CaseIterable, Identifiable {
     case commands
     case mcp
     case autoResearch
+    case workspaceBots
     case bots
     case settings
 
@@ -60,6 +61,8 @@ enum GaryxMobilePanel: String, CaseIterable, Identifiable {
             "MCP"
         case .autoResearch:
             "Auto Research"
+        case .workspaceBots:
+            "Workspace & Bots"
         case .bots:
             "Bots"
         case .settings:
@@ -89,6 +92,8 @@ enum GaryxMobilePanel: String, CaseIterable, Identifiable {
             "point.3.connected.trianglepath.dotted"
         case .autoResearch:
             "atom"
+        case .workspaceBots:
+            "folder"
         case .bots:
             "bubble.left.and.bubble.right"
         case .settings:
@@ -265,8 +270,8 @@ final class GaryxMobileModel: ObservableObject {
     }
     @Published var showsSettings = false
     @Published var sidebarVisible = false
-    @Published var activeSidebarDrilldown: GaryxSidebarDrilldown?
     @Published var pinnedThreadIds: [String] = []
+    @Published var recentThreadIds: [String] = []
     @Published var dreams: [GaryxDreamTopic] = []
     @Published var latestDreamScan: GaryxDreamScan?
     @Published var isScanningDreams = false
@@ -1079,6 +1084,14 @@ final class GaryxMobileModel: ObservableObject {
         return pinnedThreadIds.compactMap { byId[$0] }
     }
 
+    var recentThreads: [GaryxThreadSummary] {
+        var byId: [String: GaryxThreadSummary] = [:]
+        for thread in threads {
+            byId[thread.id] = thread
+        }
+        return recentThreadIds.compactMap { byId[$0] }
+    }
+
     func setSidebarVisible(_ visible: Bool, animated: Bool = true) {
         guard sidebarVisible != visible else { return }
         if animated {
@@ -1091,12 +1104,18 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func openPanel(_ panel: GaryxMobilePanel) {
-        guard panel != .dreams || dreamsAutoScanEnabled else {
+        let targetPanel: GaryxMobilePanel = switch panel {
+        case .bots, .workspaces:
+            .workspaceBots
+        default:
+            panel
+        }
+        guard targetPanel != .dreams || dreamsAutoScanEnabled else {
             activePanel = .chat
             setSidebarVisible(false)
             return
         }
-        activePanel = panel
+        activePanel = targetPanel
         setSidebarVisible(false)
     }
 
@@ -1174,7 +1193,13 @@ final class GaryxMobileModel: ObservableObject {
         }
 
         if let panelName, let panel = GaryxMobilePanel(rawValue: panelName) {
-            activePanel = panel == .dreams && !dreamsAutoScanEnabled ? .chat : panel
+            let targetPanel: GaryxMobilePanel = switch panel {
+            case .bots, .workspaces:
+                .workspaceBots
+            default:
+                panel
+            }
+            activePanel = targetPanel == .dreams && !dreamsAutoScanEnabled ? .chat : targetPanel
             setSidebarVisible(false, animated: false)
             return
         }
@@ -1728,6 +1753,7 @@ final class GaryxMobileModel: ObservableObject {
         connectionState = .disconnected
         threads = []
         pinnedThreadIds = []
+        recentThreadIds = []
         selectedThread = nil
         messages = []
         messagesByThread = [:]
@@ -2093,17 +2119,15 @@ final class GaryxMobileModel: ObservableObject {
         do {
             let previousSelectedId = selectedThread?.id
             let gatewayClient = try client()
-            async let threadsPage = gatewayClient.listThreads(limit: Self.threadListPageLimit)
+            async let threadsPage = gatewayClient.listRecentThreads(limit: Self.threadListPageLimit)
             async let threadPinsPage = gatewayClient.listThreadPins()
             let (page, pinsPage) = try await (threadsPage, threadPinsPage)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             applyPinnedThreadIds(pinsPage.threadIds)
             updateThreadListPagination(from: page)
+            recentThreadIds = page.threads.map(\.id)
             var nextThreads = page.threads
-            let requiredThreadIds = sidebarRequiredThreadIds(
-                pinnedThreadIds: pinsPage.threadIds,
-                extraThreadIds: [previousSelectedId]
-            )
+            let requiredThreadIds = normalizedThreadIds(pinsPage.threadIds + [previousSelectedId])
             nextThreads += await fetchMissingThreadSummaries(
                 using: gatewayClient,
                 requiredThreadIds: requiredThreadIds,
@@ -2174,9 +2198,13 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
         do {
-            let page = try await client().listThreads(limit: Self.threadListPageLimit, offset: offset)
+            let page = try await client().listRecentThreads(limit: Self.threadListPageLimit, offset: offset)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             updateThreadListPagination(from: page)
+            var seenRecentIds = Set(recentThreadIds)
+            recentThreadIds += page.threads.compactMap { thread in
+                seenRecentIds.insert(thread.id).inserted ? thread.id : nil
+            }
             threads = Self.mergedThreadSummaries(threads + page.threads)
             refreshRemoteBusyIdsForVisibleThreads()
         } catch {
@@ -2189,6 +2217,42 @@ final class GaryxMobileModel: ObservableObject {
         let returnedEnd = page.offset + page.count
         nextThreadListOffset = returnedEnd
         hasMoreThreadSummaries = returnedEnd < page.total
+    }
+
+    private func updateThreadListPagination(from page: GaryxRecentThreadsPage) {
+        nextThreadListOffset = page.offset + page.count
+        hasMoreThreadSummaries = page.hasMore
+    }
+
+    func refreshWorkspaceAndBotThreads() async {
+        guard hasGatewaySettings else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let gatewayClient = try client()
+            var offset = 0
+            var allThreads: [GaryxThreadSummary] = []
+            while true {
+                let page = try await gatewayClient.listThreads(limit: 1000, offset: offset)
+                allThreads += page.threads
+                let nextOffset = page.offset + page.count
+                if nextOffset >= page.total || page.count == 0 {
+                    break
+                }
+                offset = nextOffset
+            }
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            threads = Self.mergedThreadSummaries(threads + allThreads)
+            await mergeMissingSidebarRequiredThreads(
+                using: gatewayClient,
+                extraThreadIds: [selectedThread?.id],
+                runtimeGeneration: runtimeGeneration
+            )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            refreshRemoteBusyIdsForVisibleThreads()
+        } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            lastError = displayMessage(for: error)
+        }
     }
 
     private func refreshRemoteBusyIdsForVisibleThreads() {
@@ -5992,12 +6056,13 @@ final class GaryxMobileModel: ObservableObject {
         runtimeGeneration: UUID? = nil
     ) async {
         let observedGeneration = runtimeGeneration ?? gatewayRuntimeGeneration
+        let requiredThreadIds = sidebarRequiredThreadIds(
+            pinnedThreadIds: pinnedThreadIds,
+            extraThreadIds: extraThreadIds
+        )
         let missingThreads = await fetchMissingThreadSummaries(
             using: gatewayClient,
-            requiredThreadIds: sidebarRequiredThreadIds(
-                pinnedThreadIds: pinnedThreadIds,
-                extraThreadIds: extraThreadIds
-            ),
+            requiredThreadIds: requiredThreadIds,
             existingThreadIds: Set(threads.map(\.id))
         )
         guard observedGeneration == gatewayRuntimeGeneration else { return }
@@ -6020,6 +6085,15 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
         return missingThreads
+    }
+
+    private func normalizedThreadIds(_ values: [String?]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value -> String? in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !trimmed.isEmpty, seen.insert(trimmed).inserted else { return nil }
+            return trimmed
+        }
     }
 
     private func sidebarRequiredThreadIds(

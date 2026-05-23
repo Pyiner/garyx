@@ -21,6 +21,22 @@ Each thread carries:
 Threads are persisted under `~/.garyx/data/threads/`. Transcripts live in
 per-thread files.
 
+## Recent active threads
+
+Garyx also maintains a gateway-local SQLite projection of visible thread
+metadata for compact clients such as the mobile app. The projection is derived
+from canonical thread records, pruned back to a bounded recency window, and
+stores denormalized display metadata:
+`thread_id`, title, `workspace_dir`, thread type, provider/agent hints, message
+count, the latest preview, recent/active run ids, and a coarse `run_state`
+(`running`, `completed`, or `idle`).
+
+Clients read the recency-ordered view through `GET /api/recent-threads`. The
+endpoint refreshes the projection from router thread metadata before returning
+it, removes rows that are no longer visible in the router snapshot, and returns
+pagination metadata (`total`, `offset`, and `has_more`) alongside the requested
+page.
+
 ## How a chat becomes a thread
 
 When a message arrives on a channel, Garyx looks up the right thread by:

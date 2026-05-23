@@ -279,6 +279,74 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(page.threadIds, ["thread::from-snake", "thread::from-camel"])
     }
 
+    func testRecentThreadsPageDecodesGatewayShape() throws {
+        let page = try JSONDecoder().decode(
+            GaryxRecentThreadsPage.self,
+            from: Data(
+                """
+                {
+                  "threads": [
+                    {
+                      "thread_id": "thread::recent",
+                      "title": "Recent Thread",
+                      "workspace_dir": "/workspace/project",
+                      "message_count": 5,
+                      "last_message_preview": "latest user message",
+                      "active_run_id": "run::active",
+                      "run_state": "running",
+                      "last_active_at": "2026-05-23T10:00:00.000Z"
+                    }
+                  ],
+                  "count": 1,
+                  "limit": 80,
+                  "offset": 20,
+                  "total": 42,
+                  "has_more": true
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(page.count, 1)
+        XCTAssertEqual(page.limit, 80)
+        XCTAssertEqual(page.offset, 20)
+        XCTAssertEqual(page.total, 42)
+        XCTAssertTrue(page.hasMore)
+        XCTAssertEqual(page.threads.first?.id, "thread::recent")
+        XCTAssertEqual(page.threads.first?.title, "Recent Thread")
+        XCTAssertEqual(page.threads.first?.workspacePath, "/workspace/project")
+        XCTAssertEqual(page.threads.first?.lastMessagePreview, "latest user message")
+        XCTAssertEqual(page.threads.first?.activeRunId, "run::active")
+        XCTAssertEqual(page.threads.first?.runState, "running")
+        XCTAssertEqual(page.threads.first?.updatedAt, "2026-05-23T10:00:00.000Z")
+    }
+
+    func testRecentThreadsPageDecodesLegacyPreviewAndPaginationDefaults() throws {
+        let page = try JSONDecoder().decode(
+            GaryxRecentThreadsPage.self,
+            from: Data(
+                """
+                {
+                  "threads": [
+                    {
+                      "thread_id": "thread::legacy-preview",
+                      "label": "Legacy Preview",
+                      "lastMessagePreview": "legacy preview"
+                    }
+                  ],
+                  "count": 1,
+                  "limit": 80
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(page.offset, 0)
+        XCTAssertEqual(page.total, 1)
+        XCTAssertFalse(page.hasMore)
+        XCTAssertEqual(page.threads.first?.lastMessagePreview, "legacy preview")
+    }
+
     func testDreamsPageDecodesGatewayShapeAndScanRequestEncodes() throws {
         let page = try JSONDecoder().decode(
             GaryxDreamsPage.self,

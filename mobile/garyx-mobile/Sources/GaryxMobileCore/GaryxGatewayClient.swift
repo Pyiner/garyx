@@ -96,6 +96,34 @@ public struct GaryxThreadsPage: Decodable, Equatable, Sendable {
     public var offset: Int
 }
 
+public struct GaryxRecentThreadsPage: Decodable, Equatable, Sendable {
+    public var threads: [GaryxThreadSummary]
+    public var count: Int
+    public var limit: Int
+    public var offset: Int
+    public var total: Int
+    public var hasMore: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case threads
+        case count
+        case limit
+        case offset
+        case total
+        case hasMore = "has_more"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        threads = try container.decodeIfPresent([GaryxThreadSummary].self, forKey: .threads) ?? []
+        count = try container.decodeIfPresent(Int.self, forKey: .count) ?? threads.count
+        limit = try container.decodeIfPresent(Int.self, forKey: .limit) ?? count
+        offset = try container.decodeIfPresent(Int.self, forKey: .offset) ?? 0
+        total = try container.decodeIfPresent(Int.self, forKey: .total) ?? offset + count
+        hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? (offset + count < total)
+    }
+}
+
 public struct GaryxThreadPinsPage: Decodable, Equatable, Sendable {
     public var threadIds: [String]
 
@@ -359,6 +387,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var providerType: String?
     public var recentRunId: String?
     public var activeRunId: String?
+    public var runState: String?
     public var worktreePath: String?
 
     enum CodingKeys: String, CodingKey {
@@ -369,7 +398,9 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         case label
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case lastActiveAt = "last_active_at"
         case lastMessagePreview
+        case lastMessagePreviewSnake = "last_message_preview"
         case lastUserMessage = "last_user_message"
         case lastAssistantMessage = "last_assistant_message"
         case workspacePath
@@ -382,6 +413,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         case providerType = "provider_type"
         case recentRunId = "recent_run_id"
         case activeRunId = "active_run_id"
+        case runState = "run_state"
         case worktree
     }
 
@@ -391,9 +423,10 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         id = resolvedId ?? ""
         title = try container.decodeFirstString(.title, .label) ?? "New Thread"
         createdAt = try container.decodeFirstString(.createdAt)
-        updatedAt = try container.decodeFirstString(.updatedAt)
+        updatedAt = try container.decodeFirstString(.updatedAt, .lastActiveAt)
         lastMessagePreview = try container.decodeFirstString(
             .lastMessagePreview,
+            .lastMessagePreviewSnake,
             .lastUserMessage,
             .lastAssistantMessage
         ) ?? ""
@@ -405,6 +438,7 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         providerType = try container.decodeFirstString(.providerType)
         recentRunId = try container.decodeFirstString(.recentRunId)
         activeRunId = try container.decodeFirstString(.activeRunId)
+        runState = try container.decodeFirstString(.runState)
         worktreePath = try container
             .decodeIfPresent(GaryxThreadWorktreeSummary.self, forKey: .worktree)?
             .visiblePath
@@ -3587,6 +3621,16 @@ public final class GaryxGatewayClient {
     public func listThreads(limit: Int = 100, offset: Int = 0) async throws -> GaryxThreadsPage {
         try await get(
             "/api/threads",
+            queryItems: [
+                URLQueryItem(name: "limit", value: String(limit)),
+                URLQueryItem(name: "offset", value: String(offset)),
+            ]
+        )
+    }
+
+    public func listRecentThreads(limit: Int = 80, offset: Int = 0) async throws -> GaryxRecentThreadsPage {
+        try await get(
+            "/api/recent-threads",
             queryItems: [
                 URLQueryItem(name: "limit", value: String(limit)),
                 URLQueryItem(name: "offset", value: String(offset)),

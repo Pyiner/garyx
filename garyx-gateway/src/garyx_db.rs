@@ -28,6 +28,41 @@ pub struct PinnedThreadRecord {
     pub pinned_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RecentThreadRecord {
+    pub thread_id: String,
+    pub title: String,
+    pub workspace_dir: Option<String>,
+    pub thread_type: String,
+    pub provider_type: Option<String>,
+    pub agent_id: Option<String>,
+    pub message_count: u32,
+    pub last_message_preview: String,
+    pub recent_run_id: Option<String>,
+    pub active_run_id: Option<String>,
+    pub run_state: String,
+    pub updated_at: Option<String>,
+    pub last_active_at: String,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentThreadDraft {
+    pub thread_id: String,
+    pub title: String,
+    pub workspace_dir: Option<String>,
+    pub thread_type: String,
+    pub provider_type: Option<String>,
+    pub agent_id: Option<String>,
+    pub message_count: u32,
+    pub last_message_preview: String,
+    pub recent_run_id: Option<String>,
+    pub active_run_id: Option<String>,
+    pub run_state: String,
+    pub updated_at: Option<String>,
+    pub last_active_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct DreamSpanRecord {
     pub span_id: String,
@@ -179,6 +214,288 @@ impl GaryxDbService {
         let conn = self.conn()?;
         let removed = conn.execute(
             "DELETE FROM thread_pins WHERE thread_id = ?1",
+            params![thread_id],
+        )?;
+        Ok(removed > 0)
+    }
+
+    pub fn list_recent_threads(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> GaryxDbResult<Vec<RecentThreadRecord>> {
+        let conn = self.conn()?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                    message_count, last_message_preview, recent_run_id, active_run_id, run_state,
+                    updated_at, last_active_at, recorded_at
+             FROM recent_threads
+             ORDER BY last_active_at DESC, thread_id ASC
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = stmt.query_map(params![limit, offset], |row| {
+            Ok(RecentThreadRecord {
+                thread_id: row.get(0)?,
+                title: row.get(1)?,
+                workspace_dir: row.get(2)?,
+                thread_type: row.get(3)?,
+                provider_type: row.get(4)?,
+                agent_id: row.get(5)?,
+                message_count: row.get(6)?,
+                last_message_preview: row.get(7)?,
+                recent_run_id: row.get(8)?,
+                active_run_id: row.get(9)?,
+                run_state: row.get(10)?,
+                updated_at: row.get(11)?,
+                last_active_at: row.get(12)?,
+                recorded_at: row.get(13)?,
+            })
+        })?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn count_recent_threads(&self) -> GaryxDbResult<usize> {
+        let conn = self.conn()?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM recent_threads", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    pub fn sync_recent_threads_snapshot(
+        &self,
+        drafts: Vec<RecentThreadDraft>,
+        max_records: usize,
+    ) -> GaryxDbResult<()> {
+        struct NormalizedRecentThreadDraft {
+            thread_id: String,
+            title: String,
+            workspace_dir: Option<String>,
+            thread_type: String,
+            provider_type: Option<String>,
+            agent_id: Option<String>,
+            message_count: u32,
+            last_message_preview: String,
+            recent_run_id: Option<String>,
+            active_run_id: Option<String>,
+            run_state: String,
+            updated_at: Option<String>,
+            last_active_at: String,
+            recorded_at: String,
+        }
+
+        let mut rows = Vec::new();
+        for draft in drafts {
+            let Ok(thread_id) = normalize_thread_id(&draft.thread_id) else {
+                continue;
+            };
+            let Ok(thread_type) = normalize_required("thread_type", &draft.thread_type) else {
+                continue;
+            };
+            let Ok(run_state) = normalize_required("run_state", &draft.run_state) else {
+                continue;
+            };
+            let Ok(last_active_at) = normalize_required("last_active_at", &draft.last_active_at)
+            else {
+                continue;
+            };
+            rows.push(NormalizedRecentThreadDraft {
+                thread_id,
+                title: draft.title.trim().to_owned(),
+                workspace_dir: normalize_optional(draft.workspace_dir.as_deref()),
+                thread_type,
+                provider_type: normalize_optional(draft.provider_type.as_deref()),
+                agent_id: normalize_optional(draft.agent_id.as_deref()),
+                message_count: draft.message_count,
+                last_message_preview: draft.last_message_preview.trim().to_owned(),
+                recent_run_id: normalize_optional(draft.recent_run_id.as_deref()),
+                active_run_id: normalize_optional(draft.active_run_id.as_deref()),
+                run_state,
+                updated_at: normalize_optional(draft.updated_at.as_deref()),
+                last_active_at,
+                recorded_at: now_string(),
+            });
+        }
+
+        let retained_thread_ids = rows
+            .iter()
+            .map(|row| row.thread_id.clone())
+            .collect::<Vec<_>>();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        for row in rows {
+            tx.execute(
+                "INSERT INTO recent_threads (
+                    thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                    message_count, last_message_preview, recent_run_id, active_run_id, run_state,
+                    updated_at, last_active_at, recorded_at
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 ON CONFLICT(thread_id) DO UPDATE SET
+                    title = excluded.title,
+                    workspace_dir = excluded.workspace_dir,
+                    thread_type = excluded.thread_type,
+                    provider_type = excluded.provider_type,
+                    agent_id = excluded.agent_id,
+                    message_count = excluded.message_count,
+                    last_message_preview = excluded.last_message_preview,
+                    recent_run_id = excluded.recent_run_id,
+                    active_run_id = excluded.active_run_id,
+                    run_state = excluded.run_state,
+                    updated_at = excluded.updated_at,
+                    last_active_at = excluded.last_active_at,
+                    recorded_at = excluded.recorded_at",
+                params![
+                    row.thread_id,
+                    row.title,
+                    row.workspace_dir,
+                    row.thread_type,
+                    row.provider_type,
+                    row.agent_id,
+                    row.message_count,
+                    row.last_message_preview,
+                    row.recent_run_id,
+                    row.active_run_id,
+                    row.run_state,
+                    row.updated_at,
+                    row.last_active_at,
+                    row.recorded_at,
+                ],
+            )?;
+        }
+
+        if retained_thread_ids.is_empty() {
+            tx.execute("DELETE FROM recent_threads", [])?;
+        } else {
+            tx.execute(
+                "CREATE TEMP TABLE IF NOT EXISTS recent_thread_sync_ids (
+                    thread_id TEXT PRIMARY KEY
+                 )",
+                [],
+            )?;
+            tx.execute("DELETE FROM recent_thread_sync_ids", [])?;
+            for thread_id in &retained_thread_ids {
+                tx.execute(
+                    "INSERT OR IGNORE INTO recent_thread_sync_ids (thread_id) VALUES (?1)",
+                    params![thread_id],
+                )?;
+            }
+            tx.execute(
+                "DELETE FROM recent_threads
+                  WHERE thread_id NOT IN (
+                    SELECT thread_id FROM recent_thread_sync_ids
+                  )",
+                [],
+            )?;
+            tx.execute("DELETE FROM recent_thread_sync_ids", [])?;
+        }
+
+        if max_records == 0 {
+            tx.execute("DELETE FROM recent_threads", [])?;
+        } else {
+            let max_records = i64::try_from(max_records).unwrap_or(i64::MAX);
+            tx.execute(
+                "DELETE FROM recent_threads
+                 WHERE thread_id IN (
+                    SELECT thread_id
+                      FROM recent_threads
+                     ORDER BY last_active_at DESC, thread_id ASC
+                     LIMIT -1 OFFSET ?1
+                 )",
+                params![max_records],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn upsert_recent_thread(
+        &self,
+        draft: RecentThreadDraft,
+    ) -> GaryxDbResult<RecentThreadRecord> {
+        let thread_id = normalize_thread_id(&draft.thread_id)?;
+        let thread_type = normalize_required("thread_type", &draft.thread_type)?;
+        let run_state = normalize_required("run_state", &draft.run_state)?;
+        let last_active_at = normalize_required("last_active_at", &draft.last_active_at)?;
+        let title = draft.title.trim().to_owned();
+        let workspace_dir = normalize_optional(draft.workspace_dir.as_deref());
+        let provider_type = normalize_optional(draft.provider_type.as_deref());
+        let agent_id = normalize_optional(draft.agent_id.as_deref());
+        let last_message_preview = draft.last_message_preview.trim().to_owned();
+        let recent_run_id = normalize_optional(draft.recent_run_id.as_deref());
+        let active_run_id = normalize_optional(draft.active_run_id.as_deref());
+        let updated_at = normalize_optional(draft.updated_at.as_deref());
+        let recorded_at = now_string();
+
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO recent_threads (
+                thread_id, title, workspace_dir, thread_type, provider_type, agent_id,
+                message_count, last_message_preview, recent_run_id, active_run_id, run_state,
+                updated_at, last_active_at, recorded_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(thread_id) DO UPDATE SET
+                title = excluded.title,
+                workspace_dir = excluded.workspace_dir,
+                thread_type = excluded.thread_type,
+                provider_type = excluded.provider_type,
+                agent_id = excluded.agent_id,
+                message_count = excluded.message_count,
+                last_message_preview = excluded.last_message_preview,
+                recent_run_id = excluded.recent_run_id,
+                active_run_id = excluded.active_run_id,
+                run_state = excluded.run_state,
+                updated_at = excluded.updated_at,
+                last_active_at = excluded.last_active_at,
+                recorded_at = excluded.recorded_at",
+            params![
+                thread_id,
+                title,
+                workspace_dir,
+                thread_type,
+                provider_type,
+                agent_id,
+                draft.message_count,
+                last_message_preview,
+                recent_run_id,
+                active_run_id,
+                run_state,
+                updated_at,
+                last_active_at,
+                recorded_at,
+            ],
+        )?;
+
+        Ok(RecentThreadRecord {
+            thread_id,
+            title,
+            workspace_dir,
+            thread_type,
+            provider_type,
+            agent_id,
+            message_count: draft.message_count,
+            last_message_preview,
+            recent_run_id,
+            active_run_id,
+            run_state,
+            updated_at,
+            last_active_at,
+            recorded_at,
+        })
+    }
+
+    pub fn remove_recent_thread(&self, thread_id: &str) -> GaryxDbResult<bool> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        let conn = self.conn()?;
+        let removed = conn.execute(
+            "DELETE FROM recent_threads WHERE thread_id = ?1",
             params![thread_id],
         )?;
         Ok(removed > 0)
@@ -971,6 +1288,26 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             pinned_at TEXT NOT NULL
         ) STRICT;
 
+        CREATE TABLE IF NOT EXISTS recent_threads (
+            thread_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL DEFAULT '',
+            workspace_dir TEXT,
+            thread_type TEXT NOT NULL DEFAULT 'chat',
+            provider_type TEXT,
+            agent_id TEXT,
+            message_count INTEGER NOT NULL DEFAULT 0,
+            last_message_preview TEXT NOT NULL DEFAULT '',
+            recent_run_id TEXT,
+            active_run_id TEXT,
+            run_state TEXT NOT NULL DEFAULT 'idle',
+            updated_at TEXT,
+            last_active_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_recent_threads_last_active
+            ON recent_threads(last_active_at DESC);
+
         CREATE TABLE IF NOT EXISTS dream_topics (
             dream_id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -1127,6 +1464,175 @@ mod tests {
             db.pin_thread("   "),
             Err(GaryxDbError::BadRequest(_))
         ));
+    }
+
+    #[test]
+    fn recent_threads_upsert_list_and_remove() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::older".to_owned(),
+            title: "Older Thread".to_owned(),
+            workspace_dir: Some("/work/test-older".to_owned()),
+            thread_type: "chat".to_owned(),
+            provider_type: Some("claude".to_owned()),
+            agent_id: Some("agent::test".to_owned()),
+            message_count: 3,
+            last_message_preview: "older preview".to_owned(),
+            recent_run_id: Some("run::older".to_owned()),
+            active_run_id: None,
+            run_state: "completed".to_owned(),
+            updated_at: Some("2026-05-23T10:00:00.000Z".to_owned()),
+            last_active_at: "2026-05-23T10:00:00.000Z".to_owned(),
+        })
+        .expect("upsert older");
+        db.upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::newer".to_owned(),
+            title: "Newer Thread".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 1,
+            last_message_preview: "newer preview".to_owned(),
+            recent_run_id: None,
+            active_run_id: Some("run::active".to_owned()),
+            run_state: "running".to_owned(),
+            updated_at: Some("2026-05-23T11:00:00.000Z".to_owned()),
+            last_active_at: "2026-05-23T11:00:00.000Z".to_owned(),
+        })
+        .expect("upsert newer");
+        db.upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::older".to_owned(),
+            title: "Older Thread Renamed".to_owned(),
+            workspace_dir: Some("/work/test-older-renamed".to_owned()),
+            thread_type: "task".to_owned(),
+            provider_type: Some("codex".to_owned()),
+            agent_id: None,
+            message_count: 4,
+            last_message_preview: "updated preview".to_owned(),
+            recent_run_id: Some("run::older-two".to_owned()),
+            active_run_id: None,
+            run_state: "completed".to_owned(),
+            updated_at: Some("2026-05-23T12:00:00.000Z".to_owned()),
+            last_active_at: "2026-05-23T12:00:00.000Z".to_owned(),
+        })
+        .expect("update older");
+
+        let records = db.list_recent_threads(10, 0).expect("list recent threads");
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.thread_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["thread::older", "thread::newer"],
+        );
+        assert_eq!(records[0].title, "Older Thread Renamed");
+        assert_eq!(
+            records[0].workspace_dir.as_deref(),
+            Some("/work/test-older-renamed")
+        );
+        assert_eq!(records[0].thread_type, "task");
+        assert_eq!(records[0].provider_type.as_deref(), Some("codex"));
+        assert_eq!(records[0].message_count, 4);
+        assert_eq!(records[0].last_message_preview, "updated preview");
+        assert_eq!(records[0].recent_run_id.as_deref(), Some("run::older-two"));
+        assert_eq!(records[0].run_state, "completed");
+
+        let limited = db
+            .list_recent_threads(1, 0)
+            .expect("list limited recent threads");
+        assert_eq!(limited.len(), 1);
+        assert_eq!(limited[0].thread_id, "thread::older");
+        let offset = db
+            .list_recent_threads(1, 1)
+            .expect("list offset recent threads");
+        assert_eq!(offset.len(), 1);
+        assert_eq!(offset[0].thread_id, "thread::newer");
+        assert_eq!(db.count_recent_threads().expect("count recent threads"), 2);
+
+        assert!(
+            db.remove_recent_thread("thread::older")
+                .expect("remove older")
+        );
+        assert!(
+            !db.remove_recent_thread("thread::older")
+                .expect("remove older again")
+        );
+        assert_eq!(
+            db.list_recent_threads(10, 0)
+                .expect("list remaining recent threads")
+                .into_iter()
+                .map(|record| record.thread_id)
+                .collect::<Vec<_>>(),
+            vec!["thread::newer"],
+        );
+    }
+
+    #[test]
+    fn recent_threads_snapshot_sync_prunes_absent_rows_and_batches_updates() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.upsert_recent_thread(RecentThreadDraft {
+            thread_id: "thread::stale".to_owned(),
+            title: "Stale".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 0,
+            last_message_preview: String::new(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: Some("2026-05-23T08:00:00.000Z".to_owned()),
+            last_active_at: "2026-05-23T08:00:00.000Z".to_owned(),
+        })
+        .expect("seed stale");
+
+        db.sync_recent_threads_snapshot(
+            vec![
+                RecentThreadDraft {
+                    thread_id: "thread::kept".to_owned(),
+                    title: "Kept".to_owned(),
+                    workspace_dir: None,
+                    thread_type: "chat".to_owned(),
+                    provider_type: None,
+                    agent_id: None,
+                    message_count: 1,
+                    last_message_preview: "kept preview".to_owned(),
+                    recent_run_id: None,
+                    active_run_id: None,
+                    run_state: "idle".to_owned(),
+                    updated_at: Some("2026-05-23T10:00:00.000Z".to_owned()),
+                    last_active_at: "2026-05-23T10:00:00.000Z".to_owned(),
+                },
+                RecentThreadDraft {
+                    thread_id: "thread::pruned-by-limit".to_owned(),
+                    title: "Pruned".to_owned(),
+                    workspace_dir: None,
+                    thread_type: "chat".to_owned(),
+                    provider_type: None,
+                    agent_id: None,
+                    message_count: 1,
+                    last_message_preview: "old preview".to_owned(),
+                    recent_run_id: None,
+                    active_run_id: None,
+                    run_state: "idle".to_owned(),
+                    updated_at: Some("2026-05-23T09:00:00.000Z".to_owned()),
+                    last_active_at: "2026-05-23T09:00:00.000Z".to_owned(),
+                },
+            ],
+            1,
+        )
+        .expect("sync snapshot");
+
+        assert_eq!(
+            db.list_recent_threads(10, 0)
+                .expect("list synced recent threads")
+                .into_iter()
+                .map(|record| record.thread_id)
+                .collect::<Vec<_>>(),
+            vec!["thread::kept"],
+        );
     }
 
     #[test]
