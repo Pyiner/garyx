@@ -2675,6 +2675,9 @@ final class GaryxMobileModel: ObservableObject {
         let nextLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let hours = max(1, Int(intervalHours.trimmingCharacters(in: .whitespacesAndNewlines)) ?? automation.schedule.hours ?? 24)
+        let nextSchedule: GaryxAutomationSchedule? = automation.schedule.kind == .interval
+            ? .interval(hours: hours)
+            : nil
         guard !nextLabel.isEmpty, !nextPrompt.isEmpty else { return }
         do {
             let updated = try await client().updateAutomation(
@@ -2682,7 +2685,7 @@ final class GaryxMobileModel: ObservableObject {
                 request: GaryxAutomationUpdateRequest(
                     label: nextLabel,
                     prompt: nextPrompt,
-                    schedule: .interval(hours: hours)
+                    schedule: nextSchedule
                 )
             )
             replaceAutomation(updated)
@@ -2856,10 +2859,7 @@ final class GaryxMobileModel: ObservableObject {
         let nextTeamId = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextLeader = leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextMembers = memberAgentIds
-            .split { $0 == "," || $0 == "\n" || $0 == " " }
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        let nextMembers = Self.normalizedTeamMemberIds(memberAgentIds, leaderAgentId: nextLeader)
         let nextWorkflow = workflowText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextTeamId.isEmpty, !nextDisplayName.isEmpty, !nextLeader.isEmpty else { return }
         do {
@@ -2906,10 +2906,7 @@ final class GaryxMobileModel: ObservableObject {
         let teamId = draftTeamId.trimmingCharacters(in: .whitespacesAndNewlines)
         let name = draftTeamName.trimmingCharacters(in: .whitespacesAndNewlines)
         let leader = draftTeamLeaderId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let members = draftTeamMemberIds
-            .split { $0 == "," || $0 == "\n" || $0 == " " }
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        let members = Self.normalizedTeamMemberIds(draftTeamMemberIds, leaderAgentId: leader)
         let workflow = draftTeamWorkflow.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !teamId.isEmpty, !name.isEmpty, !leader.isEmpty else { return false }
         do {
@@ -5017,6 +5014,18 @@ final class GaryxMobileModel: ObservableObject {
         } else {
             teams.insert(team, at: 0)
         }
+    }
+
+    private static func normalizedTeamMemberIds(_ rawValue: String, leaderAgentId: String) -> [String] {
+        let leader = leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        var ids: [String] = leader.isEmpty ? [] : [leader]
+        for token in rawValue.split(whereSeparator: { $0 == "," || $0 == "\n" || $0 == " " }) {
+            let id = String(token).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !id.isEmpty, !ids.contains(id) {
+                ids.append(id)
+            }
+        }
+        return ids
     }
 
     private func replaceAutomation(_ automation: GaryxAutomationSummary) {

@@ -3604,9 +3604,20 @@ struct GaryxAutomationCard: View {
                     TextField("Prompt", text: $prompt, axis: .vertical)
                         .lineLimit(2...5)
                         .garyxInputStyle()
-                    TextField("Every", text: $intervalHours)
-                        .keyboardType(.numberPad)
-                        .garyxInputStyle()
+                    if automation.schedule.kind == .interval {
+                        TextField("Every", text: $intervalHours)
+                            .keyboardType(.numberPad)
+                            .garyxInputStyle()
+                    } else {
+                        GaryxFieldLabel("Schedule")
+                        Text(garyxAutomationScheduleSummary(automation.schedule))
+                            .font(GaryxFont.callout(weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 42, alignment: .leading)
+                            .background(GaryxTheme.input, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
                     Button {
                         Task {
                             await model.updateAutomation(
@@ -3666,6 +3677,27 @@ struct GaryxAutomationCard: View {
         label = automation.label
         prompt = automation.prompt
         intervalHours = String(automation.schedule.hours ?? 24)
+    }
+}
+
+private func garyxAutomationScheduleSummary(_ schedule: GaryxAutomationSchedule) -> String {
+    func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    switch schedule.kind {
+    case .interval:
+        return "Every \(max(1, schedule.hours ?? 24)) hours"
+    case .daily:
+        let time = nonEmpty(schedule.time) ?? "09:00"
+        let timezone = nonEmpty(schedule.timezone) ?? "UTC"
+        if schedule.weekdays.isEmpty {
+            return "Daily at \(time) \(timezone)"
+        }
+        return "\(schedule.weekdays.map { $0.uppercased() }.joined(separator: ", ")) at \(time) \(timezone)"
+    case .once:
+        return "Once at \(nonEmpty(schedule.at) ?? "scheduled time")"
     }
 }
 
