@@ -4959,6 +4959,10 @@ struct GaryxBotsContent: View {
                     GaryxCompactListGroup {
                         ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                             GaryxBotGroupRow(group: group)
+                            ForEach(sortedEndpoints(for: group)) { endpoint in
+                                GaryxCompactRowDivider()
+                                GaryxBotEndpointRow(endpoint: endpoint)
+                            }
                             if index < groups.count - 1 {
                                 GaryxCompactRowDivider()
                             }
@@ -4966,6 +4970,17 @@ struct GaryxBotsContent: View {
                     }
                 }
             }
+        }
+    }
+
+    private func sortedEndpoints(for group: GaryxMobileBotGroup) -> [GaryxChannelEndpoint] {
+        group.endpoints.sorted { lhs, rhs in
+            let leftActivity = lhs.lastInboundAt ?? lhs.lastDeliveryAt ?? ""
+            let rightActivity = rhs.lastInboundAt ?? rhs.lastDeliveryAt ?? ""
+            if leftActivity != rightActivity {
+                return leftActivity > rightActivity
+            }
+            return lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel) == .orderedAscending
         }
     }
 }
@@ -5038,6 +5053,120 @@ struct GaryxBotGroupRow: View {
             $0.channel.caseInsensitiveCompare(group.channel) == .orderedSame
                 && $0.accountId == group.accountId
         }
+    }
+}
+
+struct GaryxBotEndpointRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let endpoint: GaryxChannelEndpoint
+
+    var body: some View {
+        GaryxSwipeActionRow(actions: endpointActions) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: endpointIconName)
+                    .font(GaryxFont.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+                    .background(Color(.tertiarySystemFill), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(endpointTitle)
+                        .font(GaryxFont.subheadline(weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(endpointDetail)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Spacer(minLength: 6)
+
+                GaryxStatusPill(text: statusText, tone: statusTone)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private var endpointActions: [GaryxSwipeAction] {
+        var actions: [GaryxSwipeAction] = []
+        let threadId = boundThreadId
+        if !threadId.isEmpty {
+            actions.append(
+                GaryxSwipeAction(title: "Open", systemImage: "arrow.up.right", tone: .accent) {
+                    Task { await model.openBotThread(threadId) }
+                }
+            )
+        }
+        if let selectedThreadId, selectedThreadId != threadId {
+            actions.append(
+                GaryxSwipeAction(title: "Bind", systemImage: "link", tone: .accent) {
+                    Task { await model.bindEndpointToSelectedThread(endpoint) }
+                }
+            )
+        }
+        if !threadId.isEmpty {
+            actions.append(
+                GaryxSwipeAction(title: "Detach", systemImage: "link.badge.minus", tone: .warning) {
+                    Task { await model.detachEndpoint(endpoint) }
+                }
+            )
+        }
+        return actions
+    }
+
+    private var endpointTitle: String {
+        firstNonEmpty(endpoint.displayLabel, endpoint.conversationLabel, endpoint.threadLabel, endpoint.endpointKey)
+    }
+
+    private var endpointDetail: String {
+        if !boundThreadId.isEmpty {
+            return firstNonEmpty(endpoint.threadLabel, endpoint.conversationLabel, boundThreadId)
+        }
+        return "Unbound · \(endpoint.endpointKey)"
+    }
+
+    private var boundThreadId: String {
+        endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private var selectedThreadId: String? {
+        let threadId = model.selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return threadId.isEmpty ? nil : threadId
+    }
+
+    private var statusText: String {
+        if let selectedThreadId, selectedThreadId == boundThreadId {
+            return "Current"
+        }
+        return boundThreadId.isEmpty ? "Unbound" : "Bound"
+    }
+
+    private var statusTone: GaryxStatusPill.Tone {
+        boundThreadId.isEmpty ? .muted : .good
+    }
+
+    private var endpointIconName: String {
+        let kind = endpoint.conversationKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if kind.contains("group") || kind.contains("room") || kind.contains("channel") {
+            return "person.2.fill"
+        }
+        if kind.contains("direct") || kind.contains("private") || kind.contains("dm") {
+            return "person.fill"
+        }
+        return "bubble.left.fill"
+    }
+
+    private func firstNonEmpty(_ values: String?...) -> String {
+        for value in values {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return "Endpoint"
     }
 }
 
