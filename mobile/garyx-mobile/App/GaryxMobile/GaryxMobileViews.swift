@@ -7587,7 +7587,7 @@ struct GaryxSecondaryButtonStyle: ButtonStyle {
             .foregroundStyle(.primary)
             .padding(.vertical, 6)
             .padding(.horizontal, 9)
-            .background(.thinMaterial, in: Capsule())
+            .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .thinMaterial, in: Capsule())
             .opacity(configuration.isPressed ? 0.72 : 1)
     }
 }
@@ -7615,7 +7615,7 @@ struct GaryxIconButtonStyle: ButtonStyle {
             .font(GaryxFont.system(size: 15, weight: .semibold))
             .foregroundStyle(.primary)
             .frame(width: 32, height: 32)
-            .background(.thinMaterial, in: Circle())
+            .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .thinMaterial, in: Circle())
             .opacity(configuration.isPressed ? 0.72 : 1)
     }
 }
@@ -7726,7 +7726,12 @@ private struct GaryxSoftScrollEdgeModifier: ViewModifier {
 private struct GaryxSidebarHeaderBackdropModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .background(Color(.systemBackground).opacity(0.92))
+            .background {
+                Rectangle()
+                    .fill(.thinMaterial)
+                    .overlay(Color(.systemBackground).opacity(0.18))
+                    .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .thinMaterial, in: Rectangle())
+            }
     }
 }
 

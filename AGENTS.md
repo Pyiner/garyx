@@ -105,6 +105,12 @@ needs installed-app validation.
   compact rows, section headers, top navigation actions, segmented controls
   where a page has two peer categories, and left-swipe row actions for
   secondary actions.
+- Mobile chrome should follow current Apple Liquid Glass direction where
+  available: navigation bars, bottom bars, and transient icon controls should
+  use the app's adaptive glass/material helpers, while list content stays
+  readable and deferential. Toolbar icons should default to monochrome
+  `primary` styling; do not turn general navigation/actions blue unless color
+  communicates a specific state or destructive/accent action.
 - Do not port desktop management cards or exposed action button bars into the
   mobile app. Actions such as edit, delete, enable, pause, run, and detach
   should usually live behind row swipe actions unless they are the primary
