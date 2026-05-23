@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { buildTurnRows } from './turn-render.ts';
+
+const parityFixture = JSON.parse(
+  readFileSync(
+    new URL('../../../../../test-fixtures/turn-render-parity.json', import.meta.url),
+    'utf8',
+  ),
+);
 
 function messageBlock(id, role, text) {
   return {
@@ -14,6 +22,24 @@ function messageBlock(id, role, text) {
         id,
         role,
         text,
+      },
+    },
+  };
+}
+
+function fixtureMessageBlock(message) {
+  return {
+    kind: 'message',
+    key: message.id,
+    entry: {
+      kind: 'message',
+      key: message.id,
+      message: {
+        id: message.id,
+        role: message.role,
+        text: message.text ?? '',
+        pending: message.isStreaming === true,
+        timestamp: message.timestamp,
       },
     },
   };
@@ -38,6 +64,79 @@ function toolBlock(id) {
     ],
   };
 }
+
+function fixtureToolBlock(message) {
+  return {
+    kind: 'tool_group',
+    key: message.id,
+    defaultExpanded: false,
+    entries: [
+      {
+        kind: 'tool',
+        key: `${message.id}:tool`,
+        toolUse: {
+          id: `${message.id}:tool`,
+          role: 'tool_use',
+          text: '',
+          content: { name: 'lookup' },
+          timestamp: message.timestamp,
+        },
+      },
+    ],
+  };
+}
+
+function fixtureBlocks(messages) {
+  return messages.map((message) =>
+    message.role === 'tool' ? fixtureToolBlock(message) : fixtureMessageBlock(message),
+  );
+}
+
+function normalizeActivityRow(row) {
+  if (row.kind === 'flat') {
+    return { kind: 'flat', key: row.key };
+  }
+  return {
+    kind: 'turn',
+    key: row.key,
+    steps: row.steps.map((step) => step.key),
+    final: row.finalBlock?.key ?? null,
+    running: row.isRunning,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt,
+  };
+}
+
+function normalizeRows(rows) {
+  return rows.map((row) => {
+    if (row.kind === 'flat') {
+      return { kind: 'flat', key: row.key };
+    }
+    if (row.kind === 'turn') {
+      return normalizeActivityRow(row);
+    }
+    return {
+      kind: 'user_turn',
+      key: row.key,
+      user: row.userBlock.key,
+      activity: row.activityRows.map(normalizeActivityRow),
+    };
+  });
+}
+
+test('matches the shared mobile parity fixture', () => {
+  for (const testCase of parityFixture.cases) {
+    assert.deepEqual(
+      normalizeRows(
+        buildTurnRows(fixtureBlocks(testCase.messages), {
+          deferTrailingFinalAssistant: testCase.isRunningThread,
+        }),
+      ),
+      testCase.expected,
+      testCase.name,
+    );
+  }
+});
 
 test('surfaces final assistant text for every completed user turn', () => {
   const rows = buildTurnRows([

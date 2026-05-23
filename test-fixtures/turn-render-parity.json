@@ -1,0 +1,163 @@
+{
+  "cases": [
+    {
+      "name": "completed pure text reply stays flat",
+      "isRunningThread": false,
+      "messages": [
+        { "id": "u0", "role": "user", "text": "simple question" },
+        { "id": "a0", "role": "assistant", "text": "simple answer" }
+      ],
+      "expected": [
+        {
+          "kind": "user_turn",
+          "key": "user-turn:u0",
+          "user": "u0",
+          "activity": [
+            { "kind": "flat", "key": "a0" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "completed tool activity surfaces final answer outside turn",
+      "isRunningThread": false,
+      "messages": [
+        { "id": "u0", "role": "user", "text": "run command", "timestamp": "2026-01-01T00:00:00Z" },
+        { "id": "t0", "role": "tool", "timestamp": "2026-01-01T00:00:01Z" },
+        { "id": "a0", "role": "assistant", "text": "done", "timestamp": "2026-01-01T00:00:02Z" }
+      ],
+      "expected": [
+        {
+          "kind": "user_turn",
+          "key": "user-turn:u0",
+          "user": "u0",
+          "activity": [
+            {
+              "kind": "turn",
+              "key": "turn:t0",
+              "steps": ["t0"],
+              "final": "a0",
+              "running": false,
+              "startedAt": "2026-01-01T00:00:00Z",
+              "finishedAt": "2026-01-01T00:00:02Z"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "running trailing assistant stays inside stable activity turn",
+      "isRunningThread": true,
+      "messages": [
+        { "id": "u0", "role": "user", "text": "question" },
+        { "id": "a0", "role": "assistant", "text": "partial answer" }
+      ],
+      "expected": [
+        {
+          "kind": "user_turn",
+          "key": "user-turn:u0",
+          "user": "u0",
+          "activity": [
+            {
+              "kind": "turn",
+              "key": "turn:a0",
+              "steps": ["a0"],
+              "final": null,
+              "running": false,
+              "startedAt": null,
+              "finishedAt": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "running trailing assistant keeps turn identity when tool follows",
+      "isRunningThread": true,
+      "messages": [
+        { "id": "u0", "role": "user", "text": "question" },
+        { "id": "a0", "role": "assistant", "text": "partial answer" },
+        { "id": "t0", "role": "tool" }
+      ],
+      "expected": [
+        {
+          "kind": "user_turn",
+          "key": "user-turn:u0",
+          "user": "u0",
+          "activity": [
+            {
+              "kind": "turn",
+              "key": "turn:a0",
+              "steps": ["a0", "t0"],
+              "final": null,
+              "running": false,
+              "startedAt": null,
+              "finishedAt": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "running trailing user does not synthesize empty activity",
+      "isRunningThread": true,
+      "messages": [
+        { "id": "u0", "role": "user", "text": "run this" }
+      ],
+      "expected": [
+        {
+          "kind": "user_turn",
+          "key": "user-turn:u0",
+          "user": "u0",
+          "activity": []
+        }
+      ]
+    },
+    {
+      "name": "only the trailing active turn defers final text",
+      "isRunningThread": true,
+      "messages": [
+        { "id": "u0", "role": "user", "text": "first" },
+        { "id": "t0", "role": "tool" },
+        { "id": "a0", "role": "assistant", "text": "first answer" },
+        { "id": "u1", "role": "user", "text": "second" },
+        { "id": "t1", "role": "tool" },
+        { "id": "a1", "role": "assistant", "text": "second answer" }
+      ],
+      "expected": [
+        {
+          "kind": "user_turn",
+          "key": "user-turn:u0",
+          "user": "u0",
+          "activity": [
+            {
+              "kind": "turn",
+              "key": "turn:t0",
+              "steps": ["t0"],
+              "final": "a0",
+              "running": false,
+              "startedAt": null,
+              "finishedAt": null
+            }
+          ]
+        },
+        {
+          "kind": "user_turn",
+          "key": "user-turn:u1",
+          "user": "u1",
+          "activity": [
+            {
+              "kind": "turn",
+              "key": "turn:t1",
+              "steps": ["t1", "a1"],
+              "final": null,
+              "running": false,
+              "startedAt": null,
+              "finishedAt": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

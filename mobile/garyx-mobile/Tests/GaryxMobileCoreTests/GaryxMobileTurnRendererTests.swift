@@ -2,6 +2,19 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobileTurnRendererTests: XCTestCase {
+    func testMatchesDesktopTurnRenderParityFixture() throws {
+        let fixture = try loadTurnRenderParityFixture()
+
+        for testCase in fixture.cases {
+            let rows = GaryxMobileTurnRenderer.buildTurnRows(
+                messages: testCase.messages.map(mobileMessage),
+                isRunningThread: testCase.isRunningThread
+            )
+
+            XCTAssertEqual(snapshot(rows), testCase.expected, testCase.name)
+        }
+    }
+
     func testCompletedSingleAssistantAnswerStaysFlat() throws {
         let rows = GaryxMobileTurnRenderer.buildTurnRows(
             messages: [
@@ -52,7 +65,7 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         guard case .turn(let turn) = activity else {
             return XCTFail("Expected tool activity to render as a collapsible turn")
         }
-        XCTAssertEqual(turn.id, "turn:user-1")
+        XCTAssertEqual(turn.id, "turn:tool-1")
         XCTAssertEqual(turn.steps.map(\.id), ["tool-1"])
         XCTAssertEqual(turn.finalBlock?.id, "assistant-1")
         XCTAssertFalse(turn.isRunning)
@@ -231,6 +244,123 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
             primaryPathBadge: primaryPathBadge
         )
     }
+
+    private func mobileMessage(_ fixture: TurnRenderParityMessage) -> GaryxMobileMessage {
+        switch fixture.role {
+        case "user":
+            return message(
+                fixture.id,
+                role: .user,
+                text: fixture.text ?? "",
+                timestamp: fixture.timestamp,
+                isStreaming: fixture.isStreaming ?? false
+            )
+        case "assistant":
+            return message(
+                fixture.id,
+                role: .assistant,
+                text: fixture.text ?? "",
+                timestamp: fixture.timestamp,
+                isStreaming: fixture.isStreaming ?? false
+            )
+        case "tool":
+            return toolMessage(fixture.id, timestamp: fixture.timestamp)
+        default:
+            XCTFail("Unknown fixture role \(fixture.role)")
+            return message(fixture.id, role: .system, text: fixture.text ?? "", timestamp: fixture.timestamp)
+        }
+    }
+
+    private func snapshot(_ rows: [GaryxMobileTurnRow]) -> [TurnRenderParitySnapshot] {
+        rows.map { row in
+            TurnRenderParitySnapshot(
+                kind: "user_turn",
+                key: row.id,
+                user: row.userBlock?.id,
+                activity: row.activityRows.map(snapshot)
+            )
+        }
+    }
+
+    private func snapshot(_ row: GaryxMobileTurnRow.ActivityRow) -> TurnRenderParitySnapshot {
+        switch row {
+        case .flat(let block):
+            return TurnRenderParitySnapshot(kind: "flat", key: block.id)
+        case .turn(let turn):
+            return TurnRenderParitySnapshot(
+                kind: "turn",
+                key: turn.id,
+                steps: turn.steps.map(\.id),
+                final: turn.finalBlock?.id,
+                running: turn.isRunning,
+                startedAt: turn.startedAt,
+                finishedAt: turn.finishedAt
+            )
+        }
+    }
+}
+
+private struct TurnRenderParityFixture: Decodable {
+    var cases: [TurnRenderParityCase]
+}
+
+private struct TurnRenderParityCase: Decodable {
+    var name: String
+    var isRunningThread: Bool
+    var messages: [TurnRenderParityMessage]
+    var expected: [TurnRenderParitySnapshot]
+}
+
+private struct TurnRenderParityMessage: Decodable {
+    var id: String
+    var role: String
+    var text: String?
+    var timestamp: String?
+    var isStreaming: Bool?
+}
+
+private struct TurnRenderParitySnapshot: Decodable, Equatable {
+    var kind: String
+    var key: String
+    var user: String?
+    var activity: [TurnRenderParitySnapshot]?
+    var steps: [String]?
+    var final: String?
+    var running: Bool?
+    var startedAt: String?
+    var finishedAt: String?
+
+    init(
+        kind: String,
+        key: String,
+        user: String? = nil,
+        activity: [TurnRenderParitySnapshot]? = nil,
+        steps: [String]? = nil,
+        final: String? = nil,
+        running: Bool? = nil,
+        startedAt: String? = nil,
+        finishedAt: String? = nil
+    ) {
+        self.kind = kind
+        self.key = key
+        self.user = user
+        self.activity = activity
+        self.steps = steps
+        self.final = final
+        self.running = running
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+    }
+}
+
+private func loadTurnRenderParityFixture() throws -> TurnRenderParityFixture {
+    var url = URL(fileURLWithPath: #filePath)
+    for _ in 0..<5 {
+        url.deleteLastPathComponent()
+    }
+    url.appendPathComponent("test-fixtures/turn-render-parity.json")
+    let data = try Data(contentsOf: url)
+    return try JSONDecoder().decode(TurnRenderParityFixture.self, from: data)
 }
 
 private extension Array {
