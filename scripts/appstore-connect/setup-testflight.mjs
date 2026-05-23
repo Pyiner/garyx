@@ -110,7 +110,11 @@ async function ascRequest(method, path, body, options = {}) {
   }
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`${method} ${path} failed with ${response.status}: ${text}`);
+    throw new Error(
+      `${method} ${path} failed with ${response.status}: ${sanitizeForLog(
+        text,
+      )}`,
+    );
   }
   if (response.status === 204) {
     return null;
@@ -125,6 +129,13 @@ async function findFirst(path) {
 
 function encodeFilter(value) {
   return encodeURIComponent(value);
+}
+
+function sanitizeForLog(value) {
+  return String(value).replace(
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+/gi,
+    "[email]",
+  );
 }
 
 async function ensureBundleId({ appName, bundleId }) {
@@ -232,7 +243,7 @@ async function ensureTester({ email, group }) {
     `/v1/betaTesters?filter[email]=${encodeFilter(email)}&limit=1`,
   );
   if (existing) {
-    console.log(`Beta tester exists: ${email}`);
+    console.log("Beta tester exists: [email]");
     return existing;
   }
 
@@ -256,7 +267,7 @@ async function ensureTester({ email, group }) {
       },
     },
   });
-  console.log(`Created beta tester: ${email}`);
+  console.log("Created beta tester: [email]");
   return created.data;
 }
 
@@ -274,7 +285,7 @@ async function addTesterToGroup({ tester, group }) {
     },
     { allowStatuses: [409] },
   );
-  console.log(`Added beta tester to group: ${tester.attributes.email}`);
+  console.log("Added beta tester to group: [email]");
 }
 
 function testerEmails() {
