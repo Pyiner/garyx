@@ -4422,6 +4422,9 @@ struct GaryxSkillCard: View {
 
 struct GaryxSkillEditorCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var showsDiscardFileSwitchConfirmation = false
+    @State private var pendingFileSkillId = ""
+    @State private var pendingFilePath = ""
 
     var body: some View {
         if let editor = model.selectedSkillEditor {
@@ -4435,7 +4438,9 @@ struct GaryxSkillEditorCard: View {
                 }
 
                 ForEach(editor.entries) { node in
-                    GaryxSkillEntryRow(skillId: editor.skill.id, node: node, depth: 0)
+                    GaryxSkillEntryRow(skillId: editor.skill.id, node: node, depth: 0) { path in
+                        requestOpenSkillFile(skillId: editor.skill.id, path: path)
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -4477,7 +4482,52 @@ struct GaryxSkillEditorCard: View {
                 }
             }
             .garyxCardStyle()
+            .confirmationDialog(
+                "Discard unsaved skill changes?",
+                isPresented: $showsDiscardFileSwitchConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Discard", role: .destructive) {
+                    openPendingSkillFile()
+                }
+                Button("Cancel", role: .cancel) {
+                    clearPendingSkillFile()
+                }
+            } message: {
+                Text("Your current file edits have not been saved.")
+            }
         }
+    }
+
+    private var skillEditorHasUnsavedChanges: Bool {
+        guard let document = model.selectedSkillDocument, document.editable else { return false }
+        return model.selectedSkillFileContent != document.content
+    }
+
+    private func requestOpenSkillFile(skillId: String, path: String) {
+        if model.selectedSkillDocument?.path == path {
+            return
+        }
+        if skillEditorHasUnsavedChanges {
+            pendingFileSkillId = skillId
+            pendingFilePath = path
+            showsDiscardFileSwitchConfirmation = true
+        } else {
+            Task { await model.openSkillFile(skillId: skillId, path: path) }
+        }
+    }
+
+    private func openPendingSkillFile() {
+        let skillId = pendingFileSkillId
+        let path = pendingFilePath
+        clearPendingSkillFile()
+        guard !skillId.isEmpty, !path.isEmpty else { return }
+        Task { await model.openSkillFile(skillId: skillId, path: path) }
+    }
+
+    private func clearPendingSkillFile() {
+        pendingFileSkillId = ""
+        pendingFilePath = ""
     }
 }
 
@@ -4486,6 +4536,7 @@ struct GaryxSkillEntryRow: View {
     let skillId: String
     let node: GaryxSkillEntryNode
     let depth: Int
+    let onOpenFile: (String) -> Void
     @State private var showsDeleteConfirmation = false
 
     var body: some View {
@@ -4495,7 +4546,7 @@ struct GaryxSkillEntryRow: View {
                     .frame(width: 18)
                 Button {
                     if node.entryType == "file" {
-                        Task { await model.openSkillFile(skillId: skillId, path: node.path) }
+                        onOpenFile(node.path)
                     }
                 } label: {
                     Text(node.name)
@@ -4514,7 +4565,7 @@ struct GaryxSkillEntryRow: View {
             .padding(.leading, CGFloat(depth) * 14)
 
             ForEach(node.children) { child in
-                GaryxSkillEntryRow(skillId: skillId, node: child, depth: depth + 1)
+                GaryxSkillEntryRow(skillId: skillId, node: child, depth: depth + 1, onOpenFile: onOpenFile)
             }
         }
         .confirmationDialog("Delete skill entry?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
