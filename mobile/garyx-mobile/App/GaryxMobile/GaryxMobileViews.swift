@@ -7513,7 +7513,14 @@ struct GaryxSettingsProviderContent: View {
                     GaryxCompactListGroup {
                         let providers = model.providerModelsByType
                             .values
-                            .sorted { garyxProviderDisplayName($0.providerType) < garyxProviderDisplayName($1.providerType) }
+                            .sorted { lhs, rhs in
+                                let lhsName = garyxProviderDisplayName(lhs.providerType)
+                                let rhsName = garyxProviderDisplayName(rhs.providerType)
+                                if lhsName != rhsName {
+                                    return lhsName < rhsName
+                                }
+                                return lhs.providerType < rhs.providerType
+                            }
                         ForEach(Array(providers.enumerated()), id: \.element.providerType) { index, provider in
                             GaryxProviderModelsRow(provider: provider)
                             if index < providers.count - 1 {
@@ -7575,7 +7582,7 @@ struct GaryxProviderModelsRow: View {
 
             Spacer(minLength: 8)
 
-            GaryxStatusPill(text: provider.error == nil ? "Ready" : "Error", tone: provider.error == nil ? .good : .danger)
+            GaryxStatusPill(text: hasError ? "Error" : "Ready", tone: hasError ? .danger : .good)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -7598,10 +7605,12 @@ struct GaryxProviderModelsRow: View {
         return "cpu"
     }
 
+    private var hasError: Bool {
+        let error = provider.error?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return !error.isEmpty
+    }
+
     private var detail: String {
-        if let error = provider.error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
-            return error
-        }
         var parts: [String] = []
         if let defaultModel = provider.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines), !defaultModel.isEmpty {
             parts.append("Default \(defaultModel)")
@@ -7616,6 +7625,9 @@ struct GaryxProviderModelsRow: View {
             parts.append("\(provider.serviceTiers.count) tiers")
         }
         if parts.isEmpty {
+            if hasError {
+                return "Model metadata unavailable"
+            }
             return provider.source.isEmpty ? "Provider metadata" : provider.source.capitalized
         }
         return parts.joined(separator: " · ")
