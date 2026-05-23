@@ -1,4 +1,5 @@
 import React from 'react';
+import { Check, ChevronDown, MessageSquare } from 'lucide-react';
 
 import type {
   DesktopAutomationSchedule,
@@ -32,6 +33,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Textarea } from '@/components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { AgentOptionRow } from '@/app-shell/components/AgentOptionAvatar';
@@ -101,6 +109,162 @@ function defaultOnceSchedule(): DesktopAutomationSchedule {
 }
 
 const WEEKDAYS = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su'] as const;
+
+function compactPath(value?: string | null): string {
+  const trimmed = value?.trim() || '';
+  if (!trimmed) return '';
+  const parts = trimmed.split('/').filter(Boolean);
+  if (parts.length <= 2) return trimmed;
+  return `…/${parts.slice(-2).join('/')}`;
+}
+
+function shortTime(value?: string | null): string {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+function threadTitle(thread: DesktopThreadSummary): string {
+  return thread.title?.trim() || thread.id;
+}
+
+function threadSubtitle(thread: DesktopThreadSummary): string {
+  return compactPath(thread.workspacePath) || thread.id;
+}
+
+function threadDetail(thread: DesktopThreadSummary): string {
+  const preview = thread.lastMessagePreview?.trim();
+  const updated = shortTime(thread.updatedAt);
+  if (preview && updated) return `${preview} · ${updated}`;
+  return preview || updated || thread.id;
+}
+
+function AutomationThreadPicker({
+  value,
+  threads,
+  onChange,
+}: {
+  value: string;
+  threads: DesktopThreadSummary[];
+  onChange: (value: string) => void;
+}) {
+  const { t } = useI18n();
+  const selectedThread = threads.find((thread) => thread.id === value) || null;
+  const missingThreadId = value.trim() && !selectedThread ? value.trim() : '';
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="group flex min-h-[58px] w-full items-center gap-3 rounded-xl border border-input bg-background px-3 py-2 text-left shadow-xs transition-colors outline-none hover:bg-[#fbfbfa] focus-visible:ring-2 focus-visible:ring-ring/35"
+        >
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-[#f4f4f2] text-muted-foreground">
+            <MessageSquare aria-hidden size={15} strokeWidth={1.8} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-medium leading-5 text-foreground">
+              {selectedThread ? threadTitle(selectedThread) : missingThreadId || t('Choose thread')}
+            </span>
+            <span className="block truncate text-[11px] leading-4 text-muted-foreground">
+              {selectedThread
+                ? threadSubtitle(selectedThread)
+                : missingThreadId
+                  ? t('Thread not loaded')
+                  : t('Recent threads')}
+            </span>
+          </span>
+          <ChevronDown
+            aria-hidden
+            className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
+            strokeWidth={1.8}
+          />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        className="max-h-[340px] w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto p-1.5"
+      >
+        <DropdownMenuLabel>{t('Recent Threads')}</DropdownMenuLabel>
+        {missingThreadId ? (
+          <DropdownMenuItem
+            className="items-start gap-3 px-2.5 py-2.5"
+            onSelect={() => onChange(missingThreadId)}
+          >
+            <ThreadPickerRow
+              active
+              detail={t('Thread not loaded')}
+              subtitle={missingThreadId}
+              title={missingThreadId}
+            />
+          </DropdownMenuItem>
+        ) : null}
+        {threads.length ? (
+          threads.map((thread) => {
+            const active = thread.id === value;
+            return (
+              <DropdownMenuItem
+                key={thread.id}
+                className="items-start gap-3 px-2.5 py-2.5"
+                onSelect={() => onChange(thread.id)}
+              >
+                <ThreadPickerRow
+                  active={active}
+                  detail={threadDetail(thread)}
+                  subtitle={threadSubtitle(thread)}
+                  title={threadTitle(thread)}
+                />
+              </DropdownMenuItem>
+            );
+          })
+        ) : (
+          <DropdownMenuItem disabled className="px-2.5 py-2 text-[12px] text-muted-foreground">
+            {t('No existing threads are loaded yet.')}
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function ThreadPickerRow({
+  active,
+  detail,
+  subtitle,
+  title,
+}: {
+  active: boolean;
+  detail: string;
+  subtitle: string;
+  title: string;
+}) {
+  return (
+    <div className="flex min-w-0 flex-1 items-start gap-3">
+      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-[#f4f4f2] text-muted-foreground">
+        <MessageSquare aria-hidden size={14} strokeWidth={1.8} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[13px] font-medium leading-5 text-foreground">
+          {title}
+        </span>
+        <span className="block truncate text-[11px] leading-4 text-muted-foreground">
+          {subtitle}
+        </span>
+        <span className="block truncate text-[11px] leading-4 text-muted-foreground/80">
+          {detail}
+        </span>
+      </span>
+      <span className="mt-1 flex size-4 shrink-0 items-center justify-center text-foreground">
+        {active ? <Check aria-hidden size={14} strokeWidth={2} /> : null}
+      </span>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -227,9 +391,10 @@ export function AutomationDialog({
           {draft.targetMode === 'existing_thread' ? (
             <Field>
               <FieldLabel>{t('Thread')}</FieldLabel>
-              <Select
-                value={draft.targetThreadId || undefined}
-                onValueChange={(value) =>
+              <AutomationThreadPicker
+                value={draft.targetThreadId || ''}
+                threads={threadOptions}
+                onChange={(value) =>
                   onDraftChange((d) => {
                     const thread = threadOptions.find((entry) => entry.id === value);
                     return {
@@ -239,33 +404,7 @@ export function AutomationDialog({
                     };
                   })
                 }
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder={t('Choose thread')} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectLabel>{t('Recent Threads')}</SelectLabel>
-                    {draft.targetThreadId && !threadOptions.some((thread) => thread.id === draft.targetThreadId) ? (
-                      <SelectItem value={draft.targetThreadId}>
-                        {draft.targetThreadId}
-                      </SelectItem>
-                    ) : null}
-                    {threadOptions.map((thread) => (
-                      <SelectItem key={thread.id} value={thread.id}>
-                        <div className="flex min-w-0 flex-col">
-                          <span className="truncate">{thread.title || thread.id}</span>
-                          {thread.workspacePath ? (
-                            <span className="truncate text-[11px] text-muted-foreground">
-                              {thread.workspacePath}
-                            </span>
-                          ) : null}
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
+              />
               {!threadOptions.length ? (
                 <FieldDescription>
                   {t('No existing threads are loaded yet.')}
