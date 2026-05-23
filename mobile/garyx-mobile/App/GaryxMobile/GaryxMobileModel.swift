@@ -822,6 +822,14 @@ final class GaryxMobileModel: ObservableObject {
         tasks.filter { $0.status != .done }.count
     }
 
+    var selectedThreadTask: GaryxTaskSummary? {
+        guard let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadId.isEmpty else {
+            return nil
+        }
+        return tasks.first { $0.threadId == threadId }
+    }
+
     var enabledAutomationCount: Int {
         automations.filter(\.enabled).count
     }
@@ -2483,10 +2491,27 @@ final class GaryxMobileModel: ObservableObject {
             )
             draftTaskTitle = ""
             draftTaskBody = ""
-            tasks.insert(task, at: 0)
+            upsertTask(task)
             if !task.threadId.isEmpty {
                 await openThread(id: task.threadId)
             }
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func promoteSelectedThreadToTask() async {
+        guard let thread = selectedThread else { return }
+        let title = thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            let task = try await client().promoteTask(
+                GaryxTaskPromoteRequest(
+                    threadId: thread.id,
+                    title: title.isEmpty ? nil : title
+                )
+            )
+            upsertTask(task)
+            activePanel = .tasks
         } catch {
             lastError = displayMessage(for: error)
         }
@@ -2550,6 +2575,14 @@ final class GaryxMobileModel: ObservableObject {
             tasks.removeAll { $0.id == task.id }
         } catch {
             lastError = displayMessage(for: error)
+        }
+    }
+
+    private func upsertTask(_ task: GaryxTaskSummary) {
+        if let index = tasks.firstIndex(where: { $0.id == task.id }) {
+            tasks[index] = task
+        } else {
+            tasks.insert(task, at: 0)
         }
     }
 

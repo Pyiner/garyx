@@ -1777,6 +1777,15 @@ struct GaryxConversationHeader: View {
                         ) {
                             model.togglePinnedThread(selectedThread.id)
                         }
+                        if model.selectedThreadTask == nil {
+                            Button("Promote to Task", systemImage: "checklist") {
+                                Task { await model.promoteSelectedThreadToTask() }
+                            }
+                        } else {
+                            Button("View Task", systemImage: "checklist") {
+                                model.openPanel(.tasks)
+                            }
+                        }
                     }
                     Button("Refresh", systemImage: "arrow.clockwise") {
                         Task { await model.loadSelectedThreadHistory() }
