@@ -7509,21 +7509,9 @@ button.team-agent-speaker:focus-visible {
   opacity: 0;
 }
 
-/* Subtle pulse on the running label so it's easy to tell the run is
-   still in flight without staring at the seconds counter. */
-@keyframes turn-summary-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
-
-.turn-summary.is-running .turn-summary-label {
-  animation: turn-summary-pulse 1.6s ease-in-out infinite;
-}
+/* Running state uses the shared `thinking-shimmer` rule above so the
+   "Working for …" header, the active tool-call summary, and the
+   thinking indicator all sweep with the same palette and cadence. */
 
 .tool-trace-group {
   display: grid;
@@ -7586,7 +7574,8 @@ button.team-agent-speaker:focus-visible {
 }
 
 .message-loading-label--thinking,
-.tool-trace-group.is-active .tool-trace-group-summary {
+.tool-trace-group.is-active .tool-trace-group-summary,
+.turn-summary.is-running .turn-summary-label {
   color: transparent;
   -webkit-text-fill-color: transparent;
   background-image: linear-gradient(
@@ -19220,6 +19209,7 @@ button.codex-list-row {
   .team-skeleton-avatar,
   .team-skeleton-line,
   .tool-trace-group.is-active .tool-trace-group-summary,
+  .turn-summary.is-running .turn-summary-label,
   .ar-pulse,
   .ar-spin,
   .add-bot-step-panel,
@@ -19238,7 +19228,8 @@ button.codex-list-row {
     transform: none;
   }
   .message-loading-label--thinking,
-  .tool-trace-group.is-active .tool-trace-group-summary {
+  .tool-trace-group.is-active .tool-trace-group-summary,
+  .turn-summary.is-running .turn-summary-label {
     color: inherit;
     -webkit-text-fill-color: currentColor;
     background-image: none;
