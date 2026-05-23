@@ -1029,6 +1029,15 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(researchObject?["max_iterations"] as? Int, 3)
         XCTAssertEqual(researchObject?["time_budget_secs"] as? Int, 1200)
 
+        let researchFeedback = GaryxAutoResearchFeedbackRequest(message: "Use stronger sources.")
+        let researchFeedbackObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(researchFeedback)
+        ) as? [String: Any]
+
+        XCTAssertEqual(researchFeedbackObject?["message"] as? String, "Use stronger sources.")
+        XCTAssertNil(researchFeedbackObject?["feedback"])
+        XCTAssertNil(researchFeedbackObject?["candidate_id"])
+
         let thread = GaryxCreateThreadRequest(
             workspaceDir: "/workspace/project",
             workspaceMode: "local",

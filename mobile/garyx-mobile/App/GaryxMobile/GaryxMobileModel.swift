@@ -850,7 +850,7 @@ final class GaryxMobileModel: ObservableObject {
 
     var runningResearchCount: Int {
         autoResearchRuns.filter { run in
-            !["completed", "failed", "stopped", "cancelled"].contains(run.state.lowercased())
+            !garyxAutoResearchIsTerminal(run.state)
         }.count
     }
 
@@ -3316,12 +3316,15 @@ final class GaryxMobileModel: ObservableObject {
         let feedback = feedback.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !feedback.isEmpty else { return }
         do {
+            let message: String
+            if let candidate {
+                message = "Candidate \(candidate.iteration): \(feedback)"
+            } else {
+                message = feedback
+            }
             let updated = try await client().sendAutoResearchFeedback(
                 runId: run.runId,
-                request: GaryxAutoResearchFeedbackRequest(
-                    candidateId: candidate?.candidateId,
-                    feedback: feedback
-                )
+                request: GaryxAutoResearchFeedbackRequest(message: message)
             )
             replaceAutoResearchRun(updated)
             await loadAutoResearchDetail(runId: updated.runId)

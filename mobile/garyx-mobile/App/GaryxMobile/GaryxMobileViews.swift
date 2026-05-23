@@ -4769,7 +4769,7 @@ struct GaryxAutoResearchView: View {
                 GaryxCreateAutoResearchCard()
             }
         }
-        .fullScreenCover(item: $detailRun) { run in
+        .sheet(item: $detailRun) { run in
             GaryxAutoResearchDetailSheet(run: run)
         }
     }
@@ -4817,45 +4817,51 @@ struct GaryxAutoResearchRunCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let run: GaryxAutoResearchRun
     let onOpenDetail: () -> Void
+    @State private var showsDeleteConfirmation = false
 
     var body: some View {
         GaryxSwipeActionRow(actions: researchSwipeActions) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 10) {
-                    Image(systemName: "atom")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 24, height: 24)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(run.goal.isEmpty ? run.runId : run.goal)
-                            .font(GaryxFont.body(weight: .semibold))
-                            .lineLimit(2)
-                        Text(run.workspaceDir?.lastPathComponent ?? run.runId)
-                            .font(GaryxFont.caption(weight: .medium))
+            Button(action: onOpenDetail) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .center, spacing: 10) {
+                        Image(systemName: "atom")
+                            .font(GaryxFont.system(size: 15, weight: .semibold))
                             .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(run.goal.isEmpty ? run.runId : run.goal)
+                                .font(GaryxFont.body(weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                            Text(run.workspaceDir?.lastPathComponent ?? run.runId)
+                                .font(GaryxFont.caption(weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        GaryxStatusPill(text: garyxAutoResearchStateLabel(run.state), tone: researchTone)
                     }
-                    Spacer()
-                    GaryxStatusPill(text: run.state, tone: researchTone)
+                    Text("\(run.iterationsUsed) of \(run.maxIterations) iterations")
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
                 }
-                Text("\(run.iterationsUsed)/\(run.maxIterations) iterations")
-                    .font(GaryxFont.caption())
-                    .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onOpenDetail()
+            .buttonStyle(.plain)
+            .accessibilityHint("Open Auto Research details")
+        }
+        .confirmationDialog("Delete Auto Research run?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteAutoResearchRun(run) }
             }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This removes the run, iterations, and candidates.")
         }
     }
 
     private var researchSwipeActions: [GaryxSwipeAction] {
-        var actions = [
-            GaryxSwipeAction(title: "Details", systemImage: "list.bullet.rectangle", tone: .accent) {
-                onOpenDetail()
-            }
-        ]
+        var actions: [GaryxSwipeAction] = []
         if !garyxAutoResearchIsTerminal(run.state) {
             actions.append(
                 GaryxSwipeAction(title: "Stop", systemImage: "stop.fill", tone: .warning) {
@@ -4865,14 +4871,14 @@ struct GaryxAutoResearchRunCard: View {
         }
         actions.append(
             GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                Task { await model.deleteAutoResearchRun(run) }
+                showsDeleteConfirmation = true
             }
         )
         return actions
     }
 
     private var researchTone: GaryxStatusPill.Tone {
-        garyxAutoResearchTone(run.state)
+        garyxAutoResearchTone(run)
     }
 }
 
@@ -4882,7 +4888,6 @@ struct GaryxAutoResearchDetailSheet: View {
     let run: GaryxAutoResearchRun
     @State private var feedbackCandidate: GaryxResearchCandidate?
     @State private var feedbackDraft = ""
-    @State private var showsFeedbackPrompt = false
 
     var body: some View {
         NavigationStack {
@@ -4899,6 +4904,9 @@ struct GaryxAutoResearchDetailSheet: View {
                 .frame(maxWidth: .infinity)
             }
             .background(GaryxTheme.background)
+            .refreshable {
+                await model.loadAutoResearchDetail(runId: run.runId)
+            }
             .navigationTitle("Auto Research")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -4908,30 +4916,26 @@ struct GaryxAutoResearchDetailSheet: View {
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await model.loadAutoResearchDetail(runId: run.runId) }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
+                    if let activeThreadId {
+                        Button {
+                            openThread(activeThreadId)
+                        } label: {
+                            Label("Open", systemImage: "arrow.up.right")
+                        }
                     }
-                    .accessibilityLabel("Refresh")
                 }
             }
         }
         .task {
             await model.loadAutoResearchDetail(runId: run.runId)
         }
-        .alert("Send Feedback", isPresented: $showsFeedbackPrompt) {
-            TextField("Feedback", text: $feedbackDraft, axis: .vertical)
-            Button("Cancel", role: .cancel) {
-                feedbackDraft = ""
-                feedbackCandidate = nil
-            }
-            Button("Send") {
-                let candidate = feedbackCandidate
+        .sheet(item: $feedbackCandidate, onDismiss: {
+            feedbackDraft = ""
+        }) { candidate in
+            GaryxAutoResearchFeedbackSheet(candidate: candidate, feedback: $feedbackDraft) { feedback in
                 let current = currentRun
-                let feedback = feedbackDraft
-                feedbackDraft = ""
                 feedbackCandidate = nil
+                feedbackDraft = ""
                 Task {
                     await model.sendAutoResearchFeedback(
                         run: current,
@@ -4975,7 +4979,7 @@ struct GaryxAutoResearchDetailSheet: View {
            !items.contains(where: { $0.iterationIndex == latest.iterationIndex }) {
             items.append(latest)
         }
-        return items.sorted { $0.iterationIndex > $1.iterationIndex }
+        return items.sorted { $0.iterationIndex < $1.iterationIndex }
     }
 
     private var orphanCandidates: [GaryxResearchCandidate] {
@@ -5003,27 +5007,39 @@ struct GaryxAutoResearchDetailSheet: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
-                Spacer(minLength: 8)
-                GaryxStatusPill(text: currentRun.state, tone: garyxAutoResearchTone(currentRun.state))
+                Spacer(minLength: 0)
+                GaryxStatusPill(text: garyxAutoResearchStateLabel(currentRun.state), tone: garyxAutoResearchTone(currentRun))
+            }
+            if let terminalReason {
+                Text(terminalReason)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
             HStack(spacing: 8) {
                 GaryxAutoResearchMetricPill(
                     title: "Iterations",
-                    value: "\(currentRun.iterationsUsed)/\(currentRun.maxIterations)"
+                    value: "\(currentRun.iterationsUsed) of \(currentRun.maxIterations)"
                 )
-                if let bestScore {
+                if let selectedCandidate {
+                    GaryxAutoResearchMetricPill(
+                        title: "Winner",
+                        value: candidateMetricValue(selectedCandidate)
+                    )
+                } else if let bestCandidate {
                     GaryxAutoResearchMetricPill(
                         title: "Best",
-                        value: String(format: "%.1f", bestScore)
+                        value: candidateMetricValue(bestCandidate)
                     )
                 }
                 Spacer(minLength: 0)
             }
-            if let activeThreadId = detail?.activeThreadId, !activeThreadId.isEmpty {
+            if let activeThreadId {
                 Button {
                     openThread(activeThreadId)
                 } label: {
                     Label("Open Active Thread", systemImage: "arrow.up.right")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(GaryxSecondaryButtonStyle())
             }
@@ -5052,6 +5068,7 @@ struct GaryxAutoResearchDetailSheet: View {
                             candidate: candidate,
                             isBest: candidate?.candidateId == candidatesPage?.bestCandidateId,
                             isSelected: candidate?.candidateId == currentRun.selectedCandidate,
+                            isRunTerminal: garyxAutoResearchIsTerminal(currentRun.state),
                             onSelect: { candidate in
                                 Task { await model.selectAutoResearchCandidate(run: currentRun, candidate: candidate) }
                             },
@@ -5078,6 +5095,7 @@ struct GaryxAutoResearchDetailSheet: View {
                         candidate: candidate,
                         isBest: candidate.candidateId == candidatesPage?.bestCandidateId,
                         isSelected: candidate.candidateId == currentRun.selectedCandidate,
+                        isRunTerminal: garyxAutoResearchIsTerminal(currentRun.state),
                         onSelect: {
                             Task { await model.selectAutoResearchCandidate(run: currentRun, candidate: candidate) }
                         },
@@ -5102,16 +5120,38 @@ struct GaryxAutoResearchDetailSheet: View {
         return updated.isEmpty ? workspace : "\(workspace) · updated \(updated)"
     }
 
-    private var bestScore: Double? {
-        candidates
-            .compactMap(\.verdict?.score)
-            .max()
+    private var activeThreadId: String? {
+        let value = detail?.activeThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    private var terminalReason: String? {
+        let value = currentRun.terminalReason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    private var selectedCandidate: GaryxResearchCandidate? {
+        let selectedId = currentRun.selectedCandidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !selectedId.isEmpty else { return nil }
+        return candidates.first { $0.candidateId == selectedId }
+    }
+
+    private var bestCandidate: GaryxResearchCandidate? {
+        let bestId = candidatesPage?.bestCandidateId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !bestId.isEmpty else { return nil }
+        return candidates.first { $0.candidateId == bestId }
+    }
+
+    private func candidateMetricValue(_ candidate: GaryxResearchCandidate) -> String {
+        if let score = candidate.verdict?.score {
+            return String(format: "%.1f/10", score)
+        }
+        return "Candidate \(candidate.iteration)"
     }
 
     private func openFeedback(_ candidate: GaryxResearchCandidate) {
         feedbackCandidate = candidate
         feedbackDraft = ""
-        showsFeedbackPrompt = true
     }
 
     private func openThread(_ threadId: String?) {
@@ -5141,11 +5181,59 @@ struct GaryxAutoResearchMetricPill: View {
     }
 }
 
+struct GaryxAutoResearchFeedbackSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let candidate: GaryxResearchCandidate
+    @Binding var feedback: String
+    let onSend: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                TextEditor(text: $feedback)
+                    .font(GaryxFont.body())
+                    .scrollContentBackground(.hidden)
+                    .padding(8)
+                    .frame(minHeight: 160)
+                    .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(GaryxTheme.hairline, lineWidth: 1)
+                    }
+                Text("\(feedback.trimmingCharacters(in: .whitespacesAndNewlines).count) characters")
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .background(GaryxTheme.background)
+            .navigationTitle("Feedback on Candidate \(candidate.iteration)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Send") {
+                        let value = feedback.trimmingCharacters(in: .whitespacesAndNewlines)
+                        onSend(value)
+                        dismiss()
+                    }
+                    .disabled(feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
 struct GaryxResearchIterationRow: View {
     let iteration: GaryxAutoResearchIteration
     let candidate: GaryxResearchCandidate?
     let isBest: Bool
     let isSelected: Bool
+    let isRunTerminal: Bool
     let onSelect: (GaryxResearchCandidate) -> Void
     let onReverify: (GaryxResearchCandidate) -> Void
     let onFeedback: (GaryxResearchCandidate) -> Void
@@ -5158,7 +5246,7 @@ struct GaryxResearchIterationRow: View {
                     .font(GaryxFont.caption(weight: .semibold))
                     .foregroundStyle(.secondary)
                 GaryxStatusPill(
-                    text: iteration.state.isEmpty ? "pending" : iteration.state,
+                    text: garyxAutoResearchStateLabel(iteration.state.isEmpty ? "pending" : iteration.state),
                     tone: garyxAutoResearchTone(iteration.state)
                 )
                 if isSelected {
@@ -5173,35 +5261,64 @@ struct GaryxResearchIterationRow: View {
                 GaryxResearchCandidateActions(
                     candidate: candidate,
                     isSelected: isSelected,
+                    isRunTerminal: isRunTerminal,
                     onSelect: { onSelect(candidate) },
                     onReverify: { onReverify(candidate) },
                     onFeedback: { onFeedback(candidate) }
                 )
             } else {
-                Text(iteration.state.lowercased() == "completed" ? "No candidate output yet." : "This iteration is still running.")
+                Text(iteration.state.lowercased() == "completed" ? "No candidate recorded for this iteration." : "This iteration is still running.")
                     .font(GaryxFont.footnote())
                     .foregroundStyle(.secondary)
             }
-            HStack(spacing: 8) {
-                if let workThreadId = iteration.workThreadId, !workThreadId.isEmpty {
-                    Button {
-                        onOpenThread(workThreadId)
-                    } label: {
-                        Label("Work", systemImage: "doc.text")
+            if hasThreadLinks {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        threadLinkControls
                     }
-                    .buttonStyle(GaryxSecondaryButtonStyle())
-                }
-                if let verifyThreadId = iteration.verifyThreadId, !verifyThreadId.isEmpty {
-                    Button {
-                        onOpenThread(verifyThreadId)
-                    } label: {
-                        Label("Verify", systemImage: "checkmark.seal")
+                    VStack(alignment: .leading, spacing: 8) {
+                        threadLinkControls
                     }
-                    .buttonStyle(GaryxSecondaryButtonStyle())
                 }
             }
         }
         .padding(10)
+    }
+
+    private var workThreadId: String? {
+        let value = iteration.workThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    private var verifyThreadId: String? {
+        let value = iteration.verifyThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    private var hasThreadLinks: Bool {
+        workThreadId != nil || verifyThreadId != nil
+    }
+
+    @ViewBuilder
+    private var threadLinkControls: some View {
+        if let workThreadId {
+            Button {
+                onOpenThread(workThreadId)
+            } label: {
+                Label("Work", systemImage: "doc.text")
+            }
+            .buttonStyle(GaryxSecondaryButtonStyle())
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        if let verifyThreadId {
+            Button {
+                onOpenThread(verifyThreadId)
+            } label: {
+                Label("Verify", systemImage: "checkmark.seal")
+            }
+            .buttonStyle(GaryxSecondaryButtonStyle())
+            .fixedSize(horizontal: true, vertical: false)
+        }
     }
 }
 
@@ -5209,6 +5326,7 @@ struct GaryxResearchCandidateRow: View {
     let candidate: GaryxResearchCandidate
     let isBest: Bool
     let isSelected: Bool
+    let isRunTerminal: Bool
     let onSelect: () -> Void
     let onReverify: () -> Void
     let onFeedback: () -> Void
@@ -5230,6 +5348,7 @@ struct GaryxResearchCandidateRow: View {
             GaryxResearchCandidateActions(
                 candidate: candidate,
                 isSelected: isSelected,
+                isRunTerminal: isRunTerminal,
                 onSelect: onSelect,
                 onReverify: onReverify,
                 onFeedback: onFeedback
@@ -5250,7 +5369,7 @@ struct GaryxResearchCandidateContent: View {
                 .lineLimit(8)
             if let verdict = candidate.verdict {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Score \(String(format: "%.1f", verdict.score))")
+                    Text("Score \(String(format: "%.1f", verdict.score))/10")
                         .font(GaryxFont.caption(weight: .semibold))
                         .foregroundStyle(.primary)
                     if !verdict.feedback.isEmpty {
@@ -5268,6 +5387,7 @@ struct GaryxResearchCandidateContent: View {
 struct GaryxResearchCandidateActions: View {
     let candidate: GaryxResearchCandidate
     let isSelected: Bool
+    let isRunTerminal: Bool
     let onSelect: () -> Void
     let onReverify: () -> Void
     let onFeedback: () -> Void
@@ -5288,7 +5408,7 @@ struct GaryxResearchCandidateActions: View {
         if isSelected {
             GaryxStatusPill(text: "Selected Winner", tone: .good)
                 .fixedSize(horizontal: true, vertical: false)
-        } else if candidate.verdict != nil {
+        } else {
             Button {
                 onSelect()
             } label: {
@@ -5297,39 +5417,77 @@ struct GaryxResearchCandidateActions: View {
             .buttonStyle(GaryxSecondaryButtonStyle())
             .fixedSize(horizontal: true, vertical: false)
         }
-        Button {
-            onReverify()
-        } label: {
-            Label("Reverify", systemImage: "arrow.clockwise")
+        if !isRunTerminal {
+            Button {
+                onReverify()
+            } label: {
+                Label("Reverify", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(GaryxSecondaryButtonStyle())
+            .fixedSize(horizontal: true, vertical: false)
+            Button {
+                onFeedback()
+            } label: {
+                Label("Feedback", systemImage: "text.bubble")
+            }
+            .buttonStyle(GaryxSecondaryButtonStyle())
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .buttonStyle(GaryxSecondaryButtonStyle())
-        .fixedSize(horizontal: true, vertical: false)
-        Button {
-            onFeedback()
-        } label: {
-            Label("Feedback", systemImage: "text.bubble")
-        }
-        .buttonStyle(GaryxSecondaryButtonStyle())
-        .fixedSize(horizontal: true, vertical: false)
     }
 }
 
-private func garyxAutoResearchIsTerminal(_ state: String) -> Bool {
+func garyxAutoResearchIsTerminal(_ state: String) -> Bool {
     switch state.lowercased() {
-    case "completed", "failed", "stopped", "cancelled", "user_stopped", "budget_exhausted", "blocked":
+    case "user_stopped", "budget_exhausted", "blocked":
         true
     default:
         false
     }
 }
 
-private func garyxAutoResearchTone(_ state: String) -> GaryxStatusPill.Tone {
+func garyxAutoResearchStateLabel(_ state: String) -> String {
+    switch state.lowercased() {
+    case "queued":
+        "Queued"
+    case "researching":
+        "Researching"
+    case "judging":
+        "Judging"
+    case "budget_exhausted":
+        "Budget exhausted"
+    case "blocked":
+        "Blocked"
+    case "user_stopped":
+        "Stopped"
+    case "completed":
+        "Completed"
+    case "pending":
+        "Pending"
+    default:
+        state
+            .split(separator: "_")
+            .map { word in
+                word.prefix(1).uppercased() + String(word.dropFirst())
+            }
+            .joined(separator: " ")
+    }
+}
+
+func garyxAutoResearchTone(_ run: GaryxAutoResearchRun) -> GaryxStatusPill.Tone {
+    let selected = run.selectedCandidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    if !selected.isEmpty {
+        return .good
+    }
+    return garyxAutoResearchTone(run.state)
+}
+
+func garyxAutoResearchTone(_ state: String) -> GaryxStatusPill.Tone {
     switch state.lowercased() {
     case "completed":
         .good
-    case "failed", "blocked":
+    case "blocked":
         .danger
-    case "stopped", "cancelled", "user_stopped", "budget_exhausted":
+    case "user_stopped", "budget_exhausted":
         .muted
     default:
         .warning
