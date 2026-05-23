@@ -545,6 +545,13 @@ final class GaryxGatewayClientTests: XCTestCase {
                   "updated_at": "2026-03-01T00:01:00Z",
                   "pending_user_input_count": 1
                 }
+              },
+              "message_stats": {
+                "returned_messages": 2,
+                "returned_start_index": 2,
+                "returned_end_index": 4,
+                "has_more_before": true,
+                "next_before_index": 2
               }
             }
             """.utf8
@@ -595,6 +602,11 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(transcript.threadRuntime?.providerType, "codex_app_server")
         XCTAssertEqual(transcript.threadRuntime?.activeRun?.runId, "run-test")
         XCTAssertEqual(transcript.threadRuntime?.activeRun?.pendingUserInputCount, 1)
+        XCTAssertEqual(transcript.pageInfo?.returnedMessages, 2)
+        XCTAssertEqual(transcript.pageInfo?.returnedStartIndex, 2)
+        XCTAssertEqual(transcript.pageInfo?.returnedEndIndex, 4)
+        XCTAssertEqual(transcript.pageInfo?.hasMoreBefore, true)
+        XCTAssertEqual(transcript.pageInfo?.nextBeforeIndex, 2)
     }
 
     func testStructuredContentRendererExtractsTextAndAttachments() {
@@ -764,6 +776,79 @@ final class GaryxGatewayClientTests: XCTestCase {
 
         XCTAssertEqual(thread.id, "thread::test/child")
         XCTAssertEqual(thread.title, "Pinned child thread")
+    }
+
+    func testThreadHistoryRequestEncodesPaginationQueryItems() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+                "/garyx/api/threads/history"
+            )
+            let queryItems = URLComponents(
+                url: try XCTUnwrap(request.url),
+                resolvingAgainstBaseURL: false
+            )?.queryItems ?? []
+            XCTAssertEqual(queryItems.first(where: { $0.name == "thread_id" })?.value, "thread::test/child")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "limit" })?.value, "42")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "before_index" })?.value, "120")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "user_query_limit" })?.value, "10")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "include_tool_messages" })?.value, "false")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(
+                    """
+                    {
+                      "ok": true,
+                      "messages": [],
+                      "pending_user_inputs": [],
+                      "message_stats": {
+                        "returned_messages": 0,
+                        "has_more_before": false,
+                        "next_before_index": null
+                      }
+                    }
+                    """.utf8
+                )
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx")),
+                authToken: "test token"
+            ),
+            session: session
+        )
+
+        let transcript = try await client.threadHistory(
+            threadId: "thread::test/child",
+            limit: 42,
+            beforeIndex: 120,
+            userQueryLimit: 10,
+            includeToolMessages: false
+        )
+
+        XCTAssertTrue(transcript.ok)
+        XCTAssertEqual(transcript.pageInfo?.returnedMessages, 0)
+        XCTAssertEqual(transcript.pageInfo?.hasMoreBefore, false)
+        XCTAssertNil(transcript.pageInfo?.nextBeforeIndex)
     }
 
     func testStreamEventDecodesAssistantDelta() throws {

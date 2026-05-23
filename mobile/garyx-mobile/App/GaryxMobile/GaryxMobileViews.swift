@@ -1621,9 +1621,36 @@ struct GaryxThreadHistoryLoadingView: View {
     }
 }
 
+struct GaryxLoadEarlierHistoryButton: View {
+    let isLoading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if isLoading {
+                    ProgressView()
+                        .scaleEffect(0.68)
+                } else {
+                    Image(systemName: "chevron.up")
+                        .font(GaryxFont.system(size: 12, weight: .semibold))
+                }
+                Text(isLoading ? "Loading earlier" : "Load Earlier")
+                    .font(GaryxFont.caption(weight: .semibold))
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+    }
+}
+
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @FocusState private var isComposerFocused: Bool
+    @State private var suppressNextAutoScrollToBottom = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -1635,6 +1662,10 @@ struct GaryxConversationView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: model.messages) { _, newValue in
+                if suppressNextAutoScrollToBottom {
+                    suppressNextAutoScrollToBottom = false
+                    return
+                }
                 guard !newValue.isEmpty || model.showsTailThinkingIndicator else { return }
                 withAnimation(.easeOut(duration: 0.2)) {
                     scrollToConversationTail(proxy)
@@ -1668,6 +1699,15 @@ struct GaryxConversationView: View {
                             .padding(.top, 96)
                     }
                 } else {
+                    if model.selectedThreadHasMoreHistoryBefore {
+                        GaryxLoadEarlierHistoryButton(isLoading: model.isLoadingOlderThreadHistory) {
+                            suppressNextAutoScrollToBottom = true
+                            Task {
+                                await model.loadOlderSelectedThreadHistory()
+                                suppressNextAutoScrollToBottom = false
+                            }
+                        }
+                    }
                     GaryxMobileTurnRowsView(
                         rows: GaryxMobileTurnRenderer.buildTurnRows(
                             messages: model.messages,

@@ -189,6 +189,9 @@ struct GaryxGatewayProfile: Identifiable, Codable, Equatable {
 
 @MainActor
 final class GaryxMobileModel: ObservableObject {
+    private static let threadHistoryPageLimit = 120
+    private static let threadHistoryUserQueryLimit = 10
+
     @Published var gatewayURL: String
     @Published var gatewayAuthToken: String
     @Published var gatewayProfiles: [GaryxGatewayProfile]
@@ -201,6 +204,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var composerAttachments: [GaryxMobileComposerAttachment] = []
     @Published var isLoadingThreads = false
     @Published var isLoadingSelectedThreadHistory = false
+    @Published var isLoadingOlderThreadHistory = false
+    @Published var selectedThreadHasMoreHistoryBefore = false
     @Published var isSending = false
     @Published var activeRunThreadId: String?
     @Published private(set) var remoteBusyThreadIds: Set<String> = []
@@ -302,6 +307,7 @@ final class GaryxMobileModel: ObservableObject {
     private var selectedThreadRecoveryTask: Task<Void, Never>?
     private var selectedThreadRecoveryThreadId: String?
     private var selectedThreadHistoryRequestId: UUID?
+    private var selectedThreadNextHistoryBeforeIndex: Int?
     private var sceneRefreshTask: Task<Void, Never>?
     private var pendingBotId: String?
     private var pendingBotWorkspace: String?
@@ -605,6 +611,12 @@ final class GaryxMobileModel: ObservableObject {
         if selectedThread?.id == threadId {
             messages = []
         }
+    }
+
+    private func resetSelectedThreadHistoryPagination() {
+        isLoadingOlderThreadHistory = false
+        selectedThreadHasMoreHistoryBefore = false
+        selectedThreadNextHistoryBeforeIndex = nil
     }
 
     private func syncVisibleMessages(for threadId: String) {
@@ -991,6 +1003,7 @@ final class GaryxMobileModel: ObservableObject {
         isSending = false
         isLoadingThreads = false
         isLoadingRemoteState = false
+        resetSelectedThreadHistoryPagination()
         lastError = nil
         showsSettings = false
         messagesByThread = [:]
@@ -1480,6 +1493,7 @@ final class GaryxMobileModel: ObservableObject {
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
         selectedThreadHistoryRequestId = nil
+        resetSelectedThreadHistoryPagination()
         sceneRefreshTask?.cancel()
         sceneRefreshTask = nil
         cancelGlobalEventStream()
@@ -1802,6 +1816,7 @@ final class GaryxMobileModel: ObservableObject {
                 selectedThread = nil
                 draftThreadTitle = ""
                 messages = []
+                resetSelectedThreadHistoryPagination()
             }
         } catch {
             lastError = displayMessage(for: error)
@@ -1814,6 +1829,7 @@ final class GaryxMobileModel: ObservableObject {
             selectedThreadRecoveryTask?.cancel()
             selectedThreadRecoveryTask = nil
             selectedThreadRecoveryThreadId = nil
+            resetSelectedThreadHistoryPagination()
         }
         selectedThread = thread
         clearPendingBotDraft()
@@ -1832,6 +1848,7 @@ final class GaryxMobileModel: ObservableObject {
         selectedThreadRecoveryThreadId = nil
         selectedThreadHistoryRequestId = nil
         isLoadingSelectedThreadHistory = false
+        resetSelectedThreadHistoryPagination()
         clearPendingBotDraft()
         selectedThread = nil
         draftThreadTitle = ""
@@ -1925,6 +1942,7 @@ final class GaryxMobileModel: ObservableObject {
         pendingBotWorkspace = workspace.isEmpty ? nil : workspace
         pendingBotAgentId = agentId.isEmpty ? nil : agentId
         selectedThread = nil
+        resetSelectedThreadHistoryPagination()
         draftThreadTitle = ""
         draft = ""
         composerAttachments = []
@@ -1951,6 +1969,7 @@ final class GaryxMobileModel: ObservableObject {
                 self.selectedThread = nil
                 draftThreadTitle = ""
                 messages = []
+                resetSelectedThreadHistoryPagination()
             }
             messagesByThread[thread.id] = nil
             activeAssistantMessageIdsByThread[thread.id] = nil
@@ -1979,6 +1998,9 @@ final class GaryxMobileModel: ObservableObject {
     func loadSelectedThreadHistory() async {
         guard let selectedThread else {
             messages = []
+            selectedThreadHasMoreHistoryBefore = false
+            selectedThreadNextHistoryBeforeIndex = nil
+            isLoadingOlderThreadHistory = false
             return
         }
         let threadId = selectedThread.id
@@ -1991,12 +2013,21 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
         do {
-            let transcript = try await client().threadHistory(threadId: threadId, limit: 120)
+            let transcript = try await client().threadHistory(
+                threadId: threadId,
+                limit: Self.threadHistoryPageLimit,
+                userQueryLimit: Self.threadHistoryUserQueryLimit
+            )
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+            updateSelectedThreadHistoryPagination(threadId: threadId, transcript: transcript)
             let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
             setMessages(
-                mergedMessages(remoteMessages, withLocal: cachedMessages(for: threadId)),
+                mergedMessages(
+                    remoteMessages,
+                    withLocal: cachedMessages(for: threadId),
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
+                ),
                 for: threadId,
                 reconcileActiveAssistant: true
             )
@@ -2006,6 +2037,39 @@ final class GaryxMobileModel: ObservableObject {
             if cachedMessages(for: threadId).isEmpty {
                 messages = []
             }
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func loadOlderSelectedThreadHistory() async {
+        guard let selectedThread,
+              selectedThreadHasMoreHistoryBefore,
+              !isLoadingOlderThreadHistory,
+              let beforeIndex = selectedThreadNextHistoryBeforeIndex else {
+            return
+        }
+        let threadId = selectedThread.id
+        isLoadingOlderThreadHistory = true
+        defer {
+            if self.selectedThread?.id == threadId {
+                isLoadingOlderThreadHistory = false
+            }
+        }
+        do {
+            let transcript = try await client().threadHistory(
+                threadId: threadId,
+                limit: Self.threadHistoryPageLimit,
+                beforeIndex: beforeIndex,
+                userQueryLimit: Self.threadHistoryUserQueryLimit
+            )
+            guard self.selectedThread?.id == threadId else { return }
+            updateSelectedThreadHistoryPagination(threadId: threadId, transcript: transcript)
+            prependOlderMessages(
+                mobileMessages(from: transcript.messages, live: false),
+                for: threadId
+            )
+        } catch {
+            guard self.selectedThread?.id == threadId else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -2024,6 +2088,24 @@ final class GaryxMobileModel: ObservableObject {
         } else if activeTasksByThread[threadId] == nil {
             remoteBusyThreadIds.remove(threadId)
         }
+    }
+
+    private func updateSelectedThreadHistoryPagination(
+        threadId: String,
+        transcript: GaryxThreadTranscript
+    ) {
+        guard selectedThread?.id == threadId else { return }
+        selectedThreadHasMoreHistoryBefore = transcript.pageInfo?.hasMoreBefore ?? false
+        selectedThreadNextHistoryBeforeIndex = transcript.pageInfo?.nextBeforeIndex
+    }
+
+    private func prependOlderMessages(_ olderMessages: [GaryxMobileMessage], for threadId: String) {
+        guard !olderMessages.isEmpty else { return }
+        let existingMessages = cachedMessages(for: threadId)
+        let existingIds = Set(existingMessages.map(\.id))
+        let dedupedOlderMessages = olderMessages.filter { !existingIds.contains($0.id) }
+        guard !dedupedOlderMessages.isEmpty else { return }
+        setMessages(dedupedOlderMessages + existingMessages, for: threadId)
     }
 
     private func scheduleSelectedThreadRecoveryIfNeeded(threadId: String) {
@@ -2067,13 +2149,22 @@ final class GaryxMobileModel: ObservableObject {
         guard selectedThread?.id == threadId else { return }
         let observedHistoryRequestId = selectedThreadHistoryRequestId
         do {
-            let transcript = try await client().threadHistory(threadId: threadId, limit: 120)
+            let transcript = try await client().threadHistory(
+                threadId: threadId,
+                limit: Self.threadHistoryPageLimit,
+                userQueryLimit: Self.threadHistoryUserQueryLimit
+            )
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+            updateSelectedThreadHistoryPagination(threadId: threadId, transcript: transcript)
             let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
             setMessages(
-                mergedMessages(remoteMessages, withLocal: cachedMessages(for: threadId)),
+                mergedMessages(
+                    remoteMessages,
+                    withLocal: cachedMessages(for: threadId),
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
+                ),
                 for: threadId,
                 reconcileActiveAssistant: true
             )
@@ -3599,6 +3690,7 @@ final class GaryxMobileModel: ObservableObject {
                 selectedThread = nil
                 draftThreadTitle = ""
                 messages = []
+                resetSelectedThreadHistoryPagination()
             }
             messagesByThread[threadId] = nil
             activeAssistantMessageIdsByThread[threadId] = nil
@@ -3854,7 +3946,11 @@ final class GaryxMobileModel: ObservableObject {
             }
             let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
             setMessages(
-                mergedMessages(remoteMessages, withLocal: cachedMessages(for: threadId)),
+                mergedMessages(
+                    remoteMessages,
+                    withLocal: cachedMessages(for: threadId),
+                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
+                ),
                 for: threadId,
                 reconcileActiveAssistant: true
             )
@@ -4082,13 +4178,16 @@ final class GaryxMobileModel: ObservableObject {
 
     private func mergedMessages(
         _ remoteMessages: [GaryxMobileMessage],
-        withLocal localMessages: [GaryxMobileMessage]
+        withLocal localMessages: [GaryxMobileMessage],
+        preserveRemoteBeforeIndex: Int? = nil
     ) -> [GaryxMobileMessage] {
         guard !remoteMessages.isEmpty else {
             return localMessages
         }
 
         var merged = remoteMessages
+        var preservedOlderRemoteMessages: [GaryxMobileMessage] = []
+        var preservedOlderRemoteIds = Set<String>()
         var remoteUserTextCounts = Dictionary(
             grouping: remoteMessages.filter { $0.role == .user }.map(Self.userMergeKey),
             by: { $0 }
@@ -4114,6 +4213,13 @@ final class GaryxMobileModel: ObservableObject {
                    Self.normalizedMergeText(local.text).count > Self.normalizedMergeText(merged[remoteIndex].text).count {
                     merged[remoteIndex] = local
                 }
+                continue
+            }
+            if let preserveRemoteBeforeIndex,
+               let historyIndex = Self.historyIndex(fromMessageId: local.id),
+               historyIndex < preserveRemoteBeforeIndex,
+               preservedOlderRemoteIds.insert(local.id).inserted {
+                preservedOlderRemoteMessages.append(local)
                 continue
             }
             let localClientIntentId = local.clientIntentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -4189,7 +4295,18 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
 
+        if !preservedOlderRemoteMessages.isEmpty {
+            merged = preservedOlderRemoteMessages + merged
+        }
         return merged
+    }
+
+    private static func historyIndex(fromMessageId id: String) -> Int? {
+        guard let range = id.range(of: "history:") else { return nil }
+        let suffix = id[range.upperBound...]
+        let digits = suffix.prefix { $0.isNumber }
+        guard !digits.isEmpty else { return nil }
+        return Int(digits)
     }
 
     private static func currentTurnAssistantTexts(in messages: [GaryxMobileMessage]) -> [String] {
@@ -4409,6 +4526,10 @@ final class GaryxMobileModel: ObservableObject {
                 remoteUrl: attachment.remoteUrl
             )
         }
+    }
+
+    private func preserveRemoteBeforeIndex(from transcript: GaryxThreadTranscript) -> Int? {
+        transcript.pageInfo?.returnedStartIndex ?? transcript.messages.compactMap(\.index).min()
     }
 
     private func mobileMessages(from transcript: GaryxThreadTranscript, threadId: String, live: Bool = false) -> [GaryxMobileMessage] {

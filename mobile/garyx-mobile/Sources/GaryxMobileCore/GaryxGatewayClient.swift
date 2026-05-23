@@ -2260,12 +2260,39 @@ public struct GaryxThreadTranscript: Decodable, Equatable, Sendable {
     public var messages: [GaryxTranscriptMessage]
     public var pendingUserInputs: [GaryxPendingUserInput]
     public var threadRuntime: GaryxThreadRuntimeSummary?
+    public var pageInfo: GaryxThreadTranscriptPageInfo?
 
     enum CodingKeys: String, CodingKey {
         case ok
         case messages
         case pendingUserInputs = "pending_user_inputs"
         case threadRuntime = "thread_runtime"
+        case pageInfo = "message_stats"
+    }
+}
+
+public struct GaryxThreadTranscriptPageInfo: Decodable, Equatable, Sendable {
+    public var returnedMessages: Int
+    public var returnedStartIndex: Int?
+    public var returnedEndIndex: Int?
+    public var hasMoreBefore: Bool
+    public var nextBeforeIndex: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case returnedMessages = "returned_messages"
+        case returnedStartIndex = "returned_start_index"
+        case returnedEndIndex = "returned_end_index"
+        case hasMoreBefore = "has_more_before"
+        case nextBeforeIndex = "next_before_index"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        returnedMessages = try container.decodeIfPresent(Int.self, forKey: .returnedMessages) ?? 0
+        returnedStartIndex = try container.decodeIfPresent(Int.self, forKey: .returnedStartIndex)
+        returnedEndIndex = try container.decodeIfPresent(Int.self, forKey: .returnedEndIndex)
+        hasMoreBefore = try container.decodeIfPresent(Bool.self, forKey: .hasMoreBefore) ?? false
+        nextBeforeIndex = try container.decodeIfPresent(Int.self, forKey: .nextBeforeIndex)
     }
 }
 
@@ -3345,18 +3372,27 @@ public final class GaryxGatewayClient {
     public func threadHistory(
         threadId: String,
         limit: Int = 100,
+        beforeIndex: Int? = nil,
+        userQueryLimit: Int? = nil,
         includeToolMessages: Bool = true
     ) async throws -> GaryxThreadTranscript {
-        try await get(
+        var queryItems = [
+            URLQueryItem(name: "thread_id", value: threadId),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(
+                name: "include_tool_messages",
+                value: includeToolMessages ? "true" : "false"
+            ),
+        ]
+        if let beforeIndex {
+            queryItems.append(URLQueryItem(name: "before_index", value: String(beforeIndex)))
+        }
+        if let userQueryLimit {
+            queryItems.append(URLQueryItem(name: "user_query_limit", value: String(userQueryLimit)))
+        }
+        return try await get(
             "/api/threads/history",
-            queryItems: [
-                URLQueryItem(name: "thread_id", value: threadId),
-                URLQueryItem(name: "limit", value: String(limit)),
-                URLQueryItem(
-                    name: "include_tool_messages",
-                    value: includeToolMessages ? "true" : "false"
-                ),
-            ]
+            queryItems: queryItems
         )
     }
 
