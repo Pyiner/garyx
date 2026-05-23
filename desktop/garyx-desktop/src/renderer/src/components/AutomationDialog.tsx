@@ -170,30 +170,25 @@ function AutomationThreadPicker({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="group flex min-h-12 w-full items-start gap-3 rounded-md border border-input bg-background px-3 py-2 text-left shadow-xs transition-colors outline-none hover:bg-[#fafaf9] focus-visible:ring-2 focus-visible:ring-ring/35"
+          className="group flex min-h-12 w-full items-center gap-3 rounded-md border border-input bg-background px-3 py-2 text-left shadow-xs transition-colors outline-none hover:bg-[#fafaf9] focus-visible:ring-2 focus-visible:ring-ring/35"
         >
-          <ThreadPickerAvatar
+          <ThreadPickerText
             agentId={selectedThread?.agentId}
-            className="mt-0.5"
+            agentOption={selectedAgent}
             fallbackLabel={selectedThread ? threadTitle(selectedThread) : missingThreadId || t('Thread')}
-            option={selectedAgent}
-            teamId={selectedThread?.teamId}
-          />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13px] font-medium leading-5 text-foreground">
-              {selectedThread ? threadTitle(selectedThread) : missingThreadId || t('Choose thread')}
-            </span>
-            <span className="block truncate text-[11px] leading-4 text-muted-foreground">
-              {selectedThread
+            subtitle={
+              selectedThread
                 ? threadSubtitle(selectedThread)
                 : missingThreadId
                   ? t('Thread not loaded')
-                  : t('Recent threads')}
-            </span>
-          </span>
+                  : t('Recent threads')
+            }
+            teamId={selectedThread?.teamId}
+            title={selectedThread ? threadTitle(selectedThread) : missingThreadId || t('Choose thread')}
+          />
           <ChevronDown
             aria-hidden
-            className="size-4 shrink-0 self-center text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
+            className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180"
             strokeWidth={1.8}
           />
         </button>
@@ -247,30 +242,41 @@ function AutomationThreadPicker({
   );
 }
 
-function ThreadPickerAvatar({
+function ThreadPickerText({
   agentId,
-  className,
+  agentOption,
   fallbackLabel,
-  option,
+  subtitle,
   teamId,
+  title,
 }: {
   agentId?: string | null;
-  className?: string;
+  agentOption?: AutomationAgentOption | null;
   fallbackLabel: string;
-  option?: AutomationAgentOption | null;
+  subtitle: string;
   teamId?: string | null;
+  title: string;
 }) {
   return (
-    <AgentOptionAvatar
-      agentId={option?.id ?? agentId ?? teamId}
-      avatarDataUrl={option?.avatarDataUrl}
-      className={className}
-      kind={option?.kind ?? (teamId ? 'team' : 'agent')}
-      label={option?.label ?? fallbackLabel}
-      providerIcon={option?.providerIcon}
-      providerType={option?.providerType}
-      size="sm"
-    />
+    <span className="min-w-0 flex-1">
+      <span className="flex min-w-0 items-center gap-2">
+        <AgentOptionAvatar
+          agentId={agentOption?.id ?? agentId ?? teamId}
+          avatarDataUrl={agentOption?.avatarDataUrl}
+          kind={agentOption?.kind ?? (teamId ? 'team' : 'agent')}
+          label={agentOption?.label ?? fallbackLabel}
+          providerIcon={agentOption?.providerIcon}
+          providerType={agentOption?.providerType}
+          size="sm"
+        />
+        <span className="truncate text-[13px] font-medium leading-5 text-foreground">
+          {title}
+        </span>
+      </span>
+      <span className="mt-0.5 block truncate text-[11px] leading-4 text-muted-foreground">
+        {subtitle}
+      </span>
+    </span>
   );
 }
 
@@ -293,21 +299,14 @@ function ThreadPickerRow({
 
   return (
     <div className="flex min-w-0 flex-1 items-start gap-3">
-      <ThreadPickerAvatar
+      <ThreadPickerText
         agentId={thread?.agentId}
-        className="mt-0.5"
+        agentOption={option}
         fallbackLabel={title}
-        option={option}
+        subtitle={subtitle}
         teamId={thread?.teamId}
+        title={title}
       />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-medium leading-5 text-foreground">
-          {title}
-        </span>
-        <span className="block truncate text-[11px] leading-4 text-muted-foreground">
-          {subtitle}
-        </span>
-      </span>
       <span className="mt-1 flex size-4 shrink-0 items-center justify-center text-foreground">
         {active ? <Check aria-hidden size={14} strokeWidth={2} /> : null}
       </span>
