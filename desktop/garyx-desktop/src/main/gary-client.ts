@@ -1061,6 +1061,121 @@ function tryParseJson<T>(body: string): T | null {
   }
 }
 
+function mapThreadTitleUpdatedEvent(
+  payload: Record<string, unknown>,
+): DesktopChatStreamEvent | null {
+  if (asString(payload.type) !== "thread_title_updated") {
+    return null;
+  }
+  const title = (asString(payload.title) || "").trim();
+  const threadId =
+    asString(payload.threadId) || asString(payload.thread_id) || "";
+  if (!title || !threadId) {
+    return null;
+  }
+  const runId = asString(payload.runId) || asString(payload.run_id) || "";
+  return {
+    type: "thread_title_updated",
+    runId,
+    threadId,
+    sessionId: threadId,
+    title,
+  };
+}
+
+function mapGatewayEventPayload(raw: string): DesktopChatStreamEvent[] {
+  const payload = tryParseJson<Record<string, unknown>>(raw);
+  if (!payload) {
+    return [];
+  }
+  if (asString(payload.type) === "history") {
+    const events = Array.isArray(payload.events) ? payload.events : [];
+    return events.flatMap((entry) =>
+      typeof entry === "string" ? mapGatewayEventPayload(entry) : [],
+    );
+  }
+  const titleEvent = mapThreadTitleUpdatedEvent(payload);
+  return titleEvent ? [titleEvent] : [];
+}
+
+export async function streamGatewayEvents(
+  settings: DesktopSettings,
+  onEvent: (event: DesktopChatStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const headers = applyGatewayAuthHeader(
+    new Headers({ Accept: "text/event-stream" }),
+    settings.gatewayAuthToken,
+  );
+  const response = await fetch(buildUrl(settings, "/api/stream?history_limit=0"), {
+    headers,
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  if (!response.body) {
+    throw new Error("Gateway event stream returned no body");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let dataLines: string[] = [];
+  const flushEvent = () => {
+    if (dataLines.length === 0) {
+      return;
+    }
+    const payload = dataLines.join("\n");
+    dataLines = [];
+    for (const event of mapGatewayEventPayload(payload)) {
+      onEvent(event);
+    }
+  };
+  const processLine = (line: string) => {
+    if (line === "") {
+      flushEvent();
+      return;
+    }
+    if (line.startsWith(":")) {
+      return;
+    }
+    if (!line.startsWith("data:")) {
+      return;
+    }
+    let value = line.slice(5);
+    if (value.startsWith(" ")) {
+      value = value.slice(1);
+    }
+    dataLines.push(value);
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        const rawLine = buffer.slice(0, newlineIndex).replace(/\r$/, "");
+        buffer = buffer.slice(newlineIndex + 1);
+        processLine(rawLine);
+        newlineIndex = buffer.indexOf("\n");
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.length > 0) {
+      processLine(buffer.replace(/\r$/, ""));
+      buffer = "";
+    }
+    flushEvent();
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function messageFromPlainTextBody(body: string): string | undefined {
   const trimmed = body.trim().replace(/\s+/g, " ");
   if (!trimmed) {

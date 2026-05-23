@@ -1468,6 +1468,12 @@ pub async fn update_thread(
         );
     };
 
+    let requested_title = body
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     match update_thread_record(
         &state.threads.thread_store,
         &thread_id,
@@ -1483,6 +1489,11 @@ pub async fn update_thread(
                 .set_thread_workspace_binding(&thread_id, workspace_dir_from_value(&data))
                 .await;
             state.invalidate_gateway_sync_caches().await;
+            if let Some(title) = requested_title.as_deref() {
+                crate::chat_shared::emit_thread_title_updated_event(
+                    &state, &thread_id, None, title,
+                );
+            }
             (StatusCode::OK, Json(thread_summary(&thread_id, &data)))
         }
         Err(error) if error.contains("thread not found") => {

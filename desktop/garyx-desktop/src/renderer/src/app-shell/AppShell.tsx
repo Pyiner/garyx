@@ -1738,6 +1738,7 @@ export function AppShell() {
   const pendingAutomationRunsRef = useRef<Record<string, PendingAutomationRun>>(
     {},
   );
+  const threadTitleOverridesRef = useRef<Record<string, string>>({});
   const streamEventHandlerRef = useRef<(event: DesktopChatStreamEvent) => void>(
     () => {},
   );
@@ -4781,6 +4782,11 @@ export function AppShell() {
       return;
     }
 
+    threadTitleOverridesRef.current = {
+      ...threadTitleOverridesRef.current,
+      [threadId]: nextTitle,
+    };
+
     setDesktopState((current) => {
       if (!current) {
         return current;
@@ -7012,10 +7018,14 @@ export function AppShell() {
         if (!current) {
           return current;
         }
+        const titleOverride = threadTitleOverridesRef.current[resultThreadId];
+        const resultThread = titleOverride
+          ? { ...result.thread, title: titleOverride }
+          : result.thread;
         return {
           ...current,
-          threads: mergeThread(current.threads, result.thread),
-          sessions: mergeThread(current.threads, result.thread),
+          threads: mergeThread(current.threads, resultThread),
+          sessions: mergeThread(current.threads, resultThread),
         };
       });
 

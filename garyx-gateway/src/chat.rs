@@ -285,6 +285,20 @@ async fn handle_chat_ws_start(
                 "runId": run_id,
                 "threadId": thread_id
             }));
+            if let Some(title) = prepared.thread_title_update.as_deref() {
+                let _ = out_tx.send(json!({
+                    "type": "thread_title_updated",
+                    "runId": run_id,
+                    "threadId": thread_id,
+                    "title": title,
+                }));
+                crate::chat_shared::emit_thread_title_updated_event(
+                    state,
+                    &thread_id,
+                    Some(&run_id),
+                    title,
+                );
+            }
         }
         Err(error) => {
             let _ = out_tx.send(json!({

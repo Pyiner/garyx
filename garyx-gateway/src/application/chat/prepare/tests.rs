@@ -130,7 +130,7 @@ async fn persist_thread_label_marks_prompt_fallback_source() {
         )
         .await;
 
-    persist_thread_label_if_missing(
+    let title_update = persist_thread_label_if_missing(
         &state,
         "thread::prompt-title",
         "Please investigate provider title events",
@@ -138,6 +138,10 @@ async fn persist_thread_label_marks_prompt_fallback_source() {
     .await
     .expect("label persists");
 
+    assert_eq!(
+        title_update.as_deref(),
+        Some("Please investigate provider title events")
+    );
     let updated = state
         .threads
         .thread_store

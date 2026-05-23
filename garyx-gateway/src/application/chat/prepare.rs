@@ -35,6 +35,7 @@ pub(crate) enum ChatPreparationError {
 pub(crate) struct PreparedChatRequest {
     pub(crate) thread_id: String,
     pub(crate) effective_message: String,
+    pub(crate) thread_title_update: Option<String>,
     pub(crate) channel: String,
     pub(crate) account_id: String,
     pub(crate) from_id: String,
@@ -175,7 +176,11 @@ pub(crate) async fn prepare_chat_request(
         );
     }
 
-    persist_thread_label_if_missing(state, &thread_id, &resolved_message).await?;
+    let thread_title_update =
+        persist_thread_label_if_missing(state, &thread_id, &resolved_message).await?;
+    if thread_title_update.is_some() {
+        state.invalidate_gateway_sync_caches().await;
+    }
 
     record_api_thread_log(
         state,
@@ -213,6 +218,7 @@ pub(crate) async fn prepare_chat_request(
     Ok(PreparedChatRequest {
         thread_id,
         effective_message: resolved_message,
+        thread_title_update,
         channel,
         account_id: req.account_id,
         from_id: req.from_id,
@@ -301,15 +307,15 @@ async fn persist_thread_label_if_missing(
     state: &Arc<AppState>,
     thread_id: &str,
     effective_message: &str,
-) -> Result<(), ChatPreparationError> {
+) -> Result<Option<String>, ChatPreparationError> {
     let Some(next_label) = prompt_derived_thread_label(effective_message) else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(existing) = state.threads.thread_store.get(thread_id).await else {
-        return Ok(());
+        return Ok(None);
     };
     if !should_autoname_thread(&existing) {
-        return Ok(());
+        return Ok(None);
     }
 
     let Some(obj) = existing.as_object() else {
@@ -320,7 +326,7 @@ async fn persist_thread_label_if_missing(
     };
     let mut next = Value::Object(obj.clone());
     if let Some(next_obj) = next.as_object_mut() {
-        next_obj.insert("label".to_owned(), Value::String(next_label));
+        next_obj.insert("label".to_owned(), Value::String(next_label.clone()));
         next_obj.insert(
             "thread_title_source".to_owned(),
             Value::String(PROMPT_THREAD_TITLE_SOURCE.to_owned()),
@@ -331,7 +337,7 @@ async fn persist_thread_label_if_missing(
         );
     }
     state.threads.thread_store.set(thread_id, next).await;
-    Ok(())
+    Ok(Some(next_label))
 }
 
 async fn persist_thread_workspace_if_missing(

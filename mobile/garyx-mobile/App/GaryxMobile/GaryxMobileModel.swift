@@ -2130,6 +2130,33 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
+    @discardableResult
+    private func applyThreadTitleUpdate(threadId: String, title: String) -> Bool {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedThreadId.isEmpty, !nextTitle.isEmpty else { return false }
+
+        var changed = false
+        threads = threads.map { thread in
+            guard thread.id == normalizedThreadId, thread.title != nextTitle else {
+                return thread
+            }
+            var updated = thread
+            updated.title = nextTitle
+            changed = true
+            return updated
+        }
+
+        if selectedThread?.id == normalizedThreadId,
+           selectedThread?.title != nextTitle {
+            selectedThread?.title = nextTitle
+            draftThreadTitle = nextTitle
+            changed = true
+        }
+
+        return changed
+    }
+
     func loadMoreThreads() async {
         guard hasGatewaySettings,
               hasMoreThreadSummaries,
@@ -4465,9 +4492,6 @@ final class GaryxMobileModel: ObservableObject {
                 let isVisibleThread = selectedThread?.id == threadId
                 if !isVisibleThread {
                     handle(event, threadId: threadId, assistantMessageId: assistantMessageId, affectsActiveRun: affectsActiveRun)
-                    if case .threadTitleUpdated = event {
-                        Task { await refreshThreads() }
-                    }
                     if case .done = event {
                         task.cancel(with: .normalClosure, reason: nil)
                         clearActiveRun(task: task, threadId: threadId)
@@ -4640,8 +4664,8 @@ final class GaryxMobileModel: ObservableObject {
                     lastError = failureMessage
                 }
             }
-        case .threadTitleUpdated:
-            Task { await refreshThreads() }
+        case .threadTitleUpdated(_, let threadId, let title):
+            applyThreadTitleUpdate(threadId: threadId, title: title)
         case .done where affectsActiveRun:
             if !eventThreadId.isEmpty {
                 remoteBusyThreadIds.remove(eventThreadId)
@@ -5724,19 +5748,27 @@ final class GaryxMobileModel: ObservableObject {
             if type == "history" {
                 let events = dictionary["events"] as? [String] ?? []
                 var shouldReloadSelectedHistory = false
+                var titleUpdates: [(threadId: String, title: String)] = []
                 for eventPayload in events {
-                    if let event = try? client().decodeStreamEvent(eventPayload),
-                       selectedThread?.id == Self.threadId(from: event) {
-                        switch event {
-                        case .done, .runComplete, .error, .interrupt:
-                            shouldReloadSelectedHistory = true
-                        default:
-                            break
+                    if let event = try? client().decodeStreamEvent(eventPayload) {
+                        if case .threadTitleUpdated(_, let threadId, let title) = event {
+                            titleUpdates.append((threadId: threadId, title: title))
+                        }
+                        if selectedThread?.id == Self.threadId(from: event) {
+                            switch event {
+                            case .done, .runComplete, .error, .interrupt:
+                                shouldReloadSelectedHistory = true
+                            default:
+                                break
+                            }
                         }
                     }
                     await handleGlobalEventStreamPayload(eventPayload, replay: true)
                 }
                 await refreshThreads()
+                for update in titleUpdates {
+                    applyThreadTitleUpdate(threadId: update.threadId, title: update.title)
+                }
                 if shouldReloadSelectedHistory {
                     await loadSelectedThreadHistory()
                 }
@@ -5759,8 +5791,8 @@ final class GaryxMobileModel: ObservableObject {
         if replay {
             updateRemoteBusyState(from: event)
             switch event {
-            case .threadTitleUpdated:
-                await refreshThreads()
+            case .threadTitleUpdated(_, let threadId, let title):
+                applyThreadTitleUpdate(threadId: threadId, title: title)
             default:
                 break
             }
@@ -5769,6 +5801,9 @@ final class GaryxMobileModel: ObservableObject {
 
         if activeTasksByThread[threadId] != nil {
             updateRemoteBusyState(from: event)
+            if case .threadTitleUpdated(_, let eventThreadId, let title) = event {
+                applyThreadTitleUpdate(threadId: eventThreadId, title: title)
+            }
             return
         }
 
@@ -5777,8 +5812,8 @@ final class GaryxMobileModel: ObservableObject {
         handle(event, threadId: threadId, assistantMessageId: assistantMessageId, affectsActiveRun: true)
 
         switch event {
-        case .threadTitleUpdated:
-            await refreshThreads()
+        case .threadTitleUpdated(_, let threadId, let title):
+            applyThreadTitleUpdate(threadId: threadId, title: title)
         case .done, .runComplete:
             await refreshThreads()
             if selectedThread?.id == threadId {

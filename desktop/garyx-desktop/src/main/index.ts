@@ -159,6 +159,7 @@ import {
   saveGatewaySettings,
   saveSkillFile,
   sendStreamingInput,
+  streamGatewayEvents,
   deleteAutoResearchRun,
   selectAutoResearchCandidate,
   scanDreams,
@@ -233,6 +234,60 @@ let tray: Tray | null = null;
 let isQuitting = false;
 const deepLinkSubscribers = new Set<Electron.WebContents>();
 const pendingDeepLinks: DesktopDeepLinkEvent[] = [];
+let gatewayEventStreamAbortController: AbortController | null = null;
+
+function stopGatewayEventForwarder(): void {
+  gatewayEventStreamAbortController?.abort();
+  gatewayEventStreamAbortController = null;
+}
+
+function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
+function startGatewayEventForwarder(window: BrowserWindow): void {
+  stopGatewayEventForwarder();
+  const controller = new AbortController();
+  gatewayEventStreamAbortController = controller;
+  void (async () => {
+    let retryDelayMs = 1000;
+    while (!controller.signal.aborted && !window.isDestroyed()) {
+      try {
+        const settings = await resolveSettings();
+        await streamGatewayEvents(
+          settings,
+          (payload) => {
+            if (!window.isDestroyed()) {
+              window.webContents.send("garyx:chat-stream", payload);
+            }
+          },
+          controller.signal,
+        );
+        retryDelayMs = 1000;
+      } catch {
+        if (controller.signal.aborted || window.isDestroyed()) {
+          break;
+        }
+      }
+      await sleepWithAbort(retryDelayMs, controller.signal);
+      retryDelayMs = Math.min(retryDelayMs * 2, 10_000);
+    }
+  })();
+}
 const recentDeepLinkTimestamps = new Map<string, number>();
 const startupDeepLinkUrls = extractProtocolUrls(process.argv);
 
@@ -434,6 +489,7 @@ function createMainWindow(): BrowserWindow {
 
   bindBrowserWindow(window);
   subscribeUpdateStatus(window);
+  startGatewayEventForwarder(window);
   window.on("close", (event) => {
     if (!isQuitting) {
       event.preventDefault();
@@ -443,6 +499,7 @@ function createMainWindow(): BrowserWindow {
   window.on("closed", () => {
     writeBootstrapTrace("createMainWindow:closed");
     unbindBrowserWindow(window);
+    stopGatewayEventForwarder();
   });
 
   return window;
@@ -512,12 +569,20 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "garyx:save-settings",
     async (_event, settings: DesktopSettings) => {
-      return saveDesktopSettings(settings);
+      const state = await saveDesktopSettings(settings);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        startGatewayEventForwarder(mainWindow);
+      }
+      return state;
     },
   );
 
   ipcMain.handle("garyx:remember-gateway-profile", async () => {
-    return rememberDesktopGatewayProfile();
+    const state = await rememberDesktopGatewayProfile();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      startGatewayEventForwarder(mainWindow);
+    }
+    return state;
   });
 
   ipcMain.handle("garyx:get-gateway-settings", async () => {
