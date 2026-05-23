@@ -449,7 +449,6 @@ private enum GaryxSidebarMetrics {
 struct GaryxThreadSidebar: View {
     @EnvironmentObject private var model: GaryxMobileModel
     var showsInlineCloseButton: Bool
-    @State private var activeDrilldown: GaryxSidebarDrilldown?
 
     var body: some View {
         threadListWithBottomBar
@@ -481,6 +480,17 @@ struct GaryxThreadSidebar: View {
             .onChange(of: model.sidebarWorkspaceThreadGroups.map(\.path)) { _, _ in
                 reconcileActiveDrilldown()
             }
+    }
+
+    private var activeDrilldown: GaryxSidebarDrilldown? {
+        model.activeSidebarDrilldown
+    }
+
+    private var activeDrilldownBinding: Binding<GaryxSidebarDrilldown?> {
+        Binding(
+            get: { model.activeSidebarDrilldown },
+            set: { model.activeSidebarDrilldown = $0 }
+        )
     }
 
     private var threadListWithBottomBar: some View {
@@ -523,15 +533,15 @@ struct GaryxThreadSidebar: View {
     private var sidebarThreadSections: some View {
         switch activeDrilldown {
         case .unscopedThreads:
-            GaryxUnscopedThreadsSection(activeDrilldown: $activeDrilldown)
+            GaryxUnscopedThreadsSection(activeDrilldown: activeDrilldownBinding)
         case .bot:
-            GaryxSidebarBotsSection(activeDrilldown: $activeDrilldown)
+            GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
         case .workspace:
-            GaryxWorkspaceThreadGroupsSection(activeDrilldown: $activeDrilldown)
+            GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
         case nil:
             GaryxPinnedThreadsSection()
-            GaryxSidebarBotsSection(activeDrilldown: $activeDrilldown)
-            GaryxWorkspaceThreadGroupsSection(activeDrilldown: $activeDrilldown)
+            GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
+            GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
         }
     }
 
@@ -558,22 +568,22 @@ struct GaryxThreadSidebar: View {
 
     private func closeDrilldown() {
         withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-            activeDrilldown = nil
+            model.activeSidebarDrilldown = nil
         }
     }
 
     private func reconcileActiveDrilldown() {
         switch activeDrilldown {
         case .unscopedThreads where model.sidebarUnscopedThreads.isEmpty:
-            activeDrilldown = nil
+            model.activeSidebarDrilldown = nil
         case let .bot(id):
             guard let group = model.mobileBotGroups.first(where: { $0.id == id }),
                   !group.sidebarChildConversationEntries(visibleThreadIds: model.sidebarVisibleThreadIds).isEmpty else {
-                activeDrilldown = nil
+                model.activeSidebarDrilldown = nil
                 break
             }
         case let .workspace(path) where !model.sidebarWorkspaceThreadGroups.contains(where: { $0.path == path }):
-            activeDrilldown = nil
+            model.activeSidebarDrilldown = nil
         default:
             break
         }
@@ -744,7 +754,7 @@ private struct GaryxSidebarWorkspaceThreadGroup: Identifiable {
     var id: String { path }
 }
 
-private enum GaryxSidebarDrilldown: Equatable {
+enum GaryxSidebarDrilldown: Equatable {
     case unscopedThreads
     case bot(String)
     case workspace(String)

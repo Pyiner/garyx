@@ -209,6 +209,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var lastError: String?
     @Published var showsSettings = false
     @Published var sidebarVisible = false
+    @Published var activeSidebarDrilldown: GaryxSidebarDrilldown?
     @Published var pinnedThreadIds: [String] = []
     @Published var agents: [GaryxAgentSummary] = []
     @Published var teams: [GaryxTeamSummary] = []
