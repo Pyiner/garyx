@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconDeviceLaptop,
   IconFolder,
   IconGitBranch,
   IconHistory,
-  IconRefresh,
-  IconSparkles,
   IconPlus,
+  IconRefresh,
   IconSearch,
+  IconSparkles,
 } from "@tabler/icons-react";
 
 import type {
@@ -43,7 +43,12 @@ import { useI18n } from "./i18n";
 const ADD_WORKSPACE_VALUE = "__add_workspace__";
 const MISSING_WORKSPACE_VALUE_PREFIX = "__missing_workspace__:";
 const GIT_STATUS_CHECK_DELAY_MS = 120;
+const HOME_DREAMS_LIMIT = 4;
+const HOME_DREAMS_CACHE_STALE_MS = 45_000;
 const workspaceGitStatusCache = new Map<string, DesktopWorkspaceGitStatus>();
+let homeDreamsCache: { page: DesktopDreamsPage; cachedAt: number } | null =
+  null;
+let pendingHomeDreamsLoad: Promise<DesktopDreamsPage> | null = null;
 
 type NewThreadEmptyStateProps = {
   newThreadWorkspaceEntry: DesktopWorkspace | null;
@@ -395,35 +400,77 @@ function firstDreamThreadId(dream: DesktopDreamTopic): string | null {
   return dream.spans[0]?.threadId ?? null;
 }
 
+function updateHomeDreamsCache(page: DesktopDreamsPage): DesktopDreamsPage {
+  homeDreamsCache = { page, cachedAt: Date.now() };
+  return page;
+}
+
+function loadHomeDreamsPage(options?: {
+  force?: boolean;
+}): Promise<DesktopDreamsPage> {
+  const force = options?.force ?? false;
+  const now = Date.now();
+  if (
+    !force &&
+    homeDreamsCache &&
+    now - homeDreamsCache.cachedAt < HOME_DREAMS_CACHE_STALE_MS
+  ) {
+    return Promise.resolve(homeDreamsCache.page);
+  }
+  if (!force && pendingHomeDreamsLoad) {
+    return pendingHomeDreamsLoad;
+  }
+
+  const request = window.garyxDesktop
+    .listDreams({
+      sinceHours: 24,
+      limit: HOME_DREAMS_LIMIT,
+    })
+    .then(updateHomeDreamsCache)
+    .finally(() => {
+      if (pendingHomeDreamsLoad === request) {
+        pendingHomeDreamsLoad = null;
+      }
+    });
+  pendingHomeDreamsLoad = request;
+  return request;
+}
+
 function NewThreadDreamsSummary({
   onOpenThread,
 }: {
   onOpenThread: (threadId: string) => void;
 }) {
   const { t } = useI18n();
+  const mountedRef = useRef(false);
   const [page, setPage] = useState<DesktopDreamsPage | null>(null);
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dreams = page?.dreams.slice(0, 4) ?? [];
+  const dreams = page?.dreams.slice(0, HOME_DREAMS_LIMIT) ?? [];
   const scan = page?.scan ?? page?.latestScan ?? null;
   const subtitle = scan?.createdAt
     ? `${t("Last scan")} ${formatDreamTime(scan.createdAt)}`
     : t("Last 24 hours");
 
-  const loadDreams = useCallback(async () => {
+  const loadDreams = useCallback(async (options?: { force?: boolean }) => {
     setLoading(true);
     setError(null);
     try {
-      const result = await window.garyxDesktop.listDreams({
-        sinceHours: 24,
-        limit: 8,
-      });
+      const result = await loadHomeDreamsPage(options);
+      if (!mountedRef.current) {
+        return;
+      }
       setPage(result);
     } catch (cause) {
+      if (!mountedRef.current) {
+        return;
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -436,16 +483,29 @@ function NewThreadDreamsSummary({
         mode: "auto",
         limit: 600,
       });
+      updateHomeDreamsCache(result);
+      if (!mountedRef.current) {
+        return;
+      }
       setPage(result);
     } catch (cause) {
+      if (!mountedRef.current) {
+        return;
+      }
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setScanning(false);
+      if (mountedRef.current) {
+        setScanning(false);
+      }
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     void loadDreams();
+    return () => {
+      mountedRef.current = false;
+    };
   }, [loadDreams]);
 
   return (
@@ -458,7 +518,7 @@ function NewThreadDreamsSummary({
         <div className="new-thread-dreams-title-block">
           <div className="new-thread-dreams-title-row">
             <h2>{t("Dreams")}</h2>
-            <span className="new-thread-dreams-count">{page?.count ?? 0}</span>
+            <span className="new-thread-dreams-count">{dreams.length}</span>
           </div>
           <p>{subtitle}</p>
         </div>
@@ -468,7 +528,7 @@ function NewThreadDreamsSummary({
             className="new-thread-dreams-action"
             disabled={loading || scanning}
             onClick={() => {
-              void loadDreams();
+              void loadDreams({ force: true });
             }}
             size="icon"
             type="button"

@@ -19466,14 +19466,6 @@ button.new-thread-dreams-scan:hover {
 .new-thread-dreams-list {
   display: grid;
   gap: 3px;
-  max-height: 184px;
-  overflow: auto;
-  scrollbar-width: none;
-}
-
-.new-thread-dreams-list::-webkit-scrollbar {
-  display: none;
-  width: 0;
 }
 
 .new-thread-dream-row {
@@ -19499,6 +19491,7 @@ button.new-thread-dreams-scan:hover {
 
 .new-thread-dream-row:disabled {
   cursor: default;
+  opacity: 0.55;
 }
 
 .new-thread-dream-row-main {
@@ -19556,6 +19549,14 @@ button.new-thread-dreams-scan:hover {
     justify-self: start;
     justify-content: flex-start;
     max-width: 100%;
+  }
+}
+
+@media (max-height: 560px) {
+  .new-thread-dreams-list,
+  .new-thread-dreams-empty,
+  .new-thread-dreams-error {
+    display: none;
   }
 }
 
