@@ -1054,13 +1054,15 @@ fn temporary_claude_options(config: &GaryxConfig) -> ClaudeAgentOptions {
     options.permission_mode = Some(PermissionMode::Default);
     options.max_turns = Some(1);
     options.max_buffer_size = Some(10 * 1024 * 1024);
-    options.setting_sources = Some(vec!["user".to_owned()]);
+    options.setting_sources = Some(Vec::new());
     options.allowed_tools.clear();
     options.disallowed_tools.clear();
-    options.extra_args.insert("bare".to_owned(), None);
     options
         .extra_args
         .insert("disable-slash-commands".to_owned(), None);
+    options
+        .extra_args
+        .insert("no-session-persistence".to_owned(), None);
     options
         .extra_args
         .insert("strict-mcp-config".to_owned(), None);
@@ -2020,12 +2022,13 @@ mod tests {
     fn temporary_claude_options_disable_workspace_settings_and_tools() {
         let options = temporary_claude_options(&GaryxConfig::default());
 
-        assert_eq!(options.setting_sources, Some(vec!["user".to_owned()]));
+        assert_eq!(options.setting_sources, Some(Vec::new()));
         assert_eq!(options.permission_mode, Some(PermissionMode::Default));
         assert!(options.allowed_tools.is_empty());
         assert!(options.disallowed_tools.is_empty());
-        assert!(options.extra_args.contains_key("bare"));
+        assert!(!options.extra_args.contains_key("bare"));
         assert!(options.extra_args.contains_key("disable-slash-commands"));
+        assert!(options.extra_args.contains_key("no-session-persistence"));
         assert!(options.extra_args.contains_key("strict-mcp-config"));
         assert_eq!(
             options.extra_args.get("tools").and_then(Option::as_deref),
@@ -2036,7 +2039,9 @@ mod tests {
             .iter()
             .position(|arg| arg == "--setting-sources")
             .expect("temporary Claude must explicitly override setting sources");
-        assert_eq!(args[setting_sources + 1], "user");
+        assert_eq!(args[setting_sources + 1], "");
+        assert!(!args.contains(&"--bare".to_owned()));
+        assert!(args.contains(&"--no-session-persistence".to_owned()));
         let tools = args
             .iter()
             .position(|arg| arg == "--tools")
