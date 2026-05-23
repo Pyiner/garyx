@@ -242,6 +242,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var selectedSkillDocument: GaryxSkillFileDocument?
     @Published var selectedSkillFileContent = ""
     @Published var researchCandidatesByRunId: [String: GaryxAutoResearchCandidatesPage] = [:]
+    @Published var autoResearchDetailsByRunId: [String: GaryxAutoResearchDetail] = [:]
+    @Published var autoResearchIterationsByRunId: [String: [GaryxAutoResearchIteration]] = [:]
     @Published var draftThreadTitle = ""
     @Published var draftAutomationLabel = ""
     @Published var draftAutomationPrompt = ""
@@ -857,7 +859,7 @@ final class GaryxMobileModel: ObservableObject {
 
     var runningResearchCount: Int {
         autoResearchRuns.filter { run in
-            !["completed", "failed", "stopped", "cancelled"].contains(run.state.lowercased())
+            !garyxAutoResearchIsTerminal(run.state)
         }.count
     }
 
@@ -1510,6 +1512,8 @@ final class GaryxMobileModel: ObservableObject {
         selectedSkillDocument = nil
         selectedSkillFileContent = ""
         researchCandidatesByRunId = [:]
+        autoResearchDetailsByRunId = [:]
+        autoResearchIterationsByRunId = [:]
         isLoadingThreads = false
         isLoadingRemoteState = false
         isLoadingSelectedThreadHistory = false
@@ -3317,6 +3321,30 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
+    func loadAutoResearchDetail(_ run: GaryxAutoResearchRun) async {
+        await loadAutoResearchDetail(runId: run.runId)
+    }
+
+    func loadAutoResearchDetail(runId: String) async {
+        let runId = runId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !runId.isEmpty else { return }
+        do {
+            let gateway = try client()
+            async let detailResult = gateway.getAutoResearchRun(runId: runId)
+            async let iterationsResult = gateway.listAutoResearchIterations(runId: runId)
+            let detail = try await detailResult
+            let iterations = try await iterationsResult
+            autoResearchDetailsByRunId[runId] = detail
+            autoResearchIterationsByRunId[runId] = iterations
+            replaceAutoResearchRun(detail.run)
+            if let page = try? await gateway.listAutoResearchCandidates(runId: runId) {
+                researchCandidatesByRunId[runId] = page
+            }
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
     func loadAutoResearchCandidates(_ run: GaryxAutoResearchRun) async {
         do {
             researchCandidatesByRunId[run.runId] = try await client().listAutoResearchCandidates(runId: run.runId)
@@ -3332,7 +3360,45 @@ final class GaryxMobileModel: ObservableObject {
                 candidateId: candidate.candidateId
             )
             replaceAutoResearchRun(updated)
-            await loadAutoResearchCandidates(updated)
+            await loadAutoResearchDetail(runId: updated.runId)
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func reverifyAutoResearchCandidate(run: GaryxAutoResearchRun, candidate: GaryxResearchCandidate) async {
+        do {
+            let updated = try await client().reverifyAutoResearchCandidate(
+                runId: run.runId,
+                request: GaryxAutoResearchReverifyRequest(candidateId: candidate.candidateId)
+            )
+            replaceAutoResearchRun(updated)
+            await loadAutoResearchDetail(runId: updated.runId)
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func sendAutoResearchFeedback(
+        run: GaryxAutoResearchRun,
+        candidate: GaryxResearchCandidate?,
+        feedback: String
+    ) async {
+        let feedback = feedback.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !feedback.isEmpty else { return }
+        do {
+            let message: String
+            if let candidate {
+                message = "Candidate \(candidate.iteration): \(feedback)"
+            } else {
+                message = feedback
+            }
+            let updated = try await client().sendAutoResearchFeedback(
+                runId: run.runId,
+                request: GaryxAutoResearchFeedbackRequest(message: message)
+            )
+            replaceAutoResearchRun(updated)
+            await loadAutoResearchDetail(runId: updated.runId)
         } catch {
             lastError = displayMessage(for: error)
         }
@@ -3343,6 +3409,8 @@ final class GaryxMobileModel: ObservableObject {
             _ = try await client().deleteAutoResearchRun(runId: run.runId)
             autoResearchRuns.removeAll { $0.runId == run.runId }
             researchCandidatesByRunId.removeValue(forKey: run.runId)
+            autoResearchDetailsByRunId.removeValue(forKey: run.runId)
+            autoResearchIterationsByRunId.removeValue(forKey: run.runId)
         } catch {
             lastError = displayMessage(for: error)
         }
@@ -4983,6 +5051,10 @@ final class GaryxMobileModel: ObservableObject {
             autoResearchRuns[index] = run
         } else {
             autoResearchRuns.insert(run, at: 0)
+        }
+        if var detail = autoResearchDetailsByRunId[run.runId] {
+            detail.run = run
+            autoResearchDetailsByRunId[run.runId] = detail
         }
     }
 

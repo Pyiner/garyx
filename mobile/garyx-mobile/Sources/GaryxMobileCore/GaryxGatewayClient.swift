@@ -1928,17 +1928,14 @@ public struct GaryxAutoResearchCandidatesPage: Decodable, Equatable, Sendable {
 }
 
 public struct GaryxAutoResearchFeedbackRequest: Encodable, Equatable, Sendable {
-    public var candidateId: String?
-    public var feedback: String
+    public var message: String
 
-    public init(candidateId: String? = nil, feedback: String) {
-        self.candidateId = candidateId
-        self.feedback = feedback
+    public init(message: String) {
+        self.message = message
     }
 
     enum CodingKeys: String, CodingKey {
-        case candidateId = "candidate_id"
-        case feedback
+        case message
     }
 }
 
