@@ -24,7 +24,7 @@ permissions:
 jobs:
   testflight:
     name: Register Garyx and upload TestFlight build
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       GARYX_APP_NAME: ${{ vars.GARYX_APP_NAME || 'Garyx' }}
       GARYX_APP_SKU: ${{ vars.GARYX_APP_SKU || 'garyx-ios' }}
