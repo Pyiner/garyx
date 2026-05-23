@@ -7804,30 +7804,32 @@ struct GaryxSwipeActionRow<Content: View>: View {
                 .frame(maxHeight: .infinity)
                 .offset(x: actionWidth + offset)
 
-                content
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(GaryxTheme.surface)
-                    .offset(x: offset)
-                    .contentShape(Rectangle())
-                    .overlay {
-                        if isOpen {
-                            Color.clear
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    close()
-                                }
-                        }
-                    }
-                    .simultaneousGesture(swipeGesture)
-                    .contextMenu {
-                        ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
-                            Button(action.title, role: action.tone == .destructive ? .destructive : nil) {
-                                close()
-                                action.action()
+                accessibleContent(
+                    content
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(GaryxTheme.surface)
+                        .offset(x: offset)
+                        .contentShape(Rectangle())
+                        .overlay {
+                            if isOpen {
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        close()
+                                    }
                             }
                         }
-                    }
-                    .accessibilityHint("Swipe left for actions, or use the actions rotor.")
+                        .simultaneousGesture(swipeGesture)
+                        .contextMenu {
+                            ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                                Button(action.title, role: action.tone == .destructive ? .destructive : nil) {
+                                    close()
+                                    action.action()
+                                }
+                            }
+                        }
+                        .accessibilityHint("Swipe left for actions, or use the actions rotor.")
+                )
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .clipped()
@@ -7875,6 +7877,17 @@ struct GaryxSwipeActionRow<Content: View>: View {
         isOpen = false
         withAnimation(GaryxMobileMotion.rowSwipe) {
             offset = 0
+        }
+    }
+
+    private func accessibleContent<V: View>(_ view: V) -> AnyView {
+        actions.reduce(AnyView(view)) { partial, action in
+            AnyView(
+                partial.accessibilityAction(named: Text(action.title)) {
+                    close()
+                    action.action()
+                }
+            )
         }
     }
 }
