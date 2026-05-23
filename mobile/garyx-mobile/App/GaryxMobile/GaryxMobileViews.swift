@@ -8401,17 +8401,32 @@ struct GaryxSwipeAction {
     let action: () -> Void
 }
 
-struct GaryxSwipeActionRow<Content: View>: View {
-    private enum DragAxis {
-        case horizontal
-        case vertical
+final class GaryxSwipeRowCoordinator: ObservableObject {
+    static let shared = GaryxSwipeRowCoordinator()
+
+    @Published private(set) var activeRowID: UUID?
+
+    func open(_ id: UUID) {
+        if activeRowID != id {
+            activeRowID = id
+        }
     }
 
+    func close(_ id: UUID) {
+        if activeRowID == id {
+            activeRowID = nil
+        }
+    }
+}
+
+struct GaryxSwipeActionRow<Content: View>: View {
     let actions: [GaryxSwipeAction]
     let content: Content
-    @State private var isOpen = false
+
+    @State private var identityID = UUID()
+    @ObservedObject private var coordinator = GaryxSwipeRowCoordinator.shared
     @State private var offset: CGFloat = 0
-    @State private var dragAxis: DragAxis?
+    @State private var isOpen = false
 
     init(actions: [GaryxSwipeAction], @ViewBuilder content: () -> Content) {
         self.actions = actions
@@ -8423,119 +8438,207 @@ struct GaryxSwipeActionRow<Content: View>: View {
             content
         } else {
             ZStack(alignment: .trailing) {
-                HStack(spacing: 0) {
-                    ForEach(Array(visibleActions.enumerated()), id: \.offset) { _, action in
-                        Button(role: action.tone == .destructive ? .destructive : nil) {
-                            close()
-                            action.action()
-                        } label: {
-                            VStack(spacing: 4) {
-                                Image(systemName: action.systemImage)
-                                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                                Text(action.title)
-                                    .font(GaryxFont.system(size: 11, weight: .semibold))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.75)
-                            }
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
-                        }
-                        .frame(width: actionButtonWidth)
-                        .frame(maxHeight: .infinity)
-                        .background(action.tone.background)
-                        .buttonStyle(.plain)
-                    }
+                if abs(offset) > 0.5 {
+                    actionsHStack
                 }
-                .frame(width: actionWidth, alignment: .trailing)
-                .frame(maxHeight: .infinity)
-                .offset(x: actionWidth + offset)
 
-                accessibleContent(
-                    content
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(GaryxTheme.surface)
-                        .offset(x: offset)
-                        .contentShape(Rectangle())
-                        .overlay {
-                            if isOpen {
-                                Color.clear
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        close()
-                                    }
+                content
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(GaryxTheme.surface)
+                    .offset(x: offset)
+                    .contentShape(Rectangle())
+                    .accessibilityHint("Swipe left for actions, or use the actions rotor.")
+                    .modifier(GaryxSwipeRowAccessibilityActions(actions: actions, onAction: handle))
+                    .contextMenu {
+                        ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                            Button(action.title, role: action.tone == .destructive ? .destructive : nil) {
+                                handle(action)
                             }
                         }
-                        .simultaneousGesture(swipeGesture)
-                        .contextMenu {
-                            ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
-                                Button(action.title, role: action.tone == .destructive ? .destructive : nil) {
-                                    close()
-                                    action.action()
-                                }
-                            }
+                    }
+                    .overlay {
+                        GaryxSwipeRowPanRecognizer(
+                            actionWidth: actionWidth,
+                            offset: $offset,
+                            onCommit: commit(velocity:)
+                        )
+                        .accessibilityHidden(true)
+                    }
+                    .overlay {
+                        if isOpen {
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .onTapGesture { close() }
                         }
-                        .accessibilityHint("Swipe left for actions, or use the actions rotor.")
-                )
+                    }
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .clipped()
+            .onChange(of: coordinator.activeRowID) { _, newID in
+                if newID != identityID, isOpen {
+                    close(notifyCoordinator: false)
+                }
+            }
+            .onDisappear {
+                coordinator.close(identityID)
+            }
         }
     }
 
-    private var actionButtonWidth: CGFloat { 72 }
-    private var actionWidth: CGFloat { CGFloat(visibleActions.count) * actionButtonWidth }
-
-    private var visibleActions: [GaryxSwipeAction] {
-        actions
-    }
-
-    private var swipeGesture: some Gesture {
-        DragGesture(minimumDistance: 18, coordinateSpace: .local)
-            .onChanged { value in
-                if dragAxis == nil {
-                    let horizontal = abs(value.translation.width)
-                    let vertical = abs(value.translation.height)
-                    guard max(horizontal, vertical) > 8 else { return }
-                    dragAxis = horizontal > vertical * 1.25 ? .horizontal : .vertical
-                }
-                guard dragAxis == .horizontal else { return }
-                let base = isOpen ? -actionWidth : 0
-                offset = min(0, max(-actionWidth, base + value.translation.width))
-            }
-            .onEnded { value in
-                defer { dragAxis = nil }
-                guard dragAxis == .horizontal else {
-                    if !isOpen {
-                        offset = 0
+    private var actionsHStack: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                Button(role: action.tone == .destructive ? .destructive : nil) {
+                    handle(action)
+                } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: action.systemImage)
+                            .font(GaryxFont.system(size: 14, weight: .semibold))
+                        Text(action.title)
+                            .font(GaryxFont.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                     }
-                    return
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.vertical, 8)
+                    .contentShape(Rectangle())
                 }
-                let shouldOpen = offset < -actionWidth * 0.35
-                    || value.predictedEndTranslation.width < -actionWidth * 0.75
-                isOpen = shouldOpen
-                withAnimation(GaryxMobileMotion.rowSwipe) {
-                    offset = shouldOpen ? -actionWidth : 0
-                }
+                .frame(width: actionButtonWidth)
+                .frame(maxHeight: .infinity)
+                .background(action.tone.background)
+                .buttonStyle(.plain)
             }
+        }
+        .frame(width: actionWidth, alignment: .trailing)
+        .frame(maxHeight: .infinity)
+        .offset(x: actionWidth + offset)
     }
 
-    private func close() {
+    private var actionButtonWidth: CGFloat { 72 }
+    private var actionWidth: CGFloat { CGFloat(actions.count) * actionButtonWidth }
+
+    private func handle(_ action: GaryxSwipeAction) {
+        close()
+        action.action()
+    }
+
+    private func commit(velocity: CGFloat) {
+        let opening: Bool
+        if velocity < -400 {
+            opening = true
+        } else if velocity > 400 {
+            opening = false
+        } else {
+            opening = offset < -actionWidth * 0.45
+        }
+        let target: CGFloat = opening ? -actionWidth : 0
+        isOpen = opening
+        if opening {
+            coordinator.open(identityID)
+        } else {
+            coordinator.close(identityID)
+        }
+        withAnimation(GaryxMobileMotion.rowSwipe) {
+            offset = target
+        }
+    }
+
+    private func close(notifyCoordinator: Bool = true) {
+        if notifyCoordinator {
+            coordinator.close(identityID)
+        }
         isOpen = false
         withAnimation(GaryxMobileMotion.rowSwipe) {
             offset = 0
         }
     }
+}
 
-    private func accessibleContent<V: View>(_ view: V) -> AnyView {
-        actions.reduce(AnyView(view)) { partial, action in
-            AnyView(
-                partial.accessibilityAction(named: Text(action.title)) {
-                    close()
-                    action.action()
+private struct GaryxSwipeRowAccessibilityActions: ViewModifier {
+    let actions: [GaryxSwipeAction]
+    let onAction: (GaryxSwipeAction) -> Void
+
+    func body(content: Content) -> some View {
+        content.accessibilityActions {
+            ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                Button(action.title) {
+                    onAction(action)
                 }
-            )
+            }
+        }
+    }
+}
+
+private struct GaryxSwipeRowPanRecognizer: UIViewRepresentable {
+    let actionWidth: CGFloat
+    @Binding var offset: CGFloat
+    let onCommit: (CGFloat) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(frame: .zero)
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = true
+        let pan = UIPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handle(_:))
+        )
+        pan.delegate = context.coordinator
+        pan.cancelsTouchesInView = false
+        pan.maximumNumberOfTouches = 1
+        view.addGestureRecognizer(pan)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: GaryxSwipeRowPanRecognizer
+        var baseOffset: CGFloat = 0
+
+        init(parent: GaryxSwipeRowPanRecognizer) { self.parent = parent }
+
+        @objc func handle(_ gesture: UIPanGestureRecognizer) {
+            switch gesture.state {
+            case .began:
+                baseOffset = parent.offset
+            case .changed:
+                let dx = gesture.translation(in: gesture.view).x
+                let raw = baseOffset + dx
+                if raw > 0 {
+                    parent.offset = 0
+                } else if raw < -parent.actionWidth {
+                    let overshoot = raw + parent.actionWidth
+                    parent.offset = -parent.actionWidth + overshoot * 0.35
+                } else {
+                    parent.offset = raw
+                }
+            case .ended, .cancelled, .failed:
+                parent.onCommit(gesture.velocity(in: gesture.view).x)
+            default:
+                break
+            }
+        }
+
+        // Engage only when the touch is decisively horizontal — anything
+        // vertical-dominant falls through to the parent ScrollView's pan.
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
+            let v = pan.velocity(in: pan.view)
+            return abs(v.x) > abs(v.y) * 1.6 && abs(v.x) > 80
+        }
+
+        // Exclusive once we win shouldBegin — UIKit then yields the touch
+        // sequence to us and the parent ScrollView leaves it alone.
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            return false
         }
     }
 }
