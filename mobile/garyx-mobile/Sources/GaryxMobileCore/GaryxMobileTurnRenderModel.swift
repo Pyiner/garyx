@@ -159,19 +159,7 @@ enum GaryxMobileTurnRenderer {
         guard let key else { return [] }
 
         if steps.isEmpty {
-            guard deferTrailingFinalAssistant, isTrailingTurn else { return [] }
-            return [
-                .turn(
-                    GaryxMobileAgentTurn(
-                        id: "turn:\(key)",
-                        steps: [],
-                        finalBlock: nil,
-                        isRunning: true,
-                        startedAt: precedingUserTimestamp,
-                        finishedAt: nil
-                    )
-                )
-            ]
+            return []
         }
 
         let isTrailingDeferredTurn = deferTrailingFinalAssistant && isTrailingTurn

@@ -66,6 +66,7 @@ struct GaryxTurnSummaryView<Content: View>: View {
 
     @State private var expanded: Bool
     @State private var userControlled = false
+    @State private var mountStart = Date()
 
     init(
         turn: GaryxMobileAgentTurn,
@@ -140,7 +141,7 @@ struct GaryxTurnSummaryView<Content: View>: View {
     private func elapsedLabel(now: Date) -> String {
         let start = Self.timestamp(from: turn.startedAt)
         if isRunning {
-            guard let start else { return "" }
+            let start = start ?? mountStart
             return Self.formatElapsed(now.timeIntervalSince(start))
         }
         guard let start, let finished = Self.timestamp(from: turn.finishedAt) else {

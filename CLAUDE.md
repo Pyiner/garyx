@@ -143,6 +143,11 @@ needs installed-app validation.
   user-turn model that mirrors the Mac app: completed final assistant answers
   stay outside turn collapsibles, intermediate activity folds under the turn,
   and tool groups default collapsed unless the containing turn is expanded.
+- While a mobile thread is running, show the bottom Thinking indicator when no
+  assistant/tool activity is present yet; do not synthesize an empty Working
+  turn row for a trailing user-only turn. Running Working rows should show an
+  elapsed timer immediately, using the user-turn timestamp when available and a
+  view-mount fallback otherwise.
 - Mobile management screens should not expose create/edit forms inline by
   default. Use top navigation actions to open full-screen add/edit flows, not
   compact sheets or always-visible forms, and keep the main page focused on

@@ -60,7 +60,7 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         XCTAssertEqual(turn.finishedAt, "2026-01-01T00:00:02Z")
     }
 
-    func testTrailingUserWhileRunningCreatesStableEmptyTurn() throws {
+    func testTrailingUserWhileRunningDoesNotCreateEmptyTurn() throws {
         let rows = GaryxMobileTurnRenderer.buildTurnRows(
             messages: [
                 message("user-1", role: .user, text: "Run this"),
@@ -68,14 +68,10 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
             isRunningThread: true
         )
 
-        let activity = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only)
-        guard case .turn(let turn) = activity else {
-            return XCTFail("Expected pending user turn")
-        }
-        XCTAssertEqual(turn.id, "turn:user-1")
-        XCTAssertTrue(turn.steps.isEmpty)
-        XCTAssertNil(turn.finalBlock)
-        XCTAssertTrue(turn.isRunning)
+        let row = try XCTUnwrap(rows.only)
+        XCTAssertEqual(row.id, "user-turn:user-1")
+        XCTAssertEqual(row.userBlock?.id, "user-1")
+        XCTAssertTrue(row.activityRows.isEmpty)
     }
 
     func testOrphanAssistantTurnUsesStableMessageId() throws {
