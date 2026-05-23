@@ -3362,7 +3362,7 @@ struct GaryxTaskListRow: View {
             )
         }
         actions.append(
-            GaryxSwipeAction(title: "Status", systemImage: task.status.systemImage) {
+            GaryxSwipeAction(title: "Status", systemImage: "arrow.left.arrow.right.circle") {
                 showsStatusActions = true
             }
         )
@@ -7044,9 +7044,9 @@ private extension GaryxTaskStatus {
         case .todo:
             [.inProgress]
         case .inProgress:
-            [.todo, .inReview]
+            [.inReview, .todo]
         case .inReview:
-            [.inProgress, .done]
+            [.done, .inProgress]
         case .done:
             [.todo]
         }
