@@ -949,6 +949,7 @@ export function ThreadPage({
               <NewThreadEmptyState
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
                 onAddWorkspace={onAddWorkspace}
+                onOpenDreamThread={onOpenThreadById}
                 onSelectWorkspace={onSelectWorkspace}
                 onWorkspaceModeChange={onSelectNewThreadWorkspaceMode}
                 onResumeProviderSession={onResumeProviderSession}

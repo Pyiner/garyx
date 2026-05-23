@@ -1,14 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   IconDeviceLaptop,
   IconFolder,
   IconGitBranch,
   IconHistory,
+  IconRefresh,
+  IconSparkles,
   IconPlus,
   IconSearch,
 } from "@tabler/icons-react";
 
 import type {
+  DesktopDreamTopic,
+  DesktopDreamsPage,
   DesktopSessionProviderHint,
   DesktopWorkspace,
   DesktopWorkspaceGitStatus,
@@ -49,6 +53,7 @@ type NewThreadEmptyStateProps = {
   onAddWorkspace: () => void;
   onSelectWorkspace: (workspacePath: string) => void;
   onWorkspaceModeChange: (workspaceMode: DesktopWorkspaceMode) => void;
+  onOpenDreamThread: (threadId: string) => void;
   onResumeProviderSession: (
     sessionId: string,
     providerHint?: DesktopSessionProviderHint | null,
@@ -63,6 +68,7 @@ export function NewThreadEmptyState({
   onAddWorkspace,
   onSelectWorkspace,
   onWorkspaceModeChange,
+  onOpenDreamThread,
   onResumeProviderSession,
 }: NewThreadEmptyStateProps) {
   const { t } = useI18n();
@@ -291,6 +297,7 @@ export function NewThreadEmptyState({
             {t("Resume")}
           </Button>
         </div>
+        <NewThreadDreamsSummary onOpenThread={onOpenDreamThread} />
       </div>
 
       <Dialog
@@ -356,5 +363,174 @@ export function NewThreadEmptyState({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function formatDreamTime(value?: string | null): string {
+  if (!value) {
+    return "";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function dreamTimeRange(dream: DesktopDreamTopic): string {
+  const start = formatDreamTime(dream.firstMessageAt);
+  const end = formatDreamTime(dream.lastMessageAt);
+  if (start && end && start !== end) {
+    return `${start} - ${end}`;
+  }
+  return end || start;
+}
+
+function firstDreamThreadId(dream: DesktopDreamTopic): string | null {
+  return dream.spans[0]?.threadId ?? null;
+}
+
+function NewThreadDreamsSummary({
+  onOpenThread,
+}: {
+  onOpenThread: (threadId: string) => void;
+}) {
+  const { t } = useI18n();
+  const [page, setPage] = useState<DesktopDreamsPage | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dreams = page?.dreams.slice(0, 4) ?? [];
+  const scan = page?.scan ?? page?.latestScan ?? null;
+  const subtitle = scan?.createdAt
+    ? `${t("Last scan")} ${formatDreamTime(scan.createdAt)}`
+    : t("Last 24 hours");
+
+  const loadDreams = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await window.garyxDesktop.listDreams({
+        sinceHours: 24,
+        limit: 8,
+      });
+      setPage(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const scanDreams = useCallback(async () => {
+    setScanning(true);
+    setError(null);
+    try {
+      const result = await window.garyxDesktop.scanDreams({
+        sinceHours: 24,
+        mode: "auto",
+        limit: 600,
+      });
+      setPage(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDreams();
+  }, [loadDreams]);
+
+  return (
+    <section
+      aria-busy={loading || scanning}
+      aria-label={t("Dreams")}
+      className="new-thread-dreams"
+    >
+      <div className="new-thread-dreams-header">
+        <div className="new-thread-dreams-title-block">
+          <div className="new-thread-dreams-title-row">
+            <h2>{t("Dreams")}</h2>
+            <span className="new-thread-dreams-count">{page?.count ?? 0}</span>
+          </div>
+          <p>{subtitle}</p>
+        </div>
+        <div className="new-thread-dreams-actions">
+          <Button
+            aria-label={t("Refresh")}
+            className="new-thread-dreams-action"
+            disabled={loading || scanning}
+            onClick={() => {
+              void loadDreams();
+            }}
+            size="icon"
+            type="button"
+            variant="ghost"
+          >
+            <IconRefresh aria-hidden size={14} stroke={1.8} />
+          </Button>
+          <Button
+            className="new-thread-dreams-scan"
+            disabled={loading || scanning}
+            onClick={() => {
+              void scanDreams();
+            }}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            <IconSparkles aria-hidden size={14} stroke={1.8} />
+            {scanning ? t("Scanning") : t("Scan")}
+          </Button>
+        </div>
+      </div>
+
+      {error ? <p className="new-thread-dreams-error">{error}</p> : null}
+
+      {!dreams.length && !loading && !error ? (
+        <p className="new-thread-dreams-empty">{t("No dreams yet.")}</p>
+      ) : null}
+
+      {dreams.length ? (
+        <div className="new-thread-dreams-list">
+          {dreams.map((dream) => {
+            const threadId = firstDreamThreadId(dream);
+            return (
+              <button
+                className="new-thread-dream-row"
+                disabled={!threadId}
+                key={dream.dreamId}
+                onClick={() => {
+                  if (threadId) {
+                    onOpenThread(threadId);
+                  }
+                }}
+                type="button"
+              >
+                <span className="new-thread-dream-row-main">
+                  <strong>{dream.title}</strong>
+                  <span>{dream.summary}</span>
+                </span>
+                <span className="new-thread-dream-row-meta">
+                  <span>{dreamTimeRange(dream)}</span>
+                  <span>
+                    {dream.messageCount} {t("messages")}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : loading ? (
+        <p className="new-thread-dreams-empty">{t("Loading…")}</p>
+      ) : null}
+    </section>
   );
 }
