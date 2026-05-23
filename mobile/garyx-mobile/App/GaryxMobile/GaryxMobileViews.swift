@@ -5936,6 +5936,7 @@ struct GaryxSettingsSectionMenu: View {
         } label: {
             GaryxToolbarIcon(systemName: "list.bullet")
         }
+        .buttonStyle(.plain)
         .accessibilityLabel("Settings section")
         .accessibilityValue(model.activeSettingsTab.label)
     }
