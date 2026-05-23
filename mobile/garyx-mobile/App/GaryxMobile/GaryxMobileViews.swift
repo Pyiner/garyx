@@ -4309,6 +4309,7 @@ struct GaryxAutomationCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let automation: GaryxAutomationSummary
     @State private var showsEditForm = false
+    @State private var showsDeleteConfirmation = false
     @State private var label = ""
     @State private var prompt = ""
     @State private var intervalHours = ""
@@ -4384,6 +4385,14 @@ struct GaryxAutomationCard: View {
                 .garyxCardStyle()
             }
         }
+        .confirmationDialog("Delete automation?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteAutomation(automation) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the scheduled automation and its saved configuration.")
+        }
     }
 
     private var automationSwipeActions: [GaryxSwipeAction] {
@@ -4415,7 +4424,7 @@ struct GaryxAutomationCard: View {
         )
         actions.append(
             GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                Task { await model.deleteAutomation(automation) }
+                showsDeleteConfirmation = true
             }
         )
         return actions
