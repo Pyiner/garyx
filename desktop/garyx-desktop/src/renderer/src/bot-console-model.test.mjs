@@ -9,9 +9,9 @@ import {
 
 function makeEndpoint(overrides = {}) {
   return {
-    endpointKey: 'weixin::zhao::default',
+    endpointKey: 'weixin::test-account::default',
     channel: 'weixin',
-    accountId: 'zhao',
+    accountId: 'test-account',
     peerId: 'peer-1',
     chatId: 'chat-1',
     deliveryTargetType: 'chat_id',
@@ -25,11 +25,11 @@ function makeEndpoint(overrides = {}) {
 function makeBotGroup(overrides = {}) {
   const defaultOpenEndpoint = makeEndpoint();
   return {
-    id: 'weixin::zhao',
+    id: 'weixin::test-account',
     channel: 'weixin',
-    accountId: 'zhao',
+    accountId: 'test-account',
     title: 'Test User',
-    subtitle: 'Weixin Bot · zhao',
+    subtitle: 'Weixin Bot · test-account',
     rootBehavior: 'open_default',
     status: 'connected',
     latestActivity: null,
