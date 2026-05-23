@@ -3326,7 +3326,7 @@ struct GaryxTaskListRow: View {
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog("Set Status", isPresented: $showsStatusActions, titleVisibility: .visible) {
-            ForEach(GaryxTaskStatus.allCases.filter { $0 != task.status }, id: \.rawValue) { status in
+            ForEach(task.status.allowedTransitions, id: \.rawValue) { status in
                 Button {
                     Task { await model.updateTask(task, to: status) }
                 } label: {
@@ -3362,7 +3362,7 @@ struct GaryxTaskListRow: View {
             )
         }
         actions.append(
-            GaryxSwipeAction(title: "Status", systemImage: "slider.horizontal.3") {
+            GaryxSwipeAction(title: "Status", systemImage: task.status.systemImage) {
                 showsStatusActions = true
             }
         )
@@ -7036,6 +7036,19 @@ private extension GaryxTaskStatus {
             "arrowshape.turn.up.right.circle.fill"
         case .done:
             "checkmark.circle.fill"
+        }
+    }
+
+    var allowedTransitions: [GaryxTaskStatus] {
+        switch self {
+        case .todo:
+            [.inProgress]
+        case .inProgress:
+            [.todo, .inReview]
+        case .inReview:
+            [.inProgress, .done]
+        case .done:
+            [.todo]
         }
     }
 
