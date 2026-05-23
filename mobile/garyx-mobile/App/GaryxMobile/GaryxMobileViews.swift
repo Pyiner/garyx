@@ -1053,7 +1053,9 @@ private struct GaryxBotSidebarConversationEntry: Identifiable, Equatable {
 
 private extension GaryxMobileBotGroup {
     var compactDetailLine: String {
-        let botId = "\(channel):\(accountId)"
+        let channelName = garyxBotChannelDisplayName(channel)
+        let account = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let botId = account.isEmpty ? channelName : "\(channelName) · \(account)"
         let agent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let workspace = workspaceDir?.trimmingCharacters(in: .whitespacesAndNewlines)
         return [
@@ -1128,6 +1130,20 @@ private extension GaryxMobileBotGroup {
         }
 
         return entries
+    }
+}
+
+private func garyxBotChannelDisplayName(_ channel: String) -> String {
+    let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    switch normalized {
+    case "telegram":
+        return "Telegram"
+    case "discord":
+        return "Discord"
+    case "api":
+        return "API"
+    default:
+        return normalized.isEmpty ? "Channel" : normalized.replacingOccurrences(of: "_", with: " ").capitalized
     }
 }
 
@@ -3328,7 +3344,7 @@ struct GaryxWorkspacePathRow: View {
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(path)
+                    Text(garyxCompactPathLabel(path))
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -3350,6 +3366,7 @@ struct GaryxWorkspacePathRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(path.lastPathComponent.isEmpty ? path : path.lastPathComponent)
+        .accessibilityValue(garyxCompactPathLabel(path))
     }
 }
 
@@ -3589,6 +3606,26 @@ struct GaryxWorkspacePreviewSection: View {
 
 private func garyxFormattedFileSize(_ size: Int) -> String {
     ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+}
+
+private func garyxCompactPathLabel(_ path: String) -> String {
+    let normalized = path
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "\\", with: "/")
+    guard !normalized.isEmpty else { return "" }
+    let parts = normalized
+        .split(separator: "/", omittingEmptySubsequences: true)
+        .map(String.init)
+    if parts.count >= 2,
+       parts[0] == "Users" {
+        let remainder = Array(parts.dropFirst(2))
+        guard !remainder.isEmpty else { return "Home folder" }
+        return "~/" + remainder.prefix(2).joined(separator: "/")
+    }
+    if parts.count > 2 {
+        return parts.suffix(2).joined(separator: "/")
+    }
+    return normalized
 }
 
 struct GaryxTasksView: View {
@@ -3990,8 +4027,8 @@ struct GaryxTaskListRow: View {
 
     var body: some View {
         GaryxSwipeActionRow(actions: taskSwipeActions) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
                     Button {
                         if task.threadId.isEmpty {
                             showsTaskDetails = true
@@ -4001,7 +4038,7 @@ struct GaryxTaskListRow: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(task.title)
-                                .font(GaryxFont.body(weight: .semibold))
+                                .font(GaryxFont.subheadline(weight: .semibold))
                                 .foregroundStyle(.primary)
                                 .lineLimit(2)
                                 .multilineTextAlignment(.leading)
@@ -4015,6 +4052,7 @@ struct GaryxTaskListRow: View {
                     .buttonStyle(.plain)
 
                     GaryxStatusPill(text: task.status.label, tone: task.status.tone)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
 
                 HStack(spacing: 8) {
@@ -4030,7 +4068,8 @@ struct GaryxTaskListRow: View {
                         .lineLimit(1)
                 }
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
             .contentShape(Rectangle())
         }
         .fullScreenCover(isPresented: $showsAssignSheet) {
@@ -6848,14 +6887,15 @@ struct GaryxBotEndpointRow: View {
     }
 
     private var endpointTitle: String {
-        firstNonEmpty(endpoint.displayLabel, endpoint.conversationLabel, endpoint.threadLabel, endpoint.endpointKey)
+        firstHumanLabel(endpoint.displayLabel, endpoint.conversationLabel, endpoint.threadLabel)
+            ?? friendlyEndpointFallback
     }
 
     private var endpointDetail: String {
         if !boundThreadId.isEmpty {
-            return "Linked · \(firstNonEmpty(endpoint.threadLabel, endpoint.conversationLabel, boundThreadId))"
+            return "Linked · \(firstHumanLabel(endpoint.threadLabel, endpoint.conversationLabel) ?? friendlyEndpointFallback)"
         }
-        return "Unlinked · \(firstNonEmpty(endpoint.conversationLabel, conversationKindLabel, channelLabel, endpoint.endpointKey))"
+        return "Unlinked · \(firstHumanLabel(endpoint.conversationLabel) ?? friendlyEndpointFallback)"
     }
 
     private var boundThreadId: String {
@@ -6908,6 +6948,14 @@ struct GaryxBotEndpointRow: View {
         }
     }
 
+    private var friendlyEndpointFallback: String {
+        let kind = conversationKindLabel
+        if !kind.isEmpty {
+            return "\(channelLabel.isEmpty ? "Channel" : channelLabel) \(kind.lowercased())"
+        }
+        return channelLabel.isEmpty ? "Endpoint" : channelLabel
+    }
+
     private var endpointIconName: String {
         let kind = endpoint.conversationKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         if kind.contains("group") || kind.contains("room") || kind.contains("channel") {
@@ -6927,6 +6975,30 @@ struct GaryxBotEndpointRow: View {
             }
         }
         return "Endpoint"
+    }
+
+    private func firstHumanLabel(_ values: String?...) -> String? {
+        for value in values {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty, !isTechnicalEndpointLabel(trimmed) {
+                return trimmed
+            }
+        }
+        return nil
+    }
+
+    private func isTechnicalEndpointLabel(_ value: String) -> Bool {
+        let lowercased = value.lowercased()
+        if lowercased.hasPrefix("thread-") || lowercased.contains("::") {
+            return true
+        }
+        if lowercased.contains("/") {
+            return value.rangeOfCharacter(from: .decimalDigits) != nil
+        }
+        if lowercased.contains("...") {
+            return value.rangeOfCharacter(from: .decimalDigits) != nil
+        }
+        return false
     }
 }
 
@@ -7680,7 +7752,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         leadingActionLabel: String? = nil,
         leadingActionSystemName: String = "chevron.left",
         leadingAction: (() -> Void)? = nil,
-        background: Color = GaryxTheme.background,
+        background: Color = Color(.systemGroupedBackground),
         @ViewBuilder content: () -> Content,
         @ViewBuilder actions: () -> Actions
     ) {
@@ -7765,7 +7837,7 @@ extension GaryxPanelScaffold where Actions == EmptyView {
         leadingActionLabel: String? = nil,
         leadingActionSystemName: String = "chevron.left",
         leadingAction: (() -> Void)? = nil,
-        background: Color = GaryxTheme.background,
+        background: Color = Color(.systemGroupedBackground),
         @ViewBuilder content: () -> Content
     ) {
         self.init(
