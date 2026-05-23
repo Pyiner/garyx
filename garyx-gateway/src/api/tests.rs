@@ -835,7 +835,9 @@ async fn test_create_and_list_custom_agents() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert!(json["agents"].as_array().unwrap().iter().any(|agent| {
         agent["agent_id"] == "claude"
-            && agent["avatar_data_url"].is_null()
+            && agent["avatar_data_url"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("data:image/png;base64,"))
             && agent["provider_icon"]["key"] == "claude"
             && agent["provider_icon"]["provider_type"] == "claude_code"
     }));

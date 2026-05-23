@@ -7,6 +7,12 @@ async fn lists_only_provider_builtin_agents() {
     assert!(agents.iter().any(|agent| agent.agent_id == "claude"));
     assert!(agents.iter().any(|agent| agent.agent_id == "codex"));
     assert!(agents.iter().any(|agent| agent.agent_id == "gemini"));
+    assert!(agents.iter().filter(|agent| agent.built_in).all(|agent| {
+        agent
+            .avatar_data_url
+            .as_deref()
+            .is_some_and(|value| value.starts_with("data:image/png;base64,"))
+    }));
     assert!(!agents.iter().any(|agent| agent.agent_id == "gpt"));
     assert!(!agents.iter().any(|agent| agent.agent_id == "planner"));
     assert!(!agents.iter().any(|agent| agent.agent_id == "generator"));
