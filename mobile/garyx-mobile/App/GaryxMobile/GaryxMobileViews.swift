@@ -1685,7 +1685,6 @@ struct GaryxLoadEarlierHistoryButton: View {
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @FocusState private var isComposerFocused: Bool
-    @State private var suppressNextAutoScrollToBottom = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -1696,9 +1695,8 @@ struct GaryxConversationView: View {
                     .background(Color.clear)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onChange(of: model.messages) { _, newValue in
-                if suppressNextAutoScrollToBottom {
-                    suppressNextAutoScrollToBottom = false
+            .onChange(of: model.messages) { oldValue, newValue in
+                if shouldPreserveScrollForPrependedHistory(oldValue: oldValue, newValue: newValue) {
                     return
                 }
                 guard !newValue.isEmpty || model.showsTailThinkingIndicator else { return }
@@ -1736,10 +1734,8 @@ struct GaryxConversationView: View {
                 } else {
                     if model.selectedThreadHasMoreHistoryBefore {
                         GaryxLoadEarlierHistoryButton(isLoading: model.isLoadingOlderThreadHistory) {
-                            suppressNextAutoScrollToBottom = true
                             Task {
                                 await model.loadOlderSelectedThreadHistory()
-                                suppressNextAutoScrollToBottom = false
                             }
                         }
                     }
@@ -1792,6 +1788,19 @@ struct GaryxConversationView: View {
         } else {
             proxy.scrollTo("conversation-bottom-anchor", anchor: .bottom)
         }
+    }
+
+    private func shouldPreserveScrollForPrependedHistory(
+        oldValue: [GaryxMobileMessage],
+        newValue: [GaryxMobileMessage]
+    ) -> Bool {
+        guard newValue.count > oldValue.count,
+              let oldFirstId = oldValue.first?.id,
+              newValue.first?.id != oldFirstId,
+              let oldFirstIndex = newValue.firstIndex(where: { $0.id == oldFirstId }) else {
+            return false
+        }
+        return oldFirstIndex > 0
     }
 
     private func dismissComposerKeyboard() {

@@ -2063,7 +2063,11 @@ final class GaryxMobileModel: ObservableObject {
             )
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
-            updateSelectedThreadHistoryPagination(threadId: threadId, transcript: transcript)
+            updateSelectedThreadHistoryPagination(
+                threadId: threadId,
+                transcript: transcript,
+                preservingLoadedOlderPages: true
+            )
             let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
             setMessages(
                 mergedMessages(
@@ -2135,11 +2139,31 @@ final class GaryxMobileModel: ObservableObject {
 
     private func updateSelectedThreadHistoryPagination(
         threadId: String,
-        transcript: GaryxThreadTranscript
+        transcript: GaryxThreadTranscript,
+        preservingLoadedOlderPages: Bool = false
     ) {
         guard selectedThread?.id == threadId else { return }
+        if preservingLoadedOlderPages,
+           let oldestLoadedIndex = oldestLoadedHistoryIndex(for: threadId),
+           let latestPageStartIndex = preserveRemoteBeforeIndex(from: transcript),
+           oldestLoadedIndex < latestPageStartIndex {
+            if oldestLoadedIndex > 0 {
+                selectedThreadHasMoreHistoryBefore = true
+                selectedThreadNextHistoryBeforeIndex = oldestLoadedIndex
+            } else {
+                selectedThreadHasMoreHistoryBefore = false
+                selectedThreadNextHistoryBeforeIndex = nil
+            }
+            return
+        }
         selectedThreadHasMoreHistoryBefore = transcript.pageInfo?.hasMoreBefore ?? false
         selectedThreadNextHistoryBeforeIndex = transcript.pageInfo?.nextBeforeIndex
+    }
+
+    private func oldestLoadedHistoryIndex(for threadId: String) -> Int? {
+        cachedMessages(for: threadId)
+            .compactMap { Self.historyIndex(fromMessageId: $0.id) }
+            .min()
     }
 
     private func prependOlderMessages(_ olderMessages: [GaryxMobileMessage], for threadId: String) {
@@ -2200,7 +2224,11 @@ final class GaryxMobileModel: ObservableObject {
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
-            updateSelectedThreadHistoryPagination(threadId: threadId, transcript: transcript)
+            updateSelectedThreadHistoryPagination(
+                threadId: threadId,
+                transcript: transcript,
+                preservingLoadedOlderPages: true
+            )
             let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
             setMessages(
                 mergedMessages(
