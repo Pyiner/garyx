@@ -206,7 +206,15 @@ final class GaryxMobileModel: ObservableObject {
     @Published private(set) var remoteBusyThreadIds: Set<String> = []
     @Published var activePanel: GaryxMobilePanel = .chat
     @Published var activeSettingsTab: GaryxMobileSettingsTab = .manage
-    @Published var lastError: String?
+    @Published private var storedLastError: String?
+    var lastError: String? {
+        get {
+            storedLastError
+        }
+        set {
+            storedLastError = Self.presentableErrorMessage(newValue)
+        }
+    }
     @Published var showsSettings = false
     @Published var sidebarVisible = false
     @Published var activeSidebarDrilldown: GaryxSidebarDrilldown?
@@ -5142,10 +5150,47 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     private func displayMessage(for error: Error) -> String {
+        if Self.isCancellationError(error) {
+            return ""
+        }
         if let localized = (error as? LocalizedError)?.errorDescription, !localized.isEmpty {
             return localized
         }
         return error.localizedDescription
+    }
+
+    private static func presentableErrorMessage(_ message: String?) -> String? {
+        let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        guard !isCancellationMessage(trimmed) else { return nil }
+        return trimmed
+    }
+
+    private static func isCancellationError(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+            return true
+        }
+        return isCancellationMessage(error.localizedDescription)
+    }
+
+    private static func isCancellationMessage(_ message: String) -> Bool {
+        let normalized = message
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized == "cancel"
+            || normalized == "cancel."
+            || normalized == "cancelled"
+            || normalized == "canceled"
+            || normalized == "cancelled."
+            || normalized == "canceled."
+            || normalized == "the operation was cancelled."
+            || normalized == "the operation was canceled."
+            || normalized == "the operation couldn’t be completed. (nsurlerrordomain error -999.)"
+            || normalized == "the operation could not be completed. (nsurlerrordomain error -999.)"
     }
 }
 
