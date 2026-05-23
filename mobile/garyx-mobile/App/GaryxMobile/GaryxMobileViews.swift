@@ -1650,9 +1650,8 @@ struct GaryxConversationView: View {
         .background(GaryxTheme.background)
         .garyxAdaptiveTopBar {
             GaryxConversationHeader()
-                .modifier(GaryxSidebarHeaderBackdropModifier())
+                .modifier(GaryxSidebarHeaderBackdropModifier(surfaceTint: GaryxTheme.background))
         }
-        .garyxAdaptiveSoftScrollEdge(for: .top)
     }
 
     private var messageScroll: some View {
@@ -6483,9 +6482,8 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 8)
-            .modifier(GaryxSidebarHeaderBackdropModifier())
+            .modifier(GaryxSidebarHeaderBackdropModifier(surfaceTint: background))
         }
-        .garyxAdaptiveSoftScrollEdge(for: .top)
     }
 }
 
@@ -7466,8 +7464,8 @@ struct GaryxSidebarMenuButton: View {
 
 struct GaryxHeaderMenuIcon: View {
     var body: some View {
-        Image(systemName: "sidebar.left")
-            .font(GaryxFont.system(size: 18, weight: .semibold))
+        Image(systemName: "line.3.horizontal")
+            .font(GaryxFont.system(size: 17, weight: .semibold))
             .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
@@ -7724,13 +7722,15 @@ private struct GaryxSoftScrollEdgeModifier: ViewModifier {
 }
 
 private struct GaryxSidebarHeaderBackdropModifier: ViewModifier {
+    var surfaceTint: Color = GaryxTheme.background
+
     func body(content: Content) -> some View {
         content
             .background {
                 Rectangle()
-                    .fill(.thinMaterial)
-                    .overlay(Color(.systemBackground).opacity(0.18))
-                    .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .thinMaterial, in: Rectangle())
+                    .fill(.ultraThinMaterial)
+                    .overlay(surfaceTint.opacity(0.34))
+                    .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: Rectangle())
             }
     }
 }
