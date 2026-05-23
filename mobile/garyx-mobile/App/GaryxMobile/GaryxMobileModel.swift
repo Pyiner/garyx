@@ -1505,6 +1505,7 @@ final class GaryxMobileModel: ObservableObject {
         selectedThreadRecoveryThreadId = nil
         selectedThreadHistoryRequestId = nil
         resetSelectedThreadHistoryPagination()
+        resetThreadListPagination()
         sceneRefreshTask?.cancel()
         sceneRefreshTask = nil
         cancelGlobalEventStream()
