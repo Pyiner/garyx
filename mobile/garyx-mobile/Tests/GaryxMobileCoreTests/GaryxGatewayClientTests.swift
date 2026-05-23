@@ -790,6 +790,66 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
     }
 
+    func testWorkspaceFilesRequestUsesGatewayCamelCaseQueryItems() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+                "/garyx/api/workspace-files"
+            )
+            let queryItems = URLComponents(
+                url: try XCTUnwrap(request.url),
+                resolvingAgainstBaseURL: false
+            )?.queryItems ?? []
+            XCTAssertEqual(queryItems.first(where: { $0.name == "workspaceDir" })?.value, "/workspace/project")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "workspace_dir" })?.value, nil)
+            XCTAssertEqual(queryItems.first(where: { $0.name == "path" })?.value, "Sources")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(
+                    """
+                    {
+                      "workspaceDir": "/workspace/project",
+                      "directoryPath": "Sources",
+                      "entries": []
+                    }
+                    """.utf8
+                )
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx"))
+            ),
+            session: session
+        )
+
+        let listing = try await client.listWorkspaceFiles(
+            workspaceDir: "/workspace/project",
+            directoryPath: "Sources"
+        )
+
+        XCTAssertEqual(listing.workspaceDir, "/workspace/project")
+        XCTAssertEqual(listing.directoryPath, "Sources")
+    }
+
     func testGetThreadUsesMetadataEndpointAndEncodesThreadId() async throws {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GaryxURLProtocolStub.self]

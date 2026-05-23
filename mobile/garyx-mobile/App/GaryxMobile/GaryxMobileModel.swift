@@ -3322,6 +3322,7 @@ final class GaryxMobileModel: ObservableObject {
         selectedWorkspacePath = path
         draftWorkspacePath = path
         selectedWorkspaceDirectory = ""
+        workspaceListing = nil
         workspacePreview = nil
         workspaceUploadStatus = nil
         await refreshSelectedWorkspace()
@@ -3342,18 +3343,36 @@ final class GaryxMobileModel: ObservableObject {
     func refreshSelectedWorkspace() async {
         let path = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return }
+        let directory = selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             let gateway = try client()
             async let listingResult = gateway.listWorkspaceFiles(
                 workspaceDir: path,
-                directoryPath: selectedWorkspaceDirectory.isEmpty ? nil : selectedWorkspaceDirectory
+                directoryPath: directory.isEmpty ? nil : directory
             )
             async let gitStatusResult = gateway.workspaceGitStatus(workspaceDir: path)
-            workspaceListing = try await listingResult
+            let listing = try await listingResult
+            guard isCurrentWorkspaceRequest(
+                workspace: path,
+                directory: directory,
+                runtimeGeneration: runtimeGeneration
+            ) else { return }
+            workspaceListing = listing
             if let status = try? await gitStatusResult {
+                guard isCurrentWorkspaceRequest(
+                    workspace: path,
+                    directory: directory,
+                    runtimeGeneration: runtimeGeneration
+                ) else { return }
                 workspaceGitStatuses[path] = status
             }
         } catch {
+            guard isCurrentWorkspaceRequest(
+                workspace: path,
+                directory: directory,
+                runtimeGeneration: runtimeGeneration
+            ) else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -3362,16 +3381,31 @@ final class GaryxMobileModel: ObservableObject {
         guard !selectedWorkspacePath.isEmpty else { return }
         if entry.entryType == "directory" {
             selectedWorkspaceDirectory = entry.path
+            workspaceListing = nil
             workspacePreview = nil
             await refreshSelectedWorkspace()
             return
         }
+        let workspace = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let directory = selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
-            workspacePreview = try await client().previewWorkspaceFile(
-                workspaceDir: selectedWorkspacePath,
+            let preview = try await client().previewWorkspaceFile(
+                workspaceDir: workspace,
                 path: entry.path
             )
+            guard isCurrentWorkspaceRequest(
+                workspace: workspace,
+                directory: directory,
+                runtimeGeneration: runtimeGeneration
+            ) else { return }
+            workspacePreview = preview
         } catch {
+            guard isCurrentWorkspaceRequest(
+                workspace: workspace,
+                directory: directory,
+                runtimeGeneration: runtimeGeneration
+            ) else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -3380,6 +3414,7 @@ final class GaryxMobileModel: ObservableObject {
         guard !selectedWorkspaceDirectory.isEmpty else { return }
         let parent = (selectedWorkspaceDirectory as NSString).deletingLastPathComponent
         selectedWorkspaceDirectory = parent == "." ? "" : parent
+        workspaceListing = nil
         workspacePreview = nil
         await refreshSelectedWorkspace()
     }
@@ -3388,6 +3423,7 @@ final class GaryxMobileModel: ObservableObject {
         let workspace = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !workspace.isEmpty, !urls.isEmpty else { return }
         let directory = selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let runtimeGeneration = gatewayRuntimeGeneration
         isUploadingWorkspaceFiles = true
         workspaceUploadStatus = nil
         defer { isUploadingWorkspaceFiles = false }
@@ -3418,6 +3454,11 @@ final class GaryxMobileModel: ObservableObject {
                 )
             }
             guard !files.isEmpty else {
+                guard isCurrentWorkspaceRequest(
+                    workspace: workspace,
+                    directory: directory,
+                    runtimeGeneration: runtimeGeneration
+                ) else { return }
                 workspaceUploadStatus = "No files selected"
                 return
             }
@@ -3428,16 +3469,42 @@ final class GaryxMobileModel: ObservableObject {
                     files: files
                 )
             )
+            guard isCurrentWorkspaceRequest(
+                workspace: workspace,
+                directory: directory,
+                runtimeGeneration: runtimeGeneration
+            ) else { return }
             workspaceUploadStatus = files.count == 1 ? "Uploaded \(files[0].name)" : "Uploaded \(files.count) files"
             await refreshSelectedWorkspace()
             if let firstPath = result.uploadedPaths.first?.trimmingCharacters(in: .whitespacesAndNewlines),
                !firstPath.isEmpty {
-                workspacePreview = try? await client().previewWorkspaceFile(workspaceDir: workspace, path: firstPath)
+                let preview = try? await client().previewWorkspaceFile(workspaceDir: workspace, path: firstPath)
+                guard isCurrentWorkspaceRequest(
+                    workspace: workspace,
+                    directory: directory,
+                    runtimeGeneration: runtimeGeneration
+                ) else { return }
+                workspacePreview = preview
             }
         } catch {
+            guard isCurrentWorkspaceRequest(
+                workspace: workspace,
+                directory: directory,
+                runtimeGeneration: runtimeGeneration
+            ) else { return }
             workspaceUploadStatus = nil
             lastError = displayMessage(for: error)
         }
+    }
+
+    private func isCurrentWorkspaceRequest(
+        workspace: String,
+        directory: String,
+        runtimeGeneration: UUID
+    ) -> Bool {
+        runtimeGeneration == gatewayRuntimeGeneration
+            && selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines) == workspace
+            && selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines) == directory
     }
 
     func createAutomationFromDraft() async -> Bool {

@@ -3522,7 +3522,7 @@ struct GaryxWorkspacePreviewSection: View {
                 }
 
                 if let text = preview.text, !text.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: true) {
+                    ScrollView([.vertical, .horizontal], showsIndicators: true) {
                         Text(text)
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.primary)
