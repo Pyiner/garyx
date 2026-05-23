@@ -313,19 +313,9 @@ async fn run_incremental_dream_scan(
         Ok(topics) => (
             topics,
             format!("{}_incremental", extraction_source(mode)),
-            None,
+            None::<String>,
         ),
-        Err(error) => {
-            let topics = reuse_existing_topic_ids_for_matching_spans(
-                heuristic_topics(&collected.messages),
-                &existing_topics,
-            );
-            (
-                topics,
-                "heuristic_fallback_incremental".to_owned(),
-                Some(error),
-            )
-        }
+        Err(error) => return Err(error),
     };
 
     let drafts = dream_topic_drafts(topics);
@@ -635,11 +625,15 @@ fn dream_user_message(
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Option<DreamUserMessage> {
-    if message_role(message).as_deref() != Some("user") {
+    if is_internal_dream_message(message) {
+        return None;
+    }
+    if is_garyx_internal_dream_message(message) || message_role(message).as_deref() != Some("user")
+    {
         return None;
     }
     let text = extract_visible_text(message)?;
-    if is_low_signal_dream_text(&text) {
+    if is_low_signal_dream_text(&text) || is_non_topic_dream_text(&text) {
         return None;
     }
     let timestamp = timestamp_hint
@@ -658,7 +652,62 @@ fn dream_user_message(
     })
 }
 
+fn is_internal_dream_message(message: &Value) -> bool {
+    message
+        .get("internal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || message
+            .get("internal_kind")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+        || message
+            .get("internalKind")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+}
+
+fn is_garyx_internal_dream_message(message: &Value) -> bool {
+    if message
+        .get("internal")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let Some(metadata) = message.get("metadata").and_then(Value::as_object) else {
+        return false;
+    };
+    metadata
+        .get("internal_dispatch")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || metadata
+            .get("task_auto_start")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || metadata.contains_key("task_id")
+        || metadata.contains_key("task_dispatch_reason")
+        || metadata
+            .get("runtime_context")
+            .and_then(Value::as_object)
+            .map(|runtime_context| {
+                runtime_context.contains_key("task") || runtime_context.contains_key("automation")
+            })
+            .unwrap_or(false)
+}
+
 fn is_low_signal_dream_text(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    if trimmed.starts_with("<garyx_task_notification")
+        || (trimmed.starts_with("Task #TASK-") && trimmed.contains("has been assigned"))
+    {
+        return true;
+    }
     let normalized = normalize_dream_text_for_signal(text);
     if normalized.is_empty() {
         return true;
@@ -699,6 +748,15 @@ fn is_low_signal_dream_text(text: &str) -> bool {
             | "辛苦了"
             | "加油"
     )
+}
+
+fn is_non_topic_dream_text(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("<garyx_task_notification")
+        || trimmed.starts_with("Task #TASK-")
+        || trimmed.contains("has been assigned to you and is already in progress")
+        || (trimmed.starts_with("你是负责增量下载") && trimmed.contains("每 3 小时被调起一次"))
+        || (trimmed.starts_with("你是 PT 增量下载助手") && trimmed.contains("每 3 小时被调起一次"))
 }
 
 fn normalize_dream_text_for_signal(text: &str) -> String {
@@ -996,7 +1054,7 @@ fn temporary_claude_options(config: &GaryxConfig) -> ClaudeAgentOptions {
     options.permission_mode = Some(PermissionMode::Default);
     options.max_turns = Some(1);
     options.max_buffer_size = Some(10 * 1024 * 1024);
-    options.setting_sources = Some(Vec::new());
+    options.setting_sources = Some(vec!["user".to_owned()]);
     options.allowed_tools.clear();
     options.disallowed_tools.clear();
     options.extra_args.insert("bare".to_owned(), None);
@@ -1962,7 +2020,7 @@ mod tests {
     fn temporary_claude_options_disable_workspace_settings_and_tools() {
         let options = temporary_claude_options(&GaryxConfig::default());
 
-        assert_eq!(options.setting_sources, Some(Vec::new()));
+        assert_eq!(options.setting_sources, Some(vec!["user".to_owned()]));
         assert_eq!(options.permission_mode, Some(PermissionMode::Default));
         assert!(options.allowed_tools.is_empty());
         assert!(options.disallowed_tools.is_empty());
@@ -1978,7 +2036,7 @@ mod tests {
             .iter()
             .position(|arg| arg == "--setting-sources")
             .expect("temporary Claude must explicitly override setting sources");
-        assert_eq!(args[setting_sources + 1], "");
+        assert_eq!(args[setting_sources + 1], "user");
         let tools = args
             .iter()
             .position(|arg| arg == "--tools")
@@ -2003,8 +2061,39 @@ mod tests {
     }
 
     #[test]
+    fn dream_user_message_skips_internal_dispatch_messages() {
+        let mut message = user_message("Task #TASK-1 has been assigned", "2026-05-21T10:00:00Z");
+        message["internal"] = json!(true);
+        message["metadata"] = json!({
+            "internal_dispatch": true,
+            "task_auto_start": true,
+            "task_id": "#TASK-1",
+            "runtime_context": {
+                "task": { "task_id": "#TASK-1" }
+            }
+        });
+        let entry = dream_user_message(
+            "thread::one",
+            None,
+            1,
+            &message,
+            None,
+            parse_timestamp("2026-05-21T09:00:00Z").unwrap(),
+            parse_timestamp("2026-05-21T11:00:00Z").unwrap(),
+        );
+        assert!(entry.is_none());
+    }
+
+    #[test]
     fn dream_user_message_skips_control_only_text() {
-        for text in ["continue", "/continue", "停止", "滴滴", "加油"] {
+        for text in [
+            "continue",
+            "/continue",
+            "停止",
+            "滴滴",
+            "加油",
+            "<garyx_task_notification event=\"ready_for_review\">Task #TASK-1</garyx_task_notification>",
+        ] {
             let message = user_message(text, "2026-05-21T10:00:00Z");
             let entry = dream_user_message(
                 "thread::one",
@@ -2036,5 +2125,43 @@ mod tests {
         )
         .expect("substantive follow-up should remain dream input");
         assert_eq!(entry.text, "继续实现梦境 topic 抽取和桌面首页展示");
+    }
+
+    #[test]
+    fn dream_user_message_skips_internal_messages() {
+        let mut message = user_message("Implement dreams", "2026-05-21T10:00:00Z");
+        message["internal"] = Value::Bool(true);
+        let entry = dream_user_message(
+            "thread::one",
+            None,
+            1,
+            &message,
+            None,
+            parse_timestamp("2026-05-21T09:00:00Z").unwrap(),
+            parse_timestamp("2026-05-21T11:00:00Z").unwrap(),
+        );
+        assert!(entry.is_none());
+    }
+
+    #[test]
+    fn dream_user_message_skips_task_and_automation_prompts() {
+        for text in [
+            "<garyx_task_notification event=\"ready_for_review\">review</garyx_task_notification>",
+            "Task #TASK-70 has been assigned to you and is already in progress.",
+            "你是负责增量下载电视剧《测试剧》的助手，每 3 小时被调起一次。",
+            "你是 PT 增量下载助手，每 3 小时被调起一次。",
+        ] {
+            let message = user_message(text, "2026-05-21T10:00:00Z");
+            let entry = dream_user_message(
+                "thread::one",
+                None,
+                1,
+                &message,
+                None,
+                parse_timestamp("2026-05-21T09:00:00Z").unwrap(),
+                parse_timestamp("2026-05-21T11:00:00Z").unwrap(),
+            );
+            assert!(entry.is_none(), "{text:?} should not become a dream input");
+        }
     }
 }
