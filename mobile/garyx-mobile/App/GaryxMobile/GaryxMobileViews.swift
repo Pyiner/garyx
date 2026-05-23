@@ -7508,6 +7508,22 @@ struct GaryxSettingsProviderContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if !model.providerModelsByType.isEmpty {
+                GaryxSectionBlock(title: "Model Providers") {
+                    GaryxCompactListGroup {
+                        let providers = model.providerModelsByType
+                            .values
+                            .sorted { garyxProviderDisplayName($0.providerType) < garyxProviderDisplayName($1.providerType) }
+                        ForEach(Array(providers.enumerated()), id: \.element.providerType) { index, provider in
+                            GaryxProviderModelsRow(provider: provider)
+                            if index < providers.count - 1 {
+                                GaryxCompactRowDivider()
+                            }
+                        }
+                    }
+                }
+            }
+
             GaryxSectionBlock(title: "Default Agent") {
                 GaryxCompactListGroup {
                     ForEach(Array(model.agentTargets.enumerated()), id: \.element.id) { index, target in
@@ -7533,6 +7549,102 @@ struct GaryxSettingsProviderContent: View {
                 }
             }
         }
+    }
+}
+
+struct GaryxProviderModelsRow: View {
+    let provider: GaryxProviderModels
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: iconName)
+                .font(GaryxFont.system(size: 14, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(garyxProviderDisplayName(provider.providerType))
+                    .font(GaryxFont.subheadline(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(detail)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
+
+            GaryxStatusPill(text: provider.error == nil ? "Ready" : "Error", tone: provider.error == nil ? .good : .danger)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+    }
+
+    private var iconName: String {
+        let source = provider.providerType.lowercased()
+        if source.contains("codex") {
+            return "chevron.left.forwardslash.chevron.right"
+        }
+        if source.contains("claude") || source.contains("anthropic") {
+            return "sparkles"
+        }
+        if source.contains("gemini") || source.contains("google") {
+            return "diamond.fill"
+        }
+        if source.contains("gpt") || source.contains("openai") {
+            return "circle.hexagongrid.fill"
+        }
+        return "cpu"
+    }
+
+    private var detail: String {
+        if let error = provider.error?.trimmingCharacters(in: .whitespacesAndNewlines), !error.isEmpty {
+            return error
+        }
+        var parts: [String] = []
+        if let defaultModel = provider.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines), !defaultModel.isEmpty {
+            parts.append("Default \(defaultModel)")
+        }
+        if provider.supportsModelSelection {
+            parts.append("\(provider.models.count) models")
+        }
+        if provider.supportsReasoningEffortSelection {
+            parts.append("\(provider.reasoningEfforts.count) reasoning")
+        }
+        if provider.supportsServiceTierSelection {
+            parts.append("\(provider.serviceTiers.count) tiers")
+        }
+        if parts.isEmpty {
+            return provider.source.isEmpty ? "Provider metadata" : provider.source.capitalized
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private func garyxProviderDisplayName(_ providerType: String) -> String {
+    switch providerType {
+    case "codex_app_server":
+        return "Codex"
+    case "claude_code":
+        return "Claude Code"
+    case "gemini_cli":
+        return "Gemini CLI"
+    case "gpt":
+        return "OpenAI"
+    case "anthropic", "claude_llm":
+        return "Anthropic"
+    case "google", "gemini_llm":
+        return "Google"
+    default:
+        let words = providerType
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .split(separator: " ")
+            .map { word in
+                word.prefix(1).uppercased() + word.dropFirst()
+            }
+        return words.isEmpty ? "Provider" : words.joined(separator: " ")
     }
 }
 
