@@ -6905,6 +6905,9 @@ struct GaryxMobileSettingsPanel: View {
             title: "Settings",
             subtitle: model.activeSettingsTab.label,
             onRefresh: { await model.connectAndRefresh() },
+            leadingActionLabel: settingsLeadingActionLabel,
+            leadingActionSystemName: "chevron.left",
+            leadingAction: settingsLeadingAction,
             background: Color(.systemGroupedBackground)
         ) {
             VStack(alignment: .leading, spacing: 12) {
@@ -6944,6 +6947,17 @@ struct GaryxMobileSettingsPanel: View {
             GaryxFormSheet(title: "Add Server") {
                 GaryxCreateMcpServerCard()
             }
+        }
+    }
+
+    private var settingsLeadingActionLabel: String? {
+        model.activeSettingsTab == .manage ? nil : "All Settings"
+    }
+
+    private var settingsLeadingAction: (() -> Void)? {
+        guard model.activeSettingsTab != .manage else { return nil }
+        return {
+            model.activeSettingsTab = .manage
         }
     }
 }
@@ -7046,7 +7060,6 @@ struct GaryxSettingsOverviewSection<Content: View>: View {
 }
 
 struct GaryxSettingsDetailContent<Content: View>: View {
-    @EnvironmentObject private var model: GaryxMobileModel
     let content: Content
 
     init(@ViewBuilder content: () -> Content) {
@@ -7055,24 +7068,6 @@ struct GaryxSettingsDetailContent<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button {
-                model.activeSettingsTab = .manage
-            } label: {
-                HStack(spacing: 7) {
-                    Image(systemName: "chevron.left")
-                        .font(GaryxFont.system(size: 13, weight: .semibold))
-                    Text("All Settings")
-                        .font(GaryxFont.subheadline(weight: .semibold))
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 2)
-                .frame(minHeight: 40, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("All Settings")
-
             content
         }
     }
@@ -7502,6 +7497,9 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
     let title: String
     let subtitle: String
     let onRefresh: (() async -> Void)?
+    let leadingActionLabel: String?
+    let leadingActionSystemName: String
+    let leadingAction: (() -> Void)?
     let background: Color
     let content: Content
     let actions: Actions
@@ -7510,6 +7508,9 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         title: String,
         subtitle: String,
         onRefresh: (() async -> Void)? = nil,
+        leadingActionLabel: String? = nil,
+        leadingActionSystemName: String = "chevron.left",
+        leadingAction: (() -> Void)? = nil,
         background: Color = GaryxTheme.background,
         @ViewBuilder content: () -> Content,
         @ViewBuilder actions: () -> Actions
@@ -7517,6 +7518,9 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         self.title = title
         self.subtitle = subtitle
         self.onRefresh = onRefresh
+        self.leadingActionLabel = leadingActionLabel
+        self.leadingActionSystemName = leadingActionSystemName
+        self.leadingAction = leadingAction
         self.background = background
         self.content = content()
         self.actions = actions()
@@ -7538,8 +7542,18 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         .background(background)
         .garyxAdaptiveTopBar {
             HStack(spacing: 10) {
-                GaryxSidebarMenuButton {
-                    model.setSidebarVisible(true)
+                if let leadingAction {
+                    Button {
+                        leadingAction()
+                    } label: {
+                        GaryxToolbarIcon(systemName: leadingActionSystemName)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(leadingActionLabel ?? "Back")
+                } else {
+                    GaryxSidebarMenuButton {
+                        model.setSidebarVisible(true)
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -7579,6 +7593,9 @@ extension GaryxPanelScaffold where Actions == EmptyView {
         title: String,
         subtitle: String,
         onRefresh: (() async -> Void)? = nil,
+        leadingActionLabel: String? = nil,
+        leadingActionSystemName: String = "chevron.left",
+        leadingAction: (() -> Void)? = nil,
         background: Color = GaryxTheme.background,
         @ViewBuilder content: () -> Content
     ) {
@@ -7586,6 +7603,9 @@ extension GaryxPanelScaffold where Actions == EmptyView {
             title: title,
             subtitle: subtitle,
             onRefresh: onRefresh,
+            leadingActionLabel: leadingActionLabel,
+            leadingActionSystemName: leadingActionSystemName,
+            leadingAction: leadingAction,
             background: background,
             content: content,
             actions: { EmptyView() }
