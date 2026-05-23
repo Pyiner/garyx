@@ -3310,6 +3310,7 @@ struct GaryxTaskListRow: View {
     @State private var showsMoreActions = false
     @State private var showsRenamePrompt = false
     @State private var showsStatusActions = false
+    @State private var showsTaskDetails = false
     @State private var renameDraftTitle = ""
 
     var body: some View {
@@ -3317,7 +3318,11 @@ struct GaryxTaskListRow: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Button {
-                        Task { await model.openThread(id: task.threadId) }
+                        if task.threadId.isEmpty {
+                            showsTaskDetails = true
+                        } else {
+                            Task { await model.openThread(id: task.threadId) }
+                        }
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(task.title)
@@ -3333,7 +3338,6 @@ struct GaryxTaskListRow: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.plain)
-                    .disabled(task.threadId.isEmpty)
 
                     GaryxStatusPill(text: task.status.label, tone: task.status.tone)
                 }
@@ -3359,6 +3363,11 @@ struct GaryxTaskListRow: View {
                 GaryxTaskAssignCard(task: task)
             }
         }
+        .fullScreenCover(isPresented: $showsTaskDetails) {
+            GaryxFormSheet(title: "Task Details") {
+                GaryxTaskDetailCard(task: task)
+            }
+        }
         .alert("Rename Task", isPresented: $showsRenamePrompt) {
             TextField("Task title", text: $renameDraftTitle)
             Button("Cancel", role: .cancel) {}
@@ -3374,6 +3383,9 @@ struct GaryxTaskListRow: View {
                 Button("Assign") {
                     showsAssignSheet = true
                 }
+            }
+            Button("Details") {
+                showsTaskDetails = true
             }
             if task.assignee != nil || !task.assigneeLabel.isEmpty {
                 Button("Unassign") {
@@ -3414,6 +3426,13 @@ struct GaryxTaskListRow: View {
                 }
             )
         }
+        if task.threadId.isEmpty {
+            actions.append(
+                GaryxSwipeAction(title: "Details", systemImage: "info.circle", tone: .accent) {
+                    showsTaskDetails = true
+                }
+            )
+        }
         if task.status == .inProgress {
             actions.append(
                 GaryxSwipeAction(title: "Stop", systemImage: "stop.fill", tone: .warning) {
@@ -3437,6 +3456,60 @@ struct GaryxTaskListRow: View {
     private func openRenamePrompt() {
         renameDraftTitle = task.title
         showsRenamePrompt = true
+    }
+}
+
+struct GaryxTaskDetailCard: View {
+    let task: GaryxTaskSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(task.title)
+                        .font(GaryxFont.title3(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(3)
+                    Spacer(minLength: 0)
+                    GaryxStatusPill(text: task.status.label, tone: task.status.tone)
+                }
+                Text(task.displayId)
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            GaryxCompactListGroup {
+                GaryxTaskMetaLine(label: "Assignee", value: task.assigneeDisplayLabel)
+                GaryxCompactRowDivider()
+                GaryxTaskMetaLine(label: "Runtime", value: task.runtimeAgentId.isEmpty ? "Not assigned" : task.runtimeAgentId)
+                GaryxCompactRowDivider()
+                GaryxTaskMetaLine(label: "Thread", value: task.threadId.isEmpty ? "No thread" : task.threadId)
+                GaryxCompactRowDivider()
+                GaryxTaskMetaLine(label: "Replies", value: "\(task.replyCount)")
+                GaryxCompactRowDivider()
+                GaryxTaskMetaLine(label: "Updated", value: task.formattedUpdatedAt)
+                if let creator = task.creator {
+                    GaryxCompactRowDivider()
+                    GaryxTaskMetaLine(label: "Creator", value: creator.label)
+                }
+                if let updatedBy = task.updatedBy {
+                    GaryxCompactRowDivider()
+                    GaryxTaskMetaLine(label: "Updated by", value: updatedBy.label)
+                }
+                if let source = task.source {
+                    GaryxCompactRowDivider()
+                    GaryxTaskMetaLine(label: "Source", value: source.detailLabel)
+                }
+            }
+
+            if task.threadId.isEmpty {
+                GaryxNotice(
+                    title: "No chat thread yet",
+                    text: "Assign or start this task to create a runnable thread."
+                )
+            }
+        }
+        .garyxCardStyle()
     }
 }
 
@@ -7999,6 +8072,32 @@ private extension GaryxTaskPrincipal {
         return kind.isEmpty ? "Unknown" : kind
     }
 
+}
+
+private extension GaryxTaskSource {
+    var detailLabel: String {
+        if let taskId, !taskId.isEmpty {
+            return taskId
+        }
+        if let taskThreadId, !taskThreadId.isEmpty {
+            return taskThreadId
+        }
+        if let threadId, !threadId.isEmpty {
+            return threadId
+        }
+        if let botId, !botId.isEmpty {
+            return botId
+        }
+        let channel = channel ?? ""
+        let account = accountId ?? ""
+        if !channel.isEmpty, !account.isEmpty {
+            return "\(channel) / \(account)"
+        }
+        if !channel.isEmpty {
+            return channel
+        }
+        return "Unknown"
+    }
 }
 
 private func garyxFormattedTaskTimestamp(_ value: String?) -> String {
