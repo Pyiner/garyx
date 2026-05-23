@@ -5919,34 +5919,38 @@ struct GaryxSettingsTabStrip: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 2) {
                 ForEach(GaryxMobileSettingsTab.allCases) { tab in
+                    let isSelected = model.activeSettingsTab == tab
                     Button {
                         model.activeSettingsTab = tab
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: tab.iconName)
-                                .font(GaryxFont.system(size: 12, weight: .semibold))
+                                .font(GaryxFont.system(size: 11, weight: .semibold))
                             Text(tab.label)
-                                .font(GaryxFont.footnote(weight: .semibold))
+                                .font(GaryxFont.caption(weight: .medium))
+                                .lineLimit(1)
                         }
-                        .foregroundStyle(model.activeSettingsTab == tab ? Color(.systemBackground) : .primary)
-                        .padding(.horizontal, 9)
-                        .frame(height: 30)
-                        .background(
-                            model.activeSettingsTab == tab ? Color(.label) : GaryxTheme.surface,
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                        .overlay {
-                            if model.activeSettingsTab != tab {
+                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 32)
+                        .background {
+                            if isSelected {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(GaryxTheme.hairline, lineWidth: 1)
+                                    .fill(Color(.systemBackground))
+                                    .shadow(color: Color.black.opacity(0.06), radius: 1, x: 0, y: 1)
                             }
                         }
+                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .frame(minHeight: 44)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
+            .padding(4)
+            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
             .padding(.horizontal, 1)
         }
     }
