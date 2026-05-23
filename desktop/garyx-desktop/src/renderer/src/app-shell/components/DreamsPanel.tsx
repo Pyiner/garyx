@@ -85,7 +85,7 @@ export function DreamsPanel({ onOpenThread }: DreamsPanelProps) {
         </div>
         <div className="dreams-header-actions">
           <button
-            className="tasks-secondary-button"
+            className="tasks-secondary-button dreams-refresh-button"
             disabled={loading || scanning}
             onClick={() => {
               void loadDreams();
@@ -96,7 +96,7 @@ export function DreamsPanel({ onOpenThread }: DreamsPanelProps) {
             {t('Refresh')}
           </button>
           <button
-            className="tasks-primary-button"
+            className="tasks-primary-button dreams-scan-button"
             disabled={loading || scanning}
             onClick={() => {
               void scanDreams();
@@ -130,9 +130,7 @@ export function DreamsPanel({ onOpenThread }: DreamsPanelProps) {
               >
                 <div className="dreams-topic-title-row">
                   <h2>{dream.title}</h2>
-                  <span className="tasks-status-chip tone-review">
-                    {confidenceLabel(dream.confidence)}
-                  </span>
+                  <span className="dreams-confidence">{confidenceLabel(dream.confidence)}</span>
                 </div>
                 <p className="dreams-topic-summary">{dream.summary}</p>
                 <div className="dreams-topic-meta">
@@ -151,7 +149,6 @@ export function DreamsPanel({ onOpenThread }: DreamsPanelProps) {
                     }}
                     type="button"
                   >
-                    <span className="dreams-span-thread">{span.threadId}</span>
                     <span className="dreams-span-range">#{span.startSeq}-{span.endSeq}</span>
                     <span className="dreams-span-excerpt">{span.excerpt}</span>
                   </button>
