@@ -4933,7 +4933,7 @@ struct GaryxAutoResearchDetailSheet: View {
                 .frame(maxWidth: 620, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
-            .background(GaryxTheme.groupedBackground)
+            .background(GaryxTheme.background)
             .refreshable {
                 await model.loadAutoResearchDetail(runId: run.runId)
             }
@@ -5931,7 +5931,7 @@ struct GaryxSettingsTabStrip: View {
                         }
                         .foregroundStyle(model.activeSettingsTab == tab ? Color(.systemBackground) : .primary)
                         .padding(.horizontal, 9)
-                        .frame(height: 32)
+                        .frame(height: 30)
                         .background(
                             model.activeSettingsTab == tab ? Color(.label) : GaryxTheme.surface,
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -5944,7 +5944,6 @@ struct GaryxSettingsTabStrip: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .frame(minHeight: 44)
                 }
             }
             .padding(.horizontal, 1)
@@ -6340,7 +6339,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
                 await onRefresh()
             }
         }
-        .background(GaryxTheme.groupedBackground)
+        .background(GaryxTheme.background)
         .garyxAdaptiveTopBar {
             HStack(spacing: 10) {
                 GaryxSidebarMenuButton {
@@ -6429,7 +6428,7 @@ struct GaryxFormSheet<Content: View>: View {
                     .frame(maxWidth: 620, alignment: .leading)
                     .frame(maxWidth: .infinity)
             }
-            .background(GaryxTheme.groupedBackground)
+            .background(GaryxTheme.background)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -7426,7 +7425,6 @@ struct GaryxPrimaryCapsuleButton: View {
 
 enum GaryxTheme {
     static let background = Color(.systemBackground)
-    static let groupedBackground = Color(.systemGroupedBackground)
     static let sidebar = Color(.systemBackground)
     static let header = Color(.systemBackground)
     static let surface = Color(.secondarySystemGroupedBackground)
@@ -7437,40 +7435,40 @@ enum GaryxTheme {
     static let accent = Color(red: 0.000, green: 0.635, blue: 0.250)
     static let warning = Color.orange
     static let danger = Color.red
-    static let hairline = Color(.separator)
+    static let hairline = Color.primary.opacity(0.08)
 }
 
 enum GaryxFont {
     static func largeTitle(weight: Font.Weight = .regular) -> Font {
-        .largeTitle.weight(weight)
+        .system(size: 34, weight: weight)
     }
 
     static func title2(weight: Font.Weight = .regular) -> Font {
-        .title2.weight(weight)
+        .system(size: 22, weight: weight)
     }
 
     static func title3(weight: Font.Weight = .regular) -> Font {
-        .title3.weight(weight)
+        .system(size: 20, weight: weight)
     }
 
     static func body(weight: Font.Weight = .regular) -> Font {
-        .body.weight(weight)
+        .system(size: 17, weight: weight)
     }
 
     static func callout(weight: Font.Weight = .regular) -> Font {
-        .callout.weight(weight)
+        .system(size: 16, weight: weight)
     }
 
     static func subheadline(weight: Font.Weight = .regular) -> Font {
-        .subheadline.weight(weight)
+        .system(size: 15, weight: weight)
     }
 
     static func footnote(weight: Font.Weight = .regular) -> Font {
-        .footnote.weight(weight)
+        .system(size: 13, weight: weight)
     }
 
     static func caption(weight: Font.Weight = .regular) -> Font {
-        .caption.weight(weight)
+        .system(size: 12, weight: weight)
     }
 
     static func system(size: CGFloat, weight: Font.Weight = .regular) -> Font {
