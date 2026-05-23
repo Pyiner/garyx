@@ -5875,27 +5875,30 @@ struct GaryxMobileSettingsPanel: View {
             background: Color(.systemGroupedBackground)
         ) {
             VStack(alignment: .leading, spacing: 12) {
-                GaryxSettingsTabStrip()
                 GaryxSettingsTabContent()
             }
         } actions: {
-            switch model.activeSettingsTab {
-            case .gateway:
-                GaryxAddToolbarButton(label: "Add Gateway") {
-                    model.gatewaySettingsStatus = nil
-                    model.lastError = nil
-                    showsGatewaySetup = true
+            HStack(spacing: 8) {
+                GaryxSettingsSectionMenu()
+
+                switch model.activeSettingsTab {
+                case .gateway:
+                    GaryxAddToolbarButton(label: "Add Gateway") {
+                        model.gatewaySettingsStatus = nil
+                        model.lastError = nil
+                        showsGatewaySetup = true
+                    }
+                case .commands:
+                    GaryxAddToolbarButton(label: "Add Command") {
+                        showsCreateCommand = true
+                    }
+                case .mcp:
+                    GaryxAddToolbarButton(label: "Add Server") {
+                        showsCreateMcp = true
+                    }
+                case .manage, .provider, .channels:
+                    EmptyView()
                 }
-            case .commands:
-                GaryxAddToolbarButton(label: "Add Command") {
-                    showsCreateCommand = true
-                }
-            case .mcp:
-                GaryxAddToolbarButton(label: "Add Server") {
-                    showsCreateMcp = true
-                }
-            case .manage, .provider, .channels:
-                EmptyView()
             }
         }
         .fullScreenCover(isPresented: $showsGatewaySetup) {
@@ -5914,45 +5917,27 @@ struct GaryxMobileSettingsPanel: View {
     }
 }
 
-struct GaryxSettingsTabStrip: View {
+struct GaryxSettingsSectionMenu: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 2) {
-                ForEach(GaryxMobileSettingsTab.allCases) { tab in
-                    let isSelected = model.activeSettingsTab == tab
-                    Button {
-                        model.activeSettingsTab = tab
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: tab.iconName)
-                                .font(GaryxFont.system(size: 11, weight: .semibold))
-                            Text(tab.label)
-                                .font(GaryxFont.caption(weight: .medium))
-                                .lineLimit(1)
-                        }
-                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                        .padding(.horizontal, 10)
-                        .frame(height: 32)
-                        .background {
-                            if isSelected {
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(Color(.systemBackground))
-                                    .shadow(color: Color.black.opacity(0.06), radius: 1, x: 0, y: 1)
-                            }
-                        }
-                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        Menu {
+            ForEach(GaryxMobileSettingsTab.allCases) { tab in
+                Button {
+                    model.activeSettingsTab = tab
+                } label: {
+                    if model.activeSettingsTab == tab {
+                        Label(tab.label, systemImage: "checkmark")
+                    } else {
+                        Label(tab.label, systemImage: tab.iconName)
                     }
-                    .buttonStyle(.plain)
-                    .frame(minHeight: 44)
-                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
-            .padding(4)
-            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-            .padding(.horizontal, 1)
+        } label: {
+            GaryxToolbarIcon(systemName: "list.bullet")
         }
+        .accessibilityLabel("Settings section")
+        .accessibilityValue(model.activeSettingsTab.label)
     }
 }
 
