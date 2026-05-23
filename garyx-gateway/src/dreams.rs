@@ -639,6 +639,9 @@ fn dream_user_message(
         return None;
     }
     let text = extract_visible_text(message)?;
+    if is_low_signal_dream_text(&text) {
+        return None;
+    }
     let timestamp = timestamp_hint
         .or_else(|| message.get("timestamp").and_then(Value::as_str))
         .and_then(parse_stored_timestamp)
@@ -653,6 +656,81 @@ fn dream_user_message(
         timestamp,
         text,
     })
+}
+
+fn is_low_signal_dream_text(text: &str) -> bool {
+    let normalized = normalize_dream_text_for_signal(text);
+    if normalized.is_empty() {
+        return true;
+    }
+    matches!(
+        normalized.as_str(),
+        "continue"
+            | "go on"
+            | "carry on"
+            | "resume"
+            | "stop"
+            | "pause"
+            | "ok"
+            | "okay"
+            | "k"
+            | "yes"
+            | "no"
+            | "ping"
+            | "hello"
+            | "hi"
+            | "thanks"
+            | "thank you"
+            | "继续"
+            | "继续吧"
+            | "继续一下"
+            | "停止"
+            | "停"
+            | "暂停"
+            | "滴滴"
+            | "好"
+            | "好的"
+            | "嗯"
+            | "嗯嗯"
+            | "行"
+            | "可以"
+            | "收到"
+            | "谢谢"
+            | "辛苦了"
+            | "加油"
+    )
+}
+
+fn normalize_dream_text_for_signal(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_matches(is_dream_text_boundary_char)
+        .to_ascii_lowercase()
+}
+
+fn is_dream_text_boundary_char(ch: char) -> bool {
+    ch.is_ascii_punctuation()
+        || matches!(
+            ch,
+            '。' | '，'
+                | '、'
+                | '？'
+                | '！'
+                | '；'
+                | '：'
+                | '“'
+                | '”'
+                | '‘'
+                | '’'
+                | '（'
+                | '）'
+                | '【'
+                | '】'
+                | '《'
+                | '》'
+                | '…'
+        )
 }
 
 fn message_role(message: &Value) -> Option<String> {
@@ -1922,5 +2000,41 @@ mod tests {
         )
         .expect("user message is visible");
         assert_eq!(entry.text, "A visible user request");
+    }
+
+    #[test]
+    fn dream_user_message_skips_control_only_text() {
+        for text in ["continue", "/continue", "停止", "滴滴", "加油"] {
+            let message = user_message(text, "2026-05-21T10:00:00Z");
+            let entry = dream_user_message(
+                "thread::one",
+                None,
+                1,
+                &message,
+                None,
+                parse_timestamp("2026-05-21T09:00:00Z").unwrap(),
+                parse_timestamp("2026-05-21T11:00:00Z").unwrap(),
+            );
+            assert!(entry.is_none(), "{text:?} should not become a dream input");
+        }
+    }
+
+    #[test]
+    fn dream_user_message_keeps_real_followup_requests() {
+        let message = user_message(
+            "继续实现梦境 topic 抽取和桌面首页展示",
+            "2026-05-21T10:00:00Z",
+        );
+        let entry = dream_user_message(
+            "thread::one",
+            None,
+            1,
+            &message,
+            None,
+            parse_timestamp("2026-05-21T09:00:00Z").unwrap(),
+            parse_timestamp("2026-05-21T11:00:00Z").unwrap(),
+        )
+        .expect("substantive follow-up should remain dream input");
+        assert_eq!(entry.text, "继续实现梦境 topic 抽取和桌面首页展示");
     }
 }
