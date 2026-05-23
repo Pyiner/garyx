@@ -1314,10 +1314,10 @@ private struct GaryxSidebarSectionHeader: View {
     var body: some View {
         HStack(spacing: 0) {
             Text(title)
-                .font(GaryxFont.callout(weight: .semibold))
+                .font(GaryxFont.caption(weight: .medium))
                 .lineLimit(1)
         }
-        .foregroundStyle(.primary.opacity(0.86))
+        .foregroundStyle(.secondary)
     }
 }
 
