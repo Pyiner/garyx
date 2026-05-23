@@ -111,6 +111,11 @@ needs installed-app validation.
   readable and deferential. Toolbar icons should default to monochrome
   `primary` styling; do not turn general navigation/actions blue unless color
   communicates a specific state or destructive/accent action.
+- Mobile page backgrounds should stay near-white and integrated rather than
+  heavy grouped gray. Avoid strong gray-background / white-card contrast on
+  management pages; content rows can sit directly on the page background and use
+  subtle separators, spacing, and typography for structure. Reserve glass for
+  floating controls and navigation chrome, not repeated content rows.
 - Do not port desktop management cards or exposed action button bars into the
   mobile app. Actions such as edit, delete, enable, pause, run, and detach
   should usually live behind row swipe actions unless they are the primary

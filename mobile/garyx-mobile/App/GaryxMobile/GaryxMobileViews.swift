@@ -7016,7 +7016,7 @@ struct GaryxMobileSettingsPanel: View {
             leadingActionLabel: settingsLeadingActionLabel,
             leadingActionSystemName: "chevron.left",
             leadingAction: settingsLeadingAction,
-            background: Color(.systemGroupedBackground)
+            background: GaryxTheme.background
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 GaryxSettingsTabContent()
@@ -7162,7 +7162,7 @@ struct GaryxSettingsOverviewSection<Content: View>: View {
             VStack(spacing: 0) {
                 content
             }
-            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(GaryxTheme.surface)
         }
     }
 }
@@ -7752,7 +7752,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         leadingActionLabel: String? = nil,
         leadingActionSystemName: String = "chevron.left",
         leadingAction: (() -> Void)? = nil,
-        background: Color = Color(.systemGroupedBackground),
+        background: Color = GaryxTheme.background,
         @ViewBuilder content: () -> Content,
         @ViewBuilder actions: () -> Actions
     ) {
@@ -7837,7 +7837,7 @@ extension GaryxPanelScaffold where Actions == EmptyView {
         leadingActionLabel: String? = nil,
         leadingActionSystemName: String = "chevron.left",
         leadingAction: (() -> Void)? = nil,
-        background: Color = Color(.systemGroupedBackground),
+        background: Color = GaryxTheme.background,
         @ViewBuilder content: () -> Content
     ) {
         self.init(
@@ -7936,12 +7936,7 @@ struct GaryxCompactListGroup<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(GaryxTheme.hairline, lineWidth: 1)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .background(GaryxTheme.surface)
     }
 }
 
@@ -7958,8 +7953,7 @@ struct GaryxCompactGroupDivider: View {
         VStack(spacing: 0) {
             Divider()
                 .overlay(GaryxTheme.hairline)
-            Color(.systemGroupedBackground)
-                .opacity(0.58)
+            GaryxTheme.background
                 .frame(height: 7)
             Divider()
                 .overlay(GaryxTheme.hairline)
@@ -8831,7 +8825,7 @@ struct GaryxSidebarMenuButton: View {
 
 struct GaryxHeaderMenuIcon: View {
     var body: some View {
-        Image(systemName: "sidebar.left")
+        Image(systemName: "line.3.horizontal")
             .font(GaryxFont.system(size: 17, weight: .semibold))
             .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
@@ -8883,10 +8877,20 @@ struct GaryxPrimaryCapsuleButton: View {
 }
 
 enum GaryxTheme {
-    static let background = Color(.systemBackground)
-    static let sidebar = Color(.systemBackground)
-    static let header = Color(.systemBackground)
-    static let surface = Color(.secondarySystemGroupedBackground)
+    private static let sampledLightBackground = UIColor(
+        red: 253.0 / 255.0,
+        green: 253.0 / 255.0,
+        blue: 253.0 / 255.0,
+        alpha: 1
+    )
+    private static let adaptivePageBackground = UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .systemBackground : sampledLightBackground
+    }
+
+    static let background = Color(adaptivePageBackground)
+    static let sidebar = Color(adaptivePageBackground)
+    static let header = Color(adaptivePageBackground)
+    static let surface = Color(adaptivePageBackground)
     static let input = Color(.secondarySystemGroupedBackground)
     static let primaryText = Color.primary
     static let secondaryText = Color.secondary
