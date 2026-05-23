@@ -461,7 +461,6 @@ struct GaryxThreadSidebar: View {
                     onBack: { closeDrilldown() },
                     onClose: { closeSidebar() }
                 )
-                .modifier(GaryxSidebarHeaderBackdropModifier())
             }
             .task {
                 if model.threads.isEmpty {
@@ -1650,7 +1649,6 @@ struct GaryxConversationView: View {
         .background(GaryxTheme.background)
         .garyxAdaptiveTopBar {
             GaryxConversationHeader()
-                .modifier(GaryxSidebarHeaderBackdropModifier(surfaceTint: GaryxTheme.background))
         }
     }
 
@@ -1764,15 +1762,6 @@ struct GaryxConversationHeader: View {
                     .padding(.horizontal, 12)
                     .frame(height: 44, alignment: .leading)
                     .frame(maxWidth: 282, alignment: .leading)
-                    .background {
-                        Capsule()
-                            .fill(Color(.systemBackground).opacity(0.42))
-                            .background(.ultraThinMaterial, in: Capsule())
-                    }
-                    .overlay {
-                        Capsule()
-                            .stroke(Color.primary.opacity(0.03), lineWidth: 1)
-                    }
                     .layoutPriority(1)
                 }
 
@@ -6482,7 +6471,6 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 8)
-            .modifier(GaryxSidebarHeaderBackdropModifier(surfaceTint: background))
         }
     }
 }
@@ -7443,6 +7431,7 @@ struct GaryxToolbarIcon: View {
             }
         }
         .frame(width: 44, height: 44)
+        .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .ultraThinMaterial, in: Circle())
         .contentShape(Rectangle())
     }
 }
@@ -7468,6 +7457,7 @@ struct GaryxHeaderMenuIcon: View {
             .font(GaryxFont.system(size: 17, weight: .semibold))
             .foregroundStyle(.primary)
             .frame(width: 44, height: 44)
+            .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .ultraThinMaterial, in: Circle())
             .contentShape(Rectangle())
     }
 }
@@ -7718,20 +7708,6 @@ private struct GaryxSoftScrollEdgeModifier: ViewModifier {
 #else
         content
 #endif
-    }
-}
-
-private struct GaryxSidebarHeaderBackdropModifier: ViewModifier {
-    var surfaceTint: Color = GaryxTheme.background
-
-    func body(content: Content) -> some View {
-        content
-            .background {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
-                    .overlay(surfaceTint.opacity(0.34))
-                    .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: Rectangle())
-            }
     }
 }
 
