@@ -5127,7 +5127,7 @@ struct GaryxAutoResearchDetailSheet: View {
 
     private var terminalReason: String? {
         let value = currentRun.terminalReason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return value.isEmpty ? nil : value
+        return value.isEmpty ? nil : garyxAutoResearchReasonLabel(value)
     }
 
     private var selectedCandidate: GaryxResearchCandidate? {
@@ -5465,6 +5465,28 @@ func garyxAutoResearchStateLabel(_ state: String) -> String {
         "Pending"
     default:
         state
+            .split(separator: "_")
+            .map { word in
+                word.prefix(1).uppercased() + String(word.dropFirst())
+            }
+            .joined(separator: " ")
+    }
+}
+
+func garyxAutoResearchReasonLabel(_ reason: String) -> String {
+    let normalized = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { return "" }
+    switch normalized.lowercased() {
+    case "user_requested", "user_stopped":
+        return "Stopped by user"
+    case "time_budget_exhausted":
+        return "Time budget exhausted"
+    case "budget_exhausted":
+        return "Budget exhausted"
+    case "blocked":
+        return "Blocked"
+    default:
+        return normalized
             .split(separator: "_")
             .map { word in
                 word.prefix(1).uppercased() + String(word.dropFirst())
