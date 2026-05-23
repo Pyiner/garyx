@@ -4722,6 +4722,7 @@ struct GaryxAgentCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let agent: GaryxAgentSummary
     @State private var showsEditForm = false
+    @State private var showsDeleteConfirmation = false
     @State private var agentId = ""
     @State private var displayName = ""
     @State private var providerType = ""
@@ -4792,6 +4793,14 @@ struct GaryxAgentCard: View {
                 .garyxCardStyle()
             }
         }
+        .confirmationDialog("Delete agent?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteAgent(agent) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the custom agent configuration.")
+        }
     }
 
     private var agentSwipeActions: [GaryxSwipeAction] {
@@ -4813,7 +4822,7 @@ struct GaryxAgentCard: View {
             )
             actions.append(
                 GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                    Task { await model.deleteAgent(agent) }
+                    showsDeleteConfirmation = true
                 }
             )
         }
@@ -4834,6 +4843,7 @@ struct GaryxTeamCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let team: GaryxTeamSummary
     @State private var showsEditForm = false
+    @State private var showsDeleteConfirmation = false
     @State private var teamId = ""
     @State private var displayName = ""
     @State private var leaderAgentId = ""
@@ -4904,6 +4914,14 @@ struct GaryxTeamCard: View {
                 .garyxCardStyle()
             }
         }
+        .confirmationDialog("Delete team?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteTeam(team) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the team configuration.")
+        }
     }
 
     private var teamSwipeActions: [GaryxSwipeAction] {
@@ -4920,7 +4938,7 @@ struct GaryxTeamCard: View {
                 showsEditForm = true
             },
             GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                Task { await model.deleteTeam(team) }
+                showsDeleteConfirmation = true
             }
         ]
     }
@@ -5396,6 +5414,7 @@ struct GaryxSlashCommandCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let command: GaryxSlashCommand
     @State private var showsEditForm = false
+    @State private var showsDeleteConfirmation = false
     @State private var name = ""
     @State private var description = ""
     @State private var prompt = ""
@@ -5462,6 +5481,14 @@ struct GaryxSlashCommandCard: View {
                 .garyxCardStyle()
             }
         }
+        .confirmationDialog("Delete command?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task { await model.deleteSlashCommand(command) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the slash command.")
+        }
     }
 
     private var commandSwipeActions: [GaryxSwipeAction] {
@@ -5473,7 +5500,7 @@ struct GaryxSlashCommandCard: View {
                 showsEditForm = true
             },
             GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                Task { await model.deleteSlashCommand(command) }
+                showsDeleteConfirmation = true
             }
         ]
     }
@@ -7371,6 +7398,7 @@ struct GaryxSavedGatewayProfileRow: View {
     let profile: GaryxGatewayProfile
     let isCurrent: Bool
     @State private var showsEditForm = false
+    @State private var showsDeleteConfirmation = false
     @State private var label = ""
     @State private var gatewayUrl = ""
     @State private var token = ""
@@ -7443,6 +7471,14 @@ struct GaryxSavedGatewayProfileRow: View {
                 .garyxCardStyle()
             }
         }
+        .confirmationDialog("Delete gateway?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                model.removeGatewayProfile(profile)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the saved gateway profile from this device.")
+        }
     }
 
     private var profileSwipeActions: [GaryxSwipeAction] {
@@ -7455,7 +7491,7 @@ struct GaryxSavedGatewayProfileRow: View {
                 showsEditForm = true
             },
             GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                model.removeGatewayProfile(profile)
+                showsDeleteConfirmation = true
             }
         ]
     }
