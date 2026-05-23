@@ -928,6 +928,8 @@ fn resolve_incremental_dream_id(
                     .cmp(&right.1.overlap_score)
                     .then_with(|| left.1.overlap_count.cmp(&right.1.overlap_count))
                     .then_with(|| left.1.last_message_at.cmp(&right.1.last_message_at))
+                    // Prefer the alphabetically smaller dream_id on a full tie
+                    // so repeated scans make the same deterministic choice.
                     .then_with(|| right.0.cmp(left.0))
             })
             .map(|(dream_id, _)| dream_id.clone())

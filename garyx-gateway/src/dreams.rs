@@ -672,13 +672,6 @@ fn is_internal_dream_message(message: &Value) -> bool {
 }
 
 fn is_garyx_internal_dream_message(message: &Value) -> bool {
-    if message
-        .get("internal")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return true;
-    }
     let Some(metadata) = message.get("metadata").and_then(Value::as_object) else {
         return false;
     };
@@ -690,22 +683,36 @@ fn is_garyx_internal_dream_message(message: &Value) -> bool {
             .get("task_auto_start")
             .and_then(Value::as_bool)
             .unwrap_or(false)
-        || metadata.contains_key("task_id")
-        || metadata.contains_key("task_dispatch_reason")
+        || metadata_has_non_empty_string(metadata, "task_id")
+        || metadata_has_non_empty_string(metadata, "task_dispatch_reason")
         || metadata
             .get("runtime_context")
             .and_then(Value::as_object)
             .map(|runtime_context| {
-                runtime_context.contains_key("task") || runtime_context.contains_key("automation")
+                runtime_context
+                    .get("task")
+                    .filter(|value| !value.is_null())
+                    .is_some()
+                    || runtime_context
+                        .get("automation")
+                        .filter(|value| !value.is_null())
+                        .is_some()
             })
             .unwrap_or(false)
 }
 
+fn metadata_has_non_empty_string(metadata: &serde_json::Map<String, Value>, key: &str) -> bool {
+    metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+}
+
 fn is_low_signal_dream_text(text: &str) -> bool {
     let trimmed = text.trim_start();
-    if trimmed.starts_with("<garyx_task_notification")
-        || (trimmed.starts_with("Task #TASK-") && trimmed.contains("has been assigned"))
-    {
+    if trimmed.starts_with("<garyx_task_notification") || is_task_assignment_prompt(trimmed) {
         return true;
     }
     let normalized = normalize_dream_text_for_signal(text);
@@ -753,10 +760,16 @@ fn is_low_signal_dream_text(text: &str) -> bool {
 fn is_non_topic_dream_text(text: &str) -> bool {
     let trimmed = text.trim_start();
     trimmed.starts_with("<garyx_task_notification")
-        || trimmed.starts_with("Task #TASK-")
+        || is_task_assignment_prompt(trimmed)
         || trimmed.contains("has been assigned to you and is already in progress")
+        // TODO: Prefer dispatch metadata for automation prompts so product-specific
+        // wording does not live in core Dreams filtering.
         || (trimmed.starts_with("你是负责增量下载") && trimmed.contains("每 3 小时被调起一次"))
         || (trimmed.starts_with("你是 PT 增量下载助手") && trimmed.contains("每 3 小时被调起一次"))
+}
+
+fn is_task_assignment_prompt(text: &str) -> bool {
+    text.starts_with("Task #TASK-") && text.contains("has been assigned")
 }
 
 fn normalize_dream_text_for_signal(text: &str) -> String {
@@ -2090,6 +2103,31 @@ mod tests {
     }
 
     #[test]
+    fn dream_user_message_keeps_null_task_metadata_markers() {
+        let mut message =
+            user_message("Implement a task dashboard summary", "2026-05-21T10:00:00Z");
+        message["metadata"] = json!({
+            "task_id": null,
+            "task_dispatch_reason": null,
+            "runtime_context": {
+                "task": null,
+                "automation": null
+            }
+        });
+        let entry = dream_user_message(
+            "thread::one",
+            None,
+            1,
+            &message,
+            None,
+            parse_timestamp("2026-05-21T09:00:00Z").unwrap(),
+            parse_timestamp("2026-05-21T11:00:00Z").unwrap(),
+        )
+        .expect("null task metadata should not hide a normal user message");
+        assert_eq!(entry.text, "Implement a task dashboard summary");
+    }
+
+    #[test]
     fn dream_user_message_skips_control_only_text() {
         for text in [
             "continue",
@@ -2130,6 +2168,28 @@ mod tests {
         )
         .expect("substantive follow-up should remain dream input");
         assert_eq!(entry.text, "继续实现梦境 topic 抽取和桌面首页展示");
+    }
+
+    #[test]
+    fn dream_user_message_keeps_user_task_references() {
+        let message = user_message(
+            "Task #TASK-71 should also cover duplicate topic cleanup",
+            "2026-05-21T10:00:00Z",
+        );
+        let entry = dream_user_message(
+            "thread::one",
+            None,
+            1,
+            &message,
+            None,
+            parse_timestamp("2026-05-21T09:00:00Z").unwrap(),
+            parse_timestamp("2026-05-21T11:00:00Z").unwrap(),
+        )
+        .expect("substantive user task references should remain dream input");
+        assert_eq!(
+            entry.text,
+            "Task #TASK-71 should also cover duplicate topic cleanup"
+        );
     }
 
     #[test]
