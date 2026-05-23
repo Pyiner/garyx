@@ -4940,6 +4940,66 @@ pub(crate) async fn cmd_dream_scan(
     Ok(())
 }
 
+pub(crate) async fn cmd_dream_auto(
+    config_path: &str,
+    state: &str,
+    json_output: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let normalized = state.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "on" => {
+            put_gateway_json(
+                &gateway,
+                "/api/settings?merge=true",
+                &json!({"dreams": {"enabled": true}}),
+            )
+            .await?;
+        }
+        "off" => {
+            put_gateway_json(
+                &gateway,
+                "/api/settings?merge=true",
+                &json!({"dreams": {"enabled": false}}),
+            )
+            .await?;
+        }
+        "status" => {}
+        _ => return Err("dream auto state must be status, on, or off".into()),
+    }
+
+    let settings = fetch_gateway_json(&gateway, "/api/settings").await?;
+    let dreams = settings.get("dreams").unwrap_or(&Value::Null);
+    let enabled = dreams
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let scan_interval_secs = dreams
+        .get("scan_interval_secs")
+        .and_then(Value::as_u64)
+        .unwrap_or(3600);
+    let scan_since_hours = dreams
+        .get("scan_since_hours")
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    let payload = json!({
+        "enabled": enabled,
+        "scan_interval_secs": scan_interval_secs,
+        "scan_since_hours": scan_since_hours,
+    });
+    if json_output {
+        return print_pretty_json(&payload);
+    }
+
+    println!(
+        "Dream auto scan: {}",
+        if enabled { "enabled" } else { "disabled" }
+    );
+    println!("Interval: {scan_interval_secs}s");
+    println!("Lookback: {scan_since_hours}h");
+    Ok(())
+}
+
 pub(crate) async fn cmd_dream_show(
     config_path: &str,
     dream_id: &str,

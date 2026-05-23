@@ -453,6 +453,31 @@ are stored in the local Garyx SQLite database and can point back to one or more
 thread spans, so desktop and mobile clients can open the source thread from a
 topic.
 
+Automatic scanning is off by default. Manual scans stay available through the
+CLI, desktop app, mobile app, and API regardless of the switch.
+
+```json
+{
+  "dreams": {
+    "enabled": false,
+    "scan_interval_secs": 3600,
+    "scan_since_hours": 1
+  }
+}
+```
+
+When `dreams.enabled` is `true`, the gateway checks once per configured interval
+whether the last `scan_since_hours` window contains user messages. If no recent
+user message exists, the scan is skipped without invoking Claude or touching the
+Dreams database. Automatic and manual scans are incremental: existing topics
+from the same recent thread set are sent to the extractor so it can update an
+existing topic, create a new one, or leave topics unchanged without deleting
+older spans outside the scan window.
+
+The desktop and mobile settings surfaces currently expose only
+`dreams.enabled`. `scan_interval_secs` and `scan_since_hours` are JSON-only
+knobs for now.
+
 The gateway exposes:
 
 ```text

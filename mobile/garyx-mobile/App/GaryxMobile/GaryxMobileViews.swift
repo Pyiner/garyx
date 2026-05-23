@@ -3639,6 +3639,12 @@ struct GaryxDreamsView: View {
             onRefresh: { await model.refreshDreams() }
         ) {
             VStack(alignment: .leading, spacing: 14) {
+                GaryxSectionBlock(title: "Settings") {
+                    GaryxCompactListGroup {
+                        GaryxDreamsAutoScanRow()
+                    }
+                }
+
                 if model.dreams.isEmpty {
                     GaryxEmptyPanelView(
                         icon: "moon.stars",
@@ -3675,6 +3681,46 @@ struct GaryxDreamsView: View {
                 : "\(model.dreams.count) topics / \(statusText) \(updated)"
         }
         return "\(model.dreams.count) topics"
+    }
+}
+
+struct GaryxDreamsAutoScanRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "clock.arrow.2.circlepath")
+                .font(GaryxFont.system(size: 15, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Periodic auto scan")
+                    .font(GaryxFont.subheadline(weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text("Runs on the configured interval when recent user messages exist.")
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 0)
+
+            Toggle(
+                "Periodic auto scan",
+                isOn: Binding(
+                    get: { model.dreamsAutoScanEnabled },
+                    set: { nextValue in
+                        Task { await model.setDreamsAutoScanEnabled(nextValue) }
+                    }
+                )
+            )
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .disabled(model.isSavingDreamsSettings)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 }
 

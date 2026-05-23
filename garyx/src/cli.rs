@@ -1431,7 +1431,7 @@ pub(crate) enum DreamAction {
         #[arg(long)]
         json: bool,
     },
-    /// Scan recent user messages and replace dream topics in that window
+    /// Scan recent user messages and upsert dream topics in that window
     Scan {
         /// RFC3339 lower bound. Defaults to --since-hours before now.
         #[arg(long)]
@@ -1448,6 +1448,15 @@ pub(crate) enum DreamAction {
         /// Maximum user messages to inspect
         #[arg(long, default_value_t = 600)]
         limit: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show or set the hourly automatic dream scan switch
+    Auto {
+        /// Desired state: status, on, or off
+        #[arg(default_value = "status", value_parser = ["status", "on", "off"])]
+        state: String,
         /// Output as JSON
         #[arg(long)]
         json: bool,

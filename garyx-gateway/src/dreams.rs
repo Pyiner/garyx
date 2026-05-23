@@ -21,13 +21,19 @@ use serde_json::{Map, Value, json};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::garyx_db::{DreamSpanDraft, DreamTopicDraft, GaryxDbError};
+use crate::garyx_db::{
+    DreamScanRunRecord, DreamSpanDraft, DreamSpanRecord, DreamTopicDraft, DreamTopicRecord,
+    GaryxDbError,
+};
 use crate::server::AppState;
 
 const DEFAULT_LOOKBACK_HOURS: i64 = 24;
 const MAX_LOOKBACK_HOURS: i64 = 24 * 31;
 const DEFAULT_TOPIC_LIMIT: usize = 80;
 const MAX_TOPIC_LIMIT: usize = 500;
+const MAX_INCREMENTAL_EXISTING_TOPICS: usize = 32;
+const INCREMENTAL_EXISTING_TOPIC_CONTEXT_DAYS: i64 = 7;
+const MAX_PROMPT_EXISTING_SPANS_PER_TOPIC: usize = 8;
 const DEFAULT_MESSAGE_LIMIT: usize = 600;
 const MAX_MESSAGE_LIMIT: usize = 2_000;
 const CLAUDE_TIMEOUT_SECS: u64 = 120;
@@ -69,6 +75,32 @@ struct DreamWindow {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct DreamScanSummary {
+    pub scan: DreamScanRunRecord,
+    pub from: String,
+    pub to: String,
+    pub threads_scanned: usize,
+    pub matched_threads: usize,
+    pub matched_messages: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DreamAutoScanOutcome {
+    Disabled,
+    NoRecentMessages {
+        from: String,
+        to: String,
+    },
+    Scanned {
+        run_id: String,
+        topics_count: u32,
+        spans_count: u32,
+        matched_messages: usize,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct CollectedDreamMessages {
     messages: Vec<DreamUserMessage>,
     threads_scanned: usize,
@@ -86,6 +118,7 @@ struct DreamUserMessage {
 
 #[derive(Debug, Clone)]
 struct ExtractedDreamTopic {
+    dream_id: Option<String>,
     title: String,
     summary: String,
     source: String,
@@ -113,6 +146,8 @@ struct ClaudeDreamResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 struct ClaudeDreamTopic {
+    dream_id: Option<String>,
+    action: Option<String>,
     title: Option<String>,
     summary: Option<String>,
     confidence: Option<f64>,
@@ -184,7 +219,7 @@ pub async fn get_dream(
     }
 }
 
-/// POST /api/dreams/scan - run a bounded dream scan and replace the scanned window.
+/// POST /api/dreams/scan - run a bounded incremental dream scan.
 pub async fn scan_dreams(
     State(state): State<Arc<AppState>>,
     Json(request): Json<DreamScanRequest>,
@@ -206,37 +241,13 @@ pub async fn scan_dreams(
         .unwrap_or(DEFAULT_MESSAGE_LIMIT)
         .clamp(1, MAX_MESSAGE_LIMIT);
 
-    let collected =
-        match collect_dream_messages(&state, window.from, window.to, message_limit).await {
-            Ok(collected) => collected,
-            Err(message) => return internal_error(message).into_response(),
-        };
-
-    let extraction = extract_dream_topics(&state, &collected, mode).await;
-    let (topics, source, extraction_error) = match extraction {
-        Ok(topics) => (topics, extraction_source(mode), None),
-        Err(error) => {
-            let topics = heuristic_topics(&collected.messages);
-            (topics, "heuristic_fallback".to_owned(), Some(error))
-        }
-    };
-
-    let drafts = dream_topic_drafts(topics);
-    let scanned_from = format_timestamp(window.from);
-    let scanned_to = format_timestamp(window.to);
-    let scan = match state.ops.garyx_db.replace_dreams_in_window(
-        &scanned_from,
-        &scanned_to,
-        &source,
-        &drafts,
-        extraction_error.as_deref(),
-    ) {
-        Ok(scan) => scan,
-        Err(error) => return garyx_db_error_response(error).into_response(),
+    let summary = match run_incremental_dream_scan(&state, window, mode, message_limit).await {
+        Ok(summary) => summary,
+        Err(message) => return internal_error(message).into_response(),
     };
     let dreams = match state.ops.garyx_db.list_dream_topics(
-        Some(&scanned_from),
-        Some(&scanned_to),
+        Some(&summary.from),
+        Some(&summary.to),
         DEFAULT_TOPIC_LIMIT,
     ) {
         Ok(dreams) => dreams,
@@ -246,17 +257,127 @@ pub async fn scan_dreams(
     (
         StatusCode::OK,
         Json(json!({
-            "scan": scan,
+            "scan": summary.scan,
             "dreams": dreams,
             "count": dreams.len(),
-            "from": scanned_from,
-            "to": scanned_to,
-            "threads_scanned": collected.threads_scanned,
-            "matched_threads": collected.matched_threads,
-            "matched_messages": collected.messages.len(),
+            "from": summary.from,
+            "to": summary.to,
+            "threads_scanned": summary.threads_scanned,
+            "matched_threads": summary.matched_threads,
+            "matched_messages": summary.matched_messages,
         })),
     )
         .into_response()
+}
+
+pub(crate) async fn run_auto_dream_scan_once(
+    state: &Arc<AppState>,
+    now: DateTime<Utc>,
+) -> Result<DreamAutoScanOutcome, String> {
+    let config = state.config_snapshot();
+    if !config.dreams.enabled {
+        return Ok(DreamAutoScanOutcome::Disabled);
+    }
+    let hours = config.dreams.scan_since_hours.clamp(1, MAX_LOOKBACK_HOURS);
+    let window = DreamWindow {
+        from: now - Duration::hours(hours),
+        to: now,
+    };
+    let from = format_timestamp(window.from);
+    let to = format_timestamp(window.to);
+    if !has_recent_dream_user_message(state, window.from, window.to).await? {
+        return Ok(DreamAutoScanOutcome::NoRecentMessages { from, to });
+    }
+    let summary =
+        run_incremental_dream_scan(state, window, DreamScanMode::Auto, DEFAULT_MESSAGE_LIMIT)
+            .await?;
+    Ok(DreamAutoScanOutcome::Scanned {
+        run_id: summary.scan.run_id,
+        topics_count: summary.scan.topics_count,
+        spans_count: summary.scan.spans_count,
+        matched_messages: summary.matched_messages,
+    })
+}
+
+async fn run_incremental_dream_scan(
+    state: &Arc<AppState>,
+    window: DreamWindow,
+    mode: DreamScanMode,
+    message_limit: usize,
+) -> Result<DreamScanSummary, String> {
+    let collected = collect_dream_messages(state, window.from, window.to, message_limit).await?;
+    let existing_topics = existing_dream_topics_for_messages(state, &collected.messages, &window)?;
+    let extraction =
+        extract_dream_topics_with_context(state, &collected, mode, &existing_topics).await;
+    let (topics, source, extraction_error) = match extraction {
+        Ok(topics) => (
+            topics,
+            format!("{}_incremental", extraction_source(mode)),
+            None,
+        ),
+        Err(error) => {
+            let topics = reuse_existing_topic_ids_for_matching_spans(
+                heuristic_topics(&collected.messages),
+                &existing_topics,
+            );
+            (
+                topics,
+                "heuristic_fallback_incremental".to_owned(),
+                Some(error),
+            )
+        }
+    };
+
+    let drafts = dream_topic_drafts(topics);
+    let scanned_from = format_timestamp(window.from);
+    let scanned_to = format_timestamp(window.to);
+    let scan = state
+        .ops
+        .garyx_db
+        .upsert_dreams_incremental(
+            &scanned_from,
+            &scanned_to,
+            &source,
+            &drafts,
+            extraction_error.as_deref(),
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(DreamScanSummary {
+        scan,
+        from: scanned_from,
+        to: scanned_to,
+        threads_scanned: collected.threads_scanned,
+        matched_threads: collected.matched_threads,
+        matched_messages: collected.messages.len(),
+    })
+}
+
+fn existing_dream_topics_for_messages(
+    state: &Arc<AppState>,
+    messages: &[DreamUserMessage],
+    window: &DreamWindow,
+) -> Result<Vec<DreamTopicRecord>, String> {
+    if messages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let thread_ids = messages
+        .iter()
+        .map(|message| message.thread_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let context_from =
+        format_timestamp(window.from - Duration::days(INCREMENTAL_EXISTING_TOPIC_CONTEXT_DAYS));
+    state
+        .ops
+        .garyx_db
+        .list_dream_topics_for_threads(
+            &thread_ids,
+            Some(&context_from),
+            MAX_INCREMENTAL_EXISTING_TOPICS,
+        )
+        .map_err(|error| error.to_string())
 }
 
 impl DreamScanMode {
@@ -412,6 +533,76 @@ async fn collect_dream_messages(
     })
 }
 
+pub(crate) async fn has_recent_dream_user_message(
+    state: &Arc<AppState>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Result<bool, String> {
+    let thread_keys = state.threads.thread_store.list_keys(Some("thread::")).await;
+    let transcript_store = state.threads.history.transcript_store();
+
+    for thread_id in thread_keys {
+        if !is_thread_key(&thread_id) {
+            continue;
+        }
+        let Some(thread_data) = state.threads.thread_store.get(&thread_id).await else {
+            continue;
+        };
+        if thread_last_updated(&thread_data)
+            .map(|timestamp| timestamp < from)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+
+        let workspace_dir = workspace_dir_from_value(&thread_data);
+        let mut max_transcript_seq = 0u64;
+        if transcript_store.exists(&thread_id).await {
+            let records = transcript_store
+                .records(&thread_id)
+                .await
+                .map_err(|error| format!("failed to load transcript for {thread_id}: {error}"))?;
+            for record in records {
+                max_transcript_seq = max_transcript_seq.max(record.seq);
+                if dream_user_message(
+                    &thread_id,
+                    workspace_dir.as_deref(),
+                    record.seq,
+                    &record.message,
+                    Some(record.timestamp.as_str()),
+                    from,
+                    to,
+                )
+                .is_some()
+                {
+                    return Ok(true);
+                }
+            }
+        }
+
+        for (idx, message) in active_run_snapshot_messages(&thread_data)
+            .iter()
+            .enumerate()
+        {
+            if dream_user_message(
+                &thread_id,
+                workspace_dir.as_deref(),
+                max_transcript_seq + idx as u64 + 1,
+                message,
+                None,
+                from,
+                to,
+            )
+            .is_some()
+            {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 fn thread_last_updated(thread_data: &Value) -> Option<DateTime<Utc>> {
     ["lastUpdatedAt", "updated_at", "last_updated_at"]
         .into_iter()
@@ -563,30 +754,40 @@ fn parse_stored_timestamp(raw: &str) -> Option<DateTime<Utc>> {
         .map(|timestamp| timestamp.with_timezone(&Utc))
 }
 
-async fn extract_dream_topics(
+async fn extract_dream_topics_with_context(
     state: &Arc<AppState>,
     collected: &CollectedDreamMessages,
     mode: DreamScanMode,
+    existing_topics: &[DreamTopicRecord],
 ) -> Result<Vec<ExtractedDreamTopic>, String> {
     if collected.messages.is_empty() {
         return Ok(Vec::new());
     }
     if mode == DreamScanMode::Heuristic {
-        return Ok(heuristic_topics(&collected.messages));
+        return Ok(reuse_existing_topic_ids_for_matching_spans(
+            heuristic_topics(&collected.messages),
+            existing_topics,
+        ));
     }
 
     let config = state.config_snapshot();
-    let prompt = build_claude_prompt(&collected.messages)?;
+    let prompt = build_claude_prompt(&collected.messages, existing_topics)?;
     let output = run_temporary_claude(&config, prompt).await?;
     let topics = parse_claude_topics(&output)?;
-    let normalized = normalize_claude_topics(topics, &collected.messages);
+    let normalized = reuse_existing_topic_ids_for_matching_spans(
+        normalize_claude_topics(topics, &collected.messages, existing_topics),
+        existing_topics,
+    );
     if normalized.is_empty() {
         return Err("Claude returned no usable dream topics".to_owned());
     }
     Ok(normalized)
 }
 
-fn build_claude_prompt(messages: &[DreamUserMessage]) -> Result<String, String> {
+fn build_claude_prompt(
+    messages: &[DreamUserMessage],
+    existing_topics: &[DreamTopicRecord],
+) -> Result<String, String> {
     let mut by_thread: BTreeMap<&str, (Option<String>, Vec<Value>)> = BTreeMap::new();
     for message in messages {
         let entry = by_thread
@@ -612,17 +813,58 @@ fn build_claude_prompt(messages: &[DreamUserMessage]) -> Result<String, String> 
         })
         .collect::<Vec<_>>();
 
-    let payload = serde_json::to_string(&json!({ "threads": threads }))
-        .map_err(|error| format!("failed to encode dream prompt payload: {error}"))?;
+    let existing_topics = existing_topics
+        .iter()
+        .map(|topic| {
+            let span_start = topic
+                .spans
+                .len()
+                .saturating_sub(MAX_PROMPT_EXISTING_SPANS_PER_TOPIC);
+            json!({
+                "dream_id": topic.dream_id,
+                "title": topic.title,
+                "summary": topic.summary,
+                "first_message_at": topic.first_message_at,
+                "last_message_at": topic.last_message_at,
+                "confidence": topic.confidence,
+                "spans": topic.spans.iter().skip(span_start).map(|span| json!({
+                    "thread_id": span.thread_id,
+                    "start_seq": span.start_seq,
+                    "end_seq": span.end_seq,
+                    "excerpt": span.excerpt,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let incremental_rules = if existing_topics.is_empty() {
+        String::new()
+    } else {
+        "- existing_topics are previously persisted Garyx Dreams for the same thread set.\n\
+         - If new messages continue an existing topic, return that same dream_id with updated title/summary if useful and spans for the new message range.\n\
+         - If an existing topic needs no change, either omit it or return action:\"unchanged\".\n\
+         - If messages introduce a separate topic, omit dream_id so Garyx can create one.\n"
+            .to_owned()
+    };
+    let payload = serde_json::to_string(&json!({
+        "threads": threads,
+        "existing_topics": existing_topics,
+    }))
+    .map_err(|error| format!("failed to encode dream prompt payload: {error}"))?;
+    let response_shape = if existing_topics.is_empty() {
+        "{\"topics\":[{\"title\":\"...\",\"summary\":\"...\",\"confidence\":0.0,\"spans\":[{\"thread_id\":\"thread::...\",\"start_seq\":1,\"end_seq\":3,\"excerpt\":\"...\"}]}]}".to_owned()
+    } else {
+        "{\"topics\":[{\"dream_id\":\"optional existing dream::...\",\"action\":\"create|update|unchanged\",\"title\":\"...\",\"summary\":\"...\",\"confidence\":0.0,\"spans\":[{\"thread_id\":\"thread::...\",\"start_seq\":1,\"end_seq\":3,\"excerpt\":\"...\"}]}]}".to_owned()
+    };
     Ok(format!(
         "Extract Garyx dream topics from recent user messages.\n\
          Rules:\n\
          - A topic is a user's coherent area of work or intent, not every single message.\n\
          - A thread may contain multiple topics when the user changes intent.\n\
          - A topic may contain spans from multiple threads if they clearly describe the same work.\n\
+         {incremental_rules}\
          - Prefer concise titles under 32 characters.\n\
          - Return JSON only, with this exact shape:\n\
-         {{\"topics\":[{{\"title\":\"...\",\"summary\":\"...\",\"confidence\":0.0,\"spans\":[{{\"thread_id\":\"thread::...\",\"start_seq\":1,\"end_seq\":3,\"excerpt\":\"...\"}}]}}]}}\n\n\
+         {response_shape}\n\n\
          Input JSON:\n{payload}"
     ))
 }
@@ -824,15 +1066,29 @@ fn extract_json_object(output: &str) -> Option<&str> {
 fn normalize_claude_topics(
     topics: Vec<ClaudeDreamTopic>,
     messages: &[DreamUserMessage],
+    existing_topics: &[DreamTopicRecord],
 ) -> Vec<ExtractedDreamTopic> {
     let by_thread_seq = messages
         .iter()
         .map(|message| ((message.thread_id.as_str(), message.seq), message))
         .collect::<HashMap<_, _>>();
     let by_thread = messages_by_thread(messages);
+    let known_dream_ids = existing_topics
+        .iter()
+        .map(|topic| topic.dream_id.as_str())
+        .collect::<HashSet<_>>();
     let mut normalized = Vec::new();
 
     for topic in topics {
+        let action = topic
+            .action
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(action.as_str(), "unchanged" | "no_change" | "ignore") {
+            continue;
+        }
         let mut spans = Vec::new();
         let mut seen_spans = HashSet::new();
         for raw_span in topic.spans {
@@ -910,6 +1166,13 @@ fn normalize_claude_topics(
             .map(|value| truncate_chars(value, 240))
             .unwrap_or_else(|| spans[0].excerpt.clone());
         normalized.push(ExtractedDreamTopic {
+            dream_id: topic
+                .dream_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .filter(|value| known_dream_ids.contains(value))
+                .map(ToOwned::to_owned),
             title,
             summary,
             source: "claude".to_owned(),
@@ -962,6 +1225,58 @@ fn heuristic_topics(messages: &[DreamUserMessage]) -> Vec<ExtractedDreamTopic> {
     topics
 }
 
+fn reuse_existing_topic_ids_for_matching_spans(
+    topics: Vec<ExtractedDreamTopic>,
+    existing_topics: &[DreamTopicRecord],
+) -> Vec<ExtractedDreamTopic> {
+    if existing_topics.is_empty() {
+        return topics;
+    }
+    let mut claimed = HashSet::new();
+    let mut reused = Vec::with_capacity(topics.len());
+    for mut topic in topics {
+        if let Some(dream_id) = topic.dream_id.as_deref() {
+            claimed.insert(dream_id.to_owned());
+        } else if let Some(existing) =
+            find_existing_topic_for_matching_spans(&topic.spans, existing_topics, &claimed)
+        {
+            if claimed.insert(existing.dream_id.clone()) {
+                topic.dream_id = Some(existing.dream_id.clone());
+            }
+        }
+        reused.push(topic);
+    }
+    reused
+}
+
+fn find_existing_topic_for_matching_spans<'a>(
+    spans: &[ExtractedDreamSpan],
+    existing_topics: &'a [DreamTopicRecord],
+    claimed: &HashSet<String>,
+) -> Option<&'a DreamTopicRecord> {
+    existing_topics
+        .iter()
+        .filter(|topic| !claimed.contains(&topic.dream_id))
+        .filter(|topic| {
+            topic.spans.iter().any(|existing_span| {
+                spans
+                    .iter()
+                    .any(|span| dream_spans_overlap(span, existing_span))
+            })
+        })
+        .max_by(|left, right| {
+            left.last_message_at
+                .cmp(&right.last_message_at)
+                .then_with(|| left.dream_id.cmp(&right.dream_id))
+        })
+}
+
+fn dream_spans_overlap(left: &ExtractedDreamSpan, right: &DreamSpanRecord) -> bool {
+    left.thread_id == right.thread_id
+        && left.start_seq <= right.end_seq
+        && right.start_seq <= left.end_seq
+}
+
 fn messages_by_thread(messages: &[DreamUserMessage]) -> BTreeMap<&str, Vec<&DreamUserMessage>> {
     let mut by_thread: BTreeMap<&str, Vec<&DreamUserMessage>> = BTreeMap::new();
     for message in messages {
@@ -979,6 +1294,7 @@ fn heuristic_topic_from_segment(segment: &[&DreamUserMessage]) -> Option<Extract
     let excerpt = span_excerpt(segment);
     let title = title_from_text(&first.text);
     Some(ExtractedDreamTopic {
+        dream_id: None,
         title,
         summary: excerpt.clone(),
         source: "heuristic".to_owned(),
@@ -1078,7 +1394,11 @@ fn dream_topic_drafts(topics: Vec<ExtractedDreamTopic>) -> Vec<DreamTopicDraft> 
                 .map(|span| span.message_count)
                 .sum::<u32>();
             Some(DreamTopicDraft {
-                dream_id: format!("dream::{}", Uuid::new_v4()),
+                dream_id: topic
+                    .dream_id
+                    .map(|dream_id| dream_id.trim().to_owned())
+                    .filter(|dream_id| !dream_id.is_empty())
+                    .unwrap_or_else(|| format!("dream::{}", Uuid::new_v4())),
                 title: topic.title,
                 summary: topic.summary,
                 first_message_at: format_timestamp(first_message_at),
@@ -1153,6 +1473,150 @@ mod tests {
         serde_json::to_value(message).expect("message serializes")
     }
 
+    fn existing_dream_topic(
+        dream_id: &str,
+        thread_id: &str,
+        start_seq: u64,
+        end_seq: u64,
+    ) -> DreamTopicRecord {
+        DreamTopicRecord {
+            dream_id: dream_id.to_owned(),
+            title: "Dreams".to_owned(),
+            summary: String::new(),
+            first_message_at: "2026-05-21T09:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:00:00.000Z".to_owned(),
+            updated_at: "2026-05-21T10:00:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.8,
+            message_count: 1,
+            span_count: 1,
+            spans: vec![DreamSpanRecord {
+                span_id: format!("span::{dream_id}"),
+                dream_id: dream_id.to_owned(),
+                thread_id: thread_id.to_owned(),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                start_seq,
+                end_seq,
+                start_at: "2026-05-21T10:00:00.000Z".to_owned(),
+                end_at: "2026-05-21T10:00:00.000Z".to_owned(),
+                excerpt: "Continue dreams implementation".to_owned(),
+                message_count: 1,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn recent_user_message_probe_detects_transcript_user_messages() {
+        let state = crate::server::AppStateBuilder::new(GaryxConfig::default()).build();
+        let thread_id = "thread::dream-probe";
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "updated_at": "2026-05-21T10:05:00Z",
+                    "workspace_dir": "/workspace/test"
+                }),
+            )
+            .await;
+        state
+            .threads
+            .history
+            .transcript_store()
+            .append_committed_messages(
+                thread_id,
+                Some("run::dream-probe"),
+                &[user_message(
+                    "Design auto dreams scan",
+                    "2026-05-21T10:00:00Z",
+                )],
+            )
+            .await
+            .expect("append transcript");
+
+        let has_message = has_recent_dream_user_message(
+            &state,
+            parse_timestamp("2026-05-21T09:30:00Z").unwrap(),
+            parse_timestamp("2026-05-21T10:30:00Z").unwrap(),
+        )
+        .await
+        .expect("probe succeeds");
+
+        assert!(has_message);
+    }
+
+    #[tokio::test]
+    async fn recent_user_message_probe_skips_threads_older_than_window() {
+        let state = crate::server::AppStateBuilder::new(GaryxConfig::default()).build();
+        let thread_id = "thread::dream-old";
+        state
+            .threads
+            .thread_store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "updated_at": "2026-05-21T08:00:00Z"
+                }),
+            )
+            .await;
+        state
+            .threads
+            .history
+            .transcript_store()
+            .append_committed_messages(
+                thread_id,
+                Some("run::dream-old"),
+                &[user_message("Old dream message", "2026-05-21T08:00:00Z")],
+            )
+            .await
+            .expect("append transcript");
+
+        let has_message = has_recent_dream_user_message(
+            &state,
+            parse_timestamp("2026-05-21T09:00:00Z").unwrap(),
+            parse_timestamp("2026-05-21T10:00:00Z").unwrap(),
+        )
+        .await
+        .expect("probe succeeds");
+
+        assert!(!has_message);
+    }
+
+    #[tokio::test]
+    async fn auto_dream_scan_respects_disabled_switch() {
+        let state = crate::server::AppStateBuilder::new(GaryxConfig::default()).build();
+
+        let outcome =
+            run_auto_dream_scan_once(&state, parse_timestamp("2026-05-21T10:00:00Z").unwrap())
+                .await
+                .expect("auto scan succeeds");
+
+        assert_eq!(outcome, DreamAutoScanOutcome::Disabled);
+    }
+
+    #[tokio::test]
+    async fn auto_dream_scan_skips_without_recent_user_messages() {
+        let mut config = GaryxConfig::default();
+        config.dreams.enabled = true;
+        let state = crate::server::AppStateBuilder::new(config).build();
+
+        let outcome =
+            run_auto_dream_scan_once(&state, parse_timestamp("2026-05-21T10:00:00Z").unwrap())
+                .await
+                .expect("auto scan succeeds");
+
+        assert_eq!(
+            outcome,
+            DreamAutoScanOutcome::NoRecentMessages {
+                from: "2026-05-21T09:00:00.000Z".to_owned(),
+                to: "2026-05-21T10:00:00.000Z".to_owned(),
+            }
+        );
+    }
+
     #[test]
     fn heuristic_splits_one_thread_into_multiple_topics() {
         let messages = vec![
@@ -1190,6 +1654,94 @@ mod tests {
     }
 
     #[test]
+    fn heuristic_reuses_existing_id_for_overlapping_span() {
+        let messages = vec![DreamUserMessage {
+            thread_id: "thread::one".to_owned(),
+            workspace_dir: Some("/workspace/test".to_owned()),
+            seq: 1,
+            timestamp: parse_timestamp("2026-05-21T10:00:00Z").unwrap(),
+            text: "Continue dreams implementation".to_owned(),
+        }];
+        let topics = heuristic_topics(&messages);
+        let existing_topics = vec![existing_dream_topic("dream::existing", "thread::one", 1, 1)];
+
+        let reused = reuse_existing_topic_ids_for_matching_spans(topics, &existing_topics);
+
+        assert_eq!(reused.len(), 1);
+        assert_eq!(reused[0].dream_id.as_deref(), Some("dream::existing"));
+    }
+
+    #[test]
+    fn reuse_existing_ids_claims_each_existing_topic_once() {
+        let span = ExtractedDreamSpan {
+            thread_id: "thread::one".to_owned(),
+            workspace_dir: Some("/workspace/test".to_owned()),
+            start_seq: 1,
+            end_seq: 1,
+            start_at: parse_timestamp("2026-05-21T10:00:00Z").unwrap(),
+            end_at: parse_timestamp("2026-05-21T10:00:00Z").unwrap(),
+            excerpt: "Continue dreams implementation".to_owned(),
+            message_count: 1,
+        };
+        let topics = vec![
+            ExtractedDreamTopic {
+                dream_id: None,
+                title: "First".to_owned(),
+                summary: String::new(),
+                source: "heuristic".to_owned(),
+                confidence: 0.5,
+                spans: vec![span.clone()],
+            },
+            ExtractedDreamTopic {
+                dream_id: None,
+                title: "Second".to_owned(),
+                summary: String::new(),
+                source: "heuristic".to_owned(),
+                confidence: 0.5,
+                spans: vec![span],
+            },
+        ];
+        let existing_topics = vec![existing_dream_topic("dream::existing", "thread::one", 1, 1)];
+
+        let reused = reuse_existing_topic_ids_for_matching_spans(topics, &existing_topics);
+
+        assert_eq!(reused[0].dream_id.as_deref(), Some("dream::existing"));
+        assert_eq!(reused[1].dream_id, None);
+    }
+
+    #[test]
+    fn claude_topic_without_id_reuses_existing_overlap_after_normalization() {
+        let messages = vec![DreamUserMessage {
+            thread_id: "thread::one".to_owned(),
+            workspace_dir: Some("/workspace/test".to_owned()),
+            seq: 1,
+            timestamp: parse_timestamp("2026-05-21T10:00:00Z").unwrap(),
+            text: "Continue dreams implementation".to_owned(),
+        }];
+        let raw = r#"{
+          "topics": [
+            {
+              "title": "Dreams",
+              "spans": [
+                {"thread_id": "thread::one", "start_seq": 1, "end_seq": 1}
+              ]
+            }
+          ]
+        }"#;
+        let existing_topics = vec![existing_dream_topic("dream::existing", "thread::one", 1, 1)];
+        let normalized = normalize_claude_topics(
+            parse_claude_topics(raw).unwrap(),
+            &messages,
+            &existing_topics,
+        );
+
+        let reused = reuse_existing_topic_ids_for_matching_spans(normalized, &existing_topics);
+
+        assert_eq!(reused.len(), 1);
+        assert_eq!(reused[0].dream_id.as_deref(), Some("dream::existing"));
+    }
+
+    #[test]
     fn normalizes_claude_json_into_known_spans() {
         let messages = vec![
             DreamUserMessage {
@@ -1208,7 +1760,7 @@ mod tests {
             },
         ];
         let raw = r#"{"topics":[{"title":"Dreams","summary":"Daily topic map","confidence":0.9,"spans":[{"thread_id":"thread::one","start_seq":1,"end_seq":2,"excerpt":"dreams work"}]}]}"#;
-        let topics = normalize_claude_topics(parse_claude_topics(raw).unwrap(), &messages);
+        let topics = normalize_claude_topics(parse_claude_topics(raw).unwrap(), &messages, &[]);
         assert_eq!(topics.len(), 1);
         assert_eq!(topics[0].title, "Dreams");
         assert_eq!(
@@ -1239,11 +1791,93 @@ mod tests {
           ]
         }"#;
 
-        let topics = normalize_claude_topics(parse_claude_topics(raw).unwrap(), &messages);
+        let topics = normalize_claude_topics(parse_claude_topics(raw).unwrap(), &messages, &[]);
 
         assert_eq!(topics.len(), 1);
         assert_eq!(topics[0].spans.len(), 1);
         assert_eq!(topics[0].spans[0].start_seq, 1);
+    }
+
+    #[test]
+    fn normalizes_incremental_claude_json_preserves_existing_dream_id_and_skips_unchanged() {
+        let messages = vec![DreamUserMessage {
+            thread_id: "thread::one".to_owned(),
+            workspace_dir: Some("/workspace/test".to_owned()),
+            seq: 2,
+            timestamp: parse_timestamp("2026-05-21T10:30:00Z").unwrap(),
+            text: "Continue dream scheduler work".to_owned(),
+        }];
+        let raw = r#"{
+          "topics": [
+            {
+              "dream_id": "dream::existing",
+              "action": "update",
+              "title": "Dream Scheduler",
+              "spans": [
+                {"thread_id": "thread::one", "start_seq": 2, "end_seq": 2}
+              ]
+            },
+            {
+              "dream_id": "dream::unchanged",
+              "action": "unchanged",
+              "title": "No change",
+              "spans": [
+                {"thread_id": "thread::one", "start_seq": 2, "end_seq": 2}
+              ]
+            }
+          ]
+        }"#;
+
+        let existing_topics = vec![DreamTopicRecord {
+            dream_id: "dream::existing".to_owned(),
+            title: "Dream Scheduler".to_owned(),
+            summary: String::new(),
+            first_message_at: "2026-05-21T10:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:20:00.000Z".to_owned(),
+            updated_at: "2026-05-21T10:20:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.8,
+            message_count: 1,
+            span_count: 1,
+            spans: Vec::new(),
+        }];
+
+        let topics = normalize_claude_topics(
+            parse_claude_topics(raw).unwrap(),
+            &messages,
+            &existing_topics,
+        );
+
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0].dream_id.as_deref(), Some("dream::existing"));
+        assert_eq!(topics[0].title, "Dream Scheduler");
+    }
+
+    #[test]
+    fn normalizes_manual_claude_json_ignores_unknown_dream_ids() {
+        let messages = vec![DreamUserMessage {
+            thread_id: "thread::one".to_owned(),
+            workspace_dir: Some("/workspace/test".to_owned()),
+            seq: 1,
+            timestamp: parse_timestamp("2026-05-21T10:00:00Z").unwrap(),
+            text: "Implement dreams".to_owned(),
+        }];
+        let raw = r#"{
+          "topics": [
+            {
+              "dream_id": "dream::hallucinated",
+              "title": "Dreams",
+              "spans": [
+                {"thread_id": "thread::one", "start_seq": 1, "end_seq": 1}
+              ]
+            }
+          ]
+        }"#;
+
+        let topics = normalize_claude_topics(parse_claude_topics(raw).unwrap(), &messages, &[]);
+
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0].dream_id, None);
     }
 
     #[test]

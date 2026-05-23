@@ -17,6 +17,7 @@ use std::process::Command;
 use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
 
+use crate::garyx_db::{DreamSpanDraft, DreamTopicDraft};
 use crate::route_graph::build_router;
 use crate::server::AppStateBuilder;
 use crate::thread_logs::ThreadFileLogger;
@@ -837,6 +838,100 @@ async fn dream_scan_route_persists_thread_topic_spans() {
     assert_eq!(
         detail["dream"]["spans"][0]["workspace_dir"],
         json!("/workspace/test")
+    );
+}
+
+#[tokio::test]
+async fn dream_scan_route_preserves_historical_incremental_topics() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::dream-history";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Dream History",
+                "updated_at": "2026-05-21T10:10:00Z",
+                "workspace_dir": "/workspace/test"
+            }),
+        )
+        .await;
+    state
+        .ops
+        .garyx_db
+        .replace_dreams_in_window(
+            "2026-05-20T00:00:00.000Z",
+            "2026-05-21T23:59:59.999Z",
+            "claude",
+            &[DreamTopicDraft {
+                dream_id: "dream::historical".to_owned(),
+                title: "Historical Dream".to_owned(),
+                summary: "A topic that started before the manual scan window.".to_owned(),
+                first_message_at: "2026-05-20T10:00:00.000Z".to_owned(),
+                last_message_at: "2026-05-21T09:00:00.000Z".to_owned(),
+                source: "claude".to_owned(),
+                confidence: 0.8,
+                message_count: 1,
+                spans: vec![DreamSpanDraft {
+                    span_id: "span::historical".to_owned(),
+                    thread_id: thread_id.to_owned(),
+                    workspace_dir: Some("/workspace/test".to_owned()),
+                    start_seq: 1,
+                    end_seq: 1,
+                    start_at: "2026-05-20T10:00:00.000Z".to_owned(),
+                    end_at: "2026-05-20T10:10:00.000Z".to_owned(),
+                    excerpt: "historical".to_owned(),
+                    message_count: 1,
+                }],
+            }],
+            None,
+        )
+        .expect("seed historical topic");
+    let mut assistant = ProviderMessage::assistant_text("prior assistant message");
+    assistant.timestamp = Some("2026-05-21T09:50:00Z".to_owned());
+    let mut user = ProviderMessage::user_text("Continue dreams from the manual scan window");
+    user.timestamp = Some("2026-05-21T10:00:00Z".to_owned());
+    state
+        .threads
+        .history
+        .transcript_store()
+        .append_committed_messages(
+            thread_id,
+            Some("run::dream-history"),
+            &[
+                serde_json::to_value(assistant).expect("assistant message serializes"),
+                serde_json::to_value(user).expect("user message serializes"),
+            ],
+        )
+        .await
+        .expect("append transcript");
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/dreams/scan")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "from": "2026-05-21T00:00:00Z",
+                "to": "2026-05-21T23:59:59Z",
+                "mode": "heuristic"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert!(
+        state
+            .ops
+            .garyx_db
+            .get_dream_topic("dream::historical")
+            .expect("get historical dream")
+            .is_some()
     );
 }
 

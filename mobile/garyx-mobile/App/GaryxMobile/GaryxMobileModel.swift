@@ -240,6 +240,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var dreams: [GaryxDreamTopic] = []
     @Published var latestDreamScan: GaryxDreamScan?
     @Published var isScanningDreams = false
+    @Published var dreamsAutoScanEnabled = false
+    @Published var isSavingDreamsSettings = false
     @Published var agents: [GaryxAgentSummary] = []
     @Published var teams: [GaryxTeamSummary] = []
     @Published var skills: [GaryxSkillSummary] = []
@@ -1778,6 +1780,7 @@ final class GaryxMobileModel: ObservableObject {
             async let skillsResult = gateway.listSkills()
             async let tasksResult = gateway.listTasks(includeDone: true, limit: 120)
             async let dreamsResult = gateway.listDreams(sinceHours: 24, limit: 80)
+            async let gatewaySettingsResult = gateway.gatewaySettings()
             async let automationsResult = gateway.listAutomations()
             async let slashCommandsResult = gateway.listSlashCommands()
             async let mcpServersResult = gateway.listMcpServers()
@@ -1792,6 +1795,7 @@ final class GaryxMobileModel: ObservableObject {
             let nextSkills = try? await skillsResult
             let nextTasksPage = try? await tasksResult
             let nextDreamsPage = try? await dreamsResult
+            let nextGatewaySettings = try? await gatewaySettingsResult
             let nextAutomations = try? await automationsResult
             let nextSlashCommands = try? await slashCommandsResult
             let nextMcpServers = try? await mcpServersResult
@@ -1811,6 +1815,9 @@ final class GaryxMobileModel: ObservableObject {
             if let page = nextDreamsPage {
                 dreams = page.dreams
                 latestDreamScan = page.scan ?? page.latestScan
+            }
+            if let settings = nextGatewaySettings {
+                applyGatewayRuntimeSettings(settings)
             }
             automations = nextAutomations ?? automations
             slashCommands = nextSlashCommands ?? slashCommands
@@ -1833,6 +1840,12 @@ final class GaryxMobileModel: ObservableObject {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
+    }
+
+    private func applyGatewayRuntimeSettings(_ settings: [String: GaryxJSONValue]) {
+        dreamsAutoScanEnabled = settings
+            .objectValue(forKeys: ["dreams"])?
+            .boolValue(forKeys: ["enabled"]) ?? false
     }
 
     func refreshThreads() async {
@@ -2970,6 +2983,27 @@ final class GaryxMobileModel: ObservableObject {
             dreams = page.dreams
             latestDreamScan = page.scan ?? page.latestScan
         } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func setDreamsAutoScanEnabled(_ enabled: Bool) async {
+        guard hasGatewaySettings, dreamsAutoScanEnabled != enabled, !isSavingDreamsSettings else {
+            return
+        }
+        let previous = dreamsAutoScanEnabled
+        dreamsAutoScanEnabled = enabled
+        isSavingDreamsSettings = true
+        defer { isSavingDreamsSettings = false }
+        do {
+            _ = try await client().saveGatewaySettings([
+                "dreams": .object([
+                    "enabled": .bool(enabled)
+                ])
+            ])
+            gatewaySettingsStatus = "Saved"
+        } catch {
+            dreamsAutoScanEnabled = previous
             lastError = displayMessage(for: error)
         }
     }

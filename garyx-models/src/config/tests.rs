@@ -44,6 +44,26 @@ fn test_default_config_has_empty_commands_and_mcp_servers() {
 }
 
 #[test]
+fn dreams_config_defaults_to_manual_only_hourly_scan() {
+    let cfg = GaryxConfig::default();
+
+    assert!(!cfg.dreams.enabled);
+    assert_eq!(cfg.dreams.scan_interval_secs, 3_600);
+    assert_eq!(cfg.dreams.scan_since_hours, 1);
+
+    let cfg: GaryxConfig = serde_json::from_value(serde_json::json!({
+        "dreams": {
+            "enabled": true
+        }
+    }))
+    .unwrap();
+
+    assert!(cfg.dreams.enabled);
+    assert_eq!(cfg.dreams.scan_interval_secs, 3_600);
+    assert_eq!(cfg.dreams.scan_since_hours, 1);
+}
+
+#[test]
 fn test_resolve_slash_command_from_config() {
     let mut cfg = GaryxConfig::default();
     cfg.commands.push(SlashCommand {

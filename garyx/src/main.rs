@@ -45,8 +45,8 @@ use commands::{
     cmd_config_show, cmd_config_unset, cmd_config_validate, cmd_db_events, cmd_db_field_add,
     cmd_db_field_drop, cmd_db_record_delete, cmd_db_record_get, cmd_db_record_insert,
     cmd_db_record_update, cmd_db_sql, cmd_db_table_create, cmd_db_table_drop, cmd_db_table_list,
-    cmd_db_table_schema, cmd_doctor, cmd_dream_list, cmd_dream_scan, cmd_dream_show,
-    cmd_endpoint_bind, cmd_endpoint_detach, cmd_endpoint_list, cmd_gateway_install,
+    cmd_db_table_schema, cmd_doctor, cmd_dream_auto, cmd_dream_list, cmd_dream_scan,
+    cmd_dream_show, cmd_endpoint_bind, cmd_endpoint_detach, cmd_endpoint_list, cmd_gateway_install,
     cmd_gateway_reload_config, cmd_gateway_restart, cmd_gateway_start, cmd_gateway_stop,
     cmd_gateway_token, cmd_gateway_uninstall, cmd_logs_clear, cmd_logs_path, cmd_logs_tail,
     cmd_onboard, cmd_send_message, cmd_status, cmd_task_assign, cmd_task_claim, cmd_task_create,
@@ -1048,6 +1048,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DreamAction::Show { dream_id, json } => {
                 cmd_dream_show(config_path, &dream_id, json).await
             }
+            DreamAction::Auto { state, json } => cmd_dream_auto(config_path, &state, json).await,
         },
         Some(Commands::Task { action }) => match action {
             TaskAction::List {

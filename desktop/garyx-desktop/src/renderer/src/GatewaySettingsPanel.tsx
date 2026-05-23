@@ -3528,6 +3528,22 @@ export function GatewaySettingsPanel({
             description={t('Show or hide the Auto Research entry in the desktop client. Disabling it only hides the desktop surface.')}
             label={t('Auto Research')}
           />
+          <SettingsControlRow
+            control={
+              <SettingsSwitch
+                checked={Boolean(gatewayDraft?.dreams?.enabled)}
+                label="dreams.enabled"
+                onChange={(nextValue) => {
+                  onMutateGatewayDraft((next) => {
+                    next.dreams ||= {};
+                    next.dreams.enabled = nextValue;
+                  });
+                }}
+              />
+            }
+            description={t('Run Dreams automatically on the configured interval when recent user messages exist. Manual scans stay available.')}
+            label={t('Dreams auto scan')}
+          />
         </div>
       </div>
     </>

@@ -571,6 +571,20 @@ fn parse_dream_scan() {
 }
 
 #[test]
+fn parse_dream_auto_on() {
+    let cli = Cli::parse_from(["garyx", "dream", "auto", "on", "--json"]);
+    match cli.command {
+        Some(Commands::Dream {
+            action: DreamAction::Auto { state, json },
+        }) => {
+            assert_eq!(state, "on");
+            assert!(json);
+        }
+        _ => panic!("expected Dream::Auto"),
+    }
+}
+
+#[test]
 fn parse_channels_enable() {
     let cli = Cli::parse_from(["garyx", "channels", "enable", "telegram", "main"]);
     match cli.command {

@@ -1,9 +1,10 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use chrono::{SecondsFormat, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -198,7 +199,7 @@ impl GaryxDbService {
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM dream_topics
-             WHERE last_message_at >= ?1 AND first_message_at <= ?2",
+             WHERE first_message_at >= ?1 AND last_message_at <= ?2",
             params![scanned_from, scanned_to],
         )?;
         tx.execute(
@@ -239,7 +240,17 @@ impl GaryxDbService {
                     dream_id, title, summary, first_message_at, last_message_at,
                     updated_at, source, confidence, message_count, span_count
                  )
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(dream_id) DO UPDATE SET
+                    title = excluded.title,
+                    summary = excluded.summary,
+                    first_message_at = excluded.first_message_at,
+                    last_message_at = excluded.last_message_at,
+                    updated_at = excluded.updated_at,
+                    source = excluded.source,
+                    confidence = excluded.confidence,
+                    message_count = excluded.message_count,
+                    span_count = excluded.span_count",
                 params![
                     dream_id,
                     title,
@@ -291,6 +302,279 @@ impl GaryxDbService {
                         created_at,
                     ],
                 )?;
+            }
+        }
+        tx.commit()?;
+
+        Ok(DreamScanRunRecord {
+            run_id,
+            scanned_from,
+            scanned_to,
+            created_at,
+            source,
+            status,
+            topics_count,
+            spans_count,
+            error: error
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+        })
+    }
+
+    pub fn upsert_dreams_incremental(
+        &self,
+        scanned_from: &str,
+        scanned_to: &str,
+        source: &str,
+        topics: &[DreamTopicDraft],
+        error: Option<&str>,
+    ) -> GaryxDbResult<DreamScanRunRecord> {
+        let scanned_from = normalize_required("scanned_from", scanned_from)?;
+        let scanned_to = normalize_required("scanned_to", scanned_to)?;
+        let source = normalize_required("source", source)?;
+        if scanned_from > scanned_to {
+            return Err(GaryxDbError::BadRequest(
+                "scanned_from must not be later than scanned_to".to_owned(),
+            ));
+        }
+
+        let created_at = now_string();
+        let run_id = format!("dream_scan::{}", Uuid::new_v4());
+        let status = if error.is_some() { "fallback" } else { "ok" }.to_owned();
+        let topics_count = topics.len() as u32;
+        let spans_count = topics
+            .iter()
+            .map(|topic| topic.spans.len() as u32)
+            .sum::<u32>();
+
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO dream_scan_runs (
+                run_id, scanned_from, scanned_to, created_at, source, status,
+                topics_count, spans_count, error
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                run_id,
+                scanned_from,
+                scanned_to,
+                created_at,
+                source,
+                status,
+                topics_count,
+                spans_count,
+                error.map(str::trim).filter(|value| !value.is_empty()),
+            ],
+        )?;
+
+        for topic in topics {
+            let dream_id = normalize_required("dream_id", &topic.dream_id)?;
+            let title = normalize_required("title", &topic.title)?;
+            let summary = topic.summary.trim().to_owned();
+            let topic_source = normalize_required("source", &topic.source)?;
+            let confidence = topic.confidence.clamp(0.0, 1.0);
+            let mut span_map = BTreeMap::<(String, u64, u64), DreamSpanDraft>::new();
+            let mut existing_span_keys = BTreeSet::<(String, u64, u64)>::new();
+
+            {
+                let mut stmt = tx.prepare(
+                    "SELECT span_id, thread_id, workspace_dir, start_seq, end_seq,
+                            start_at, end_at, excerpt, message_count
+                     FROM dream_spans
+                     WHERE dream_id = ?1",
+                )?;
+                let rows = stmt.query_map(params![dream_id.as_str()], |row| {
+                    Ok(DreamSpanDraft {
+                        span_id: row.get(0)?,
+                        thread_id: row.get(1)?,
+                        workspace_dir: row.get(2)?,
+                        start_seq: row.get(3)?,
+                        end_seq: row.get(4)?,
+                        start_at: row.get(5)?,
+                        end_at: row.get(6)?,
+                        excerpt: row.get(7)?,
+                        message_count: row.get(8)?,
+                    })
+                })?;
+                for row in rows {
+                    let span = row?;
+                    existing_span_keys.insert((
+                        span.thread_id.clone(),
+                        span.start_seq,
+                        span.end_seq,
+                    ));
+                    span_map.insert((span.thread_id.clone(), span.start_seq, span.end_seq), span);
+                }
+            }
+
+            for span in &topic.spans {
+                let thread_id = normalize_thread_id(&span.thread_id)?;
+                let start_at = normalize_required("start_at", &span.start_at)?;
+                let end_at = normalize_required("end_at", &span.end_at)?;
+                let key = (thread_id.clone(), span.start_seq, span.end_seq);
+                let span_id = span_map
+                    .get(&key)
+                    .or_else(|| {
+                        span_map.values().find(|existing| {
+                            dream_span_ranges_overlap(
+                                &thread_id,
+                                span.start_seq,
+                                span.end_seq,
+                                existing,
+                            )
+                        })
+                    })
+                    .map(|existing| existing.span_id.clone())
+                    .unwrap_or_else(|| span.span_id.trim().to_owned());
+                let span_id = normalize_required("span_id", &span_id)?;
+                if span.start_seq == 0 || span.end_seq == 0 || span.start_seq > span.end_seq {
+                    return Err(GaryxDbError::BadRequest(format!(
+                        "dream span {span_id} has an invalid sequence range"
+                    )));
+                }
+                if start_at > end_at {
+                    return Err(GaryxDbError::BadRequest(format!(
+                        "dream span {span_id} has start_at later than end_at"
+                    )));
+                }
+                span_map.insert(
+                    key,
+                    DreamSpanDraft {
+                        span_id,
+                        thread_id,
+                        workspace_dir: span.workspace_dir.clone(),
+                        start_seq: span.start_seq,
+                        end_seq: span.end_seq,
+                        start_at,
+                        end_at,
+                        excerpt: span.excerpt.trim().to_owned(),
+                        message_count: span.message_count,
+                    },
+                );
+            }
+
+            let spans = merge_overlapping_dream_spans(span_map.into_values());
+            let retained_span_keys = spans
+                .iter()
+                .map(|span| (span.thread_id.clone(), span.start_seq, span.end_seq))
+                .collect::<BTreeSet<_>>();
+            let first_message_at = spans
+                .iter()
+                .map(|span| span.start_at.as_str())
+                .min()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| topic.first_message_at.trim().to_owned());
+            let last_message_at = spans
+                .iter()
+                .map(|span| span.end_at.as_str())
+                .max()
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| topic.last_message_at.trim().to_owned());
+            let first_message_at = normalize_required("first_message_at", &first_message_at)?;
+            let last_message_at = normalize_required("last_message_at", &last_message_at)?;
+            if first_message_at > last_message_at {
+                return Err(GaryxDbError::BadRequest(format!(
+                    "dream topic {dream_id} has first_message_at later than last_message_at"
+                )));
+            }
+            let message_count = spans.iter().map(|span| span.message_count).sum::<u32>();
+            let span_count = spans.len() as u32;
+
+            tx.execute(
+                "INSERT INTO dream_topics (
+                    dream_id, title, summary, first_message_at, last_message_at,
+                    updated_at, source, confidence, message_count, span_count
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ON CONFLICT(dream_id) DO UPDATE SET
+                    title = excluded.title,
+                    summary = excluded.summary,
+                    first_message_at = excluded.first_message_at,
+                    last_message_at = excluded.last_message_at,
+                    updated_at = excluded.updated_at,
+                    source = excluded.source,
+                    confidence = excluded.confidence,
+                    message_count = excluded.message_count,
+                    span_count = excluded.span_count",
+                params![
+                    dream_id,
+                    title,
+                    summary,
+                    first_message_at,
+                    last_message_at,
+                    created_at,
+                    topic_source,
+                    confidence,
+                    message_count,
+                    span_count,
+                ],
+            )?;
+            for (thread_id, start_seq, end_seq) in
+                existing_span_keys.difference(&retained_span_keys)
+            {
+                tx.execute(
+                    "DELETE FROM dream_spans
+                     WHERE dream_id = ?1
+                       AND thread_id = ?2
+                       AND start_seq = ?3
+                       AND end_seq = ?4",
+                    params![dream_id, thread_id, start_seq, end_seq],
+                )?;
+            }
+            for span in spans {
+                let updated = tx.execute(
+                    "UPDATE dream_spans
+                     SET workspace_dir = ?1,
+                         start_at = ?2,
+                         end_at = ?3,
+                         excerpt = ?4,
+                         message_count = ?5
+                     WHERE dream_id = ?6
+                       AND thread_id = ?7
+                       AND start_seq = ?8
+                       AND end_seq = ?9",
+                    params![
+                        span.workspace_dir
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty()),
+                        span.start_at,
+                        span.end_at,
+                        span.excerpt.trim(),
+                        span.message_count,
+                        dream_id,
+                        span.thread_id,
+                        span.start_seq,
+                        span.end_seq,
+                    ],
+                )?;
+                if updated == 0 {
+                    tx.execute(
+                        "INSERT INTO dream_spans (
+                            span_id, dream_id, thread_id, workspace_dir, start_seq, end_seq,
+                            start_at, end_at, excerpt, message_count, created_at
+                         )
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                        params![
+                            span.span_id,
+                            dream_id,
+                            span.thread_id,
+                            span.workspace_dir
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty()),
+                            span.start_seq,
+                            span.end_seq,
+                            span.start_at,
+                            span.end_at,
+                            span.excerpt.trim(),
+                            span.message_count,
+                            created_at,
+                        ],
+                    )?;
+                }
             }
         }
         tx.commit()?;
@@ -386,6 +670,71 @@ impl GaryxDbService {
         Ok(topic)
     }
 
+    pub fn list_dream_topics_for_threads(
+        &self,
+        thread_ids: &[String],
+        from: Option<&str>,
+        limit: usize,
+    ) -> GaryxDbResult<Vec<DreamTopicRecord>> {
+        let mut normalized_thread_ids = thread_ids
+            .iter()
+            .map(|thread_id| normalize_thread_id(thread_id))
+            .collect::<GaryxDbResult<Vec<_>>>()?;
+        normalized_thread_ids.sort();
+        normalized_thread_ids.dedup();
+        if normalized_thread_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let from = normalize_optional(from);
+
+        let placeholders = std::iter::repeat_n("?", normalized_thread_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let limit = limit.clamp(1, 500).to_string();
+        let time_filter = if from.is_some() {
+            " AND t.last_message_at >= ?"
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT DISTINCT t.dream_id, t.title, t.summary, t.first_message_at,
+                    t.last_message_at, t.updated_at, t.source, t.confidence,
+                    t.message_count, t.span_count
+             FROM dream_topics t
+             JOIN dream_spans s ON s.dream_id = t.dream_id
+             WHERE s.thread_id IN ({placeholders}){time_filter}
+             ORDER BY t.last_message_at DESC, t.dream_id ASC
+             LIMIT {limit}"
+        );
+        let mut bind_values = normalized_thread_ids;
+        if let Some(from) = from {
+            bind_values.push(from);
+        }
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(bind_values.iter()), |row| {
+            Ok(DreamTopicRecord {
+                dream_id: row.get(0)?,
+                title: row.get(1)?,
+                summary: row.get(2)?,
+                first_message_at: row.get(3)?,
+                last_message_at: row.get(4)?,
+                updated_at: row.get(5)?,
+                source: row.get(6)?,
+                confidence: row.get(7)?,
+                message_count: row.get(8)?,
+                span_count: row.get(9)?,
+                spans: Vec::new(),
+            })
+        })?;
+        let mut topics = Vec::new();
+        for row in rows {
+            topics.push(row?);
+        }
+        attach_dream_spans(&conn, &mut topics)?;
+        Ok(topics)
+    }
+
     pub fn latest_dream_scan(&self) -> GaryxDbResult<Option<DreamScanRunRecord>> {
         let conn = self.conn()?;
         conn.query_row(
@@ -412,6 +761,68 @@ impl GaryxDbService {
         .optional()
         .map_err(Into::into)
     }
+}
+
+fn merge_overlapping_dream_spans(
+    spans: impl IntoIterator<Item = DreamSpanDraft>,
+) -> Vec<DreamSpanDraft> {
+    let mut by_thread = BTreeMap::<String, Vec<DreamSpanDraft>>::new();
+    for span in spans {
+        by_thread
+            .entry(span.thread_id.clone())
+            .or_default()
+            .push(span);
+    }
+
+    let mut merged = Vec::new();
+    for (_thread_id, mut spans) in by_thread {
+        spans.sort_by(|left, right| {
+            left.start_seq
+                .cmp(&right.start_seq)
+                .then_with(|| left.end_seq.cmp(&right.end_seq))
+        });
+        let mut current: Option<DreamSpanDraft> = None;
+        for span in spans {
+            match current.as_mut() {
+                Some(active) if span.start_seq <= active.end_seq => {
+                    active.end_seq = active.end_seq.max(span.end_seq);
+                    if span.end_at > active.end_at {
+                        active.end_at = span.end_at.clone();
+                    }
+                    if span.start_at < active.start_at {
+                        active.start_at = span.start_at.clone();
+                    }
+                    if span.workspace_dir.is_some() {
+                        active.workspace_dir = span.workspace_dir.clone();
+                    }
+                    if !span.excerpt.trim().is_empty() {
+                        active.excerpt = span.excerpt.clone();
+                    }
+                    active.message_count = active.message_count.max(span.message_count);
+                }
+                _ => {
+                    if let Some(previous) = current.replace(span) {
+                        merged.push(previous);
+                    }
+                }
+            }
+        }
+        if let Some(last) = current {
+            merged.push(last);
+        }
+    }
+    merged
+}
+
+fn dream_span_ranges_overlap(
+    thread_id: &str,
+    start_seq: u64,
+    end_seq: u64,
+    existing: &DreamSpanDraft,
+) -> bool {
+    existing.thread_id == thread_id
+        && start_seq <= existing.end_seq
+        && existing.start_seq <= end_seq
 }
 
 fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
@@ -727,5 +1138,379 @@ mod tests {
             db.latest_dream_scan().expect("scan exists"),
             Some(DreamScanRunRecord { status, .. }) if status == "fallback"
         ));
+    }
+
+    #[test]
+    fn dreams_replace_window_keeps_partially_overlapping_topics() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let spanning = DreamTopicDraft {
+            dream_id: "dream::spanning".to_owned(),
+            title: "Spanning".to_owned(),
+            summary: String::new(),
+            first_message_at: "2026-05-20T10:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:05:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.8,
+            message_count: 2,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::spanning".to_owned(),
+                thread_id: "thread::one".to_owned(),
+                workspace_dir: None,
+                start_seq: 1,
+                end_seq: 2,
+                start_at: "2026-05-20T10:00:00.000Z".to_owned(),
+                end_at: "2026-05-21T10:05:00.000Z".to_owned(),
+                excerpt: String::new(),
+                message_count: 2,
+            }],
+        };
+        db.replace_dreams_in_window(
+            "2026-05-20T00:00:00.000Z",
+            "2026-05-21T23:59:59.999Z",
+            "claude",
+            &[spanning],
+            None,
+        )
+        .expect("insert spanning topic");
+
+        db.replace_dreams_in_window(
+            "2026-05-21T00:00:00.000Z",
+            "2026-05-21T23:59:59.999Z",
+            "claude",
+            &[],
+            None,
+        )
+        .expect("replace narrow window");
+
+        assert!(
+            db.get_dream_topic("dream::spanning")
+                .expect("get spanning topic")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn dreams_incremental_upsert_extends_existing_topics_without_deleting_old_spans() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let original = DreamTopicDraft {
+            dream_id: "dream::incremental".to_owned(),
+            title: "Dreams".to_owned(),
+            summary: "Initial dream topic.".to_owned(),
+            first_message_at: "2026-05-21T10:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:05:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.8,
+            message_count: 1,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::first".to_owned(),
+                thread_id: "thread::one".to_owned(),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                start_seq: 1,
+                end_seq: 1,
+                start_at: "2026-05-21T10:00:00.000Z".to_owned(),
+                end_at: "2026-05-21T10:05:00.000Z".to_owned(),
+                excerpt: "initial".to_owned(),
+                message_count: 1,
+            }],
+        };
+        db.replace_dreams_in_window(
+            "2026-05-21T10:00:00.000Z",
+            "2026-05-21T10:05:00.000Z",
+            "claude",
+            &[original],
+            None,
+        )
+        .expect("insert original");
+
+        let update = DreamTopicDraft {
+            dream_id: "dream::incremental".to_owned(),
+            title: "Dreams Auto Scan".to_owned(),
+            summary: "Initial topic plus automatic scan work.".to_owned(),
+            first_message_at: "2026-05-21T10:30:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:35:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.9,
+            message_count: 1,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::second".to_owned(),
+                thread_id: "thread::one".to_owned(),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                start_seq: 2,
+                end_seq: 2,
+                start_at: "2026-05-21T10:30:00.000Z".to_owned(),
+                end_at: "2026-05-21T10:35:00.000Z".to_owned(),
+                excerpt: "automatic scan".to_owned(),
+                message_count: 1,
+            }],
+        };
+        let scan = db
+            .upsert_dreams_incremental(
+                "2026-05-21T10:00:00.000Z",
+                "2026-05-21T11:00:00.000Z",
+                "claude_incremental",
+                &[update],
+                None,
+            )
+            .expect("incremental upsert succeeds");
+
+        assert_eq!(scan.topics_count, 1);
+        assert_eq!(scan.spans_count, 1);
+
+        let topic = db
+            .get_dream_topic("dream::incremental")
+            .expect("get topic")
+            .expect("topic exists");
+        assert_eq!(topic.title, "Dreams Auto Scan");
+        assert_eq!(topic.message_count, 2);
+        assert_eq!(topic.span_count, 2);
+        assert_eq!(topic.first_message_at, "2026-05-21T10:00:00.000Z");
+        assert_eq!(topic.last_message_at, "2026-05-21T10:35:00.000Z");
+        assert_eq!(
+            topic
+                .spans
+                .iter()
+                .map(|span| span.span_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["span::first", "span::second"]
+        );
+    }
+
+    #[test]
+    fn dreams_incremental_upsert_preserves_existing_span_identity() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let original = DreamTopicDraft {
+            dream_id: "dream::stable-span".to_owned(),
+            title: "Stable Span".to_owned(),
+            summary: "Original summary.".to_owned(),
+            first_message_at: "2026-05-21T10:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:05:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.8,
+            message_count: 1,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::stable".to_owned(),
+                thread_id: "thread::one".to_owned(),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                start_seq: 1,
+                end_seq: 1,
+                start_at: "2026-05-21T10:00:00.000Z".to_owned(),
+                end_at: "2026-05-21T10:05:00.000Z".to_owned(),
+                excerpt: "original".to_owned(),
+                message_count: 1,
+            }],
+        };
+        db.replace_dreams_in_window(
+            "2026-05-21T10:00:00.000Z",
+            "2026-05-21T10:05:00.000Z",
+            "claude",
+            &[original],
+            None,
+        )
+        .expect("insert original");
+
+        let update = DreamTopicDraft {
+            dream_id: "dream::stable-span".to_owned(),
+            title: "Stable Span Updated".to_owned(),
+            summary: "Updated summary.".to_owned(),
+            first_message_at: "2026-05-21T10:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:05:00.000Z".to_owned(),
+            source: "claude_incremental".to_owned(),
+            confidence: 0.9,
+            message_count: 1,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::fresh".to_owned(),
+                thread_id: "thread::one".to_owned(),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                start_seq: 1,
+                end_seq: 1,
+                start_at: "2026-05-21T10:00:00.000Z".to_owned(),
+                end_at: "2026-05-21T10:05:00.000Z".to_owned(),
+                excerpt: "updated excerpt".to_owned(),
+                message_count: 1,
+            }],
+        };
+        db.upsert_dreams_incremental(
+            "2026-05-21T10:00:00.000Z",
+            "2026-05-21T11:00:00.000Z",
+            "claude_incremental",
+            &[update],
+            None,
+        )
+        .expect("incremental update succeeds");
+
+        let topic = db
+            .get_dream_topic("dream::stable-span")
+            .expect("get topic")
+            .expect("topic exists");
+        assert_eq!(topic.spans.len(), 1);
+        assert_eq!(topic.spans[0].span_id, "span::stable");
+        assert_eq!(topic.spans[0].excerpt, "updated excerpt");
+    }
+
+    #[test]
+    fn dreams_incremental_upsert_merges_overlapping_spans_with_stable_identity() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let original = DreamTopicDraft {
+            dream_id: "dream::overlap-span".to_owned(),
+            title: "Overlap Span".to_owned(),
+            summary: "Original summary.".to_owned(),
+            first_message_at: "2026-05-21T10:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:05:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.8,
+            message_count: 1,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::stable-overlap".to_owned(),
+                thread_id: "thread::one".to_owned(),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                start_seq: 1,
+                end_seq: 1,
+                start_at: "2026-05-21T10:00:00.000Z".to_owned(),
+                end_at: "2026-05-21T10:05:00.000Z".to_owned(),
+                excerpt: "original".to_owned(),
+                message_count: 1,
+            }],
+        };
+        db.replace_dreams_in_window(
+            "2026-05-21T10:00:00.000Z",
+            "2026-05-21T10:05:00.000Z",
+            "claude",
+            &[original],
+            None,
+        )
+        .expect("insert original");
+
+        let update = DreamTopicDraft {
+            dream_id: "dream::overlap-span".to_owned(),
+            title: "Overlap Span Updated".to_owned(),
+            summary: "Updated summary.".to_owned(),
+            first_message_at: "2026-05-21T10:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:10:00.000Z".to_owned(),
+            source: "claude_incremental".to_owned(),
+            confidence: 0.9,
+            message_count: 2,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::fresh-overlap".to_owned(),
+                thread_id: "thread::one".to_owned(),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                start_seq: 1,
+                end_seq: 2,
+                start_at: "2026-05-21T10:00:00.000Z".to_owned(),
+                end_at: "2026-05-21T10:10:00.000Z".to_owned(),
+                excerpt: "expanded excerpt".to_owned(),
+                message_count: 2,
+            }],
+        };
+        db.upsert_dreams_incremental(
+            "2026-05-21T10:00:00.000Z",
+            "2026-05-21T11:00:00.000Z",
+            "claude_incremental",
+            &[update],
+            None,
+        )
+        .expect("incremental update succeeds");
+
+        let topic = db
+            .get_dream_topic("dream::overlap-span")
+            .expect("get topic")
+            .expect("topic exists");
+        assert_eq!(topic.spans.len(), 1);
+        assert_eq!(topic.spans[0].span_id, "span::stable-overlap");
+        assert_eq!(topic.spans[0].start_seq, 1);
+        assert_eq!(topic.spans[0].end_seq, 2);
+        assert_eq!(topic.spans[0].excerpt, "expanded excerpt");
+    }
+
+    #[test]
+    fn dreams_list_topics_for_threads_returns_only_matching_topics() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let matching = DreamTopicDraft {
+            dream_id: "dream::matching".to_owned(),
+            title: "Matching".to_owned(),
+            summary: String::new(),
+            first_message_at: "2026-05-21T10:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T10:05:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.8,
+            message_count: 1,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::matching".to_owned(),
+                thread_id: "thread::matching".to_owned(),
+                workspace_dir: None,
+                start_seq: 1,
+                end_seq: 1,
+                start_at: "2026-05-21T10:00:00.000Z".to_owned(),
+                end_at: "2026-05-21T10:05:00.000Z".to_owned(),
+                excerpt: String::new(),
+                message_count: 1,
+            }],
+        };
+        let other = DreamTopicDraft {
+            dream_id: "dream::other".to_owned(),
+            title: "Other".to_owned(),
+            summary: String::new(),
+            first_message_at: "2026-05-21T11:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-21T11:05:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.8,
+            message_count: 1,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::other".to_owned(),
+                thread_id: "thread::other".to_owned(),
+                workspace_dir: None,
+                start_seq: 1,
+                end_seq: 1,
+                start_at: "2026-05-21T11:00:00.000Z".to_owned(),
+                end_at: "2026-05-21T11:05:00.000Z".to_owned(),
+                excerpt: String::new(),
+                message_count: 1,
+            }],
+        };
+        let old_matching = DreamTopicDraft {
+            dream_id: "dream::old-matching".to_owned(),
+            title: "Old Matching".to_owned(),
+            summary: String::new(),
+            first_message_at: "2026-05-19T10:00:00.000Z".to_owned(),
+            last_message_at: "2026-05-19T10:05:00.000Z".to_owned(),
+            source: "claude".to_owned(),
+            confidence: 0.8,
+            message_count: 1,
+            spans: vec![DreamSpanDraft {
+                span_id: "span::old-matching".to_owned(),
+                thread_id: "thread::matching".to_owned(),
+                workspace_dir: None,
+                start_seq: 1,
+                end_seq: 1,
+                start_at: "2026-05-19T10:00:00.000Z".to_owned(),
+                end_at: "2026-05-19T10:05:00.000Z".to_owned(),
+                excerpt: String::new(),
+                message_count: 1,
+            }],
+        };
+        db.replace_dreams_in_window(
+            "2026-05-19T00:00:00.000Z",
+            "2026-05-21T23:59:59.999Z",
+            "claude",
+            &[matching, other, old_matching],
+            None,
+        )
+        .expect("insert dreams");
+
+        let topics = db
+            .list_dream_topics_for_threads(
+                &["thread::matching".to_owned()],
+                Some("2026-05-21T00:00:00.000Z"),
+                20,
+            )
+            .expect("list topics by thread");
+
+        assert_eq!(
+            topics
+                .iter()
+                .map(|topic| topic.dream_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["dream::matching"]
+        );
+        assert_eq!(topics[0].spans[0].thread_id, "thread::matching");
     }
 }
