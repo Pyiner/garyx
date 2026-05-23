@@ -4133,15 +4133,14 @@ struct GaryxTeamCard: View {
 struct GaryxSkillsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var showsCreateSkill = false
+    @State private var showsDiscardSkillEditorConfirmation = false
 
     private var skillEditorPresented: Binding<Bool> {
         Binding(
             get: { model.selectedSkillEditor != nil },
             set: { isPresented in
                 if !isPresented {
-                    model.selectedSkillEditor = nil
-                    model.selectedSkillDocument = nil
-                    model.selectedSkillFileContent = ""
+                    requestCloseSkillEditor()
                 }
             }
         )
@@ -4184,10 +4183,42 @@ struct GaryxSkillsView: View {
             }
         }
         .fullScreenCover(isPresented: skillEditorPresented) {
-            GaryxFormSheet(title: "Skill Editor") {
+            GaryxFormSheet(title: "Skill Editor", onDone: requestCloseSkillEditor) {
                 GaryxSkillEditorCard()
             }
+            .interactiveDismissDisabled(skillEditorHasUnsavedChanges)
+            .confirmationDialog(
+                "Discard unsaved skill changes?",
+                isPresented: $showsDiscardSkillEditorConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Discard", role: .destructive) {
+                    closeSkillEditor()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Your current file edits have not been saved.")
+            }
         }
+    }
+
+    private var skillEditorHasUnsavedChanges: Bool {
+        guard let document = model.selectedSkillDocument, document.editable else { return false }
+        return model.selectedSkillFileContent != document.content
+    }
+
+    private func requestCloseSkillEditor() {
+        if skillEditorHasUnsavedChanges {
+            showsDiscardSkillEditorConfirmation = true
+        } else {
+            closeSkillEditor()
+        }
+    }
+
+    private func closeSkillEditor() {
+        model.selectedSkillEditor = nil
+        model.selectedSkillDocument = nil
+        model.selectedSkillFileContent = ""
     }
 }
 
@@ -6595,10 +6626,12 @@ struct GaryxAddToolbarButton: View {
 struct GaryxFormSheet<Content: View>: View {
     @Environment(\.dismiss) private var dismiss
     let title: String
+    let onDone: (() -> Void)?
     let content: Content
 
-    init(title: String, @ViewBuilder content: () -> Content) {
+    init(title: String, onDone: (() -> Void)? = nil, @ViewBuilder content: () -> Content) {
         self.title = title
+        self.onDone = onDone
         self.content = content()
     }
 
@@ -6616,7 +6649,11 @@ struct GaryxFormSheet<Content: View>: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
-                        dismiss()
+                        if let onDone {
+                            onDone()
+                        } else {
+                            dismiss()
+                        }
                     }
                 }
             }
