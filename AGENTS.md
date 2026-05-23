@@ -125,6 +125,10 @@ needs installed-app validation.
   action for the current screen.
 - Agent and team rows should use the same avatar data as the Mac app when
   available, with compact circular fallbacks rather than generic list icons.
+- Channel and bot rows should use gateway-provided channel icon data first.
+  Built-in channels need local raster fallbacks on mobile, and plugin SVG icons
+  should be rasterized to PNG before catalog delivery so mobile does not fall
+  back to initials for known icons or spin up WebKit on hot list rows.
 - Mobile sidebars should keep workspace navigation as a two-stage flow: list
   workspace folders first, then show the selected workspace's threads in that
   workspace detail layer. Do not dump every workspace's sessions inline at once.

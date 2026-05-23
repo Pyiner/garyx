@@ -32,6 +32,7 @@ regex = { workspace = true }
 aes = "0.8"
 ecb = "0.1"
 md5 = "0.7"
+resvg = { version = "0.45.1", default-features = false }
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = { workspace = true }

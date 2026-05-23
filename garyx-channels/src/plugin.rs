@@ -3140,12 +3140,15 @@ fn manifest_to_metadata(manifest: &PluginManifest) -> PluginMetadata {
 /// even a full macOS `.icns`-scale PNG rarely exceeds 200 KB) and
 /// cheap to hold in memory during response generation.
 const MAX_ICON_BYTES: u64 = 1_024 * 1_024;
+const RASTERIZED_SVG_ICON_MAX_EDGE_PX: u32 = 144;
 
 /// Read an icon file from disk and package it as a `data:` URL so
-/// it can ride inside the JSON catalog straight to the browser. The
+/// it can ride inside the JSON catalog straight to clients. The
 /// media type is derived from the file extension because the user-
 /// controlled install path guarantees one of the four sanctioned
-/// suffixes (SVG > PNG > WebP > JPG).
+/// suffixes (SVG > PNG > WebP > JPG). SVG files are rasterized to
+/// PNG so mobile clients do not need WebKit just to render a list
+/// avatar.
 ///
 /// Returns `None` on any of:
 /// - filesystem error (missing / permissions / etc.),
@@ -3158,13 +3161,12 @@ const MAX_ICON_BYTES: u64 = 1_024 * 1_024;
 /// malformed; the UI falls back to its generic logo instead.
 pub(crate) fn read_icon_as_data_url(path: &std::path::Path) -> Option<String> {
     use base64::Engine as _;
-    let media = match path
+    let extension = path
         .extension()
         .and_then(|e| e.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("svg") => "image/svg+xml",
+        .map(str::to_ascii_lowercase);
+    let media = match extension.as_deref() {
+        Some("svg") => "image/png",
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
@@ -3191,8 +3193,58 @@ pub(crate) fn read_icon_as_data_url(path: &std::path::Path) -> Option<String> {
         return None;
     }
     let bytes = std::fs::read(path).ok()?;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    let icon_bytes = if extension.as_deref() == Some("svg") {
+        rasterize_svg_icon(&bytes, path)?
+    } else {
+        bytes
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&icon_bytes);
     Some(format!("data:{media};base64,{encoded}"))
+}
+
+fn rasterize_svg_icon(bytes: &[u8], path: &std::path::Path) -> Option<Vec<u8>> {
+    let options = resvg::usvg::Options::default();
+    let tree = match resvg::usvg::Tree::from_data(bytes, &options) {
+        Ok(tree) => tree,
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "channel plugin SVG icon could not be parsed; falling back to generic logo"
+            );
+            return None;
+        }
+    };
+    let source_size = tree.size().to_int_size();
+    let source_max_edge = source_size.width().max(source_size.height());
+    if source_max_edge == 0 {
+        tracing::warn!(
+            path = %path.display(),
+            "channel plugin SVG icon has zero render size; falling back to generic logo"
+        );
+        return None;
+    }
+
+    let scale = RASTERIZED_SVG_ICON_MAX_EDGE_PX as f32 / source_max_edge as f32;
+    let width = ((source_size.width() as f32) * scale).round().max(1.0) as u32;
+    let height = ((source_size.height() as f32) * scale).round().max(1.0) as u32;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    match pixmap.encode_png() {
+        Ok(bytes) => Some(bytes),
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "channel plugin SVG icon could not be encoded as PNG; falling back to generic logo"
+            );
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -46,6 +46,13 @@ fn discord_catalog_exposes_form_schema_and_account_token() {
     let catalog = builtin_channel_catalog(&config.channels);
     let discord = catalog.iter().find(|e| e.id == "discord").unwrap();
     assert_eq!(discord.display_name, "Discord");
+    assert!(
+        discord
+            .icon_data_url
+            .as_deref()
+            .is_some_and(|icon| icon.starts_with("data:image/png;base64,")),
+        "Discord icon should be raster data so mobile rows do not need WebKit"
+    );
     assert_eq!(
         discord.config_methods,
         vec![garyx_channels::auth_flow::ConfigMethod::Form]

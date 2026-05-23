@@ -97,7 +97,7 @@ fn plugin_conversation_endpoint(
 }
 
 #[test]
-fn read_icon_as_data_url_handles_svg() {
+fn read_icon_as_data_url_rasterizes_svg_to_png() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("icon.svg");
     // Minimal but valid SVG — good enough for base64 round-trip.
@@ -108,16 +108,17 @@ fn read_icon_as_data_url_handles_svg() {
     .unwrap();
     let url = read_icon_as_data_url(&path).expect("icon read");
     assert!(
-        url.starts_with("data:image/svg+xml;base64,"),
-        "expected SVG data URL, got {url}"
+        url.starts_with("data:image/png;base64,"),
+        "expected PNG data URL, got {url}"
     );
-    // Base64 round-trip sanity: decoding the tail should reproduce the bytes.
+    // Mobile renders plugin icons through UIImage, so SVG catalog icons must
+    // be raster payloads rather than raw XML that would require WebKit.
     use base64::Engine as _;
-    let payload = url.trim_start_matches("data:image/svg+xml;base64,");
+    let payload = url.trim_start_matches("data:image/png;base64,");
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(payload)
         .expect("decode");
-    assert_eq!(decoded, std::fs::read(&path).unwrap());
+    assert!(decoded.starts_with(b"\x89PNG\r\n\x1a\n"));
 }
 
 #[test]

@@ -203,8 +203,24 @@ final class GaryxMobileModel: ObservableObject {
     private static let threadHistoryPageLimit = 120
     private static let threadHistoryUserQueryLimit = 10
     private static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
+    private static let assistantDeltaFlushDelayNanos: UInt64 = 50_000_000
     private static let gatewayReconnectInitialDelayNanos: UInt64 = 1_000_000_000
     private static let gatewayReconnectMaxDelayNanos: UInt64 = 10_000_000_000
+
+    private struct MessageListSignature: Equatable {
+        let count: Int
+        let fingerprint: Int
+    }
+
+    private struct TurnRowsCacheKey: Equatable {
+        let isRunning: Bool
+        let messages: MessageListSignature
+    }
+
+    private struct PendingAssistantDelta {
+        var targetId: String
+        var text: String
+    }
 
     @Published var gatewayURL: String
     @Published var gatewayAuthToken: String
@@ -213,8 +229,14 @@ final class GaryxMobileModel: ObservableObject {
     @Published var connectionState: GaryxMobileConnectionState = .disconnected
     @Published var threads: [GaryxThreadSummary] = []
     @Published var selectedThread: GaryxThreadSummary?
-    @Published var messages: [GaryxMobileMessage] = []
+    @Published var messages: [GaryxMobileMessage] = [] {
+        didSet {
+            selectedMessagesSignature = Self.messageListSignature(for: messages)
+            selectedThreadTurnRowsCacheKey = nil
+        }
+    }
     @Published var draft = ""
+    @Published private(set) var composerContextVersion = 0
     @Published var composerAttachments: [GaryxMobileComposerAttachment] = []
     @Published var isLoadingThreads = false
     @Published var isLoadingMoreThreads = false
@@ -332,7 +354,13 @@ final class GaryxMobileModel: ObservableObject {
     private var selectedThreadReconcileThreadId: String?
     private var selectedThreadActivitySignatures: [String: String] = [:]
     private var messagesByThread: [String: [GaryxMobileMessage]] = [:]
+    private var messageSignaturesByThread: [String: MessageListSignature] = [:]
+    private var selectedMessagesSignature = MessageListSignature(count: 0, fingerprint: 0)
+    private var selectedThreadTurnRowsCacheKey: TurnRowsCacheKey?
+    private var selectedThreadTurnRowsCache: [GaryxMobileTurnRow] = []
     private var activeAssistantMessageIdsByThread: [String: String] = [:]
+    private var pendingAssistantDeltasByThread: [String: PendingAssistantDelta] = [:]
+    private var assistantDeltaFlushTasksByThread: [String: Task<Void, Never>] = [:]
     private var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]
     private var gatewayRuntimeGeneration = UUID()
     private var selectedThreadRecoveryTask: Task<Void, Never>?
@@ -545,14 +573,19 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     var canSend: Bool {
-        hasComposerPayload && (
-            (!isSelectedThreadSending && !isSelectedThreadRemoteBusy)
-                || canQueueSelectedThreadInput
-        )
+        canSendComposerPayload(text: draft, attachments: composerAttachments)
     }
 
     var hasComposerPayload: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerAttachments.isEmpty
+    }
+
+    func canSendComposerPayload(text: String, attachments: [GaryxMobileComposerAttachment]) -> Bool {
+        let hasPayload = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
+        return hasPayload && (
+            (!isSelectedThreadSending && !isSelectedThreadRemoteBusy)
+                || canQueueSelectedThreadInput
+        )
     }
 
     var canQueueSelectedThreadInput: Bool {
@@ -626,6 +659,22 @@ final class GaryxMobileModel: ObservableObject {
         messagesByThread[threadId] ?? []
     }
 
+    func selectedThreadTurnRows() -> [GaryxMobileTurnRow] {
+        let isRunning = isSelectedThreadSending
+        let key = TurnRowsCacheKey(
+            isRunning: isRunning,
+            messages: selectedMessagesSignature
+        )
+        if selectedThreadTurnRowsCacheKey != key {
+            selectedThreadTurnRowsCache = GaryxMobileTurnRenderer.buildTurnRows(
+                messages: messages,
+                isRunningThread: isRunning
+            )
+            selectedThreadTurnRowsCacheKey = key
+        }
+        return selectedThreadTurnRowsCache
+    }
+
     private func setMessages(
         _ nextMessages: [GaryxMobileMessage],
         for threadId: String,
@@ -635,7 +684,13 @@ final class GaryxMobileModel: ObservableObject {
         if reconcileActiveAssistant {
             reconcileActiveAssistantMessageId(threadId: threadId, messages: &adjustedMessages)
         }
+        let nextSignature = Self.messageListSignature(for: adjustedMessages)
+        if messageSignaturesByThread[threadId] == nextSignature,
+           (selectedThread?.id != threadId || selectedMessagesSignature == nextSignature) {
+            return
+        }
         messagesByThread[threadId] = adjustedMessages
+        messageSignaturesByThread[threadId] = nextSignature
         if selectedThread?.id == threadId {
             messages = adjustedMessages
         }
@@ -661,7 +716,9 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     private func clearMessages(for threadId: String) {
+        discardPendingAssistantDelta(for: threadId)
         messagesByThread[threadId] = []
+        messageSignaturesByThread[threadId] = Self.messageListSignature(for: [])
         activeAssistantMessageIdsByThread[threadId] = nil
         if selectedThread?.id == threadId {
             messages = []
@@ -690,6 +747,70 @@ final class GaryxMobileModel: ObservableObject {
         var nextMessages = cachedMessages(for: threadId)
         update(&nextMessages)
         setMessages(nextMessages, for: threadId)
+    }
+
+    private func resetComposerDraft() {
+        draft = ""
+        composerAttachments = []
+        composerContextVersion &+= 1
+    }
+
+    private static func messageListSignature(for messages: [GaryxMobileMessage]) -> MessageListSignature {
+        var hasher = Hasher()
+        for message in messages {
+            hasher.combine(message.id)
+            hasher.combine(Self.roleSignature(message.role))
+            hasher.combine(message.text)
+            hasher.combine(message.timestamp)
+            hasher.combine(message.isStreaming)
+            hasher.combine(message.statusText)
+            hasher.combine(message.clientIntentId)
+            hasher.combine(message.pendingInputId)
+            hasher.combine(message.attachments.count)
+            for attachment in message.attachments {
+                hasher.combine(attachment.id)
+                hasher.combine(attachment.kind)
+                hasher.combine(attachment.name)
+                hasher.combine(attachment.mediaType)
+                hasher.combine(attachment.path)
+                hasher.combine(attachment.dataUrl)
+                hasher.combine(attachment.remoteUrl)
+            }
+            if let group = message.toolTraceGroup {
+                hasher.combine(group.live)
+                hasher.combine(group.entries.count)
+                for entry in group.entries {
+                    hasher.combine(entry.id)
+                    hasher.combine(entry.toolUseId)
+                    hasher.combine(entry.parentToolUseId)
+                    hasher.combine(entry.toolName)
+                    hasher.combine(entry.title)
+                    hasher.combine(entry.inputLabel)
+                    hasher.combine(entry.resultLabel)
+                    hasher.combine(entry.summaryText)
+                    hasher.combine(entry.status.rawValue)
+                    hasher.combine(entry.isError)
+                    hasher.combine(entry.timestamp)
+                    hasher.combine(entry.primaryPathBadge)
+                    hasher.combine(entry.inputText)
+                    hasher.combine(entry.resultText)
+                }
+            }
+        }
+        return MessageListSignature(count: messages.count, fingerprint: hasher.finalize())
+    }
+
+    private static func roleSignature(_ role: GaryxMobileMessage.Role) -> String {
+        switch role {
+        case .user:
+            "user"
+        case .assistant:
+            "assistant"
+        case .system:
+            "system"
+        case .tool:
+            "tool"
+        }
     }
 
     var agentTargets: [GaryxMobileAgentTarget] {
@@ -1074,7 +1195,11 @@ final class GaryxMobileModel: ObservableObject {
         lastError = nil
         showsSettings = false
         messagesByThread = [:]
+        messageSignaturesByThread = [:]
         activeAssistantMessageIdsByThread = [:]
+        pendingAssistantDeltasByThread = [:]
+        assistantDeltaFlushTasksByThread.values.forEach { $0.cancel() }
+        assistantDeltaFlushTasksByThread = [:]
 
         threads = Self.decodeDebugFixture([GaryxThreadSummary].self, from: """
         [
@@ -1212,6 +1337,7 @@ final class GaryxMobileModel: ObservableObject {
         ]
         if let selectedThread {
             messagesByThread[selectedThread.id] = messages
+            messageSignaturesByThread[selectedThread.id] = Self.messageListSignature(for: messages)
         }
 
         agents = Self.decodeDebugFixture(GaryxAgentsPage.self, from: """
@@ -1580,9 +1706,12 @@ final class GaryxMobileModel: ObservableObject {
         selectedThread = nil
         messages = []
         messagesByThread = [:]
+        messageSignaturesByThread = [:]
         activeAssistantMessageIdsByThread = [:]
-        draft = ""
-        composerAttachments = []
+        pendingAssistantDeltasByThread = [:]
+        assistantDeltaFlushTasksByThread.values.forEach { $0.cancel() }
+        assistantDeltaFlushTasksByThread = [:]
+        resetComposerDraft()
         draftThreadTitle = ""
         agents = []
         teams = []
@@ -1965,6 +2094,7 @@ final class GaryxMobileModel: ObservableObject {
             } else if previousSelectedId != nil {
                 selectedThread = nil
                 draftThreadTitle = ""
+                resetComposerDraft()
                 messages = []
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
@@ -2028,6 +2158,7 @@ final class GaryxMobileModel: ObservableObject {
     func selectThread(_ thread: GaryxThreadSummary) async {
         let previousThreadId = selectedThread?.id
         if previousThreadId != thread.id {
+            resetComposerDraft()
             selectedThreadRecoveryTask?.cancel()
             selectedThreadRecoveryTask = nil
             selectedThreadRecoveryThreadId = nil
@@ -2057,8 +2188,7 @@ final class GaryxMobileModel: ObservableObject {
         clearPendingBotDraft()
         selectedThread = nil
         draftThreadTitle = ""
-        draft = ""
-        composerAttachments = []
+        resetComposerDraft()
         messages = []
         activePanel = .chat
         setSidebarVisible(false)
@@ -2107,8 +2237,7 @@ final class GaryxMobileModel: ObservableObject {
             threads.insert(thread, at: 0)
             selectedThread = thread
             clearPendingBotDraft()
-            draft = ""
-            composerAttachments = []
+            resetComposerDraft()
             draftThreadTitle = thread.title
             activePanel = .chat
             clearMessages(for: thread.id)
@@ -2150,8 +2279,7 @@ final class GaryxMobileModel: ObservableObject {
         selectedThread = nil
         resetSelectedThreadHistoryPagination()
         draftThreadTitle = ""
-        draft = ""
-        composerAttachments = []
+        resetComposerDraft()
         messages = []
         activePanel = .chat
         setSidebarVisible(false)
@@ -2174,11 +2302,14 @@ final class GaryxMobileModel: ObservableObject {
             if selectedThread?.id == thread.id {
                 self.selectedThread = nil
                 draftThreadTitle = ""
+                resetComposerDraft()
                 messages = []
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
             }
+            discardPendingAssistantDelta(for: thread.id)
             messagesByThread[thread.id] = nil
+            messageSignaturesByThread[thread.id] = nil
             activeAssistantMessageIdsByThread[thread.id] = nil
             await refreshThreads()
         } catch {
@@ -2609,14 +2740,20 @@ final class GaryxMobileModel: ObservableObject {
         composerAttachments.removeAll { $0.id == attachment.id }
     }
 
-    func sendDraft() async {
-        guard canSend else { return }
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    @discardableResult
+    func sendDraft() async -> Bool {
+        await sendDraft(text: draft)
+    }
+
+    @discardableResult
+    func sendDraft(text rawText: String) async -> Bool {
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         let attachments = composerAttachments
-        guard !text.isEmpty || !attachments.isEmpty else { return }
-        draft = ""
-        composerAttachments = []
+        guard canSendComposerPayload(text: text, attachments: attachments) else { return false }
+        guard !text.isEmpty || !attachments.isEmpty else { return false }
+        resetComposerDraft()
         await send(text, attachments: attachments)
+        return true
     }
 
     func send(_ text: String, attachments: [GaryxMobileComposerAttachment] = []) async {
@@ -4262,11 +4399,14 @@ final class GaryxMobileModel: ObservableObject {
             if selectedThread?.id == threadId {
                 selectedThread = nil
                 draftThreadTitle = ""
+                resetComposerDraft()
                 messages = []
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
             }
+            discardPendingAssistantDelta(for: threadId)
             messagesByThread[threadId] = nil
+            messageSignaturesByThread[threadId] = nil
             activeAssistantMessageIdsByThread[threadId] = nil
             await refreshRemoteState()
             await refreshThreads()
@@ -4427,6 +4567,9 @@ final class GaryxMobileModel: ObservableObject {
     private func handle(_ event: GaryxChatStreamEvent, threadId: String, assistantMessageId: String, affectsActiveRun: Bool) {
         let eventThreadId = Self.threadId(from: event)
         updateRemoteBusyState(from: event)
+        if !Self.isAssistantDeltaEvent(event) {
+            flushPendingAssistantDelta(for: threadId)
+        }
         switch event {
         case .userMessage(let runId, _, let text, let imageCount):
             appendRemoteUserMessage(
@@ -4538,6 +4681,35 @@ final class GaryxMobileModel: ObservableObject {
         guard !delta.isEmpty else { return }
         let targetId = activeAssistantMessageIdsByThread[threadId]
             ?? "stream-assistant-\(threadId)-\(UUID().uuidString)"
+        activeAssistantMessageIdsByThread[threadId] = targetId
+        if var pending = pendingAssistantDeltasByThread[threadId],
+           pending.targetId == targetId {
+            pending.text += delta
+            pendingAssistantDeltasByThread[threadId] = pending
+        } else {
+            pendingAssistantDeltasByThread[threadId] = PendingAssistantDelta(targetId: targetId, text: delta)
+        }
+        scheduleAssistantDeltaFlush(for: threadId)
+    }
+
+    private func scheduleAssistantDeltaFlush(for threadId: String) {
+        guard assistantDeltaFlushTasksByThread[threadId] == nil else { return }
+        assistantDeltaFlushTasksByThread[threadId] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.assistantDeltaFlushDelayNanos)
+            await MainActor.run {
+                self?.flushPendingAssistantDelta(for: threadId)
+            }
+        }
+    }
+
+    private func flushPendingAssistantDelta(for threadId: String) {
+        assistantDeltaFlushTasksByThread[threadId]?.cancel()
+        assistantDeltaFlushTasksByThread[threadId] = nil
+        guard let pending = pendingAssistantDeltasByThread.removeValue(forKey: threadId),
+              !pending.text.isEmpty else {
+            return
+        }
+        let targetId = pending.targetId
         mutateMessages(for: threadId) { messages in
             guard let index = messages.firstIndex(where: { $0.id == targetId }) else {
                 activeAssistantMessageIdsByThread[threadId] = targetId
@@ -4545,16 +4717,29 @@ final class GaryxMobileModel: ObservableObject {
                     GaryxMobileMessage(
                         id: targetId,
                         role: .assistant,
-                        text: delta,
+                        text: pending.text,
                         timestamp: nil,
                         isStreaming: true
                     )
                 )
                 return
             }
-            messages[index].text += delta
+            messages[index].text += pending.text
             messages[index].isStreaming = true
         }
+    }
+
+    private func discardPendingAssistantDelta(for threadId: String) {
+        assistantDeltaFlushTasksByThread[threadId]?.cancel()
+        assistantDeltaFlushTasksByThread[threadId] = nil
+        pendingAssistantDeltasByThread[threadId] = nil
+    }
+
+    private static func isAssistantDeltaEvent(_ event: GaryxChatStreamEvent) -> Bool {
+        if case .assistantDelta = event {
+            return true
+        }
+        return false
     }
 
     private func appendRemoteUserMessage(runId: String, threadId: String, text: String, imageCount: Int) {
@@ -4643,6 +4828,7 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     private func suspendStreamingAssistantForBackground(threadId: String) -> String? {
+        flushPendingAssistantDelta(for: threadId)
         let activeAssistantMessageId = activeAssistantMessageIdsByThread[threadId]
         var preservedAssistantId: String?
         mutateMessages(for: threadId) { messages in
@@ -5583,6 +5769,9 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     private func cancelActiveSocket() {
+        for threadId in Array(pendingAssistantDeltasByThread.keys) {
+            flushPendingAssistantDelta(for: threadId)
+        }
         for task in activeReaderTasksByThread.values {
             task.cancel()
         }
@@ -5601,6 +5790,7 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     private func cancelActiveSocket(for threadId: String) {
+        flushPendingAssistantDelta(for: threadId)
         activeReaderTasksByThread[threadId]?.cancel()
         activeReaderTasksByThread[threadId] = nil
         activeTasksByThread[threadId]?.cancel(with: .goingAway, reason: nil)
@@ -5635,6 +5825,7 @@ final class GaryxMobileModel: ObservableObject {
             return
         }
 
+        flushPendingAssistantDelta(for: resolvedThreadId)
         activeReaderTasksByThread[resolvedThreadId]?.cancel()
         activeReaderTasksByThread[resolvedThreadId] = nil
         activeTasksByThread[resolvedThreadId] = nil

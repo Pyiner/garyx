@@ -224,12 +224,12 @@ pub struct PluginHeader {
     /// PNG / JPG / SVG / WebP. `garyx plugins install` copies it
     /// next to the binary. At catalog-build time the gateway reads
     /// the file and bakes it inline as a `data:` URL in the
-    /// `SubprocessPluginCatalogEntry.icon_data_url` field — the
-    /// desktop UI never touches the filesystem directly. Paths
-    /// are validated against `..`-traversal and absolute-path
-    /// tricks before any read (see
-    /// `crate::plugin::resolve_plugin_icon_path`). `None` means the
-    /// UI should fall back to a generic logo.
+    /// `SubprocessPluginCatalogEntry.icon_data_url` field; SVG files
+    /// are rasterized to PNG first so every client can render the
+    /// catalog without filesystem access or a WebView. Paths are
+    /// validated against `..`-traversal and absolute-path tricks
+    /// before any read (see `crate::plugin::resolve_plugin_icon_path`).
+    /// `None` means the UI should fall back to a generic logo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
 }

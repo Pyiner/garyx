@@ -645,10 +645,10 @@ async fn respawn_with_failing_new_preserves_old() {
 
 /// Plugin-supplied brand icon: install drops `icon.svg` next to the
 /// binary, the manifest references it, and `subprocess_plugin_catalog()`
-/// bakes the file into a data URL so the desktop UI can bind it
-/// directly to `<img src={...}>` without a second round-trip.
+/// bakes a mobile-safe raster data URL so clients can bind it directly
+/// without a second round-trip or per-row WebKit renderer.
 #[tokio::test]
-async fn plugin_icon_flows_through_catalog_as_data_url() {
+async fn plugin_svg_icon_flows_through_catalog_as_png_data_url() {
     if !python3_available() {
         eprintln!("skipping respawn_contract: python3 not available");
         return;
@@ -724,16 +724,16 @@ type = "object"
         .as_deref()
         .expect("icon_data_url must be populated when plugin ships an icon");
     assert!(
-        data_url.starts_with("data:image/svg+xml;base64,"),
-        "expected SVG data URL, got {data_url}"
+        data_url.starts_with("data:image/png;base64,"),
+        "expected PNG data URL, got {data_url}"
     );
-    // Round-trip the payload to make sure the bytes match what we
-    // dropped on disk — otherwise a subtle encoding bug (double
-    // base64, extra newlines) would silently corrupt icons.
+    // Round-trip the payload to make sure the catalog carries a real raster
+    // image. Otherwise mobile would have to fall back to initials for SVG
+    // plugin icons.
     use base64::Engine as _;
-    let payload = data_url.trim_start_matches("data:image/svg+xml;base64,");
+    let payload = data_url.trim_start_matches("data:image/png;base64,");
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(payload)
         .expect("decode");
-    assert_eq!(decoded, icon_bytes);
+    assert!(decoded.starts_with(b"\x89PNG\r\n\x1a\n"));
 }

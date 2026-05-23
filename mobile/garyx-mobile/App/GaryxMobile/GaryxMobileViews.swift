@@ -982,6 +982,7 @@ private struct GaryxSidebarBotsSection: View {
     }
 
     var body: some View {
+        let visibleThreadIds = model.sidebarVisibleThreadIds
         VStack(alignment: .leading, spacing: 0) {
             if let selectedGroup {
                 GaryxBotThreadDetailSection(
@@ -996,6 +997,7 @@ private struct GaryxSidebarBotsSection: View {
                     ForEach(groups) { group in
                         GaryxSidebarBotRow(
                             group: group,
+                            canDrillDown: !group.sidebarChildConversationEntries(visibleThreadIds: visibleThreadIds).isEmpty,
                             onSelect: {
                                 withAnimation(GaryxMobileMotion.sidebarDrilldown) {
                                     activeDrilldown = .bot(group.id)
@@ -1019,14 +1021,10 @@ private struct GaryxSidebarBotsSection: View {
 }
 
 private struct GaryxSidebarBotRow: View {
-    @EnvironmentObject private var model: GaryxMobileModel
     let group: GaryxMobileBotGroup
+    let canDrillDown: Bool
     let onSelect: () -> Void
     let onOpenRoot: () -> Void
-
-    private var canDrillDown: Bool {
-        !group.sidebarChildConversationEntries(visibleThreadIds: model.sidebarVisibleThreadIds).isEmpty
-    }
 
     private var rootCanOpen: Bool {
         let mainThreadId = group.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1801,10 +1799,7 @@ struct GaryxConversationView: View {
                         }
                     }
                     GaryxMobileTurnRowsView(
-                        rows: GaryxMobileTurnRenderer.buildTurnRows(
-                            messages: model.messages,
-                            isRunningThread: model.isSelectedThreadSending
-                        ),
+                        rows: model.selectedThreadTurnRows(),
                         forceRunningLastTurn: model.isSelectedThreadSending
                     )
                     if model.showsTailThinkingIndicator {
@@ -2911,15 +2906,50 @@ private enum GaryxComposerLayout {
     static let draftFieldIdentity = "garyx-composer-draft-field"
 }
 
+private enum GaryxDataURLImageCache {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 128
+        cache.totalCostLimit = 32 * 1024 * 1024
+        return cache
+    }()
+
+    static func image(from rawValue: String?) -> UIImage? {
+        let raw = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        let cacheKey = NSString(string: raw)
+        if let cached = cache.object(forKey: cacheKey) {
+            return cached
+        }
+        let encoded = raw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? raw
+        guard let data = Data(base64Encoded: encoded),
+              let image = UIImage(data: data) else {
+            return nil
+        }
+        cache.setObject(image, forKey: cacheKey, cost: data.count)
+        return image
+    }
+}
+
 struct GaryxComposer: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let isFocused: FocusState<Bool>.Binding
+    @State private var draftText = ""
+    @State private var draftContextVersion = 0
     @State private var isPickingAttachments = false
     @State private var isPickingPhotos = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
 
+    private var hasLocalPayload: Bool {
+        !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.composerAttachments.isEmpty
+    }
+
+    private var canSendLocalPayload: Bool {
+        model.canSendComposerPayload(text: draftText, attachments: model.composerAttachments)
+    }
+
     private var showsSendButton: Bool {
-        !model.isSelectedThreadSending || model.hasComposerPayload
+        !model.isSelectedThreadSending || hasLocalPayload
     }
 
     var body: some View {
@@ -2955,6 +2985,24 @@ struct GaryxComposer: View {
             Task {
                 await attachPhotos(items)
                 selectedPhotoItems = []
+            }
+        }
+        .onAppear {
+            draftContextVersion = model.composerContextVersion
+            draftText = model.draft
+        }
+        .onChange(of: model.composerContextVersion) { _, newValue in
+            draftContextVersion = newValue
+            draftText = model.draft
+        }
+        .onChange(of: model.draft) { _, newValue in
+            guard newValue != draftText else { return }
+            draftText = newValue
+        }
+        .onDisappear {
+            guard draftContextVersion == model.composerContextVersion else { return }
+            if model.draft != draftText {
+                model.draft = draftText
             }
         }
     }
@@ -2994,7 +3042,7 @@ struct GaryxComposer: View {
 
     private var composerInput: some View {
         ZStack(alignment: .topLeading) {
-            if model.draft.isEmpty {
+            if draftText.isEmpty {
                 Text(placeholderText)
                     .font(GaryxFont.subheadline())
                     .foregroundStyle(Color(.placeholderText))
@@ -3002,7 +3050,7 @@ struct GaryxComposer: View {
                     .allowsHitTesting(false)
             }
 
-            TextField("", text: $model.draft, axis: .vertical)
+            TextField("", text: $draftText, axis: .vertical)
                 .id(GaryxComposerLayout.draftFieldIdentity)
                 .font(GaryxFont.subheadline())
                 .foregroundStyle(.primary)
@@ -3010,7 +3058,7 @@ struct GaryxComposer: View {
                 .lineLimit(1...4)
                 .submitLabel(.send)
                 .onSubmit {
-                    Task { await model.sendDraft() }
+                    Task { await sendLocalDraft() }
                 }
         }
         .frame(maxWidth: .infinity, minHeight: 34, alignment: .topLeading)
@@ -3049,16 +3097,16 @@ struct GaryxComposer: View {
 
             if showsSendButton {
                 Button {
-                    Task { await model.sendDraft() }
+                    Task { await sendLocalDraft() }
                 } label: {
                     GaryxCircleBadge(
                         systemName: "arrow.up",
-                        foreground: model.canSend ? Color(.systemBackground) : Color(.systemGray2),
-                        background: model.canSend ? Color(.label) : Color(.systemGray5)
+                        foreground: canSendLocalPayload ? Color(.systemBackground) : Color(.systemGray2),
+                        background: canSendLocalPayload ? Color(.label) : Color(.systemGray5)
                     )
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.canSend)
+                .disabled(!canSendLocalPayload)
                 .accessibilityLabel("Send")
             }
         }
@@ -3155,8 +3203,19 @@ struct GaryxComposer: View {
 
     private func insertSlashCommand(_ command: GaryxSlashCommand) {
         let normalizedName = command.name.hasPrefix("/") ? command.name : "/\(command.name)"
-        model.draft = normalizedName + " "
+        draftText = normalizedName + " "
+        model.draft = draftText
         isFocused.wrappedValue = true
+    }
+
+    private func sendLocalDraft() async {
+        guard canSendLocalPayload else { return }
+        let text = draftText
+        draftText = ""
+        let sent = await model.sendDraft(text: text)
+        if !sent {
+            draftText = text
+        }
     }
 
     private func configuredBot(for group: GaryxMobileBotGroup) -> GaryxConfiguredBot? {
@@ -3183,11 +3242,7 @@ struct GaryxComposer: View {
     }
 
     private static func decodedMenuIcon(from raw: String?) -> UIImage? {
-        let stripped = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !stripped.isEmpty else { return nil }
-        let encoded = stripped.split(separator: ",", maxSplits: 1).last.map(String.init) ?? stripped
-        guard let data = Data(base64Encoded: encoded) else { return nil }
-        return UIImage(data: data)
+        GaryxDataURLImageCache.image(from: raw)
     }
 
     private func attachPhotos(_ items: [PhotosPickerItem]) async {
@@ -3365,11 +3420,7 @@ struct GaryxAttachmentChip: View {
     }
 
     private var decodedThumbnail: UIImage? {
-        let raw = (attachment.previewDataUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else { return nil }
-        let encoded = raw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? raw
-        guard let data = Data(base64Encoded: encoded) else { return nil }
-        return UIImage(data: data)
+        GaryxDataURLImageCache.image(from: attachment.previewDataUrl)
     }
 }
 
@@ -8535,6 +8586,11 @@ struct GaryxChannelLogoView: View {
                     .resizable()
                     .scaledToFit()
                     .padding(diameter * 0.16)
+            } else if let image = builtInFallbackImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(diameter * 0.16)
             } else if let svgDataUrl {
                 GaryxSVGIconDataURLView(dataURL: svgDataUrl)
                     .padding(diameter * 0.16)
@@ -8555,11 +8611,22 @@ struct GaryxChannelLogoView: View {
     }
 
     private var decodedImage: UIImage? {
-        let raw = (iconDataUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else { return nil }
-        let encoded = raw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? raw
-        guard let data = Data(base64Encoded: encoded) else { return nil }
-        return UIImage(data: data)
+        GaryxDataURLImageCache.image(from: iconDataUrl)
+    }
+
+    private var builtInFallbackImage: UIImage? {
+        switch channel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "telegram":
+            UIImage(named: "ChannelTelegram")
+        case "discord":
+            UIImage(named: "ChannelDiscord")
+        case "feishu":
+            UIImage(named: "ChannelFeishu")
+        case "weixin":
+            UIImage(named: "ChannelWeixin")
+        default:
+            nil
+        }
     }
 
     private var svgDataUrl: String? {
@@ -8758,11 +8825,7 @@ struct GaryxAgentAvatarView: View {
     }
 
     private var decodedImage: UIImage? {
-        let raw = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty else { return nil }
-        let encoded = raw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? raw
-        guard let data = Data(base64Encoded: encoded) else { return nil }
-        return UIImage(data: data)
+        GaryxDataURLImageCache.image(from: avatarDataUrl)
     }
 
     private var remoteAvatarURL: URL? {

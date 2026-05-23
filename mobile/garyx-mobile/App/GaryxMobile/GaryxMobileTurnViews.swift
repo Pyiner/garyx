@@ -88,22 +88,8 @@ struct GaryxTurnSummaryView<Content: View>: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    TimelineView(.periodic(from: Date(), by: 1)) { context in
-                        let label = summaryLabel(now: context.date)
-                        if isRunning {
-                            GaryxShimmerText(
-                                text: label,
-                                font: GaryxFont.footnote(weight: .medium)
-                            )
-                            .lineLimit(1)
-                        } else {
-                            Text(label)
-                                .font(GaryxFont.footnote(weight: .medium))
-                                .foregroundStyle(GaryxTheme.secondaryText)
-                                .lineLimit(1)
-                        }
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
+                    summaryText
+                        .fixedSize(horizontal: true, vertical: false)
 
                     Rectangle()
                         .fill(GaryxTheme.hairline)
@@ -137,6 +123,28 @@ struct GaryxTurnSummaryView<Content: View>: View {
 
     private var isRunning: Bool {
         turn.isRunning || forceRunning
+    }
+
+    @ViewBuilder
+    private var summaryText: some View {
+        if isRunning {
+            TimelineView(.periodic(from: Date(), by: 1)) { context in
+                GaryxShimmerText(
+                    text: summaryLabel(now: context.date),
+                    font: GaryxFont.footnote(weight: .medium)
+                )
+                .lineLimit(1)
+            }
+        } else {
+            summaryTextLabel(summaryLabel(now: Date()))
+        }
+    }
+
+    private func summaryTextLabel(_ label: String) -> some View {
+        Text(label)
+            .font(GaryxFont.footnote(weight: .medium))
+            .foregroundStyle(isRunning ? GaryxTheme.accent : GaryxTheme.secondaryText)
+            .lineLimit(1)
     }
 
     private func summaryLabel(now: Date) -> String {
