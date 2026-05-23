@@ -5871,7 +5871,8 @@ struct GaryxMobileSettingsPanel: View {
         GaryxPanelScaffold(
             title: "Settings",
             subtitle: model.activeSettingsTab.label,
-            onRefresh: { await model.connectAndRefresh() }
+            onRefresh: { await model.connectAndRefresh() },
+            background: Color(.systemGroupedBackground)
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 GaryxSettingsTabStrip()
@@ -5981,17 +5982,22 @@ struct GaryxSettingsManageContent: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GaryxSectionBlock(title: "Manage") {
-                GaryxCompactListGroup {
-                    ForEach(Array(panels.enumerated()), id: \.element.id) { index, panel in
-                        GaryxSettingsPanelLinkRow(panel: panel)
-                        if index < panels.count - 1 {
-                            GaryxCompactRowDivider()
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Manage")
+                .font(GaryxFont.caption(weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+
+            VStack(spacing: 0) {
+                ForEach(Array(panels.enumerated()), id: \.element.id) { index, panel in
+                    GaryxSettingsPanelLinkRow(panel: panel)
+                    if index < panels.count - 1 {
+                        Divider()
+                            .padding(.leading, 54)
                     }
                 }
             }
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }
 }
@@ -6008,7 +6014,7 @@ struct GaryxSettingsPanelLinkRow: View {
                 Image(systemName: panel.iconName)
                     .font(GaryxFont.system(size: 15, weight: .semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 22, height: 22)
+                    .frame(width: 28, height: 28)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(panel.label)
@@ -6027,8 +6033,9 @@ struct GaryxSettingsPanelLinkRow: View {
                     .font(GaryxFont.system(size: 11, weight: .semibold))
                     .foregroundStyle(.tertiary)
             }
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 16)
             .padding(.vertical, 9)
+            .frame(minHeight: 52)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -6309,6 +6316,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
     let title: String
     let subtitle: String
     let onRefresh: (() async -> Void)?
+    let background: Color
     let content: Content
     let actions: Actions
 
@@ -6316,12 +6324,14 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         title: String,
         subtitle: String,
         onRefresh: (() async -> Void)? = nil,
+        background: Color = GaryxTheme.background,
         @ViewBuilder content: () -> Content,
         @ViewBuilder actions: () -> Actions
     ) {
         self.title = title
         self.subtitle = subtitle
         self.onRefresh = onRefresh
+        self.background = background
         self.content = content()
         self.actions = actions()
     }
@@ -6339,7 +6349,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
                 await onRefresh()
             }
         }
-        .background(GaryxTheme.background)
+        .background(background)
         .garyxAdaptiveTopBar {
             HStack(spacing: 10) {
                 GaryxSidebarMenuButton {
@@ -6385,12 +6395,14 @@ extension GaryxPanelScaffold where Actions == EmptyView {
         title: String,
         subtitle: String,
         onRefresh: (() async -> Void)? = nil,
+        background: Color = GaryxTheme.background,
         @ViewBuilder content: () -> Content
     ) {
         self.init(
             title: title,
             subtitle: subtitle,
             onRefresh: onRefresh,
+            background: background,
             content: content,
             actions: { EmptyView() }
         )
