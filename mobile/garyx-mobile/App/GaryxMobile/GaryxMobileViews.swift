@@ -225,9 +225,12 @@ struct GaryxShellView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var sidebarDragOffset: CGFloat = 0
+    @State private var sidebarDragAxis: GaryxSidebarDragAxis?
 
     private let sidebarWidth: CGFloat = 330
     private let sidebarEdgeGestureWidth: CGFloat = 24
+    private let sidebarAxisDecisionDistance: CGFloat = 14
+    private let sidebarAxisDecisionRatio: CGFloat = 1.5
 
     var body: some View {
         GeometryReader { proxy in
@@ -301,7 +304,7 @@ struct GaryxShellView: View {
                     .frame(width: 28, height: containerSize.height)
                     .offset(x: closeStripX)
                     .contentShape(Rectangle())
-                    .gesture(closingSidebarGesture(sidebarWidth: width))
+                    .simultaneousGesture(closingSidebarGesture(sidebarWidth: width))
                     .zIndex(3)
                     .accessibilityHidden(true)
             }
@@ -322,15 +325,24 @@ struct GaryxShellView: View {
     }
 
     private func openingSidebarGesture(sidebarWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .global)
+        DragGesture(minimumDistance: 18, coordinateSpace: .global)
             .onChanged { value in
-                guard !model.sidebarVisible, isOpeningSidebarGesture(value) else {
-                    return
+                guard !model.sidebarVisible else { return }
+                if sidebarDragAxis == nil {
+                    sidebarDragAxis = decideSidebarAxis(
+                        translation: value.translation,
+                        startLocation: value.startLocation,
+                        opening: true
+                    )
                 }
+                guard sidebarDragAxis == .horizontal else { return }
                 sidebarDragOffset = max(0, min(sidebarWidth, value.translation.width))
             }
             .onEnded { value in
-                guard !model.sidebarVisible, isOpeningSidebarGesture(value) else {
+                defer {
+                    sidebarDragAxis = nil
+                }
+                guard !model.sidebarVisible, sidebarDragAxis == .horizontal else {
                     resetSidebarDrag()
                     return
                 }
@@ -341,15 +353,24 @@ struct GaryxShellView: View {
     }
 
     private func closingSidebarGesture(sidebarWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .global)
+        DragGesture(minimumDistance: 18, coordinateSpace: .global)
             .onChanged { value in
-                guard model.sidebarVisible, isClosingSidebarGesture(value) else {
-                    return
+                guard model.sidebarVisible else { return }
+                if sidebarDragAxis == nil {
+                    sidebarDragAxis = decideSidebarAxis(
+                        translation: value.translation,
+                        startLocation: value.startLocation,
+                        opening: false
+                    )
                 }
+                guard sidebarDragAxis == .horizontal else { return }
                 sidebarDragOffset = min(0, max(-sidebarWidth, value.translation.width))
             }
             .onEnded { value in
-                guard model.sidebarVisible, isClosingSidebarGesture(value) else {
+                defer {
+                    sidebarDragAxis = nil
+                }
+                guard model.sidebarVisible, sidebarDragAxis == .horizontal else {
                     resetSidebarDrag()
                     return
                 }
@@ -359,18 +380,29 @@ struct GaryxShellView: View {
             }
     }
 
-    private func isOpeningSidebarGesture(_ value: DragGesture.Value) -> Bool {
-        let horizontal = value.translation.width
-        let vertical = value.translation.height
-        return value.startLocation.x <= sidebarEdgeGestureWidth
-            && horizontal > 0
-            && abs(horizontal) > abs(vertical) * 1.35
-    }
-
-    private func isClosingSidebarGesture(_ value: DragGesture.Value) -> Bool {
-        let horizontal = value.translation.width
-        let vertical = value.translation.height
-        return horizontal < 0 && abs(horizontal) > abs(vertical) * 1.05
+    private func decideSidebarAxis(
+        translation: CGSize,
+        startLocation: CGPoint,
+        opening: Bool
+    ) -> GaryxSidebarDragAxis? {
+        let horizontal = translation.width
+        let vertical = translation.height
+        let horizontalMag = abs(horizontal)
+        let verticalMag = abs(vertical)
+        let dominant = max(horizontalMag, verticalMag)
+        guard dominant >= sidebarAxisDecisionDistance else { return nil }
+        guard horizontalMag > verticalMag * sidebarAxisDecisionRatio else {
+            return .vertical
+        }
+        if opening {
+            guard horizontal > 0,
+                  startLocation.x <= sidebarEdgeGestureWidth else {
+                return .vertical
+            }
+        } else {
+            guard horizontal < 0 else { return .vertical }
+        }
+        return .horizontal
     }
 
     private func finishGesture(open: Bool) {
@@ -399,6 +431,11 @@ struct GaryxShellView: View {
             for: nil
         )
     }
+}
+
+private enum GaryxSidebarDragAxis {
+    case horizontal
+    case vertical
 }
 
 struct GaryxMainPanelView: View {
@@ -502,7 +539,7 @@ struct GaryxThreadSidebar: View {
     }
 
     private var threadListWithBottomBar: some View {
-        ScrollView {
+        ScrollView(.vertical, showsIndicators: false) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if activeDrilldown == nil {
                     GaryxSidebarNavigationList()
