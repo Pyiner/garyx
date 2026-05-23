@@ -35,6 +35,7 @@ type AppLeftRailProps = {
   isDreamsView: boolean;
   isBrowserView: boolean;
   showAutoResearch: boolean;
+  showDreams: boolean;
   settingsActiveTab: SettingsTabId;
   selectedAutomationId: string | null;
   activeBotConversationGroupId: string | null;
@@ -89,6 +90,7 @@ export function AppLeftRail({
   isDreamsView,
   isBrowserView,
   showAutoResearch,
+  showDreams,
   settingsActiveTab,
   selectedAutomationId,
   activeBotConversationGroupId,
@@ -195,14 +197,16 @@ export function AppLeftRail({
               <AutomationIcon />
               <span>{t('Automation')}</span>
             </button>
-            <button
-              className={`sidebar-action ${isDreamsView ? 'active' : ''}`}
-              onClick={onOpenDreams}
-              type="button"
-            >
-              <DreamsIcon />
-              <span>{t('Dreams')}</span>
-            </button>
+            {showDreams ? (
+              <button
+                className={`sidebar-action ${isDreamsView ? 'active' : ''}`}
+                onClick={onOpenDreams}
+                type="button"
+              >
+                <DreamsIcon />
+                <span>{t('Dreams')}</span>
+              </button>
+            ) : null}
             <button
               className={`sidebar-action ${isTasksView ? 'active' : ''}`}
               onClick={onOpenTasks}

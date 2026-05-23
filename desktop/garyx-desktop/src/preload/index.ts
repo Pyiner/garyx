@@ -37,8 +37,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:start-channel-auth-flow", input),
   pollChannelAuthFlow: (input) =>
     ipcRenderer.invoke("garyx:poll-channel-auth-flow", input),
-  saveGatewaySettings: (config) =>
-    ipcRenderer.invoke("garyx:save-gateway-settings", config),
+  saveGatewaySettings: (config, options) =>
+    ipcRenderer.invoke("garyx:save-gateway-settings", config, options),
   selectWorkspace: (input) =>
     ipcRenderer.invoke("garyx:select-workspace", input),
   addWorkspace: () => ipcRenderer.invoke("garyx:add-workspace"),

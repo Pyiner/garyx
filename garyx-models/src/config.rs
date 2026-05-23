@@ -1124,7 +1124,8 @@ impl Default for PluginsConfig {
 /// Dreams topic extraction and automatic scan configuration.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct DreamsConfig {
-    /// Master switch. Manual scans stay available when this is false.
+    /// Master switch for app entry points and automatic scans. API/CLI
+    /// manual scans stay available when this is false.
     #[serde(default)]
     pub enabled: bool,
     /// Seconds between automatic scan attempts while enabled.

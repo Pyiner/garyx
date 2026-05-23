@@ -60,6 +60,7 @@ import type {
   GetThreadHistoryInput,
   GetSkillEditorInput,
   GatewayConfigDocument,
+  GatewaySettingsSaveRequestOptions,
   DeleteTaskInput,
   ListAutoResearchRunsInput,
   ListCandidatesInput,
@@ -561,9 +562,13 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     "garyx:save-gateway-settings",
-    async (_event, config: GatewayConfigDocument) => {
+    async (
+      _event,
+      config: GatewayConfigDocument,
+      options?: GatewaySettingsSaveRequestOptions,
+    ) => {
       const settings = await resolveSettings();
-      return saveGatewaySettings(settings, config);
+      return saveGatewaySettings(settings, config, options);
     },
   );
 

@@ -1871,6 +1871,7 @@ export function AppShell() {
     handleDeleteSlashCommand,
     handleRetrySettingsView,
     handleSaveGatewaySettings,
+    handleSaveGatewaySettingsPatch,
     handleSaveLocalSettingsDraft,
     handleSaveLocalSettingsNow,
     handleSelectSettingsTab,
@@ -2807,16 +2808,24 @@ export function AppShell() {
     typeof gatewaySettingsDraft?.desktop?.labs?.auto_research === "boolean"
       ? gatewaySettingsDraft.desktop.labs.auto_research
       : true;
+  const showDreamsFeature = Boolean(gatewaySettingsDraft?.dreams?.enabled);
   const isAgentsView = contentView === "agents";
   const isTeamsView = contentView === "teams";
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
-  const isDreamsView = contentView === "dreams";
+  const isDreamsView = contentView === "dreams" && showDreamsFeature;
   const shouldShowConversationRail = contentView === "thread";
   const visibleSelectedThreadId = shouldShowConversationRail ? selectedThreadId : null;
   const visibleThreadEntrySelectionSource = shouldShowConversationRail
     ? threadEntrySelectionSource
     : null;
+
+  useLayoutEffect(() => {
+    if (contentView === "dreams" && !showDreamsFeature) {
+      setContentView("thread");
+    }
+  }, [contentView, setContentView, showDreamsFeature]);
+
   const botRootSelectedThreadId =
     visibleThreadEntrySelectionSource === "bot-root" ? visibleSelectedThreadId : null;
   const botConversationSelectedThreadId =
@@ -7999,6 +8008,7 @@ export function AppShell() {
         isAutomationView={isAutomationView}
         isAutoResearchView={isAutoResearchView}
         showAutoResearch={showAutoResearchLab}
+        showDreams={showDreamsFeature}
         isAgentsView={isAgentsView}
         isBrowserView={isBrowserView}
         isTeamsView={isTeamsView}
@@ -8321,6 +8331,9 @@ export function AppShell() {
                     }}
                     onSaveGatewaySettings={(options) => {
                       return handleSaveGatewaySettings(options);
+                    }}
+                    onSaveGatewaySettingsPatch={(patch, options) => {
+                      return handleSaveGatewaySettingsPatch(patch, options);
                     }}
                     onOpenGatewaySetup={() => {
                       void handleOpenGatewaySetup();
@@ -8647,6 +8660,7 @@ export function AppShell() {
                 showAutomationRunInitialPlaceholder={
                   showAutomationRunInitialPlaceholder
                 }
+                showDreams={showDreamsFeature}
                 showAutomationRunTailLoading={showAutomationRunTailLoading}
                 showHistoryLoadingPlaceholder={showHistoryLoadingPlaceholder}
                 showPendingAckLoading={showPendingAckLoading}

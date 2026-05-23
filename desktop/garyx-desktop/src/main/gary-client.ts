@@ -55,6 +55,7 @@ import type {
   GatewayProbeResult,
   GatewaySettingsPayload,
   GatewaySettingsSaveResult,
+  GatewaySettingsSaveRequestOptions,
   GatewaySettingsSource,
   GetThreadHistoryInput,
   InterruptResult,
@@ -2755,15 +2756,17 @@ export async function validateChannelAccount(
 export async function saveGatewaySettings(
   settings: DesktopSettings,
   config: GatewayConfigDocument,
+  options?: GatewaySettingsSaveRequestOptions,
 ): Promise<GatewaySettingsSaveResult> {
   const normalizedConfig = stripNullObjectFields(
     stripLegacyGatewayConfigFields(config),
   );
+  const merge = options?.merge === true;
   const result = await requestJson<{
     ok?: boolean;
     message?: string;
     errors?: string[];
-  }>(settings, "/api/settings?merge=false", {
+  }>(settings, `/api/settings?merge=${merge ? "true" : "false"}`, {
     method: "PUT",
     signal: AbortSignal.timeout(12000),
     body: JSON.stringify(normalizedConfig),

@@ -105,10 +105,10 @@ Common flags on `channels add`:
 
 `garyx dreams` is an alias for the same command group. Scans use the running
 gateway and store their results in the local Garyx SQLite database.
-The `dreams.enabled` gateway setting only controls the hourly automatic scan;
-manual CLI scans still run when the switch is off. Manual scans upsert topic
-changes incrementally instead of deleting older spans outside the requested
-window.
+The `dreams.enabled` gateway setting controls app entry points and automatic
+scans; manual CLI scans still run when the switch is off. Manual scans upsert
+topic changes incrementally instead of deleting older spans outside the
+requested window.
 
 ## Tasks
 

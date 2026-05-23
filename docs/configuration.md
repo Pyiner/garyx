@@ -453,8 +453,9 @@ are stored in the local Garyx SQLite database and can point back to one or more
 thread spans, so desktop and mobile clients can open the source thread from a
 topic.
 
-Automatic scanning is off by default. Manual scans stay available through the
-CLI, desktop app, mobile app, and API regardless of the switch.
+Dreams are off by default. When the switch is off, the desktop and mobile apps
+hide the Dreams entry points; manual scans remain available through the CLI and
+API.
 
 ```json
 {

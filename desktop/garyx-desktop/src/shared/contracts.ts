@@ -1037,6 +1037,10 @@ export interface GatewaySettingsSaveResult {
   settings: GatewaySettingsPayload;
 }
 
+export interface GatewaySettingsSaveRequestOptions {
+  merge?: boolean;
+}
+
 export type TranscriptRole =
   | "assistant"
   | "system"
@@ -1583,6 +1587,7 @@ export interface GaryxDesktopApi {
   }>;
   saveGatewaySettings: (
     config: GatewayConfigDocument,
+    options?: GatewaySettingsSaveRequestOptions,
   ) => Promise<GatewaySettingsSaveResult>;
   selectWorkspace: (input: SelectWorkspaceInput) => Promise<DesktopState>;
   addWorkspace: () => Promise<WorkspaceMutationResult>;

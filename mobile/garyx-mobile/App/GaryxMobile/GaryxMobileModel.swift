@@ -961,6 +961,11 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func openPanel(_ panel: GaryxMobilePanel) {
+        guard panel != .dreams || dreamsAutoScanEnabled else {
+            activePanel = .chat
+            setSidebarVisible(false)
+            return
+        }
         activePanel = panel
         setSidebarVisible(false)
     }
@@ -1019,7 +1024,7 @@ final class GaryxMobileModel: ObservableObject {
         }
 
         if let panelName, let panel = GaryxMobilePanel(rawValue: panelName) {
-            activePanel = panel
+            activePanel = panel == .dreams && !dreamsAutoScanEnabled ? .chat : panel
             setSidebarVisible(false, animated: false)
             return
         }
@@ -1875,6 +1880,13 @@ final class GaryxMobileModel: ObservableObject {
         dreamsAutoScanEnabled = settings
             .objectValue(forKeys: ["dreams"])?
             .boolValue(forKeys: ["enabled"]) ?? false
+        if !dreamsAutoScanEnabled {
+            dreams = []
+            latestDreamScan = nil
+            if activePanel == .dreams {
+                activePanel = .chat
+            }
+        }
     }
 
     func refreshThreads() async {
@@ -2991,7 +3003,11 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func refreshDreams() async {
-        guard hasGatewaySettings else { return }
+        guard hasGatewaySettings, dreamsAutoScanEnabled else {
+            dreams = []
+            latestDreamScan = nil
+            return
+        }
         do {
             let page = try await client().listDreams(sinceHours: 24, limit: 80)
             dreams = page.dreams
@@ -3002,7 +3018,7 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func scanDreams() async {
-        guard hasGatewaySettings, !isScanningDreams else { return }
+        guard hasGatewaySettings, dreamsAutoScanEnabled, !isScanningDreams else { return }
         isScanningDreams = true
         defer { isScanningDreams = false }
         do {
@@ -3031,6 +3047,15 @@ final class GaryxMobileModel: ObservableObject {
                 ])
             ])
             gatewaySettingsStatus = "Saved"
+            if !enabled {
+                dreams = []
+                latestDreamScan = nil
+                if activePanel == .dreams {
+                    activePanel = .chat
+                }
+            } else {
+                await refreshDreams()
+            }
         } catch {
             dreamsAutoScanEnabled = previous
             lastError = displayMessage(for: error)

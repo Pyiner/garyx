@@ -18,6 +18,7 @@ import {
   type DesktopMcpServer,
   type DesktopSkillInfo,
   type DesktopUpdateStatus,
+  type GatewayConfigDocument,
   type GatewaySettingsSource,
   type McpTransportType,
   type SlashCommand,
@@ -85,6 +86,7 @@ const UNKNOWN_DESKTOP_APP_VERSION = '0.0.0';
 
 type DraftMutator = (mutator: (nextConfig: any) => void) => void;
 type GatewaySettingsSaveOptions = {
+  silent?: boolean;
   refreshDesktopState?: 'await' | 'background' | 'skip';
 };
 type GatewaySettingsPanelProps = {
@@ -128,6 +130,10 @@ type GatewaySettingsPanelProps = {
     },
   ) => Promise<boolean>;
   onSaveGatewaySettings?: (options?: GatewaySettingsSaveOptions) => Promise<boolean>;
+  onSaveGatewaySettingsPatch?: (
+    patch: GatewayConfigDocument,
+    options?: GatewaySettingsSaveOptions,
+  ) => Promise<boolean>;
   onOpenGatewaySetup?: () => void;
   onMutateGatewayDraft?: DraftMutator;
   onRefreshAgentTargets?: () => Promise<void>;
@@ -386,6 +392,7 @@ type SettingsControlRowProps = {
 
 type SettingsSwitchProps = {
   checked: boolean;
+  disabled?: boolean;
   label: string;
   onChange: (nextValue: boolean) => void;
 };
@@ -1013,6 +1020,7 @@ function SettingsSummaryRow({
 
 function SettingsSwitch({
   checked,
+  disabled = false,
   label,
   onChange,
 }: SettingsSwitchProps) {
@@ -1020,6 +1028,7 @@ function SettingsSwitch({
     <Switch
       aria-label={label}
       checked={checked}
+      disabled={disabled}
       onCheckedChange={onChange}
     />
   );
@@ -1321,6 +1330,7 @@ export function GatewaySettingsPanel({
   onSaveLocalSettingsNow = noopAsyncBoolean,
   onSaveLocalSettingsDraft = noopAsyncBoolean,
   onSaveGatewaySettings = noopAsyncBoolean,
+  onSaveGatewaySettingsPatch = noopAsyncBoolean,
   onOpenGatewaySetup = noop,
   onMutateGatewayDraft = noop,
   onRefreshAgentTargets = noopAsync,
@@ -3534,17 +3544,18 @@ export function GatewaySettingsPanel({
             control={
               <SettingsSwitch
                 checked={Boolean(gatewayDraft?.dreams?.enabled)}
+                disabled={gatewaySaving}
                 label="dreams.enabled"
                 onChange={(nextValue) => {
-                  onMutateGatewayDraft((next) => {
-                    next.dreams ||= {};
-                    next.dreams.enabled = nextValue;
-                  });
+                  void onSaveGatewaySettingsPatch(
+                    { dreams: { enabled: nextValue } },
+                    { refreshDesktopState: 'background' },
+                  );
                 }}
               />
             }
-            description={t('Run Dreams automatically on the configured interval when recent user messages exist. Manual scans stay available.')}
-            label={t('Dreams auto scan')}
+            description={t('Show Dreams in the apps and run automatic scans on the configured interval when recent user messages exist.')}
+            label={t('Dreams')}
           />
         </div>
       </div>

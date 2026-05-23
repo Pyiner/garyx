@@ -410,7 +410,11 @@ struct GaryxMainPanelView: View {
                 case .chat:
                     GaryxConversationView()
                 case .dreams:
-                    GaryxDreamsView()
+                    if model.dreamsAutoScanEnabled {
+                        GaryxDreamsView()
+                    } else {
+                        GaryxConversationView()
+                    }
                 case .tasks:
                     GaryxTasksView()
                 case .workspaces:
@@ -3743,10 +3747,10 @@ struct GaryxDreamsAutoScanRow: View {
                 .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Periodic auto scan")
+                Text("Dreams")
                     .font(GaryxFont.subheadline(weight: .semibold))
                     .foregroundStyle(.primary)
-                Text("Runs on the configured interval when recent user messages exist.")
+                Text("Shows Dreams in the app and runs periodic scans when recent user messages exist.")
                     .font(GaryxFont.caption())
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -3755,7 +3759,7 @@ struct GaryxDreamsAutoScanRow: View {
             Spacer(minLength: 0)
 
             Toggle(
-                "Periodic auto scan",
+                "Dreams",
                 isOn: Binding(
                     get: { model.dreamsAutoScanEnabled },
                     set: { nextValue in
@@ -7101,14 +7105,18 @@ struct GaryxSettingsTabContent: View {
 }
 
 struct GaryxSettingsOverviewContent: View {
-    private let managementPanels: [GaryxMobilePanel] = [
-        .workspaces,
-        .dreams,
-        .tasks,
-        .autoResearch,
-        .agents,
-        .skills,
-    ]
+    @EnvironmentObject private var model: GaryxMobileModel
+
+    private var managementPanels: [GaryxMobilePanel] {
+        [
+            .workspaces,
+            model.dreamsAutoScanEnabled ? .dreams : nil,
+            .tasks,
+            .autoResearch,
+            .agents,
+            .skills,
+        ].compactMap { $0 }
+    }
     private let settingsTabs: [GaryxMobileSettingsTab] = [
         .gateway,
         .provider,
@@ -7130,6 +7138,10 @@ struct GaryxSettingsOverviewContent: View {
             }
 
             GaryxSettingsOverviewSection(title: "Settings") {
+                GaryxDreamsAutoScanRow()
+                Divider()
+                    .padding(.leading, 54)
+
                 ForEach(Array(settingsTabs.enumerated()), id: \.element.id) { index, tab in
                     GaryxSettingsTabLinkRow(tab: tab)
                     if index < settingsTabs.count - 1 {

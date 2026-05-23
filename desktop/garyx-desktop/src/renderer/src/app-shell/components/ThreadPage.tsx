@@ -260,6 +260,7 @@ type ThreadPageProps = {
   selectableNewThreadWorkspaces: DesktopWorkspace[];
   selectedThreadId: string | null;
   showAutomationRunInitialPlaceholder: boolean;
+  showDreams: boolean;
   showAutomationRunTailLoading: boolean;
   showHistoryLoadingPlaceholder: boolean;
   showPendingAckLoading: boolean;
@@ -403,6 +404,7 @@ export function ThreadPage({
   selectableNewThreadWorkspaces,
   selectedThreadId,
   showAutomationRunInitialPlaceholder,
+  showDreams,
   showAutomationRunTailLoading,
   showHistoryLoadingPlaceholder,
   showPendingAckLoading,
@@ -954,6 +956,7 @@ export function ThreadPage({
                 onWorkspaceModeChange={onSelectNewThreadWorkspaceMode}
                 onResumeProviderSession={onResumeProviderSession}
                 selectableNewThreadWorkspaces={selectableNewThreadWorkspaces}
+                showDreams={showDreams}
                 workspaceMode={newThreadWorkspaceMode}
                 workspaceMutation={workspaceMutation}
               />

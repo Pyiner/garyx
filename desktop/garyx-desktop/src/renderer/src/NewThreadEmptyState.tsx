@@ -63,6 +63,7 @@ type NewThreadEmptyStateProps = {
     sessionId: string,
     providerHint?: DesktopSessionProviderHint | null,
   ) => Promise<void>;
+  showDreams: boolean;
 };
 
 export function NewThreadEmptyState({
@@ -75,6 +76,7 @@ export function NewThreadEmptyState({
   onWorkspaceModeChange,
   onOpenDreamThread,
   onResumeProviderSession,
+  showDreams,
 }: NewThreadEmptyStateProps) {
   const { t } = useI18n();
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -302,7 +304,9 @@ export function NewThreadEmptyState({
             {t("Resume")}
           </Button>
         </div>
-        <NewThreadDreamsSummary onOpenThread={onOpenDreamThread} />
+        {showDreams ? (
+          <NewThreadDreamsSummary onOpenThread={onOpenDreamThread} />
+        ) : null}
       </div>
 
       <Dialog

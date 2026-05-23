@@ -1714,6 +1714,42 @@ async fn test_settings_update_rejects_unknown_nested_field() {
 }
 
 #[tokio::test]
+async fn test_settings_update_merge_true_rejects_unknown_patch_field() {
+    let state = test_state();
+    let router = api_router(state);
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings?merge=true")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "dreams": {
+                    "enbaled": true
+                }
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["ok"], false);
+    let errors = json["errors"].as_array().unwrap();
+    assert!(errors.iter().any(|error| {
+        error
+            .as_str()
+            .unwrap_or_default()
+            .contains("$.dreams.enbaled")
+    }));
+}
+
+#[tokio::test]
 async fn test_settings_roundtrip_persistence() {
     let tmp = tempfile::TempDir::new().unwrap();
     let config_path = tmp.path().join("gary.json");
@@ -1999,6 +2035,154 @@ async fn test_settings_update_rejects_blank_builtin_account_required_config() {
             .unwrap_or_default()
             .contains("$.channels.feishu.accounts.main.config.app_secret must not be blank")
     }));
+}
+
+#[tokio::test]
+async fn test_settings_update_merge_true_ignores_untouched_legacy_account_config_errors() {
+    use garyx_models::config::{PluginAccountEntry, PluginChannelConfig};
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config_path = tmp.path().join("gary.json");
+
+    let mut initial = GaryxConfig::default();
+    let mut weixin_cfg = PluginChannelConfig::default();
+    weixin_cfg.accounts.insert(
+        "test-weixin".to_owned(),
+        PluginAccountEntry {
+            enabled: true,
+            name: Some("Test Weixin".to_owned()),
+            agent_id: Some("claude".to_owned()),
+            workspace_dir: None,
+            workspace_mode: None,
+            config: json!({
+                "token": "test-token",
+                "uin": ""
+            }),
+        },
+    );
+    initial
+        .channels
+        .plugins
+        .insert("weixin".to_owned(), weixin_cfg);
+    tokio::fs::write(&config_path, serde_json::to_vec_pretty(&initial).unwrap())
+        .await
+        .unwrap();
+
+    let state = test_state();
+    let mut state_with_path = (*state).clone_for_test();
+    state_with_path.ops.config_path = Some(config_path.clone());
+    state_with_path
+        .apply_runtime_config(initial.clone())
+        .await
+        .unwrap();
+    let state_with_path = Arc::new(state_with_path);
+    let router = api_router(state_with_path.clone());
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings?merge=true")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "dreams": {
+                    "enabled": true
+                }
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let live = state_with_path.config_snapshot();
+    assert!(live.dreams.enabled);
+
+    let persisted: Value =
+        serde_json::from_str(&tokio::fs::read_to_string(&config_path).await.unwrap()).unwrap();
+    assert_eq!(persisted["dreams"]["enabled"], true);
+    assert_eq!(
+        persisted["channels"]["weixin"]["accounts"]["test-weixin"]["config"]["uin"],
+        ""
+    );
+}
+
+#[tokio::test]
+async fn test_settings_update_merge_true_rejects_touched_legacy_account_config_errors() {
+    use garyx_models::config::{PluginAccountEntry, PluginChannelConfig};
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config_path = tmp.path().join("gary.json");
+
+    let mut initial = GaryxConfig::default();
+    let mut weixin_cfg = PluginChannelConfig::default();
+    weixin_cfg.accounts.insert(
+        "test-weixin".to_owned(),
+        PluginAccountEntry {
+            enabled: true,
+            name: Some("Test Weixin".to_owned()),
+            agent_id: Some("claude".to_owned()),
+            workspace_dir: None,
+            workspace_mode: None,
+            config: json!({
+                "token": "test-token",
+                "uin": ""
+            }),
+        },
+    );
+    initial
+        .channels
+        .plugins
+        .insert("weixin".to_owned(), weixin_cfg);
+    tokio::fs::write(&config_path, serde_json::to_vec_pretty(&initial).unwrap())
+        .await
+        .unwrap();
+
+    let state = test_state();
+    let mut state_with_path = (*state).clone_for_test();
+    state_with_path.ops.config_path = Some(config_path.clone());
+    state_with_path
+        .apply_runtime_config(initial.clone())
+        .await
+        .unwrap();
+    let state_with_path = Arc::new(state_with_path);
+    let router = api_router(state_with_path.clone());
+
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/api/settings?merge=true")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "channels": {
+                    "weixin": {
+                        "accounts": {
+                            "test-weixin": {
+                                "enabled": false
+                            }
+                        }
+                    }
+                },
+                "dreams": {
+                    "enabled": true
+                }
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["errors"].as_array().unwrap().iter().any(|error| {
+        error
+            .as_str()
+            .unwrap_or_default()
+            .contains("$.channels.weixin.accounts.test-weixin.config.uin must not be blank")
+    }));
+    assert!(!state_with_path.config_snapshot().dreams.enabled);
 }
 
 #[tokio::test]

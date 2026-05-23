@@ -2062,6 +2062,7 @@ fn json_type_name(value: &Value) -> &'static str {
 fn collect_channel_account_config_errors(
     body: &Value,
     channel_schemas: &HashMap<String, Value>,
+    scoped_accounts: Option<&HashSet<(String, String)>>,
 ) -> Vec<String> {
     let mut errors = Vec::new();
     let Some(channels) = body.get("channels").and_then(Value::as_object) else {
@@ -2078,6 +2079,12 @@ fn collect_channel_account_config_errors(
         };
 
         for (account_id, account_value) in accounts {
+            if let Some(scoped_accounts) = scoped_accounts {
+                let key = (channel_id.clone(), account_id.clone());
+                if !scoped_accounts.contains(&key) {
+                    continue;
+                }
+            }
             let Some(account) = account_value.as_object() else {
                 continue;
             };
@@ -2104,6 +2111,30 @@ fn collect_channel_account_config_errors(
     }
 
     errors
+}
+
+fn collect_touched_channel_accounts(body: &Value) -> HashSet<(String, String)> {
+    let mut accounts = HashSet::new();
+    let Some(channels) = body.get("channels").and_then(Value::as_object) else {
+        return accounts;
+    };
+
+    for (channel_id, channel_value) in channels {
+        if channel_id == "api" {
+            continue;
+        }
+
+        let Some(channel_accounts) = channel_value.get("accounts").and_then(Value::as_object)
+        else {
+            continue;
+        };
+
+        for account_id in channel_accounts.keys() {
+            accounts.insert((channel_id.clone(), account_id.clone()));
+        }
+    }
+
+    accounts
 }
 
 fn collect_required_account_config_errors(
@@ -2188,17 +2219,20 @@ pub async fn settings_update(
     // PUT requests (read snapshot → modify → persist → apply).
     let _settings_guard = state.ops.settings_mutex.lock().await;
 
+    let merge_settings = params.merge.unwrap_or(true);
+    let mut patch_body = body.clone();
     let existing_config = serde_json::to_value(state.config_snapshot()).unwrap_or_default();
 
     // Deep-merge by default: prevents partial payloads (e.g. `{"commands":[]}`)
     // from wiping unrelated sections. Callers sending the full document opt
     // out with `?merge=false` so deletions (e.g. removing a channel account)
     // actually take effect — additive merge has no delete semantics.
-    if params.merge.unwrap_or(true) {
+    if merge_settings {
         body = deep_merge_json(existing_config.clone(), body);
     }
 
     garyx_models::config_loader::strip_redundant_config_fields(&mut body);
+    garyx_models::config_loader::strip_redundant_config_fields(&mut patch_body);
 
     let mut channel_schemas = builtin_channel_account_schemas();
     {
@@ -2209,7 +2243,16 @@ pub async fn settings_update(
         }
     }
 
-    let account_config_errors = collect_channel_account_config_errors(&body, &channel_schemas);
+    let touched_channel_accounts = if merge_settings {
+        Some(collect_touched_channel_accounts(&patch_body))
+    } else {
+        None
+    };
+    let account_config_errors = collect_channel_account_config_errors(
+        &body,
+        &channel_schemas,
+        touched_channel_accounts.as_ref(),
+    );
     if !account_config_errors.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -2247,7 +2290,8 @@ pub async fn settings_update(
         }
     };
     let mut unknown_fields = Vec::new();
-    collect_unknown_fields("$", &body, &normalized, &mut unknown_fields);
+    let unknown_field_input = if merge_settings { &patch_body } else { &body };
+    collect_unknown_fields("$", unknown_field_input, &normalized, &mut unknown_fields);
     if !unknown_fields.is_empty() {
         return (
             StatusCode::BAD_REQUEST,

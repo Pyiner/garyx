@@ -5,6 +5,7 @@ import {
   type ConnectionStatus,
   type DesktopMcpServer,
   type DesktopState,
+  type GatewayConfigDocument,
   type GatewaySettingsPayload,
   type GatewaySettingsSource,
   type SlashCommand,
@@ -46,6 +47,63 @@ function normalizeSettingsTab(value?: SettingsTabId | null): SettingsTabId {
     return 'gateway';
   }
   return value && SETTINGS_TABS.some((tab) => tab.id === value) ? value : 'labs';
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function mergeGatewayConfigPatch(
+  base: unknown,
+  patch: GatewayConfigDocument,
+): GatewayConfigDocument {
+  const next = ensureGatewayConfig(cloneJson(base));
+  mergeRecordPatch(next, cloneJson(patch));
+  return ensureGatewayConfig(next);
+}
+
+function mergeRecordPatch(
+  target: Record<string, unknown>,
+  patch: Record<string, unknown>,
+) {
+  for (const [key, value] of Object.entries(patch)) {
+    const current = target[key];
+    if (isPlainRecord(current) && isPlainRecord(value)) {
+      mergeRecordPatch(current, value);
+    } else {
+      target[key] = value;
+    }
+  }
+}
+
+function restoreGatewayConfigPatch(
+  base: unknown,
+  patch: GatewayConfigDocument,
+  snapshot: GatewayConfigDocument,
+): GatewayConfigDocument {
+  const next = ensureGatewayConfig(cloneJson(base));
+  restoreRecordPatch(next, patch, snapshot);
+  return ensureGatewayConfig(next);
+}
+
+function restoreRecordPatch(
+  target: Record<string, unknown>,
+  patch: Record<string, unknown>,
+  snapshot: Record<string, unknown>,
+) {
+  for (const [key, value] of Object.entries(patch)) {
+    const current = target[key];
+    const previous = snapshot[key];
+    if (isPlainRecord(current) && isPlainRecord(value) && isPlainRecord(previous)) {
+      restoreRecordPatch(current, value, previous);
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, key)) {
+      target[key] = cloneJson(previous);
+    } else {
+      delete target[key];
+    }
+  }
 }
 
 type UseSettingsControllerArgs = {
@@ -93,6 +151,7 @@ export function useSettingsController({
   );
 
   const gatewaySettingsDraftRef = useRef<any>(ensureGatewayConfig({}));
+  const gatewaySettingsDirtyRef = useRef(false);
   const gatewaySettingsSavingRef = useRef(false);
   const gatewaySaveGenerationRef = useRef(0);
   const gatewayAutoSaveTimerRef = useRef<number | null>(null);
@@ -104,6 +163,7 @@ export function useSettingsController({
     const normalized = ensureGatewayConfig(payload.config);
     gatewaySettingsDraftRef.current = normalized;
     setGatewaySettingsDraft(normalized);
+    gatewaySettingsDirtyRef.current = false;
     setGatewaySettingsDirty(false);
     setGatewaySettingsSource(payload.source);
   }
@@ -113,6 +173,7 @@ export function useSettingsController({
     mutator(next);
     gatewaySettingsDraftRef.current = next;
     setGatewaySettingsDraft(next);
+    gatewaySettingsDirtyRef.current = true;
     setGatewaySettingsDirty(true);
     setGatewaySettingsStatus(null);
     scheduleGatewayAutoSave();
@@ -140,8 +201,14 @@ export function useSettingsController({
     while (gatewaySettingsSavingRef.current) {
       await new Promise((resolve) => window.setTimeout(resolve, 40));
     }
-    if (gatewaySettingsDirty) {
+    if (gatewaySettingsDirtyRef.current) {
       await handleSaveGatewaySettings({ silent: true });
+    }
+  }
+
+  async function waitForGatewaySettingsSave(): Promise<void> {
+    while (gatewaySettingsSavingRef.current) {
+      await new Promise((resolve) => window.setTimeout(resolve, 40));
     }
   }
 
@@ -581,6 +648,88 @@ export function useSettingsController({
     }
   }
 
+  async function handleSaveGatewaySettingsPatch(
+    patch: GatewayConfigDocument,
+    options?: GatewaySettingsSaveOptions,
+  ): Promise<boolean> {
+    if (gatewaySettingsSavingRef.current) {
+      await waitForGatewaySettingsSave();
+    }
+    const silent = options?.silent === true;
+    const refreshDesktopState = options?.refreshDesktopState ?? 'background';
+    const saveGeneration = gatewaySaveGenerationRef.current + 1;
+    const hadDirtyDraft = gatewaySettingsDirtyRef.current;
+    const previousDraft = ensureGatewayConfig(
+      cloneJson(gatewaySettingsDraftRef.current),
+    );
+    gatewaySaveGenerationRef.current = saveGeneration;
+    if (gatewayAutoSaveTimerRef.current !== null) {
+      window.clearTimeout(gatewayAutoSaveTimerRef.current);
+      gatewayAutoSaveTimerRef.current = null;
+    }
+    const optimisticDraft = mergeGatewayConfigPatch(
+      gatewaySettingsDraftRef.current,
+      patch,
+    );
+    gatewaySettingsDraftRef.current = optimisticDraft;
+    setGatewaySettingsDraft(optimisticDraft);
+    gatewaySettingsDirtyRef.current = hadDirtyDraft;
+    setGatewaySettingsDirty(hadDirtyDraft);
+    setGatewaySettingsStatus(null);
+    gatewaySettingsSavingRef.current = true;
+    setGatewaySettingsSaving(true);
+
+    try {
+      const result = await measureUiAction("bot.modify.save_gateway_settings_patch", () =>
+        window.garyxDesktop.saveGatewaySettings(patch, { merge: true }),
+      );
+      if (gatewaySettingsDirtyRef.current) {
+        setGatewaySettingsSource(result.settings.source);
+      } else {
+        replaceGatewaySettings(result.settings);
+      }
+      if (!silent) {
+        setGatewaySettingsStatus('Saved');
+      }
+      if (refreshDesktopState === 'await') {
+        await refreshDesktopStateAfterGatewaySave(saveGeneration);
+      } else if (refreshDesktopState === 'background') {
+        void refreshDesktopStateAfterGatewaySave(saveGeneration).catch(
+          (refreshError) => {
+            console.warn(
+              'Failed to refresh desktop state after gateway settings patch save.',
+              refreshError,
+            );
+          },
+        );
+      }
+      return true;
+    } catch (gatewayError) {
+      setGatewaySettingsStatus(
+        gatewayError instanceof Error
+          ? gatewayError.message
+          : 'Failed to save gateway config',
+      );
+      const keepDirtyDraft = hadDirtyDraft || gatewaySettingsDirtyRef.current;
+      const restoredDraft = restoreGatewayConfigPatch(
+        gatewaySettingsDraftRef.current,
+        patch,
+        previousDraft,
+      );
+      gatewaySettingsDraftRef.current = restoredDraft;
+      setGatewaySettingsDraft(restoredDraft);
+      gatewaySettingsDirtyRef.current = keepDirtyDraft;
+      setGatewaySettingsDirty(keepDirtyDraft);
+      return false;
+    } finally {
+      gatewaySettingsSavingRef.current = false;
+      setGatewaySettingsSaving(false);
+      if (gatewaySettingsDirtyRef.current) {
+        scheduleGatewayAutoSave();
+      }
+    }
+  }
+
   function handleRetrySettingsView() {
     setError(null);
     if (isLocalSettingsTab(settingsActiveTab)) {
@@ -639,6 +788,7 @@ export function useSettingsController({
     handleDeleteSlashCommand,
     handleRetrySettingsView,
     handleSaveGatewaySettings,
+    handleSaveGatewaySettingsPatch,
     handleSaveLocalSettingsDraft,
     handleSaveLocalSettingsNow,
     handleSaveSettings,
