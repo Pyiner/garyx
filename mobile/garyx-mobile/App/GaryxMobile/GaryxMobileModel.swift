@@ -307,6 +307,7 @@ final class GaryxMobileModel: ObservableObject {
     private var messagesByThread: [String: [GaryxMobileMessage]] = [:]
     private var activeAssistantMessageIdsByThread: [String: String] = [:]
     private var pendingQueuedInputsByIntentId: [String: GaryxPendingQueuedInput] = [:]
+    private var gatewayRuntimeGeneration = UUID()
     private var selectedThreadRecoveryTask: Task<Void, Never>?
     private var selectedThreadRecoveryThreadId: String?
     private var selectedThreadHistoryRequestId: UUID?
@@ -1500,6 +1501,7 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     private func resetGatewayRuntimeState() {
+        gatewayRuntimeGeneration = UUID()
         selectedThreadRecoveryTask?.cancel()
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
@@ -1745,8 +1747,13 @@ final class GaryxMobileModel: ObservableObject {
 
     func refreshRemoteState() async {
         guard hasGatewaySettings else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
         isLoadingRemoteState = true
-        defer { isLoadingRemoteState = false }
+        defer {
+            if runtimeGeneration == gatewayRuntimeGeneration {
+                isLoadingRemoteState = false
+            }
+        }
         do {
             let gateway = try client()
             async let agentsResult = gateway.listAgents()
@@ -1762,39 +1769,65 @@ final class GaryxMobileModel: ObservableObject {
             async let botConsolesResult = gateway.listBotConsoles()
             async let channelPluginsResult = gateway.listChannelPlugins()
 
-            agents = (try? await agentsResult) ?? agents
-            teams = (try? await teamsResult) ?? teams
-            skills = (try? await skillsResult) ?? skills
-            if let page = try? await tasksResult {
+            let nextAgents = try? await agentsResult
+            let nextTeams = try? await teamsResult
+            let nextSkills = try? await skillsResult
+            let nextTasksPage = try? await tasksResult
+            let nextAutomations = try? await automationsResult
+            let nextSlashCommands = try? await slashCommandsResult
+            let nextMcpServers = try? await mcpServersResult
+            let nextAutoResearchRuns = try? await autoResearchRunsResult
+            let nextChannelEndpoints = try? await channelEndpointsResult
+            let nextConfiguredBots = try? await configuredBotsResult
+            let nextBotConsoles = try? await botConsolesResult
+            let nextChannelPlugins = try? await channelPluginsResult
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+
+            agents = nextAgents ?? agents
+            teams = nextTeams ?? teams
+            skills = nextSkills ?? skills
+            if let page = nextTasksPage {
                 tasks = page.tasks
             }
-            automations = (try? await automationsResult) ?? automations
-            slashCommands = (try? await slashCommandsResult) ?? slashCommands
-            mcpServers = (try? await mcpServersResult) ?? mcpServers
-            autoResearchRuns = (try? await autoResearchRunsResult) ?? autoResearchRuns
-            channelEndpoints = (try? await channelEndpointsResult) ?? channelEndpoints
-            configuredBots = (try? await configuredBotsResult) ?? configuredBots
-            botConsoles = (try? await botConsolesResult) ?? botConsoles
-            channelPlugins = (try? await channelPluginsResult) ?? channelPlugins
-            await mergeMissingSidebarRequiredThreads(using: gateway, extraThreadIds: [selectedThread?.id])
+            automations = nextAutomations ?? automations
+            slashCommands = nextSlashCommands ?? slashCommands
+            mcpServers = nextMcpServers ?? mcpServers
+            autoResearchRuns = nextAutoResearchRuns ?? autoResearchRuns
+            channelEndpoints = nextChannelEndpoints ?? channelEndpoints
+            configuredBots = nextConfiguredBots ?? configuredBots
+            botConsoles = nextBotConsoles ?? botConsoles
+            channelPlugins = nextChannelPlugins ?? channelPlugins
+            await mergeMissingSidebarRequiredThreads(
+                using: gateway,
+                extraThreadIds: [selectedThread?.id],
+                runtimeGeneration: runtimeGeneration
+            )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             ensureSelectedAgentTarget()
             ensureSelectedWorkspace()
-            await refreshProviderModelsForVisibleAgents()
+            await refreshProviderModelsForVisibleAgents(runtimeGeneration: runtimeGeneration)
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func refreshThreads() async {
         guard hasGatewaySettings else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
         isLoadingThreads = true
-        defer { isLoadingThreads = false }
+        defer {
+            if runtimeGeneration == gatewayRuntimeGeneration {
+                isLoadingThreads = false
+            }
+        }
         do {
             let previousSelectedId = selectedThread?.id
             let gatewayClient = try client()
             async let threadsPage = gatewayClient.listThreads(limit: Self.threadListPageLimit)
             async let threadPinsPage = gatewayClient.listThreadPins()
             let (page, pinsPage) = try await (threadsPage, threadPinsPage)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             applyPinnedThreadIds(pinsPage.threadIds)
             updateThreadListPagination(from: page)
             var nextThreads = page.threads
@@ -1807,6 +1840,7 @@ final class GaryxMobileModel: ObservableObject {
                 requiredThreadIds: requiredThreadIds,
                 existingThreadIds: Set(nextThreads.map(\.id))
             )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             threads = Self.mergedThreadSummaries(nextThreads)
             refreshRemoteBusyIdsForVisibleThreads()
             if let previousSelectedId,
@@ -1820,6 +1854,7 @@ final class GaryxMobileModel: ObservableObject {
                 resetSelectedThreadHistoryPagination()
             }
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -1831,16 +1866,23 @@ final class GaryxMobileModel: ObservableObject {
               !isLoadingMoreThreads else {
             return
         }
+        let runtimeGeneration = gatewayRuntimeGeneration
         let offset = nextThreadListOffset
         guard offset > 0 else { return }
         isLoadingMoreThreads = true
-        defer { isLoadingMoreThreads = false }
+        defer {
+            if runtimeGeneration == gatewayRuntimeGeneration {
+                isLoadingMoreThreads = false
+            }
+        }
         do {
             let page = try await client().listThreads(limit: Self.threadListPageLimit, offset: offset)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             updateThreadListPagination(from: page)
             threads = Self.mergedThreadSummaries(threads + page.threads)
             refreshRemoteBusyIdsForVisibleThreads()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -3134,12 +3176,16 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
-    func loadProviderModels(providerType: String) async {
+    func loadProviderModels(providerType: String, runtimeGeneration: UUID? = nil) async {
         let provider = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !provider.isEmpty else { return }
+        let observedGeneration = runtimeGeneration ?? gatewayRuntimeGeneration
         do {
-            providerModelsByType[provider] = try await client().providerModels(providerType: provider)
+            let models = try await client().providerModels(providerType: provider)
+            guard observedGeneration == gatewayRuntimeGeneration else { return }
+            providerModelsByType[provider] = models
         } catch {
+            guard observedGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -5199,8 +5245,10 @@ final class GaryxMobileModel: ObservableObject {
 
     private func mergeMissingSidebarRequiredThreads(
         using gatewayClient: GaryxGatewayClient,
-        extraThreadIds: [String?] = []
+        extraThreadIds: [String?] = [],
+        runtimeGeneration: UUID? = nil
     ) async {
+        let observedGeneration = runtimeGeneration ?? gatewayRuntimeGeneration
         let missingThreads = await fetchMissingThreadSummaries(
             using: gatewayClient,
             requiredThreadIds: sidebarRequiredThreadIds(
@@ -5209,6 +5257,7 @@ final class GaryxMobileModel: ObservableObject {
             ),
             existingThreadIds: Set(threads.map(\.id))
         )
+        guard observedGeneration == gatewayRuntimeGeneration else { return }
         if !missingThreads.isEmpty {
             threads = Self.mergedThreadSummaries(threads + missingThreads)
         }
@@ -5276,10 +5325,10 @@ final class GaryxMobileModel: ObservableObject {
         return merged
     }
 
-    private func refreshProviderModelsForVisibleAgents() async {
+    private func refreshProviderModelsForVisibleAgents(runtimeGeneration: UUID? = nil) async {
         let providerTypes = Set(agents.map(\.providerType).filter { !$0.isEmpty })
         for providerType in providerTypes where providerModelsByType[providerType] == nil {
-            await loadProviderModels(providerType: providerType)
+            await loadProviderModels(providerType: providerType, runtimeGeneration: runtimeGeneration)
         }
     }
 

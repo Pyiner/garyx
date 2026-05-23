@@ -1685,6 +1685,7 @@ struct GaryxLoadEarlierHistoryButton: View {
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @FocusState private var isComposerFocused: Bool
+    @State private var scrollPreservationThreadId: String?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -1794,7 +1795,10 @@ struct GaryxConversationView: View {
         oldValue: [GaryxMobileMessage],
         newValue: [GaryxMobileMessage]
     ) -> Bool {
-        guard newValue.count > oldValue.count,
+        let threadId = model.selectedThread?.id
+        defer { scrollPreservationThreadId = threadId }
+        guard threadId == scrollPreservationThreadId,
+              newValue.count > oldValue.count,
               let oldFirstId = oldValue.first?.id,
               newValue.first?.id != oldFirstId,
               let oldFirstIndex = newValue.firstIndex(where: { $0.id == oldFirstId }) else {
