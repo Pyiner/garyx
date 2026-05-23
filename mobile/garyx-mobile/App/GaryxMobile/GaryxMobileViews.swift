@@ -1751,28 +1751,26 @@ struct GaryxConversationView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            VStack(spacing: 0) {
-                messageScroll
-
-                GaryxComposer(isFocused: $isComposerFocused)
-                    .background(Color.clear)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .onChange(of: model.messages) { oldValue, newValue in
-                if shouldPreserveScrollForPrependedHistory(oldValue: oldValue, newValue: newValue) {
-                    return
+            messageScroll
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    GaryxComposer(isFocused: $isComposerFocused)
                 }
-                guard !newValue.isEmpty || model.showsTailThinkingIndicator else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    scrollToConversationTail(proxy)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onChange(of: model.messages) { oldValue, newValue in
+                    if shouldPreserveScrollForPrependedHistory(oldValue: oldValue, newValue: newValue) {
+                        return
+                    }
+                    guard !newValue.isEmpty || model.showsTailThinkingIndicator else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        scrollToConversationTail(proxy)
+                    }
                 }
-            }
-            .onChange(of: isComposerFocused) { _, isFocused in
-                guard isFocused else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    scrollToConversationTail(proxy)
+                .onChange(of: isComposerFocused) { _, isFocused in
+                    guard isFocused else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        scrollToConversationTail(proxy)
+                    }
                 }
-            }
         }
         .background(GaryxTheme.background)
         .garyxAdaptiveTopBar {
@@ -1820,7 +1818,7 @@ struct GaryxConversationView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 18)
-            .padding(.bottom, 12)
+            .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .scrollDisabled(isComposerFocused)
@@ -2929,9 +2927,10 @@ struct GaryxComposer: View {
             composerCard
         }
         .padding(.horizontal, 12)
-        .padding(.top, 4)
-        .padding(.bottom, 4)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.clear)
         .animation(.spring(response: 0.24, dampingFraction: 0.88), value: model.composerAttachments)
         .fileImporter(
             isPresented: $isPickingAttachments,
