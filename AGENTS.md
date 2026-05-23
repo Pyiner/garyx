@@ -114,6 +114,10 @@ needs installed-app validation.
   readable and deferential. Toolbar icons should default to monochrome
   `primary` styling; do not turn general navigation/actions blue unless color
   communicates a specific state or destructive/accent action.
+- The mobile thread page top bar is the visual standard for custom top chrome:
+  use the same floating glass icon controls, spacing, and compact glass title
+  treatment for sibling mobile pages unless a native system navigation bar owns
+  that surface.
 - Mobile page backgrounds should stay near-white and integrated rather than
   heavy grouped gray. Avoid strong gray-background / white-card contrast on
   management pages; content rows can sit directly on the page background and use
