@@ -35,6 +35,9 @@ jobs:
       APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
       APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
       APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+      IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64 }}
+      IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -53,6 +56,16 @@ jobs:
               missing+=("$name")
             fi
           done
+          if [[ "${{ inputs.upload_build }}" == "true" ]]; then
+            for name in \
+              IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64 \
+              IOS_DISTRIBUTION_CERTIFICATE_PASSWORD \
+              IOS_PROVISIONING_PROFILE_BASE64; do
+              if [[ -z "${!name:-}" ]]; then
+                missing+=("$name")
+              fi
+            done
+          fi
           if (( ${#missing[@]} > 0 )); then
             printf 'Missing required GitHub secret(s): %s\n' "${missing[*]}" >&2
             exit 1
@@ -96,6 +109,61 @@ jobs:
           fi
           echo "GARYX_IOS_BUILD_NUMBER=$build_number" >> "$GITHUB_ENV"
 
+      - name: Install iOS signing assets
+        if: inputs.upload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          signing_dir="$RUNNER_TEMP/ios-signing"
+          mkdir -p "$signing_dir"
+          certificate_path="$signing_dir/distribution.p12"
+          profile_path="$signing_dir/garyx.mobileprovision"
+          keychain_path="$signing_dir/app-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 24)"
+
+          SIGNING_CERTIFICATE_P12_PATH="$certificate_path" \
+          SIGNING_PROVISIONING_PROFILE_PATH="$profile_path" \
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          Path(os.environ["SIGNING_CERTIFICATE_P12_PATH"]).write_bytes(
+              base64.b64decode(os.environ["IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64"])
+          )
+          Path(os.environ["SIGNING_PROVISIONING_PROFILE_PATH"]).write_bytes(
+              base64.b64decode(os.environ["IOS_PROVISIONING_PROFILE_BASE64"])
+          )
+          PY
+          chmod 600 "$certificate_path" "$profile_path"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$IOS_DISTRIBUTION_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+
+          profile_plist="$signing_dir/profile.plist"
+          security cms -D -i "$profile_path" > "$profile_plist"
+          profile_uuid="$(/usr/libexec/PlistBuddy -c 'Print UUID' "$profile_plist")"
+          profile_name="$(/usr/libexec/PlistBuddy -c 'Print Name' "$profile_plist")"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$profile_path" "$HOME/Library/MobileDevice/Provisioning Profiles/$profile_uuid.mobileprovision"
+
+          echo "IOS_PROVISIONING_PROFILE_NAME=$profile_name" >> "$GITHUB_ENV"
+          echo "SIGNING_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+
       - name: Archive Garyx iOS app
         if: inputs.upload_build
         shell: bash
@@ -113,11 +181,10 @@ jobs:
             PRODUCT_NAME="Garyx" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CURRENT_PROJECT_VERSION="$GARYX_IOS_BUILD_NUMBER" \
-            CODE_SIGN_STYLE=Automatic \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$APP_STORE_CONNECT_API_KEY_PATH" \
-            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID"
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$IOS_PROVISIONING_PROFILE_NAME" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN_PATH"
 
       - name: Export IPA
         if: inputs.upload_build
@@ -135,7 +202,14 @@ jobs:
             <key>destination</key>
             <string>export</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${IOS_BUNDLE_ID}</key>
+              <string>${IOS_PROVISIONING_PROFILE_NAME}</string>
+            </dict>
             <key>teamID</key>
             <string>${APPLE_TEAM_ID}</string>
             <key>stripSwiftSymbols</key>
@@ -149,11 +223,7 @@ jobs:
             -exportArchive \
             -archivePath "$RUNNER_TEMP/GaryxMobile.xcarchive" \
             -exportPath "$RUNNER_TEMP/GaryxMobileExport" \
-            -exportOptionsPlist "$export_options" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$APP_STORE_CONNECT_API_KEY_PATH" \
-            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID"
+            -exportOptionsPlist "$export_options"
 
       - name: Upload IPA to TestFlight
         if: inputs.upload_build
@@ -171,3 +241,12 @@ jobs:
             --file "$ipa_path" \
             --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
             --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+
+      - name: Clean up signing keychain
+        if: always() && inputs.upload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${SIGNING_KEYCHAIN_PATH:-}" ]]; then
+            security delete-keychain "$SIGNING_KEYCHAIN_PATH" || true
+          fi
