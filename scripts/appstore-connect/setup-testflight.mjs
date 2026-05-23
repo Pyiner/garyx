@@ -192,37 +192,36 @@ async function ensureApp({ appName, bundleId, sku, primaryLocale }) {
   return created.data;
 }
 
-async function ensureBetaGroup({ app, groupName }) {
+async function ensureInternalBetaGroup({ app, groupName }) {
   const groups = await ascRequest(
     "GET",
     `/v1/apps/${app.id}/betaGroups?limit=200`,
   );
-  const fallbackGroupName = `${groupName} External`;
-  const groupNames = Array.from(new Set([groupName, fallbackGroupName]));
   const existing = groups.data?.find(
-    (group) =>
-      groupNames.includes(group.attributes?.name) &&
-      group.attributes?.isInternalGroup === false,
-  );
-  if (existing) {
-    console.log(`External beta group exists: ${existing.attributes.name}`);
-    return existing;
-  }
-
-  const hasInternalGroupWithName = groups.data?.some(
     (group) =>
       group.attributes?.name === groupName &&
       group.attributes?.isInternalGroup === true,
   );
-  const createName = hasInternalGroupWithName ? fallbackGroupName : groupName;
+  if (existing) {
+    console.log(`Internal beta group exists: ${existing.attributes.name}`);
+    return existing;
+  }
+
+  const fallback = groups.data?.find(
+    (group) => group.attributes?.isInternalGroup === true,
+  );
+  if (fallback) {
+    console.log(`Internal beta group exists: ${fallback.attributes.name}`);
+    return fallback;
+  }
+
   const created = await ascRequest("POST", "/v1/betaGroups", {
     data: {
       type: "betaGroups",
       attributes: {
         feedbackEnabled: true,
-        isInternalGroup: false,
-        name: createName,
-        publicLinkEnabled: false,
+        isInternalGroup: true,
+        name: groupName,
       },
       relationships: {
         app: {
@@ -234,7 +233,7 @@ async function ensureBetaGroup({ app, groupName }) {
       },
     },
   });
-  console.log(`Created external beta group: ${createName}`);
+  console.log(`Created internal beta group: ${groupName}`);
   return created.data;
 }
 
@@ -272,20 +271,39 @@ async function ensureTester({ email, group }) {
 }
 
 async function addTesterToGroup({ tester, group }) {
-  await ascRequest(
-    "POST",
-    `/v1/betaGroups/${group.id}/relationships/betaTesters`,
-    {
-      data: [
-        {
-          id: tester.id,
-          type: "betaTesters",
-        },
-      ],
-    },
-    { allowStatuses: [409] },
+  const groups = await ascRequest(
+    "GET",
+    `/v1/betaTesters/${tester.id}/relationships/betaGroups?limit=200`,
   );
-  console.log("Added beta tester to group: [email]");
+  if (groups.data?.some((existing) => existing.id === group.id)) {
+    console.log("Beta tester already in internal group: [email]");
+    return;
+  }
+
+  try {
+    await ascRequest(
+      "POST",
+      `/v1/betaGroups/${group.id}/relationships/betaTesters`,
+      {
+        data: [
+          {
+            id: tester.id,
+            type: "betaTesters",
+          },
+        ],
+      },
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.includes("Tester(s) cannot be assigned")
+    ) {
+      console.warn("Skipped beta tester that Apple cannot assign: [email]");
+      return;
+    }
+    throw error;
+  }
+  console.log("Added beta tester to internal group: [email]");
 }
 
 function testerEmails() {
@@ -304,7 +322,7 @@ async function main() {
 
   await ensureBundleId({ appName, bundleId });
   const app = await ensureApp({ appName, bundleId, sku, primaryLocale });
-  const group = await ensureBetaGroup({ app, groupName });
+  const group = await ensureInternalBetaGroup({ app, groupName });
 
   for (const email of testerEmails()) {
     const tester = await ensureTester({ email, group });

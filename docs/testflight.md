@@ -1,7 +1,8 @@
-# TestFlight Release
+# iOS TestFlight Release
 
-Garyx iOS TestFlight releases are driven by the `TestFlight` GitHub Actions
-workflow.
+Garyx iOS TestFlight releases are driven by the `iOS TestFlight` GitHub Actions
+workflow. This workflow is intentionally separate from the macOS/gateway release
+workflow; iOS builds are uploaded only when this workflow is run manually.
 
 ## Required GitHub Secrets
 
@@ -34,15 +35,22 @@ the keychain at the end of the job.
 
 The workflow can do two independent things:
 
-- Register/update the App Store Connect app, Bundle ID, beta group, and testers.
-- Archive, export, and upload the iOS app to TestFlight.
+- Register/update the App Store Connect app, Bundle ID, internal beta group, and
+  internal testers.
+- Archive, export, upload the iOS app to TestFlight, wait for Apple processing,
+  and assign the build to the internal beta group.
 
 The setup step is idempotent. It reuses existing App Store Connect resources
-when they already exist. If App Store Connect already has an internal group with
-the configured `TESTFLIGHT_GROUP_NAME`, the setup step creates or reuses an
-external group named `<TESTFLIGHT_GROUP_NAME> External` for beta tester email
-invitations, because external beta testers cannot be attached to an internal
-tester group.
+when they already exist. `TESTFLIGHT_TESTER_EMAILS` must refer to App Store
+Connect users who can be assigned as internal testers. If Apple rejects a tester
+assignment because of the account state, the workflow logs a warning and keeps
+publishing the build to the internal beta group.
+
+The upload path verifies that the archived app contains AppIcon outputs before
+exporting the IPA. After upload, it waits for the requested build number to reach
+`VALID` processing state and then confirms the build is attached to the internal
+TestFlight group. It does not submit builds for external TestFlight Beta App
+Review.
 
 Run it from GitHub Actions with `workflow_dispatch`. The optional build number
 input maps to `CFBundleVersion`; when omitted, the GitHub run number is used.

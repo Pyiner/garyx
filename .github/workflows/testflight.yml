@@ -1,4 +1,4 @@
-name: TestFlight
+name: iOS TestFlight
 
 on:
   workflow_dispatch:
@@ -22,8 +22,8 @@ permissions:
   contents: read
 
 jobs:
-  testflight:
-    name: Register Garyx and upload TestFlight build
+  ios-testflight:
+    name: Register Garyx iOS and upload TestFlight build
     runs-on: macos-26
     env:
       GARYX_APP_NAME: ${{ vars.GARYX_APP_NAME || 'Garyx' }}
@@ -186,6 +186,31 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="$IOS_PROVISIONING_PROFILE_NAME" \
             OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN_PATH"
 
+      - name: Verify archived app icon
+        if: inputs.upload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_path="$RUNNER_TEMP/GaryxMobile.xcarchive/Products/Applications/Garyx.app"
+          if [[ ! -f "$app_path/AppIcon60x60@2x.png" ]]; then
+            echo "Archived app is missing the iPhone app icon." >&2
+            exit 1
+          fi
+          if [[ ! -f "$app_path/AppIcon76x76@2x~ipad.png" ]]; then
+            echo "Archived app is missing the iPad app icon." >&2
+            exit 1
+          fi
+          if [[ ! -f "$app_path/Assets.car" ]]; then
+            echo "Archived app is missing compiled asset catalog." >&2
+            exit 1
+          fi
+          icon_name="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIconName' "$app_path/Info.plist" 2>/dev/null || true)"
+          legacy_icon="$(/usr/libexec/PlistBuddy -c 'Print CFBundleIcons:CFBundlePrimaryIcon:CFBundleIconFiles:0' "$app_path/Info.plist" 2>/dev/null || true)"
+          if [[ "$icon_name" != "AppIcon" && -z "$legacy_icon" ]]; then
+            echo "Archived Info.plist does not declare an app icon." >&2
+            exit 1
+          fi
+
       - name: Export IPA
         if: inputs.upload_build
         shell: bash
@@ -241,6 +266,11 @@ jobs:
             --file "$ipa_path" \
             --apiKey "$APP_STORE_CONNECT_API_KEY_ID" \
             --apiIssuer "$APP_STORE_CONNECT_API_ISSUER_ID"
+
+      - name: Make build available to internal testers
+        if: inputs.upload_build
+        shell: bash
+        run: node scripts/appstore-connect/publish-internal-testflight.mjs
 
       - name: Clean up signing keychain
         if: always() && inputs.upload_build
