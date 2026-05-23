@@ -5879,8 +5879,6 @@ struct GaryxMobileSettingsPanel: View {
             }
         } actions: {
             HStack(spacing: 8) {
-                GaryxSettingsSectionMenu()
-
                 switch model.activeSettingsTab {
                 case .gateway:
                     GaryxAddToolbarButton(label: "Add Gateway") {
@@ -5917,77 +5915,130 @@ struct GaryxMobileSettingsPanel: View {
     }
 }
 
-struct GaryxSettingsSectionMenu: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-
-    var body: some View {
-        Menu {
-            ForEach(GaryxMobileSettingsTab.allCases) { tab in
-                Button {
-                    model.activeSettingsTab = tab
-                } label: {
-                    if model.activeSettingsTab == tab {
-                        Label(tab.label, systemImage: "checkmark")
-                    } else {
-                        Label(tab.label, systemImage: tab.iconName)
-                    }
-                }
-            }
-        } label: {
-            GaryxToolbarIcon(systemName: "list.bullet")
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Settings section")
-        .accessibilityValue(model.activeSettingsTab.label)
-    }
-}
-
 struct GaryxSettingsTabContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
         switch model.activeSettingsTab {
         case .manage:
-            GaryxSettingsManageContent()
+            GaryxSettingsOverviewContent()
         case .gateway:
-            GaryxSettingsGatewayContent()
+            GaryxSettingsDetailContent {
+                GaryxSettingsGatewayContent()
+            }
         case .provider:
-            GaryxSettingsProviderContent()
+            GaryxSettingsDetailContent {
+                GaryxSettingsProviderContent()
+            }
         case .channels:
-            GaryxBotsContent()
+            GaryxSettingsDetailContent {
+                GaryxBotsContent()
+            }
         case .commands:
-            GaryxCommandsContent()
+            GaryxSettingsDetailContent {
+                GaryxCommandsContent()
+            }
         case .mcp:
-            GaryxMcpServersContent()
+            GaryxSettingsDetailContent {
+                GaryxMcpServersContent()
+            }
         }
     }
 }
 
-struct GaryxSettingsManageContent: View {
-    private let panels: [GaryxMobilePanel] = [
+struct GaryxSettingsOverviewContent: View {
+    private let managementPanels: [GaryxMobilePanel] = [
         .tasks,
         .autoResearch,
         .agents,
         .skills,
     ]
+    private let settingsTabs: [GaryxMobileSettingsTab] = [
+        .gateway,
+        .provider,
+        .channels,
+        .commands,
+        .mcp,
+    ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Manage")
-                .font(GaryxFont.caption(weight: .medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-
-            VStack(spacing: 0) {
-                ForEach(Array(panels.enumerated()), id: \.element.id) { index, panel in
+        VStack(alignment: .leading, spacing: 14) {
+            GaryxSettingsOverviewSection(title: "Manage") {
+                ForEach(Array(managementPanels.enumerated()), id: \.element.id) { index, panel in
                     GaryxSettingsPanelLinkRow(panel: panel)
-                    if index < panels.count - 1 {
+                    if index < managementPanels.count - 1 {
                         Divider()
                             .padding(.leading, 54)
                     }
                 }
             }
+
+            GaryxSettingsOverviewSection(title: "Settings") {
+                ForEach(Array(settingsTabs.enumerated()), id: \.element.id) { index, tab in
+                    GaryxSettingsTabLinkRow(tab: tab)
+                    if index < settingsTabs.count - 1 {
+                        Divider()
+                            .padding(.leading, 54)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct GaryxSettingsOverviewSection<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(GaryxFont.caption(weight: .medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+
+            VStack(spacing: 0) {
+                content
+            }
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+    }
+}
+
+struct GaryxSettingsDetailContent<Content: View>: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                model.activeSettingsTab = .manage
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "chevron.left")
+                        .font(GaryxFont.system(size: 13, weight: .semibold))
+                    Text("All Settings")
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 2)
+                .frame(minHeight: 40, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("All Settings")
+
+            content
         }
     }
 }
@@ -6044,6 +6095,64 @@ struct GaryxSettingsPanelLinkRow: View {
             "\(model.skills.filter(\.enabled).count) enabled / \(model.skills.count) total"
         default:
             ""
+        }
+    }
+}
+
+struct GaryxSettingsTabLinkRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let tab: GaryxMobileSettingsTab
+
+    var body: some View {
+        Button {
+            model.activeSettingsTab = tab
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: tab.iconName)
+                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tab.label)
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(tab.label)
+    }
+
+    private var subtitle: String {
+        switch tab {
+        case .manage:
+            "All mobile settings"
+        case .gateway:
+            model.gatewayURL.isEmpty ? "Connection and saved gateways" : model.gatewayURL
+        case .provider:
+            model.providerModelsByType.isEmpty ? "Model providers" : "\(model.providerModelsByType.count) provider types"
+        case .channels:
+            "\(model.configuredBots.count) bots / \(model.channelEndpoints.count) endpoints"
+        case .commands:
+            "\(model.slashCommands.count) slash commands"
+        case .mcp:
+            "\(model.mcpServers.count) servers"
         }
     }
 }

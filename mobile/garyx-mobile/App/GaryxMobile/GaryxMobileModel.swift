@@ -100,7 +100,7 @@ enum GaryxMobileSettingsTab: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .manage:
-            "Manage"
+            "All Settings"
         case .gateway:
             "Gateway"
         case .provider:
@@ -117,7 +117,7 @@ enum GaryxMobileSettingsTab: String, CaseIterable, Identifiable {
     var iconName: String {
         switch self {
         case .manage:
-            "slider.horizontal.3"
+            "list.bullet"
         case .gateway:
             "server.rack"
         case .provider:
