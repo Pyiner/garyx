@@ -4728,6 +4728,7 @@ struct GaryxMcpServerCard: View {
 struct GaryxAutoResearchView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var showsCreateRun = false
+    @State private var detailRun: GaryxAutoResearchRun?
 
     var body: some View {
         GaryxPanelScaffold(
@@ -4746,7 +4747,10 @@ struct GaryxAutoResearchView: View {
                     GaryxSectionBlock(title: "Auto Research") {
                         GaryxCompactListGroup {
                             ForEach(Array(model.autoResearchRuns.enumerated()), id: \.element.id) { index, run in
-                                GaryxAutoResearchRunCard(run: run)
+                                GaryxAutoResearchRunCard(run: run) {
+                                    detailRun = run
+                                    Task { await model.loadAutoResearchDetail(run) }
+                                }
                                 if index < model.autoResearchRuns.count - 1 {
                                     GaryxCompactRowDivider()
                                 }
@@ -4764,6 +4768,9 @@ struct GaryxAutoResearchView: View {
             GaryxFormSheet(title: "Create Auto Research Run") {
                 GaryxCreateAutoResearchCard()
             }
+        }
+        .fullScreenCover(item: $detailRun) { run in
+            GaryxAutoResearchDetailSheet(run: run)
         }
     }
 }
@@ -4809,6 +4816,7 @@ struct GaryxCreateAutoResearchCard: View {
 struct GaryxAutoResearchRunCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let run: GaryxAutoResearchRun
+    let onOpenDetail: () -> Void
 
     var body: some View {
         GaryxSwipeActionRow(actions: researchSwipeActions) {
@@ -4832,29 +4840,23 @@ struct GaryxAutoResearchRunCard: View {
                 Text("\(run.iterationsUsed)/\(run.maxIterations) iterations")
                     .font(GaryxFont.caption())
                     .foregroundStyle(.secondary)
-                if let page = model.researchCandidatesByRunId[run.runId] {
-                    ForEach(page.candidates) { candidate in
-                        GaryxResearchCandidateRow(
-                            run: run,
-                            candidate: candidate,
-                            isBest: page.bestCandidateId == candidate.candidateId
-                        )
-                    }
-                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
             .contentShape(Rectangle())
+            .onTapGesture {
+                onOpenDetail()
+            }
         }
     }
 
     private var researchSwipeActions: [GaryxSwipeAction] {
         var actions = [
-            GaryxSwipeAction(title: "Candidates", systemImage: "list.bullet", tone: .accent) {
-                Task { await model.loadAutoResearchCandidates(run) }
+            GaryxSwipeAction(title: "Details", systemImage: "list.bullet.rectangle", tone: .accent) {
+                onOpenDetail()
             }
         ]
-        if researchTone != .muted {
+        if !garyxAutoResearchIsTerminal(run.state) {
             actions.append(
                 GaryxSwipeAction(title: "Stop", systemImage: "stop.fill", tone: .warning) {
                     Task { await model.stopAutoResearchRun(run) }
@@ -4870,59 +4872,467 @@ struct GaryxAutoResearchRunCard: View {
     }
 
     private var researchTone: GaryxStatusPill.Tone {
-        switch run.state.lowercased() {
-        case "completed":
-            .good
-        case "failed":
-            .danger
-        case "stopped", "cancelled":
-            .muted
-        default:
-            .warning
+        garyxAutoResearchTone(run.state)
+    }
+}
+
+struct GaryxAutoResearchDetailSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let run: GaryxAutoResearchRun
+    @State private var feedbackCandidate: GaryxResearchCandidate?
+    @State private var feedbackDraft = ""
+    @State private var showsFeedbackPrompt = false
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    summaryBlock
+                    iterationBlock
+                    if orphanCandidates.count > 0 {
+                        candidateBlock
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: 620, alignment: .leading)
+                .frame(maxWidth: .infinity)
+            }
+            .background(GaryxTheme.background)
+            .navigationTitle("Auto Research")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        Task { await model.loadAutoResearchDetail(runId: run.runId) }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .accessibilityLabel("Refresh")
+                }
+            }
         }
+        .task {
+            await model.loadAutoResearchDetail(runId: run.runId)
+        }
+        .alert("Send Feedback", isPresented: $showsFeedbackPrompt) {
+            TextField("Feedback", text: $feedbackDraft, axis: .vertical)
+            Button("Cancel", role: .cancel) {
+                feedbackDraft = ""
+                feedbackCandidate = nil
+            }
+            Button("Send") {
+                let candidate = feedbackCandidate
+                let current = currentRun
+                let feedback = feedbackDraft
+                feedbackDraft = ""
+                feedbackCandidate = nil
+                Task {
+                    await model.sendAutoResearchFeedback(
+                        run: current,
+                        candidate: candidate,
+                        feedback: feedback
+                    )
+                }
+            }
+        }
+    }
+
+    private var currentRun: GaryxAutoResearchRun {
+        model.autoResearchDetailsByRunId[run.runId]?.run
+            ?? model.autoResearchRuns.first { $0.runId == run.runId }
+            ?? run
+    }
+
+    private var detail: GaryxAutoResearchDetail? {
+        model.autoResearchDetailsByRunId[run.runId]
+    }
+
+    private var candidatesPage: GaryxAutoResearchCandidatesPage? {
+        model.researchCandidatesByRunId[run.runId]
+    }
+
+    private var candidates: [GaryxResearchCandidate] {
+        candidatesPage?.candidates ?? []
+    }
+
+    private var candidatesByIteration: [Int: GaryxResearchCandidate] {
+        var result: [Int: GaryxResearchCandidate] = [:]
+        for candidate in candidates {
+            result[candidate.iteration] = candidate
+        }
+        return result
+    }
+
+    private var displayIterations: [GaryxAutoResearchIteration] {
+        var items = model.autoResearchIterationsByRunId[run.runId] ?? []
+        if let latest = detail?.latestIteration,
+           !items.contains(where: { $0.iterationIndex == latest.iterationIndex }) {
+            items.append(latest)
+        }
+        return items.sorted { $0.iterationIndex > $1.iterationIndex }
+    }
+
+    private var orphanCandidates: [GaryxResearchCandidate] {
+        let iterationIds = Set(displayIterations.map(\.iterationIndex))
+        return candidates
+            .filter { !iterationIds.contains($0.iteration) }
+            .sorted { $0.iteration > $1.iteration }
+    }
+
+    private var summaryBlock: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "atom")
+                    .font(GaryxFont.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(Color(.secondarySystemGroupedBackground), in: Circle())
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(currentRun.goal.isEmpty ? currentRun.runId : currentRun.goal)
+                        .font(GaryxFont.body(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(summarySubtitle)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                GaryxStatusPill(text: currentRun.state, tone: garyxAutoResearchTone(currentRun.state))
+            }
+            HStack(spacing: 8) {
+                GaryxAutoResearchMetricPill(
+                    title: "Iterations",
+                    value: "\(currentRun.iterationsUsed)/\(currentRun.maxIterations)"
+                )
+                if let bestScore {
+                    GaryxAutoResearchMetricPill(
+                        title: "Best",
+                        value: String(format: "%.1f", bestScore)
+                    )
+                }
+                Spacer(minLength: 0)
+            }
+            if let activeThreadId = detail?.activeThreadId, !activeThreadId.isEmpty {
+                Button {
+                    openThread(activeThreadId)
+                } label: {
+                    Label("Open Active Thread", systemImage: "arrow.up.right")
+                }
+                .buttonStyle(GaryxSecondaryButtonStyle())
+            }
+        }
+        .padding(12)
+        .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(GaryxTheme.hairline, lineWidth: 1)
+        }
+    }
+
+    private var iterationBlock: some View {
+        GaryxSectionBlock(title: "Iterations") {
+            if displayIterations.isEmpty {
+                Text("No iteration records yet.")
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+            } else {
+                GaryxCompactListGroup {
+                    ForEach(Array(displayIterations.enumerated()), id: \.element.id) { index, iteration in
+                        let candidate = candidatesByIteration[iteration.iterationIndex]
+                        GaryxResearchIterationRow(
+                            iteration: iteration,
+                            candidate: candidate,
+                            isBest: candidate?.candidateId == candidatesPage?.bestCandidateId,
+                            isSelected: candidate?.candidateId == currentRun.selectedCandidate,
+                            onSelect: { candidate in
+                                Task { await model.selectAutoResearchCandidate(run: currentRun, candidate: candidate) }
+                            },
+                            onReverify: { candidate in
+                                Task { await model.reverifyAutoResearchCandidate(run: currentRun, candidate: candidate) }
+                            },
+                            onFeedback: openFeedback,
+                            onOpenThread: openThread
+                        )
+                        if index < displayIterations.count - 1 {
+                            GaryxCompactRowDivider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var candidateBlock: some View {
+        GaryxSectionBlock(title: "Candidates") {
+            GaryxCompactListGroup {
+                ForEach(Array(orphanCandidates.enumerated()), id: \.element.id) { index, candidate in
+                    GaryxResearchCandidateRow(
+                        candidate: candidate,
+                        isBest: candidate.candidateId == candidatesPage?.bestCandidateId,
+                        isSelected: candidate.candidateId == currentRun.selectedCandidate,
+                        onSelect: {
+                            Task { await model.selectAutoResearchCandidate(run: currentRun, candidate: candidate) }
+                        },
+                        onReverify: {
+                            Task { await model.reverifyAutoResearchCandidate(run: currentRun, candidate: candidate) }
+                        },
+                        onFeedback: {
+                            openFeedback(candidate)
+                        }
+                    )
+                    if index < orphanCandidates.count - 1 {
+                        GaryxCompactRowDivider()
+                    }
+                }
+            }
+        }
+    }
+
+    private var summarySubtitle: String {
+        let workspace = currentRun.workspaceDir?.lastPathComponent ?? "No workspace"
+        let updated = garyxFormattedTaskTimestamp(currentRun.updatedAt)
+        return updated.isEmpty ? workspace : "\(workspace) · updated \(updated)"
+    }
+
+    private var bestScore: Double? {
+        candidates
+            .compactMap(\.verdict?.score)
+            .max()
+    }
+
+    private func openFeedback(_ candidate: GaryxResearchCandidate) {
+        feedbackCandidate = candidate
+        feedbackDraft = ""
+        showsFeedbackPrompt = true
+    }
+
+    private func openThread(_ threadId: String?) {
+        let threadId = threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !threadId.isEmpty else { return }
+        dismiss()
+        Task { await model.openThread(id: threadId) }
+    }
+}
+
+struct GaryxAutoResearchMetricPill: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(GaryxFont.caption(weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(GaryxFont.footnote(weight: .semibold))
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+struct GaryxResearchIterationRow: View {
+    let iteration: GaryxAutoResearchIteration
+    let candidate: GaryxResearchCandidate?
+    let isBest: Bool
+    let isSelected: Bool
+    let onSelect: (GaryxResearchCandidate) -> Void
+    let onReverify: (GaryxResearchCandidate) -> Void
+    let onFeedback: (GaryxResearchCandidate) -> Void
+    let onOpenThread: (String?) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Text("Iteration \(iteration.iterationIndex)")
+                    .font(GaryxFont.caption(weight: .semibold))
+                    .foregroundStyle(.secondary)
+                GaryxStatusPill(
+                    text: iteration.state.isEmpty ? "pending" : iteration.state,
+                    tone: garyxAutoResearchTone(iteration.state)
+                )
+                if isSelected {
+                    GaryxStatusPill(text: "Winner", tone: .good)
+                } else if isBest {
+                    GaryxStatusPill(text: "Current best", tone: .good)
+                }
+                Spacer(minLength: 0)
+            }
+            if let candidate {
+                GaryxResearchCandidateContent(candidate: candidate)
+                GaryxResearchCandidateActions(
+                    candidate: candidate,
+                    isSelected: isSelected,
+                    onSelect: { onSelect(candidate) },
+                    onReverify: { onReverify(candidate) },
+                    onFeedback: { onFeedback(candidate) }
+                )
+            } else {
+                Text(iteration.state.lowercased() == "completed" ? "No candidate output yet." : "This iteration is still running.")
+                    .font(GaryxFont.footnote())
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                if let workThreadId = iteration.workThreadId, !workThreadId.isEmpty {
+                    Button {
+                        onOpenThread(workThreadId)
+                    } label: {
+                        Label("Work", systemImage: "doc.text")
+                    }
+                    .buttonStyle(GaryxSecondaryButtonStyle())
+                }
+                if let verifyThreadId = iteration.verifyThreadId, !verifyThreadId.isEmpty {
+                    Button {
+                        onOpenThread(verifyThreadId)
+                    } label: {
+                        Label("Verify", systemImage: "checkmark.seal")
+                    }
+                    .buttonStyle(GaryxSecondaryButtonStyle())
+                }
+            }
+        }
+        .padding(10)
     }
 }
 
 struct GaryxResearchCandidateRow: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    let run: GaryxAutoResearchRun
     let candidate: GaryxResearchCandidate
     let isBest: Bool
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onReverify: () -> Void
+    let onFeedback: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Text("Candidate \(candidate.iteration)")
                     .font(GaryxFont.caption(weight: .semibold))
                     .foregroundStyle(.secondary)
-                if isBest {
+                if isSelected {
+                    GaryxStatusPill(text: "Winner", tone: .good)
+                } else if isBest {
                     GaryxStatusPill(text: "Current best", tone: .good)
                 }
-                Spacer()
-                if run.selectedCandidate != candidate.candidateId {
-                    Button {
-                        Task { await model.selectAutoResearchCandidate(run: run, candidate: candidate) }
-                    } label: {
-                        Text("Select winner")
-                    }
-                    .buttonStyle(GaryxSecondaryButtonStyle())
-                } else {
-                    GaryxStatusPill(text: "Selected Winner", tone: .good)
-                }
+                Spacer(minLength: 0)
             }
-            Text(candidate.output)
-                .font(GaryxFont.footnote())
-                .foregroundStyle(.secondary)
-                .lineLimit(5)
-            if let verdict = candidate.verdict {
-                Text("Score \(Int(verdict.score)) / \(verdict.feedback)")
-                    .font(GaryxFont.caption())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+            GaryxResearchCandidateContent(candidate: candidate)
+            GaryxResearchCandidateActions(
+                candidate: candidate,
+                isSelected: isSelected,
+                onSelect: onSelect,
+                onReverify: onReverify,
+                onFeedback: onFeedback
+            )
         }
         .padding(10)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+struct GaryxResearchCandidateContent: View {
+    let candidate: GaryxResearchCandidate
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(candidate.output.isEmpty ? "No candidate output yet." : candidate.output)
+                .font(GaryxFont.footnote())
+                .foregroundStyle(.secondary)
+                .lineLimit(8)
+            if let verdict = candidate.verdict {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Score \(String(format: "%.1f", verdict.score))")
+                        .font(GaryxFont.caption(weight: .semibold))
+                        .foregroundStyle(.primary)
+                    if !verdict.feedback.isEmpty {
+                        Text(verdict.feedback)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct GaryxResearchCandidateActions: View {
+    let candidate: GaryxResearchCandidate
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onReverify: () -> Void
+    let onFeedback: () -> Void
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                controls
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                controls
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        if isSelected {
+            GaryxStatusPill(text: "Selected Winner", tone: .good)
+                .fixedSize(horizontal: true, vertical: false)
+        } else if candidate.verdict != nil {
+            Button {
+                onSelect()
+            } label: {
+                Label("Select", systemImage: "checkmark")
+            }
+            .buttonStyle(GaryxSecondaryButtonStyle())
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        Button {
+            onReverify()
+        } label: {
+            Label("Reverify", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(GaryxSecondaryButtonStyle())
+        .fixedSize(horizontal: true, vertical: false)
+        Button {
+            onFeedback()
+        } label: {
+            Label("Feedback", systemImage: "text.bubble")
+        }
+        .buttonStyle(GaryxSecondaryButtonStyle())
+        .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+private func garyxAutoResearchIsTerminal(_ state: String) -> Bool {
+    switch state.lowercased() {
+    case "completed", "failed", "stopped", "cancelled", "user_stopped", "budget_exhausted", "blocked":
+        true
+    default:
+        false
+    }
+}
+
+private func garyxAutoResearchTone(_ state: String) -> GaryxStatusPill.Tone {
+    switch state.lowercased() {
+    case "completed":
+        .good
+    case "failed", "blocked":
+        .danger
+    case "stopped", "cancelled", "user_stopped", "budget_exhausted":
+        .muted
+    default:
+        .warning
     }
 }
 
