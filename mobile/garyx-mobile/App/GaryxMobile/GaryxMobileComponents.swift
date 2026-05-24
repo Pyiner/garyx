@@ -1237,17 +1237,20 @@ struct GaryxCompactGlassIcon: View {
 struct GaryxGlassPanel<Content: View>: View {
     var cornerRadius: CGFloat = 24
     var fallbackMaterial: Material = .ultraThinMaterial
+    var tint: Color? = Color(.systemBackground).opacity(0.96)
     var shadowOpacity: Double = 0.055
     private let content: () -> Content
 
     init(
         cornerRadius: CGFloat = 24,
         fallbackMaterial: Material = .ultraThinMaterial,
+        tint: Color? = Color(.systemBackground).opacity(0.96),
         shadowOpacity: Double = 0.055,
         @ViewBuilder content: @escaping () -> Content
     ) {
         self.cornerRadius = cornerRadius
         self.fallbackMaterial = fallbackMaterial
+        self.tint = tint
         self.shadowOpacity = shadowOpacity
         self.content = content
     }
@@ -1259,6 +1262,7 @@ struct GaryxGlassPanel<Content: View>: View {
             .garyxAdaptiveGlass(
                 .regular,
                 isInteractive: false,
+                tint: tint,
                 fallbackMaterial: fallbackMaterial,
                 in: shape
             )
@@ -1315,6 +1319,7 @@ struct GaryxGlassSearchField: View {
         .garyxAdaptiveGlass(
             .regular,
             isInteractive: true,
+            tint: Color(.systemBackground).opacity(0.92),
             fallbackMaterial: .ultraThinMaterial,
             in: shape
         )

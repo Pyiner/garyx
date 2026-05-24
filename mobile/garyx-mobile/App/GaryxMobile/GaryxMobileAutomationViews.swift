@@ -1077,12 +1077,12 @@ struct GaryxAutomationThreadPickerSheet: View {
         }
         .background {
             Rectangle()
-                .fill(.ultraThinMaterial)
+                .fill(Color(.systemBackground).opacity(0.98))
                 .overlay {
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(0.22),
-                            Color.white.opacity(0.05)
+                            Color.white.opacity(0.28),
+                            Color.white.opacity(0.10)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
@@ -1090,7 +1090,8 @@ struct GaryxAutomationThreadPickerSheet: View {
                 }
                 .ignoresSafeArea()
         }
-        .presentationBackground(.ultraThinMaterial)
+        .presentationBackground(.clear)
+        .presentationBackgroundInteraction(.enabled)
         .presentationDetents([.fraction(0.93), .large])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(38)
