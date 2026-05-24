@@ -146,18 +146,24 @@ needs installed-app validation.
   the thread page menu. Show pinned state with a neutral slanted pin immediately
   after the thread title that can be tapped to unpin, and show running state with
   a compact trailing spinner using `run_state`/`active_run_id` from recent-thread
-  summaries.
+  summaries. Under each thread title, show the thread workspace rather than the
+  latest message preview; do not duplicate workspace metadata on the row's right
+  edge.
 - While the mobile sidebar is visible, silently refresh recent threads and pins
   about every three seconds so running-state indicators stay current without
   showing inline loading rows.
 - Mobile sidebar root content should not render inline loading rows or raw
   thread/session lists. Use one unobtrusive global loading indicator and keep
   conversation/thread lists inside bot or workspace drilldown layers.
-- Mobile sidebar primary navigation should keep only Automation at the root;
-  Tasks, Auto Research, Agents, and Skills belong under Settings.
-- Mobile workspace and bot browsing belongs under Automation as the
-  `Workspace & Bots` surface. Do not put workspace or bot drilldowns back into
-  the root sidebar.
+- Mobile sidebar primary navigation should show Automation and, directly below
+  it, Workspace & Bots. Tasks, Auto Research, Agents, and Skills belong under
+  Settings.
+- Mobile workspace and bot browsing belongs visually under Automation as the
+  `Workspace & Bots` sibling row in the sidebar, not inside the Automation page.
+  Do not put workspace or bot drilldowns back into the root thread list.
+- Mobile Automation rows should be plain tappable rows without leading icons or
+  left-swipe actions. Tapping an automation opens its edit/detail page, where
+  run once, edit fields, pause/resume, and delete actions live.
 - Mobile chat keyboard handling should treat the message area and composer as
   one vertical stack: the keyboard shrinks/moves both together, the composer
   remains attached below the messages, and the first tap or drag in the message
