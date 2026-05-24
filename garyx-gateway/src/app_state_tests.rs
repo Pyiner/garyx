@@ -1,16 +1,79 @@
 use super::*;
 use crate::app_bootstrap::{AppStateBuilder, create_app_state};
+use async_trait::async_trait;
 use axum::body::Body;
+use garyx_bridge::MultiProviderBridge;
+use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 use garyx_models::config::{GaryxConfig, TelegramAccount};
+use garyx_models::provider::{
+    AgentRunRequest, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
+};
 use garyx_router::{InMemoryThreadStore, ThreadStore};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::Notify;
 use tower::ServiceExt;
 
 fn test_state() -> Arc<AppState> {
     create_app_state(crate::test_support::with_gateway_auth(
         GaryxConfig::default(),
     ))
+}
+
+struct HoldingProvider {
+    started: Arc<Notify>,
+    release: Arc<Notify>,
+}
+
+#[async_trait]
+impl AgentLoopProvider for HoldingProvider {
+    fn provider_type(&self) -> ProviderType {
+        ProviderType::ClaudeCode
+    }
+
+    fn is_ready(&self) -> bool {
+        true
+    }
+
+    async fn initialize(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn shutdown(&mut self) -> Result<(), BridgeError> {
+        Ok(())
+    }
+
+    async fn run_streaming(
+        &self,
+        options: &ProviderRunOptions,
+        on_chunk: StreamCallback,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        on_chunk(StreamEvent::Delta {
+            text: "partial reply".to_owned(),
+        });
+        self.started.notify_waiters();
+        self.release.notified().await;
+        on_chunk(StreamEvent::Done);
+        Ok(ProviderRunResult {
+            run_id: "provider-run".to_owned(),
+            thread_id: options.thread_id.clone(),
+            response: "partial reply".to_owned(),
+            session_messages: Vec::new(),
+            sdk_session_id: None,
+            actual_model: None,
+            thread_title: None,
+            success: true,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cost: 0.0,
+            duration_ms: 1,
+        })
+    }
+
+    async fn get_or_create_session(&self, thread_id: &str) -> Result<String, BridgeError> {
+        Ok(format!("sdk-{thread_id}"))
+    }
 }
 
 #[tokio::test]
@@ -198,4 +261,87 @@ async fn test_app_state_builder_shares_thread_store() {
             .unwrap()["msg"],
         "hello"
     );
+}
+
+#[tokio::test]
+async fn test_app_state_builder_wires_bridge_thread_store_for_recent_projection() {
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let bridge = Arc::new(MultiProviderBridge::new());
+    bridge
+        .register_provider(
+            "projection-provider",
+            Arc::new(HoldingProvider {
+                started: started.clone(),
+                release: release.clone(),
+            }),
+        )
+        .await;
+    bridge.set_default_provider_key("projection-provider").await;
+
+    let state = AppStateBuilder::new(crate::test_support::with_gateway_auth(
+        GaryxConfig::default(),
+    ))
+    .with_bridge(bridge.clone())
+    .build();
+
+    bridge
+        .start_agent_run(
+            AgentRunRequest::new(
+                "thread::recent-projection-run",
+                "keep projection current",
+                "run::recent-projection",
+                "api",
+                "main",
+                HashMap::new(),
+            ),
+            None,
+        )
+        .await
+        .expect("run should start");
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), started.notified())
+        .await
+        .expect("provider should stream a partial reply");
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let records = state
+                .ops
+                .garyx_db
+                .list_recent_threads(10, 0)
+                .expect("list recent threads");
+            if records.iter().any(|record| {
+                record.thread_id == "thread::recent-projection-run"
+                    && record.active_run_id.as_deref() == Some("run::recent-projection")
+                    && record.run_state == "running"
+            }) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("partial persistence should project active run state");
+
+    release.notify_waiters();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while bridge.is_run_active("run::recent-projection").await {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("run should complete");
+
+    let records = state
+        .ops
+        .garyx_db
+        .list_recent_threads(10, 0)
+        .expect("list recent threads after completion");
+    let record = records
+        .iter()
+        .find(|record| record.thread_id == "thread::recent-projection-run")
+        .expect("projected recent thread should exist");
+    assert!(record.active_run_id.is_none());
+    assert_eq!(record.run_state, "completed");
 }

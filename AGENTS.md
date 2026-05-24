@@ -32,6 +32,13 @@ from a real chat captured during local debugging.
 - Mobile recent-thread lists read the gateway SQLite `recent_threads` projection
   only. Keep that projection current by writing it from the thread-store write
   path; do not make `GET /api/recent-threads` rescan router/thread files.
+- Provider bridge run persistence must use the same projecting thread store as
+  the gateway/router so active run state updates are dual-written into
+  `recent_threads` at write time. Do not repair stale `active_run_id` or
+  `run_state` in read routes.
+- Startup reconciliation may repair historically stale active-run projection
+  rows as a data migration, but steady-state correctness must come from the
+  thread-store write path.
 - MCP schema and tool behavior: `garyx-gateway/src/mcp.rs`.
 - Provider session behavior: `garyx-bridge`.
 - Channel/plugin stream presentation policy, buffering, and tool-call display

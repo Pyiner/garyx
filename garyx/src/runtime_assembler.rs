@@ -151,8 +151,13 @@ impl RuntimeAssembler {
 
         rebuild_routing_caches(&state, &self.config).await;
 
-        bridge.set_thread_store(thread_store).await;
-        bridge.set_thread_history(thread_history);
+        // AppStateBuilder wraps the raw file store in the recent-thread
+        // projecting store. Bind the bridge to that final store so provider
+        // persistence updates the projection instead of bypassing it.
+        bridge
+            .set_thread_store(state.threads.thread_store.clone())
+            .await;
+        bridge.set_thread_history(state.threads.history.clone());
         bridge.set_event_tx(state.ops.events.sender()).await;
         bridge
             .replace_thread_workspace_bindings(

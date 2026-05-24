@@ -57,6 +57,12 @@ impl MultiProviderBridge {
         *self.inner.thread_store.write().await = Some(store);
     }
 
+    pub fn set_thread_store_blocking(&self, store: Arc<dyn ThreadStore>) {
+        if let Ok(mut guard) = self.inner.thread_store.try_write() {
+            *guard = Some(store);
+        }
+    }
+
     pub fn set_thread_history(&self, history: Arc<ThreadHistoryRepository>) {
         if let Ok(mut guard) = self.inner.thread_history.try_write() {
             *guard = Some(history);

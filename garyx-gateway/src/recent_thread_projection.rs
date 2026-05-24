@@ -71,6 +71,57 @@ pub(crate) async fn backfill_recent_thread_projection_if_empty(
     count
 }
 
+pub(crate) async fn reconcile_active_recent_thread_projection(
+    thread_store: &Arc<dyn ThreadStore>,
+    garyx_db: &GaryxDbService,
+) -> usize {
+    let records = match garyx_db.list_recent_threads(usize::MAX, 0) {
+        Ok(records) => records,
+        Err(error) => {
+            warn!(error = %error, "failed to list recent thread projection before active-run reconcile");
+            return 0;
+        }
+    };
+
+    let mut reconciled = 0;
+    for record in records {
+        let projection_is_active = record
+            .active_run_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+            || record.run_state == "running";
+        if !projection_is_active {
+            continue;
+        }
+
+        let Some(data) = thread_store.get(&record.thread_id).await else {
+            continue;
+        };
+        if is_hidden_thread_value(&data) {
+            if let Err(error) = garyx_db.remove_recent_thread(&record.thread_id) {
+                warn!(thread_id = %record.thread_id, error = %error, "failed to remove hidden active recent thread projection during reconcile");
+            } else {
+                reconciled += 1;
+            }
+            continue;
+        }
+
+        let Some(draft) = recent_thread_draft_from_thread_data(&record.thread_id, &data) else {
+            continue;
+        };
+        if draft.active_run_id == record.active_run_id && draft.run_state == record.run_state {
+            continue;
+        }
+        if let Err(error) = garyx_db.upsert_recent_thread(draft) {
+            warn!(thread_id = %record.thread_id, error = %error, "failed to reconcile active recent thread projection");
+            continue;
+        }
+        reconciled += 1;
+    }
+    reconciled
+}
+
 #[async_trait]
 impl ThreadStore for RecentThreadProjectingStore {
     async fn get(&self, thread_id: &str) -> Option<Value> {
@@ -256,4 +307,65 @@ fn summarize_text(value: &str, limit: usize) -> Option<String> {
         summary.push(ch);
     }
     Some(summary + "…")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use garyx_router::InMemoryThreadStore;
+    use serde_json::json;
+
+    fn stale_active_draft(thread_id: &str) -> RecentThreadDraft {
+        RecentThreadDraft {
+            thread_id: thread_id.to_owned(),
+            title: "Stale Thread".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 1,
+            last_message_preview: "hello".to_owned(),
+            recent_run_id: Some("run::done".to_owned()),
+            active_run_id: Some("run::stale".to_owned()),
+            run_state: "running".to_owned(),
+            updated_at: Some("2026-01-01T00:00:00Z".to_owned()),
+            last_active_at: "2026-01-01T00:00:00Z".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn reconcile_active_recent_thread_projection_clears_stale_active_run() {
+        let thread_id = "thread::stale-active-projection";
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        thread_store
+            .set(
+                thread_id,
+                json!({
+                    "label": "Finished Thread",
+                    "updated_at": "2026-01-01T00:00:01Z",
+                    "history": {
+                        "recent_committed_run_ids": ["run::done"]
+                    },
+                    "messages": [
+                        {"role": "user", "content": "hello"},
+                        {"role": "assistant", "content": "done"}
+                    ]
+                }),
+            )
+            .await;
+        let garyx_db = GaryxDbService::memory().expect("memory db");
+        garyx_db
+            .upsert_recent_thread(stale_active_draft(thread_id))
+            .expect("seed stale recent thread");
+
+        let count = reconcile_active_recent_thread_projection(&thread_store, &garyx_db).await;
+
+        assert_eq!(count, 1);
+        let records = garyx_db
+            .list_recent_threads(10, 0)
+            .expect("list recent threads");
+        assert_eq!(records[0].thread_id, thread_id);
+        assert_eq!(records[0].active_run_id, None);
+        assert_eq!(records[0].run_state, "completed");
+    }
 }

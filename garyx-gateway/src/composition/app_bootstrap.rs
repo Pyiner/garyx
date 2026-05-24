@@ -351,6 +351,7 @@ impl AppStateBuilder {
         router.set_thread_log_sink(self.thread_logs.clone());
         router.set_message_ledger_store(self.message_ledger.clone());
         self.bridge.set_thread_log_sink(self.thread_logs.clone());
+        self.bridge.set_thread_store_blocking(thread_store.clone());
         self.bridge.set_thread_history(thread_history.clone());
 
         // Wire the AgentTeam meta-provider into the bridge. This is the

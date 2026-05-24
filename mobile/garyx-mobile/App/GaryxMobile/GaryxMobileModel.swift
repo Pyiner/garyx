@@ -2599,6 +2599,39 @@ final class GaryxMobileModel: ObservableObject {
             }
         } else if activeTasksByThread[threadId] == nil {
             remoteBusyThreadIds.remove(threadId)
+            markThreadSummaryRuntimeInactive(threadId)
+        }
+    }
+
+    private func markThreadSummaryRuntimeInactive(_ threadId: String) {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedThreadId.isEmpty else { return }
+
+        func inactiveSummary(_ thread: GaryxThreadSummary) -> GaryxThreadSummary {
+            var updated = thread
+            updated.activeRunId = nil
+            let recentRunId = updated.recentRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            updated.runState = recentRunId.isEmpty ? "idle" : "completed"
+            return updated
+        }
+
+        var changed = false
+        threads = threads.map { thread in
+            guard thread.id == normalizedThreadId,
+                  !(thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) else {
+                return thread
+            }
+            changed = true
+            return inactiveSummary(thread)
+        }
+        if selectedThread?.id == normalizedThreadId,
+           let selectedThread,
+           !(selectedThread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) {
+            self.selectedThread = inactiveSummary(selectedThread)
+            changed = true
+        }
+        if changed {
+            refreshRemoteBusyIdsForVisibleThreads()
         }
     }
 
