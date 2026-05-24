@@ -143,9 +143,10 @@ needs installed-app validation.
   inline as a compact section rather than hiding them behind a drilldown row.
 - Mobile root-sidebar thread rows should not expose left-swipe actions; reserve
   horizontal swipes for opening/closing the sidebar. Put pin/archive actions in
-  the thread page menu. Show pinned state with a leading neutral pin icon that
-  can be tapped to unpin, and show running state with a compact trailing spinner
-  using `run_state`/`active_run_id` from recent-thread summaries.
+  the thread page menu. Show pinned state with a neutral slanted pin immediately
+  after the thread title that can be tapped to unpin, and show running state with
+  a compact trailing spinner using `run_state`/`active_run_id` from recent-thread
+  summaries.
 - While the mobile sidebar is visible, silently refresh recent threads and pins
   about every three seconds so running-state indicators stay current without
   showing inline loading rows.

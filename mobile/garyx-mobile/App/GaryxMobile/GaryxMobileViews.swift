@@ -565,7 +565,6 @@ struct GaryxThreadSidebar: View {
                     startNewChat()
                 }
             )
-            .background(GaryxTheme.background.ignoresSafeArea(edges: .bottom))
         }
     }
 
@@ -1412,47 +1411,48 @@ struct GaryxSidebarThreadRowView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            if isPinned {
-                Button {
-                    onUnpin?()
-                } label: {
-                    Image(systemName: "pin.fill")
-                        .font(GaryxFont.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 22, height: 28)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Unpin thread")
-            }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(thread.title.isEmpty ? "Untitled" : thread.title)
+                        .font(GaryxFont.subheadline(weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(.primary)
+                        .layoutPriority(1)
 
-            Button {
-                onSelect?()
-            } label: {
-                HStack(alignment: .center, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(thread.title.isEmpty ? "Untitled" : thread.title)
-                            .font(GaryxFont.subheadline(weight: .medium))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .foregroundStyle(.primary)
-
-                        if let subtitle, !subtitle.isEmpty {
-                            Text(subtitle)
-                                .font(GaryxFont.caption())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
+                    if isPinned {
+                        Button {
+                            onUnpin?()
+                        } label: {
+                            Image(systemName: "pin.fill")
+                                .font(GaryxFont.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                                .rotationEffect(.degrees(-28))
+                                .frame(width: 18, height: 18)
+                                .contentShape(Circle())
                         }
+                        .buttonStyle(.plain)
+                        .disabled(onUnpin == nil)
+                        .accessibilityLabel("Unpin thread")
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    trailingMeta
-                        .fixedSize(horizontal: true, vertical: false)
                 }
-                .contentShape(Rectangle())
+
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            trailingMeta
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            onSelect?()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: GaryxSidebarMetrics.threadRowMinHeight, alignment: .leading)
@@ -1479,12 +1479,44 @@ struct GaryxSidebarThreadRowView: View {
 
 private struct GaryxSidebarRunningIndicator: View {
     var body: some View {
-        ProgressView()
-            .controlSize(.mini)
-            .scaleEffect(0.76)
-            .tint(.secondary)
-            .frame(width: 18, height: 18)
-            .accessibilityLabel("Running")
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let cycle = 1.55
+            let progress = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: cycle) / cycle
+
+            ZStack {
+                Circle()
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+
+                Circle()
+                    .trim(from: 0.08, to: 0.78)
+                    .stroke(
+                        AngularGradient(
+                            colors: [
+                                Color.primary.opacity(0.05),
+                                Color.primary.opacity(0.22),
+                                Color.primary.opacity(0.62),
+                                Color.primary.opacity(0.18),
+                                Color.primary.opacity(0.04)
+                            ],
+                            center: .center
+                        ),
+                        style: StrokeStyle(lineWidth: 1.7, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(progress * 360))
+
+                Circle()
+                    .trim(from: 0.0, to: 0.18)
+                    .stroke(
+                        Color.primary.opacity(0.24),
+                        style: StrokeStyle(lineWidth: 1.1, lineCap: .round)
+                    )
+                    .rotationEffect(.degrees(progress * -520 + 90))
+                    .blur(radius: 0.15)
+            }
+        }
+        .frame(width: 18, height: 18)
+        .accessibilityLabel("Running")
     }
 }
 
