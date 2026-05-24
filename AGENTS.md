@@ -187,6 +187,9 @@ needs installed-app validation.
   default. Use top navigation actions to open full-screen add/edit flows, not
   compact sheets or always-visible forms, and keep the main page focused on
   current state and lists.
+- Keep mobile SwiftUI feature surfaces in feature-specific files rather than
+  adding large view trees to `GaryxMobileViews.swift`; use small shared helpers
+  in the main views file only when they are genuinely reused across surfaces.
 - Mobile UI screenshots used for product review should be captured against the
   running local gateway by default. Debug snapshot fixtures are only for isolated
   layout checks and must be called out explicitly when used.
