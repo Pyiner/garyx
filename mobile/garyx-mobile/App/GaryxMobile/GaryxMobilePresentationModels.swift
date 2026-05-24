@@ -12,14 +12,15 @@ struct GaryxSidebarThreadRowPresentation: Equatable {
         thread: GaryxThreadSummary,
         isSelected: Bool,
         isPinned: Bool,
-        trailingTimestamp: String?
+        trailingTimestamp: String?,
+        showsRunningState: Bool = true
     ) {
         self.title = thread.title.isEmpty ? "Untitled" : thread.title
         self.subtitle = Self.subtitle(for: thread)
         self.trailingTimestamp = trailingTimestamp
         self.isSelected = isSelected
         self.isPinned = isPinned
-        self.isRunning = Self.isRunning(thread)
+        self.isRunning = showsRunningState && Self.isRunning(thread)
     }
 
     private static func subtitle(for thread: GaryxThreadSummary) -> String? {

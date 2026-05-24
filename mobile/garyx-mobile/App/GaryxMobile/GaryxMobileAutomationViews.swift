@@ -1032,25 +1032,25 @@ struct GaryxAutomationThreadPickerSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 14) {
-                Text("Choose Thread")
-                    .font(GaryxFont.title3(weight: .semibold))
+                Text("Choose thread")
+                    .font(GaryxFont.callout(weight: .medium))
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
                 Button {
                     dismiss()
                 } label: {
-                    GaryxToolbarIcon(systemName: "xmark")
+                    GaryxCompactGlassIcon(systemName: "xmark")
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close")
             }
             .padding(.horizontal, 22)
-            .padding(.top, 28)
-            .padding(.bottom, 16)
+            .padding(.top, 22)
+            .padding(.bottom, 12)
 
             GaryxGlassSearchField("Search threads", text: $searchText)
                 .padding(.horizontal, 22)
-                .padding(.bottom, 16)
+                .padding(.bottom, 14)
 
             ScrollView {
                 GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
@@ -1160,10 +1160,12 @@ struct GaryxAutomationThreadPickerRow: View {
                     thread: thread,
                     isSelected: isSelected,
                     isPinned: false,
-                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt),
+                    showsRunningState: false
                 ),
                 isFullBleed: true,
                 density: .compact,
+                selectionDisplay: .checkmark,
                 onSelect: onSelect
             )
 

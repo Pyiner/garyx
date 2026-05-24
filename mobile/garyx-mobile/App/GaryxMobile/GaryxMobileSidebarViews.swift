@@ -967,6 +967,33 @@ enum GaryxSidebarThreadRowDensity {
         }
     }
 
+    var titleFont: Font {
+        switch self {
+        case .regular:
+            GaryxFont.subheadline(weight: titleWeight)
+        case .compact:
+            GaryxFont.footnote(weight: titleWeight)
+        }
+    }
+
+    var subtitleFont: Font {
+        switch self {
+        case .regular:
+            GaryxFont.caption()
+        case .compact:
+            GaryxFont.caption()
+        }
+    }
+
+    var textSpacing: CGFloat {
+        switch self {
+        case .regular:
+            4
+        case .compact:
+            2
+        }
+    }
+
     func verticalPadding(isFullBleed: Bool) -> CGFloat {
         switch self {
         case .regular:
@@ -977,19 +1004,26 @@ enum GaryxSidebarThreadRowDensity {
     }
 }
 
+enum GaryxSidebarThreadSelectionDisplay: Equatable {
+    case sidebar
+    case checkmark
+    case none
+}
+
 struct GaryxSidebarThreadRowView: View {
     let model: GaryxSidebarThreadRowPresentation
     var isFullBleed = false
     var density: GaryxSidebarThreadRowDensity = .regular
+    var selectionDisplay: GaryxSidebarThreadSelectionDisplay = .sidebar
     var onSelect: (() -> Void)?
     var onUnpin: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: density.textSpacing) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(model.title)
-                        .font(GaryxFont.subheadline(weight: density.titleWeight))
+                        .font(density.titleFont)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .foregroundStyle(.primary)
@@ -1014,7 +1048,7 @@ struct GaryxSidebarThreadRowView: View {
 
                 if let subtitle = model.subtitle, !subtitle.isEmpty {
                     Text(subtitle)
-                        .font(GaryxFont.caption())
+                        .font(density.subtitleFont)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -1040,7 +1074,7 @@ struct GaryxSidebarThreadRowView: View {
         .padding(.horizontal, isFullBleed ? GaryxSidebarMetrics.sectionHorizontalPadding : GaryxSidebarMetrics.rowInnerHorizontalPadding)
         .padding(.vertical, density.verticalPadding(isFullBleed: isFullBleed))
         .background {
-            if model.isSelected {
+            if model.isSelected, selectionDisplay == .sidebar {
                 if isFullBleed {
                     Color(.secondarySystemGroupedBackground)
                 } else {
@@ -1121,9 +1155,18 @@ private extension GaryxSidebarThreadRowView {
             if model.isRunning {
                 GaryxSidebarRunningIndicator()
             } else if model.isSelected {
-                Circle()
-                    .fill(.secondary)
-                    .frame(width: 7, height: 7)
+                switch selectionDisplay {
+                case .sidebar:
+                    Circle()
+                        .fill(.secondary)
+                        .frame(width: 7, height: 7)
+                case .checkmark:
+                    Image(systemName: "checkmark")
+                        .font(GaryxFont.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                case .none:
+                    EmptyView()
+                }
             } else if let trailingTimestamp = model.trailingTimestamp, !trailingTimestamp.isEmpty {
                 Text(trailingTimestamp)
                     .font(GaryxFont.caption())

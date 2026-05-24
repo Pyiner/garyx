@@ -1219,6 +1219,21 @@ struct GaryxToolbarIcon: View {
     }
 }
 
+struct GaryxCompactGlassIcon: View {
+    let systemName: String
+    var diameter: CGFloat = 32
+    var iconSize: CGFloat = 13
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(GaryxFont.system(size: iconSize, weight: .medium))
+            .foregroundStyle(.primary)
+            .frame(width: diameter, height: diameter)
+            .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .ultraThinMaterial, in: Circle())
+            .contentShape(Rectangle())
+    }
+}
+
 struct GaryxGlassPanel<Content: View>: View {
     var cornerRadius: CGFloat = 24
     var fallbackMaterial: Material = .ultraThinMaterial
@@ -1247,6 +1262,7 @@ struct GaryxGlassPanel<Content: View>: View {
                 fallbackMaterial: fallbackMaterial,
                 in: shape
             )
+            .clipShape(shape)
             .overlay {
                 shape
                     .stroke(Color.white.opacity(0.34), lineWidth: 0.7)
@@ -1277,7 +1293,7 @@ struct GaryxGlassSearchField: View {
                 .foregroundStyle(.secondary)
 
             TextField(placeholder, text: $text)
-                .font(GaryxFont.callout())
+                .font(GaryxFont.subheadline())
                 .foregroundStyle(.primary)
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
@@ -1295,7 +1311,7 @@ struct GaryxGlassSearchField: View {
             }
         }
         .padding(.horizontal, 14)
-        .frame(height: 44)
+        .frame(height: 38)
         .garyxAdaptiveGlass(
             .regular,
             isInteractive: true,
