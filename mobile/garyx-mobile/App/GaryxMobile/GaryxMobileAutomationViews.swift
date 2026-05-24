@@ -115,77 +115,119 @@ struct GaryxAutomationCard: View {
     }
 
     private var editAutomationForm: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            GaryxAutomationFormSection(
-                title: "Controls",
-                subtitle: garyxAutomationScheduleSummary(automation.schedule)
-            ) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(automation.label)
-                                .font(GaryxFont.title3(weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(2)
-                            Text(automation.enabled ? "Enabled" : "Paused")
-                                .font(GaryxFont.caption(weight: .semibold))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
-                        GaryxStatusPill(text: automation.enabled ? "Enabled" : "Paused", tone: automation.enabled ? .good : .muted)
-                    }
-
-                    HStack(spacing: 10) {
-                        if automation.enabled {
-                            GaryxAutomationCommandButton(title: "Run Once", systemName: "play.fill", isPrimary: true) {
-                                Task {
-                                    await model.runAutomation(automation)
-                                    showsEditForm = false
-                                }
-                            }
-                        }
-
-                        GaryxAutomationCommandButton(
-                            title: automation.enabled ? "Pause" : "Resume",
-                            systemName: automation.enabled ? "pause.fill" : "play.fill"
-                        ) {
-                            Task { await model.toggleAutomation(automation) }
-                        }
-                    }
-
-                    HStack(spacing: 10) {
-                        if let threadId = automationOpenThreadId {
-                            GaryxAutomationCommandButton(title: "Open Thread", systemName: "arrow.up.right") {
-                                Task {
-                                    await model.openThread(id: threadId)
-                                    showsEditForm = false
-                                }
-                            }
-                        }
-
-                        GaryxAutomationCommandButton(title: "Delete", systemName: "trash", isDestructive: true) {
-                            showsDeleteConfirmation = true
-                        }
-                    }
-                }
-            }
-
+        VStack(alignment: .leading, spacing: 24) {
+            automationEditSummary
+            automationEditActions
             automationFields
         }
+        .padding(.top, 2)
         .onAppear(perform: fillDraft)
         .onChange(of: targetsExistingThread) { _, _ in
             ensureEditTargetSelection()
         }
     }
 
+    private var automationEditSummary: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(automation.label)
+                        .font(GaryxFont.title2(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Text(automationTargetLabel)
+                        .font(GaryxFont.callout(weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                GaryxStatusPill(
+                    text: automation.enabled ? "Enabled" : "Paused",
+                    tone: automation.enabled ? .good : .muted
+                )
+                .padding(.top, 3)
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    automationScheduleChip
+                    automationTargetChip
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    automationScheduleChip
+                    automationTargetChip
+                }
+            }
+        }
+        .padding(.horizontal, 2)
+    }
+
+    private var automationScheduleChip: some View {
+        GaryxAutomationInfoChip(systemName: "clock", title: garyxAutomationScheduleSummary(automation.schedule))
+    }
+
+    private var automationTargetChip: some View {
+        GaryxAutomationInfoChip(
+            systemName: targetsExistingThread ? "bubble.left" : "folder",
+            title: targetsExistingThread ? "Existing thread" : "New thread"
+        )
+    }
+
+    private var automationEditActions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if automation.enabled {
+                Button {
+                    Task {
+                        await model.runAutomation(automation)
+                        showsEditForm = false
+                    }
+                } label: {
+                    Label("Run Once", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(GaryxPrimaryWideButtonStyle())
+            }
+
+            HStack(spacing: 10) {
+                GaryxAutomationCommandButton(
+                    title: automation.enabled ? "Pause" : "Resume",
+                    systemName: automation.enabled ? "pause.fill" : "play.fill"
+                ) {
+                    Task { await model.toggleAutomation(automation) }
+                }
+
+                if let threadId = automationOpenThreadId {
+                    GaryxAutomationCommandButton(title: "Thread", systemName: "arrow.up.right") {
+                        Task {
+                            await model.openThread(id: threadId)
+                            showsEditForm = false
+                        }
+                    }
+                }
+
+                GaryxAutomationCommandButton(title: "Delete", systemName: "trash", isDestructive: true) {
+                    showsDeleteConfirmation = true
+                }
+            }
+        }
+    }
+
     private var automationFields: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             GaryxAutomationFormSection(title: "Details") {
-                TextField("Name", text: $label)
-                    .garyxInputStyle()
-                TextField("Prompt", text: $prompt, axis: .vertical)
-                    .lineLimit(3...8)
-                    .garyxInputStyle()
+                GaryxAutomationFieldLabel("Name") {
+                    TextField("Automation name", text: $label)
+                        .garyxInputStyle()
+                }
+                GaryxAutomationFieldLabel("Prompt") {
+                    TextField("What should Garyx run?", text: $prompt, axis: .vertical)
+                        .lineLimit(3...8)
+                        .garyxInputStyle()
+                }
             }
 
             GaryxAutomationFormSection(title: "Target") {
@@ -200,15 +242,17 @@ struct GaryxAutomationCard: View {
 
             GaryxAutomationFormSection(title: "Schedule") {
                 if automation.schedule.kind == .interval {
-                    HStack(spacing: 10) {
-                        TextField("Every", text: $intervalHours)
-                            .keyboardType(.numberPad)
-                            .garyxInputStyle()
-                            .frame(maxWidth: 160)
-                        Text("hours")
-                            .font(GaryxFont.callout(weight: .medium))
-                            .foregroundStyle(.secondary)
-                        Spacer(minLength: 0)
+                    GaryxAutomationFieldLabel("Repeat every") {
+                        HStack(spacing: 10) {
+                            TextField("Every", text: $intervalHours)
+                                .keyboardType(.numberPad)
+                                .garyxInputStyle()
+                                .frame(maxWidth: 128)
+                            Text("hours")
+                                .font(GaryxFont.callout(weight: .medium))
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                        }
                     }
                 } else {
                     Text(garyxAutomationScheduleSummary(automation.schedule))
@@ -431,7 +475,7 @@ struct GaryxAutomationFormSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 11) {
+        VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(GaryxFont.caption(weight: .semibold))
@@ -448,13 +492,49 @@ struct GaryxAutomationFormSection<Content: View>: View {
                 content
             }
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(GaryxTheme.hairline, lineWidth: 1)
+        .padding(.vertical, 2)
+    }
+}
+
+struct GaryxAutomationFieldLabel<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(GaryxFont.caption(weight: .semibold))
+                .foregroundStyle(.tertiary)
+            content
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct GaryxAutomationInfoChip: View {
+    let systemName: String
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemName)
+                .font(GaryxFont.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(GaryxFont.caption(weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 9)
+        .frame(minHeight: 28)
+        .background(Color(.tertiarySystemFill).opacity(0.45), in: Capsule())
     }
 }
 
@@ -467,17 +547,23 @@ struct GaryxAutomationCommandButton: View {
 
     var body: some View {
         Button(action: action) {
-            Label(title, systemImage: systemName)
-                .font(GaryxFont.footnote(weight: .semibold))
-                .lineLimit(1)
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: 44)
-                .foregroundStyle(foreground)
-                .background(background, in: Capsule())
-                .overlay {
-                    Capsule()
-                        .stroke(border, lineWidth: 1)
-                }
+            VStack(spacing: 5) {
+                Image(systemName: systemName)
+                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                    .frame(width: 20, height: 18)
+                Text(title)
+                    .font(GaryxFont.caption(weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+            .foregroundStyle(foreground)
+            .frame(maxWidth: .infinity)
+            .frame(minHeight: 58)
+            .background(background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(border, lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
     }
@@ -499,7 +585,7 @@ struct GaryxAutomationCommandButton: View {
         if isDestructive {
             return GaryxTheme.danger.opacity(0.08)
         }
-        return Color(.tertiarySystemFill).opacity(0.5)
+        return Color(.tertiarySystemFill).opacity(0.38)
     }
 
     private var border: Color {
