@@ -504,10 +504,6 @@ private struct GaryxSidebarBotRow: View {
         return group.rootBehavior != "expand_only" || !mainThreadId.isEmpty || !defaultOpenThreadId.isEmpty
     }
 
-    private var rowCanOpen: Bool {
-        canDrillDown || rootCanOpen
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             Button {
@@ -535,7 +531,6 @@ private struct GaryxSidebarBotRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!rowCanOpen)
 
             if canDrillDown {
                 Button(action: onSelect) {
@@ -972,15 +967,14 @@ struct GaryxSidebarThreadRowView: View {
                             onUnpin?()
                         } label: {
                             Image(systemName: "pin.fill")
-                                .font(GaryxFont.system(size: 10.5, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                                .rotationEffect(.degrees(-28))
-                                .frame(width: 18, height: 18)
+                                .font(GaryxFont.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .rotationEffect(.degrees(28))
+                                .frame(width: 22, height: 22)
                         }
-                        .frame(width: 44, height: 44)
+                        .frame(width: 30, height: 24)
                         .contentShape(Rectangle())
                         .buttonStyle(.plain)
-                        .disabled(onUnpin == nil)
                         .accessibilityLabel("Unpin thread")
                     }
                 }
@@ -1223,7 +1217,7 @@ struct GaryxWorkspaceBotsView: View {
     var body: some View {
         GaryxPanelScaffold(
             title: title,
-            subtitle: subtitle,
+            subtitle: "",
             onRefresh: { await refresh() },
             leadingActionLabel: activeDrilldown == nil ? nil : "Workspace & Bots",
             leadingAction: activeDrilldown == nil ? nil : { goBack() }
@@ -1250,6 +1244,19 @@ struct GaryxWorkspaceBotsView: View {
         .task {
             await refresh()
         }
+        .onAppear {
+            syncWorkspaceBotsDrilldownState()
+        }
+        .onChange(of: activeDrilldown) { _, _ in
+            syncWorkspaceBotsDrilldownState()
+        }
+        .onChange(of: model.workspaceBotsBackRequest) { _, _ in
+            guard activeDrilldown != nil else { return }
+            goBack()
+        }
+        .onDisappear {
+            model.workspaceBotsDrilldownActive = false
+        }
     }
 
     private var activeDrilldownBinding: Binding<GaryxSidebarDrilldown?> {
@@ -1270,26 +1277,9 @@ struct GaryxWorkspaceBotsView: View {
         }
     }
 
-    private var subtitle: String {
-        switch activeDrilldown {
-        case let .bot(id):
-            return model.mobileBotGroups.first { $0.id == id }?.compactDetailLine ?? "Bot threads"
-        case let .workspace(path):
-            return model.sidebarWorkspaceThreadGroups.first { $0.path == path }?.path ?? "Workspace threads"
-        case nil:
-            return "\(model.mobileBotGroups.count) bots · \(visibleWorkspaceCount) workspaces"
-        }
-    }
-
     private func refresh() async {
         await model.refreshRemoteState()
         await model.refreshWorkspaceAndBotThreads()
-    }
-
-    private var visibleWorkspaceCount: Int {
-        model.knownWorkspacePaths
-            .filter(GaryxMobileModel.isVisibleMobileWorkspacePath)
-            .count
     }
 
     private func goBack() {
@@ -1298,5 +1288,9 @@ struct GaryxWorkspaceBotsView: View {
                 activeDrilldown = nil
             }
         }
+    }
+
+    private func syncWorkspaceBotsDrilldownState() {
+        model.workspaceBotsDrilldownActive = activeDrilldown != nil
     }
 }

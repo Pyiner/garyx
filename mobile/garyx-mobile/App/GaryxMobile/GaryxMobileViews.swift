@@ -330,7 +330,7 @@ struct GaryxShellView: View {
                 switch model.mainPanelLeadingEdgeAction {
                 case .openSidebar:
                     sidebarDragOffset = max(0, min(sidebarWidth, value.translation.width))
-                case .settingsOverview:
+                case .settingsOverview, .workspaceBotsOverview:
                     sidebarDragOffset = 0
                 }
             }
@@ -347,7 +347,7 @@ struct GaryxShellView: View {
                 switch model.mainPanelLeadingEdgeAction {
                 case .openSidebar:
                     finishGesture(open: shouldOpen)
-                case .settingsOverview:
+                case .settingsOverview, .workspaceBotsOverview:
                     resetSidebarDrag()
                     if shouldOpen {
                         hideKeyboard()

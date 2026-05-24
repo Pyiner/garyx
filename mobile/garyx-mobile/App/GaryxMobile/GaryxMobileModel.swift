@@ -150,6 +150,7 @@ enum GaryxMobileSettingsTab: String, CaseIterable, Identifiable {
 enum GaryxMobileLeadingEdgeAction {
     case openSidebar
     case settingsOverview
+    case workspaceBotsOverview
 }
 
 struct GaryxMobileAgentTarget: Identifiable, Equatable {
@@ -265,6 +266,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published private(set) var remoteBusyThreadIds: Set<String> = []
     @Published var activePanel: GaryxMobilePanel = .chat
     @Published var activeSettingsTab: GaryxMobileSettingsTab = .manage
+    @Published var workspaceBotsDrilldownActive = false
+    @Published var workspaceBotsBackRequest = 0
     @Published private var storedLastError: String?
     var lastError: String? {
         get {
@@ -1132,6 +1135,9 @@ final class GaryxMobileModel: ObservableObject {
         default:
             panel
         }
+        if targetPanel != .workspaceBots {
+            workspaceBotsDrilldownActive = false
+        }
         guard targetPanel != .dreams || dreamsAutoScanEnabled else {
             activePanel = .chat
             setSidebarVisible(false)
@@ -1150,6 +1156,9 @@ final class GaryxMobileModel: ObservableObject {
         if activePanel == .settings, activeSettingsTab != .manage {
             return .settingsOverview
         }
+        if activePanel == .workspaceBots, workspaceBotsDrilldownActive {
+            return .workspaceBotsOverview
+        }
         return .openSidebar
     }
 
@@ -1159,6 +1168,8 @@ final class GaryxMobileModel: ObservableObject {
             setSidebarVisible(true)
         case .settingsOverview:
             showSettingsOverview()
+        case .workspaceBotsOverview:
+            workspaceBotsBackRequest &+= 1
         }
     }
 

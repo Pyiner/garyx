@@ -54,25 +54,89 @@ struct GaryxLoadEarlierHistoryButton: View {
     }
 }
 
+private struct GaryxConversationBottomOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct GaryxConversationViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @FocusState private var isComposerFocused: Bool
     @State private var scrollPreservationThreadId: String?
+    @State private var conversationBottomOffset: CGFloat = 0
+    @State private var conversationViewportHeight: CGFloat = 0
+    @State private var isNearConversationBottom = true
+    @State private var showsScrollToBottomButton = false
 
     var body: some View {
         ScrollViewReader { proxy in
-            messageScroll
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    GaryxComposer(isFocused: $isComposerFocused)
+            ZStack(alignment: .bottomTrailing) {
+                messageScroll
+
+                if showsScrollToBottomButton {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            scrollToConversationTail(proxy)
+                        }
+                        showsScrollToBottomButton = false
+                    } label: {
+                        Image(systemName: "arrow.down")
+                            .font(GaryxFont.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 42, height: 42)
+                            .garyxAdaptiveGlass(
+                                .regular,
+                                isInteractive: true,
+                                fallbackMaterial: .ultraThinMaterial,
+                                in: Circle()
+                            )
+                            .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 18)
+                    .padding(.bottom, 14)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                    .accessibilityLabel("Scroll to latest message")
                 }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                GaryxComposer(isFocused: $isComposerFocused)
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear {
+                    isNearConversationBottom = true
+                    showsScrollToBottomButton = false
+                    scheduleScrollToConversationTail(proxy, animated: false)
+                }
+                .onChange(of: model.selectedThread?.id) { _, _ in
+                    scrollPreservationThreadId = model.selectedThread?.id
+                    isNearConversationBottom = true
+                    showsScrollToBottomButton = false
+                    scheduleScrollToConversationTail(proxy, animated: false)
+                }
                 .onChange(of: model.messages) { oldValue, newValue in
                     if shouldPreserveScrollForPrependedHistory(oldValue: oldValue, newValue: newValue) {
                         return
                     }
                     guard !newValue.isEmpty || model.showsTailThinkingIndicator else { return }
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        scrollToConversationTail(proxy)
+                    if oldValue.isEmpty || isNearConversationBottom {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            scrollToConversationTail(proxy)
+                        }
+                        showsScrollToBottomButton = false
+                    } else {
+                        showsScrollToBottomButton = true
                     }
                 }
                 .onChange(of: isComposerFocused) { _, isFocused in
@@ -122,12 +186,37 @@ struct GaryxConversationView: View {
                 Color.clear
                     .frame(height: 1)
                     .id("conversation-bottom-anchor")
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: GaryxConversationBottomOffsetKey.self,
+                                value: geometry.frame(in: .named("garyx-conversation-scroll")).maxY
+                            )
+                        }
+                    }
             }
             .padding(.horizontal, 16)
             .padding(.top, 18)
             .padding(.bottom, 24)
         }
+        .coordinateSpace(name: "garyx-conversation-scroll")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: GaryxConversationViewportHeightKey.self,
+                    value: geometry.size.height
+                )
+            }
+        }
+        .onPreferenceChange(GaryxConversationBottomOffsetKey.self) { value in
+            conversationBottomOffset = value
+            updateConversationBottomState()
+        }
+        .onPreferenceChange(GaryxConversationViewportHeightKey.self) { value in
+            conversationViewportHeight = value
+            updateConversationBottomState()
+        }
         .scrollDisabled(isComposerFocused)
         .scrollDismissesKeyboard(.never)
         .refreshable {
@@ -156,6 +245,29 @@ struct GaryxConversationView: View {
         } else {
             proxy.scrollTo("conversation-bottom-anchor", anchor: .bottom)
         }
+    }
+
+    private func scheduleScrollToConversationTail(_ proxy: ScrollViewProxy, animated: Bool) {
+        DispatchQueue.main.async {
+            DispatchQueue.main.async {
+                if animated {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        scrollToConversationTail(proxy)
+                    }
+                } else {
+                    scrollToConversationTail(proxy)
+                }
+                showsScrollToBottomButton = false
+            }
+        }
+    }
+
+    private func updateConversationBottomState() {
+        guard conversationViewportHeight > 0 else { return }
+        let distanceFromBottom = conversationBottomOffset - conversationViewportHeight
+        let isNearBottom = distanceFromBottom <= 96
+        isNearConversationBottom = isNearBottom
+        showsScrollToBottomButton = !isNearBottom && !model.messages.isEmpty
     }
 
     private func shouldPreserveScrollForPrependedHistory(
