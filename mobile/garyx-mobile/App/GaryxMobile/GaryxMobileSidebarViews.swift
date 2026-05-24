@@ -945,9 +945,33 @@ private struct GaryxSidebarThreadButton: View {
     }
 }
 
+enum GaryxSidebarThreadRowDensity {
+    case regular
+    case compact
+
+    var minHeight: CGFloat {
+        switch self {
+        case .regular:
+            GaryxSidebarMetrics.threadRowMinHeight
+        case .compact:
+            42
+        }
+    }
+
+    func verticalPadding(isFullBleed: Bool) -> CGFloat {
+        switch self {
+        case .regular:
+            isFullBleed ? 10 : 8
+        case .compact:
+            6
+        }
+    }
+}
+
 struct GaryxSidebarThreadRowView: View {
     let model: GaryxSidebarThreadRowPresentation
     var isFullBleed = false
+    var density: GaryxSidebarThreadRowDensity = .regular
     var onSelect: (() -> Void)?
     var onUnpin: (() -> Void)?
 
@@ -1003,9 +1027,9 @@ struct GaryxSidebarThreadRowView: View {
             onSelect?()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(minHeight: GaryxSidebarMetrics.threadRowMinHeight, alignment: .leading)
+        .frame(minHeight: density.minHeight, alignment: .leading)
         .padding(.horizontal, isFullBleed ? GaryxSidebarMetrics.sectionHorizontalPadding : GaryxSidebarMetrics.rowInnerHorizontalPadding)
-        .padding(.vertical, isFullBleed ? 10 : 8)
+        .padding(.vertical, density.verticalPadding(isFullBleed: isFullBleed))
         .background {
             if model.isSelected {
                 if isFullBleed {

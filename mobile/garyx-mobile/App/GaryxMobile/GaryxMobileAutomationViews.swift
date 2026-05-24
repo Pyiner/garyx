@@ -1038,23 +1038,14 @@ struct GaryxAutomationThreadPickerSheet: View {
                 .padding(.bottom, 18)
 
             HStack(alignment: .center, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Choose Thread")
-                        .font(GaryxFont.title2(weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Text("Recent threads")
-                        .font(GaryxFont.callout())
-                        .foregroundStyle(.secondary)
-                }
+                Text("Choose Thread")
+                    .font(GaryxFont.title2(weight: .semibold))
+                    .foregroundStyle(.primary)
                 Spacer(minLength: 0)
                 Button {
                     dismiss()
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(GaryxFont.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .frame(width: 40, height: 40)
-                        .background(.ultraThinMaterial, in: Circle())
+                    GaryxToolbarIcon(systemName: "xmark")
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Close")
@@ -1092,10 +1083,14 @@ struct GaryxAutomationThreadPickerSheet: View {
             }
             .scrollIndicators(.hidden)
         }
-        .background(GaryxAutomationPalette.pageBackground.ignoresSafeArea())
-        .presentationDetents([.fraction(0.82), .large])
+        .background {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
+        }
+        .presentationDetents([.fraction(0.93), .large])
         .presentationDragIndicator(.hidden)
-        .presentationCornerRadius(34)
+        .presentationCornerRadius(38)
         .task {
             isRefreshing = true
             await model.refreshThreads(silent: true)
@@ -1199,6 +1194,7 @@ struct GaryxAutomationThreadPickerRow: View {
                     trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
                 ),
                 isFullBleed: true,
+                density: .compact,
                 onSelect: onSelect
             )
 
