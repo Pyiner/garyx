@@ -622,19 +622,10 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     var showsTailThinkingIndicator: Bool {
-        guard isSelectedThreadSending else { return false }
-        if let last = messages.last,
-           last.role == .assistant,
-           last.isStreaming,
-           last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return false
-        }
-        if let last = messages.last,
-           last.role == .tool,
-           last.toolTraceGroup?.isActive == true {
-            return false
-        }
-        return true
+        GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+            messages: messages,
+            runActive: isSelectedThreadSending
+        )
     }
 
     func isThreadBusy(_ threadId: String) -> Bool {
@@ -2894,22 +2885,14 @@ final class GaryxMobileModel: ObservableObject {
             clientIntentId: clientIntentId
         )
         let assistantId = "local-assistant-\(UUID().uuidString)"
-        let assistantMessage = GaryxMobileMessage(
-            id: assistantId,
-            role: .assistant,
-            text: "",
-            timestamp: nil,
-            isStreaming: true
-        )
         var optimisticThreadId = selectedThread?.id
         if let optimisticThreadId {
             mutateMessages(for: optimisticThreadId) { messages in
                 messages.append(userMessage)
-                messages.append(assistantMessage)
             }
             activeAssistantMessageIdsByThread[optimisticThreadId] = assistantId
         } else {
-            messages = [userMessage, assistantMessage]
+            messages = [userMessage]
         }
 
         do {
@@ -3000,6 +2983,7 @@ final class GaryxMobileModel: ObservableObject {
             isStreaming: false,
             clientIntentId: clientIntentId
         )
+        finishActiveAssistantSegmentBeforeUserTurn(for: thread.id)
         mutateMessages(for: thread.id) { messages in
             messages.append(userMessage)
         }
@@ -3047,6 +3031,7 @@ final class GaryxMobileModel: ObservableObject {
             isStreaming: false,
             clientIntentId: clientIntentId
         )
+        finishActiveAssistantSegmentBeforeUserTurn(for: thread.id)
         mutateMessages(for: thread.id) { messages in
             messages.append(userMessage)
         }
@@ -4860,6 +4845,15 @@ final class GaryxMobileModel: ObservableObject {
             ? "remote-user-\(threadId)-\(UUID().uuidString)"
             : "remote-user-\(runId)"
         let visibleText = Self.remoteUserMessageText(text: text, imageCount: imageCount)
+        let existingMessages = cachedMessages(for: threadId)
+        let materializesExistingLocalUser = existingMessages.contains { message in
+            message.role == .user
+                && (message.id.hasPrefix("local-user-") || message.id.hasPrefix("pending-user:"))
+                && Self.normalizedMergeText(message.text) == Self.normalizedMergeText(visibleText)
+        }
+        if !existingMessages.contains(where: { $0.id == messageId }) && !materializesExistingLocalUser {
+            finishActiveAssistantSegmentBeforeUserTurn(for: threadId)
+        }
         mutateMessages(for: threadId) { messages in
             if messages.contains(where: { $0.id == messageId }) {
                 return
@@ -4938,6 +4932,13 @@ final class GaryxMobileModel: ObservableObject {
             }
             messages[index].isStreaming = false
         }
+    }
+
+    private func finishActiveAssistantSegmentBeforeUserTurn(for threadId: String) {
+        flushPendingAssistantDelta(for: threadId)
+        markActiveAssistantSegmentComplete(for: threadId)
+        removeEmptyActiveAssistantPlaceholder(for: threadId)
+        activeAssistantMessageIdsByThread[threadId] = nil
     }
 
     private func suspendStreamingAssistantForBackground(threadId: String) -> String? {
@@ -5435,35 +5436,6 @@ final class GaryxMobileModel: ObservableObject {
                     pendingInputId: pendingId
                 )
             )
-        }
-
-        if live,
-           activeTasksByThread[threadId] == nil,
-           let activeRun = transcript.threadRuntime?.activeRun,
-           let assistantText = activeRun.assistantResponse?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assistantText.isEmpty {
-            let normalizedAssistantText = Self.normalizedMergeText(assistantText)
-            let alreadyRendered = Self.currentTurnAssistantTexts(in: rendered).contains { normalizedExisting in
-                !normalizedExisting.isEmpty
-                    && (normalizedExisting.contains(normalizedAssistantText)
-                        || normalizedAssistantText.contains(normalizedExisting))
-            }
-            if !alreadyRendered {
-                let runId = activeRun.runId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let stableRunId = runId.flatMap { $0.isEmpty ? nil : $0 } ?? "active"
-                let assistantId = activeAssistantMessageIdsByThread[threadId]
-                    ?? "stream-assistant-\(threadId)-\(stableRunId)"
-                activeAssistantMessageIdsByThread[threadId] = assistantId
-                rendered.append(
-                    GaryxMobileMessage(
-                        id: assistantId,
-                        role: .assistant,
-                        text: assistantText,
-                        timestamp: activeRun.updatedAt,
-                        isStreaming: true
-                    )
-                )
-            }
         }
 
         return rendered

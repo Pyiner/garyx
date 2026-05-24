@@ -87,6 +87,67 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         XCTAssertTrue(row.activityRows.isEmpty)
     }
 
+    func testRunningSecondTurnKeepsPriorPureReplyOnFirstTurn() throws {
+        let rows = GaryxMobileTurnRenderer.buildTurnRows(
+            messages: [
+                message("user-1", role: .user, text: "Hello"),
+                message("assistant-1", role: .assistant, text: "Hi, I am here."),
+                message("user-2", role: .user, text: "Run this"),
+                toolMessage("tool-1"),
+                message("assistant-2", role: .assistant, text: "Working on it", isStreaming: true),
+            ],
+            isRunningThread: true
+        )
+
+        XCTAssertEqual(rows.map(\.userBlock?.id), ["user-1", "user-2"])
+        guard case .flat(let firstReply) = try XCTUnwrap(rows[0].activityRows.only) else {
+            return XCTFail("Expected the first completed reply to stay outside the running turn")
+        }
+        XCTAssertEqual(firstReply.id, "assistant-1")
+
+        guard case .turn(let secondTurn) = try XCTUnwrap(rows[1].activityRows.only) else {
+            return XCTFail("Expected the running second turn to render its own activity")
+        }
+        XCTAssertNil(secondTurn.finalBlock)
+        XCTAssertEqual(secondTurn.steps.map(\.id), ["tool-1", "assistant-2"])
+        XCTAssertFalse(secondTurn.steps.contains { $0.id == "assistant-1" })
+    }
+
+    func testActivityModelShowsThinkingForTrailingUserOnlyRun() {
+        let messages = [
+            message("user-1", role: .user, text: "Run this"),
+        ]
+
+        XCTAssertTrue(GaryxMobileThreadActivityModel.latestUserMessageAwaitsAssistant(messages))
+        XCTAssertTrue(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: messages,
+                runActive: true
+            )
+        )
+    }
+
+    func testActivityModelSuppressesThinkingForEmptyAssistantPlaceholderAndActiveTool() {
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: [
+                    message("user-1", role: .user, text: "Run this"),
+                    message("assistant-1", role: .assistant, isStreaming: true),
+                ],
+                runActive: true
+            )
+        )
+        XCTAssertFalse(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: [
+                    message("user-1", role: .user, text: "Run this"),
+                    toolMessage("tool-1", isActive: true),
+                ],
+                runActive: true
+            )
+        )
+    }
+
     func testOrphanAssistantTurnUsesStableMessageId() throws {
         let messages = [
             message("assistant-1", role: .assistant, text: "Restored answer"),
@@ -196,22 +257,27 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         )
     }
 
-    private func toolMessage(_ id: String, timestamp: String? = nil) -> GaryxMobileMessage {
+    private func toolMessage(
+        _ id: String,
+        timestamp: String? = nil,
+        isActive: Bool = false
+    ) -> GaryxMobileMessage {
         GaryxMobileMessage(
             id: id,
             role: .tool,
             text: "",
             timestamp: timestamp,
-            isStreaming: false,
+            isStreaming: isActive,
             toolTraceGroup: GaryxMobileToolTraceGroup(
                 entries: [
                     toolEntry(
                         id: "\(id)-entry",
                         toolName: "exec_command",
                         title: "Command",
-                        status: .completed
+                        status: isActive ? .running : .completed
                     ),
-                ]
+                ],
+                live: isActive
             )
         )
     }

@@ -217,3 +217,39 @@ enum GaryxMobileTurnRenderer {
         )
     }
 }
+
+enum GaryxMobileThreadActivityModel {
+    static func latestUserMessageAwaitsAssistant(_ messages: [GaryxMobileMessage]) -> Bool {
+        var latestUserIndex: Int?
+        var latestAssistantOrToolIndex: Int?
+        for (index, message) in messages.enumerated() {
+            if message.role == .user {
+                latestUserIndex = index
+            }
+            if message.role == .assistant || message.role == .tool {
+                latestAssistantOrToolIndex = index
+            }
+        }
+        guard let latestUserIndex else { return false }
+        return latestAssistantOrToolIndex.map { $0 < latestUserIndex } ?? true
+    }
+
+    static func showsTailThinkingIndicator(
+        messages: [GaryxMobileMessage],
+        runActive: Bool
+    ) -> Bool {
+        guard runActive else { return false }
+        guard let last = messages.last else { return true }
+        if last.role == .assistant,
+           last.isStreaming,
+           last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           last.attachments.isEmpty {
+            return false
+        }
+        if last.role == .tool,
+           last.toolTraceGroup?.isActive == true {
+            return false
+        }
+        return true
+    }
+}
