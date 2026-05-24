@@ -6578,11 +6578,12 @@ private extension GaryxMobileToolTraceEntry {
 
 private extension GaryxMobileToolTracePayload {
     var shouldRender: Bool {
-        let normalizedSource = source?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let isCodex = normalizedSource == "codex" || normalizedSource == "codex_app_server"
         let normalizedItemType = itemType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedToolName = toolName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return !(isCodex && (normalizedItemType == "reasoning" || normalizedToolName == "reasoning"))
+        if normalizedItemType == "reasoning" || normalizedToolName == "reasoning" {
+            return false
+        }
+        return true
     }
 
     var normalizedToolName: String {

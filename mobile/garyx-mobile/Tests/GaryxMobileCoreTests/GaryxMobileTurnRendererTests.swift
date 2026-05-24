@@ -34,21 +34,37 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         XCTAssertEqual(block.id, "assistant-1")
     }
 
-    func testRunningTurnDefersTrailingAssistantAnswerIntoTurnBody() throws {
+    func testRunningTextOnlyAssistantStaysFlatWithoutWorkingTurn() throws {
         let rows = GaryxMobileTurnRenderer.buildTurnRows(
             messages: [
                 message("user-1", role: .user, text: "Question"),
-                message("assistant-1", role: .assistant, text: "Partial final-looking text"),
+                message("assistant-1", role: .assistant, text: "Partial text", isStreaming: true),
+            ],
+            isRunningThread: true
+        )
+
+        let activity = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only)
+        guard case .flat(let block) = activity else {
+            return XCTFail("Expected text-only assistant activity to stay flat")
+        }
+        XCTAssertEqual(block.id, "assistant-1")
+    }
+
+    func testRunningToolActivityCreatesWorkingTurn() throws {
+        let rows = GaryxMobileTurnRenderer.buildTurnRows(
+            messages: [
+                message("user-1", role: .user, text: "Search this"),
+                toolMessage("tool-1", isActive: true),
             ],
             isRunningThread: true
         )
 
         let activity = try XCTUnwrap(try XCTUnwrap(rows.only).activityRows.only)
         guard case .turn(let turn) = activity else {
-            return XCTFail("Expected running trailing answer to remain inside the turn")
+            return XCTFail("Expected real tool activity to render as a working turn")
         }
-        XCTAssertNil(turn.finalBlock)
-        XCTAssertEqual(turn.steps.map(\.id), ["assistant-1"])
+        XCTAssertEqual(turn.steps.map(\.id), ["tool-1"])
+        XCTAssertTrue(turn.isRunning)
     }
 
     func testCompletedTurnSurfacesTrailingAssistantAfterToolActivity() throws {

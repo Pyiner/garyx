@@ -46,7 +46,7 @@
       ]
     },
     {
-      "name": "running trailing assistant stays inside stable activity turn",
+      "name": "running text-only assistant stays flat without working turn",
       "isRunningThread": true,
       "messages": [
         { "id": "u0", "role": "user", "text": "question" },
@@ -58,15 +58,7 @@
           "key": "user-turn:u0",
           "user": "u0",
           "activity": [
-            {
-              "kind": "turn",
-              "key": "turn:a0",
-              "steps": ["a0"],
-              "final": null,
-              "running": false,
-              "startedAt": null,
-              "finishedAt": null
-            }
+            { "kind": "flat", "key": "a0" }
           ]
         }
       ]

@@ -201,7 +201,7 @@ test('keeps pure text replies inside their user turn without a summary row', () 
   assert.equal(rows[0].activityRows[0].block.key, 'a0');
 });
 
-test('keeps active trailing text inside a stable turn until the run finishes', () => {
+test('keeps active text flat until a real tool starts the working turn', () => {
   const rows = buildTurnRows(
     [
       messageBlock('u0', 'user', 'question'),
@@ -212,13 +212,8 @@ test('keeps active trailing text inside a stable turn until the run finishes', (
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].kind, 'user_turn');
-  assert.equal(rows[0].activityRows[0].kind, 'turn');
-  assert.equal(rows[0].activityRows[0].key, 'turn:a0');
-  assert.deepEqual(
-    rows[0].activityRows[0].steps.map((step) => step.key),
-    ['a0'],
-  );
-  assert.equal(rows[0].activityRows[0].finalBlock, null);
+  assert.equal(rows[0].activityRows[0].kind, 'flat');
+  assert.equal(rows[0].activityRows[0].key, 'a0');
 
   const rowsAfterTool = buildTurnRows(
     [

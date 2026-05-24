@@ -136,18 +136,15 @@ function buildUserTurnActivityRows(
     return [];
   }
   // Codex emits its `worked-for` divider only as part of a turn that
-  // had real agent activity (reasoning + tool calls). A pure-text
+  // had real tool activity. A pure-text or reasoning-only
   // reply ("1 + 1 = 2") should sit flat under the user message with
   // no Worked-for header. Detect that case here so we mirror the
   // same UX.
-  const isTrailingDeferredTurn = deferTrailingFinalAssistant && isTrailingTurn;
   const isPureTextReply =
     surfaceFinalAssistant &&
-    !isTrailingDeferredTurn &&
     steps.length === 1 &&
     steps[0]!.kind === 'message' &&
-    steps[0]!.entry.message.role === 'assistant' &&
-    steps[0]!.entry.message.pending !== true;
+    steps[0]!.entry.message.role === 'assistant';
   if (isPureTextReply) {
     const only = steps[0]!;
     return [{ kind: 'flat', key: only.key, block: only }];

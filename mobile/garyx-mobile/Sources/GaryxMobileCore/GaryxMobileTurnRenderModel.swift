@@ -163,11 +163,14 @@ enum GaryxMobileTurnRenderer {
         }
 
         let isTrailingDeferredTurn = deferTrailingFinalAssistant && isTrailingTurn
-        if !isTrailingDeferredTurn,
-           steps.count == 1,
+        if steps.count == 1,
            case .message(let message) = steps[0],
-           message.role == .assistant,
-           !message.isStreaming {
+           message.role == .assistant {
+            if message.isStreaming,
+               message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               message.attachments.isEmpty {
+                return []
+            }
             return [.flat(steps[0])]
         }
 

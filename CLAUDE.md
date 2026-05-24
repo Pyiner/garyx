@@ -171,9 +171,11 @@ needs installed-app validation.
   appear if a stream event is missed.
 - While a mobile thread is running, show the bottom Thinking indicator when no
   assistant/tool activity is present yet; do not synthesize an empty Working
-  turn row for a trailing user-only turn. Running Working rows should show an
-  elapsed timer immediately, using the user-turn timestamp when available and a
-  view-mount fallback otherwise.
+  turn row for a trailing user-only turn. Pure assistant/reasoning text is not a
+  tool step and should stay as a normal assistant message rather than opening a
+  Working row. Running Working rows should appear only for real tool activity
+  and show an elapsed timer immediately, using the user-turn timestamp when
+  available and a view-mount fallback otherwise.
 - Mobile management screens should not expose create/edit forms inline by
   default. Use top navigation actions to open full-screen add/edit flows, not
   compact sheets or always-visible forms, and keep the main page focused on
@@ -197,7 +199,9 @@ needs installed-app validation.
   remount or replay entry animations.
 - If an assistant text segment has streamed but the desktop thread is still
   running and the tail is not an active tool group, keep a bottom "Thinking"
-  indicator visible until the run is done.
+  indicator visible until the run is done. Pure assistant/reasoning text should
+  remain a normal assistant message and must not create a Working/Worked
+  summary row; reserve those rows for real tool activity.
 - Desktop interruption controls must be gateway-backed. The local Mac app
   process may not own the active WebSocket for runs started elsewhere or after
   a reload; after trying any local active socket, call the gateway chat
