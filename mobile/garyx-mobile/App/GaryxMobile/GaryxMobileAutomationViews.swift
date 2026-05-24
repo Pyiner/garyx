@@ -1072,16 +1072,13 @@ struct GaryxAutomationThreadPickerSheet: View {
                         GaryxAutomationThreadPickerEmptyState(isLoading: isRefreshing)
                     } else {
                         ForEach(indexedFilteredThreads) { item in
-                            Button {
+                            GaryxAutomationThreadPickerRow(
+                                thread: item.thread,
+                                isSelected: item.thread.id == selectedThreadId,
+                                showsSeparator: item.index < indexedFilteredThreads.count - 1
+                            ) {
                                 selectAndClose(item.thread)
-                            } label: {
-                                GaryxAutomationThreadPickerRow(
-                                    thread: item.thread,
-                                    isSelected: item.thread.id == selectedThreadId,
-                                    showsSeparator: item.index < indexedFilteredThreads.count - 1
-                                )
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -1190,78 +1187,26 @@ struct GaryxAutomationThreadPickerRow: View {
     let thread: GaryxThreadSummary
     let isSelected: Bool
     let showsSeparator: Bool
+    let onSelect: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 13) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.primary.opacity(0.055))
-                    Image(systemName: "bubble.left")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(width: 32, height: 32)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 7) {
-                        Text(thread.title.isEmpty ? "Untitled" : thread.title)
-                            .font(GaryxFont.body(weight: .medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        if isRunning {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .scaleEffect(0.66)
-                                .tint(.secondary)
-                        }
-                    }
-
-                    Text(subtitle)
-                        .font(GaryxFont.caption(weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(GaryxFont.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.primary)
-                }
-            }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 62)
-            .contentShape(Rectangle())
+            GaryxSidebarThreadRowView(
+                model: GaryxSidebarThreadRowPresentation(
+                    thread: thread,
+                    isSelected: isSelected,
+                    isPinned: false,
+                    trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
+                ),
+                isFullBleed: true,
+                onSelect: onSelect
+            )
 
             if showsSeparator {
                 Divider()
-                    .padding(.leading, 61)
+                    .padding(.leading, 16)
             }
         }
-    }
-
-    private var subtitle: String {
-        if let workspacePath = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !workspacePath.isEmpty {
-            return workspacePath.automationLastPathComponent
-        }
-        if let teamName = thread.teamName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !teamName.isEmpty {
-            return teamName
-        }
-        if let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !agentId.isEmpty {
-            return agentId
-        }
-        return thread.id
-    }
-
-    private var isRunning: Bool {
-        let state = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let activeRunId = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return state == "running" || !activeRunId.isEmpty
     }
 }
 
