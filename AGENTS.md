@@ -164,6 +164,9 @@ needs installed-app validation.
 - Mobile Automation rows should be plain tappable rows without leading icons or
   left-swipe actions. Tapping an automation opens its edit/detail page, where
   run once, edit fields, pause/resume, and delete actions live.
+- Mobile Automation existing-thread selectors should open a large bottom sheet
+  backed by recent threads with search. Do not use compact menu pickers for
+  choosing a target thread.
 - Mobile chat keyboard handling should treat the message area and composer as
   one vertical stack: the keyboard shrinks/moves both together, the composer
   remains attached below the messages, and the first tap or drag in the message

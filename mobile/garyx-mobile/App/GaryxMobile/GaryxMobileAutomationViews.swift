@@ -7,18 +7,8 @@ struct GaryxAutomationsView: View {
     @State private var activeAutomationActionId: String?
 
     var body: some View {
-        GaryxPanelScaffold(
-            title: "Automation",
-            subtitle: "\(model.enabledAutomationCount) enabled",
-            onRefresh: { await model.refreshRemoteState() }
-        ) {
-            VStack(alignment: .leading, spacing: 18) {
-                if let run = model.lastAutomationRun {
-                    GaryxNotice(
-                        title: "Last run \(run.status)",
-                        text: run.excerpt ?? run.threadId
-                    )
-                }
+        GaryxAutomationScaffold(title: "Automation") {
+            VStack(alignment: .leading, spacing: 16) {
                 if model.automations.isEmpty {
                     GaryxEmptyPanelView(
                         icon: "clock.badge",
@@ -26,28 +16,82 @@ struct GaryxAutomationsView: View {
                         text: ""
                     )
                 } else {
-                    GaryxSectionBlock(title: "Automation") {
-                        VStack(spacing: 12) {
-                            ForEach(model.automations) { automation in
-                                GaryxAutomationCard(
-                                    automation: automation,
-                                    activeAutomationActionId: $activeAutomationActionId
-                                )
-                                .zIndex(activeAutomationActionId == automation.id ? 1 : 0)
-                            }
+                    VStack(spacing: 14) {
+                        ForEach(model.automations) { automation in
+                            GaryxAutomationCard(
+                                automation: automation,
+                                activeAutomationActionId: $activeAutomationActionId
+                            )
+                            .zIndex(activeAutomationActionId == automation.id ? 1 : 0)
                         }
                     }
                 }
             }
-        } actions: {
-            GaryxAddToolbarButton(label: "New Automation") {
+        } trailingAction: {
+            Button {
                 showsCreateAutomation = true
+            } label: {
+                GaryxToolbarIcon(systemName: "plus")
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("New Automation")
         }
         .fullScreenCover(isPresented: $showsCreateAutomation) {
-            GaryxFormSheet(title: "New Automation") {
-                GaryxCreateAutomationCard()
+            GaryxCreateAutomationSheet()
+        }
+    }
+}
+
+struct GaryxAutomationScaffold<Content: View, TrailingAction: View>: View {
+    @Environment(\.garyxOpenSidebar) private var openSidebar
+    let title: String
+    let content: Content
+    let trailingAction: TrailingAction
+
+    init(
+        title: String,
+        @ViewBuilder content: () -> Content,
+        @ViewBuilder trailingAction: () -> TrailingAction
+    ) {
+        self.title = title
+        self.content = content()
+        self.trailingAction = trailingAction()
+    }
+
+    var body: some View {
+        ScrollView {
+            content
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
+                .padding(.bottom, 32)
+                .frame(maxWidth: 560, alignment: .leading)
+                .frame(maxWidth: .infinity)
+        }
+        .background(GaryxAutomationPalette.pageBackground)
+        .garyxAdaptiveTopBar {
+            ZStack {
+                HStack {
+                    Button {
+                        openSidebar()
+                    } label: {
+                        GaryxToolbarIcon(systemName: "line.3.horizontal")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Open menu")
+
+                    Spacer(minLength: 0)
+
+                    trailingAction
+                }
+
+                Text(title)
+                    .font(GaryxFont.title3(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
             }
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
+            .padding(.bottom, 10)
         }
     }
 }
@@ -59,30 +103,26 @@ struct GaryxAutomationCard: View {
     @State private var showsEditForm = false
     @State private var showsDeleteConfirmation = false
     @State private var optimisticEnabled: Bool?
-    @State private var label = ""
-    @State private var prompt = ""
-    @State private var intervalHours = ""
-    @State private var targetsExistingThread = false
-    @State private var targetThreadId = ""
-    @State private var workspacePath = ""
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 14) {
                     Button {
                         openEditForm()
                     } label: {
-                        VStack(alignment: .leading, spacing: 5) {
+                        VStack(alignment: .leading, spacing: 7) {
                             Text(automation.label)
-                                .font(GaryxFont.body(weight: .semibold))
+                                .font(GaryxFont.title3(weight: .semibold))
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
-                            Text(automationTargetLabel)
-                                .font(GaryxFont.caption(weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                            if !automation.prompt.isEmpty {
+                                Text(automation.prompt)
+                                    .font(GaryxFont.callout())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -93,25 +133,12 @@ struct GaryxAutomationCard: View {
                         .tint(.blue)
                 }
 
-                if !automation.prompt.isEmpty {
-                    Button {
-                        openEditForm()
-                    } label: {
-                        Text(automation.prompt)
-                            .font(GaryxFont.caption())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-                }
-
                 Divider()
-                    .overlay(GaryxTheme.hairline)
+                    .overlay(Color.primary.opacity(0.08))
 
                 HStack(alignment: .center, spacing: 10) {
-                    Text(garyxAutomationScheduleSummary(automation.schedule))
-                        .font(GaryxFont.caption(weight: .medium))
+                    Text(garyxAutomationScheduleCardSummary(automation.schedule))
+                        .font(GaryxFont.callout(weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 0)
@@ -121,26 +148,26 @@ struct GaryxAutomationCard: View {
                         }
                     } label: {
                         Image(systemName: "ellipsis")
-                            .font(GaryxFont.system(size: 16, weight: .semibold))
+                            .font(GaryxFont.system(size: 18, weight: .semibold))
                             .foregroundStyle(.secondary)
-                            .frame(width: 34, height: 28)
+                            .frame(width: 42, height: 32)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Automation actions")
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 18)
+            .background(GaryxAutomationPalette.cardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(GaryxTheme.hairline, lineWidth: 1)
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.primary.opacity(0.05), lineWidth: 1)
             }
+            .shadow(color: Color.black.opacity(0.045), radius: 18, x: 0, y: 10)
 
             if showsActionPanel {
                 GaryxAutomationActionPanel(
-                    canOpenThread: automationOpenThreadId != nil,
                     onRun: {
                         activeAutomationActionId = nil
                         Task {
@@ -151,31 +178,23 @@ struct GaryxAutomationCard: View {
                         activeAutomationActionId = nil
                         openEditForm()
                     },
-                    onOpenThread: {
-                        guard let threadId = automationOpenThreadId else { return }
-                        activeAutomationActionId = nil
-                        Task { await model.openThread(id: threadId) }
-                    },
                     onDelete: {
                         activeAutomationActionId = nil
                         showsDeleteConfirmation = true
                     }
                 )
-                .offset(x: -10, y: -38)
+                .offset(x: -10, y: -40)
                 .transition(.scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity))
                 .zIndex(2)
             }
         }
-        .onAppear(perform: fillDraft)
         .onChange(of: automation.enabled) { _, newValue in
             if optimisticEnabled == newValue {
                 optimisticEnabled = nil
             }
         }
         .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxFormSheet(title: "Edit Automation") {
-                editAutomationForm
-            }
+            GaryxEditAutomationSheet(automation: automation)
         }
         .confirmationDialog("Delete automation?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -190,213 +209,6 @@ struct GaryxAutomationCard: View {
         }
     }
 
-    private var editAutomationForm: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            automationEditSummary
-            automationEditActions
-            automationFields
-        }
-        .padding(.top, 2)
-        .onAppear(perform: fillDraft)
-        .onChange(of: targetsExistingThread) { _, _ in
-            ensureEditTargetSelection()
-        }
-    }
-
-    private var automationEditSummary: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(automation.label)
-                        .font(GaryxFont.title2(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Text(automationTargetLabel)
-                        .font(GaryxFont.callout(weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                GaryxStatusPill(
-                    text: automation.enabled ? "Enabled" : "Paused",
-                    tone: automation.enabled ? .good : .muted
-                )
-                .padding(.top, 3)
-            }
-
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    automationScheduleChip
-                    automationTargetChip
-                }
-                VStack(alignment: .leading, spacing: 8) {
-                    automationScheduleChip
-                    automationTargetChip
-                }
-            }
-        }
-        .padding(.horizontal, 2)
-    }
-
-    private var automationScheduleChip: some View {
-        GaryxAutomationInfoChip(systemName: "clock", title: garyxAutomationScheduleSummary(automation.schedule))
-    }
-
-    private var automationTargetChip: some View {
-        GaryxAutomationInfoChip(
-            systemName: targetsExistingThread ? "bubble.left" : "folder",
-            title: targetsExistingThread ? "Existing thread" : "New thread"
-        )
-    }
-
-    private var automationEditActions: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if automation.enabled {
-                Button {
-                    Task {
-                        await model.runAutomation(automation)
-                        showsEditForm = false
-                    }
-                } label: {
-                    Label("Run Once", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(GaryxPrimaryWideButtonStyle())
-            }
-
-            HStack(spacing: 10) {
-                if let threadId = automationOpenThreadId {
-                    GaryxAutomationCommandButton(title: "Thread", systemName: "arrow.up.right") {
-                        Task {
-                            await model.openThread(id: threadId)
-                            showsEditForm = false
-                        }
-                    }
-                }
-
-                GaryxAutomationCommandButton(title: "Delete", systemName: "trash", isDestructive: true) {
-                    showsDeleteConfirmation = true
-                }
-            }
-        }
-    }
-
-    private var automationFields: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            GaryxAutomationFormSection(title: "Details") {
-                GaryxAutomationFieldLabel("Name") {
-                    TextField("Automation name", text: $label)
-                        .garyxInputStyle()
-                }
-                GaryxAutomationFieldLabel("Prompt") {
-                    TextField("What should Garyx run?", text: $prompt, axis: .vertical)
-                        .lineLimit(3...8)
-                        .garyxInputStyle()
-                }
-            }
-
-            GaryxAutomationFormSection(title: "Target") {
-                Picker("Run In", selection: $targetsExistingThread) {
-                    Text("New Thread").tag(false)
-                    Text("Existing Thread").tag(true)
-                }
-                .pickerStyle(.segmented)
-
-                editTargetPicker
-            }
-
-            GaryxAutomationFormSection(title: "Schedule") {
-                if automation.schedule.kind == .interval {
-                    GaryxAutomationFieldLabel("Repeat every") {
-                        HStack(spacing: 10) {
-                            TextField("Every", text: $intervalHours)
-                                .keyboardType(.numberPad)
-                                .garyxInputStyle()
-                                .frame(maxWidth: 128)
-                            Text("hours")
-                                .font(GaryxFont.callout(weight: .medium))
-                                .foregroundStyle(.secondary)
-                            Spacer(minLength: 0)
-                        }
-                    }
-                } else {
-                    Text(garyxAutomationScheduleSummary(automation.schedule))
-                        .font(GaryxFont.callout(weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 42, alignment: .leading)
-                        .background(GaryxTheme.input, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-            }
-
-            Button {
-                Task {
-                    await model.updateAutomation(
-                        automation,
-                        label: label,
-                        prompt: prompt,
-                        intervalHours: intervalHours,
-                        targetsExistingThread: targetsExistingThread,
-                        targetThreadId: effectiveEditThreadId,
-                        workspacePath: effectiveEditWorkspacePath
-                    )
-                    showsEditForm = false
-                }
-            } label: {
-                Label("Save Changes", systemImage: "checkmark")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(GaryxPrimaryWideButtonStyle())
-            .disabled(!canSave)
-        }
-    }
-
-    @ViewBuilder
-    private var editTargetPicker: some View {
-        if targetsExistingThread {
-            if model.threads.isEmpty && effectiveEditThreadId.isEmpty {
-                Text("No existing threads loaded")
-                    .font(GaryxFont.caption(weight: .semibold))
-                    .foregroundStyle(.secondary)
-            } else {
-                Picker("Thread", selection: editThreadSelection) {
-                    if !targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                       !model.threads.contains(where: { $0.id == targetThreadId }) {
-                        Text(targetThreadId).tag(targetThreadId)
-                    }
-                    ForEach(model.threads, id: \.id) { thread in
-                        Text(thread.title).tag(thread.id)
-                    }
-                }
-                .pickerStyle(.menu)
-                .garyxInputStyle()
-            }
-            Text("Each run posts the prompt into the selected thread.")
-                .font(GaryxFont.caption())
-                .foregroundStyle(.secondary)
-        } else if editWorkspaceOptions.isEmpty {
-            Text("No workspaces available")
-                .font(GaryxFont.caption(weight: .semibold))
-                .foregroundStyle(.secondary)
-        } else {
-            Picker("Workspace", selection: editWorkspaceSelection) {
-                ForEach(editWorkspaceOptions, id: \.self) { path in
-                    Text(path.automationLastPathComponent).tag(path)
-                }
-            }
-            .pickerStyle(.menu)
-            .garyxInputStyle()
-            Text("Each run creates a fresh automation thread in the selected workspace.")
-                .font(GaryxFont.caption())
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private var showsActionPanel: Bool {
         activeAutomationActionId == automation.id
     }
@@ -407,128 +219,16 @@ struct GaryxAutomationCard: View {
         } set: { nextValue in
             optimisticEnabled = nextValue
             Task {
-                await model.setAutomationEnabled(automation, enabled: nextValue)
+                if await model.setAutomationEnabled(automation, enabled: nextValue) == false {
+                    optimisticEnabled = nil
+                }
             }
         }
     }
 
     private func openEditForm() {
         activeAutomationActionId = nil
-        fillDraft()
         showsEditForm = true
-    }
-
-    private var automationOpenThreadId: String? {
-        let target = automation.targetThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !target.isEmpty {
-            return target
-        }
-        let latest = automation.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return latest.isEmpty ? nil : latest
-    }
-
-    private var automationTargetLabel: String {
-        if let targetThreadId = automationOpenThreadId,
-           let thread = model.threads.first(where: { $0.id == targetThreadId }) {
-            return "Thread · \(thread.title)"
-        }
-        if let targetThreadId = automationOpenThreadId,
-           automation.targetThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) == targetThreadId {
-            return "Thread · \(targetThreadId)"
-        }
-        return automation.workspacePath.isEmpty ? automation.agentId : automation.workspacePath.automationLastPathComponent
-    }
-
-    private func fillDraft() {
-        label = automation.label
-        prompt = automation.prompt
-        intervalHours = String(automation.schedule.hours ?? 24)
-        let target = automation.targetThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        targetsExistingThread = !target.isEmpty
-        targetThreadId = target
-        let targetWorkspace = target.isEmpty
-            ? ""
-            : model.threads.first(where: { $0.id == target })?.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let automationWorkspace = automation.workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        workspacePath = automationWorkspace.isEmpty ? targetWorkspace : automationWorkspace
-        ensureEditTargetSelection()
-    }
-
-    private var editWorkspaceOptions: [String] {
-        var seen = Set<String>()
-        return ([workspacePath] + model.knownWorkspacePaths)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .filter { seen.insert($0).inserted }
-    }
-
-    private var editWorkspaceSelection: Binding<String> {
-        Binding {
-            effectiveEditWorkspacePath
-        } set: { value in
-            workspacePath = value
-        }
-    }
-
-    private var editThreadSelection: Binding<String> {
-        Binding {
-            effectiveEditThreadId
-        } set: { value in
-            targetThreadId = value
-            if let thread = model.threads.first(where: { $0.id == value }),
-               let nextWorkspace = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !nextWorkspace.isEmpty {
-                workspacePath = nextWorkspace
-            }
-        }
-    }
-
-    private var effectiveEditWorkspacePath: String {
-        let selected = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty, editWorkspaceOptions.contains(selected) {
-            return selected
-        }
-        return editWorkspaceOptions.first ?? ""
-    }
-
-    private var effectiveEditThreadId: String {
-        let selected = targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty {
-            return selected
-        }
-        return model.threads.first?.id ?? ""
-    }
-
-    private var canSave: Bool {
-        !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (targetsExistingThread ? !effectiveEditThreadId.isEmpty : !effectiveEditWorkspacePath.isEmpty)
-            && (automation.schedule.kind != .interval || positiveInteger(intervalHours) != nil)
-    }
-
-    private func ensureEditTargetSelection() {
-        if targetsExistingThread {
-            let nextThreadId = effectiveEditThreadId
-            if targetThreadId != nextThreadId {
-                targetThreadId = nextThreadId
-            }
-            if let thread = model.threads.first(where: { $0.id == nextThreadId }),
-               let nextWorkspace = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !nextWorkspace.isEmpty {
-                workspacePath = nextWorkspace
-            }
-        } else {
-            let nextWorkspace = effectiveEditWorkspacePath
-            if workspacePath != nextWorkspace {
-                workspacePath = nextWorkspace
-            }
-        }
-    }
-
-    private func positiveInteger(_ value: String) -> Int? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parsed = Int(trimmed), parsed > 0 else { return nil }
-        return parsed
     }
 }
 
@@ -553,105 +253,49 @@ private func garyxAutomationScheduleSummary(_ schedule: GaryxAutomationSchedule)
     }
 }
 
-struct GaryxAutomationFormSection<Content: View>: View {
-    let title: String
-    var subtitle: String?
-    let content: Content
-
-    init(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.subtitle = subtitle
-        self.content = content()
+private func garyxAutomationScheduleCardSummary(_ schedule: GaryxAutomationSchedule) -> String {
+    func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(GaryxFont.caption(weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                if let subtitle, !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(subtitle)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                content
-            }
+    switch schedule.kind {
+    case .interval:
+        return "Every \(max(1, schedule.hours ?? 24))h"
+    case .daily:
+        let time = nonEmpty(schedule.time) ?? "09:00"
+        let normalizedWeekdays = schedule.weekdays.map { $0.lowercased() }
+        if normalizedWeekdays == ["mo", "tu", "we", "th", "fr"] {
+            return "Weekdays at \(time)"
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 2)
-    }
-}
-
-struct GaryxAutomationFieldLabel<Content: View>: View {
-    let title: String
-    let content: Content
-
-    init(_ title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(GaryxFont.caption(weight: .semibold))
-                .foregroundStyle(.tertiary)
-            content
+        if schedule.weekdays.isEmpty {
+            return "Daily at \(time)"
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-struct GaryxAutomationInfoChip: View {
-    let systemName: String
-    let title: String
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: systemName)
-                .font(GaryxFont.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(title)
-                .font(GaryxFont.caption(weight: .semibold))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-        .padding(.horizontal, 9)
-        .frame(minHeight: 28)
-        .background(Color(.tertiarySystemFill).opacity(0.45), in: Capsule())
+        return "\(schedule.weekdays.map { $0.uppercased() }.joined(separator: ", ")) at \(time)"
+    case .once:
+        return "Once at \(nonEmpty(schedule.at) ?? "scheduled time")"
     }
 }
 
 struct GaryxAutomationActionPanel: View {
-    let canOpenThread: Bool
     let onRun: () -> Void
     let onEdit: () -> Void
-    let onOpenThread: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             actionRow(title: "Run Once", systemName: "clock.arrow.circlepath", action: onRun)
             actionRow(title: "Edit Automation", systemName: "pencil", action: onEdit)
-            if canOpenThread {
-                actionRow(title: "Open Thread", systemName: "arrow.up.right", action: onOpenThread)
-            }
             actionRow(title: "Delete Automation", systemName: "trash", isDestructive: true, action: onDelete)
         }
-        .padding(.vertical, 8)
-        .frame(width: 232)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(.vertical, 7)
+        .frame(width: 246)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color.white.opacity(0.42), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.white.opacity(0.5), lineWidth: 1)
         }
-        .shadow(color: Color.black.opacity(0.16), radius: 24, x: 0, y: 14)
+        .shadow(color: Color.black.opacity(0.18), radius: 26, x: 0, y: 16)
     }
 
     private func actionRow(
@@ -678,163 +322,102 @@ struct GaryxAutomationActionPanel: View {
     }
 }
 
-struct GaryxAutomationCommandButton: View {
-    let title: String
-    let systemName: String
-    var isPrimary = false
-    var isDestructive = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 5) {
-                Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                    .frame(width: 20, height: 18)
-                Text(title)
-                    .font(GaryxFont.caption(weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-            }
-            .foregroundStyle(foreground)
-            .frame(maxWidth: .infinity)
-            .frame(minHeight: 58)
-            .background(background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(border, lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var foreground: Color {
-        if isPrimary {
-            return Color(.systemBackground)
-        }
-        if isDestructive {
-            return GaryxTheme.danger
-        }
-        return .primary
-    }
-
-    private var background: Color {
-        if isPrimary {
-            return Color(.label)
-        }
-        if isDestructive {
-            return GaryxTheme.danger.opacity(0.08)
-        }
-        return Color(.tertiarySystemFill).opacity(0.38)
-    }
-
-    private var border: Color {
-        isPrimary ? .clear : GaryxTheme.hairline
-    }
-}
-
-struct GaryxCreateAutomationCard: View {
+struct GaryxCreateAutomationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var draft = GaryxAutomationDraft()
+    @State private var isSaving = false
+    @State private var showsThreadPicker = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Schedule an agent prompt")
-                    .font(GaryxFont.title3(weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text("Choose where it runs, write the prompt, then set the interval.")
-                    .font(GaryxFont.callout())
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(.horizontal, 2)
+        GaryxAutomationEditorScaffold(
+            title: "New Automation",
+            canSave: canCreate && !isSaving,
+            onCancel: { dismiss() },
+            onSave: save
+        ) {
+            automationFormFields
+        }
+        .onAppear(perform: ensureTargetSelection)
+        .onChange(of: draft.targetsExistingThread) { _, _ in
+            ensureTargetSelection()
+        }
+        .sheet(isPresented: $showsThreadPicker) {
+            GaryxAutomationThreadPickerSheet(
+                selectedThreadId: effectiveThreadId,
+                onSelect: selectThread
+            )
+        }
+    }
 
-            GaryxAutomationFormSection(title: "Target") {
+    private var automationFormFields: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            GaryxAutomationGroupedSection(title: "Title") {
+                TextField("Automation name", text: $draft.label)
+                    .font(GaryxFont.body())
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 52, alignment: .leading)
+            }
+
+            GaryxAutomationGroupedSection(title: "Target") {
                 Picker("Run In", selection: $draft.targetsExistingThread) {
                     Text("New Thread").tag(false)
                     Text("Existing Thread").tag(true)
                 }
                 .pickerStyle(.segmented)
+                .padding(12)
 
+                Divider().padding(.leading, 16)
                 createTargetPicker
             }
 
-            GaryxAutomationFormSection(title: "Prompt") {
-                TextField("Name", text: $draft.label)
-                    .garyxInputStyle()
-                TextField("What should Garyx do?", text: $draft.prompt, axis: .vertical)
-                    .lineLimit(4...10)
-                    .garyxInputStyle()
-            }
-
-            GaryxAutomationFormSection(title: "Schedule") {
-                HStack(spacing: 10) {
-                    TextField("Every", text: $draft.intervalHours)
-                        .keyboardType(.numberPad)
-                        .garyxInputStyle()
-                        .frame(maxWidth: 150)
-                    Text("hours")
-                        .font(GaryxFont.callout(weight: .medium))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-            }
-
-            Button {
-                Task {
-                    if await model.createAutomation(
-                        label: draft.label,
-                        prompt: draft.prompt,
-                        workspacePath: draft.targetsExistingThread ? "" : effectiveWorkspacePath,
-                        targetThreadId: draft.targetsExistingThread ? effectiveThreadId : "",
-                        intervalHours: draft.intervalHours
-                    ) {
-                        dismiss()
+            GaryxAutomationGroupedSection(title: "Schedule") {
+                GaryxAutomationFormRow(title: "Repeat") {
+                    HStack(spacing: 8) {
+                        Text("Every")
+                            .foregroundStyle(.secondary)
+                        TextField("24", text: $draft.intervalHours)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 54)
+                        Text("hours")
+                            .foregroundStyle(.secondary)
                     }
+                    .font(GaryxFont.body())
                 }
-            } label: {
-                Label("Create Automation", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(GaryxPrimaryWideButtonStyle())
-            .disabled(!canCreate)
-        }
-        .onAppear(perform: ensureTargetSelection)
-        .onChange(of: draft.targetsExistingThread) { _, _ in
-            ensureTargetSelection()
+
+            GaryxAutomationGroupedSection(title: "Prompt") {
+                TextField("What should Garyx do?", text: $draft.prompt, axis: .vertical)
+                    .font(GaryxFont.body())
+                    .lineLimit(5...12)
+                    .padding(16)
+                    .frame(minHeight: 142, alignment: .topLeading)
+            }
         }
     }
 
     @ViewBuilder
     private var createTargetPicker: some View {
         if draft.targetsExistingThread {
-            if threadOptions.isEmpty {
-                Text("No existing threads loaded")
-                    .font(GaryxFont.caption(weight: .semibold))
-                    .foregroundStyle(.secondary)
-            } else {
-                Picker("Thread", selection: threadSelection) {
-                    ForEach(threadOptions, id: \.id) { thread in
-                        Text(thread.title).tag(thread.id)
+            GaryxAutomationSelectionRow(
+                title: "Thread",
+                value: selectedThreadTitle,
+                placeholder: "Choose recent thread"
+            ) {
+                showsThreadPicker = true
+            }
+        } else if workspacePaths.isEmpty {
+            GaryxAutomationReadOnlyRow(title: "Workspace", value: "No workspaces available")
+        } else {
+            GaryxAutomationFormRow(title: "Workspace") {
+                Picker("Workspace", selection: workspaceSelection) {
+                    ForEach(workspacePaths, id: \.self) { path in
+                        Text(path.automationLastPathComponent).tag(path)
                     }
                 }
                 .pickerStyle(.menu)
-                .garyxInputStyle()
             }
-        } else if workspacePaths.isEmpty {
-            Text("No workspaces available")
-                .font(GaryxFont.caption(weight: .semibold))
-                .foregroundStyle(.secondary)
-        } else {
-            Picker("Workspace", selection: workspaceSelection) {
-                ForEach(workspacePaths, id: \.self) { path in
-                    Text(path.automationLastPathComponent).tag(path)
-                }
-            }
-            .pickerStyle(.menu)
-            .garyxInputStyle()
         }
     }
 
@@ -854,19 +437,6 @@ struct GaryxCreateAutomationCard: View {
         }
     }
 
-    private var threadSelection: Binding<String> {
-        Binding {
-            effectiveThreadId
-        } set: { value in
-            draft.targetThreadId = value
-            if let thread = model.threads.first(where: { $0.id == value }),
-               let workspacePath = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !workspacePath.isEmpty {
-                draft.workspacePath = workspacePath
-            }
-        }
-    }
-
     private var effectiveWorkspacePath: String {
         draft.effectiveWorkspacePath(workspacePaths: workspacePaths)
     }
@@ -879,9 +449,674 @@ struct GaryxCreateAutomationCard: View {
         draft.canSubmit(workspacePaths: workspacePaths, threadOptions: threadOptions)
     }
 
+    private var selectedThreadTitle: String {
+        (model.recentThreads + model.threads)
+            .first(where: { $0.id == effectiveThreadId })?
+            .title ?? effectiveThreadId
+    }
+
     private func ensureTargetSelection() {
         draft.ensureTargetSelection(workspacePaths: workspacePaths, threadOptions: threadOptions)
     }
+
+    private func selectThread(_ thread: GaryxThreadSummary) {
+        draft.targetThreadId = thread.id
+        if let workspacePath = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !workspacePath.isEmpty {
+            draft.workspacePath = workspacePath
+        }
+    }
+
+    private func save() {
+        guard canCreate, !isSaving else { return }
+        isSaving = true
+        Task {
+            let created = await model.createAutomation(
+                label: draft.label,
+                prompt: draft.prompt,
+                workspacePath: draft.targetsExistingThread ? "" : effectiveWorkspacePath,
+                targetThreadId: draft.targetsExistingThread ? effectiveThreadId : "",
+                intervalHours: draft.intervalHours
+            )
+            isSaving = false
+            if created {
+                dismiss()
+            }
+        }
+    }
+}
+
+struct GaryxEditAutomationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let automation: GaryxAutomationSummary
+    @State private var label = ""
+    @State private var prompt = ""
+    @State private var intervalHours = ""
+    @State private var targetsExistingThread = false
+    @State private var targetThreadId = ""
+    @State private var workspacePath = ""
+    @State private var isSaving = false
+    @State private var showsThreadPicker = false
+
+    var body: some View {
+        GaryxAutomationEditorScaffold(
+            title: "Edit Automation",
+            canSave: canSave && !isSaving,
+            onCancel: { dismiss() },
+            onSave: save
+        ) {
+            VStack(alignment: .leading, spacing: 22) {
+                GaryxAutomationGroupedSection(title: "Title") {
+                    TextField("Automation name", text: $label)
+                        .font(GaryxFont.body())
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 52, alignment: .leading)
+                }
+
+                GaryxAutomationGroupedSection(title: "Target") {
+                    Picker("Run In", selection: $targetsExistingThread) {
+                        Text("New Thread").tag(false)
+                        Text("Existing Thread").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(12)
+
+                    Divider().padding(.leading, 16)
+                    editTargetPicker
+                }
+
+                GaryxAutomationGroupedSection(title: "Schedule") {
+                    if automation.schedule.kind == .interval {
+                        GaryxAutomationFormRow(title: "Repeat") {
+                            HStack(spacing: 8) {
+                                Text("Every")
+                                    .foregroundStyle(.secondary)
+                                TextField("24", text: $intervalHours)
+                                    .keyboardType(.numberPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 54)
+                                Text("hours")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(GaryxFont.body())
+                        }
+                    } else {
+                        GaryxAutomationReadOnlyRow(
+                            title: "Repeat",
+                            value: garyxAutomationScheduleCardSummary(automation.schedule)
+                        )
+                    }
+                }
+
+                GaryxAutomationGroupedSection(title: "Prompt") {
+                    TextField("What should Garyx do?", text: $prompt, axis: .vertical)
+                        .font(GaryxFont.body())
+                        .lineLimit(5...12)
+                        .padding(16)
+                        .frame(minHeight: 142, alignment: .topLeading)
+                }
+            }
+        }
+        .onAppear(perform: fillDraft)
+        .onChange(of: targetsExistingThread) { _, _ in
+            ensureEditTargetSelection()
+        }
+        .sheet(isPresented: $showsThreadPicker) {
+            GaryxAutomationThreadPickerSheet(
+                selectedThreadId: effectiveEditThreadId,
+                onSelect: selectThread
+            )
+        }
+    }
+
+    @ViewBuilder
+    private var editTargetPicker: some View {
+        if targetsExistingThread {
+            GaryxAutomationSelectionRow(
+                title: "Thread",
+                value: selectedThreadTitle,
+                placeholder: "Choose recent thread"
+            ) {
+                showsThreadPicker = true
+            }
+        } else if editWorkspaceOptions.isEmpty {
+            GaryxAutomationReadOnlyRow(title: "Workspace", value: "No workspaces available")
+        } else {
+            GaryxAutomationFormRow(title: "Workspace") {
+                Picker("Workspace", selection: editWorkspaceSelection) {
+                    ForEach(editWorkspaceOptions, id: \.self) { path in
+                        Text(path.automationLastPathComponent).tag(path)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+        }
+    }
+
+    private var editWorkspaceOptions: [String] {
+        var seen = Set<String>()
+        return ([workspacePath] + model.knownWorkspacePaths)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .filter { seen.insert($0).inserted }
+    }
+
+    private var editWorkspaceSelection: Binding<String> {
+        Binding {
+            effectiveEditWorkspacePath
+        } set: { value in
+            workspacePath = value
+        }
+    }
+
+    private var effectiveEditWorkspacePath: String {
+        let selected = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty, editWorkspaceOptions.contains(selected) {
+            return selected
+        }
+        return editWorkspaceOptions.first ?? ""
+    }
+
+    private var effectiveEditThreadId: String {
+        let selected = targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty {
+            return selected
+        }
+        return model.threads.first?.id ?? ""
+    }
+
+    private var canSave: Bool {
+        !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (targetsExistingThread ? !effectiveEditThreadId.isEmpty : !effectiveEditWorkspacePath.isEmpty)
+            && (automation.schedule.kind != .interval || positiveInteger(intervalHours) != nil)
+    }
+
+    private var selectedThreadTitle: String {
+        (model.recentThreads + model.threads)
+            .first(where: { $0.id == effectiveEditThreadId })?
+            .title ?? effectiveEditThreadId
+    }
+
+    private func fillDraft() {
+        label = automation.label
+        prompt = automation.prompt
+        intervalHours = String(automation.schedule.hours ?? 24)
+        let target = automation.targetThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        targetsExistingThread = !target.isEmpty
+        targetThreadId = target
+        let targetWorkspace = target.isEmpty
+            ? ""
+            : model.threads.first(where: { $0.id == target })?.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let automationWorkspace = automation.workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        workspacePath = automationWorkspace.isEmpty ? targetWorkspace : automationWorkspace
+        ensureEditTargetSelection()
+    }
+
+    private func ensureEditTargetSelection() {
+        if targetsExistingThread {
+            let nextThreadId = effectiveEditThreadId
+            if targetThreadId != nextThreadId {
+                targetThreadId = nextThreadId
+            }
+            if let thread = model.threads.first(where: { $0.id == nextThreadId }),
+               let nextWorkspace = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !nextWorkspace.isEmpty {
+                workspacePath = nextWorkspace
+            }
+        } else {
+            let nextWorkspace = effectiveEditWorkspacePath
+            if workspacePath != nextWorkspace {
+                workspacePath = nextWorkspace
+            }
+        }
+    }
+
+    private func positiveInteger(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = Int(trimmed), parsed > 0 else { return nil }
+        return parsed
+    }
+
+    private func selectThread(_ thread: GaryxThreadSummary) {
+        targetThreadId = thread.id
+        if let nextWorkspace = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !nextWorkspace.isEmpty {
+            workspacePath = nextWorkspace
+        }
+    }
+
+    private func save() {
+        guard canSave, !isSaving else { return }
+        isSaving = true
+        Task {
+            let updated = await model.updateAutomation(
+                automation,
+                label: label,
+                prompt: prompt,
+                intervalHours: intervalHours,
+                targetsExistingThread: targetsExistingThread,
+                targetThreadId: effectiveEditThreadId,
+                workspacePath: effectiveEditWorkspacePath
+            )
+            isSaving = false
+            if updated {
+                dismiss()
+            }
+        }
+    }
+}
+
+struct GaryxAutomationEditorScaffold<Content: View>: View {
+    let title: String
+    let canSave: Bool
+    let onCancel: () -> Void
+    let onSave: () -> Void
+    let content: Content
+
+    init(
+        title: String,
+        canSave: Bool,
+        onCancel: @escaping () -> Void,
+        onSave: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.title = title
+        self.canSave = canSave
+        self.onCancel = onCancel
+        self.onSave = onSave
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            GaryxAutomationPalette.pageBackground
+                .ignoresSafeArea()
+
+            ScrollView {
+                content
+                    .padding(.horizontal, 18)
+                    .padding(.top, 92)
+                    .padding(.bottom, 28)
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
+            }
+
+            ZStack {
+                HStack {
+                    Button(action: onCancel) {
+                        GaryxToolbarIcon(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cancel")
+
+                    Spacer(minLength: 0)
+
+                    Button(action: onSave) {
+                        GaryxToolbarIcon(systemName: "checkmark")
+                            .opacity(canSave ? 1 : 0.42)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSave)
+                    .accessibilityLabel("Save")
+                }
+
+                Text(title)
+                    .font(GaryxFont.title3(weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 10)
+        }
+    }
+}
+
+struct GaryxAutomationGroupedSection<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(GaryxFont.caption(weight: .semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.horizontal, 14)
+
+            VStack(alignment: .leading, spacing: 0) {
+                content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(GaryxAutomationPalette.cardBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        }
+    }
+}
+
+struct GaryxAutomationFormRow<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(GaryxFont.body())
+                .foregroundStyle(.primary)
+            Spacer(minLength: 8)
+            content
+                .font(GaryxFont.body())
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.trailing)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 52)
+    }
+}
+
+struct GaryxAutomationReadOnlyRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        GaryxAutomationFormRow(title: title) {
+            Text(value)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+}
+
+struct GaryxAutomationSelectionRow: View {
+    let title: String
+    let value: String
+    let placeholder: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(title)
+                    .font(GaryxFont.body())
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Text(displayValue)
+                    .font(GaryxFont.body())
+                    .foregroundStyle(isPlaceholder ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var displayValue: String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? placeholder : value
+    }
+
+    private var isPlaceholder: Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+struct GaryxAutomationThreadPickerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let selectedThreadId: String
+    let onSelect: (GaryxThreadSummary) -> Void
+    @State private var searchText = ""
+    @State private var isRefreshing = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Color.secondary.opacity(0.22))
+                .frame(width: 42, height: 5)
+                .padding(.top, 10)
+                .padding(.bottom, 18)
+
+            HStack(alignment: .center, spacing: 14) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Choose Thread")
+                        .font(GaryxFont.title2(weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text("Recent threads")
+                        .font(GaryxFont.callout())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(GaryxFont.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 40, height: 40)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+            .padding(.horizontal, 22)
+            .padding(.bottom, 16)
+
+            GaryxAutomationThreadSearchField(text: $searchText)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 14)
+
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if filteredThreads.isEmpty {
+                        GaryxAutomationThreadPickerEmptyState(isLoading: isRefreshing)
+                            .padding(.top, 44)
+                    } else {
+                        ForEach(filteredThreads) { thread in
+                            Button {
+                                onSelect(thread)
+                                dismiss()
+                            } label: {
+                                GaryxAutomationThreadPickerRow(
+                                    thread: thread,
+                                    isSelected: thread.id == selectedThreadId
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 28)
+            }
+        }
+        .background(GaryxAutomationPalette.pageBackground.ignoresSafeArea())
+        .presentationDetents([.fraction(0.82), .large])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(34)
+        .task {
+            isRefreshing = true
+            await model.refreshThreads(silent: true)
+            isRefreshing = false
+        }
+    }
+
+    private var filteredThreads: [GaryxThreadSummary] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let threads = recentThreadOptions
+        guard !query.isEmpty else { return threads }
+        return threads.filter { thread in
+            [
+                thread.title,
+                thread.workspacePath ?? "",
+                thread.agentId ?? "",
+                thread.teamName ?? "",
+                thread.lastMessagePreview,
+            ]
+            .contains { $0.lowercased().contains(query) }
+        }
+    }
+
+    private var recentThreadOptions: [GaryxThreadSummary] {
+        let source = model.recentThreads.isEmpty ? model.threads : model.recentThreads
+        var seen = Set<String>()
+        var result = source.filter { seen.insert($0.id).inserted }
+        if !selectedThreadId.isEmpty,
+           !seen.contains(selectedThreadId),
+           let selected = model.threads.first(where: { $0.id == selectedThreadId }) {
+            result.insert(selected, at: 0)
+        }
+        return result
+    }
+}
+
+struct GaryxAutomationThreadSearchField: View {
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(GaryxFont.system(size: 16, weight: .semibold))
+                .foregroundStyle(.secondary)
+            TextField("Search threads", text: $text)
+                .font(GaryxFont.body())
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(GaryxFont.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 48)
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+}
+
+struct GaryxAutomationThreadPickerRow: View {
+    let thread: GaryxThreadSummary
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    Text(thread.title.isEmpty ? "Untitled" : thread.title)
+                        .font(GaryxFont.body(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if isRunning {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .scaleEffect(0.72)
+                    }
+                }
+
+                Text(subtitle)
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                if !thread.lastMessagePreview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(thread.lastMessagePreview)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if isSelected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(GaryxFont.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.blue)
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.primary.opacity(0.04), lineWidth: 1)
+        }
+    }
+
+    private var subtitle: String {
+        if let workspacePath = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !workspacePath.isEmpty {
+            return workspacePath.automationLastPathComponent
+        }
+        if let teamName = thread.teamName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !teamName.isEmpty {
+            return teamName
+        }
+        if let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !agentId.isEmpty {
+            return agentId
+        }
+        return thread.id
+    }
+
+    private var isRunning: Bool {
+        let state = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let activeRunId = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return state == "running" || !activeRunId.isEmpty
+    }
+}
+
+struct GaryxAutomationThreadPickerEmptyState: View {
+    let isLoading: Bool
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.regular)
+            } else {
+                Image(systemName: "bubble.left.and.text.bubble.right")
+                    .font(GaryxFont.system(size: 28, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Text(isLoading ? "Loading recent threads" : "No matching recent threads")
+                .font(GaryxFont.callout(weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 42)
+    }
+}
+
+enum GaryxAutomationPalette {
+    static let pageBackground = Color(.systemGroupedBackground).opacity(0.72)
+    static let cardBackground = Color(.systemBackground)
 }
 
 private extension String {

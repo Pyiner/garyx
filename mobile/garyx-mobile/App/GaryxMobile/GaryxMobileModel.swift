@@ -3514,18 +3514,22 @@ final class GaryxMobileModel: ObservableObject {
         await setAutomationEnabled(automation, enabled: !automation.enabled)
     }
 
-    func setAutomationEnabled(_ automation: GaryxAutomationSummary, enabled: Bool) async {
+    @discardableResult
+    func setAutomationEnabled(_ automation: GaryxAutomationSummary, enabled: Bool) async -> Bool {
         do {
             _ = try await client().updateAutomationEnabled(
                 id: automation.id,
                 enabled: enabled
             )
             await refreshRemoteState()
+            return true
         } catch {
             lastError = displayMessage(for: error)
+            return false
         }
     }
 
+    @discardableResult
     func updateAutomation(
         _ automation: GaryxAutomationSummary,
         label: String,
@@ -3534,7 +3538,7 @@ final class GaryxMobileModel: ObservableObject {
         targetsExistingThread: Bool,
         targetThreadId: String,
         workspacePath: String
-    ) async {
+    ) async -> Bool {
         let nextLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextTargetThreadId = targetsExistingThread
@@ -3545,11 +3549,11 @@ final class GaryxMobileModel: ObservableObject {
         let nextSchedule: GaryxAutomationSchedule? = automation.schedule.kind == .interval
             ? .interval(hours: hours)
             : nil
-        guard !nextLabel.isEmpty, !nextPrompt.isEmpty else { return }
+        guard !nextLabel.isEmpty, !nextPrompt.isEmpty else { return false }
         if targetsExistingThread {
-            guard !nextTargetThreadId.isEmpty else { return }
+            guard !nextTargetThreadId.isEmpty else { return false }
         } else {
-            guard !nextWorkspacePath.isEmpty else { return }
+            guard !nextWorkspacePath.isEmpty else { return false }
         }
         do {
             let updated = try await client().updateAutomation(
@@ -3564,8 +3568,10 @@ final class GaryxMobileModel: ObservableObject {
                 )
             )
             replaceAutomation(updated)
+            return true
         } catch {
             lastError = displayMessage(for: error)
+            return false
         }
     }
 
