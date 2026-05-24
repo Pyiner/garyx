@@ -220,6 +220,8 @@ enum GaryxMobileTurnRenderer {
 
 enum GaryxMobileThreadActivityModel {
     static func latestUserMessageAwaitsAssistant(_ messages: [GaryxMobileMessage]) -> Bool {
+        // Desktop ignores internal loop-continuation user messages here; mobile does not
+        // decode that marker yet, so every user role is treated as user-visible input.
         var latestUserIndex: Int?
         var latestAssistantOrToolIndex: Int?
         for (index, message) in messages.enumerated() {

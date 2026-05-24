@@ -513,6 +513,7 @@ private enum GaryxSidebarMetrics {
 struct GaryxThreadSidebar: View {
     @EnvironmentObject private var model: GaryxMobileModel
     var showsInlineCloseButton: Bool
+    private let silentRefreshIntervalNanos: UInt64 = 3_000_000_000
 
     var body: some View {
         threadListWithBottomBar
@@ -527,10 +528,10 @@ struct GaryxThreadSidebar: View {
                 )
             }
             .task {
-                await refreshSidebarThreads()
+                await refreshSidebarThreads(silent: true)
             }
             .task(id: model.sidebarVisible) {
-                await refreshSidebarThreads()
+                await runSilentSidebarRefreshLoop()
             }
     }
 
@@ -584,16 +585,28 @@ struct GaryxThreadSidebar: View {
     }
 
     private func refreshAll() async {
-        await model.refreshThreads()
+        await model.refreshThreads(silent: true)
         await model.refreshRemoteState()
     }
 
-    private func refreshSidebarThreads() async {
-        if showsInlineCloseButton, !model.sidebarVisible {
-            return
+    private func runSilentSidebarRefreshLoop() async {
+        guard shouldRefreshSidebarThreads else { return }
+        await refreshSidebarThreads(silent: true)
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: silentRefreshIntervalNanos)
+            guard !Task.isCancelled, shouldRefreshSidebarThreads else { return }
+            await refreshSidebarThreads(silent: true)
         }
+    }
+
+    private func refreshSidebarThreads(silent: Bool = false) async {
+        guard shouldRefreshSidebarThreads else { return }
         guard !model.isLoadingThreads else { return }
-        await model.refreshThreads()
+        await model.refreshThreads(silent: silent)
+    }
+
+    private var shouldRefreshSidebarThreads: Bool {
+        !(showsInlineCloseButton && !model.sidebarVisible)
     }
 
     private func startNewChat() {
@@ -1369,20 +1382,21 @@ private struct GaryxSidebarThreadButton: View {
     var isFullBleed = false
 
     var body: some View {
-        Button {
-            Task { await model.selectThread(thread) }
-        } label: {
-            GaryxSidebarThreadRowView(
-                thread: thread,
-                isSelected: model.selectedThread?.id == thread.id,
-                isPinned: showsPinnedMarker || model.isThreadPinned(thread.id),
-                showsWorkspaceMeta: showsWorkspaceMeta,
-                trailingTimestamp: trailingTimestamp,
-                isFullBleed: isFullBleed
-            )
-            .padding(.leading, indent)
-        }
-        .buttonStyle(.plain)
+        GaryxSidebarThreadRowView(
+            thread: thread,
+            isSelected: model.selectedThread?.id == thread.id,
+            isPinned: showsPinnedMarker || model.isThreadPinned(thread.id),
+            showsWorkspaceMeta: showsWorkspaceMeta,
+            trailingTimestamp: trailingTimestamp,
+            isFullBleed: isFullBleed,
+            onSelect: {
+                Task { await model.selectThread(thread) }
+            },
+            onUnpin: {
+                model.unpinThread(thread.id)
+            }
+        )
+        .padding(.leading, indent)
     }
 }
 
@@ -1393,32 +1407,55 @@ struct GaryxSidebarThreadRowView: View {
     var showsWorkspaceMeta = true
     var trailingTimestamp: String?
     var isFullBleed = false
+    var onSelect: (() -> Void)?
+    var onUnpin: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(thread.title.isEmpty ? "Untitled" : thread.title)
-                    .font(GaryxFont.subheadline(weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .foregroundStyle(.primary)
-
-                if let subtitle, !subtitle.isEmpty {
-                    Text(subtitle)
-                        .font(GaryxFont.caption())
+            if isPinned {
+                Button {
+                    onUnpin?()
+                } label: {
+                    Image(systemName: "pin.fill")
+                        .font(GaryxFont.system(size: 12, weight: .semibold))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                        .frame(width: 22, height: 28)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Unpin thread")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
 
-            trailingMeta
-                .fixedSize(horizontal: true, vertical: false)
+            Button {
+                onSelect?()
+            } label: {
+                HStack(alignment: .center, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(thread.title.isEmpty ? "Untitled" : thread.title)
+                            .font(GaryxFont.subheadline(weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .foregroundStyle(.primary)
+
+                        if let subtitle, !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(GaryxFont.caption())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    trailingMeta
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(minHeight: GaryxSidebarMetrics.threadRowMinHeight, alignment: .leading)
-        .contentShape(Rectangle())
         .padding(.horizontal, isFullBleed ? GaryxSidebarMetrics.sectionHorizontalPadding : GaryxSidebarMetrics.rowInnerHorizontalPadding)
         .padding(.vertical, isFullBleed ? 10 : 8)
         .background {
@@ -1438,8 +1475,21 @@ struct GaryxSidebarThreadRowView: View {
         }
         .padding(.horizontal, isFullBleed ? 0 : GaryxSidebarMetrics.rowOuterPadding - 4)
     }
+}
 
-    private var subtitle: String? {
+private struct GaryxSidebarRunningIndicator: View {
+    var body: some View {
+        ProgressView()
+            .controlSize(.mini)
+            .scaleEffect(0.76)
+            .tint(.secondary)
+            .frame(width: 18, height: 18)
+            .accessibilityLabel("Running")
+    }
+}
+
+private extension GaryxSidebarThreadRowView {
+    var subtitle: String? {
         if !thread.lastMessagePreview.isEmpty {
             return thread.lastMessagePreview
         }
@@ -1452,14 +1502,8 @@ struct GaryxSidebarThreadRowView: View {
         return thread.agentId
     }
 
-    private var trailingMeta: some View {
+    var trailingMeta: some View {
         HStack(spacing: 6) {
-            if isPinned {
-                Image(systemName: "pin.fill")
-                    .font(GaryxFont.system(size: 10, weight: .semibold))
-                    .foregroundStyle(GaryxTheme.accent)
-            }
-
             if showsWorkspaceMeta, let workspacePath = thread.workspacePath, !workspacePath.isEmpty {
                 Text(workspacePath.lastPathComponent)
                     .font(GaryxFont.caption())
@@ -1469,20 +1513,10 @@ struct GaryxSidebarThreadRowView: View {
             }
 
             if isRunning {
-                Text("Running")
-                    .font(GaryxFont.system(size: 10, weight: .semibold))
-                    .foregroundStyle(GaryxTheme.accent)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule()
-                            .fill(GaryxTheme.accent.opacity(0.12))
-                    )
-            }
-
-            if isSelected {
+                GaryxSidebarRunningIndicator()
+            } else if isSelected {
                 Circle()
-                    .fill(GaryxTheme.accent)
+                    .fill(.secondary)
                     .frame(width: 7, height: 7)
             } else if let trailingTimestamp, !trailingTimestamp.isEmpty {
                 Text(trailingTimestamp)
@@ -1493,10 +1527,13 @@ struct GaryxSidebarThreadRowView: View {
         }
     }
 
-    private var isRunning: Bool {
+    var isRunning: Bool {
         let state = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let activeRunId = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return state == "running" || !activeRunId.isEmpty
+        if let state, ["running", "active", "queued", "pending", "working", "in_progress"].contains(state) {
+            return true
+        }
+        return !activeRunId.isEmpty
     }
 }
 

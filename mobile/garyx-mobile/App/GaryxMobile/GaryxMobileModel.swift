@@ -2098,12 +2098,14 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
-    func refreshThreads() async {
+    func refreshThreads(silent: Bool = false) async {
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
-        isLoadingThreads = true
+        if !silent {
+            isLoadingThreads = true
+        }
         defer {
-            if runtimeGeneration == gatewayRuntimeGeneration {
+            if !silent, runtimeGeneration == gatewayRuntimeGeneration {
                 isLoadingThreads = false
             }
         }
@@ -2887,6 +2889,7 @@ final class GaryxMobileModel: ObservableObject {
         let assistantId = "local-assistant-\(UUID().uuidString)"
         var optimisticThreadId = selectedThread?.id
         if let optimisticThreadId {
+            finishActiveAssistantSegmentBeforeUserTurn(for: optimisticThreadId)
             mutateMessages(for: optimisticThreadId) { messages in
                 messages.append(userMessage)
             }
@@ -2983,7 +2986,6 @@ final class GaryxMobileModel: ObservableObject {
             isStreaming: false,
             clientIntentId: clientIntentId
         )
-        finishActiveAssistantSegmentBeforeUserTurn(for: thread.id)
         mutateMessages(for: thread.id) { messages in
             messages.append(userMessage)
         }
@@ -3031,7 +3033,6 @@ final class GaryxMobileModel: ObservableObject {
             isStreaming: false,
             clientIntentId: clientIntentId
         )
-        finishActiveAssistantSegmentBeforeUserTurn(for: thread.id)
         mutateMessages(for: thread.id) { messages in
             messages.append(userMessage)
         }
@@ -4794,6 +4795,7 @@ final class GaryxMobileModel: ObservableObject {
         guard assistantDeltaFlushTasksByThread[threadId] == nil else { return }
         assistantDeltaFlushTasksByThread[threadId] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: Self.assistantDeltaFlushDelayNanos)
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 self?.flushPendingAssistantDelta(for: threadId)
             }
@@ -5409,36 +5411,10 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     private func mobileMessages(from transcript: GaryxThreadTranscript, threadId: String, live: Bool = false) -> [GaryxMobileMessage] {
-        var rendered = mobileMessages(from: transcript.messages, live: live)
-        var existingPendingIds = Set(
-            rendered
-                .compactMap { $0.pendingInputId?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
+        GaryxMobileTranscriptMapper.appendPendingUserInputs(
+            to: mobileMessages(from: transcript.messages, live: live),
+            from: transcript
         )
-        for input in transcript.pendingUserInputs {
-            let pendingId = input.id.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard input.active,
-                  !pendingId.isEmpty,
-                  (input.status ?? "awaiting_ack").lowercased() != "abandoned",
-                  !existingPendingIds.contains(pendingId) else {
-                continue
-            }
-            existingPendingIds.insert(pendingId)
-            let attachments = Self.messageAttachments(fromStructuredContent: input.content)
-            rendered.append(
-                GaryxMobileMessage(
-                    id: "pending-user:\(pendingId)",
-                    role: .user,
-                    text: Self.pendingUserInputText(input, attachments: attachments),
-                    attachments: attachments,
-                    timestamp: input.timestamp,
-                    isStreaming: false,
-                    pendingInputId: pendingId
-                )
-            )
-        }
-
-        return rendered
     }
 
     private func mobileMessages(from transcript: [GaryxTranscriptMessage], live: Bool = false) -> [GaryxMobileMessage] {

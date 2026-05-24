@@ -148,6 +148,88 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         )
     }
 
+    func testActivityModelShowsThinkingForImageOnlyStreamingAssistant() {
+        XCTAssertTrue(
+            GaryxMobileThreadActivityModel.showsTailThinkingIndicator(
+                messages: [
+                    message("user-1", role: .user, text: "Make an image"),
+                    message(
+                        "assistant-1",
+                        role: .assistant,
+                        attachments: [
+                            GaryxMobileMessageAttachment(
+                                id: "image-1",
+                                kind: "image",
+                                name: "Image",
+                                mediaType: "image/png"
+                            ),
+                        ],
+                        isStreaming: true
+                    ),
+                ],
+                runActive: true
+            )
+        )
+    }
+
+    func testTranscriptMapperDoesNotAppendActiveRunAssistantResponseAfterPendingInput() throws {
+        let transcript = try JSONDecoder().decode(
+            GaryxThreadTranscript.self,
+            from: Data(
+                """
+                {
+                  "ok": true,
+                  "messages": [
+                    {
+                      "index": 0,
+                      "role": "user",
+                      "text": "Hello",
+                      "timestamp": "2026-01-01T00:00:00Z"
+                    },
+                    {
+                      "index": 1,
+                      "role": "assistant",
+                      "text": "Hi, I am here.",
+                      "timestamp": "2026-01-01T00:00:01Z"
+                    }
+                  ],
+                  "pending_user_inputs": [
+                    {
+                      "id": "pending-1",
+                      "run_id": "run-1",
+                      "text": "Run this",
+                      "timestamp": "2026-01-01T00:00:02Z",
+                      "status": "awaiting_ack",
+                      "active": true
+                    }
+                  ],
+                  "thread_runtime": {
+                    "active_run": {
+                      "run_id": "run-1",
+                      "assistant_response": "Hi, I am here.",
+                      "updated_at": "2026-01-01T00:00:03Z",
+                      "pending_user_input_count": 1
+                    }
+                  }
+                }
+                """.utf8
+            )
+        )
+        XCTAssertEqual(transcript.threadRuntime?.activeRun?.assistantResponse, "Hi, I am here.")
+
+        let rendered = GaryxMobileTranscriptMapper.appendPendingUserInputs(
+            to: [
+                message("history:0", role: .user, text: "Hello"),
+                message("history:1", role: .assistant, text: "Hi, I am here."),
+            ],
+            from: transcript
+        )
+
+        XCTAssertEqual(rendered.map(\.text), ["Hello", "Hi, I am here.", "Run this"])
+        XCTAssertEqual(rendered.filter { $0.role == .assistant && $0.text == "Hi, I am here." }.count, 1)
+        XCTAssertEqual(rendered.last?.pendingInputId, "pending-1")
+    }
+
     func testOrphanAssistantTurnUsesStableMessageId() throws {
         let messages = [
             message("assistant-1", role: .assistant, text: "Restored answer"),
@@ -245,6 +327,7 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         _ id: String,
         role: GaryxMobileMessage.Role,
         text: String = "",
+        attachments: [GaryxMobileMessageAttachment] = [],
         timestamp: String? = nil,
         isStreaming: Bool = false
     ) -> GaryxMobileMessage {
@@ -252,6 +335,7 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
             id: id,
             role: role,
             text: text,
+            attachments: attachments,
             timestamp: timestamp,
             isStreaming: isStreaming
         )
