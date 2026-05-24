@@ -527,9 +527,10 @@ struct GaryxThreadSidebar: View {
                 )
             }
             .task {
-                if model.threads.isEmpty && !model.isLoadingThreads {
-                    await model.refreshThreads()
-                }
+                await refreshSidebarThreads()
+            }
+            .task(id: model.sidebarVisible) {
+                await refreshSidebarThreads()
             }
     }
 
@@ -585,6 +586,14 @@ struct GaryxThreadSidebar: View {
     private func refreshAll() async {
         await model.refreshThreads()
         await model.refreshRemoteState()
+    }
+
+    private func refreshSidebarThreads() async {
+        if showsInlineCloseButton, !model.sidebarVisible {
+            return
+        }
+        guard !model.isLoadingThreads else { return }
+        await model.refreshThreads()
     }
 
     private func startNewChat() {
@@ -1360,41 +1369,20 @@ private struct GaryxSidebarThreadButton: View {
     var isFullBleed = false
 
     var body: some View {
-        GaryxSwipeActionRow(actions: rowActions) {
-            Button {
-                Task { await model.selectThread(thread) }
-            } label: {
-                GaryxSidebarThreadRowView(
-                    thread: thread,
-                    isSelected: model.selectedThread?.id == thread.id,
-                    isPinned: showsPinnedMarker || model.isThreadPinned(thread.id),
-                    showsWorkspaceMeta: showsWorkspaceMeta,
-                    trailingTimestamp: trailingTimestamp,
-                    isFullBleed: isFullBleed
-                )
-                .padding(.leading, indent)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private var rowActions: [GaryxSwipeAction] {
-        var actions = [
-            GaryxSwipeAction(
-                title: model.isThreadPinned(thread.id) ? "Unpin" : "Pin",
-                systemImage: model.isThreadPinned(thread.id) ? "pin.slash" : "pin"
-            ) {
-                model.togglePinnedThread(thread.id)
-            },
-        ]
-        if model.canDeleteThread(thread) {
-            actions.append(
-                GaryxSwipeAction(title: "Archive", systemImage: "archivebox", tone: .destructive) {
-                    Task { await model.deleteThread(thread) }
-                }
+        Button {
+            Task { await model.selectThread(thread) }
+        } label: {
+            GaryxSidebarThreadRowView(
+                thread: thread,
+                isSelected: model.selectedThread?.id == thread.id,
+                isPinned: showsPinnedMarker || model.isThreadPinned(thread.id),
+                showsWorkspaceMeta: showsWorkspaceMeta,
+                trailingTimestamp: trailingTimestamp,
+                isFullBleed: isFullBleed
             )
+            .padding(.leading, indent)
         }
-        return actions
+        .buttonStyle(.plain)
     }
 }
 
