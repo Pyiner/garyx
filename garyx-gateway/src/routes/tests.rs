@@ -897,6 +897,58 @@ async fn recent_threads_route_syncs_router_summary_to_garyx_db() {
 }
 
 #[tokio::test]
+async fn recent_threads_route_reads_persistent_projection_without_router_resync() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::recent-projection-only";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Canonical Thread Title",
+                "created_at": "2026-05-23T08:00:00.000Z",
+                "updated_at": "2026-05-23T09:00:00.000Z"
+            }),
+        )
+        .await;
+    state
+        .ops
+        .garyx_db
+        .upsert_recent_thread(crate::garyx_db::RecentThreadDraft {
+            thread_id: thread_id.to_owned(),
+            title: "Projected Thread Title".to_owned(),
+            workspace_dir: None,
+            thread_type: "chat".to_owned(),
+            provider_type: None,
+            agent_id: None,
+            message_count: 0,
+            last_message_preview: String::new(),
+            recent_run_id: None,
+            active_run_id: None,
+            run_state: "idle".to_owned(),
+            updated_at: Some("2026-05-23T09:00:00.000Z".to_owned()),
+            last_active_at: "2026-05-23T09:00:00.000Z".to_owned(),
+        })
+        .expect("overwrite recent projection");
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .uri("/api/recent-threads?limit=10")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["threads"][0]["thread_id"], thread_id);
+    assert_eq!(payload["threads"][0]["title"], "Projected Thread Title");
+}
+
+#[tokio::test]
 async fn recent_threads_route_removes_hidden_threads_from_projection() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::hidden-recent-route";

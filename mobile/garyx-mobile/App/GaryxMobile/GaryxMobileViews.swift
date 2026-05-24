@@ -8476,6 +8476,9 @@ struct GaryxSwipeActionRow<Content: View>: View {
     @ObservedObject private var coordinator = GaryxSwipeRowCoordinator.shared
     @State private var offset: CGFloat = 0
     @State private var isOpen = false
+    @State private var dragBaseOffset: CGFloat = 0
+    @State private var dragDirectionLocked = false
+    @State private var dragIsHorizontal = false
 
     init(actions: [GaryxSwipeAction], @ViewBuilder content: () -> Content) {
         self.actions = actions
@@ -8498,6 +8501,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
                     .contentShape(Rectangle())
                     .accessibilityHint("Swipe left for actions, or use the actions rotor.")
                     .modifier(GaryxSwipeRowAccessibilityActions(actions: actions, onAction: handle))
+                    .simultaneousGesture(swipeDragGesture)
                     .contextMenu {
                         ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
                             Button(action.title, role: action.tone == .destructive ? .destructive : nil) {
@@ -8506,18 +8510,11 @@ struct GaryxSwipeActionRow<Content: View>: View {
                         }
                     }
                     .overlay {
-                        GaryxSwipeRowPanRecognizer(
-                            actionWidth: actionWidth,
-                            offset: $offset,
-                            onCommit: commit(velocity:)
-                        )
-                        .accessibilityHidden(true)
-                    }
-                    .overlay {
                         if isOpen {
                             Color.clear
                                 .contentShape(Rectangle())
                                 .onTapGesture { close() }
+                                .simultaneousGesture(swipeDragGesture)
                         }
                     }
             }
@@ -8567,20 +8564,45 @@ struct GaryxSwipeActionRow<Content: View>: View {
     private var actionButtonWidth: CGFloat { 72 }
     private var actionWidth: CGFloat { CGFloat(actions.count) * actionButtonWidth }
 
+    private var swipeDragGesture: some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .local)
+            .onChanged { value in
+                if !dragDirectionLocked {
+                    let dx = value.translation.width
+                    let dy = value.translation.height
+                    guard abs(dx) > 6 || abs(dy) > 6 else { return }
+                    dragDirectionLocked = true
+                    dragIsHorizontal = abs(dx) > abs(dy) * 1.6
+                    dragBaseOffset = offset
+                }
+                guard dragIsHorizontal else { return }
+                offset = clampedSwipeOffset(dragBaseOffset + value.translation.width)
+            }
+            .onEnded { value in
+                defer { resetDragState() }
+                guard dragIsHorizontal else { return }
+                finishSwipe(projectedOffset: dragBaseOffset + value.predictedEndTranslation.width)
+            }
+    }
+
     private func handle(_ action: GaryxSwipeAction) {
         close()
         action.action()
     }
 
-    private func commit(velocity: CGFloat) {
-        let opening: Bool
-        if velocity < -400 {
-            opening = true
-        } else if velocity > 400 {
-            opening = false
-        } else {
-            opening = offset < -actionWidth * 0.45
+    private func clampedSwipeOffset(_ raw: CGFloat) -> CGFloat {
+        if raw > 0 {
+            return 0
         }
+        if raw < -actionWidth {
+            let overshoot = raw + actionWidth
+            return -actionWidth + overshoot * 0.35
+        }
+        return raw
+    }
+
+    private func finishSwipe(projectedOffset: CGFloat) {
+        let opening = projectedOffset < -actionWidth * 0.5
         let target: CGFloat = opening ? -actionWidth : 0
         isOpen = opening
         if opening {
@@ -8591,6 +8613,12 @@ struct GaryxSwipeActionRow<Content: View>: View {
         withAnimation(GaryxMobileMotion.rowSwipe) {
             offset = target
         }
+    }
+
+    private func resetDragState() {
+        dragBaseOffset = 0
+        dragDirectionLocked = false
+        dragIsHorizontal = false
     }
 
     private func close(notifyCoordinator: Bool = true) {
@@ -8615,79 +8643,6 @@ private struct GaryxSwipeRowAccessibilityActions: ViewModifier {
                     onAction(action)
                 }
             }
-        }
-    }
-}
-
-private struct GaryxSwipeRowPanRecognizer: UIViewRepresentable {
-    let actionWidth: CGFloat
-    @Binding var offset: CGFloat
-    let onCommit: (CGFloat) -> Void
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView(frame: .zero)
-        view.backgroundColor = .clear
-        view.isUserInteractionEnabled = true
-        let pan = UIPanGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handle(_:))
-        )
-        pan.delegate = context.coordinator
-        pan.cancelsTouchesInView = false
-        pan.maximumNumberOfTouches = 1
-        view.addGestureRecognizer(pan)
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.parent = self
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var parent: GaryxSwipeRowPanRecognizer
-        var baseOffset: CGFloat = 0
-
-        init(parent: GaryxSwipeRowPanRecognizer) { self.parent = parent }
-
-        @objc func handle(_ gesture: UIPanGestureRecognizer) {
-            switch gesture.state {
-            case .began:
-                baseOffset = parent.offset
-            case .changed:
-                let dx = gesture.translation(in: gesture.view).x
-                let raw = baseOffset + dx
-                if raw > 0 {
-                    parent.offset = 0
-                } else if raw < -parent.actionWidth {
-                    let overshoot = raw + parent.actionWidth
-                    parent.offset = -parent.actionWidth + overshoot * 0.35
-                } else {
-                    parent.offset = raw
-                }
-            case .ended, .cancelled, .failed:
-                parent.onCommit(gesture.velocity(in: gesture.view).x)
-            default:
-                break
-            }
-        }
-
-        // Engage only when the touch is decisively horizontal — anything
-        // vertical-dominant falls through to the parent ScrollView's pan.
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
-            let v = pan.velocity(in: pan.view)
-            return abs(v.x) > abs(v.y) * 1.6 && abs(v.x) > 80
-        }
-
-        // Exclusive once we win shouldBegin — UIKit then yields the touch
-        // sequence to us and the parent ScrollView leaves it alone.
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
-        ) -> Bool {
-            return false
         }
     }
 }

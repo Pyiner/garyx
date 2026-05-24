@@ -42,6 +42,7 @@ use crate::event_stream_hub::EventStreamHub;
 use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
+use crate::recent_thread_projection::RecentThreadProjectingStore;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::wikis::WikiStore;
@@ -327,18 +328,30 @@ impl AppStateBuilder {
             panic!("agent_team registry uniqueness check failed during startup: {error}");
         }
         let start_time = Instant::now();
-        let mut router = MessageRouter::new(self.thread_store.clone(), self.config.clone());
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(RecentThreadProjectingStore::new(
+            self.thread_store.clone(),
+            self.garyx_db.clone(),
+        ));
+        let mut thread_history = ThreadHistoryRepository::new(
+            thread_store.clone(),
+            self.thread_history.transcript_store(),
+        );
+        if let Some(conversation_index) = self.thread_history.conversation_index() {
+            thread_history = thread_history.with_conversation_index(conversation_index);
+        }
+        let thread_history = Arc::new(thread_history);
+        let mut router = MessageRouter::new(thread_store.clone(), self.config.clone());
         let thread_creator: Arc<dyn ThreadCreator> = Arc::new(GatewayThreadCreator::new(
             self.bridge.clone(),
             self.custom_agents.clone(),
             self.agent_teams.clone(),
         ));
         router.set_thread_creator(thread_creator.clone());
-        router.set_thread_history_repository(self.thread_history.clone());
+        router.set_thread_history_repository(thread_history.clone());
         router.set_thread_log_sink(self.thread_logs.clone());
         router.set_message_ledger_store(self.message_ledger.clone());
         self.bridge.set_thread_log_sink(self.thread_logs.clone());
-        self.bridge.set_thread_history(self.thread_history.clone());
+        self.bridge.set_thread_history(thread_history.clone());
 
         // Wire the AgentTeam meta-provider into the bridge. This is the
         // production implementation of the two DI traits the provider needs:
@@ -372,7 +385,7 @@ impl AppStateBuilder {
         let sub_agent_dispatcher: Arc<dyn SubAgentDispatcher> =
             Arc::new(GatewaySubAgentDispatcher::new(
                 Arc::downgrade(&self.bridge),
-                self.thread_store.clone(),
+                thread_store.clone(),
                 thread_creator.clone(),
                 self.custom_agents.clone(),
             ));
@@ -456,8 +469,8 @@ impl AppStateBuilder {
                 live_config,
             },
             threads: ThreadState {
-                thread_store: self.thread_store,
-                history: self.thread_history,
+                thread_store,
+                history: thread_history,
                 message_ledger: self.message_ledger,
                 router,
             },

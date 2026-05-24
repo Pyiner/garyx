@@ -29,6 +29,9 @@ from a real chat captured during local debugging.
 - Config: `~/.garyx/garyx.json`.
 - Channel accounts: `channels.<channel_id>.accounts[...]` (`channels.api.accounts[...]` for API).
 - Thread records and known endpoint state: `garyx-router`.
+- Mobile recent-thread lists read the gateway SQLite `recent_threads` projection
+  only. Keep that projection current by writing it from the thread-store write
+  path; do not make `GET /api/recent-threads` rescan router/thread files.
 - MCP schema and tool behavior: `garyx-gateway/src/mcp.rs`.
 - Provider session behavior: `garyx-bridge`.
 - Channel/plugin stream presentation policy, buffering, and tool-call display

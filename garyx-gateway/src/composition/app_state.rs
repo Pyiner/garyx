@@ -28,6 +28,7 @@ use crate::event_stream_hub::EventStreamHub;
 use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
+use crate::recent_thread_projection::backfill_recent_thread_projection_if_empty;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::wikis::WikiStore;
@@ -252,12 +253,18 @@ impl AppState {
         let state = Arc::clone(self);
         tokio::spawn(async move {
             let started = Instant::now();
+            let recent_threads = backfill_recent_thread_projection_if_empty(
+                &state.threads.thread_store,
+                &state.ops.garyx_db,
+            )
+            .await;
             let threads = state.cached_thread_list_entries().await.len();
             let endpoints = state.cached_channel_endpoints().await.len();
             debug!(
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 thread_count = threads,
                 endpoint_count = endpoints,
+                recent_thread_backfill_count = recent_threads,
                 "gateway sync snapshots warmed"
             );
         });

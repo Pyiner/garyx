@@ -25,17 +25,18 @@ per-thread files.
 
 Garyx also maintains a gateway-local SQLite projection of visible thread
 metadata for compact clients such as the mobile app. The projection is derived
-from canonical thread records, pruned back to a bounded recency window, and
-stores denormalized display metadata:
+from canonical thread records at the thread-store write boundary: creating,
+updating, hiding, deleting, or changing run state on a thread updates the
+projection as part of the same gateway write path. It stores denormalized
+display metadata:
 `thread_id`, title, `workspace_dir`, thread type, provider/agent hints, message
 count, the latest preview, recent/active run ids, and a coarse `run_state`
 (`running`, `completed`, or `idle`).
 
 Clients read the recency-ordered view through `GET /api/recent-threads`. The
-endpoint refreshes the projection from router thread metadata before returning
-it, removes rows that are no longer visible in the router snapshot, and returns
-pagination metadata (`total`, `offset`, and `has_more`) alongside the requested
-page.
+endpoint reads only the SQLite projection and returns pagination metadata
+(`total`, `offset`, and `has_more`) alongside the requested page. It must not
+rescan router thread files on the read path.
 
 ## How a chat becomes a thread
 
