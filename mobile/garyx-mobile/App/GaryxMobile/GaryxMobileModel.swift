@@ -209,7 +209,7 @@ struct GaryxGatewayProfile: Identifiable, Codable, Equatable {
 
 @MainActor
 final class GaryxMobileModel: ObservableObject {
-    private static let threadListPageLimit = 80
+    private static let threadListPageLimit = 30
     private static let threadHistoryPageLimit = 120
     private static let threadHistoryUserQueryLimit = 10
     private static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000

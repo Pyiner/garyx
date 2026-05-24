@@ -585,7 +585,7 @@ pub async fn runtime_info(State(state): State<Arc<AppState>>) -> impl IntoRespon
 
 const DEFAULT_THREAD_LIMIT: usize = 100;
 const MAX_THREAD_LIMIT: usize = 1000;
-const DEFAULT_RECENT_THREAD_LIMIT: usize = 80;
+const DEFAULT_RECENT_THREAD_LIMIT: usize = 30;
 const MAX_RECENT_THREAD_LIMIT: usize = 200;
 
 #[derive(Deserialize)]

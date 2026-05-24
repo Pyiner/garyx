@@ -3628,7 +3628,7 @@ public final class GaryxGatewayClient {
         )
     }
 
-    public func listRecentThreads(limit: Int = 80, offset: Int = 0) async throws -> GaryxRecentThreadsPage {
+    public func listRecentThreads(limit: Int = 30, offset: Int = 0) async throws -> GaryxRecentThreadsPage {
         try await get(
             "/api/recent-threads",
             queryItems: [

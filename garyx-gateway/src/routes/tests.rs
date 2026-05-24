@@ -949,6 +949,51 @@ async fn recent_threads_route_reads_persistent_projection_without_router_resync(
 }
 
 #[tokio::test]
+async fn recent_threads_route_defaults_to_thirty_threads() {
+    let state = AppStateBuilder::new(test_config()).build();
+    for index in 0..35 {
+        let thread_id = format!("thread::recent-default-limit-{index:02}");
+        state
+            .ops
+            .garyx_db
+            .upsert_recent_thread(crate::garyx_db::RecentThreadDraft {
+                thread_id: thread_id.clone(),
+                title: format!("Recent Default Limit {index:02}"),
+                workspace_dir: Some("/workspace/test".to_owned()),
+                thread_type: "chat".to_owned(),
+                provider_type: None,
+                agent_id: None,
+                message_count: index,
+                last_message_preview: String::new(),
+                recent_run_id: None,
+                active_run_id: None,
+                run_state: "idle".to_owned(),
+                updated_at: Some(format!("2026-05-23T10:{index:02}:00.000Z")),
+                last_active_at: format!("2026-05-23T10:{index:02}:00.000Z"),
+            })
+            .expect("seed recent projection");
+    }
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .uri("/api/recent-threads")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["count"], 30);
+    assert_eq!(payload["limit"], 30);
+    assert_eq!(payload["offset"], 0);
+    assert_eq!(payload["total"], 35);
+    assert_eq!(payload["has_more"], true);
+    assert_eq!(payload["threads"].as_array().unwrap().len(), 30);
+}
+
+#[tokio::test]
 async fn recent_threads_route_removes_hidden_threads_from_projection() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::hidden-recent-route";

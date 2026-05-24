@@ -571,7 +571,7 @@ struct GaryxThreadSidebar: View {
     private var sidebarThreadSections: some View {
         GaryxPinnedThreadsSection()
         GaryxRecentThreadsSection()
-        GaryxSidebarThreadPaginationRow()
+        GaryxSidebarThreadAutoLoadFooter()
     }
 
     private var sidebarHeaderContext: GaryxSidebarHeaderContext? {
@@ -846,36 +846,31 @@ private struct GaryxSidebarEmptyRow: View {
     }
 }
 
-private struct GaryxSidebarThreadPaginationRow: View {
+private struct GaryxSidebarThreadAutoLoadFooter: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        if model.hasMoreThreadSummaries || model.isLoadingMoreThreads {
-            Button {
-                Task { await model.loadMoreThreads() }
-            } label: {
+        Group {
+            if model.isLoadingMoreThreads {
                 HStack(spacing: 8) {
-                    if model.isLoadingMoreThreads {
-                        ProgressView()
-                            .scaleEffect(0.68)
-                    } else {
-                        Image(systemName: "chevron.down")
-                            .font(GaryxFont.system(size: 12, weight: .semibold))
-                    }
-
-                    Text(model.isLoadingMoreThreads ? "Loading threads" : "Load More Threads")
-                        .font(GaryxFont.caption(weight: .semibold))
+                    ProgressView()
+                        .scaleEffect(0.68)
+                    Text("Loading more")
+                        .font(GaryxFont.caption(weight: .medium))
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 44)
-                .contentShape(Rectangle())
+            } else if model.hasMoreThreadSummaries {
+                Color.clear
+                    .frame(height: 1)
+                    .onAppear {
+                        Task { await model.loadMoreThreads() }
+                    }
             }
-            .buttonStyle(.plain)
-            .disabled(model.isLoadingMoreThreads)
-            .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-            .padding(.bottom, 10)
         }
+        .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
+        .padding(.bottom, 10)
     }
 }
 
@@ -8501,7 +8496,6 @@ struct GaryxSwipeActionRow<Content: View>: View {
                     .contentShape(Rectangle())
                     .accessibilityHint("Swipe left for actions, or use the actions rotor.")
                     .modifier(GaryxSwipeRowAccessibilityActions(actions: actions, onAction: handle))
-                    .simultaneousGesture(swipeDragGesture)
                     .contextMenu {
                         ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
                             Button(action.title, role: action.tone == .destructive ? .destructive : nil) {
@@ -8514,12 +8508,12 @@ struct GaryxSwipeActionRow<Content: View>: View {
                             Color.clear
                                 .contentShape(Rectangle())
                                 .onTapGesture { close() }
-                                .simultaneousGesture(swipeDragGesture)
                         }
                     }
             }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .clipped()
+            .simultaneousGesture(swipeDragGesture)
             .onChange(of: coordinator.activeRowID) { _, newID in
                 if newID != identityID, isOpen {
                     close(notifyCoordinator: false)
@@ -8580,7 +8574,12 @@ struct GaryxSwipeActionRow<Content: View>: View {
             }
             .onEnded { value in
                 defer { resetDragState() }
-                guard dragIsHorizontal else { return }
+                guard dragIsHorizontal else {
+                    if isOpen {
+                        close()
+                    }
+                    return
+                }
                 finishSwipe(projectedOffset: dragBaseOffset + value.predictedEndTranslation.width)
             }
     }
