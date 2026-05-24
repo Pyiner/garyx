@@ -4,6 +4,7 @@ import SwiftUI
 struct GaryxAutomationsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var showsCreateAutomation = false
+    @State private var activeAutomationActionId: String?
 
     var body: some View {
         GaryxPanelScaffold(
@@ -26,12 +27,13 @@ struct GaryxAutomationsView: View {
                     )
                 } else {
                     GaryxSectionBlock(title: "Automation") {
-                        GaryxCompactListGroup {
-                            ForEach(Array(model.automations.enumerated()), id: \.element.id) { index, automation in
-                                GaryxAutomationCard(automation: automation)
-                                if index < model.automations.count - 1 {
-                                    GaryxCompactRowDivider()
-                                }
+                        VStack(spacing: 12) {
+                            ForEach(model.automations) { automation in
+                                GaryxAutomationCard(
+                                    automation: automation,
+                                    activeAutomationActionId: $activeAutomationActionId
+                                )
+                                .zIndex(activeAutomationActionId == automation.id ? 1 : 0)
                             }
                         }
                     }
@@ -53,8 +55,10 @@ struct GaryxAutomationsView: View {
 struct GaryxAutomationCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let automation: GaryxAutomationSummary
+    @Binding var activeAutomationActionId: String?
     @State private var showsEditForm = false
     @State private var showsDeleteConfirmation = false
+    @State private var optimisticEnabled: Bool?
     @State private var label = ""
     @State private var prompt = ""
     @State private var intervalHours = ""
@@ -63,39 +67,111 @@ struct GaryxAutomationCard: View {
     @State private var workspacePath = ""
 
     var body: some View {
-        Button {
-            fillDraft()
-            showsEditForm = true
-        } label: {
+        ZStack(alignment: .bottomTrailing) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(automation.label)
-                            .font(GaryxFont.body(weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Text(automationTargetLabel)
-                            .font(GaryxFont.caption(weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                HStack(alignment: .top, spacing: 12) {
+                    Button {
+                        openEditForm()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(automation.label)
+                                .font(GaryxFont.body(weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text(automationTargetLabel)
+                                .font(GaryxFont.caption(weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Spacer()
-                    GaryxStatusPill(text: automation.enabled ? "Enabled" : "Paused", tone: automation.enabled ? .good : .muted)
+                    .buttonStyle(.plain)
+
+                    Toggle("", isOn: automationEnabledBinding)
+                        .labelsHidden()
+                        .tint(.blue)
                 }
+
                 if !automation.prompt.isEmpty {
-                    Text(automation.prompt)
-                        .font(GaryxFont.caption())
+                    Button {
+                        openEditForm()
+                    } label: {
+                        Text(automation.prompt)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Divider()
+                    .overlay(GaryxTheme.hairline)
+
+                HStack(alignment: .center, spacing: 10) {
+                    Text(garyxAutomationScheduleSummary(automation.schedule))
+                        .font(GaryxFont.caption(weight: .medium))
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    Button {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            activeAutomationActionId = showsActionPanel ? nil : automation.id
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(GaryxFont.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 34, height: 28)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Automation actions")
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
-            .contentShape(Rectangle())
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(GaryxTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(GaryxTheme.hairline, lineWidth: 1)
+            }
+
+            if showsActionPanel {
+                GaryxAutomationActionPanel(
+                    canOpenThread: automationOpenThreadId != nil,
+                    onRun: {
+                        activeAutomationActionId = nil
+                        Task {
+                            await model.runAutomation(automation)
+                        }
+                    },
+                    onEdit: {
+                        activeAutomationActionId = nil
+                        openEditForm()
+                    },
+                    onOpenThread: {
+                        guard let threadId = automationOpenThreadId else { return }
+                        activeAutomationActionId = nil
+                        Task { await model.openThread(id: threadId) }
+                    },
+                    onDelete: {
+                        activeAutomationActionId = nil
+                        showsDeleteConfirmation = true
+                    }
+                )
+                .offset(x: -10, y: -38)
+                .transition(.scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity))
+                .zIndex(2)
+            }
         }
-        .buttonStyle(.plain)
         .onAppear(perform: fillDraft)
+        .onChange(of: automation.enabled) { _, newValue in
+            if optimisticEnabled == newValue {
+                optimisticEnabled = nil
+            }
+        }
         .fullScreenCover(isPresented: $showsEditForm) {
             GaryxFormSheet(title: "Edit Automation") {
                 editAutomationForm
@@ -193,13 +269,6 @@ struct GaryxAutomationCard: View {
             }
 
             HStack(spacing: 10) {
-                GaryxAutomationCommandButton(
-                    title: automation.enabled ? "Pause" : "Resume",
-                    systemName: automation.enabled ? "pause.fill" : "play.fill"
-                ) {
-                    Task { await model.toggleAutomation(automation) }
-                }
-
                 if let threadId = automationOpenThreadId {
                     GaryxAutomationCommandButton(title: "Thread", systemName: "arrow.up.right") {
                         Task {
@@ -326,6 +395,27 @@ struct GaryxAutomationCard: View {
                 .font(GaryxFont.caption())
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var showsActionPanel: Bool {
+        activeAutomationActionId == automation.id
+    }
+
+    private var automationEnabledBinding: Binding<Bool> {
+        Binding {
+            optimisticEnabled ?? automation.enabled
+        } set: { nextValue in
+            optimisticEnabled = nextValue
+            Task {
+                await model.setAutomationEnabled(automation, enabled: nextValue)
+            }
+        }
+    }
+
+    private func openEditForm() {
+        activeAutomationActionId = nil
+        fillDraft()
+        showsEditForm = true
     }
 
     private var automationOpenThreadId: String? {
@@ -535,6 +625,56 @@ struct GaryxAutomationInfoChip: View {
         .padding(.horizontal, 9)
         .frame(minHeight: 28)
         .background(Color(.tertiarySystemFill).opacity(0.45), in: Capsule())
+    }
+}
+
+struct GaryxAutomationActionPanel: View {
+    let canOpenThread: Bool
+    let onRun: () -> Void
+    let onEdit: () -> Void
+    let onOpenThread: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            actionRow(title: "Run Once", systemName: "clock.arrow.circlepath", action: onRun)
+            actionRow(title: "Edit Automation", systemName: "pencil", action: onEdit)
+            if canOpenThread {
+                actionRow(title: "Open Thread", systemName: "arrow.up.right", action: onOpenThread)
+            }
+            actionRow(title: "Delete Automation", systemName: "trash", isDestructive: true, action: onDelete)
+        }
+        .padding(.vertical, 8)
+        .frame(width: 232)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color.white.opacity(0.42), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.16), radius: 24, x: 0, y: 14)
+    }
+
+    private func actionRow(
+        title: String,
+        systemName: String,
+        isDestructive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: systemName)
+                    .font(GaryxFont.system(size: 16, weight: .medium))
+                    .frame(width: 22, height: 22)
+                Text(title)
+                    .font(GaryxFont.callout(weight: .medium))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(isDestructive ? GaryxTheme.danger : .primary)
+            .padding(.horizontal, 18)
+            .frame(height: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

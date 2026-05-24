@@ -3511,10 +3511,14 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func toggleAutomation(_ automation: GaryxAutomationSummary) async {
+        await setAutomationEnabled(automation, enabled: !automation.enabled)
+    }
+
+    func setAutomationEnabled(_ automation: GaryxAutomationSummary, enabled: Bool) async {
         do {
             _ = try await client().updateAutomationEnabled(
                 id: automation.id,
-                enabled: !automation.enabled
+                enabled: enabled
             )
             await refreshRemoteState()
         } catch {
