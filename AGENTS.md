@@ -167,6 +167,9 @@ needs installed-app validation.
 - Mobile Automation existing-thread selectors should open a large bottom sheet
   backed by recent threads with search. Do not use compact menu pickers for
   choosing a target thread.
+- Mobile Automation schedule editing should use a user-facing repeat/date/time
+  model (daily, weekdays, weekly, monthly, no-repeat) rather than making
+  interval hours the primary control.
 - Mobile chat keyboard handling should treat the message area and composer as
   one vertical stack: the keyboard shrinks/moves both together, the composer
   remains attached below the messages, and the first tap or drag in the message

@@ -1432,6 +1432,42 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(threadObject?["agentId"] as? String, "codex")
     }
 
+    func testAutomationScheduleEncodesAndDecodesCalendarShapes() throws {
+        let monthly = GaryxAutomationSchedule.monthly(day: 31, time: "08:45", timezone: "Asia/Shanghai")
+        let monthlyObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(monthly)
+        ) as? [String: Any]
+        XCTAssertEqual(monthlyObject?["kind"] as? String, "monthly")
+        XCTAssertEqual(monthlyObject?["day"] as? Int, 31)
+        XCTAssertEqual(monthlyObject?["time"] as? String, "08:45")
+        XCTAssertEqual(monthlyObject?["timezone"] as? String, "Asia/Shanghai")
+
+        let decodedDaily = try JSONDecoder().decode(
+            GaryxAutomationSchedule.self,
+            from: Data(
+                """
+                {
+                  "kind": "daily",
+                  "time": "09:30",
+                  "weekdays": ["mo", "tu"],
+                  "timezone": "UTC"
+                }
+                """.utf8
+            )
+        )
+        XCTAssertEqual(decodedDaily.kind, .daily)
+        XCTAssertEqual(decodedDaily.time, "09:30")
+        XCTAssertEqual(decodedDaily.weekdays, ["mo", "tu"])
+        XCTAssertEqual(decodedDaily.timezone, "UTC")
+
+        let once = GaryxAutomationSchedule.once(at: "2026-03-01T09:00")
+        let onceObject = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(once)
+        ) as? [String: Any]
+        XCTAssertEqual(onceObject?["kind"] as? String, "once")
+        XCTAssertEqual(onceObject?["at"] as? String, "2026-03-01T09:00")
+    }
+
     func testMacParityAgentTeamAndChannelPayloadsDecodeGatewayShapes() throws {
         let agents = try JSONDecoder().decode(
             GaryxAgentsPage.self,

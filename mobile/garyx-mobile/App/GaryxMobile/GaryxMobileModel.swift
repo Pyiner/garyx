@@ -3534,7 +3534,7 @@ final class GaryxMobileModel: ObservableObject {
         _ automation: GaryxAutomationSummary,
         label: String,
         prompt: String,
-        intervalHours: String,
+        schedule: GaryxAutomationSchedule,
         targetsExistingThread: Bool,
         targetThreadId: String,
         workspacePath: String
@@ -3545,10 +3545,6 @@ final class GaryxMobileModel: ObservableObject {
             ? targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
             : ""
         let nextWorkspacePath = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hours = max(1, Int(intervalHours.trimmingCharacters(in: .whitespacesAndNewlines)) ?? automation.schedule.hours ?? 24)
-        let nextSchedule: GaryxAutomationSchedule? = automation.schedule.kind == .interval
-            ? .interval(hours: hours)
-            : nil
         guard !nextLabel.isEmpty, !nextPrompt.isEmpty else { return false }
         if targetsExistingThread {
             guard !nextTargetThreadId.isEmpty else { return false }
@@ -3564,7 +3560,7 @@ final class GaryxMobileModel: ObservableObject {
                     workspaceDir: nextTargetThreadId.isEmpty ? nextWorkspacePath : nil,
                     targetThreadId: nextTargetThreadId.isEmpty ? nil : nextTargetThreadId,
                     clearsTargetThreadId: nextTargetThreadId.isEmpty,
-                    schedule: nextSchedule
+                    schedule: schedule
                 )
             )
             replaceAutomation(updated)
@@ -4022,7 +4018,7 @@ final class GaryxMobileModel: ObservableObject {
         prompt rawPrompt: String,
         workspacePath rawWorkspacePath: String,
         targetThreadId rawTargetThreadId: String,
-        intervalHours rawIntervalHours: String
+        schedule: GaryxAutomationSchedule
     ) async -> Bool {
         let label = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4030,8 +4026,6 @@ final class GaryxMobileModel: ObservableObject {
         let targetThreadId = rawTargetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !label.isEmpty, !prompt.isEmpty else { return false }
         guard !targetThreadId.isEmpty || !workspace.isEmpty else { return false }
-        let intervalHours = rawIntervalHours.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let hours = Int(intervalHours), hours > 0 else { return false }
         do {
             let automation = try await client().createAutomation(
                 GaryxAutomationCreateRequest(
@@ -4040,7 +4034,7 @@ final class GaryxMobileModel: ObservableObject {
                     agentId: selectedAgentTargetId,
                     workspaceDir: targetThreadId.isEmpty && !workspace.isEmpty ? workspace : nil,
                     targetThreadId: targetThreadId.isEmpty ? nil : targetThreadId,
-                    schedule: .interval(hours: hours),
+                    schedule: schedule,
                     enabled: true
                 )
             )

@@ -154,7 +154,8 @@ requested window.
 
 Schedule flags include `--every-hours <N>`, `--daily-time HH:MM`,
 `--weekday mon`, `--timezone <tz>`, `--once-at <time>`, and
-`--schedule-json <json>`.
+`--schedule-json <json>`. `--schedule-json` also accepts monthly schedules such
+as `{"kind":"monthly","day":24,"time":"08:00","timezone":"Asia/Shanghai"}`.
 
 ## App Database
 

@@ -1264,6 +1264,7 @@ public struct GaryxAutomationSchedule: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, Equatable, Sendable {
         case daily
         case interval
+        case monthly
         case once
     }
 
@@ -1273,21 +1274,30 @@ public struct GaryxAutomationSchedule: Codable, Equatable, Sendable {
     public var timezone: String?
     public var hours: Int?
     public var at: String?
+    public var day: Int?
 
     public static func daily(
         time: String = "09:00",
         weekdays: [String] = ["mo", "tu", "we", "th", "fr"],
         timezone: String = "UTC"
     ) -> Self {
-        Self(kind: .daily, time: time, weekdays: weekdays, timezone: timezone, hours: nil, at: nil)
+        Self(kind: .daily, time: time, weekdays: weekdays, timezone: timezone, hours: nil, at: nil, day: nil)
     }
 
     public static func interval(hours: Int = 24) -> Self {
-        Self(kind: .interval, time: nil, weekdays: [], timezone: nil, hours: max(1, hours), at: nil)
+        Self(kind: .interval, time: nil, weekdays: [], timezone: nil, hours: max(1, hours), at: nil, day: nil)
+    }
+
+    public static func monthly(
+        day: Int = 1,
+        time: String = "09:00",
+        timezone: String = "UTC"
+    ) -> Self {
+        Self(kind: .monthly, time: time, weekdays: [], timezone: timezone, hours: nil, at: nil, day: min(max(day, 1), 31))
     }
 
     public static func once(at: String) -> Self {
-        Self(kind: .once, time: nil, weekdays: [], timezone: nil, hours: nil, at: at)
+        Self(kind: .once, time: nil, weekdays: [], timezone: nil, hours: nil, at: at, day: nil)
     }
 
     public init(
@@ -1296,7 +1306,8 @@ public struct GaryxAutomationSchedule: Codable, Equatable, Sendable {
         weekdays: [String] = [],
         timezone: String? = nil,
         hours: Int? = nil,
-        at: String? = nil
+        at: String? = nil,
+        day: Int? = nil
     ) {
         self.kind = kind
         self.time = time
@@ -1304,6 +1315,7 @@ public struct GaryxAutomationSchedule: Codable, Equatable, Sendable {
         self.timezone = timezone
         self.hours = hours
         self.at = at
+        self.day = day
     }
 
     enum CodingKeys: String, CodingKey {
@@ -1313,6 +1325,7 @@ public struct GaryxAutomationSchedule: Codable, Equatable, Sendable {
         case timezone
         case hours
         case at
+        case day
     }
 
     public init(from decoder: Decoder) throws {
@@ -1323,6 +1336,7 @@ public struct GaryxAutomationSchedule: Codable, Equatable, Sendable {
         timezone = try container.decodeIfPresent(String.self, forKey: .timezone)
         hours = try container.decodeIfPresent(Int.self, forKey: .hours)
         at = try container.decodeIfPresent(String.self, forKey: .at)
+        day = try container.decodeIfPresent(Int.self, forKey: .day)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -1335,6 +1349,10 @@ public struct GaryxAutomationSchedule: Codable, Equatable, Sendable {
             try container.encode(timezone ?? "UTC", forKey: .timezone)
         case .interval:
             try container.encode(max(1, hours ?? 24), forKey: .hours)
+        case .monthly:
+            try container.encode(min(max(day ?? 1, 1), 31), forKey: .day)
+            try container.encode(time ?? "09:00", forKey: .time)
+            try container.encode(timezone ?? "UTC", forKey: .timezone)
         case .once:
             try container.encode(at ?? "", forKey: .at)
         }

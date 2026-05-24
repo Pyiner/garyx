@@ -973,6 +973,11 @@ pub enum AutomationScheduleView {
     Interval {
         hours: u64,
     },
+    Monthly {
+        day: u8,
+        time: String,
+        timezone: String,
+    },
     Once {
         at: String,
     },

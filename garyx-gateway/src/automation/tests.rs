@@ -47,6 +47,32 @@ fn compile_schedule_interval_rejects_overflow_hours() {
 }
 
 #[test]
+fn compile_schedule_monthly_builds_day_of_month_cron() {
+    let schedule = AutomationScheduleView::Monthly {
+        day: 24,
+        time: "08:00".to_owned(),
+        timezone: "Asia/Shanghai".to_owned(),
+    };
+    assert_eq!(
+        compile_schedule(&schedule).unwrap(),
+        CronSchedule::Cron {
+            expr: "0 0 8 24 * *".to_owned(),
+            timezone: Some("Asia/Shanghai".to_owned()),
+        }
+    );
+}
+
+#[test]
+fn compile_schedule_monthly_rejects_invalid_day() {
+    let schedule = AutomationScheduleView::Monthly {
+        day: 0,
+        time: "08:00".to_owned(),
+        timezone: "Asia/Shanghai".to_owned(),
+    };
+    assert!(compile_schedule(&schedule).is_err());
+}
+
+#[test]
 fn compile_schedule_once_accepts_datetime_local() {
     let schedule = AutomationScheduleView::Once {
         at: "2030-05-01T08:30".to_owned(),
@@ -85,6 +111,22 @@ fn infer_schedule_view_from_daily_cron() {
                 "th".to_owned(),
                 "fr".to_owned(),
             ],
+            timezone: "Asia/Shanghai".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn infer_schedule_view_from_monthly_cron() {
+    let schedule = CronSchedule::Cron {
+        expr: "0 0 8 24 * *".to_owned(),
+        timezone: Some("Asia/Shanghai".to_owned()),
+    };
+    assert_eq!(
+        infer_schedule_view(&schedule).unwrap(),
+        AutomationScheduleView::Monthly {
+            day: 24,
+            time: "08:00".to_owned(),
             timezone: "Asia/Shanghai".to_owned(),
         }
     );

@@ -509,6 +509,7 @@ garyx automation list
 garyx automation create --label "Daily triage" --prompt "Summarize repo state" --workspace-dir /path/to/repo --every-hours 24
 garyx automation create --label "Thread check-in" --prompt "Post the scheduled update" --thread-id thread::example --every-hours 24
 garyx automation update <automation-id> --daily-time 09:30 --weekday mon --weekday fri --timezone Asia/Shanghai
+garyx automation update <automation-id> --schedule-json '{"kind":"monthly","day":24,"time":"08:00","timezone":"Asia/Shanghai"}'
 garyx automation update <automation-id> --thread-id thread::example
 garyx automation pause <automation-id>
 garyx automation resume <automation-id>
@@ -522,6 +523,11 @@ to an existing Garyx thread; each scheduled or manual run sends the configured
 prompt into that thread and keeps the transcript in one conversation. When an
 automation is bound to a thread, the thread's workspace is used unless an
 explicit workspace is provided.
+
+Automation schedules can be represented as hourly intervals, daily or weekday
+cron-style runs, one-shot timestamps, or monthly day-of-month runs. The mobile
+app presents these as repeat, date/day, and time controls; monthly schedules run
+on the selected calendar day in the selected timezone.
 
 The MCP surface intentionally does not expose automation management tools.
 

@@ -206,6 +206,14 @@ fn parse_time_hm(raw: &str) -> Result<(u8, u8), String> {
     Ok((hour, minute))
 }
 
+fn parse_month_day(day: u8) -> Result<u8, String> {
+    if (1..=31).contains(&day) {
+        Ok(day)
+    } else {
+        Err("schedule.day must be between 1 and 31".to_owned())
+    }
+}
+
 fn parse_once_input(raw: &str) -> Result<DateTime<Utc>, String> {
     crate::cron::parse_once_timestamp(raw)
         .ok_or_else(|| "schedule.at must use YYYY-MM-DDTHH:MM or ONCE:YYYY-MM-DD HH:MM".to_owned())
@@ -330,6 +338,19 @@ pub(crate) fn compile_schedule(schedule: &AutomationScheduleView) -> Result<Cron
                 interval_secs: hours * 3600,
             })
         }
+        AutomationScheduleView::Monthly {
+            day,
+            time,
+            timezone,
+        } => {
+            let day = parse_month_day(*day)?;
+            let (hour, minute) = parse_time_hm(time)?;
+            let timezone = trim_required(timezone, "schedule.timezone")?;
+            Ok(CronSchedule::Cron {
+                expr: format!("0 {minute} {hour} {day} * *"),
+                timezone: Some(timezone),
+            })
+        }
         AutomationScheduleView::Once { at } => Ok(CronSchedule::Once {
             at: parse_once_input(at)?.to_rfc3339(),
         }),
@@ -374,12 +395,14 @@ pub(crate) fn infer_schedule_view(
             let parts = expr.split_whitespace().collect::<Vec<_>>();
             if parts.len() != 6 {
                 return Err(
-                    "automation cron schedules must use `0 MIN HOUR * * WEEKDAYS`".to_owned(),
+                    "automation cron schedules must use `0 MIN HOUR * * WEEKDAYS` or `0 MIN HOUR DAY * *`"
+                        .to_owned(),
                 );
             }
-            if parts[0] != "0" || parts[3] != "*" || parts[4] != "*" {
+            if parts[0] != "0" || parts[4] != "*" {
                 return Err(
-                    "automation cron schedules must use `0 MIN HOUR * * WEEKDAYS`".to_owned(),
+                    "automation cron schedules must use `0 MIN HOUR * * WEEKDAYS` or `0 MIN HOUR DAY * *`"
+                        .to_owned(),
                 );
             }
             let minute = parts[1]
@@ -391,9 +414,25 @@ pub(crate) fn infer_schedule_view(
             if hour > 23 || minute > 59 {
                 return Err("automation cron time is out of range".to_owned());
             }
-            Ok(AutomationScheduleView::Daily {
+            if parts[3] == "*" {
+                return Ok(AutomationScheduleView::Daily {
+                    time: format!("{hour:02}:{minute:02}"),
+                    weekdays: expand_weekday_expr(parts[5])?,
+                    timezone,
+                });
+            }
+            if parts[5] != "*" {
+                return Err(
+                    "automation monthly cron schedules must use `0 MIN HOUR DAY * *`".to_owned(),
+                );
+            }
+            let day = parts[3]
+                .parse::<u8>()
+                .map_err(|_| "automation cron day is invalid".to_owned())
+                .and_then(parse_month_day)?;
+            Ok(AutomationScheduleView::Monthly {
+                day,
                 time: format!("{hour:02}:{minute:02}"),
-                weekdays: expand_weekday_expr(parts[5])?,
                 timezone,
             })
         }
