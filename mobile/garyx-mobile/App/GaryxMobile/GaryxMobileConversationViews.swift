@@ -253,12 +253,6 @@ struct GaryxConversationHeader: View {
                             Task { await model.deleteSelectedThread() }
                         }
                     }
-                    Button("Refresh", systemImage: "arrow.clockwise") {
-                        Task { await model.loadSelectedThreadHistory() }
-                    }
-                    Button("New Thread", systemImage: "square.and.pencil") {
-                        model.openNewThreadDraft()
-                    }
                 } label: {
                     GaryxToolbarIcon(systemName: "ellipsis")
                 }
