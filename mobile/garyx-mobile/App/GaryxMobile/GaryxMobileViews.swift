@@ -25,6 +25,9 @@ struct GaryxRootView: View {
         .overlay(alignment: .top) {
             GaryxGlobalErrorToastHost(topOffset: 72)
         }
+        .environment(\.garyxOpenSidebar) {
+            model.setSidebarVisible(true)
+        }
         .task {
             #if DEBUG
             guard !model.debugSnapshotActive else { return }
@@ -790,11 +793,10 @@ struct GaryxWorkspacePreviewSection: View {
 
     private var image: UIImage? {
         guard preview.previewKind == "image",
-              let dataBase64 = preview.dataBase64,
-              let data = Data(base64Encoded: dataBase64) else {
+              let dataBase64 = preview.dataBase64 else {
             return nil
         }
-        return UIImage(data: data)
+        return GaryxDataURLImageCache.image(from: dataBase64)
     }
 
     private var previewIconName: String {

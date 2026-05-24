@@ -220,6 +220,7 @@ final class GaryxMobileModel: ObservableObject {
     private struct MessageListSignature: Equatable {
         let count: Int
         let fingerprint: Int
+        let sampled: Bool
     }
 
     private struct TurnRowsCacheKey: Equatable {
@@ -241,7 +242,12 @@ final class GaryxMobileModel: ObservableObject {
     @Published var selectedThread: GaryxThreadSummary?
     @Published var messages: [GaryxMobileMessage] = [] {
         didSet {
-            selectedMessagesSignature = Self.messageListSignature(for: messages)
+            if let pendingSelectedMessagesSignature {
+                selectedMessagesSignature = pendingSelectedMessagesSignature
+                self.pendingSelectedMessagesSignature = nil
+            } else {
+                selectedMessagesSignature = Self.messageListSignature(for: messages)
+            }
             selectedThreadTurnRowsCacheKey = nil
         }
     }
@@ -313,11 +319,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var autoResearchDetailsByRunId: [String: GaryxAutoResearchDetail] = [:]
     @Published var autoResearchIterationsByRunId: [String: [GaryxAutoResearchIteration]] = [:]
     @Published var draftThreadTitle = ""
-    @Published var draftAutomationLabel = ""
-    @Published var draftAutomationPrompt = ""
-    @Published var draftAutomationIntervalHours = "24"
-    @Published var draftAutomationTargetsExistingThread = false
-    @Published var draftAutomationTargetThreadId = ""
     @Published var draftAgentId = ""
     @Published var draftAgentName = ""
     @Published var draftAgentProvider = "codex_app_server"
@@ -365,7 +366,8 @@ final class GaryxMobileModel: ObservableObject {
     private var selectedThreadActivitySignatures: [String: String] = [:]
     private var messagesByThread: [String: [GaryxMobileMessage]] = [:]
     private var messageSignaturesByThread: [String: MessageListSignature] = [:]
-    private var selectedMessagesSignature = MessageListSignature(count: 0, fingerprint: 0)
+    private var selectedMessagesSignature = MessageListSignature(count: 0, fingerprint: 0, sampled: false)
+    private var pendingSelectedMessagesSignature: MessageListSignature?
     private var selectedThreadTurnRowsCacheKey: TurnRowsCacheKey?
     private var selectedThreadTurnRowsCache: [GaryxMobileTurnRow] = []
     private var activeAssistantMessageIdsByThread: [String: String] = [:]
@@ -687,12 +689,14 @@ final class GaryxMobileModel: ObservableObject {
         }
         let nextSignature = Self.messageListSignature(for: adjustedMessages)
         if messageSignaturesByThread[threadId] == nextSignature,
+           !nextSignature.sampled,
            (selectedThread?.id != threadId || selectedMessagesSignature == nextSignature) {
             return
         }
         messagesByThread[threadId] = adjustedMessages
         messageSignaturesByThread[threadId] = nextSignature
         if selectedThread?.id == threadId {
+            pendingSelectedMessagesSignature = nextSignature
             messages = adjustedMessages
         }
     }
@@ -722,6 +726,7 @@ final class GaryxMobileModel: ObservableObject {
         messageSignaturesByThread[threadId] = Self.messageListSignature(for: [])
         activeAssistantMessageIdsByThread[threadId] = nil
         if selectedThread?.id == threadId {
+            pendingSelectedMessagesSignature = messageSignaturesByThread[threadId]
             messages = []
         }
     }
@@ -758,10 +763,11 @@ final class GaryxMobileModel: ObservableObject {
 
     private static func messageListSignature(for messages: [GaryxMobileMessage]) -> MessageListSignature {
         var hasher = Hasher()
+        var sampled = false
         for message in messages {
             hasher.combine(message.id)
             hasher.combine(Self.roleSignature(message.role))
-            hasher.combine(message.text)
+            sampled = Self.combineTextSignature(message.text, into: &hasher) || sampled
             hasher.combine(message.timestamp)
             hasher.combine(message.isStreaming)
             hasher.combine(message.statusText)
@@ -774,7 +780,7 @@ final class GaryxMobileModel: ObservableObject {
                 hasher.combine(attachment.name)
                 hasher.combine(attachment.mediaType)
                 hasher.combine(attachment.path)
-                hasher.combine(attachment.dataUrl)
+                sampled = Self.combineTextSignature(attachment.dataUrl, into: &hasher) || sampled
                 hasher.combine(attachment.remoteUrl)
             }
             if let group = message.toolTraceGroup {
@@ -793,12 +799,37 @@ final class GaryxMobileModel: ObservableObject {
                     hasher.combine(entry.isError)
                     hasher.combine(entry.timestamp)
                     hasher.combine(entry.primaryPathBadge)
-                    hasher.combine(entry.inputText)
-                    hasher.combine(entry.resultText)
+                    sampled = Self.combineTextSignature(entry.inputText, into: &hasher) || sampled
+                    sampled = Self.combineTextSignature(entry.resultText, into: &hasher) || sampled
                 }
             }
         }
-        return MessageListSignature(count: messages.count, fingerprint: hasher.finalize())
+        return MessageListSignature(count: messages.count, fingerprint: hasher.finalize(), sampled: sampled)
+    }
+
+    @discardableResult
+    private static func combineTextSignature(_ value: String?, into hasher: inout Hasher) -> Bool {
+        guard let value else {
+            hasher.combine(-1)
+            return false
+        }
+        return combineTextSignature(value, into: &hasher)
+    }
+
+    @discardableResult
+    private static func combineTextSignature(_ value: String, into hasher: inout Hasher) -> Bool {
+        hasher.combine(value.count)
+        if value.count <= 1_024 {
+            hasher.combine(value)
+            return false
+        }
+        hasher.combine(value.prefix(256))
+        let middleOffset = max(0, (value.count / 2) - 128)
+        let middleStart = value.index(value.startIndex, offsetBy: middleOffset)
+        let middleEnd = value.index(middleStart, offsetBy: min(256, value.distance(from: middleStart, to: value.endIndex)))
+        hasher.combine(value[middleStart..<middleEnd])
+        hasher.combine(value.suffix(256))
+        return true
     }
 
     private static func roleSignature(_ role: GaryxMobileMessage.Role) -> String {
@@ -2117,8 +2148,7 @@ final class GaryxMobileModel: ObservableObject {
             let (page, pinsPage) = try await (threadsPage, threadPinsPage)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             applyPinnedThreadIds(pinsPage.threadIds)
-            updateThreadListPagination(from: page)
-            recentThreadIds = page.threads.map(\.id)
+            applyRecentThreadsPage(page, preservesLoadedPages: silent)
             var nextThreads = page.threads
             let requiredThreadIds = normalizedThreadIds(pinsPage.threadIds + [previousSelectedId])
             nextThreads += await fetchMissingThreadSummaries(
@@ -2127,7 +2157,8 @@ final class GaryxMobileModel: ObservableObject {
                 existingThreadIds: Set(nextThreads.map(\.id))
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            threads = Self.mergedThreadSummaries(nextThreads)
+            let existingThreads = silent ? threads : []
+            threads = Self.mergedThreadSummaries(existingThreads + nextThreads)
             refreshRemoteBusyIdsForVisibleThreads()
             if let previousSelectedId,
                let updatedSelection = threads.first(where: { $0.id == previousSelectedId }) {
@@ -2145,6 +2176,23 @@ final class GaryxMobileModel: ObservableObject {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
+    }
+
+    private func applyRecentThreadsPage(_ page: GaryxRecentThreadsPage, preservesLoadedPages: Bool) {
+        let pageIds = page.threads.map(\.id)
+        let returnedEnd = page.offset + page.count
+        let hasLoadedBeyondHead = preservesLoadedPages
+            && (nextThreadListOffset > returnedEnd || recentThreadIds.count > pageIds.count)
+
+        if hasLoadedBeyondHead {
+            let pageIdSet = Set(pageIds)
+            let existingTail = recentThreadIds.filter { !pageIdSet.contains($0) }
+            recentThreadIds = pageIds + existingTail
+            return
+        }
+
+        updateThreadListPagination(from: page)
+        recentThreadIds = pageIds
     }
 
     @discardableResult
@@ -3948,17 +3996,21 @@ final class GaryxMobileModel: ObservableObject {
             && selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines) == directory
     }
 
-    func createAutomationFromDraft() async -> Bool {
-        let label = draftAutomationLabel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = draftAutomationPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        let workspace = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let targetThreadId = draftAutomationTargetsExistingThread
-            ? draftAutomationTargetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
-            : ""
+    func createAutomation(
+        label rawLabel: String,
+        prompt rawPrompt: String,
+        workspacePath rawWorkspacePath: String,
+        targetThreadId rawTargetThreadId: String,
+        intervalHours rawIntervalHours: String
+    ) async -> Bool {
+        let label = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspace = rawWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetThreadId = rawTargetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !label.isEmpty, !prompt.isEmpty else { return false }
         guard !targetThreadId.isEmpty || !workspace.isEmpty else { return false }
-        let trimmedHours = draftAutomationIntervalHours.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let hours = Int(trimmedHours), hours > 0 else { return false }
+        let intervalHours = rawIntervalHours.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let hours = Int(intervalHours), hours > 0 else { return false }
         do {
             let automation = try await client().createAutomation(
                 GaryxAutomationCreateRequest(
@@ -3971,10 +4023,6 @@ final class GaryxMobileModel: ObservableObject {
                     enabled: true
                 )
             )
-            draftAutomationLabel = ""
-            draftAutomationPrompt = ""
-            draftAutomationTargetThreadId = ""
-            draftAutomationTargetsExistingThread = false
             automations.insert(automation, at: 0)
             activePanel = .automations
             return true

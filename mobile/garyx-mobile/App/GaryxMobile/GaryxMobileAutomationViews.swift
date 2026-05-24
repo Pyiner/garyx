@@ -471,7 +471,7 @@ struct GaryxAutomationCommandButton: View {
                 .font(GaryxFont.footnote(weight: .semibold))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity)
-                .frame(height: 36)
+                .frame(minHeight: 44)
                 .foregroundStyle(foreground)
                 .background(background, in: Capsule())
                 .overlay {
@@ -510,6 +510,7 @@ struct GaryxAutomationCommandButton: View {
 struct GaryxCreateAutomationCard: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var draft = GaryxAutomationDraft()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -525,7 +526,7 @@ struct GaryxCreateAutomationCard: View {
             .padding(.horizontal, 2)
 
             GaryxAutomationFormSection(title: "Target") {
-                Picker("Run In", selection: $model.draftAutomationTargetsExistingThread) {
+                Picker("Run In", selection: $draft.targetsExistingThread) {
                     Text("New Thread").tag(false)
                     Text("Existing Thread").tag(true)
                 }
@@ -535,16 +536,16 @@ struct GaryxCreateAutomationCard: View {
             }
 
             GaryxAutomationFormSection(title: "Prompt") {
-                TextField("Name", text: $model.draftAutomationLabel)
+                TextField("Name", text: $draft.label)
                     .garyxInputStyle()
-                TextField("What should Garyx do?", text: $model.draftAutomationPrompt, axis: .vertical)
+                TextField("What should Garyx do?", text: $draft.prompt, axis: .vertical)
                     .lineLimit(4...10)
                     .garyxInputStyle()
             }
 
             GaryxAutomationFormSection(title: "Schedule") {
                 HStack(spacing: 10) {
-                    TextField("Every", text: $model.draftAutomationIntervalHours)
+                    TextField("Every", text: $draft.intervalHours)
                         .keyboardType(.numberPad)
                         .garyxInputStyle()
                         .frame(maxWidth: 150)
@@ -557,7 +558,13 @@ struct GaryxCreateAutomationCard: View {
 
             Button {
                 Task {
-                    if await model.createAutomationFromDraft() {
+                    if await model.createAutomation(
+                        label: draft.label,
+                        prompt: draft.prompt,
+                        workspacePath: draft.targetsExistingThread ? "" : effectiveWorkspacePath,
+                        targetThreadId: draft.targetsExistingThread ? effectiveThreadId : "",
+                        intervalHours: draft.intervalHours
+                    ) {
                         dismiss()
                     }
                 }
@@ -569,14 +576,14 @@ struct GaryxCreateAutomationCard: View {
             .disabled(!canCreate)
         }
         .onAppear(perform: ensureTargetSelection)
-        .onChange(of: model.draftAutomationTargetsExistingThread) { _, _ in
+        .onChange(of: draft.targetsExistingThread) { _, _ in
             ensureTargetSelection()
         }
     }
 
     @ViewBuilder
     private var createTargetPicker: some View {
-        if model.draftAutomationTargetsExistingThread {
+        if draft.targetsExistingThread {
             if threadOptions.isEmpty {
                 Text("No existing threads loaded")
                     .font(GaryxFont.caption(weight: .semibold))
@@ -617,7 +624,7 @@ struct GaryxCreateAutomationCard: View {
         Binding {
             effectiveWorkspacePath
         } set: { value in
-            model.selectedWorkspacePath = value
+            draft.workspacePath = value
         }
     }
 
@@ -625,61 +632,29 @@ struct GaryxCreateAutomationCard: View {
         Binding {
             effectiveThreadId
         } set: { value in
-            model.draftAutomationTargetThreadId = value
+            draft.targetThreadId = value
             if let thread = model.threads.first(where: { $0.id == value }),
                let workspacePath = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
                !workspacePath.isEmpty {
-                model.selectedWorkspacePath = workspacePath
+                draft.workspacePath = workspacePath
             }
         }
     }
 
     private var effectiveWorkspacePath: String {
-        let selected = model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty, workspacePaths.contains(selected) {
-            return selected
-        }
-        return workspacePaths.first ?? ""
+        draft.effectiveWorkspacePath(workspacePaths: workspacePaths)
     }
 
     private var effectiveThreadId: String {
-        let selected = model.draftAutomationTargetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty, threadOptions.contains(where: { $0.id == selected }) {
-            return selected
-        }
-        return threadOptions.first?.id ?? ""
+        draft.effectiveThreadId(threadOptions: threadOptions)
     }
 
     private var canCreate: Bool {
-        !model.draftAutomationLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !model.draftAutomationPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (model.draftAutomationTargetsExistingThread ? !effectiveThreadId.isEmpty : !effectiveWorkspacePath.isEmpty)
-            && positiveInteger(model.draftAutomationIntervalHours) != nil
+        draft.canSubmit(workspacePaths: workspacePaths, threadOptions: threadOptions)
     }
 
     private func ensureTargetSelection() {
-        if model.draftAutomationTargetsExistingThread {
-            let nextThreadId = effectiveThreadId
-            if model.draftAutomationTargetThreadId != nextThreadId {
-                model.draftAutomationTargetThreadId = nextThreadId
-            }
-            if let thread = model.threads.first(where: { $0.id == nextThreadId }),
-               let workspacePath = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !workspacePath.isEmpty {
-                model.selectedWorkspacePath = workspacePath
-            }
-        } else {
-            let nextSelection = effectiveWorkspacePath
-            if model.selectedWorkspacePath != nextSelection {
-                model.selectedWorkspacePath = nextSelection
-            }
-        }
-    }
-
-    private func positiveInteger(_ value: String) -> Int? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parsed = Int(trimmed), parsed > 0 else { return nil }
-        return parsed
+        draft.ensureTargetSelection(workspacePaths: workspacePaths, threadOptions: threadOptions)
     }
 }
 

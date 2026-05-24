@@ -1,7 +1,17 @@
 import Foundation
 import SwiftUI
 import UIKit
-import WebKit
+
+private struct GaryxOpenSidebarActionKey: EnvironmentKey {
+    static let defaultValue: () -> Void = {}
+}
+
+extension EnvironmentValues {
+    var garyxOpenSidebar: () -> Void {
+        get { self[GaryxOpenSidebarActionKey.self] }
+        set { self[GaryxOpenSidebarActionKey.self] = newValue }
+    }
+}
 
 enum GaryxDataURLImageCache {
     private static let cache: NSCache<NSString, UIImage> = {
@@ -29,11 +39,12 @@ enum GaryxDataURLImageCache {
 }
 
 struct GaryxPanelScaffold<Content: View, Actions: View>: View {
-    @EnvironmentObject private var model: GaryxMobileModel
+    @Environment(\.garyxOpenSidebar) private var openSidebar
 
     let title: String
     let subtitle: String
     let onRefresh: (() async -> Void)?
+    let showsRefreshButton: Bool
     let leadingActionLabel: String?
     let leadingActionSystemName: String
     let leadingAction: (() -> Void)?
@@ -45,6 +56,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         title: String,
         subtitle: String,
         onRefresh: (() async -> Void)? = nil,
+        showsRefreshButton: Bool? = nil,
         leadingActionLabel: String? = nil,
         leadingActionSystemName: String = "chevron.left",
         leadingAction: (() -> Void)? = nil,
@@ -55,6 +67,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
         self.title = title
         self.subtitle = subtitle
         self.onRefresh = onRefresh
+        self.showsRefreshButton = showsRefreshButton ?? (onRefresh != nil)
         self.leadingActionLabel = leadingActionLabel
         self.leadingActionSystemName = leadingActionSystemName
         self.leadingAction = leadingAction
@@ -90,7 +103,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
                         .accessibilityLabel(leadingActionLabel ?? "Back")
                     } else {
                         GaryxSidebarMenuButton {
-                            model.setSidebarVisible(true)
+                            openSidebar()
                         }
                     }
 
@@ -99,7 +112,7 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
 
                     Spacer(minLength: 0)
 
-                    if let onRefresh {
+                    if let onRefresh, showsRefreshButton {
                         Button {
                             Task { await onRefresh() }
                         } label: {
@@ -155,6 +168,7 @@ extension GaryxPanelScaffold where Actions == EmptyView {
         title: String,
         subtitle: String,
         onRefresh: (() async -> Void)? = nil,
+        showsRefreshButton: Bool? = nil,
         leadingActionLabel: String? = nil,
         leadingActionSystemName: String = "chevron.left",
         leadingAction: (() -> Void)? = nil,
@@ -165,6 +179,7 @@ extension GaryxPanelScaffold where Actions == EmptyView {
             title: title,
             subtitle: subtitle,
             onRefresh: onRefresh,
+            showsRefreshButton: showsRefreshButton,
             leadingActionLabel: leadingActionLabel,
             leadingActionSystemName: leadingActionSystemName,
             leadingAction: leadingAction,
@@ -561,9 +576,6 @@ struct GaryxChannelLogoView: View {
                     .resizable()
                     .scaledToFit()
                     .padding(diameter * 0.16)
-            } else if let svgDataUrl {
-                GaryxSVGIconDataURLView(dataURL: svgDataUrl)
-                    .padding(diameter * 0.16)
             } else {
                 Text(fallbackLabel)
                     .font(GaryxFont.system(size: diameter * 0.34, weight: .semibold))
@@ -599,12 +611,6 @@ struct GaryxChannelLogoView: View {
         }
     }
 
-    private var svgDataUrl: String? {
-        let raw = (iconDataUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard raw.lowercased().hasPrefix("data:image/svg+xml") else { return nil }
-        return raw
-    }
-
     private var fallbackLabel: String {
         let source = label.isEmpty ? channel : label
         let words = source
@@ -613,77 +619,6 @@ struct GaryxChannelLogoView: View {
             .split(separator: " ")
         let initials = words.prefix(2).compactMap { $0.first }.map { String($0).uppercased() }.joined()
         return initials.isEmpty ? "B" : initials
-    }
-}
-
-private struct GaryxSVGIconDataURLView: UIViewRepresentable {
-    let dataURL: String
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeUIView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .nonPersistent()
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = false
-        webView.isUserInteractionEnabled = false
-        return webView
-    }
-
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        guard context.coordinator.loadedDataURL != dataURL else { return }
-        context.coordinator.loadedDataURL = dataURL
-        webView.loadHTMLString(Self.html(for: dataURL), baseURL: nil)
-    }
-
-    private static func html(for dataURL: String) -> String {
-        """
-        <!doctype html>
-        <html>
-          <head>
-            <meta name="viewport" content="width=device-width,initial-scale=1">
-            <style>
-              html, body {
-                background: transparent;
-                height: 100%;
-                margin: 0;
-                overflow: hidden;
-                width: 100%;
-              }
-              body {
-                align-items: center;
-                display: flex;
-                justify-content: center;
-              }
-              img {
-                display: block;
-                height: 100%;
-                object-fit: contain;
-                width: 100%;
-              }
-            </style>
-          </head>
-          <body><img alt="" src="\(dataURL.garyxHTMLEscapedAttribute)"></body>
-        </html>
-        """
-    }
-
-    final class Coordinator {
-        var loadedDataURL: String?
-    }
-}
-
-private extension String {
-    var garyxHTMLEscapedAttribute: String {
-        replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
     }
 }
 
@@ -1421,6 +1356,7 @@ struct GaryxPrimaryCompactButtonStyle: ButtonStyle {
             .foregroundStyle(Color(.systemBackground))
             .padding(.vertical, 6)
             .padding(.horizontal, 9)
+            .frame(minHeight: 44)
             .background(Color(.label).opacity(configuration.isPressed ? 0.72 : 1), in: Capsule())
     }
 }
@@ -1444,6 +1380,7 @@ struct GaryxSecondaryButtonStyle: ButtonStyle {
             .foregroundStyle(.primary)
             .padding(.vertical, 6)
             .padding(.horizontal, 9)
+            .frame(minHeight: 44)
             .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .thinMaterial, in: Capsule())
             .opacity(configuration.isPressed ? 0.72 : 1)
     }
@@ -1456,7 +1393,7 @@ struct GaryxMiniIconButtonStyle: ButtonStyle {
         configuration.label
             .font(GaryxFont.system(size: 13, weight: .semibold))
             .foregroundStyle(isPrimary ? Color(.systemBackground) : Color.primary)
-            .frame(width: 28, height: 28)
+            .frame(width: 44, height: 44)
             .background(
                 isPrimary
                     ? Color(.label).opacity(configuration.isPressed ? 0.72 : 1)
@@ -1471,7 +1408,7 @@ struct GaryxIconButtonStyle: ButtonStyle {
         configuration.label
             .font(GaryxFont.system(size: 15, weight: .semibold))
             .foregroundStyle(.primary)
-            .frame(width: 32, height: 32)
+            .frame(width: 44, height: 44)
             .garyxAdaptiveGlass(.regular, isInteractive: true, fallbackMaterial: .thinMaterial, in: Circle())
             .opacity(configuration.isPressed ? 0.72 : 1)
     }

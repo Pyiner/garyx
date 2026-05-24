@@ -79,9 +79,6 @@ struct GaryxThreadSidebar: View {
                     onClose: { closeSidebar() }
                 )
             }
-            .task {
-                await refreshSidebarThreads(silent: true)
-            }
             .task(id: model.sidebarVisible) {
                 await runSilentSidebarRefreshLoop()
             }
@@ -152,7 +149,7 @@ struct GaryxThreadSidebar: View {
 
     private func refreshSidebarThreads(silent: Bool = false) async {
         guard shouldRefreshSidebarThreads else { return }
-        guard !model.isLoadingThreads else { return }
+        guard !model.isLoadingThreads, !model.isLoadingMoreThreads else { return }
         await model.refreshThreads(silent: silent)
     }
 
@@ -261,7 +258,7 @@ struct GaryxSidebarNavigationRow: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
-            .frame(height: 39)
+            .frame(minHeight: 44)
             .background(
                 isSelected ? Color(.tertiarySystemFill).opacity(0.58) : Color.clear,
                 in: RoundedRectangle(cornerRadius: GaryxSidebarMetrics.rowCornerRadius, style: .continuous)
@@ -979,8 +976,9 @@ struct GaryxSidebarThreadRowView: View {
                                 .foregroundStyle(.tertiary)
                                 .rotationEffect(.degrees(-28))
                                 .frame(width: 18, height: 18)
-                                .contentShape(Circle())
                         }
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                         .buttonStyle(.plain)
                         .disabled(onUnpin == nil)
                         .accessibilityLabel("Unpin thread")
@@ -1002,6 +1000,12 @@ struct GaryxSidebarThreadRowView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
+            onSelect?()
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(rowAccessibilityLabel)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
             onSelect?()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1071,6 +1075,20 @@ private struct GaryxSidebarRunningIndicator: View {
 }
 
 private extension GaryxSidebarThreadRowView {
+    var rowAccessibilityLabel: String {
+        [
+            model.title,
+            model.subtitle,
+            model.isPinned ? "Pinned" : nil,
+            model.isRunning ? "Running" : nil,
+        ]
+        .compactMap { value in
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        .joined(separator: ", ")
+    }
+
     var trailingMeta: some View {
         HStack(spacing: 6) {
             if model.isRunning {
@@ -1153,7 +1171,7 @@ struct GaryxSidebarActionPill: View {
             }
             .foregroundStyle(foreground)
             .padding(.horizontal, 16)
-            .frame(height: 42)
+            .frame(minHeight: 44)
             .background(background, in: Capsule())
             .if(style == .glass) { view in
                 view.garyxAdaptiveGlass(.regular, isInteractive: true, in: Capsule())

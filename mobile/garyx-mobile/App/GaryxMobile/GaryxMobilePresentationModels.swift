@@ -41,3 +41,74 @@ struct GaryxSidebarThreadRowPresentation: Equatable {
         return !activeRunId.isEmpty
     }
 }
+
+struct GaryxAutomationDraft: Equatable {
+    var label = ""
+    var prompt = ""
+    var intervalHours = "24"
+    var targetsExistingThread = false
+    var targetThreadId = ""
+    var workspacePath = ""
+
+    var trimmedLabel: String {
+        label.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var trimmedPrompt: String {
+        prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var trimmedWorkspacePath: String {
+        workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var trimmedTargetThreadId: String {
+        targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var parsedIntervalHours: Int? {
+        let trimmed = intervalHours.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let parsed = Int(trimmed), parsed > 0 else { return nil }
+        return parsed
+    }
+
+    func canSubmit(workspacePaths: [String], threadOptions: [GaryxThreadSummary]) -> Bool {
+        guard !trimmedLabel.isEmpty,
+              !trimmedPrompt.isEmpty,
+              parsedIntervalHours != nil else {
+            return false
+        }
+        if targetsExistingThread {
+            return !effectiveThreadId(threadOptions: threadOptions).isEmpty
+        }
+        return !effectiveWorkspacePath(workspacePaths: workspacePaths).isEmpty
+    }
+
+    func effectiveWorkspacePath(workspacePaths: [String]) -> String {
+        if !trimmedWorkspacePath.isEmpty, workspacePaths.contains(trimmedWorkspacePath) {
+            return trimmedWorkspacePath
+        }
+        return workspacePaths.first ?? ""
+    }
+
+    func effectiveThreadId(threadOptions: [GaryxThreadSummary]) -> String {
+        if !trimmedTargetThreadId.isEmpty, threadOptions.contains(where: { $0.id == trimmedTargetThreadId }) {
+            return trimmedTargetThreadId
+        }
+        return threadOptions.first?.id ?? ""
+    }
+
+    mutating func ensureTargetSelection(workspacePaths: [String], threadOptions: [GaryxThreadSummary]) {
+        if targetsExistingThread {
+            let nextThreadId = effectiveThreadId(threadOptions: threadOptions)
+            targetThreadId = nextThreadId
+            if let workspacePath = threadOptions.first(where: { $0.id == nextThreadId })?.workspacePath?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !workspacePath.isEmpty {
+                self.workspacePath = workspacePath
+            }
+        } else {
+            workspacePath = effectiveWorkspacePath(workspacePaths: workspacePaths)
+        }
+    }
+}

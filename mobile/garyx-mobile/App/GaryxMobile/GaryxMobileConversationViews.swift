@@ -994,7 +994,7 @@ struct GaryxMarkdownText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(GaryxMarkdownBlock.blocks(from: text)) { block in
+            ForEach(GaryxMarkdownRenderCache.shared.blocks(from: text)) { block in
                 switch block.kind {
                 case .markdown(let markdown):
                     GaryxMarkdownParagraphView(markdown: markdown, foreground: foreground)
@@ -1014,11 +1014,7 @@ struct GaryxMarkdownText: View {
     }
 
     fileprivate static func attributedString(from markdown: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .full,
-            failurePolicy: .returnPartiallyParsedIfPossible
-        )
-        return (try? AttributedString(markdown: markdown, options: options)) ?? AttributedString(markdown)
+        GaryxMarkdownRenderCache.shared.attributedString(from: markdown)
     }
 }
 
@@ -1206,6 +1202,75 @@ private struct GaryxMarkdownBlock: Identifiable {
             blocks.append(GaryxMarkdownBlock(id: 0, kind: .markdown(text)))
         }
         return blocks
+    }
+}
+
+private final class GaryxMarkdownRenderCache {
+    static let shared = GaryxMarkdownRenderCache()
+
+    private let maxCacheableBlockBytes = 16 * 1024
+    private let maxCacheableAttributedBytes = 8 * 1024
+    private let blockCache: NSCache<NSString, GaryxMarkdownBlockCacheEntry>
+    private let attributedCache: NSCache<NSString, GaryxMarkdownAttributedCacheEntry>
+    private let attributedOptions = AttributedString.MarkdownParsingOptions(
+        interpretedSyntax: .full,
+        failurePolicy: .returnPartiallyParsedIfPossible
+    )
+
+    private init() {
+        let blockCache = NSCache<NSString, GaryxMarkdownBlockCacheEntry>()
+        blockCache.countLimit = 256
+        blockCache.totalCostLimit = 2 * 1024 * 1024
+        self.blockCache = blockCache
+
+        let attributedCache = NSCache<NSString, GaryxMarkdownAttributedCacheEntry>()
+        attributedCache.countLimit = 1_024
+        attributedCache.totalCostLimit = 4 * 1024 * 1024
+        self.attributedCache = attributedCache
+    }
+
+    func blocks(from text: String) -> [GaryxMarkdownBlock] {
+        let byteCount = text.utf8.count
+        guard byteCount <= maxCacheableBlockBytes else {
+            return GaryxMarkdownBlock.blocks(from: text)
+        }
+        let key = NSString(string: text)
+        if let cached = blockCache.object(forKey: key) {
+            return cached.blocks
+        }
+        let blocks = GaryxMarkdownBlock.blocks(from: text)
+        blockCache.setObject(GaryxMarkdownBlockCacheEntry(blocks: blocks), forKey: key, cost: max(1, byteCount))
+        return blocks
+    }
+
+    func attributedString(from markdown: String) -> AttributedString {
+        let byteCount = markdown.utf8.count
+        guard byteCount <= maxCacheableAttributedBytes else {
+            return (try? AttributedString(markdown: markdown, options: attributedOptions)) ?? AttributedString(markdown)
+        }
+        let key = NSString(string: markdown)
+        if let cached = attributedCache.object(forKey: key) {
+            return cached.value
+        }
+        let value = (try? AttributedString(markdown: markdown, options: attributedOptions)) ?? AttributedString(markdown)
+        attributedCache.setObject(GaryxMarkdownAttributedCacheEntry(value: value), forKey: key, cost: max(1, byteCount))
+        return value
+    }
+}
+
+private final class GaryxMarkdownBlockCacheEntry {
+    let blocks: [GaryxMarkdownBlock]
+
+    init(blocks: [GaryxMarkdownBlock]) {
+        self.blocks = blocks
+    }
+}
+
+private final class GaryxMarkdownAttributedCacheEntry {
+    let value: AttributedString
+
+    init(value: AttributedString) {
+        self.value = value
     }
 }
 
