@@ -117,6 +117,11 @@ needs installed-app validation.
   readable and deferential. Toolbar icons should default to monochrome
   `primary` styling; do not turn general navigation/actions blue unless color
   communicates a specific state or destructive/accent action.
+- Mobile glass styling should use Garyx's shared adaptive glass components,
+  backed by Apple's official Liquid Glass APIs when the active Xcode/iOS SDK
+  supports them. Do not introduce third-party glass libraries; keep SDK-gated
+  fallbacks only so local and CI builds remain reproducible until the build
+  toolchain moves to the latest iOS SDK.
 - The mobile thread page top bar is the visual standard for custom top chrome:
   use the same floating glass icon controls, spacing, and compact glass title
   treatment for sibling mobile pages unless a native system navigation bar owns

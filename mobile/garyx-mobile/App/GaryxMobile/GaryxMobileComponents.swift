@@ -1219,6 +1219,100 @@ struct GaryxToolbarIcon: View {
     }
 }
 
+struct GaryxGlassPanel<Content: View>: View {
+    var cornerRadius: CGFloat = 24
+    var fallbackMaterial: Material = .ultraThinMaterial
+    var shadowOpacity: Double = 0.055
+    private let content: () -> Content
+
+    init(
+        cornerRadius: CGFloat = 24,
+        fallbackMaterial: Material = .ultraThinMaterial,
+        shadowOpacity: Double = 0.055,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.cornerRadius = cornerRadius
+        self.fallbackMaterial = fallbackMaterial
+        self.shadowOpacity = shadowOpacity
+        self.content = content
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        content()
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: false,
+                fallbackMaterial: fallbackMaterial,
+                in: shape
+            )
+            .overlay {
+                shape
+                    .stroke(Color.white.opacity(0.34), lineWidth: 0.7)
+            }
+            .overlay {
+                shape
+                    .stroke(Color.primary.opacity(0.055), lineWidth: 1)
+            }
+            .shadow(color: Color.black.opacity(shadowOpacity), radius: 24, x: 0, y: 10)
+    }
+}
+
+struct GaryxGlassSearchField: View {
+    let placeholder: String
+    @Binding var text: String
+
+    init(_ placeholder: String = "Search", text: Binding<String>) {
+        self.placeholder = placeholder
+        self._text = text
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+
+        HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+                .font(GaryxFont.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            TextField(placeholder, text: $text)
+                .font(GaryxFont.callout())
+                .foregroundStyle(.primary)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(GaryxFont.system(size: 15, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .garyxAdaptiveGlass(
+            .regular,
+            isInteractive: true,
+            fallbackMaterial: .ultraThinMaterial,
+            in: shape
+        )
+        .overlay {
+            shape
+                .stroke(Color.white.opacity(0.34), lineWidth: 0.7)
+        }
+        .overlay {
+            shape
+                .stroke(Color.primary.opacity(0.055), lineWidth: 1)
+        }
+    }
+}
+
 struct GaryxSidebarMenuButton: View {
     let action: () -> Void
 

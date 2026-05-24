@@ -954,7 +954,16 @@ enum GaryxSidebarThreadRowDensity {
         case .regular:
             GaryxSidebarMetrics.threadRowMinHeight
         case .compact:
-            42
+            38
+        }
+    }
+
+    var titleWeight: Font.Weight {
+        switch self {
+        case .regular:
+            .medium
+        case .compact:
+            .regular
         }
     }
 
@@ -963,7 +972,7 @@ enum GaryxSidebarThreadRowDensity {
         case .regular:
             isFullBleed ? 10 : 8
         case .compact:
-            6
+            4
         }
     }
 }
@@ -980,7 +989,7 @@ struct GaryxSidebarThreadRowView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(model.title)
-                        .font(GaryxFont.subheadline(weight: .medium))
+                        .font(GaryxFont.subheadline(weight: density.titleWeight))
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .foregroundStyle(.primary)

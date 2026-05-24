@@ -1031,15 +1031,9 @@ struct GaryxAutomationThreadPickerSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Capsule()
-                .fill(Color.secondary.opacity(0.22))
-                .frame(width: 42, height: 5)
-                .padding(.top, 10)
-                .padding(.bottom, 18)
-
             HStack(alignment: .center, spacing: 14) {
                 Text("Choose Thread")
-                    .font(GaryxFont.title2(weight: .semibold))
+                    .font(GaryxFont.title3(weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer(minLength: 0)
                 Button {
@@ -1051,32 +1045,30 @@ struct GaryxAutomationThreadPickerSheet: View {
                 .accessibilityLabel("Close")
             }
             .padding(.horizontal, 22)
-            .padding(.bottom, 14)
+            .padding(.top, 28)
+            .padding(.bottom, 16)
 
-            GaryxAutomationThreadSearchField(text: $searchText)
+            GaryxGlassSearchField("Search threads", text: $searchText)
                 .padding(.horizontal, 22)
                 .padding(.bottom, 16)
 
             ScrollView {
-                VStack(spacing: 0) {
-                    if indexedFilteredThreads.isEmpty {
-                        GaryxAutomationThreadPickerEmptyState(isLoading: isRefreshing)
-                    } else {
-                        ForEach(indexedFilteredThreads) { item in
-                            GaryxAutomationThreadPickerRow(
-                                thread: item.thread,
-                                isSelected: item.thread.id == selectedThreadId,
-                                showsSeparator: item.index < indexedFilteredThreads.count - 1
-                            ) {
-                                selectAndClose(item.thread)
+                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                    VStack(spacing: 0) {
+                        if indexedFilteredThreads.isEmpty {
+                            GaryxAutomationThreadPickerEmptyState(isLoading: isRefreshing)
+                        } else {
+                            ForEach(indexedFilteredThreads) { item in
+                                GaryxAutomationThreadPickerRow(
+                                    thread: item.thread,
+                                    isSelected: item.thread.id == selectedThreadId,
+                                    showsSeparator: item.index < indexedFilteredThreads.count - 1
+                                ) {
+                                    selectAndClose(item.thread)
+                                }
                             }
                         }
                     }
-                }
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 26, style: .continuous)
-                        .stroke(Color.primary.opacity(0.045), lineWidth: 1)
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
@@ -1086,8 +1078,19 @@ struct GaryxAutomationThreadPickerSheet: View {
         .background {
             Rectangle()
                 .fill(.ultraThinMaterial)
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.22),
+                            Color.white.opacity(0.05)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
                 .ignoresSafeArea()
         }
+        .presentationBackground(.ultraThinMaterial)
         .presentationDetents([.fraction(0.93), .large])
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(38)
@@ -1122,7 +1125,7 @@ struct GaryxAutomationThreadPickerSheet: View {
 
     private var recentThreadOptions: [GaryxThreadSummary] {
         var result = garyxAutomationThreadOptions(recentThreads: model.recentThreads, cachedThreads: model.threads)
-        var seen = Set(result.map(\.id))
+        let seen = Set(result.map(\.id))
         if !selectedThreadId.isEmpty,
            !seen.contains(selectedThreadId),
            let selected = model.threads.first(where: { $0.id == selectedThreadId }) {
@@ -1134,40 +1137,6 @@ struct GaryxAutomationThreadPickerSheet: View {
     private func selectAndClose(_ thread: GaryxThreadSummary) {
         onSelect(thread)
         dismiss()
-    }
-}
-
-struct GaryxAutomationThreadSearchField: View {
-    @Binding var text: String
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .font(GaryxFont.system(size: 16, weight: .semibold))
-                .foregroundStyle(.secondary)
-            TextField("Search threads", text: $text)
-                .font(GaryxFont.body())
-                .textInputAutocapitalization(.never)
-                .disableAutocorrection(true)
-            if !text.isEmpty {
-                Button {
-                    text = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(GaryxFont.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.primary.opacity(0.045), lineWidth: 1)
-        }
     }
 }
 
