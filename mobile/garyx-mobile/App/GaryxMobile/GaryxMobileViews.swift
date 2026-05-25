@@ -758,30 +758,7 @@ struct GaryxWorkspacePreviewSection: View {
                     GaryxStatusPill(text: preview.previewKind.capitalized, tone: .muted)
                 }
 
-                if let text = preview.text, !text.isEmpty {
-                    ScrollView([.vertical, .horizontal], showsIndicators: true) {
-                        Text(text)
-                            .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(.primary)
-                            .textSelection(.enabled)
-                            .padding(10)
-                    }
-                    .frame(maxHeight: 240, alignment: .topLeading)
-                    .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                } else if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: 260)
-                        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                } else {
-                    Text(preview.previewKind == "pdf" ? "PDF preview available on desktop." : "No inline preview available.")
-                        .font(GaryxFont.callout())
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
+                GaryxWorkspacePreviewBody(preview: preview)
 
                 HStack(spacing: 8) {
                     Text(garyxFormattedFileSize(preview.size))
@@ -799,14 +776,6 @@ struct GaryxWorkspacePreviewSection: View {
                     .stroke(GaryxTheme.hairline, lineWidth: 1)
             }
         }
-    }
-
-    private var image: UIImage? {
-        guard preview.previewKind == "image",
-              let dataBase64 = preview.dataBase64 else {
-            return nil
-        }
-        return GaryxDataURLImageCache.image(from: dataBase64)
     }
 
     private var previewIconName: String {

@@ -4196,6 +4196,86 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
+    func openLocalFilePreview(_ target: String) async {
+        guard let resolved = GaryxMobileFileLink.previewTarget(
+            fromLink: target,
+            workspacePaths: knownWorkspacePaths
+        ) else {
+            lastError = "Garyx could not resolve this local file for preview."
+            return
+        }
+        await openWorkspaceFilePreview(resolved)
+    }
+
+    func openWorkspacePreviewLink(
+        _ target: String,
+        from preview: GaryxWorkspaceFilePreview
+    ) async {
+        let workspacePaths = knownWorkspacePaths + [preview.workspaceDir]
+        guard let resolved = GaryxMobileFileLink.previewTarget(
+            fromLink: target,
+            workspacePaths: workspacePaths,
+            currentWorkspaceDir: preview.workspaceDir,
+            currentFilePath: preview.path
+        ) else {
+            lastError = "Garyx could not resolve this local file for preview."
+            return
+        }
+        await openWorkspaceFilePreview(resolved)
+    }
+
+    private func openWorkspaceFilePreview(_ target: GaryxMobileWorkspaceFileTarget) async {
+        let workspace = target.workspaceDir.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filePath = target.path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workspace.isEmpty, !filePath.isEmpty else { return }
+
+        let directory = Self.workspaceDirectory(forFilePath: filePath)
+        selectedWorkspacePath = workspace
+        draftWorkspacePath = workspace
+        selectedWorkspaceDirectory = directory
+        workspaceListing = nil
+        workspacePreview = nil
+        workspaceUploadStatus = nil
+        workspaceBotsDrilldownActive = false
+        activePanel = .workspaces
+        setSidebarVisible(false)
+
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let gateway = try client()
+            async let listingResult: GaryxWorkspaceFileListing? = try? gateway.listWorkspaceFiles(
+                workspaceDir: workspace,
+                directoryPath: directory.isEmpty ? nil : directory
+            )
+            let preview = try await gateway.previewWorkspaceFile(
+                workspaceDir: workspace,
+                path: filePath
+            )
+            let listing = await listingResult
+            guard isCurrentWorkspaceRequest(
+                workspace: workspace,
+                directory: directory,
+                runtimeGeneration: runtimeGeneration
+            ) else { return }
+            workspacePreview = preview
+            if let listing {
+                workspaceListing = listing
+            }
+        } catch {
+            guard isCurrentWorkspaceRequest(
+                workspace: workspace,
+                directory: directory,
+                runtimeGeneration: runtimeGeneration
+            ) else { return }
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    private static func workspaceDirectory(forFilePath filePath: String) -> String {
+        let parent = (filePath.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).deletingLastPathComponent
+        return parent == "." ? "" : parent
+    }
+
     func goUpWorkspaceDirectory() async {
         guard !selectedWorkspaceDirectory.isEmpty else { return }
         let parent = (selectedWorkspaceDirectory as NSString).deletingLastPathComponent

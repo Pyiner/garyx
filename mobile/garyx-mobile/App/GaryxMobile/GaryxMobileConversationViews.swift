@@ -832,7 +832,8 @@ struct GaryxMessageBubble: View {
                             foreground: .primary,
                             codeBackground: userCodeBackground,
                             codeBorder: GaryxTheme.hairline,
-                            fillsAvailableWidth: false
+                            fillsAvailableWidth: false,
+                            onFileLinkTap: openMessageFileLink
                         )
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -856,12 +857,21 @@ struct GaryxMessageBubble: View {
                         GaryxThinkingLabel()
                     }
                 } else if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    GaryxMarkdownText(text: displayText, foreground: .primary)
+                    GaryxMarkdownText(
+                        text: displayText,
+                        foreground: .primary,
+                        onFileLinkTap: openMessageFileLink
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         case .system:
-            GaryxMarkdownText(text: displayText, foreground: .secondary, fillsAvailableWidth: false)
+            GaryxMarkdownText(
+                text: displayText,
+                foreground: .secondary,
+                fillsAvailableWidth: false,
+                onFileLinkTap: openMessageFileLink
+            )
                 .font(GaryxFont.footnote())
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -895,6 +905,10 @@ struct GaryxMessageBubble: View {
 
     private var userCodeBackground: Color {
         colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.055)
+    }
+
+    private func openMessageFileLink(_ target: String) {
+        Task { await model.openLocalFilePreview(target) }
     }
 
     @ViewBuilder
@@ -1136,13 +1150,20 @@ struct GaryxMarkdownText: View {
     var codeBackground: Color = GaryxTheme.surface
     var codeBorder: Color = GaryxTheme.hairline
     var fillsAvailableWidth = true
+    var allowsRelativeFileLinks = false
+    var onFileLinkTap: ((String) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(GaryxMarkdownRenderCache.shared.blocks(from: text)) { block in
                 switch block.kind {
                 case .markdown(let markdown):
-                    GaryxMarkdownParagraphView(markdown: markdown, foreground: foreground)
+                    GaryxMarkdownParagraphView(
+                        markdown: markdown,
+                        foreground: foreground,
+                        allowsRelativeFileLinks: allowsRelativeFileLinks,
+                        onFileLinkTap: onFileLinkTap
+                    )
                 case .code(let language, let code):
                     GaryxCodeBlockView(
                         language: language,
@@ -1168,6 +1189,8 @@ struct GaryxMarkdownText: View {
 private struct GaryxMarkdownParagraphView: View {
     let markdown: String
     let foreground: Color
+    var allowsRelativeFileLinks = false
+    var onFileLinkTap: ((String) -> Void)?
 
     private var lines: [String] {
         markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -1189,6 +1212,7 @@ private struct GaryxMarkdownParagraphView: View {
                             .font(GaryxFont.body())
                             .foregroundStyle(foreground)
                             .tint(GaryxTheme.accent)
+                            .environment(\.openURL, openURLAction)
                             .textSelection(.enabled)
                             .lineSpacing(2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1204,6 +1228,7 @@ private struct GaryxMarkdownParagraphView: View {
                             .font(GaryxFont.body())
                             .foregroundStyle(foreground)
                             .tint(GaryxTheme.accent)
+                            .environment(\.openURL, openURLAction)
                             .textSelection(.enabled)
                             .lineSpacing(2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1213,12 +1238,45 @@ private struct GaryxMarkdownParagraphView: View {
                         .font(GaryxFont.body())
                         .foregroundStyle(foreground)
                         .tint(GaryxTheme.accent)
+                        .environment(\.openURL, openURLAction)
                         .textSelection(.enabled)
                         .lineSpacing(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
+    }
+
+    private var openURLAction: OpenURLAction {
+        OpenURLAction { url in
+            guard let onFileLinkTap else { return .systemAction }
+            let target = Self.fileLinkTarget(
+                from: url,
+                allowsRelativeFileLinks: allowsRelativeFileLinks
+            )
+            guard !target.isEmpty else { return .systemAction }
+            onFileLinkTap(target)
+            return .handled
+        }
+    }
+
+    private static func fileLinkTarget(
+        from url: URL,
+        allowsRelativeFileLinks: Bool
+    ) -> String {
+        if let path = GaryxMobileFileLink.localFilePath(from: url) {
+            return path
+        }
+        guard allowsRelativeFileLinks else { return "" }
+
+        let raw = url.relativeString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty,
+              !raw.hasPrefix("#"),
+              !raw.hasPrefix("?"),
+              url.scheme == nil else {
+            return ""
+        }
+        return raw
     }
 
     private static func bulletText(from line: String) -> String? {

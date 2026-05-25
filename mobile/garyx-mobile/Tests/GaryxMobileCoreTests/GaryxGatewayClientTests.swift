@@ -2113,6 +2113,66 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertFalse(GaryxGatewayRetryClassifier.isRetryableStatus(400, idempotent: true))
         XCTAssertFalse(GaryxGatewayRetryClassifier.isRetryableStatus(404, idempotent: true))
     }
+
+    func testMobileFileLinkParsesAbsoluteAndFileURLs() throws {
+        XCTAssertEqual(
+            GaryxMobileFileLink.localFilePath(from: "/workspace/project/docs/page.html?tab=preview#top"),
+            "/workspace/project/docs/page.html"
+        )
+        XCTAssertEqual(
+            GaryxMobileFileLink.localFilePath(from: "file:///workspace/project/docs/My%20File.md"),
+            "/workspace/project/docs/My File.md"
+        )
+        XCTAssertNil(GaryxMobileFileLink.localFilePath(from: "https://example.test/docs/page.html"))
+        XCTAssertNil(GaryxMobileFileLink.localFilePath(from: "docs/page.html"))
+    }
+
+    func testMobileFileLinkResolvesWorkspacePreviewTarget() {
+        let target = GaryxMobileFileLink.previewTarget(
+            forLocalFilePath: "/workspace/project/docs/page.html",
+            workspacePaths: ["/workspace", "/workspace/project"]
+        )
+
+        XCTAssertEqual(
+            target,
+            GaryxMobileWorkspaceFileTarget(
+                workspaceDir: "/workspace/project",
+                path: "docs/page.html"
+            )
+        )
+    }
+
+    func testMobileFileLinkFallsBackToParentDirectoryWorkspace() {
+        let target = GaryxMobileFileLink.previewTarget(
+            forLocalFilePath: "/workspace/standalone/report.html",
+            workspacePaths: []
+        )
+
+        XCTAssertEqual(
+            target,
+            GaryxMobileWorkspaceFileTarget(
+                workspaceDir: "/workspace/standalone",
+                path: "report.html"
+            )
+        )
+    }
+
+    func testMobileFileLinkResolvesRelativeLinksFromWorkspacePreview() {
+        let target = GaryxMobileFileLink.previewTarget(
+            fromLink: "../public/index.html#main",
+            workspacePaths: ["/workspace/project"],
+            currentWorkspaceDir: "/workspace/project",
+            currentFilePath: "docs/notes/readme.md"
+        )
+
+        XCTAssertEqual(
+            target,
+            GaryxMobileWorkspaceFileTarget(
+                workspaceDir: "/workspace/project",
+                path: "docs/public/index.html"
+            )
+        )
+    }
 }
 
 private final class GaryxURLProtocolStub: URLProtocol {
