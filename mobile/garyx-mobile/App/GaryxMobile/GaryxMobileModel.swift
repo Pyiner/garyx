@@ -255,6 +255,7 @@ final class GaryxMobileModel: ObservableObject {
     private var selectedThreadHistoryRequestId: UUID?
     private var completedThreadHistoryHydrationTasks: [String: Task<Void, Never>] = [:]
     private var remoteStateRefreshRequestId: UUID?
+    private var agentTargetsRefreshRequestId: UUID?
     private var nextThreadListOffset = 0
     private var selectedThreadNextHistoryBeforeIndex: Int?
     private var sceneRefreshTask: Task<Void, Never>?
@@ -1843,6 +1844,8 @@ final class GaryxMobileModel: ObservableObject {
         cancelGlobalEventStream()
         cancelActiveSocket()
         isSending = false
+        remoteStateRefreshRequestId = nil
+        agentTargetsRefreshRequestId = nil
         remoteBusyThreadIds = []
         agentTargetsLoadPhase = .idle
         connectionState = .disconnected
@@ -2140,18 +2143,20 @@ final class GaryxMobileModel: ObservableObject {
     func refreshAgentTargets() async {
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
+        let requestId = UUID()
+        agentTargetsRefreshRequestId = requestId
         agentTargetsLoadPhase = .loading
         do {
             let gateway = try client()
             async let agentsResult: [GaryxAgentSummary]? = try? gateway.listAgents()
             async let teamsResult: [GaryxTeamSummary]? = try? gateway.listTeams()
             let (nextAgents, nextTeams) = await (agentsResult, teamsResult)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             if !applyAgentTargets(agents: nextAgents, teams: nextTeams) {
                 agentTargetsLoadPhase = .failed("Agents could not be loaded.")
             }
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             let message = displayMessage(for: error)
             agentTargetsLoadPhase = .failed(message)
             lastError = message
@@ -2163,6 +2168,7 @@ final class GaryxMobileModel: ObservableObject {
         let runtimeGeneration = gatewayRuntimeGeneration
         let requestId = UUID()
         remoteStateRefreshRequestId = requestId
+        agentTargetsRefreshRequestId = requestId
         remoteStateLoadPhase = .loading
         if agentTargets.isEmpty {
             agentTargetsLoadPhase = .loading
@@ -2187,7 +2193,9 @@ final class GaryxMobileModel: ObservableObject {
             let nextAgents = try? await agentsResult
             let nextTeams = try? await teamsResult
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
-            applyAgentTargets(agents: nextAgents, teams: nextTeams)
+            if isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) {
+                applyAgentTargets(agents: nextAgents, teams: nextTeams)
+            }
 
             let nextSkills = try? await skillsResult
             let nextTasksPage = try? await tasksResult
@@ -2236,7 +2244,8 @@ final class GaryxMobileModel: ObservableObject {
                 remoteStateRefreshRequestId: requestId
             )
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
-            if agentTargetsLoadPhase.isLoading {
+            if isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration),
+               agentTargetsLoadPhase.isLoading {
                 agentTargetsLoadPhase = agentTargets.isEmpty
                     ? .failed("Agents could not be loaded.")
                     : .loaded
@@ -2246,7 +2255,8 @@ final class GaryxMobileModel: ObservableObject {
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             let message = displayMessage(for: error)
             remoteStateLoadPhase = .failed(message)
-            if agentTargetsLoadPhase.isLoading {
+            if isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration),
+               agentTargetsLoadPhase.isLoading {
                 agentTargetsLoadPhase = .failed(message)
             }
             lastError = message
@@ -2255,6 +2265,10 @@ final class GaryxMobileModel: ObservableObject {
 
     private func isCurrentRemoteStateRefresh(_ requestId: UUID, runtimeGeneration: UUID) -> Bool {
         runtimeGeneration == gatewayRuntimeGeneration && remoteStateRefreshRequestId == requestId
+    }
+
+    private func isCurrentAgentTargetsRefresh(_ requestId: UUID, runtimeGeneration: UUID) -> Bool {
+        runtimeGeneration == gatewayRuntimeGeneration && agentTargetsRefreshRequestId == requestId
     }
 
     private func applyGatewayRuntimeSettings(_ settings: [String: GaryxJSONValue]) {

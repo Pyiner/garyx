@@ -1,0 +1,514 @@
+import Foundation
+import ImageIO
+import PhotosUI
+import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
+
+private enum GaryxComposerLayout {
+    static let composerCornerRadius: CGFloat = 26
+    static let composerSpacing: CGFloat = 6
+    static let bottomBarSpacing: CGFloat = 12
+    static let bottomBarHorizontalPadding: CGFloat = 8
+    static let bottomBarTopPadding: CGFloat = 2
+    static let bottomBarBottomPadding: CGFloat = 8
+    static let bottomBarIconSide: CGFloat = 22
+    static let inputHorizontalPadding: CGFloat = 16
+    static let inputTopPadding: CGFloat = 12
+    static let inputBottomPadding: CGFloat = 8
+    static let draftFieldIdentity = "garyx-composer-draft-field"
+}
+
+
+struct GaryxComposer: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let isFocused: FocusState<Bool>.Binding
+    @State private var draftText = ""
+    @State private var draftContextVersion = 0
+    @State private var isPickingAttachments = false
+    @State private var isPickingPhotos = false
+    @State private var selectedPhotoItems: [PhotosPickerItem] = []
+
+    private var hasLocalPayload: Bool {
+        !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.composerAttachments.isEmpty
+    }
+
+    private var canSendLocalPayload: Bool {
+        model.canSendComposerPayload(text: draftText, attachments: model.composerAttachments)
+    }
+
+    private var showsSendButton: Bool {
+        !model.isSelectedThreadSending || hasLocalPayload
+    }
+
+    var body: some View {
+        GaryxAdaptiveGlassContainer(spacing: GaryxComposerLayout.composerSpacing) {
+            composerCard
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.clear)
+        .animation(.spring(response: 0.24, dampingFraction: 0.88), value: model.composerAttachments)
+        .fileImporter(
+            isPresented: $isPickingAttachments,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                Task { await model.attachFiles(from: urls) }
+            case .failure(let error):
+                model.lastError = error.localizedDescription
+            }
+        }
+        .photosPicker(
+            isPresented: $isPickingPhotos,
+            selection: $selectedPhotoItems,
+            maxSelectionCount: 10,
+            matching: .images
+        )
+        .onChange(of: selectedPhotoItems) { _, items in
+            guard !items.isEmpty else { return }
+            Task {
+                await attachPhotos(items)
+                selectedPhotoItems = []
+            }
+        }
+        .onAppear {
+            draftContextVersion = model.composerContextVersion
+            draftText = model.draft
+        }
+        .onChange(of: model.composerContextVersion) { _, newValue in
+            draftContextVersion = newValue
+            draftText = model.draft
+        }
+        .onChange(of: model.draft) { _, newValue in
+            guard newValue != draftText else { return }
+            draftText = newValue
+        }
+        .onDisappear {
+            guard draftContextVersion == model.composerContextVersion else { return }
+            if model.draft != draftText {
+                model.draft = draftText
+            }
+        }
+    }
+
+    private var composerCard: some View {
+        VStack(spacing: 0) {
+            if !model.composerAttachments.isEmpty {
+                composerAttachmentsPreview
+            }
+
+            composerInput
+            composerBottomBar
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .garyxAdaptiveGlass(
+            .regular,
+            in: RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
+                .stroke(GaryxTheme.hairline, lineWidth: 1)
+        }
+    }
+
+    private var composerAttachmentsPreview: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.composerAttachments) { attachment in
+                    GaryxAttachmentChip(attachment: attachment)
+                }
+            }
+            .padding(.horizontal, GaryxComposerLayout.inputHorizontalPadding)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+        }
+    }
+
+    private var composerInput: some View {
+        ZStack(alignment: .topLeading) {
+            if draftText.isEmpty {
+                Text(placeholderText)
+                    .font(GaryxFont.subheadline())
+                    .foregroundStyle(Color(.placeholderText))
+                    .padding(.top, 2)
+                    .allowsHitTesting(false)
+            }
+
+            TextField("", text: $draftText, axis: .vertical)
+                .id(GaryxComposerLayout.draftFieldIdentity)
+                .font(GaryxFont.subheadline())
+                .foregroundStyle(.primary)
+                .focused(isFocused)
+                .lineLimit(1...4)
+                .submitLabel(.send)
+                .onSubmit {
+                    Task { await sendLocalDraft() }
+                }
+        }
+        .frame(maxWidth: .infinity, minHeight: 34, alignment: .topLeading)
+        .padding(.horizontal, GaryxComposerLayout.inputHorizontalPadding)
+        .padding(.top, model.composerAttachments.isEmpty ? GaryxComposerLayout.inputTopPadding : 6)
+        .padding(.bottom, GaryxComposerLayout.inputBottomPadding)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            isFocused.wrappedValue = true
+        }
+    }
+
+    private var placeholderText: String {
+        model.selectedThread == nil ? "Ask Garyx anything..." : "Ask for follow-up changes"
+    }
+
+    private var composerBottomBar: some View {
+        HStack(spacing: GaryxComposerLayout.bottomBarSpacing) {
+            addMenuButton
+
+            Spacer(minLength: 0)
+
+            if model.isSelectedThreadSending {
+                Button {
+                    Task { await model.interruptActiveRun() }
+                } label: {
+                    GaryxCircleBadge(
+                        systemName: "stop.fill",
+                        foreground: Color(.systemBackground),
+                        background: Color(.label)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop current run")
+            }
+
+            if showsSendButton {
+                Button {
+                    Task { await sendLocalDraft() }
+                } label: {
+                    GaryxCircleBadge(
+                        systemName: "arrow.up",
+                        foreground: canSendLocalPayload ? Color(.systemBackground) : Color(.systemGray2),
+                        background: canSendLocalPayload ? Color(.label) : Color(.systemGray5)
+                    )
+                }
+                .buttonStyle(.plain)
+                .disabled(!canSendLocalPayload)
+                .accessibilityLabel("Send")
+            }
+        }
+        .padding(.horizontal, GaryxComposerLayout.bottomBarHorizontalPadding)
+        .padding(.top, GaryxComposerLayout.bottomBarTopPadding)
+        .padding(.bottom, GaryxComposerLayout.bottomBarBottomPadding)
+    }
+
+    private var addMenuButton: some View {
+        Menu {
+            if !model.slashCommands.isEmpty {
+                Section("Commands") {
+                    ForEach(Array(model.slashCommands.prefix(6))) { command in
+                        Button {
+                            insertSlashCommand(command)
+                        } label: {
+                            Label(command.name, systemImage: "command")
+                        }
+                    }
+                }
+            }
+
+            if model.selectedThread == nil {
+                Section("New Thread") {
+                    Button {
+                        model.setNewThreadWorkspaceMode("local")
+                    } label: {
+                        Label("Local workspace", systemImage: model.newThreadUsesWorktree ? "laptopcomputer" : "checkmark")
+                    }
+
+                    Button {
+                        model.setNewThreadWorkspaceMode("worktree")
+                    } label: {
+                        Label("Worktree", systemImage: model.newThreadUsesWorktree ? "checkmark" : "arrow.triangle.branch")
+                    }
+                    .disabled(!model.newThreadWorkspaceCanUseWorktree)
+                }
+            }
+
+            Section("Attach") {
+                Button {
+                    DispatchQueue.main.async {
+                        isPickingPhotos = true
+                    }
+                } label: {
+                    Label("Photo library", systemImage: "photo")
+                }
+
+                Button {
+                    DispatchQueue.main.async {
+                        isPickingAttachments = true
+                    }
+                } label: {
+                    Label("File", systemImage: "doc")
+                }
+            }
+
+            if model.selectedThread != nil, !model.mobileBotGroups.isEmpty {
+                Section("Bots") {
+                    if let boundGroup = model.selectedThreadBotGroup,
+                       let configuredBot = configuredBot(for: boundGroup) {
+                        Button(role: .destructive) {
+                            Task { await model.unbindBot(configuredBot) }
+                        } label: {
+                            Label("Unbind \(boundGroup.title)", systemImage: "link.badge.minus")
+                        }
+                    }
+
+                    ForEach(model.mobileBotGroups) { group in
+                        if let configuredBot = configuredBot(for: group) {
+                            Button {
+                                Task { await model.bindBotToSelectedThread(configuredBot) }
+                            } label: {
+                                botMenuLabel(for: group)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(GaryxFont.system(size: 22, weight: .regular))
+                .foregroundStyle(.primary)
+                .frame(
+                    width: GaryxComposerLayout.bottomBarIconSide,
+                    height: GaryxComposerLayout.bottomBarIconSide
+                )
+                .contentShape(Capsule())
+        }
+        .tint(.secondary)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Composer options")
+    }
+
+    private func insertSlashCommand(_ command: GaryxSlashCommand) {
+        let normalizedName = command.name.hasPrefix("/") ? command.name : "/\(command.name)"
+        draftText = normalizedName + " "
+        model.draft = draftText
+        isFocused.wrappedValue = true
+    }
+
+    private func sendLocalDraft() async {
+        guard canSendLocalPayload else { return }
+        let text = draftText
+        draftText = ""
+        let sent = await model.sendDraft(text: text)
+        if !sent {
+            draftText = text
+        }
+    }
+
+    private func configuredBot(for group: GaryxMobileBotGroup) -> GaryxConfiguredBot? {
+        model.configuredBots.first {
+            $0.channel.caseInsensitiveCompare(group.channel) == .orderedSame
+                && $0.accountId == group.accountId
+        }
+    }
+
+    @ViewBuilder
+    private func botMenuLabel(for group: GaryxMobileBotGroup) -> some View {
+        if let image = Self.decodedMenuIcon(from: group.iconDataUrl) {
+            Label {
+                Text(group.title)
+            } icon: {
+                Image(uiImage: image)
+                    .renderingMode(.original)
+                    .resizable()
+                    .scaledToFit()
+            }
+        } else {
+            Label(group.title, systemImage: "bubble.left.and.bubble.right")
+        }
+    }
+
+    private static func decodedMenuIcon(from raw: String?) -> UIImage? {
+        GaryxDataURLImageCache.image(from: raw)
+    }
+
+    private func attachPhotos(_ items: [PhotosPickerItem]) async {
+        var images: [GaryxMobileSelectedImage] = []
+        for (index, item) in items.enumerated() {
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    continue
+                }
+                let contentType = item.supportedContentTypes.first { $0.conforms(to: .image) }
+                    ?? item.supportedContentTypes.first
+                let mediaType = contentType?.preferredMIMEType ?? "image/jpeg"
+                let fileExtension = contentType?.preferredFilenameExtension ?? "jpg"
+                guard let image = await Task.detached(priority: .utility, operation: {
+                    Self.preparedPhotoUpload(
+                        data: data,
+                        index: index,
+                        mediaType: mediaType,
+                        fileExtension: fileExtension
+                    )
+                }).value else {
+                    model.lastError = "That image is too large to prepare for upload."
+                    continue
+                }
+                images.append(image)
+            } catch {
+                model.lastError = error.localizedDescription
+            }
+        }
+        await model.attachImages(images)
+    }
+
+    nonisolated private static func preparedPhotoUpload(
+        data: Data,
+        index: Int,
+        mediaType: String,
+        fileExtension: String
+    ) -> GaryxMobileSelectedImage? {
+        if let jpegData = compressedJPEGPhotoData(from: data) {
+            return GaryxMobileSelectedImage(
+                name: "photo-\(index + 1).jpg",
+                mediaType: "image/jpeg",
+                data: jpegData
+            )
+        }
+        guard data.count <= maxPreparedPhotoBytes else {
+            return nil
+        }
+        let normalizedExtension = fileExtension.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GaryxMobileSelectedImage(
+            name: "photo-\(index + 1).\(normalizedExtension.isEmpty ? "jpg" : normalizedExtension)",
+            mediaType: mediaType.isEmpty ? "image/jpeg" : mediaType,
+            data: data
+        )
+    }
+
+    nonisolated private static func compressedJPEGPhotoData(from data: Data) -> Data? {
+        for maxPixelSize in preparedPhotoPixelSizes {
+            guard let image = thumbnailImage(from: data, maxPixelSize: maxPixelSize) else {
+                continue
+            }
+            for quality in preparedPhotoJPEGQualities {
+                guard let jpegData = image.jpegData(compressionQuality: quality) else {
+                    continue
+                }
+                if jpegData.count <= maxPreparedPhotoBytes {
+                    return jpegData
+                }
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func thumbnailImage(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        if let source = CGImageSourceCreateWithData(data as CFData, options) {
+            let thumbnailOptions: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: Int(maxPixelSize),
+            ]
+            if let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) {
+                return UIImage(cgImage: image)
+            }
+        }
+
+        guard let image = UIImage(data: data) else {
+            return nil
+        }
+        let maxSide = max(image.size.width, image.size.height)
+        guard maxSide > maxPixelSize else {
+            return image
+        }
+        let scale = maxPixelSize / maxSide
+        let targetSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
+    }
+
+    nonisolated private static var preparedPhotoPixelSizes: [CGFloat] {
+        [2048, 1600, 1280, 1024]
+    }
+
+    nonisolated private static var preparedPhotoJPEGQualities: [CGFloat] {
+        [0.82, 0.72, 0.62, 0.52, 0.42, 0.34]
+    }
+
+    nonisolated private static var maxPreparedPhotoBytes: Int {
+        1_350_000
+    }
+}
+
+struct GaryxAttachmentChip: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let attachment: GaryxMobileComposerAttachment
+
+    var body: some View {
+        if attachment.kind == "image", let thumbnail = decodedThumbnail {
+            imageChip(thumbnail: thumbnail)
+        } else {
+            fileChip
+        }
+    }
+
+    private func imageChip(thumbnail: UIImage) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Image(uiImage: thumbnail)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+
+            Button {
+                model.removeComposerAttachment(attachment)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(GaryxFont.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color.white)
+                    .padding(4)
+                    .background(Color.black.opacity(0.65), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove attachment")
+            .padding(4)
+        }
+    }
+
+    private var fileChip: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "doc")
+                .font(GaryxFont.caption(weight: .semibold))
+            Text(attachment.name)
+                .font(GaryxFont.caption(weight: .semibold))
+                .lineLimit(1)
+            Button {
+                model.removeComposerAttachment(attachment)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(GaryxFont.caption(weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove attachment")
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+    }
+
+    private var decodedThumbnail: UIImage? {
+        GaryxDataURLImageCache.image(from: attachment.previewDataUrl)
+    }
+}

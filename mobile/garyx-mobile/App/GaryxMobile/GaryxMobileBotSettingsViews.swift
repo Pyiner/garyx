@@ -66,7 +66,7 @@ struct GaryxConfiguredBotConfigRow: View {
     @State private var showsDeleteConfirmation = false
 
     var body: some View {
-        GaryxSwipeActionRow(actions: actions) {
+        GaryxRowActionMenu(actions: actions) {
             Button {
                 showsEditForm = true
             } label: {
@@ -116,19 +116,19 @@ struct GaryxConfiguredBotConfigRow: View {
         }
     }
 
-    private var actions: [GaryxSwipeAction] {
+    private var actions: [GaryxRowAction] {
         [
-            GaryxSwipeAction(
+            GaryxRowAction(
                 title: bot.enabled ? "Disable" : "Enable",
                 systemImage: bot.enabled ? "pause.fill" : "play.fill",
                 tone: .accent
             ) {
                 Task { await model.setConfiguredBotAccountEnabled(bot, enabled: !bot.enabled) }
             },
-            GaryxSwipeAction(title: "Edit", systemImage: "pencil") {
+            GaryxRowAction(title: "Edit", systemImage: "pencil") {
                 showsEditForm = true
             },
-            GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
+            GaryxRowAction(title: "Delete", systemImage: "trash", tone: .destructive) {
                 showsDeleteConfirmation = true
             },
         ]
