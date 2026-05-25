@@ -3557,12 +3557,7 @@ struct GaryxBotsView: View {
     }
 
     private var subtitle: String {
-        let groups = model.mobileBotGroups
-        let endpointCount = groups.reduce(0) { $0 + $1.endpointCount }
-        guard endpointCount > 0 else {
-            return "\(groups.count) bots"
-        }
-        return "\(groups.count) bots · \(endpointCount) endpoints"
+        "\(model.configuredBots.count) configured"
     }
 }
 
@@ -3570,9 +3565,9 @@ struct GaryxBotsContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        let groups = model.mobileBotGroups
+        let bots = sortedConfiguredBots
         VStack(alignment: .leading, spacing: 10) {
-            if groups.isEmpty {
+            if bots.isEmpty {
                 if !model.isLoadingRemoteState {
                     GaryxEmptyPanelView(
                         icon: "bubble.left.and.bubble.right",
@@ -3583,13 +3578,9 @@ struct GaryxBotsContent: View {
             } else {
                 GaryxSectionBlock(title: "Bots") {
                     GaryxCompactListGroup {
-                        ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                            GaryxBotGroupRow(group: group)
-                            ForEach(sortedEndpoints(for: group)) { endpoint in
-                                GaryxCompactRowDivider()
-                                GaryxBotEndpointRow(endpoint: endpoint)
-                            }
-                            if index < groups.count - 1 {
+                        ForEach(Array(bots.enumerated()), id: \.element.id) { index, bot in
+                            GaryxConfiguredBotConfigRow(bot: bot)
+                            if index < bots.count - 1 {
                                 GaryxCompactGroupDivider()
                             }
                         }
@@ -3599,39 +3590,42 @@ struct GaryxBotsContent: View {
         }
     }
 
-    private func sortedEndpoints(for group: GaryxMobileBotGroup) -> [GaryxChannelEndpoint] {
-        group.endpoints.sorted { lhs, rhs in
-            let labelOrder = lhs.displayLabel.localizedCaseInsensitiveCompare(rhs.displayLabel)
+    private var sortedConfiguredBots: [GaryxConfiguredBot] {
+        model.configuredBots.sorted { lhs, rhs in
+            let labelOrder = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
             if labelOrder != .orderedSame {
                 return labelOrder == .orderedAscending
             }
-            return lhs.endpointKey.localizedCaseInsensitiveCompare(rhs.endpointKey) == .orderedAscending
+            let channelOrder = lhs.channel.localizedCaseInsensitiveCompare(rhs.channel)
+            if channelOrder != .orderedSame {
+                return channelOrder == .orderedAscending
+            }
+            return lhs.accountId.localizedCaseInsensitiveCompare(rhs.accountId) == .orderedAscending
         }
     }
 }
 
-struct GaryxBotGroupRow: View {
+struct GaryxConfiguredBotConfigRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    let group: GaryxMobileBotGroup
-    @State private var showsAccountActions = false
+    let bot: GaryxConfiguredBot
     @State private var showsDeleteConfirmation = false
 
     var body: some View {
         GaryxSwipeActionRow(actions: swipeActions) {
             HStack(alignment: .center, spacing: 10) {
                 GaryxChannelLogoView(
-                    channel: group.channel,
-                    label: group.title,
-                    iconDataUrl: group.iconDataUrl,
+                    channel: bot.channel,
+                    label: bot.displayName,
+                    iconDataUrl: iconDataUrl,
                     diameter: 28
                 )
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(group.title)
+                    Text(bot.displayName)
                         .font(GaryxFont.subheadline(weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Text(group.compactDetailLine)
+                    Text(detailLine)
                         .font(GaryxFont.caption())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -3640,32 +3634,14 @@ struct GaryxBotGroupRow: View {
 
                 Spacer(minLength: 6)
 
-                if group.endpointCount > 0 {
-                    Text("\(group.boundEndpointCount)/\(group.endpointCount)")
-                        .font(GaryxFont.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(Color(.tertiarySystemFill), in: Capsule())
-                        .accessibilityLabel("\(group.boundEndpointCount) of \(group.endpointCount) endpoints linked")
-                }
+                GaryxStatusPill(text: bot.enabled ? "Enabled" : "Paused", tone: bot.enabled ? .good : .muted)
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 8)
         }
-        .confirmationDialog("Bot Actions", isPresented: $showsAccountActions, titleVisibility: .visible) {
-            if configuredBot != nil {
-                Button("Delete", systemImage: "trash", role: .destructive) {
-                    showsDeleteConfirmation = true
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
         .confirmationDialog("Delete bot account?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
-                if let configuredBot {
-                    Task { await model.deleteConfiguredBotAccount(configuredBot) }
-                }
+                Task { await model.deleteConfiguredBotAccount(bot) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -3675,232 +3651,91 @@ struct GaryxBotGroupRow: View {
 
     private var swipeActions: [GaryxSwipeAction] {
         var actions: [GaryxSwipeAction] = []
-        let rootBehavior = group.rootBehavior.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let mainThreadId = group.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rootBehavior = bot.rootBehavior.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let mainThreadId = bot.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !mainThreadId.isEmpty || rootBehavior != "expand_only" {
             actions.append(
                 GaryxSwipeAction(title: "Open", systemImage: "arrow.up.right", tone: .accent) {
-                    Task { await model.openBotGroup(group) }
+                    Task { await model.openBotGroup(botGroup) }
                 }
             )
         }
-        if let configuredBot {
-            if model.selectedThread != nil {
-                actions.append(
-                    GaryxSwipeAction(title: "Bind", systemImage: "link") {
-                        Task { await model.bindBotToSelectedThread(configuredBot) }
-                    }
-                )
-            }
-            if !mainThreadId.isEmpty {
-                actions.append(
-                    GaryxSwipeAction(title: "Unbind", systemImage: "link.badge.minus") {
-                        Task { await model.unbindBot(configuredBot) }
-                    }
-                )
-            }
+        if model.selectedThread != nil {
             actions.append(
-                GaryxSwipeAction(title: "More", systemImage: "ellipsis.circle") {
-                    showsAccountActions = true
+                GaryxSwipeAction(title: "Bind", systemImage: "link") {
+                    Task { await model.bindBotToSelectedThread(bot) }
                 }
             )
         }
+        if !mainThreadId.isEmpty {
+            actions.append(
+                GaryxSwipeAction(title: "Unbind", systemImage: "link.badge.minus") {
+                    Task { await model.unbindBot(bot) }
+                }
+            )
+        }
+        actions.append(
+            GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
+                showsDeleteConfirmation = true
+            }
+        )
         return actions
     }
 
-    private var configuredBot: GaryxConfiguredBot? {
-        model.configuredBots.first {
-            $0.channel.caseInsensitiveCompare(group.channel) == .orderedSame
-                && $0.accountId == group.accountId
+    private var detailLine: String {
+        let workspace = bot.workspaceDir?.garyxLastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let agent = bot.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let base = "\(garyxConfiguredBotChannelDisplayName(bot.channel)) Bot · \(bot.accountId)"
+        if !workspace.isEmpty {
+            return "\(base) · \(workspace)"
         }
+        if !agent.isEmpty {
+            return "\(base) · \(agent)"
+        }
+        return base
+    }
+
+    private var iconDataUrl: String? {
+        GaryxChannelIconResolver.iconDataUrl(for: bot.channel, plugins: model.channelPlugins)
+    }
+
+    private var botGroup: GaryxMobileBotGroup {
+        GaryxMobileBotGroup(
+            id: "\(bot.channel)::\(bot.accountId)",
+            channel: bot.channel,
+            accountId: bot.accountId,
+            title: bot.displayName,
+            subtitle: "\(garyxConfiguredBotChannelDisplayName(bot.channel)) Bot · \(bot.accountId)",
+            agentId: bot.agentId,
+            rootBehavior: bot.rootBehavior,
+            status: bot.enabled ? "idle" : "disabled",
+            endpointCount: 0,
+            boundEndpointCount: 0,
+            workspaceDir: bot.workspaceDir,
+            mainThreadId: bot.mainThreadId,
+            defaultOpenThreadId: bot.defaultOpenThreadId ?? bot.mainThreadId,
+            endpoints: [],
+            conversationNodes: [],
+            iconDataUrl: iconDataUrl
+        )
     }
 }
 
-struct GaryxBotEndpointRow: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    let endpoint: GaryxChannelEndpoint
-    @State private var showsBindConfirmation = false
-
-    var body: some View {
-        GaryxSwipeActionRow(actions: endpointActions) {
-            HStack(alignment: .center, spacing: 10) {
-                Image(systemName: endpointIconName)
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 26, height: 26)
-                    .background(Color(.tertiarySystemFill), in: Circle())
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(endpointTitle)
-                        .font(GaryxFont.subheadline(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(endpointDetail)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer(minLength: 6)
-
-                GaryxStatusPill(text: statusText, tone: statusTone)
-                    .padding(.leading, 12)
-            }
-            .padding(.leading, 34)
-            .padding(.trailing, 9)
-            .padding(.vertical, 8)
-        }
-        .confirmationDialog("Bind endpoint?", isPresented: $showsBindConfirmation, titleVisibility: .visible) {
-            Button("Bind to \(selectedThreadTitle)") {
-                Task { await model.bindEndpointToSelectedThread(endpoint) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("\(endpointTitle) will be linked to \(selectedThreadTitle).")
-        }
-    }
-
-    private var endpointActions: [GaryxSwipeAction] {
-        var actions: [GaryxSwipeAction] = []
-        let threadId = boundThreadId
-        if !threadId.isEmpty {
-            actions.append(
-                GaryxSwipeAction(title: "Open", systemImage: "arrow.up.right", tone: .accent) {
-                    Task { await model.openBotThread(threadId) }
-                }
-            )
-        }
-        if let selectedThreadId, selectedThreadId != threadId {
-            actions.append(
-                GaryxSwipeAction(title: "Bind", systemImage: "link") {
-                    showsBindConfirmation = true
-                }
-            )
-        }
-        if !threadId.isEmpty {
-            actions.append(
-                GaryxSwipeAction(title: "Detach", systemImage: "link.badge.minus", tone: .warning) {
-                    Task { await model.detachEndpoint(endpoint) }
-                }
-            )
-        }
-        return actions
-    }
-
-    private var endpointTitle: String {
-        firstHumanLabel(endpoint.displayLabel, endpoint.conversationLabel, endpoint.threadLabel)
-            ?? friendlyEndpointFallback
-    }
-
-    private var endpointDetail: String {
-        if !boundThreadId.isEmpty {
-            return "Linked · \(firstHumanLabel(endpoint.threadLabel, endpoint.conversationLabel) ?? friendlyEndpointFallback)"
-        }
-        return "Unlinked · \(firstHumanLabel(endpoint.conversationLabel) ?? friendlyEndpointFallback)"
-    }
-
-    private var boundThreadId: String {
-        endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
-    private var selectedThreadId: String? {
-        let threadId = model.selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return threadId.isEmpty ? nil : threadId
-    }
-
-    private var selectedThreadTitle: String {
-        firstNonEmpty(model.selectedThread?.title, selectedThreadId, "selected thread")
-    }
-
-    private var statusText: String {
-        boundThreadId.isEmpty ? "Unlinked" : "Linked"
-    }
-
-    private var statusTone: GaryxStatusPill.Tone {
-        boundThreadId.isEmpty ? .muted : .good
-    }
-
-    private var conversationKindLabel: String {
-        let kind = endpoint.conversationKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if kind.contains("group") || kind.contains("room") {
-            return "Group chat"
-        }
-        if kind.contains("direct") || kind.contains("private") || kind.contains("dm") {
-            return "Direct chat"
-        }
-        if kind.contains("channel") {
-            return "Channel"
-        }
-        return kind.isEmpty ? "" : kind.capitalized
-    }
-
-    private var channelLabel: String {
-        let channel = endpoint.channel.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !channel.isEmpty else { return "" }
-        switch channel.lowercased() {
-        case "api":
-            return "API"
-        case "telegram":
-            return "Telegram"
-        case "discord":
-            return "Discord"
-        default:
-            return channel.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
-
-    private var friendlyEndpointFallback: String {
-        let kind = conversationKindLabel
-        if !kind.isEmpty {
-            return "\(channelLabel.isEmpty ? "Channel" : channelLabel) \(kind.lowercased())"
-        }
-        return channelLabel.isEmpty ? "Endpoint" : channelLabel
-    }
-
-    private var endpointIconName: String {
-        let kind = endpoint.conversationKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if kind.contains("group") || kind.contains("room") || kind.contains("channel") {
-            return "person.2.fill"
-        }
-        if kind.contains("direct") || kind.contains("private") || kind.contains("dm") {
-            return "person.fill"
-        }
-        return "bubble.left.fill"
-    }
-
-    private func firstNonEmpty(_ values: String?...) -> String {
-        for value in values {
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !trimmed.isEmpty {
-                return trimmed
-            }
-        }
-        return "Endpoint"
-    }
-
-    private func firstHumanLabel(_ values: String?...) -> String? {
-        for value in values {
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !trimmed.isEmpty, !isTechnicalEndpointLabel(trimmed) {
-                return trimmed
-            }
-        }
-        return nil
-    }
-
-    private func isTechnicalEndpointLabel(_ value: String) -> Bool {
-        let lowercased = value.lowercased()
-        if lowercased.hasPrefix("thread-") || lowercased.contains("::") {
-            return true
-        }
-        if lowercased.contains("/") {
-            return value.rangeOfCharacter(from: .decimalDigits) != nil
-        }
-        if lowercased.contains("...") {
-            return value.rangeOfCharacter(from: .decimalDigits) != nil
-        }
-        return false
+private func garyxConfiguredBotChannelDisplayName(_ channel: String) -> String {
+    let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines)
+    switch normalized.lowercased() {
+    case "telegram":
+        return "Telegram"
+    case "feishu":
+        return "Feishu"
+    case "weixin":
+        return "Weixin"
+    case "discord":
+        return "Discord"
+    case "api":
+        return "API"
+    default:
+        return normalized.isEmpty ? "Channel" : normalized
     }
 }
 
@@ -4207,7 +4042,7 @@ struct GaryxSettingsTabLinkRow: View {
         case .provider:
             model.providerModelsByType.isEmpty ? "Model providers" : "\(model.providerModelsByType.count) provider types"
         case .channels:
-            "\(model.configuredBots.count) bots / \(model.channelEndpoints.count) endpoints"
+            "\(model.configuredBots.count) configured bots"
         case .commands:
             "\(model.slashCommands.count) slash commands"
         case .mcp:

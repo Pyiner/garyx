@@ -116,7 +116,7 @@ needs installed-app validation.
   sidebar.
 - Mobile Garyx management pages should use native iOS patterns: grouped lists,
   compact rows, section headers, top navigation actions, segmented controls
-  where a page has two peer categories, and left-swipe row actions for
+  where a page has two peer categories, and row-level ellipsis actions for
   secondary actions.
 - Mobile chrome should follow current Apple Liquid Glass direction where
   available: navigation bars, bottom bars, and transient icon controls should
@@ -133,6 +133,9 @@ needs installed-app validation.
   use the same floating glass icon controls, spacing, and compact glass title
   treatment for sibling mobile pages unless a native system navigation bar owns
   that surface.
+- Mobile custom top chrome titles should be single-line only. Do not render
+  dynamic counts, subtitles, or secondary metadata as a second line inside the
+  glass title capsule; put that information in page content when needed.
 - Mobile page backgrounds should stay near-white and integrated rather than
   heavy grouped gray. Avoid strong gray-background / white-card contrast on
   management pages; content rows can sit directly on the page background and use
@@ -140,8 +143,9 @@ needs installed-app validation.
   floating controls and navigation chrome, not repeated content rows.
 - Do not port desktop management cards or exposed action button bars into the
   mobile app. Actions such as edit, delete, enable, pause, run, and detach
-  should usually live behind row swipe actions unless they are the primary
-  action for the current screen.
+  should usually live behind each row's ellipsis glass action menu unless they
+  are the primary action for the current screen. Do not use item left-swipe
+  actions; horizontal swipes are reserved for navigation/sidebar gestures.
 - Agent and team rows should use the same avatar data as the Mac app when
   available, with compact circular fallbacks rather than generic list icons.
 - Channel and bot rows should use gateway-provided channel icon data first.
@@ -174,8 +178,8 @@ needs installed-app validation.
   `Workspace & Bots` sibling row in the sidebar, not inside the Automation page.
   Do not put workspace or bot drilldowns back into the root thread list.
 - Mobile Automation rows should be plain tappable rows without leading icons or
-  left-swipe actions. Tapping an automation opens its edit/detail page, where
-  run once, edit fields, pause/resume, and delete actions live.
+  left-swipe actions. Tapping an automation opens its edit/detail page; list-row
+  secondary actions live behind the row's ellipsis glass action menu.
 - Mobile Automation existing-thread selectors should open a large bottom sheet
   backed by recent threads with search. Do not use compact menu pickers for
   choosing a target thread.
