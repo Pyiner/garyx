@@ -35,22 +35,28 @@ struct GaryxRecentThreadsProvider: TimelineProvider {
 struct GaryxRecentThreadsWidgetView: View {
     let entry: GaryxRecentThreadsEntry
 
+    @Environment(\.widgetFamily) private var widgetFamily
+
     private var threads: [GaryxMobileWidgetThread] {
         Array(entry.snapshot.threads.prefix(GaryxMobileWidgetStore.threadLimit))
     }
 
+    private var metrics: GaryxRecentThreadsWidgetMetrics {
+        GaryxRecentThreadsWidgetMetrics(family: widgetFamily)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: metrics.headerToListSpacing) {
             HStack(spacing: 6) {
                 Image(systemName: "bubble.left.and.text.bubble.right.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: metrics.headerIconSize, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text("Gary X")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: metrics.headerFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer(minLength: 6)
                 Text("Recent")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: metrics.headerBadgeFontSize, weight: .medium))
                     .foregroundStyle(.secondary)
             }
 
@@ -64,27 +70,74 @@ struct GaryxRecentThreadsWidgetView: View {
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             } else {
-                VStack(spacing: 5) {
+                VStack(spacing: metrics.rowSpacing) {
                     ForEach(threads) { thread in
                         if let url = GaryxMobileThreadLink.make(threadId: thread.id) {
                             Link(destination: url) {
-                                GaryxRecentThreadWidgetRow(thread: thread)
+                                GaryxRecentThreadWidgetRow(thread: thread, metrics: metrics)
                             }
                         } else {
-                            GaryxRecentThreadWidgetRow(thread: thread)
+                            GaryxRecentThreadWidgetRow(thread: thread, metrics: metrics)
                         }
                     }
                 }
             }
         }
-        .padding(14)
+        .padding(metrics.contentPadding)
         .containerBackground(.background, for: .widget)
         .widgetURL(threads.first.flatMap { GaryxMobileThreadLink.make(threadId: $0.id) })
     }
 }
 
+private struct GaryxRecentThreadsWidgetMetrics {
+    let contentPadding: CGFloat
+    let headerToListSpacing: CGFloat
+    let headerIconSize: CGFloat
+    let headerFontSize: CGFloat
+    let headerBadgeFontSize: CGFloat
+    let rowSpacing: CGFloat
+    let rowMinHeight: CGFloat
+    let rowDotSize: CGFloat
+    let rowTitleFontSize: CGFloat
+    let rowWorkspaceFontSize: CGFloat
+    let rowWorkspaceSpacing: CGFloat
+    let rowShowsWorkspace: Bool
+
+    init(family: WidgetFamily) {
+        switch family {
+        case .systemMedium:
+            contentPadding = 12
+            headerToListSpacing = 7
+            headerIconSize = 13
+            headerFontSize = 13
+            headerBadgeFontSize = 10
+            rowSpacing = 2
+            rowMinHeight = 19
+            rowDotSize = 5
+            rowTitleFontSize = 11
+            rowWorkspaceFontSize = 9
+            rowWorkspaceSpacing = 0
+            rowShowsWorkspace = false
+        default:
+            contentPadding = 14
+            headerToListSpacing = 8
+            headerIconSize = 14
+            headerFontSize = 14
+            headerBadgeFontSize = 11
+            rowSpacing = 5
+            rowMinHeight = 22
+            rowDotSize = 6
+            rowTitleFontSize = 12
+            rowWorkspaceFontSize = 10
+            rowWorkspaceSpacing = 1
+            rowShowsWorkspace = true
+        }
+    }
+}
+
 private struct GaryxRecentThreadWidgetRow: View {
     let thread: GaryxMobileWidgetThread
+    let metrics: GaryxRecentThreadsWidgetMetrics
 
     private var isRunning: Bool {
         let activeRun = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -96,17 +149,17 @@ private struct GaryxRecentThreadWidgetRow: View {
         HStack(spacing: 7) {
             Circle()
                 .fill(isRunning ? Color.accentColor : Color.secondary.opacity(0.4))
-                .frame(width: 6, height: 6)
+                .frame(width: metrics.rowDotSize, height: metrics.rowDotSize)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: metrics.rowWorkspaceSpacing) {
                 Text(thread.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: metrics.rowTitleFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                if !thread.workspaceName.isEmpty {
+                if metrics.rowShowsWorkspace, !thread.workspaceName.isEmpty {
                     Text(thread.workspaceName)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: metrics.rowWorkspaceFontSize, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -118,7 +171,7 @@ private struct GaryxRecentThreadWidgetRow: View {
                 .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.tertiary)
         }
-        .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: metrics.rowMinHeight, alignment: .leading)
     }
 }
 
