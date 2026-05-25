@@ -1032,6 +1032,62 @@ struct GaryxAppLogo: View {
     }
 }
 
+struct GaryxIonicLoader: View {
+    var text: String = "Garyx"
+    var fontSize: CGFloat = 84
+    var isAnimating: Bool = true
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !isAnimating)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            let cycle: Double = 2.6
+            let raw = (t / cycle).truncatingRemainder(dividingBy: 1.0)
+            let sweep = CGFloat(raw)
+            let bob = CGFloat(sin(t * .pi / cycle))
+
+            let baseFont = Font.system(size: fontSize, weight: .black, design: .rounded)
+
+            ZStack {
+                Text(text)
+                    .font(baseFont)
+                    .tracking(-2)
+                    .foregroundStyle(
+                        AngularGradient(
+                            gradient: Gradient(colors: [
+                                Color(red: 0.42, green: 0.55, blue: 1.0),
+                                Color(red: 0.65, green: 0.40, blue: 1.0),
+                                Color(red: 0.30, green: 0.85, blue: 1.0),
+                                Color(red: 0.42, green: 0.55, blue: 1.0),
+                            ]),
+                            center: .center,
+                            angle: .degrees(Double(sweep) * 360.0)
+                        )
+                    )
+                    .blur(radius: 26)
+                    .opacity(0.55 + Double(abs(bob)) * 0.12)
+
+                Text(text)
+                    .font(baseFont)
+                    .tracking(-2)
+                    .foregroundStyle(
+                        LinearGradient(
+                            stops: [
+                                .init(color: Color(.label).opacity(0.92), location: 0.0),
+                                .init(color: Color(.label).opacity(0.55), location: max(0.0, sweep - 0.18)),
+                                .init(color: Color(red: 0.55, green: 0.85, blue: 1.0), location: sweep),
+                                .init(color: Color(.label).opacity(0.55), location: min(1.0, sweep + 0.18)),
+                                .init(color: Color(.label).opacity(0.92), location: 1.0),
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+            }
+        }
+        .accessibilityLabel(Text(text))
+    }
+}
+
 struct GaryxConnectionPill: View {
     let label: String
     let color: Color

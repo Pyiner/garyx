@@ -1536,7 +1536,7 @@ struct GaryxComposer: View {
     }
 
     private var placeholderText: String {
-        model.selectedThread == nil ? "Ask Gary X anything..." : "Ask for follow-up changes"
+        model.selectedThread == nil ? "Ask Garyx anything..." : "Ask for follow-up changes"
     }
 
     private var composerBottomBar: some View {

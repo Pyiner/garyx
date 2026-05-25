@@ -63,80 +63,24 @@ struct GaryxGatewaySetupView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Spacer(minLength: 32)
-
-                VStack(spacing: 20) {
-                    GaryxAppLogo(size: 88)
-
-                    GaryxConnectionPill(
-                        label: setupStatusLabel,
-                        color: setupStatusColor,
-                        isBusy: setupIsBusy
-                    )
-
-                    VStack(spacing: 10) {
-                        Text("Gary X")
-                            .font(GaryxFont.largeTitle(weight: .semibold))
-                            .foregroundStyle(.primary)
-
-                        Text("Set the gateway address and token, then save. Saving verifies the gateway before continuing.")
-                            .font(GaryxFont.callout())
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: 280)
-
-                    VStack(spacing: 10) {
-                        HStack(spacing: 8) {
-                            TextField("Gateway URL", text: $draftGatewayURL)
-                                .textContentType(.URL)
-                                .keyboardType(.URL)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .garyxInputStyle()
-
-                            GaryxGatewayProfileMenuButton { profile in
-                                model.selectGatewayProfile(profile)
-                                draftGatewayURL = model.gatewayURL
-                                draftGatewayAuthToken = model.gatewayAuthToken
-                            }
-                        }
-
-                        SecureField("Gateway Token", text: $draftGatewayAuthToken)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .garyxInputStyle()
-                    }
-
-                    GaryxPrimaryCapsuleButton(
-                        title: setupIsBusy ? "Saving..." : "Save and Continue",
-                        systemImage: setupIsBusy ? nil : "checkmark.circle.fill"
-                    ) {
-                        Task {
-                            model.gatewayURL = draftGatewayURL
-                            model.gatewayAuthToken = draftGatewayAuthToken
-                            await model.connectAndRefresh()
-                            if isSheet, case .ready = model.connectionState {
-                                dismiss()
-                            }
-                        }
-                    }
-                    .disabled(!canSaveGateway || setupIsBusy)
-                    .opacity(canSaveGateway && !setupIsBusy ? 1 : 0.45)
+            Group {
+                if showsSetupDetails {
+                    setupForm
+                } else {
+                    connectingBody
                 }
-                .frame(maxWidth: 320)
-                .padding(.horizontal, 24)
-
-                Spacer(minLength: 24)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(GaryxTheme.background)
-            .navigationTitle("Gary X")
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear(perform: initializeDraft)
             .toolbar {
+                if showsSetupDetails {
+                    ToolbarItem(placement: .principal) {
+                        Text("Garyx")
+                            .font(GaryxFont.body(weight: .semibold))
+                            .foregroundStyle(.primary)
+                    }
+                }
                 if isSheet {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") {
@@ -146,12 +90,108 @@ struct GaryxGatewaySetupView: View {
                     }
                 }
             }
+            .onAppear(perform: initializeDraft)
             .overlay(alignment: .top) {
                 if isSheet {
                     GaryxGlobalErrorToastHost(topOffset: 8)
                 }
             }
         }
+    }
+
+    private var connectingBody: some View {
+        VStack {
+            Spacer()
+            GaryxIonicLoader(fontSize: 88)
+                .padding(.horizontal, 24)
+            Spacer()
+        }
+    }
+
+    private var setupForm: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 24)
+
+            VStack(spacing: 24) {
+                GaryxIonicLoader(fontSize: 72, isAnimating: setupIsBusy)
+
+                if let failureMessage {
+                    Text(failureMessage)
+                        .font(GaryxFont.callout(weight: .medium))
+                        .foregroundStyle(Color.orange)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 300)
+                } else {
+                    Text("Set the gateway address and token, then save. Saving verifies the gateway before continuing.")
+                        .font(GaryxFont.callout())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 300)
+                }
+
+                VStack(spacing: 10) {
+                    HStack(spacing: 8) {
+                        TextField("Gateway URL", text: $draftGatewayURL)
+                            .textContentType(.URL)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .garyxInputStyle()
+
+                        GaryxGatewayProfileMenuButton { profile in
+                            model.selectGatewayProfile(profile)
+                            draftGatewayURL = model.gatewayURL
+                            draftGatewayAuthToken = model.gatewayAuthToken
+                        }
+                    }
+
+                    SecureField("Gateway Token", text: $draftGatewayAuthToken)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxInputStyle()
+                }
+
+                GaryxPrimaryCapsuleButton(
+                    title: setupIsBusy ? "Saving..." : "Save and Continue",
+                    systemImage: setupIsBusy ? nil : "checkmark.circle.fill"
+                ) {
+                    Task {
+                        model.gatewayURL = draftGatewayURL
+                        model.gatewayAuthToken = draftGatewayAuthToken
+                        await model.connectAndRefresh()
+                        if isSheet, case .ready = model.connectionState {
+                            dismiss()
+                        }
+                    }
+                }
+                .disabled(!canSaveGateway || setupIsBusy)
+                .opacity(canSaveGateway && !setupIsBusy ? 1 : 0.45)
+            }
+            .frame(maxWidth: 320)
+            .padding(.horizontal, 24)
+
+            Spacer(minLength: 24)
+        }
+    }
+
+    private var showsSetupDetails: Bool {
+        if isSheet || startsEmpty { return true }
+        if !model.hasGatewaySettings { return true }
+        switch model.connectionState {
+        case .failed:
+            return true
+        case .checking, .disconnected, .ready:
+            return false
+        }
+    }
+
+    private var failureMessage: String? {
+        if case .failed(let message) = model.connectionState, !message.isEmpty {
+            return message
+        }
+        return nil
     }
 
     private var canSaveGateway: Bool {
@@ -177,36 +217,6 @@ struct GaryxGatewaySetupView: View {
             return true
         }
         return false
-    }
-
-    private var setupStatusLabel: String {
-        if startsEmpty && draftGatewayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "Add Gateway"
-        }
-        switch model.connectionState {
-        case .disconnected:
-            return "Not connected"
-        case .checking:
-            return "Connecting"
-        case .ready:
-            return "Connected"
-        case .failed:
-            return "Offline"
-        }
-    }
-
-    private var setupStatusColor: Color {
-        if startsEmpty && draftGatewayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return Color(.tertiaryLabel)
-        }
-        switch model.connectionState {
-        case .checking:
-            return .orange
-        case .ready:
-            return .green
-        case .disconnected, .failed:
-            return Color(.tertiaryLabel)
-        }
     }
 }
 
