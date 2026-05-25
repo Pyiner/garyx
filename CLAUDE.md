@@ -238,6 +238,9 @@ needs installed-app validation.
   Working row. Running Working rows should appear only for real tool activity
   and show an elapsed timer immediately, using the user-turn timestamp when
   available and a view-mount fallback otherwise.
+- Mobile transcript AI activity loaders should use Garyx's sweep/shimmer
+  treatment, such as `GaryxShimmerText`, for thinking, running work, and active
+  tool summaries. Do not add `ProgressView` spinners to transcript activity rows.
 - Mobile management screens should not expose create/edit forms inline by
   default. Use top navigation actions to open full-screen add/edit flows, not
   compact sheets or always-visible forms, and keep the main page focused on
