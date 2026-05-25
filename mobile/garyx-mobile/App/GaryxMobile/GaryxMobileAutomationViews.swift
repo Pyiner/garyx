@@ -12,7 +12,6 @@ private func garyxAutomationThreadOptions(
 struct GaryxAutomationsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var showsCreateAutomation = false
-    @State private var activeAutomationActionId: String?
 
     var body: some View {
         GaryxAutomationScaffold(title: "Automation") {
@@ -26,11 +25,7 @@ struct GaryxAutomationsView: View {
                 } else {
                     VStack(spacing: 14) {
                         ForEach(model.automations) { automation in
-                            GaryxAutomationCard(
-                                automation: automation,
-                                activeAutomationActionId: $activeAutomationActionId
-                            )
-                            .zIndex(activeAutomationActionId == automation.id ? 1 : 0)
+                            GaryxAutomationCard(automation: automation)
                         }
                     }
                 }
@@ -105,98 +100,99 @@ struct GaryxAutomationScaffold<Content: View, TrailingAction: View>: View {
 }
 
 struct GaryxAutomationCard: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var model: GaryxMobileModel
     let automation: GaryxAutomationSummary
-    @Binding var activeAutomationActionId: String?
     @State private var showsEditForm = false
     @State private var showsDeleteConfirmation = false
+    @State private var showsActionPanel = false
     @State private var optimisticEnabled: Bool?
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 14) {
-                    Button {
-                        openEditForm()
-                    } label: {
-                        VStack(alignment: .leading, spacing: 7) {
-                            Text(automation.label)
-                                .font(GaryxFont.title3(weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            if !automation.prompt.isEmpty {
-                                Text(automation.prompt)
-                                    .font(GaryxFont.callout())
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
+                Button {
+                    openEditForm()
+                } label: {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(automation.label)
+                            .font(GaryxFont.title3(weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if !automation.prompt.isEmpty {
+                            Text(automation.prompt)
+                                .font(GaryxFont.callout())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .buttonStyle(.plain)
-
-                    Toggle("", isOn: automationEnabledBinding)
-                        .labelsHidden()
-                        .tint(Color(.systemBlue))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .buttonStyle(.plain)
 
-                Divider()
-                    .overlay(Color.primary.opacity(0.08))
+                Toggle("", isOn: automationEnabledBinding)
+                    .labelsHidden()
+                    .tint(Color(.systemBlue))
+            }
 
-                HStack(alignment: .center, spacing: 10) {
-                    Text(garyxAutomationScheduleCardSummary(automation.schedule))
-                        .font(GaryxFont.callout(weight: .medium))
+            Divider()
+                .overlay(Color.primary.opacity(0.08))
+
+            HStack(alignment: .center, spacing: 10) {
+                Text(garyxAutomationScheduleCardSummary(automation.schedule))
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Button {
+                    showsActionPanel.toggle()
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(GaryxFont.system(size: 18, weight: .semibold))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    Button {
-                        withAnimation(actionPanelAnimation) {
-                            activeAutomationActionId = showsActionPanel ? nil : automation.id
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(GaryxFont.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 42, height: 32)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Automation actions")
+                        .frame(width: 40, height: 34)
+                        .garyxAdaptiveGlass(
+                            .regular,
+                            isInteractive: true,
+                            tint: Color(.systemBackground).opacity(0.66),
+                            fallbackMaterial: .ultraThinMaterial,
+                            in: Capsule()
+                        )
+                        .contentShape(Capsule())
                 }
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 18)
-            .background(GaryxAutomationPalette.cardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.primary.opacity(0.05), lineWidth: 1)
-            }
-            .shadow(color: Color.black.opacity(0.045), radius: 18, x: 0, y: 10)
-
-            if showsActionPanel {
-                GaryxAutomationActionPanel(
-                    onRun: {
-                        closeActionPanel()
-                        Task {
-                            await model.runAutomation(automation)
+                .buttonStyle(GaryxItemActionMenuButtonStyle())
+                .accessibilityLabel("Automation actions")
+                .popover(isPresented: $showsActionPanel, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+                    GaryxAutomationActionPopover(
+                        onRun: {
+                            showsActionPanel = false
+                            Task {
+                                await model.runAutomation(automation)
+                            }
+                        },
+                        onEdit: {
+                            showsActionPanel = false
+                            openEditForm()
+                        },
+                        onDelete: {
+                            showsActionPanel = false
+                            showsDeleteConfirmation = true
                         }
-                    },
-                    onEdit: {
-                        openEditForm()
-                    },
-                    onDelete: {
-                        closeActionPanel()
-                        showsDeleteConfirmation = true
-                    }
-                )
-                .offset(x: -10, y: -42)
-                .transition(actionPanelTransition)
-                .zIndex(2)
+                    )
+                    .presentationCompactAdaptation(.popover)
+                    .presentationBackground(.ultraThinMaterial)
+                    .presentationCornerRadius(22)
+                }
             }
         }
-        .animation(actionPanelAnimation, value: showsActionPanel)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 18)
+        .background(GaryxAutomationPalette.cardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.045), radius: 18, x: 0, y: 10)
         .onChange(of: automation.enabled) { _, newValue in
             if optimisticEnabled == newValue {
                 optimisticEnabled = nil
@@ -218,31 +214,6 @@ struct GaryxAutomationCard: View {
         }
     }
 
-    private var showsActionPanel: Bool {
-        activeAutomationActionId == automation.id
-    }
-
-    private var actionPanelAnimation: Animation? {
-        if reduceMotion {
-            return nil
-        }
-        return .timingCurve(0.16, 1.0, 0.3, 1.0, duration: 0.22)
-    }
-
-    private var actionPanelTransition: AnyTransition {
-        if reduceMotion {
-            return .opacity
-        }
-        return .asymmetric(
-            insertion: .scale(scale: 0.88, anchor: .bottomTrailing)
-                .combined(with: .offset(x: 8, y: 12))
-                .combined(with: .opacity),
-            removal: .scale(scale: 0.96, anchor: .bottomTrailing)
-                .combined(with: .offset(x: 4, y: 6))
-                .combined(with: .opacity)
-        )
-    }
-
     private var automationEnabledBinding: Binding<Bool> {
         Binding {
             optimisticEnabled ?? automation.enabled
@@ -256,14 +227,7 @@ struct GaryxAutomationCard: View {
         }
     }
 
-    private func closeActionPanel() {
-        withAnimation(actionPanelAnimation) {
-            activeAutomationActionId = nil
-        }
-    }
-
     private func openEditForm() {
-        closeActionPanel()
         showsEditForm = true
     }
 }
@@ -320,96 +284,44 @@ private func garyxAutomationScheduleCardSummary(_ schedule: GaryxAutomationSched
     }
 }
 
-struct GaryxAutomationActionPanel: View {
+private struct GaryxAutomationActionPopover: View {
     let onRun: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
-        GaryxAdaptiveGlassContainer(spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                actionRow(title: "Run Once", systemName: "clock.arrow.circlepath", action: onRun)
-                actionRow(title: "Edit Automation", systemName: "pencil", action: onEdit)
-                actionRow(title: "Delete Automation", systemName: "trash", isDestructive: true, action: onDelete)
-            }
+        VStack(spacing: 0) {
+            actionButton(title: "Run Once", systemName: "clock.arrow.circlepath", action: onRun)
+            Divider().padding(.leading, 44)
+            actionButton(title: "Edit", systemName: "pencil", action: onEdit)
+            Divider().padding(.leading, 44)
+            actionButton(title: "Delete", systemName: "trash", isDestructive: true, action: onDelete)
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 6)
-        .frame(width: 246)
-        .garyxAdaptiveGlass(
-            .regular,
-            isInteractive: false,
-            tint: nil,
-            fallbackMaterial: .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: 26, style: .continuous)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.34),
-                            Color.white.opacity(0.06),
-                            Color.white.opacity(0.0)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .allowsHitTesting(false)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(Color.white.opacity(0.52), lineWidth: 0.8)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        }
-        .shadow(color: Color.black.opacity(0.18), radius: 30, x: 0, y: 18)
-        .shadow(color: Color.white.opacity(0.34), radius: 10, x: -6, y: -6)
+        .frame(width: 226)
+        .padding(.vertical, 6)
     }
 
-    private func actionRow(
+    private func actionButton(
         title: String,
         systemName: String,
         isDestructive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 12) {
+        Button(role: isDestructive ? .destructive : nil, action: action) {
+            HStack(spacing: 10) {
                 Image(systemName: systemName)
                     .font(GaryxFont.system(size: 15, weight: .semibold))
-                    .frame(width: 28, height: 28)
-                    .background(
-                        Circle()
-                            .fill(Color.white.opacity(isDestructive ? 0.14 : 0.24))
-                    )
+                    .frame(width: 24)
                 Text(title)
                     .font(GaryxFont.callout(weight: .medium))
                 Spacer(minLength: 0)
             }
             .foregroundStyle(isDestructive ? GaryxTheme.danger : .primary)
             .padding(.horizontal, 12)
-            .frame(height: 48)
-            .contentShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+            .frame(height: 44)
+            .contentShape(Rectangle())
         }
-        .buttonStyle(GaryxAutomationGlassActionButtonStyle())
-    }
-}
-
-private struct GaryxAutomationGlassActionButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background {
-                RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.24 : 0.001))
-            }
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
+        .buttonStyle(.plain)
     }
 }
 

@@ -318,32 +318,9 @@ struct GaryxSwipeAction {
     let action: () -> Void
 }
 
-final class GaryxSwipeRowCoordinator: ObservableObject {
-    static let shared = GaryxSwipeRowCoordinator()
-
-    @Published private(set) var activeRowID: UUID?
-
-    func open(_ id: UUID) {
-        if activeRowID != id {
-            activeRowID = id
-        }
-    }
-
-    func close(_ id: UUID) {
-        if activeRowID == id {
-            activeRowID = nil
-        }
-    }
-}
-
 struct GaryxSwipeActionRow<Content: View>: View {
     let actions: [GaryxSwipeAction]
     let content: Content
-
-    @State private var identityID = UUID()
-    @ObservedObject private var coordinator = GaryxSwipeRowCoordinator.shared
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isMenuOpen = false
 
     init(actions: [GaryxSwipeAction], @ViewBuilder content: () -> Content) {
         self.actions = actions
@@ -354,182 +331,50 @@ struct GaryxSwipeActionRow<Content: View>: View {
         if actions.isEmpty {
             content
         } else {
-            ZStack(alignment: .bottomTrailing) {
-                content
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(GaryxTheme.surface)
-                    .contentShape(Rectangle())
-                    .accessibilityHint("Use the actions button for item actions.")
-                    .modifier(GaryxSwipeRowAccessibilityActions(actions: actions, onAction: handle))
-
-                Button {
-                    toggleMenu()
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(GaryxFont.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 36, height: 28)
-                        .garyxAdaptiveGlass(
-                            .regular,
-                            isInteractive: true,
-                            tint: Color(.systemBackground).opacity(0.68),
-                            fallbackMaterial: .ultraThinMaterial,
-                            in: Capsule()
-                        )
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(GaryxItemActionMenuButtonStyle())
-                .padding(.trailing, 10)
-                .padding(.bottom, 8)
-                .accessibilityLabel("Item actions")
-                .zIndex(3)
-
-                if isMenuOpen {
-                    GaryxGlassActionMenu(actions: actions, onAction: handle)
-                        .offset(x: -8, y: -42)
-                        .transition(menuTransition)
-                        .zIndex(4)
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GaryxTheme.surface)
+                .contentShape(Rectangle())
+                .accessibilityHint("Use the actions button for item actions.")
+                .modifier(GaryxSwipeRowAccessibilityActions(actions: actions, onAction: handle))
+                .overlay(alignment: .bottomTrailing) {
+                    Menu {
+                        ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
+                            Button(role: action.menuRole) {
+                                handle(action)
+                            } label: {
+                                Label(action.title, systemImage: action.systemImage)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(GaryxFont.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, height: 28)
+                            .garyxAdaptiveGlass(
+                                .regular,
+                                isInteractive: true,
+                                tint: Color(.systemBackground).opacity(0.68),
+                                fallbackMaterial: .ultraThinMaterial,
+                                in: Capsule()
+                            )
+                            .contentShape(Capsule())
                     }
-            }
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-            .zIndex(isMenuOpen ? 10 : 0)
-            .animation(menuAnimation, value: isMenuOpen)
-            .onChange(of: coordinator.activeRowID) { _, newID in
-                if newID != identityID, isMenuOpen {
-                    closeMenu(notifyCoordinator: false)
+                    .buttonStyle(GaryxItemActionMenuButtonStyle())
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 8)
+                    .accessibilityLabel("Item actions")
                 }
-            }
-            .onDisappear {
-                closeMenu()
-            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }
     }
 
     private func handle(_ action: GaryxSwipeAction) {
-        closeMenu()
         action.action()
     }
-
-    private var menuAnimation: Animation? {
-        if reduceMotion {
-            return nil
-        }
-        return .timingCurve(0.16, 1.0, 0.3, 1.0, duration: 0.2)
-    }
-
-    private var menuTransition: AnyTransition {
-        if reduceMotion {
-            return .opacity
-        }
-        return .asymmetric(
-            insertion: .scale(scale: 0.88, anchor: .bottomTrailing)
-                .combined(with: .offset(x: 8, y: 12))
-                .combined(with: .opacity),
-            removal: .scale(scale: 0.96, anchor: .bottomTrailing)
-                .combined(with: .offset(x: 4, y: 6))
-                .combined(with: .opacity)
-        )
-    }
-
-    private func toggleMenu() {
-        withAnimation(menuAnimation) {
-            if isMenuOpen {
-                closeMenu()
-            } else {
-                coordinator.open(identityID)
-                isMenuOpen = true
-            }
-        }
-    }
-
-    private func closeMenu(notifyCoordinator: Bool = true) {
-        if notifyCoordinator {
-            coordinator.close(identityID)
-        }
-        if isMenuOpen {
-            withAnimation(menuAnimation) {
-                isMenuOpen = false
-            }
-        }
-    }
 }
 
-struct GaryxGlassActionMenu: View {
-    let actions: [GaryxSwipeAction]
-    let onAction: (GaryxSwipeAction) -> Void
-
-    var body: some View {
-        GaryxAdaptiveGlassContainer(spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
-                    actionRow(action)
-                }
-            }
-        }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 6)
-        .frame(width: 246)
-        .garyxAdaptiveGlass(
-            .regular,
-            isInteractive: false,
-            tint: nil,
-            fallbackMaterial: .ultraThinMaterial,
-            in: RoundedRectangle(cornerRadius: 26, style: .continuous)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.34),
-                            Color.white.opacity(0.06),
-                            Color.white.opacity(0.0)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .allowsHitTesting(false)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(Color.white.opacity(0.52), lineWidth: 0.8)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        }
-        .shadow(color: Color.black.opacity(0.18), radius: 30, x: 0, y: 18)
-        .shadow(color: Color.white.opacity(0.34), radius: 10, x: -6, y: -6)
-    }
-
-    private func actionRow(_ action: GaryxSwipeAction) -> some View {
-        Button(role: action.tone == .destructive ? .destructive : nil) {
-            onAction(action)
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: action.systemImage)
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
-                    .frame(width: 28, height: 28)
-                    .background {
-                        Circle()
-                            .fill(action.iconBackground)
-                    }
-                Text(action.title)
-                    .font(GaryxFont.callout(weight: .medium))
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(action.menuForeground)
-            .padding(.horizontal, 12)
-            .frame(height: 48)
-            .contentShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
-        }
-        .buttonStyle(GaryxGlassActionButtonStyle())
-    }
-}
-
-private struct GaryxItemActionMenuButtonStyle: ButtonStyle {
+struct GaryxItemActionMenuButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
@@ -540,41 +385,9 @@ private struct GaryxItemActionMenuButtonStyle: ButtonStyle {
     }
 }
 
-private struct GaryxGlassActionButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background {
-                RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.24 : 0.001))
-            }
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-}
-
 private extension GaryxSwipeAction {
-    var menuForeground: Color {
-        switch tone {
-        case .destructive:
-            GaryxTheme.danger
-        case .warning:
-            GaryxTheme.warning
-        case .accent, .neutral:
-            Color.primary
-        }
-    }
-
-    var iconBackground: Color {
-        switch tone {
-        case .destructive:
-            GaryxTheme.danger.opacity(0.12)
-        case .warning:
-            GaryxTheme.warning.opacity(0.12)
-        case .accent, .neutral:
-            Color.white.opacity(0.24)
-        }
+    var menuRole: ButtonRole? {
+        tone == .destructive ? .destructive : nil
     }
 }
 
