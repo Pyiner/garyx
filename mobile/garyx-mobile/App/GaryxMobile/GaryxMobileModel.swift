@@ -180,8 +180,20 @@ enum GaryxMobileLoadPhase: Equatable {
 
 enum GaryxMobileLeadingEdgeAction {
     case openSidebar
+    case mainPanelBack
     case settingsOverview
     case workspaceBotsOverview
+}
+
+enum GaryxMobilePanelOpenSource {
+    case current
+    case sidebar
+    case replace
+}
+
+struct GaryxMobilePanelRoute: Equatable {
+    let panel: GaryxMobilePanel
+    let settingsTab: GaryxMobileSettingsTab
 }
 
 struct GaryxMobileAgentTarget: Identifiable, Equatable {
@@ -327,10 +339,21 @@ final class GaryxMobileModel: ObservableObject {
     @Published var isSending = false
     @Published var activeRunThreadId: String?
     @Published private(set) var remoteBusyThreadIds: Set<String> = []
-    @Published var activePanel: GaryxMobilePanel = .chat
+    @Published var activePanel: GaryxMobilePanel = .chat {
+        didSet {
+            guard activePanel != oldValue else { return }
+            if !isApplyingMainPanelRoute {
+                mainPanelBackStack.removeAll()
+            }
+            if activePanel != .workspaceBots {
+                workspaceBotsDrilldownActive = false
+            }
+        }
+    }
     @Published var activeSettingsTab: GaryxMobileSettingsTab = .manage
     @Published var workspaceBotsDrilldownActive = false
     @Published var workspaceBotsBackRequest = 0
+    @Published private(set) var mainPanelBackStack: [GaryxMobilePanelRoute] = []
     @Published private var storedLastError: String?
     var lastError: String? {
         get {
@@ -454,6 +477,7 @@ final class GaryxMobileModel: ObservableObject {
     private var pendingBotId: String?
     private var pendingBotWorkspace: String?
     private var pendingBotAgentId: String?
+    private var isApplyingMainPanelRoute = false
     #if DEBUG
     private(set) var debugSnapshotActive = false
     #endif
@@ -1354,44 +1378,94 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
-    func openPanel(_ panel: GaryxMobilePanel) {
+    func openPanel(_ panel: GaryxMobilePanel, source: GaryxMobilePanelOpenSource = .current) {
         let targetPanel: GaryxMobilePanel = switch panel {
         case .bots, .workspaces:
             .workspaceBots
         default:
             panel
         }
-        if targetPanel != .workspaceBots {
-            workspaceBotsDrilldownActive = false
-        }
         guard targetPanel != .dreams || dreamsAutoScanEnabled else {
-            activePanel = .chat
+            openPanel(.chat, source: .replace)
             setSidebarVisible(false)
             return
         }
-        activePanel = targetPanel
+
+        let targetRoute = GaryxMobilePanelRoute(
+            panel: targetPanel,
+            settingsTab: targetPanel == .settings ? activeSettingsTab : .manage
+        )
+        openPanelRoute(targetRoute, source: source)
+    }
+
+    private func openPanelRoute(_ route: GaryxMobilePanelRoute, source: GaryxMobilePanelOpenSource) {
+        let currentRoute = currentMainPanelRoute
+        switch source {
+        case .current:
+            if currentRoute != route, mainPanelBackStack.last != currentRoute {
+                mainPanelBackStack.append(currentRoute)
+            }
+        case .sidebar, .replace:
+            mainPanelBackStack.removeAll()
+        }
+
+        applyMainPanelRoute(route)
         setSidebarVisible(false)
     }
 
-    func openSettings(tab: GaryxMobileSettingsTab = .manage) {
-        activeSettingsTab = tab
-        openPanel(.settings)
+    private var currentMainPanelRoute: GaryxMobilePanelRoute {
+        GaryxMobilePanelRoute(panel: activePanel, settingsTab: activeSettingsTab)
+    }
+
+    private func applyMainPanelRoute(_ route: GaryxMobilePanelRoute) {
+        isApplyingMainPanelRoute = true
+        activePanel = route.panel
+        activeSettingsTab = route.panel == .settings ? route.settingsTab : .manage
+        if route.panel != .workspaceBots {
+            workspaceBotsDrilldownActive = false
+        }
+        isApplyingMainPanelRoute = false
+    }
+
+    func openSettings(tab: GaryxMobileSettingsTab = .manage, source: GaryxMobilePanelOpenSource = .sidebar) {
+        openPanelRoute(
+            GaryxMobilePanelRoute(panel: .settings, settingsTab: tab),
+            source: source
+        )
     }
 
     var mainPanelLeadingEdgeAction: GaryxMobileLeadingEdgeAction {
-        if activePanel == .settings, activeSettingsTab != .manage {
-            return .settingsOverview
-        }
         if activePanel == .workspaceBots, workspaceBotsDrilldownActive {
             return .workspaceBotsOverview
         }
+        if activePanel == .settings, activeSettingsTab != .manage {
+            return .settingsOverview
+        }
+        if !mainPanelBackStack.isEmpty {
+            return .mainPanelBack
+        }
         return .openSidebar
+    }
+
+    var mainPanelLeadingEdgeActionLabel: String {
+        switch mainPanelLeadingEdgeAction {
+        case .openSidebar:
+            "Open menu"
+        case .mainPanelBack:
+            "Back"
+        case .settingsOverview:
+            "All Settings"
+        case .workspaceBotsOverview:
+            "Workspace & Bots"
+        }
     }
 
     func performMainPanelLeadingEdgeAction() {
         switch mainPanelLeadingEdgeAction {
         case .openSidebar:
             setSidebarVisible(true)
+        case .mainPanelBack:
+            goBackInMainPanel()
         case .settingsOverview:
             showSettingsOverview()
         case .workspaceBotsOverview:
@@ -1401,6 +1475,15 @@ final class GaryxMobileModel: ObservableObject {
 
     func showSettingsOverview() {
         activeSettingsTab = .manage
+    }
+
+    func goBackInMainPanel() {
+        guard let previousRoute = mainPanelBackStack.popLast() else {
+            setSidebarVisible(true)
+            return
+        }
+        applyMainPanelRoute(previousRoute)
+        setSidebarVisible(false)
     }
 
     #if DEBUG
@@ -3991,11 +4074,11 @@ final class GaryxMobileModel: ObservableObject {
                 task.threadId = thread.id
             }
             upsertTask(task)
-            activePanel = .tasks
+            openPanel(.tasks)
         } catch {
             if Self.isAlreadyTaskError(error),
                await reconcileTaskForThread(thread.id) != nil {
-                activePanel = .tasks
+                openPanel(.tasks)
                 return
             }
             lastError = displayMessage(for: error)
@@ -4630,8 +4713,7 @@ final class GaryxMobileModel: ObservableObject {
         workspacePreview = nil
         workspaceUploadStatus = nil
         workspaceBotsDrilldownActive = false
-        activePanel = .workspaces
-        setSidebarVisible(false)
+        openPanel(.workspaces)
 
         let runtimeGeneration = gatewayRuntimeGeneration
         do {

@@ -40,6 +40,7 @@ enum GaryxDataURLImageCache {
 
 struct GaryxPanelScaffold<Content: View, Actions: View>: View {
     @Environment(\.garyxOpenSidebar) private var openSidebar
+    @EnvironmentObject private var model: GaryxMobileModel
 
     let title: String
     let subtitle: String
@@ -101,6 +102,14 @@ struct GaryxPanelScaffold<Content: View, Actions: View>: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel(leadingActionLabel ?? "Back")
+                    } else if model.mainPanelLeadingEdgeAction != .openSidebar {
+                        Button {
+                            model.performMainPanelLeadingEdgeAction()
+                        } label: {
+                            GaryxToolbarIcon(systemName: "chevron.left")
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(model.mainPanelLeadingEdgeActionLabel)
                     } else {
                         GaryxSidebarMenuButton {
                             openSidebar()

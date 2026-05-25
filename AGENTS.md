@@ -190,6 +190,10 @@ needs installed-app validation.
 - Mobile sidebar primary navigation should show Automation and, directly below
   it, Workspace & Bots. Tasks, Auto Research, Agents, and Skills belong under
   Settings.
+- Mobile leading-edge gestures and the top-left header control must share the
+  same navigation action. Thread detail and first-level pages opened directly
+  from the sidebar may open the sidebar; deeper pages must go back to their
+  immediate parent instead of opening the sidebar.
 - Mobile workspace and bot browsing belongs visually under Automation as the
   `Workspace & Bots` sibling row in the sidebar, not inside the Automation page.
   Do not put workspace or bot drilldowns back into the root thread list.

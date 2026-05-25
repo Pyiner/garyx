@@ -242,7 +242,7 @@ struct GaryxSidebarNavigationRow: View {
 
     var body: some View {
         Button {
-            model.openPanel(panel)
+            model.openPanel(panel, source: .sidebar)
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: panel.iconName)
