@@ -155,8 +155,12 @@ needs installed-app validation.
   available, with compact circular fallbacks rather than generic list icons.
 - The iOS home-screen recent-threads widget should start directly with thread
   rows, not a title/header row. Put pinned threads first but render them exactly
-  like other rows, use agent/team avatars as the leading image, and cap the
-  visible viewport at five rows while allowing vertical overflow scrolling.
+  like other rows, use agent/team avatars as the leading image, and let the
+  visible row count scale with the widget family. Do not put a `ScrollView`
+  inside the widget — WidgetKit views are static snapshots, and iOS marks any
+  scrollable area with a yellow + ban-symbol overlay. Show only as many rows
+  as comfortably fit each family at a tappable row height; older threads stay
+  reachable from the in-app sidebar, not from widget scrolling.
 - Channel and bot rows should use gateway-provided channel icon data first.
   Built-in channels need local raster fallbacks on mobile, and plugin SVG icons
   should be rasterized to PNG before catalog delivery so mobile does not fall

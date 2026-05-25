@@ -66,12 +66,12 @@ struct GaryxRecentThreadsWidgetView: View {
 
     @Environment(\.widgetFamily) private var widgetFamily
 
-    private var threads: [GaryxMobileWidgetThread] {
-        entry.snapshot.threads
-    }
-
     private var metrics: GaryxRecentThreadsWidgetMetrics {
         GaryxRecentThreadsWidgetMetrics(family: widgetFamily)
+    }
+
+    private var threads: [GaryxMobileWidgetThread] {
+        Array(entry.snapshot.threads.prefix(metrics.visibleRowCount))
     }
 
     var body: some View {
@@ -79,37 +79,26 @@ struct GaryxRecentThreadsWidgetView: View {
             if threads.isEmpty {
                 Spacer(minLength: 0)
                 Text("No recent threads")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
                 Text("Open Gary X to refresh")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             } else {
-                ScrollView(.vertical) {
-                    LazyVStack(spacing: metrics.rowSpacing) {
-                        ForEach(Array(threads.enumerated()), id: \.element.id) { index, thread in
-                            if let url = GaryxMobileThreadLink.make(threadId: thread.id) {
-                                Link(destination: url) {
-                                    GaryxRecentThreadWidgetRow(
-                                        thread: thread,
-                                        metrics: metrics,
-                                        showsSeparator: index < threads.count - 1
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            } else {
-                                GaryxRecentThreadWidgetRow(
-                                    thread: thread,
-                                    metrics: metrics,
-                                    showsSeparator: index < threads.count - 1
-                                )
+                VStack(spacing: metrics.rowSpacing) {
+                    ForEach(threads) { thread in
+                        if let url = GaryxMobileThreadLink.make(threadId: thread.id) {
+                            Link(destination: url) {
+                                GaryxRecentThreadWidgetRow(thread: thread, metrics: metrics)
                             }
+                            .buttonStyle(.plain)
+                        } else {
+                            GaryxRecentThreadWidgetRow(thread: thread, metrics: metrics)
                         }
                     }
+                    Spacer(minLength: 0)
                 }
-                .scrollIndicators(.hidden)
-                .frame(maxHeight: metrics.visibleListHeight)
             }
         }
         .padding(metrics.contentPadding)
@@ -132,40 +121,46 @@ private struct GaryxRecentThreadsWidgetMetrics {
     let rowTitleFontSize: CGFloat
     let rowWorkspaceFontSize: CGFloat
     let rowWorkspaceSpacing: CGFloat
-    let chevronSize: CGFloat
-
-    var visibleListHeight: CGFloat {
-        let visibleRows = CGFloat(GaryxMobileWidgetStore.visibleThreadLimit)
-        let visibleSpacings = max(0, visibleRows - 1) * rowSpacing
-        return rowHeight * visibleRows + visibleSpacings
-    }
+    let visibleRowCount: Int
 
     init(family: WidgetFamily) {
         switch family {
         case .systemMedium:
-            contentPadding = 12
-            rowContentSpacing = 8
-            rowSpacing = 0
-            rowHeight = 24
-            avatarSize = 19
-            avatarIconSize = 8
-            runningDotSize = 5
-            rowTitleFontSize = 10.5
-            rowWorkspaceFontSize = 8.5
-            rowWorkspaceSpacing = 0
-            chevronSize = 8
-        default:
             contentPadding = 14
-            rowContentSpacing = 10
-            rowSpacing = 0
-            rowHeight = 32
-            avatarSize = 24
-            avatarIconSize = 10
+            rowContentSpacing = 11
+            rowSpacing = 4
+            rowHeight = 38
+            avatarSize = 28
+            avatarIconSize = 12
             runningDotSize = 6
-            rowTitleFontSize = 12
-            rowWorkspaceFontSize = 9.5
+            rowTitleFontSize = 13
+            rowWorkspaceFontSize = 10.5
             rowWorkspaceSpacing = 1
-            chevronSize = 9
+            visibleRowCount = 3
+        case .systemExtraLarge:
+            contentPadding = 18
+            rowContentSpacing = 13
+            rowSpacing = 6
+            rowHeight = 46
+            avatarSize = 34
+            avatarIconSize = 14
+            runningDotSize = 7
+            rowTitleFontSize = 14.5
+            rowWorkspaceFontSize = 11.5
+            rowWorkspaceSpacing = 2
+            visibleRowCount = 6
+        default:
+            contentPadding = 16
+            rowContentSpacing = 12
+            rowSpacing = 6
+            rowHeight = 44
+            avatarSize = 32
+            avatarIconSize = 13
+            runningDotSize = 7
+            rowTitleFontSize = 14
+            rowWorkspaceFontSize = 11
+            rowWorkspaceSpacing = 2
+            visibleRowCount = 6
         }
     }
 }
@@ -173,7 +168,6 @@ private struct GaryxRecentThreadsWidgetMetrics {
 private struct GaryxRecentThreadWidgetRow: View {
     let thread: GaryxMobileWidgetThread
     let metrics: GaryxRecentThreadsWidgetMetrics
-    let showsSeparator: Bool
 
     private var isRunning: Bool {
         let activeRun = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -186,10 +180,19 @@ private struct GaryxRecentThreadWidgetRow: View {
             GaryxWidgetAgentAvatar(thread: thread, metrics: metrics)
 
             VStack(alignment: .leading, spacing: metrics.rowWorkspaceSpacing) {
-                Text(thread.title)
-                    .font(.system(size: metrics.rowTitleFontSize, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(thread.title)
+                        .font(.system(size: metrics.rowTitleFontSize, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    if isRunning {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: metrics.runningDotSize, height: metrics.runningDotSize)
+                    }
+                }
 
                 if !thread.workspaceName.isEmpty {
                     Text(thread.workspaceName)
@@ -199,28 +202,10 @@ private struct GaryxRecentThreadWidgetRow: View {
                 }
             }
 
-            Spacer(minLength: 4)
-
-            if isRunning {
-                Circle()
-                    .fill(Color.accentColor)
-                    .frame(width: metrics.runningDotSize, height: metrics.runningDotSize)
-            }
-
-            Image(systemName: "chevron.right")
-                .font(.system(size: metrics.chevronSize, weight: .semibold))
-                .foregroundStyle(.tertiary)
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, minHeight: metrics.rowHeight, maxHeight: metrics.rowHeight, alignment: .leading)
         .contentShape(Rectangle())
-        .overlay(alignment: .bottom) {
-            if showsSeparator {
-                Rectangle()
-                    .fill(Color.primary.opacity(0.08))
-                    .frame(height: 0.5)
-                    .padding(.leading, metrics.avatarSize + metrics.rowContentSpacing)
-            }
-        }
     }
 }
 
@@ -231,7 +216,7 @@ private struct GaryxWidgetAgentAvatar: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(fallbackBackground)
+                .fill(Color.primary.opacity(0.08))
 
             if let image = GaryxWidgetDataURLImageCache.image(from: thread.avatarDataUrl) {
                 Image(uiImage: image)
@@ -242,23 +227,19 @@ private struct GaryxWidgetAgentAvatar: View {
             } else if thread.isTeam {
                 Image(systemName: "person.2.fill")
                     .font(.system(size: metrics.avatarIconSize, weight: .semibold))
-                    .foregroundStyle(fallbackForeground)
+                    .foregroundStyle(.secondary)
             } else if let symbol = providerSymbol {
                 Image(systemName: symbol)
                     .font(.system(size: metrics.avatarIconSize, weight: .semibold))
-                    .foregroundStyle(fallbackForeground)
+                    .foregroundStyle(.secondary)
             } else {
                 Text(initials)
                     .font(.system(size: metrics.avatarIconSize, weight: .bold))
-                    .foregroundStyle(fallbackForeground)
+                    .foregroundStyle(.secondary)
                     .minimumScaleFactor(0.7)
             }
         }
         .frame(width: metrics.avatarSize, height: metrics.avatarSize)
-        .overlay {
-            Circle()
-                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
-        }
         .accessibilityHidden(true)
     }
 
@@ -288,25 +269,6 @@ private struct GaryxWidgetAgentAvatar: View {
             return "\(first)\(second)".uppercased()
         }
         return String(source.prefix(2)).uppercased()
-    }
-
-    private var fallbackBackground: Color {
-        if thread.builtIn {
-            return Color.primary.opacity(0.10)
-        }
-        let colors = [
-            Color(red: 0.86, green: 0.93, blue: 0.96),
-            Color(red: 0.91, green: 0.88, blue: 0.97),
-            Color(red: 0.92, green: 0.96, blue: 0.88),
-            Color(red: 0.97, green: 0.91, blue: 0.86),
-        ]
-        let source = "\(thread.agentName ?? "")\(thread.agentId ?? "")\(thread.title)"
-        let seed = source.unicodeScalars.reduce(0) { ($0 &+ Int($1.value)) % 997 }
-        return colors[seed % colors.count]
-    }
-
-    private var fallbackForeground: Color {
-        thread.builtIn ? Color.primary.opacity(0.72) : Color.primary.opacity(0.66)
     }
 }
 
