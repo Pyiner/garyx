@@ -949,7 +949,7 @@ private struct GaryxSidebarThreadButton: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(thread.title.isEmpty ? "This removes the thread from the list." : thread.title)
+            Text("This removes the thread from the list.")
         }
         .padding(.leading, indent)
     }
