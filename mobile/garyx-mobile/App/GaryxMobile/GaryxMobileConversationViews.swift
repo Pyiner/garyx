@@ -1152,6 +1152,8 @@ struct GaryxMarkdownText: View {
                         border: codeBorder,
                         fillsAvailableWidth: fillsAvailableWidth
                     )
+                case .image(let alt, let source):
+                    GaryxMarkdownImageView(alt: alt, source: source)
                 }
             }
         }
@@ -1285,10 +1287,127 @@ private struct GaryxCodeBlockView: View {
     }
 }
 
+private struct GaryxMarkdownImageView: View {
+    let alt: String
+    let source: String
+
+    @State private var localImage: UIImage?
+    @State private var loadFailed = false
+
+    private var resolvedURL: URL? {
+        let trimmed = source.trimmingCharacters(in: .whitespaces)
+        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
+           ["http", "https", "data"].contains(scheme) {
+            return url
+        }
+        return nil
+    }
+
+    private var localFilePath: String? {
+        let trimmed = source.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("file://") {
+            return URL(string: trimmed)?.path
+        }
+        if trimmed.hasPrefix("/") {
+            return trimmed
+        }
+        return nil
+    }
+
+    var body: some View {
+        Group {
+            if let image = localImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else if let url = resolvedURL {
+                AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.18))) { phase in
+                    switch phase {
+                    case .empty:
+                        loadingPlaceholder
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                    case .failure:
+                        failurePlaceholder
+                    @unknown default:
+                        failurePlaceholder
+                    }
+                }
+            } else if loadFailed {
+                failurePlaceholder
+            } else {
+                loadingPlaceholder
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .accessibilityLabel(alt.isEmpty ? "Image" : alt)
+        .task(id: source) {
+            await loadLocalImageIfPossible()
+        }
+    }
+
+    @ViewBuilder
+    private var loadingPlaceholder: some View {
+        ZStack {
+            Color(.secondarySystemFill)
+            ProgressView()
+                .scaleEffect(0.78)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 160)
+    }
+
+    @ViewBuilder
+    private var failurePlaceholder: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "photo")
+                .font(GaryxFont.system(size: 18, weight: .medium))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(alt.isEmpty ? "Image" : alt)
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(.primary)
+                Text(source)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemFill))
+    }
+
+    @MainActor
+    private func loadLocalImageIfPossible() async {
+        guard let path = localFilePath else { return }
+        let image = await Task.detached(priority: .utility) {
+            UIImage(contentsOfFile: path)
+        }.value
+        guard !Task.isCancelled else { return }
+        if let image {
+            localImage = image
+        } else {
+            loadFailed = true
+        }
+    }
+}
+
 private struct GaryxMarkdownBlock: Identifiable {
     enum Kind {
         case markdown(String)
         case code(language: String?, text: String)
+        case image(alt: String, source: String)
     }
 
     let id: Int
@@ -1318,6 +1437,11 @@ private struct GaryxMarkdownBlock: Identifiable {
 
         for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !insideFence, let image = parseStandaloneImage(trimmed) {
+                appendMarkdown()
+                blocks.append(GaryxMarkdownBlock(id: blocks.count, kind: .image(alt: image.alt, source: image.source)))
+                continue
+            }
             if trimmed.hasPrefix("```") {
                 if insideFence {
                     appendCode()
@@ -1347,6 +1471,25 @@ private struct GaryxMarkdownBlock: Identifiable {
             blocks.append(GaryxMarkdownBlock(id: 0, kind: .markdown(text)))
         }
         return blocks
+    }
+
+    private static func parseStandaloneImage(_ trimmed: String) -> (alt: String, source: String)? {
+        guard trimmed.hasPrefix("!["), trimmed.hasSuffix(")") else { return nil }
+        let afterBang = trimmed.index(trimmed.startIndex, offsetBy: 2)
+        guard let altEnd = trimmed[afterBang...].firstIndex(of: "]") else { return nil }
+        let parenStart = trimmed.index(after: altEnd)
+        guard parenStart < trimmed.endIndex, trimmed[parenStart] == "(" else { return nil }
+        let sourceStart = trimmed.index(after: parenStart)
+        let sourceEnd = trimmed.index(before: trimmed.endIndex)
+        guard sourceStart < sourceEnd else { return nil }
+        let alt = String(trimmed[afterBang..<altEnd]).trimmingCharacters(in: .whitespaces)
+        let rawSource = String(trimmed[sourceStart..<sourceEnd]).trimmingCharacters(in: .whitespaces)
+        guard !rawSource.isEmpty else { return nil }
+        let source = rawSource
+            .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map(String.init) ?? rawSource
+        return (alt, source)
     }
 }
 

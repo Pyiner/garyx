@@ -129,6 +129,30 @@ final class GaryxMobileTurnRendererTests: XCTestCase {
         XCTAssertFalse(secondTurn.steps.contains { $0.id == "assistant-1" })
     }
 
+    func testTurnEndingWithToolActivityCollapsesIntoWorkingTurn() throws {
+        // Mirrors the case where the assistant emits a brief intro reply, fires
+        // tool calls, and the next user message arrives before a closing
+        // assistant text. The first user turn must still render as a collapsible
+        // "Worked for" summary so the work isn't lost behind a bare reply.
+        let rows = GaryxMobileTurnRenderer.buildTurnRows(
+            messages: [
+                message("user-1", role: .user, text: "Send it"),
+                message("assistant-1", role: .assistant, text: "On it"),
+                toolMessage("tool-1"),
+                message("user-2", role: .user, text: "Use markdown"),
+                message("assistant-2", role: .assistant, text: "Sure", isStreaming: true),
+            ],
+            isRunningThread: true
+        )
+
+        XCTAssertEqual(rows.map(\.userBlock?.id), ["user-1", "user-2"])
+        guard case .turn(let firstTurn) = try XCTUnwrap(rows[0].activityRows.only) else {
+            return XCTFail("Expected the first turn to collapse into a working summary")
+        }
+        XCTAssertEqual(firstTurn.steps.map(\.id), ["assistant-1", "tool-1"])
+        XCTAssertNil(firstTurn.finalBlock)
+    }
+
     func testActivityModelShowsThinkingForTrailingUserOnlyRun() {
         let messages = [
             message("user-1", role: .user, text: "Run this"),
