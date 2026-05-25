@@ -36,7 +36,10 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
       configs:
         Debug:
+          CODE_SIGN_IDENTITY: iPhone Developer
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          CODE_SIGN_IDENTITY: Apple Distribution
   GaryxRecentThreadsWidget:
     type: app-extension
     platform: iOS
@@ -55,3 +58,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
         SKIP_INSTALL: YES
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: iPhone Developer
+        Release:
+          CODE_SIGN_IDENTITY: Apple Distribution
