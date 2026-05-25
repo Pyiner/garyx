@@ -815,6 +815,39 @@ final class GaryxMobileModel: ObservableObject {
         return true
     }
 
+    func canArchiveThread(_ thread: GaryxThreadSummary) -> Bool {
+        canArchiveThreadId(thread.id)
+    }
+
+    func canArchiveThreadId(_ threadId: String) -> Bool {
+        let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty, !isThreadBusy(normalizedId) else { return false }
+        if automations.contains(
+            where: { ($0.threadId ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == normalizedId }
+        ) {
+            return false
+        }
+        return true
+    }
+
+    func sidebarThreadSummary(for threadId: String) -> GaryxThreadSummary? {
+        let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return nil }
+        if selectedThread?.id == normalizedId {
+            return selectedThread
+        }
+        if let thread = threads.first(where: { $0.id == normalizedId }) {
+            return thread
+        }
+        if let thread = recentThreads.first(where: { $0.id == normalizedId }) {
+            return thread
+        }
+        if let thread = pinnedThreads.first(where: { $0.id == normalizedId }) {
+            return thread
+        }
+        return nil
+    }
+
     private func cachedMessages(for threadId: String) -> [GaryxMobileMessage] {
         messagesByThread[threadId] ?? []
     }
@@ -1882,6 +1915,15 @@ final class GaryxMobileModel: ObservableObject {
         pinnedThreadIds.removeAll { $0 == normalizedId }
     }
 
+    private func removeArchivedThreadLocally(_ threadId: String) {
+        let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedId.isEmpty else { return }
+        pinnedThreadIds.removeAll { $0 == normalizedId }
+        recentThreadIds.removeAll { $0 == normalizedId }
+        threads.removeAll { $0.id == normalizedId }
+        persistRecentThreadsWidgetSnapshot()
+    }
+
     private static func pinnedThreadIdsWith(
         _ ids: [String],
         threadId: String,
@@ -2801,7 +2843,16 @@ final class GaryxMobileModel: ObservableObject {
 
     func deleteSelectedThread() async {
         guard let selectedThread else { return }
-        await deleteThread(selectedThread)
+        await archiveThread(selectedThread)
+    }
+
+    func archiveThread(_ thread: GaryxThreadSummary) async {
+        let threadId = thread.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canArchiveThreadId(threadId) else {
+            lastError = "This thread is active or managed by an automation."
+            return
+        }
+        await archiveThreadRecord(threadId: threadId)
     }
 
     func deleteThread(_ thread: GaryxThreadSummary) async {
@@ -2811,7 +2862,7 @@ final class GaryxMobileModel: ObservableObject {
         }
         do {
             _ = try await client().deleteThread(threadId: thread.id)
-            removePinnedThreadIdLocally(thread.id)
+            removeArchivedThreadLocally(thread.id)
             if selectedThread?.id == thread.id {
                 self.selectedThread = nil
                 draftThreadTitle = ""
@@ -4034,6 +4085,7 @@ final class GaryxMobileModel: ObservableObject {
         _ automation: GaryxAutomationSummary,
         label: String,
         prompt: String,
+        agentId rawAgentId: String,
         schedule: GaryxAutomationSchedule,
         targetsExistingThread: Bool,
         targetThreadId: String,
@@ -4044,11 +4096,13 @@ final class GaryxMobileModel: ObservableObject {
         let nextTargetThreadId = targetsExistingThread
             ? targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
             : ""
+        let nextAgentId = rawAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextWorkspacePath = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextLabel.isEmpty, !nextPrompt.isEmpty else { return false }
         if targetsExistingThread {
             guard !nextTargetThreadId.isEmpty else { return false }
         } else {
+            guard !nextAgentId.isEmpty else { return false }
             guard !nextWorkspacePath.isEmpty else { return false }
         }
         do {
@@ -4057,6 +4111,7 @@ final class GaryxMobileModel: ObservableObject {
                 request: GaryxAutomationUpdateRequest(
                     label: nextLabel,
                     prompt: nextPrompt,
+                    agentId: nextTargetThreadId.isEmpty ? nextAgentId : nil,
                     workspaceDir: nextTargetThreadId.isEmpty ? nextWorkspacePath : nil,
                     targetThreadId: nextTargetThreadId.isEmpty ? nil : nextTargetThreadId,
                     clearsTargetThreadId: nextTargetThreadId.isEmpty,
@@ -4596,22 +4651,27 @@ final class GaryxMobileModel: ObservableObject {
     func createAutomation(
         label rawLabel: String,
         prompt rawPrompt: String,
+        agentId rawAgentId: String,
         workspacePath rawWorkspacePath: String,
         targetThreadId rawTargetThreadId: String,
         schedule: GaryxAutomationSchedule
     ) async -> Bool {
         let label = rawLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = rawPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let agentId = rawAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
         let workspace = rawWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
         let targetThreadId = rawTargetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !label.isEmpty, !prompt.isEmpty else { return false }
         guard !targetThreadId.isEmpty || !workspace.isEmpty else { return false }
+        if targetThreadId.isEmpty {
+            guard !agentId.isEmpty else { return false }
+        }
         do {
             let automation = try await client().createAutomation(
                 GaryxAutomationCreateRequest(
                     label: label,
                     prompt: prompt,
-                    agentId: selectedAgentTargetId,
+                    agentId: agentId.isEmpty ? nil : agentId,
                     workspaceDir: targetThreadId.isEmpty && !workspace.isEmpty ? workspace : nil,
                     targetThreadId: targetThreadId.isEmpty ? nil : targetThreadId,
                     schedule: schedule,
@@ -5221,22 +5281,27 @@ final class GaryxMobileModel: ObservableObject {
     func archiveBotConversationEndpoint(_ endpoint: GaryxChannelEndpoint) async {
         let threadId = endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !threadId.isEmpty else { return }
-        guard !isThreadBusy(threadId) else {
-            lastError = "This thread is active."
+        guard canArchiveThreadId(threadId) else {
+            lastError = "This thread is active or managed by an automation."
             return
         }
-        guard !automations.contains(where: { $0.threadId == threadId }) else {
-            lastError = "Delete this automation first."
-            return
-        }
+        await archiveThreadRecord(
+            threadId: threadId,
+            additionalEndpointKey: endpoint.endpointKey
+        )
+    }
+
+    private func archiveThreadRecord(threadId: String, additionalEndpointKey: String? = nil) async {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedThreadId.isEmpty else { return }
 
         var endpointKeys = Set(
             channelEndpoints
-                .filter { $0.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) == threadId }
+                .filter { $0.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) == normalizedThreadId }
                 .map(\.endpointKey)
                 .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         )
-        let currentEndpointKey = endpoint.endpointKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentEndpointKey = additionalEndpointKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !currentEndpointKey.isEmpty {
             endpointKeys.insert(currentEndpointKey)
         }
@@ -5245,9 +5310,14 @@ final class GaryxMobileModel: ObservableObject {
             for endpointKey in endpointKeys {
                 _ = try await client().detachChannelEndpoint(endpointKey: endpointKey)
             }
-            _ = try await client().deleteThread(threadId: threadId)
-            unpinThread(threadId)
-            if selectedThread?.id == threadId {
+            _ = try await client().deleteThread(threadId: normalizedThreadId)
+            removeArchivedThreadLocally(normalizedThreadId)
+            channelEndpoints.removeAll { endpoint in
+                let endpointThreadId = endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                return endpointKeys.contains(endpoint.endpointKey)
+                    || endpointThreadId == normalizedThreadId
+            }
+            if selectedThread?.id == normalizedThreadId {
                 selectedThread = nil
                 draftThreadTitle = ""
                 resetComposerDraft()
@@ -5255,10 +5325,10 @@ final class GaryxMobileModel: ObservableObject {
                 cancelSelectedThreadReconcileLoop()
                 resetSelectedThreadHistoryPagination()
             }
-            discardPendingAssistantDelta(for: threadId)
-            messagesByThread[threadId] = nil
-            messageSignaturesByThread[threadId] = nil
-            activeAssistantMessageIdsByThread[threadId] = nil
+            discardPendingAssistantDelta(for: normalizedThreadId)
+            messagesByThread[normalizedThreadId] = nil
+            messageSignaturesByThread[normalizedThreadId] = nil
+            activeAssistantMessageIdsByThread[normalizedThreadId] = nil
             await refreshRemoteState()
             await refreshThreads()
         } catch {

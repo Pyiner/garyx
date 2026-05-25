@@ -492,6 +492,40 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var runState: String?
     public var worktreePath: String?
 
+    public init(
+        id: String,
+        title: String,
+        createdAt: String?,
+        updatedAt: String?,
+        lastMessagePreview: String,
+        workspacePath: String?,
+        messageCount: Int?,
+        agentId: String?,
+        teamId: String?,
+        teamName: String?,
+        providerType: String?,
+        recentRunId: String?,
+        activeRunId: String?,
+        runState: String?,
+        worktreePath: String?
+    ) {
+        self.id = id
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.lastMessagePreview = lastMessagePreview
+        self.workspacePath = workspacePath
+        self.messageCount = messageCount
+        self.agentId = agentId
+        self.teamId = teamId
+        self.teamName = teamName
+        self.providerType = providerType
+        self.recentRunId = recentRunId
+        self.activeRunId = activeRunId
+        self.runState = runState
+        self.worktreePath = worktreePath
+    }
+
     enum CodingKeys: String, CodingKey {
         case id
         case threadId = "thread_id"

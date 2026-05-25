@@ -46,6 +46,7 @@ struct GaryxSidebarThreadRowPresentation: Equatable {
 struct GaryxAutomationDraft: Equatable {
     var label = ""
     var prompt = ""
+    var agentTargetId = ""
     var schedule = GaryxAutomationScheduleDraft()
     var targetsExistingThread = false
     var targetThreadId = ""
@@ -63,6 +64,10 @@ struct GaryxAutomationDraft: Equatable {
         workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    var trimmedAgentTargetId: String {
+        agentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var trimmedTargetThreadId: String {
         targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -75,7 +80,7 @@ struct GaryxAutomationDraft: Equatable {
         if targetsExistingThread {
             return !effectiveThreadId(threadOptions: threadOptions).isEmpty
         }
-        return !effectiveWorkspacePath(workspacePaths: workspacePaths).isEmpty
+        return !trimmedAgentTargetId.isEmpty && !effectiveWorkspacePath(workspacePaths: workspacePaths).isEmpty
     }
 
     func effectiveWorkspacePath(workspacePaths: [String]) -> String {

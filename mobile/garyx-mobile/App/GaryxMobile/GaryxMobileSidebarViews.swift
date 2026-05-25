@@ -552,6 +552,32 @@ private struct GaryxBotSidebarConversationEntry: Identifiable, Equatable {
     let endpoint: GaryxChannelEndpoint
 }
 
+private extension GaryxBotSidebarConversationEntry {
+    func fallbackThreadSummary(workspacePath: String?) -> GaryxThreadSummary? {
+        guard let threadId = threadId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadId.isEmpty else {
+            return nil
+        }
+        return GaryxThreadSummary(
+            id: threadId,
+            title: title.isEmpty ? "Thread" : title,
+            createdAt: nil,
+            updatedAt: latestActivity,
+            lastMessagePreview: subtitle ?? "",
+            workspacePath: workspacePath,
+            messageCount: nil,
+            agentId: nil,
+            teamId: nil,
+            teamName: nil,
+            providerType: nil,
+            recentRunId: nil,
+            activeRunId: nil,
+            runState: nil,
+            worktreePath: nil
+        )
+    }
+}
+
 extension GaryxMobileBotGroup {
     fileprivate var rootCanOpen: Bool {
         let mainThreadId = self.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -683,53 +709,20 @@ private struct GaryxBotThreadDetailSection: View {
                     .padding(.vertical, 8)
             } else {
                 ForEach(entries) { entry in
-                    let isSelected = entry.threadId.map { $0 == model.selectedThread?.id } ?? false
                     let timestamp = garyxFormattedTaskTimestamp(entry.latestActivity)
-                    GaryxSwipeActionRow(actions: conversationActions(for: entry)) {
-                        Button {
-                            guard let threadId = entry.threadId, entry.openable else { return }
-                            Task { await model.openBotThread(threadId) }
-                        } label: {
-                            HStack(alignment: .center, spacing: 8) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(entry.title)
-                                        .font(GaryxFont.subheadline(weight: .medium))
-                                        .foregroundStyle(.primary)
-                                        .lineLimit(1)
-                                        .truncationMode(.tail)
-
-                                    if let subtitle = entry.subtitle, !subtitle.isEmpty {
-                                        Text(subtitle)
-                                            .font(GaryxFont.caption())
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(1)
-                                            .truncationMode(.tail)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                                if isSelected {
-                                    Circle()
-                                        .fill(GaryxTheme.accent)
-                                        .frame(width: 7, height: 7)
-                                } else if !timestamp.isEmpty {
-                                    Text(timestamp)
-                                        .font(GaryxFont.caption())
-                                        .foregroundStyle(.tertiary)
-                                        .lineLimit(1)
-                                }
+                    if let thread = threadSummary(for: entry) {
+                        GaryxSidebarThreadButton(
+                            thread: thread,
+                            trailingTimestamp: timestamp,
+                            canArchive: canArchive(entry),
+                            onSelect: {
+                                guard let threadId = entry.threadId, entry.openable else { return }
+                                Task { await model.openBotThread(threadId) }
+                            },
+                            onArchive: {
+                                Task { await model.archiveBotConversationEndpoint(entry.endpoint) }
                             }
-                            .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
-                            .padding(.vertical, 10)
-                            .background {
-                                if isSelected {
-                                    Color(.secondarySystemGroupedBackground)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!entry.openable)
+                        )
                     }
                 }
             }
@@ -737,17 +730,21 @@ private struct GaryxBotThreadDetailSection: View {
         .transition(.opacity)
     }
 
-    private func conversationActions(for entry: GaryxBotSidebarConversationEntry) -> [GaryxSwipeAction] {
-        guard let threadId = entry.threadId,
-              !threadId.isEmpty,
-              !model.isThreadBusy(threadId) else {
-            return []
+    private func threadSummary(for entry: GaryxBotSidebarConversationEntry) -> GaryxThreadSummary? {
+        guard let threadId = entry.threadId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadId.isEmpty else {
+            return nil
         }
-        return [
-            GaryxSwipeAction(title: "Archive", systemImage: "archivebox", tone: .destructive) {
-                Task { await model.archiveBotConversationEndpoint(entry.endpoint) }
-            }
-        ]
+        return model.sidebarThreadSummary(for: threadId)
+            ?? entry.fallbackThreadSummary(workspacePath: group.workspaceDir)
+    }
+
+    private func canArchive(_ entry: GaryxBotSidebarConversationEntry) -> Bool {
+        guard let threadId = entry.threadId,
+              !threadId.isEmpty else {
+            return false
+        }
+        return model.canArchiveThreadId(threadId)
     }
 }
 
@@ -854,9 +851,7 @@ private struct GaryxWorkspaceThreadDetailSection: View {
                 ForEach(group.threads) { thread in
                     GaryxSidebarThreadButton(
                         thread: thread,
-                        showsWorkspaceMeta: false,
-                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt),
-                        isFullBleed: true
+                        trailingTimestamp: garyxFormattedTaskTimestamp(thread.updatedAt ?? thread.createdAt)
                     )
                 }
             }
@@ -917,9 +912,12 @@ private struct GaryxSidebarThreadButton: View {
     let thread: GaryxThreadSummary
     var indent: CGFloat = 0
     var showsPinnedMarker = false
-    var showsWorkspaceMeta = true
     var trailingTimestamp: String?
     var isFullBleed = false
+    var canArchive: Bool?
+    var onSelect: (() -> Void)?
+    var onArchive: (() -> Void)?
+    @State private var showsArchiveConfirmation = false
 
     var body: some View {
         GaryxSidebarThreadRowView(
@@ -931,13 +929,41 @@ private struct GaryxSidebarThreadButton: View {
             ),
             isFullBleed: isFullBleed,
             onSelect: {
-                Task { await model.selectThread(thread) }
+                if let onSelect {
+                    onSelect()
+                } else {
+                    Task { await model.selectThread(thread) }
+                }
             },
             onUnpin: {
                 model.unpinThread(thread.id)
             }
         )
+        .onLongPressGesture {
+            guard archiveAvailable else { return }
+            showsArchiveConfirmation = true
+        }
+        .confirmationDialog("Archive thread?", isPresented: $showsArchiveConfirmation, titleVisibility: .visible) {
+            Button("Archive", role: .destructive) {
+                archive()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(thread.title.isEmpty ? "This removes the thread from the list." : thread.title)
+        }
         .padding(.leading, indent)
+    }
+
+    private var archiveAvailable: Bool {
+        canArchive ?? model.canArchiveThread(thread)
+    }
+
+    private func archive() {
+        if let onArchive {
+            onArchive()
+        } else {
+            Task { await model.archiveThread(thread) }
+        }
     }
 }
 
