@@ -1735,6 +1735,38 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(botObject?["botId"] as? String, "telegram:main")
         XCTAssertEqual(botObject?["threadId"] as? String, "thread::test")
     }
+
+    func testMobileThreadLinkRoundTripsWidgetURL() throws {
+        let url = try XCTUnwrap(GaryxMobileThreadLink.make(threadId: " thread::recent "))
+
+        XCTAssertEqual(url.absoluteString, "garyx://mobile/thread?threadId=thread::recent")
+        XCTAssertEqual(GaryxMobileThreadLink.parse(url), "thread::recent")
+        XCTAssertEqual(GaryxMobileThreadLink.parse(URL(string: "garyx://thread?id=thread::other")!), "thread::other")
+        XCTAssertNil(GaryxMobileThreadLink.parse(URL(string: "garyx://mobile/connect?gatewayUrl=http://gateway.local")!))
+    }
+
+    func testWidgetStorePersistsOnlyFiveRecentThreads() {
+        let defaults = UserDefaults(suiteName: "garyx.mobile.widget.tests")!
+        GaryxMobileWidgetStore.clear(defaults: defaults)
+        let threads = (1...7).map { index in
+            GaryxMobileWidgetThread(
+                id: "thread::\(index)",
+                title: "Thread \(index)",
+                workspaceName: "Workspace"
+            )
+        }
+
+        GaryxMobileWidgetStore.saveRecentThreads(
+            threads,
+            refreshedAt: Date(timeIntervalSince1970: 100),
+            defaults: defaults
+        )
+
+        let snapshot = GaryxMobileWidgetStore.loadRecentThreads(defaults: defaults)
+        XCTAssertEqual(snapshot.threads.map(\.id), ["thread::1", "thread::2", "thread::3", "thread::4", "thread::5"])
+        XCTAssertEqual(snapshot.refreshedAt, Date(timeIntervalSince1970: 100))
+        GaryxMobileWidgetStore.clear(defaults: defaults)
+    }
 }
 
 private final class GaryxURLProtocolStub: URLProtocol {

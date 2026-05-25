@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
+import WidgetKit
 
 enum GaryxMobileConnectionState: Equatable {
     case disconnected
@@ -1900,6 +1901,8 @@ final class GaryxMobileModel: ObservableObject {
         threads = []
         pinnedThreadIds = []
         recentThreadIds = []
+        GaryxMobileWidgetStore.clear()
+        WidgetCenter.shared.reloadTimelines(ofKind: GaryxRecentThreadsWidgetConstants.kind)
         selectedThread = nil
         messages = []
         messagesByThread = [:]
@@ -2124,6 +2127,19 @@ final class GaryxMobileModel: ObservableObject {
         await connectAndRefresh()
     }
 
+    func handleOpenURL(_ url: URL) async {
+        if let threadId = GaryxMobileThreadLink.parse(url) {
+            if case .ready = connectionState {
+                await openThread(id: threadId)
+            } else if canConnectGateway {
+                await connectAndRefresh()
+                await openThread(id: threadId)
+            }
+            return
+        }
+        await applyMobileConnectLink(url)
+    }
+
     func connectAndRefresh() async {
         gatewayReconnectTask?.cancel()
         gatewayReconnectTask = nil
@@ -2286,6 +2302,7 @@ final class GaryxMobileModel: ObservableObject {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             let existingThreads = silent ? threads : []
             threads = Self.mergedThreadSummaries(existingThreads + nextThreads)
+            persistRecentThreadsWidgetSnapshot()
             refreshRemoteBusyIdsForVisibleThreads()
             if let previousSelectedId,
                let updatedSelection = threads.first(where: { $0.id == previousSelectedId }) {
@@ -2322,6 +2339,29 @@ final class GaryxMobileModel: ObservableObject {
         recentThreadIds = pageIds
     }
 
+    private func persistRecentThreadsWidgetSnapshot() {
+        var summariesById: [String: GaryxThreadSummary] = [:]
+        for thread in threads where summariesById[thread.id] == nil {
+            summariesById[thread.id] = thread
+        }
+        let widgetThreads = recentThreadIds.compactMap { threadId -> GaryxMobileWidgetThread? in
+            guard let thread = summariesById[threadId] else { return nil }
+            let workspaceName = thread.workspacePath?
+                .garyxLastPathComponent
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return GaryxMobileWidgetThread(
+                id: thread.id,
+                title: thread.title,
+                workspaceName: workspaceName,
+                updatedAt: thread.updatedAt ?? thread.createdAt,
+                activeRunId: thread.activeRunId,
+                runState: thread.runState
+            )
+        }
+        GaryxMobileWidgetStore.saveRecentThreads(Array(widgetThreads.prefix(GaryxMobileWidgetStore.threadLimit)))
+        WidgetCenter.shared.reloadTimelines(ofKind: GaryxRecentThreadsWidgetConstants.kind)
+    }
+
     @discardableResult
     private func applyThreadTitleUpdate(threadId: String, title: String) -> Bool {
         let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2346,6 +2386,9 @@ final class GaryxMobileModel: ObservableObject {
             changed = true
         }
 
+        if changed {
+            persistRecentThreadsWidgetSnapshot()
+        }
         return changed
     }
 

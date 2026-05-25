@@ -42,7 +42,7 @@ struct GaryxRootView: View {
                 return
             }
             #endif
-            Task { await model.applyMobileConnectLink(url) }
+            Task { await model.handleOpenURL(url) }
         }
         .sheet(isPresented: $model.showsSettings) {
             GaryxGatewaySetupView(isSheet: true)

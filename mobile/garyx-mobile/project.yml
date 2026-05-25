@@ -16,6 +16,9 @@ targets:
     sources:
       - path: App/GaryxMobile
       - path: Sources/GaryxMobileCore
+    dependencies:
+      - target: GaryxRecentThreadsWidget
+        embed: true
     resources:
       - App/GaryxMobile/Assets.xcassets
       - App/GaryxMobile/PrivacyInfo.xcprivacy
@@ -24,6 +27,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.garyx.mobile
         PRODUCT_NAME: Gary X
         INFOPLIST_FILE: App/GaryxMobile/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/GaryxMobile/GaryxMobile.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: 5.9
@@ -33,3 +37,21 @@ targets:
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+  GaryxRecentThreadsWidget:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Widget/GaryxRecentThreadsWidget
+      - path: Sources/GaryxMobileCore/GaryxMobileWidgetData.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.garyx.mobile.RecentThreadsWidget
+        PRODUCT_NAME: GaryxRecentThreadsWidget
+        INFOPLIST_FILE: Widget/GaryxRecentThreadsWidget/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Widget/GaryxRecentThreadsWidget/GaryxRecentThreadsWidget.entitlements
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: 5.9
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        SKIP_INSTALL: YES
