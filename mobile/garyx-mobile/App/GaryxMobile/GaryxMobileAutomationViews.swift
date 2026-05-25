@@ -105,6 +105,7 @@ struct GaryxAutomationScaffold<Content: View, TrailingAction: View>: View {
 }
 
 struct GaryxAutomationCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var model: GaryxMobileModel
     let automation: GaryxAutomationSummary
     @Binding var activeAutomationActionId: String?
@@ -138,6 +139,7 @@ struct GaryxAutomationCard: View {
 
                     Toggle("", isOn: automationEnabledBinding)
                         .labelsHidden()
+                        .tint(Color(.systemBlue))
                 }
 
                 Divider()
@@ -150,7 +152,7 @@ struct GaryxAutomationCard: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     Button {
-                        withAnimation(.easeOut(duration: 0.18)) {
+                        withAnimation(actionPanelAnimation) {
                             activeAutomationActionId = showsActionPanel ? nil : automation.id
                         }
                     } label: {
@@ -176,25 +178,25 @@ struct GaryxAutomationCard: View {
             if showsActionPanel {
                 GaryxAutomationActionPanel(
                     onRun: {
-                        activeAutomationActionId = nil
+                        closeActionPanel()
                         Task {
                             await model.runAutomation(automation)
                         }
                     },
                     onEdit: {
-                        activeAutomationActionId = nil
                         openEditForm()
                     },
                     onDelete: {
-                        activeAutomationActionId = nil
+                        closeActionPanel()
                         showsDeleteConfirmation = true
                     }
                 )
-                .offset(x: -10, y: -40)
-                .transition(.scale(scale: 0.94, anchor: .bottomTrailing).combined(with: .opacity))
+                .offset(x: -10, y: -42)
+                .transition(actionPanelTransition)
                 .zIndex(2)
             }
         }
+        .animation(actionPanelAnimation, value: showsActionPanel)
         .onChange(of: automation.enabled) { _, newValue in
             if optimisticEnabled == newValue {
                 optimisticEnabled = nil
@@ -220,6 +222,27 @@ struct GaryxAutomationCard: View {
         activeAutomationActionId == automation.id
     }
 
+    private var actionPanelAnimation: Animation? {
+        if reduceMotion {
+            return nil
+        }
+        return .timingCurve(0.16, 1.0, 0.3, 1.0, duration: 0.22)
+    }
+
+    private var actionPanelTransition: AnyTransition {
+        if reduceMotion {
+            return .opacity
+        }
+        return .asymmetric(
+            insertion: .scale(scale: 0.88, anchor: .bottomTrailing)
+                .combined(with: .offset(x: 8, y: 12))
+                .combined(with: .opacity),
+            removal: .scale(scale: 0.96, anchor: .bottomTrailing)
+                .combined(with: .offset(x: 4, y: 6))
+                .combined(with: .opacity)
+        )
+    }
+
     private var automationEnabledBinding: Binding<Bool> {
         Binding {
             optimisticEnabled ?? automation.enabled
@@ -233,8 +256,14 @@ struct GaryxAutomationCard: View {
         }
     }
 
+    private func closeActionPanel() {
+        withAnimation(actionPanelAnimation) {
+            activeAutomationActionId = nil
+        }
+    }
+
     private func openEditForm() {
-        activeAutomationActionId = nil
+        closeActionPanel()
         showsEditForm = true
     }
 }
@@ -297,19 +326,49 @@ struct GaryxAutomationActionPanel: View {
     let onDelete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            actionRow(title: "Run Once", systemName: "clock.arrow.circlepath", action: onRun)
-            actionRow(title: "Edit Automation", systemName: "pencil", action: onEdit)
-            actionRow(title: "Delete Automation", systemName: "trash", isDestructive: true, action: onDelete)
+        GaryxAdaptiveGlassContainer(spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                actionRow(title: "Run Once", systemName: "clock.arrow.circlepath", action: onRun)
+                actionRow(title: "Edit Automation", systemName: "pencil", action: onEdit)
+                actionRow(title: "Delete Automation", systemName: "trash", isDestructive: true, action: onDelete)
+            }
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, 8)
+        .padding(.horizontal, 6)
         .frame(width: 246)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .garyxAdaptiveGlass(
+            .regular,
+            isInteractive: false,
+            tint: nil,
+            fallbackMaterial: .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 26, style: .continuous)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.white.opacity(0.5), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.34),
+                            Color.white.opacity(0.06),
+                            Color.white.opacity(0.0)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .allowsHitTesting(false)
         }
-        .shadow(color: Color.black.opacity(0.18), radius: 26, x: 0, y: 16)
+        .overlay {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(Color.white.opacity(0.52), lineWidth: 0.8)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.18), radius: 30, x: 0, y: 18)
+        .shadow(color: Color.white.opacity(0.34), radius: 10, x: -6, y: -6)
     }
 
     private func actionRow(
@@ -321,18 +380,36 @@ struct GaryxAutomationActionPanel: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 16, weight: .medium))
-                    .frame(width: 22, height: 22)
+                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .frame(width: 28, height: 28)
+                    .background(
+                        Circle()
+                            .fill(Color.white.opacity(isDestructive ? 0.14 : 0.24))
+                    )
                 Text(title)
                     .font(GaryxFont.callout(weight: .medium))
                 Spacer(minLength: 0)
             }
             .foregroundStyle(isDestructive ? GaryxTheme.danger : .primary)
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 12)
             .frame(height: 48)
-            .contentShape(Rectangle())
+            .contentShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GaryxAutomationGlassActionButtonStyle())
+    }
+}
+
+private struct GaryxAutomationGlassActionButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                RoundedRectangle(cornerRadius: 17, style: .continuous)
+                    .fill(Color.white.opacity(configuration.isPressed ? 0.24 : 0.001))
+            }
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
