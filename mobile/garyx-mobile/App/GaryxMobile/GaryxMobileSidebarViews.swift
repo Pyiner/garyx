@@ -189,7 +189,7 @@ struct GaryxSidebarHeaderView: View {
                     )
                     .layoutPriority(1)
                 } else {
-                    Text("Gary X")
+                    Text("Garyx")
                         .font(GaryxFont.system(size: 26, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
