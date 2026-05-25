@@ -3543,205 +3543,10 @@ func garyxAutoResearchTone(_ state: String) -> GaryxStatusPill.Tone {
     }
 }
 
-struct GaryxBotsView: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-
-    var body: some View {
-        GaryxPanelScaffold(
-            title: "Bots",
-            subtitle: subtitle,
-            onRefresh: { await model.refreshRemoteState() }
-        ) {
-            GaryxBotsContent()
-        }
-    }
-
-    private var subtitle: String {
-        "\(model.configuredBots.count) configured"
-    }
-}
-
-struct GaryxBotsContent: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-
-    var body: some View {
-        let bots = sortedConfiguredBots
-        VStack(alignment: .leading, spacing: 10) {
-            if bots.isEmpty {
-                if !model.isLoadingRemoteState {
-                    GaryxEmptyPanelView(
-                        icon: "bubble.left.and.bubble.right",
-                        title: "No bots configured",
-                        text: ""
-                    )
-                }
-            } else {
-                GaryxSectionBlock(title: "Bots") {
-                    GaryxCompactListGroup {
-                        ForEach(Array(bots.enumerated()), id: \.element.id) { index, bot in
-                            GaryxConfiguredBotConfigRow(bot: bot)
-                            if index < bots.count - 1 {
-                                GaryxCompactGroupDivider()
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private var sortedConfiguredBots: [GaryxConfiguredBot] {
-        model.configuredBots.sorted { lhs, rhs in
-            let labelOrder = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
-            if labelOrder != .orderedSame {
-                return labelOrder == .orderedAscending
-            }
-            let channelOrder = lhs.channel.localizedCaseInsensitiveCompare(rhs.channel)
-            if channelOrder != .orderedSame {
-                return channelOrder == .orderedAscending
-            }
-            return lhs.accountId.localizedCaseInsensitiveCompare(rhs.accountId) == .orderedAscending
-        }
-    }
-}
-
-struct GaryxConfiguredBotConfigRow: View {
-    @EnvironmentObject private var model: GaryxMobileModel
-    let bot: GaryxConfiguredBot
-    @State private var showsDeleteConfirmation = false
-
-    var body: some View {
-        GaryxSwipeActionRow(actions: swipeActions) {
-            HStack(alignment: .center, spacing: 10) {
-                GaryxChannelLogoView(
-                    channel: bot.channel,
-                    label: bot.displayName,
-                    iconDataUrl: iconDataUrl,
-                    diameter: 28
-                )
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(bot.displayName)
-                        .font(GaryxFont.subheadline(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(detailLine)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer(minLength: 6)
-
-                GaryxStatusPill(text: bot.enabled ? "Enabled" : "Paused", tone: bot.enabled ? .good : .muted)
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 8)
-        }
-        .confirmationDialog("Delete bot account?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                Task { await model.deleteConfiguredBotAccount(bot) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes the channel account from the gateway configuration.")
-        }
-    }
-
-    private var swipeActions: [GaryxSwipeAction] {
-        var actions: [GaryxSwipeAction] = []
-        let rootBehavior = bot.rootBehavior.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let mainThreadId = bot.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !mainThreadId.isEmpty || rootBehavior != "expand_only" {
-            actions.append(
-                GaryxSwipeAction(title: "Open", systemImage: "arrow.up.right", tone: .accent) {
-                    Task { await model.openBotGroup(botGroup) }
-                }
-            )
-        }
-        if model.selectedThread != nil {
-            actions.append(
-                GaryxSwipeAction(title: "Bind", systemImage: "link") {
-                    Task { await model.bindBotToSelectedThread(bot) }
-                }
-            )
-        }
-        if !mainThreadId.isEmpty {
-            actions.append(
-                GaryxSwipeAction(title: "Unbind", systemImage: "link.badge.minus") {
-                    Task { await model.unbindBot(bot) }
-                }
-            )
-        }
-        actions.append(
-            GaryxSwipeAction(title: "Delete", systemImage: "trash", tone: .destructive) {
-                showsDeleteConfirmation = true
-            }
-        )
-        return actions
-    }
-
-    private var detailLine: String {
-        let workspace = bot.workspaceDir?.garyxLastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let agent = bot.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let base = "\(garyxConfiguredBotChannelDisplayName(bot.channel)) Bot · \(bot.accountId)"
-        if !workspace.isEmpty {
-            return "\(base) · \(workspace)"
-        }
-        if !agent.isEmpty {
-            return "\(base) · \(agent)"
-        }
-        return base
-    }
-
-    private var iconDataUrl: String? {
-        GaryxChannelIconResolver.iconDataUrl(for: bot.channel, plugins: model.channelPlugins)
-    }
-
-    private var botGroup: GaryxMobileBotGroup {
-        GaryxMobileBotGroup(
-            id: "\(bot.channel)::\(bot.accountId)",
-            channel: bot.channel,
-            accountId: bot.accountId,
-            title: bot.displayName,
-            subtitle: "\(garyxConfiguredBotChannelDisplayName(bot.channel)) Bot · \(bot.accountId)",
-            agentId: bot.agentId,
-            rootBehavior: bot.rootBehavior,
-            status: bot.enabled ? "idle" : "disabled",
-            endpointCount: 0,
-            boundEndpointCount: 0,
-            workspaceDir: bot.workspaceDir,
-            mainThreadId: bot.mainThreadId,
-            defaultOpenThreadId: bot.defaultOpenThreadId ?? bot.mainThreadId,
-            endpoints: [],
-            conversationNodes: [],
-            iconDataUrl: iconDataUrl
-        )
-    }
-}
-
-private func garyxConfiguredBotChannelDisplayName(_ channel: String) -> String {
-    let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines)
-    switch normalized.lowercased() {
-    case "telegram":
-        return "Telegram"
-    case "feishu":
-        return "Feishu"
-    case "weixin":
-        return "Weixin"
-    case "discord":
-        return "Discord"
-    case "api":
-        return "API"
-    default:
-        return normalized.isEmpty ? "Channel" : normalized
-    }
-}
-
 struct GaryxMobileSettingsPanel: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var showsGatewaySetup = false
+    @State private var showsCreateBot = false
     @State private var showsCreateCommand = false
     @State private var showsCreateMcp = false
 
@@ -3775,13 +3580,22 @@ struct GaryxMobileSettingsPanel: View {
                     GaryxAddToolbarButton(label: "Add Server") {
                         showsCreateMcp = true
                     }
-                case .manage, .provider, .channels:
+                case .channels:
+                    GaryxAddToolbarButton(label: "Add Bot") {
+                        showsCreateBot = true
+                    }
+                case .manage, .provider:
                     EmptyView()
                 }
             }
         }
         .fullScreenCover(isPresented: $showsGatewaySetup) {
             GaryxGatewaySetupView(isSheet: true, startsEmpty: true)
+        }
+        .fullScreenCover(isPresented: $showsCreateBot) {
+            GaryxFormSheet(title: "Add Bot") {
+                GaryxBotAccountForm(account: nil)
+            }
         }
         .fullScreenCover(isPresented: $showsCreateCommand) {
             GaryxFormSheet(title: "Add Command") {

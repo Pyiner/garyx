@@ -208,6 +208,29 @@ struct GaryxGatewayProfile: Identifiable, Codable, Equatable {
     var hasToken: Bool
 }
 
+struct GaryxConfiguredBotAccountSettings: Identifiable, Equatable {
+    var id: String { "\(channel):\(accountId)" }
+    var channel: String
+    var accountId: String
+    var displayName: String
+    var enabled: Bool
+    var agentId: String?
+    var workspaceDir: String?
+    var workspaceMode: String?
+    var config: [String: GaryxJSONValue]
+}
+
+struct GaryxConfiguredBotAccountInput: Equatable {
+    var channel: String
+    var accountId: String
+    var displayName: String
+    var enabled: Bool
+    var agentId: String?
+    var workspaceDir: String?
+    var workspaceMode: String?
+    var config: [String: GaryxJSONValue]
+}
+
 @MainActor
 final class GaryxMobileModel: ObservableObject {
     private static let threadListPageLimit = 30
@@ -314,6 +337,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var botConsoles: [GaryxBotConsoleSummary] = []
     @Published var botStatusesById: [String: GaryxBotBindingResult] = [:]
     @Published var channelPlugins: [GaryxChannelPluginCatalogEntry] = []
+    @Published var gatewaySettingsDocument: [String: GaryxJSONValue] = [:]
+    @Published var isSavingBotSettings = false
     @Published var providerModelsByType: [String: GaryxProviderModels] = [:]
     @Published var selectedSkillEditor: GaryxSkillEditorState?
     @Published var selectedSkillDocument: GaryxSkillFileDocument?
@@ -541,6 +566,90 @@ final class GaryxMobileModel: ObservableObject {
         return true
     }
 
+    private static func configuredBotAccountSettings(
+        from settings: [String: GaryxJSONValue]
+    ) -> [GaryxConfiguredBotAccountSettings] {
+        guard let channels = settings["channels"]?.objectValue else { return [] }
+        var accounts: [GaryxConfiguredBotAccountSettings] = []
+        for (channel, channelValue) in channels where channel != "api" {
+            guard let channelConfig = channelValue.objectValue,
+                  let accountValues = channelConfig["accounts"]?.objectValue else {
+                continue
+            }
+            for (accountId, rawAccount) in accountValues {
+                guard let account = rawAccount.objectValue else { continue }
+                let name = account.stringValue(forKeys: ["name"])
+                let config = account.objectValue(forKeys: ["config"]) ?? [:]
+                accounts.append(
+                    GaryxConfiguredBotAccountSettings(
+                        channel: channel,
+                        accountId: accountId,
+                        displayName: name ?? accountId,
+                        enabled: account.boolValue(forKeys: ["enabled"]) ?? true,
+                        agentId: account.stringValue(forKeys: ["agent_id", "agentId"]),
+                        workspaceDir: account.stringValue(forKeys: ["workspace_dir", "workspaceDir"]),
+                        workspaceMode: account.stringValue(forKeys: ["workspace_mode", "workspaceMode"]),
+                        config: config
+                    )
+                )
+            }
+        }
+        return accounts.sorted { lhs, rhs in
+            let channelOrder = lhs.channel.localizedCaseInsensitiveCompare(rhs.channel)
+            if channelOrder != .orderedSame {
+                return channelOrder == .orderedAscending
+            }
+            let nameOrder = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
+            if nameOrder != .orderedSame {
+                return nameOrder == .orderedAscending
+            }
+            return lhs.accountId.localizedCaseInsensitiveCompare(rhs.accountId) == .orderedAscending
+        }
+    }
+
+    private static func setChannelAccount(
+        in settings: inout [String: GaryxJSONValue],
+        originalChannel: String?,
+        originalAccountId: String?,
+        input: GaryxConfiguredBotAccountInput
+    ) -> Bool {
+        let channel = input.channel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accountId = input.accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !channel.isEmpty, !accountId.isEmpty else { return false }
+
+        var channels = settings["channels"]?.objectValue ?? [:]
+        if let originalChannel,
+           let originalAccountId,
+           (originalChannel.caseInsensitiveCompare(channel) != .orderedSame || originalAccountId != accountId) {
+            _ = removeChannelAccount(from: &settings, channel: originalChannel, accountId: originalAccountId)
+            channels = settings["channels"]?.objectValue ?? channels
+        }
+
+        var channelConfig = channels[channel]?.objectValue ?? [:]
+        var accounts = channelConfig["accounts"]?.objectValue ?? [:]
+        var account: [String: GaryxJSONValue] = [
+            "enabled": .bool(input.enabled),
+            "config": .object(input.config),
+        ]
+        if let name = input.displayName.garyxTrimmedNilIfEmpty {
+            account["name"] = .string(name)
+        }
+        if let agentId = input.agentId?.garyxTrimmedNilIfEmpty {
+            account["agent_id"] = .string(agentId)
+        }
+        if let workspaceDir = input.workspaceDir?.garyxTrimmedNilIfEmpty {
+            account["workspace_dir"] = .string(workspaceDir)
+        }
+        if let workspaceMode = input.workspaceMode?.garyxTrimmedNilIfEmpty {
+            account["workspace_mode"] = .string(workspaceMode)
+        }
+        accounts[accountId] = .object(account)
+        channelConfig["accounts"] = .object(accounts)
+        channels[channel] = .object(channelConfig)
+        settings["channels"] = .object(channels)
+        return true
+    }
+
     private static func channelDisplayName(_ channel: String) -> String {
         let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines)
         switch normalized.lowercased() {
@@ -576,6 +685,10 @@ final class GaryxMobileModel: ObservableObject {
 
     var hasGatewaySettings: Bool {
         !gatewayURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var configuredBotAccountSettings: [GaryxConfiguredBotAccountSettings] {
+        Self.configuredBotAccountSettings(from: gatewaySettingsDocument)
     }
 
     var canConnectGateway: Bool {
@@ -1810,6 +1923,8 @@ final class GaryxMobileModel: ObservableObject {
         botConsoles = []
         botStatusesById = [:]
         channelPlugins = []
+        gatewaySettingsDocument = [:]
+        isSavingBotSettings = false
         providerModelsByType = [:]
         selectedWorkspacePath = ""
         selectedWorkspaceDirectory = ""
@@ -2102,6 +2217,7 @@ final class GaryxMobileModel: ObservableObject {
                 latestDreamScan = page.scan ?? page.latestScan
             }
             if let settings = nextGatewaySettings {
+                gatewaySettingsDocument = settings
                 applyGatewayRuntimeSettings(settings)
             }
             automations = nextAutomations ?? automations
@@ -4512,6 +4628,112 @@ final class GaryxMobileModel: ObservableObject {
     func unbindBot(_ bot: GaryxConfiguredBot) async {
         do {
             botStatusesById[bot.id] = try await client().unbindBot(botId: bot.id)
+            await refreshRemoteState()
+        } catch {
+            lastError = displayMessage(for: error)
+        }
+    }
+
+    func saveConfiguredBotAccount(
+        _ input: GaryxConfiguredBotAccountInput,
+        original: GaryxConfiguredBotAccountSettings? = nil
+    ) async -> Bool {
+        let channel = input.channel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let accountId = input.accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !channel.isEmpty else {
+            lastError = "Channel is required"
+            return false
+        }
+        guard !accountId.isEmpty else {
+            lastError = "Account ID is required"
+            return false
+        }
+        if original == nil,
+           configuredBotAccountSettings.contains(where: {
+               $0.channel.caseInsensitiveCompare(channel) == .orderedSame && $0.accountId == accountId
+           }) {
+            lastError = "Bot account already exists"
+            return false
+        }
+
+        isSavingBotSettings = true
+        defer { isSavingBotSettings = false }
+        do {
+            let validation = try await client().validateChannelAccount(
+                pluginId: channel,
+                request: GaryxChannelAccountValidationRequest(
+                    accountId: accountId,
+                    enabled: input.enabled,
+                    config: input.config
+                )
+            )
+            guard validation.validated else {
+                lastError = validation.message
+                return false
+            }
+
+            var settings = try await client().gatewaySettings()
+            guard Self.setChannelAccount(
+                in: &settings,
+                originalChannel: original?.channel,
+                originalAccountId: original?.accountId,
+                input: input
+            ) else {
+                lastError = "Bot account could not be saved"
+                return false
+            }
+            _ = try await client().saveGatewaySettings(settings, merge: false)
+            gatewaySettingsDocument = settings
+            await refreshRemoteState()
+            return true
+        } catch {
+            lastError = displayMessage(for: error)
+            return false
+        }
+    }
+
+    func setConfiguredBotAccountEnabled(_ account: GaryxConfiguredBotAccountSettings, enabled: Bool) async {
+        let input = GaryxConfiguredBotAccountInput(
+            channel: account.channel,
+            accountId: account.accountId,
+            displayName: account.displayName,
+            enabled: enabled,
+            agentId: account.agentId,
+            workspaceDir: account.workspaceDir,
+            workspaceMode: account.workspaceMode,
+            config: account.config
+        )
+        _ = await saveConfiguredBotAccount(input, original: account)
+    }
+
+    func deleteConfiguredBotAccount(_ account: GaryxConfiguredBotAccountSettings) async {
+        isSavingBotSettings = true
+        defer { isSavingBotSettings = false }
+        do {
+            var settings = try await client().gatewaySettings()
+            guard Self.removeChannelAccount(
+                from: &settings,
+                channel: account.channel,
+                accountId: account.accountId
+            ) else {
+                lastError = "Bot account not found"
+                return
+            }
+            _ = try await client().saveGatewaySettings(settings, merge: false)
+            gatewaySettingsDocument = settings
+            configuredBots.removeAll {
+                $0.channel.caseInsensitiveCompare(account.channel) == .orderedSame
+                    && $0.accountId == account.accountId
+            }
+            channelEndpoints.removeAll { endpoint in
+                endpoint.channel.caseInsensitiveCompare(account.channel) == .orderedSame
+                    && endpoint.accountId == account.accountId
+            }
+            botConsoles.removeAll {
+                $0.channel.caseInsensitiveCompare(account.channel) == .orderedSame
+                    && $0.accountId == account.accountId
+            }
+            botStatusesById.removeValue(forKey: account.id)
             await refreshRemoteState()
         } catch {
             lastError = displayMessage(for: error)

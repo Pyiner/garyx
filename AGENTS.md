@@ -90,7 +90,9 @@ from a real chat captured during local debugging.
    for the current task, and leave unrelated user work untouched.
 9. iOS TestFlight releases are independent from the macOS/gateway release flow:
    do not wire iOS uploads into version-tag release jobs unless the user
-   explicitly asks for that coupling.
+   explicitly asks for that coupling. Do not trigger an iOS TestFlight build
+   or upload unless the user explicitly asks for TestFlight packaging/upload in
+   the current turn.
 
 ## Desktop Dev Mode
 
