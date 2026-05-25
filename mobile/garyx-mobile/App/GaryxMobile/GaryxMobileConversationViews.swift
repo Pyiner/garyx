@@ -801,6 +801,8 @@ struct GaryxEmptyConversationView: View {
 struct GaryxMessageBubble: View {
     let message: GaryxMobileMessage
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var model: GaryxMobileModel
+    @State private var retrying = false
 
     var body: some View {
         Group {
@@ -838,11 +840,7 @@ struct GaryxMessageBubble: View {
                     }
 
                     if let statusText = message.statusText, !statusText.isEmpty {
-                        Text(statusText)
-                            .font(GaryxFont.caption())
-                            .foregroundStyle(Color(.systemRed))
-                            .lineLimit(2)
-                            .multilineTextAlignment(.trailing)
+                        failureStatusRow(statusText: statusText)
                     }
                 }
                 .frame(maxWidth: UIScreen.main.bounds.width * 0.77, alignment: .trailing)
@@ -897,6 +895,47 @@ struct GaryxMessageBubble: View {
 
     private var userCodeBackground: Color {
         colorScheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.055)
+    }
+
+    @ViewBuilder
+    private func failureStatusRow(statusText: String) -> some View {
+        let canRetry = message.id.hasPrefix("local-user-")
+            || message.id.hasPrefix("pending-user:")
+        if canRetry {
+            Button {
+                guard !retrying else { return }
+                retrying = true
+                Task {
+                    _ = await model.retryFailedUserMessage(message.id)
+                    retrying = false
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if retrying {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(GaryxFont.system(size: 11, weight: .semibold))
+                    }
+                    Text(retrying ? "Retrying…" : statusText)
+                        .font(GaryxFont.caption())
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                }
+                .foregroundStyle(Color(.systemRed))
+            }
+            .buttonStyle(.plain)
+            .disabled(retrying)
+            .accessibilityLabel(Text("Retry message"))
+            .accessibilityHint(Text(statusText))
+        } else {
+            Text(statusText)
+                .font(GaryxFont.caption())
+                .foregroundStyle(Color(.systemRed))
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+        }
     }
 }
 

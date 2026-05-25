@@ -46,6 +46,108 @@ public enum GaryxGatewayError: Error, Equatable, LocalizedError {
     }
 }
 
+public struct GaryxGatewayRetryPolicy: Equatable, Sendable {
+    public var maxAttempts: Int
+    public var initialDelay: TimeInterval
+    public var maxDelay: TimeInterval
+    public var backoffMultiplier: Double
+    public var jitter: TimeInterval
+
+    public init(
+        maxAttempts: Int = 3,
+        initialDelay: TimeInterval = 0.4,
+        maxDelay: TimeInterval = 4.0,
+        backoffMultiplier: Double = 2.5,
+        jitter: TimeInterval = 0.2
+    ) {
+        self.maxAttempts = max(1, maxAttempts)
+        self.initialDelay = max(0, initialDelay)
+        self.maxDelay = max(self.initialDelay, maxDelay)
+        self.backoffMultiplier = max(1.0, backoffMultiplier)
+        self.jitter = max(0, jitter)
+    }
+
+    public static let `default` = GaryxGatewayRetryPolicy()
+    public static let disabled = GaryxGatewayRetryPolicy(
+        maxAttempts: 1,
+        initialDelay: 0,
+        maxDelay: 0,
+        backoffMultiplier: 1,
+        jitter: 0
+    )
+
+    public func delay(forAttempt attempt: Int) -> TimeInterval {
+        guard attempt >= 1 else { return 0 }
+        let exponent = Double(attempt - 1)
+        let base = initialDelay * pow(backoffMultiplier, exponent)
+        let capped = min(base, maxDelay)
+        guard jitter > 0 else { return capped }
+        let jitterAmount = Double.random(in: -jitter...jitter)
+        return max(0, capped + jitterAmount)
+    }
+}
+
+public enum GaryxGatewayRetryClassifier {
+    /// Errors raised before the request reached the server. Always safe to retry.
+    public static func isConnectionEstablishmentError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else { return false }
+        switch nsError.code {
+        case NSURLErrorCannotConnectToHost,
+             NSURLErrorCannotFindHost,
+             NSURLErrorDNSLookupFailed,
+             NSURLErrorNotConnectedToInternet,
+             NSURLErrorInternationalRoamingOff,
+             NSURLErrorCallIsActive,
+             NSURLErrorDataNotAllowed,
+             NSURLErrorRequestBodyStreamExhausted,
+             NSURLErrorNetworkConnectionLost,
+             NSURLErrorResourceUnavailable:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Errors that could have been partially processed by the server. Safe only for idempotent calls.
+    public static func isAmbiguousNetworkError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain else { return false }
+        switch nsError.code {
+        case NSURLErrorTimedOut,
+             NSURLErrorBadServerResponse,
+             NSURLErrorCannotParseResponse,
+             NSURLErrorZeroByteResource:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public static func isRetryableStatus(_ statusCode: Int, idempotent: Bool) -> Bool {
+        switch statusCode {
+        case 502:
+            // Bad Gateway typically means a reverse proxy failed to reach the upstream:
+            // the request was not processed, so retrying is safe for any method.
+            return true
+        case 503, 504:
+            // Service Unavailable / Gateway Timeout might have partially processed the
+            // request, so only retry for idempotent calls.
+            return idempotent
+        case 408, 425, 429:
+            return idempotent
+        default:
+            return false
+        }
+    }
+
+    public static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+}
+
 public struct GaryxSystemStatus: Decodable, Equatable, Sendable {
     public struct ThreadCount: Decodable, Equatable, Sendable {
         public var count: Int
@@ -3600,18 +3702,23 @@ public final class GaryxGatewayClient {
     private let session: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let retryPolicy: GaryxGatewayRetryPolicy
 
     public init(
         configuration: GaryxGatewayConfiguration,
         session: URLSession = .shared,
         encoder: JSONEncoder = JSONEncoder(),
-        decoder: JSONDecoder = JSONDecoder()
+        decoder: JSONDecoder = JSONDecoder(),
+        retryPolicy: GaryxGatewayRetryPolicy = .default
     ) {
         self.configuration = configuration
         self.session = session
         self.encoder = encoder
         self.decoder = decoder
+        self.retryPolicy = retryPolicy
     }
+
+    public var retry: GaryxGatewayRetryPolicy { retryPolicy }
 
     static func encodePathSegment(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: garyxURLPathSegmentAllowed) ?? value
@@ -3745,10 +3852,14 @@ public final class GaryxGatewayClient {
     }
 
     public func interruptThread(threadId: String) async throws -> GaryxInterruptResult {
-        try await post("/api/chat/interrupt", body: GaryxInterruptRequest(threadId: threadId))
+        // Interrupt is idempotent: repeating it for the same thread converges on the same state.
+        try await post("/api/chat/interrupt", body: GaryxInterruptRequest(threadId: threadId), idempotent: true)
     }
 
     public func streamInput(_ request: GaryxStreamInputRequest) async throws -> GaryxStreamInputResult {
+        // Gateway does not dedup by client_intent_id on the queue, so we keep this
+        // non-idempotent: only connection-establishment errors auto-retry (safe because
+        // the request never reached the server). 5xx/timeout surface for explicit retry.
         try await post("/api/chat/stream-input", body: request)
     }
 
@@ -4280,23 +4391,31 @@ public final class GaryxGatewayClient {
     ) async throws -> Response {
         var request = try makeRequest(path: path, method: "GET", queryItems: queryItems)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        return try await send(request)
+        return try await send(request, idempotent: true)
     }
 
-    private func post<Response: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> Response {
+    private func post<Response: Decodable, Body: Encodable>(
+        _ path: String,
+        body: Body,
+        idempotent: Bool = false
+    ) async throws -> Response {
         var request = try makeRequest(path: path, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        return try await send(request)
+        return try await send(request, idempotent: idempotent)
     }
 
-    private func patch<Response: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> Response {
+    private func patch<Response: Decodable, Body: Encodable>(
+        _ path: String,
+        body: Body,
+        idempotent: Bool = false
+    ) async throws -> Response {
         var request = try makeRequest(path: path, method: "PATCH")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        return try await send(request)
+        return try await send(request, idempotent: idempotent)
     }
 
     private func put<Response: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> Response {
@@ -4304,7 +4423,7 @@ public final class GaryxGatewayClient {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        return try await send(request)
+        return try await send(request, idempotent: true)
     }
 
     private func delete<Response: Decodable>(
@@ -4313,7 +4432,7 @@ public final class GaryxGatewayClient {
     ) async throws -> Response {
         var request = try makeRequest(path: path, method: "DELETE", queryItems: queryItems)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        return try await send(request)
+        return try await send(request, idempotent: true)
     }
 
     private func makeRequest(
@@ -4329,19 +4448,79 @@ public final class GaryxGatewayClient {
         return request
     }
 
-    private func send<Response: Decodable>(_ request: URLRequest) async throws -> Response {
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw GaryxGatewayError.invalidHTTPResponse
+    private func send<Response: Decodable>(_ request: URLRequest, idempotent: Bool) async throws -> Response {
+        let maxAttempts = retryPolicy.maxAttempts
+        var attempt = 0
+        while true {
+            attempt += 1
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    throw GaryxGatewayError.invalidHTTPResponse
+                }
+                if (200..<300).contains(http.statusCode) {
+                    if data.isEmpty, Response.self == GaryxEmptyResponse.self {
+                        return GaryxEmptyResponse() as! Response
+                    }
+                    return try decoder.decode(Response.self, from: data)
+                }
+                let body = String(data: data, encoding: .utf8) ?? ""
+                let error = GaryxGatewayError.httpStatus(http.statusCode, body)
+                if attempt < maxAttempts,
+                   GaryxGatewayRetryClassifier.isRetryableStatus(http.statusCode, idempotent: idempotent) {
+                    try await sleepForRetry(after: error, attempt: attempt, response: http)
+                    continue
+                }
+                throw error
+            } catch let error as GaryxGatewayError {
+                throw error
+            } catch {
+                if GaryxGatewayRetryClassifier.isCancellation(error) {
+                    throw error
+                }
+                let shouldRetry: Bool
+                if GaryxGatewayRetryClassifier.isConnectionEstablishmentError(error) {
+                    shouldRetry = true
+                } else if idempotent, GaryxGatewayRetryClassifier.isAmbiguousNetworkError(error) {
+                    shouldRetry = true
+                } else {
+                    shouldRetry = false
+                }
+                if attempt < maxAttempts, shouldRetry {
+                    try await sleepForRetry(after: error, attempt: attempt, response: nil)
+                    continue
+                }
+                throw error
+            }
         }
-        guard (200..<300).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw GaryxGatewayError.httpStatus(http.statusCode, body)
+    }
+
+    private func sleepForRetry(after error: Error, attempt: Int, response: HTTPURLResponse?) async throws {
+        try Task.checkCancellation()
+        let retryAfter = response.flatMap { Self.retryAfterDelay(from: $0) }
+        let computed = retryPolicy.delay(forAttempt: attempt)
+        let delay = max(retryAfter ?? 0, computed)
+        guard delay > 0 else { return }
+        let nanoseconds = UInt64(delay * 1_000_000_000)
+        try await Task.sleep(nanoseconds: nanoseconds)
+        try Task.checkCancellation()
+    }
+
+    private static func retryAfterDelay(from response: HTTPURLResponse) -> TimeInterval? {
+        guard let header = response.value(forHTTPHeaderField: "Retry-After")?
+            .trimmingCharacters(in: .whitespacesAndNewlines), !header.isEmpty
+        else { return nil }
+        if let seconds = TimeInterval(header) {
+            return max(0, seconds)
         }
-        if data.isEmpty, Response.self == GaryxEmptyResponse.self {
-            return GaryxEmptyResponse() as! Response
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        if let date = formatter.date(from: header) {
+            return max(0, date.timeIntervalSinceNow)
         }
-        return try decoder.decode(Response.self, from: data)
+        return nil
     }
 }
 

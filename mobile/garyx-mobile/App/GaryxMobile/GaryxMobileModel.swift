@@ -3170,10 +3170,6 @@ final class GaryxMobileModel: ObservableObject {
             remoteBusyThreadIds.remove(thread.id)
             lastError = nil
             activeAssistantMessageIdsByThread[thread.id] = assistantId
-            let task = try client().makeWebSocketTask()
-            activeTask = task
-            activeTasksByThread[thread.id] = task
-            task.resume()
             let workspacePath = Self.firstNonEmpty(
                 thread.workspacePath,
                 newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3192,7 +3188,9 @@ final class GaryxMobileModel: ObservableObject {
                     ]
                 )
             )
-            try await task.send(.string(command))
+            let task = try await openChatWebSocketAndSend(command: command)
+            activeTask = task
+            activeTasksByThread[thread.id] = task
             activeReaderTasksByThread[thread.id]?.cancel()
             let readerTask = Task { [weak self, weak task] in
                 guard let self, let task else { return }
@@ -3386,10 +3384,6 @@ final class GaryxMobileModel: ObservableObject {
             isSending = true
             activeRunThreadId = queued.threadId
             activeAssistantMessageIdsByThread[queued.threadId] = assistantId
-            let task = try client().makeWebSocketTask()
-            activeTask = task
-            activeTasksByThread[queued.threadId] = task
-            task.resume()
             let workspacePath = Self.firstNonEmpty(
                 thread.workspacePath,
                 newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -3408,7 +3402,9 @@ final class GaryxMobileModel: ObservableObject {
                     ]
                 )
             )
-            try await task.send(.string(command))
+            let task = try await openChatWebSocketAndSend(command: command)
+            activeTask = task
+            activeTasksByThread[queued.threadId] = task
             activeReaderTasksByThread[queued.threadId]?.cancel()
             let readerTask = Task { [weak self, weak task] in
                 guard let self, let task else { return }
@@ -3427,6 +3423,98 @@ final class GaryxMobileModel: ObservableObject {
             cancelActiveSocket(for: queued.threadId)
             lastError = displayMessage(for: error)
         }
+    }
+
+    /// Dial the chat WebSocket and send the first command, retrying transient failures
+    /// with bounded backoff before bubbling the error up to the user.
+    private func openChatWebSocketAndSend(command: String) async throws -> URLSessionWebSocketTask {
+        let gateway = try client()
+        let policy = gateway.retry
+        var attempt = 0
+        while true {
+            attempt += 1
+            try Task.checkCancellation()
+            let task = try gateway.makeWebSocketTask()
+            task.resume()
+            do {
+                try await task.send(.string(command))
+                return task
+            } catch {
+                task.cancel(with: .goingAway, reason: nil)
+                if Self.isCancellationError(error) {
+                    throw error
+                }
+                let canRetry = attempt < policy.maxAttempts
+                    && Self.isRetryableWebSocketSendError(error)
+                if !canRetry {
+                    throw error
+                }
+                let delay = policy.delay(forAttempt: attempt)
+                if delay > 0 {
+                    let nanoseconds = UInt64(delay * 1_000_000_000)
+                    try await Task.sleep(nanoseconds: nanoseconds)
+                }
+            }
+        }
+    }
+
+    private static func isRetryableWebSocketSendError(_ error: Error) -> Bool {
+        if GaryxGatewayRetryClassifier.isConnectionEstablishmentError(error) {
+            return true
+        }
+        if GaryxGatewayRetryClassifier.isAmbiguousNetworkError(error) {
+            return true
+        }
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain {
+            // POSIX errors raised mid-handshake (ENOTCONN, EPIPE, etc.) — safe to retry.
+            return true
+        }
+        return false
+    }
+
+    /// Re-send a user message that previously failed. Removes the failed user bubble +
+    /// any trailing failed assistant placeholder and runs the normal send pipeline.
+    @discardableResult
+    func retryFailedUserMessage(_ messageId: String) async -> Bool {
+        guard let threadId = selectedThread?.id else { return false }
+        var capturedText: String?
+        var capturedAttachments: [GaryxMobileMessageAttachment] = []
+        mutateMessages(for: threadId) { messages in
+            guard let index = messages.firstIndex(where: { message in
+                message.id == messageId
+                    && message.role == .user
+                    && (message.statusText?.isEmpty == false)
+            }) else {
+                return
+            }
+            capturedText = messages[index].text
+            capturedAttachments = messages[index].attachments
+            // Drop the failed user bubble plus any trailing local assistant placeholder
+            // so the resend path can rebuild the optimistic state cleanly.
+            messages.removeSubrange(index..<messages.endIndex)
+        }
+        guard let text = capturedText else { return false }
+        let composerAttachments = capturedAttachments.compactMap(Self.composerAttachment(from:))
+        lastError = nil
+        await send(text, attachments: composerAttachments)
+        return true
+    }
+
+    private static func composerAttachment(
+        from messageAttachment: GaryxMobileMessageAttachment
+    ) -> GaryxMobileComposerAttachment? {
+        guard let path = messageAttachment.path?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty
+        else { return nil }
+        return GaryxMobileComposerAttachment(
+            id: messageAttachment.id,
+            kind: messageAttachment.kind,
+            name: messageAttachment.name,
+            mediaType: messageAttachment.mediaType,
+            path: path,
+            previewDataUrl: messageAttachment.dataUrl
+        )
     }
 
     func interruptActiveRun() async {
