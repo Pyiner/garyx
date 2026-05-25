@@ -14,6 +14,9 @@ real tokens or secrets. Use clearly synthetic placeholders instead, e.g.
 Before staging a change, scan the diff for personal data and remove it. If a
 test needs to reference an account, build it from a placeholder fixture, not
 from a real chat captured during local debugging.
+When committing from an agent, ensure Git author and committer metadata are
+synthetic too; override any local real-name or real-email Git config with
+placeholders such as `Test User <bot@example.com>`.
 
 ## Repository Shape
 
