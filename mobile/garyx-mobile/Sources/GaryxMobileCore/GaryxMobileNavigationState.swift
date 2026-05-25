@@ -188,43 +188,55 @@ public enum GaryxMobilePanelOpenSource: Equatable, Sendable {
     case replace
 }
 
+public enum GaryxWorkspaceBotsDrilldown: Equatable, Sendable {
+    case bot(String)
+    case workspace(String)
+}
+
 public struct GaryxMobilePanelRoute: Equatable, Sendable {
     public let panel: GaryxMobilePanel
     public let settingsTab: GaryxMobileSettingsTab
+    public let workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown?
 
-    public init(panel: GaryxMobilePanel, settingsTab: GaryxMobileSettingsTab) {
+    public init(
+        panel: GaryxMobilePanel,
+        settingsTab: GaryxMobileSettingsTab,
+        workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown? = nil
+    ) {
         self.panel = panel
         self.settingsTab = settingsTab
+        self.workspaceBotsDrilldown = workspaceBotsDrilldown
     }
 }
 
 public struct GaryxMobileNavigationState: Equatable, Sendable {
     public private(set) var activePanel: GaryxMobilePanel
     public var activeSettingsTab: GaryxMobileSettingsTab
-    public var workspaceBotsDrilldownActive: Bool
-    public var workspaceBotsBackRequest: Int
+    public var workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown?
     public private(set) var mainPanelBackStack: [GaryxMobilePanelRoute]
 
     public init(
         activePanel: GaryxMobilePanel = .chat,
         activeSettingsTab: GaryxMobileSettingsTab = .manage,
-        workspaceBotsDrilldownActive: Bool = false,
-        workspaceBotsBackRequest: Int = 0,
+        workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown? = nil,
         mainPanelBackStack: [GaryxMobilePanelRoute] = []
     ) {
         self.activePanel = activePanel
         self.activeSettingsTab = activeSettingsTab
-        self.workspaceBotsDrilldownActive = workspaceBotsDrilldownActive
-        self.workspaceBotsBackRequest = workspaceBotsBackRequest
+        self.workspaceBotsDrilldown = workspaceBotsDrilldown
         self.mainPanelBackStack = mainPanelBackStack
     }
 
     public var currentRoute: GaryxMobilePanelRoute {
-        GaryxMobilePanelRoute(panel: activePanel, settingsTab: activeSettingsTab)
+        GaryxMobilePanelRoute(
+            panel: activePanel,
+            settingsTab: activeSettingsTab,
+            workspaceBotsDrilldown: activePanel == .workspaceBots ? workspaceBotsDrilldown : nil
+        )
     }
 
     public var leadingEdgeAction: GaryxMobileLeadingEdgeAction {
-        if activePanel == .workspaceBots, workspaceBotsDrilldownActive {
+        if activePanel == .workspaceBots, workspaceBotsDrilldown != nil {
             return .workspaceBotsOverview
         }
         if activePanel == .settings, activeSettingsTab != .manage {
@@ -241,12 +253,12 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
         activePanel = panel
         mainPanelBackStack.removeAll()
         if panel != .workspaceBots {
-            workspaceBotsDrilldownActive = false
+            workspaceBotsDrilldown = nil
         }
     }
 
-    public mutating func setWorkspaceBotsDrilldownActive(_ active: Bool) {
-        workspaceBotsDrilldownActive = active
+    public mutating func setWorkspaceBotsDrilldown(_ drilldown: GaryxWorkspaceBotsDrilldown?) {
+        workspaceBotsDrilldown = drilldown
     }
 
     public mutating func openPanel(
@@ -299,16 +311,14 @@ public struct GaryxMobileNavigationState: Equatable, Sendable {
         return true
     }
 
-    public mutating func requestWorkspaceBotsOverview() {
-        workspaceBotsBackRequest &+= 1
+    public mutating func showWorkspaceBotsOverview() {
+        workspaceBotsDrilldown = nil
     }
 
     private mutating func apply(_ route: GaryxMobilePanelRoute) {
         activePanel = route.panel
         activeSettingsTab = route.panel == .settings ? route.settingsTab : .manage
-        if route.panel != .workspaceBots {
-            workspaceBotsDrilldownActive = false
-        }
+        workspaceBotsDrilldown = route.panel == .workspaceBots ? route.workspaceBotsDrilldown : nil
     }
 
     private func resolvedPanel(

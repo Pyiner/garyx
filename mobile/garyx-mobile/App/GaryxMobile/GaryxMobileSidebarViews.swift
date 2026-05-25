@@ -286,11 +286,6 @@ private struct GaryxSidebarWorkspaceThreadGroup: Identifiable {
     var id: String { path }
 }
 
-enum GaryxSidebarDrilldown: Equatable {
-    case bot(String)
-    case workspace(String)
-}
-
 private extension GaryxMobileModel {
     var sidebarWorkspaceThreadGroups: [GaryxSidebarWorkspaceThreadGroup] {
         let grouped = Dictionary(grouping: threads) { thread in
@@ -447,7 +442,7 @@ private struct GaryxSidebarThreadAutoLoadFooter: View {
 
 private struct GaryxSidebarBotsSection: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @Binding var activeDrilldown: GaryxSidebarDrilldown?
+    @Binding var activeDrilldown: GaryxWorkspaceBotsDrilldown?
 
     private var groups: [GaryxMobileBotGroup] {
         model.mobileBotGroups
@@ -750,7 +745,7 @@ private struct GaryxBotThreadDetailSection: View {
 
 private struct GaryxWorkspaceThreadGroupsSection: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @Binding var activeDrilldown: GaryxSidebarDrilldown?
+    @Binding var activeDrilldown: GaryxWorkspaceBotsDrilldown?
 
     var body: some View {
         let groups = model.sidebarWorkspaceThreadGroups
@@ -1310,7 +1305,6 @@ struct GaryxSidebarEmptyState: View {
 
 struct GaryxWorkspaceBotsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @State private var activeDrilldown: GaryxSidebarDrilldown?
 
     var body: some View {
         GaryxPanelScaffold(
@@ -1342,25 +1336,19 @@ struct GaryxWorkspaceBotsView: View {
         .task {
             await refresh()
         }
-        .onAppear {
-            syncWorkspaceBotsDrilldownState()
-        }
-        .onChange(of: activeDrilldown) { _, _ in
-            syncWorkspaceBotsDrilldownState()
-        }
-        .onChange(of: model.workspaceBotsBackRequest) { _, _ in
-            guard activeDrilldown != nil else { return }
-            goBack()
-        }
         .onDisappear {
-            model.workspaceBotsDrilldownActive = false
+            model.workspaceBotsDrilldown = nil
         }
     }
 
-    private var activeDrilldownBinding: Binding<GaryxSidebarDrilldown?> {
+    private var activeDrilldown: GaryxWorkspaceBotsDrilldown? {
+        model.workspaceBotsDrilldown
+    }
+
+    private var activeDrilldownBinding: Binding<GaryxWorkspaceBotsDrilldown?> {
         Binding(
-            get: { activeDrilldown },
-            set: { activeDrilldown = $0 }
+            get: { model.workspaceBotsDrilldown },
+            set: { model.workspaceBotsDrilldown = $0 }
         )
     }
 
@@ -1383,12 +1371,8 @@ struct GaryxWorkspaceBotsView: View {
     private func goBack() {
         if activeDrilldown != nil {
             withAnimation(GaryxMobileMotion.sidebarDrilldown) {
-                activeDrilldown = nil
+                model.workspaceBotsDrilldown = nil
             }
         }
-    }
-
-    private func syncWorkspaceBotsDrilldownState() {
-        model.workspaceBotsDrilldownActive = activeDrilldown != nil
     }
 }

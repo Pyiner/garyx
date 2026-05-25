@@ -189,20 +189,39 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
         XCTAssertEqual(state.leadingEdgeAction, .mainPanelBack)
 
         state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .replace)
-        state.setWorkspaceBotsDrilldownActive(true)
+        state.setWorkspaceBotsDrilldown(.bot("agent-1"))
         XCTAssertEqual(state.leadingEdgeAction, .workspaceBotsOverview)
+        state.showWorkspaceBotsOverview()
+        XCTAssertEqual(state.leadingEdgeAction, .openSidebar)
     }
 
     func testDirectPanelMutationClearsStackAndWorkspaceDrilldown() {
         var state = GaryxMobileNavigationState()
         state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .current)
-        state.setWorkspaceBotsDrilldownActive(true)
+        state.setWorkspaceBotsDrilldown(.workspace("/workspace"))
 
         state.setActivePanel(.chat)
 
         XCTAssertEqual(state.activePanel, .chat)
         XCTAssertTrue(state.mainPanelBackStack.isEmpty)
-        XCTAssertFalse(state.workspaceBotsDrilldownActive)
+        XCTAssertNil(state.workspaceBotsDrilldown)
         XCTAssertEqual(state.leadingEdgeAction, .openSidebar)
+    }
+
+    func testWorkspaceBotsDrilldownRoutePersistsInNavigationState() {
+        var state = GaryxMobileNavigationState()
+
+        state.openPanel(.workspaceBots, dreamsAutoScanEnabled: true, source: .replace)
+        state.setWorkspaceBotsDrilldown(.workspace("/workspace"))
+
+        XCTAssertEqual(state.workspaceBotsDrilldown, .workspace("/workspace"))
+        XCTAssertEqual(state.leadingEdgeAction, .workspaceBotsOverview)
+
+        state.openPanel(.automations, dreamsAutoScanEnabled: true, source: .current)
+
+        XCTAssertNil(state.workspaceBotsDrilldown)
+        XCTAssertTrue(state.goBackInMainPanel())
+        XCTAssertEqual(state.activePanel, .workspaceBots)
+        XCTAssertEqual(state.workspaceBotsDrilldown, .workspace("/workspace"))
     }
 }

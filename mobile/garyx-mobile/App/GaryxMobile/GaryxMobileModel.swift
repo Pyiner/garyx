@@ -553,18 +553,14 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
-    var workspaceBotsDrilldownActive: Bool {
-        get { navigationState.workspaceBotsDrilldownActive }
+    var workspaceBotsDrilldown: GaryxWorkspaceBotsDrilldown? {
+        get { navigationState.workspaceBotsDrilldown }
         set {
-            guard navigationState.workspaceBotsDrilldownActive != newValue else { return }
+            guard navigationState.workspaceBotsDrilldown != newValue else { return }
             var nextState = navigationState
-            nextState.setWorkspaceBotsDrilldownActive(newValue)
+            nextState.setWorkspaceBotsDrilldown(newValue)
             navigationState = nextState
         }
-    }
-
-    var workspaceBotsBackRequest: Int {
-        navigationState.workspaceBotsBackRequest
     }
 
     var mainPanelBackStack: [GaryxMobilePanelRoute] {
@@ -1207,7 +1203,7 @@ final class GaryxMobileModel: ObservableObject {
             showSettingsOverview()
         case .workspaceBotsOverview:
             var nextState = navigationState
-            nextState.requestWorkspaceBotsOverview()
+            nextState.showWorkspaceBotsOverview()
             navigationState = nextState
         }
     }
@@ -4481,7 +4477,7 @@ final class GaryxMobileModel: ObservableObject {
         workspaceListing = nil
         workspacePreview = nil
         workspaceUploadStatus = nil
-        workspaceBotsDrilldownActive = false
+        workspaceBotsDrilldown = nil
         openPanel(.workspaces)
 
         let runtimeGeneration = gatewayRuntimeGeneration
