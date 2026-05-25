@@ -1062,6 +1062,9 @@ struct GaryxAutomationThreadPickerSheet: View {
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
             }
+            .refreshable {
+                await refreshThreadOptions()
+            }
             .scrollIndicators(.hidden)
         }
         .background {
@@ -1085,9 +1088,7 @@ struct GaryxAutomationThreadPickerSheet: View {
         .presentationDragIndicator(.hidden)
         .presentationCornerRadius(38)
         .task {
-            isRefreshing = true
-            await model.refreshThreads(silent: true)
-            isRefreshing = false
+            await refreshThreadOptions()
         }
     }
 
@@ -1127,6 +1128,13 @@ struct GaryxAutomationThreadPickerSheet: View {
     private func selectAndClose(_ thread: GaryxThreadSummary) {
         onSelect(thread)
         dismiss()
+    }
+
+    private func refreshThreadOptions() async {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        await model.refreshThreads(silent: true)
+        isRefreshing = false
     }
 }
 
