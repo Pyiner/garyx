@@ -984,37 +984,52 @@ struct GaryxMessageImageAttachmentView: View {
 
     @State private var decodedImage: UIImage?
     @State private var decodedImageKey: String?
+    @State private var showsPreview = false
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color(.secondarySystemFill))
+        Button {
+            showsPreview = true
+        } label: {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(.secondarySystemFill))
 
-            if let image = decodedImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else if let remoteURL {
-                AsyncImage(url: remoteURL) { phase in
-                    if let image = phase.image {
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        fallback
+                if let image = decodedImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else if let remoteURL {
+                    AsyncImage(url: remoteURL) { phase in
+                        if let image = phase.image {
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            fallback
+                        }
                     }
+                } else {
+                    fallback
                 }
-            } else {
-                fallback
+            }
+            .frame(width: 218, height: 154)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
             }
         }
-        .frame(width: 218, height: 154)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        .buttonStyle(.plain)
+        .fullScreenCover(isPresented: $showsPreview) {
+            GaryxFullscreenImagePreview(
+                title: attachment.name.isEmpty ? "Image" : attachment.name,
+                dataUrl: attachment.dataUrl,
+                remoteUrl: attachment.remoteUrl,
+                filePath: Self.localFilePath(from: attachment.path)
+            )
         }
         .accessibilityLabel(attachment.name.isEmpty ? "Image attachment" : attachment.name)
+        .accessibilityHint("Opens full screen preview")
         .task(id: dataUrlDecodeKey) {
             await updateDecodedImage()
         }
@@ -1049,32 +1064,10 @@ struct GaryxMessageImageAttachmentView: View {
         guard let raw = attachment.dataUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else { return }
         let image = await Task.detached(priority: .utility) {
-            Self.decodedImage(from: raw, maxPixelSize: 520)
+            GaryxConversationImageDecoder.image(fromDataUrl: raw, maxPixelSize: 520)
         }.value
         guard !Task.isCancelled, decodedImageKey == key else { return }
         decodedImage = image
-    }
-
-    nonisolated private static func decodedImage(from raw: String, maxPixelSize: CGFloat) -> UIImage? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let encoded = trimmed.split(separator: ",", maxSplits: 1).last.map(String.init) ?? trimmed
-        guard let data = Data(base64Encoded: encoded) else { return nil }
-        let options = [kCGImageSourceShouldCache: false] as CFDictionary
-        guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
-            return UIImage(data: data)
-        }
-        let thumbnailOptions: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: Int(maxPixelSize),
-        ]
-        let optionsDictionary = thumbnailOptions as CFDictionary
-        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, optionsDictionary) else {
-            return UIImage(data: data)
-        }
-        return UIImage(cgImage: image)
     }
 
     private var remoteURL: URL? {
@@ -1083,6 +1076,271 @@ struct GaryxMessageImageAttachmentView: View {
             return nil
         }
         return URL(string: raw)
+    }
+
+    private static func localFilePath(from value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else { return nil }
+        if value.hasPrefix("file://") {
+            return URL(string: value)?.path
+        }
+        if value.hasPrefix("/") {
+            return value
+        }
+        return nil
+    }
+}
+
+private enum GaryxConversationImageDecoder {
+    nonisolated static func image(fromDataUrl raw: String, maxPixelSize: CGFloat) -> UIImage? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let encoded = trimmed.split(separator: ",", maxSplits: 1).last.map(String.init) ?? trimmed
+        guard let data = Data(base64Encoded: encoded) else { return nil }
+        return image(from: data, maxPixelSize: maxPixelSize)
+    }
+
+    nonisolated static func image(from data: Data, maxPixelSize: CGFloat) -> UIImage? {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, options) else {
+            return UIImage(data: data)
+        }
+        return thumbnail(from: source, maxPixelSize: maxPixelSize) ?? UIImage(data: data)
+    }
+
+    nonisolated static func image(fromFile path: String, maxPixelSize: CGFloat) -> UIImage? {
+        let url = URL(fileURLWithPath: path)
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, options) else {
+            return UIImage(contentsOfFile: path)
+        }
+        return thumbnail(from: source, maxPixelSize: maxPixelSize) ?? UIImage(contentsOfFile: path)
+    }
+
+    nonisolated private static func thumbnail(from source: CGImageSource, maxPixelSize: CGFloat) -> UIImage? {
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: Int(maxPixelSize),
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
+            return nil
+        }
+        return UIImage(cgImage: image)
+    }
+}
+
+private struct GaryxFullscreenImagePreview: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let title: String
+    let dataUrl: String?
+    let remoteUrl: String?
+    let filePath: String?
+
+    @State private var image: UIImage?
+    @State private var isLoading = false
+    @State private var loadFailed = false
+
+    private var loadKey: String {
+        [
+            dataUrl ?? "",
+            remoteUrl ?? "",
+            filePath ?? "",
+        ].joined(separator: "|")
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if let image {
+                GaryxZoomableImageCanvas(image: image)
+                    .ignoresSafeArea()
+            } else if isLoading {
+                ProgressView()
+                    .tint(.white)
+                    .controlSize(.large)
+            } else {
+                failureContent
+            }
+        }
+        .preferredColorScheme(.dark)
+        .overlay(alignment: .topTrailing) {
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(GaryxFont.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .garyxAdaptiveGlass(
+                        .regular,
+                        isInteractive: true,
+                        tint: Color(.systemBackground).opacity(0.32),
+                        fallbackMaterial: .ultraThinMaterial,
+                        in: Circle()
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close image preview")
+            .padding(.top, 12)
+            .padding(.trailing, 16)
+        }
+        .task(id: loadKey) {
+            await loadImage()
+        }
+    }
+
+    @ViewBuilder
+    private var failureContent: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "photo")
+                .font(GaryxFont.title2(weight: .medium))
+            Text(loadFailed ? "Unable to load image" : title)
+                .font(GaryxFont.callout(weight: .medium))
+        }
+        .foregroundStyle(.white.opacity(0.78))
+        .padding(.horizontal, 24)
+        .multilineTextAlignment(.center)
+    }
+
+    @MainActor
+    private func loadImage() async {
+        image = nil
+        loadFailed = false
+        isLoading = true
+        defer { isLoading = false }
+
+        let dataUrl = dataUrl
+        let filePath = filePath
+        let loaded: UIImage? = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            if let dataUrl = dataUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !dataUrl.isEmpty,
+               let image = GaryxConversationImageDecoder.image(fromDataUrl: dataUrl, maxPixelSize: 4096) {
+                return image
+            }
+            if let filePath = filePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !filePath.isEmpty,
+               let image = GaryxConversationImageDecoder.image(fromFile: filePath, maxPixelSize: 4096) {
+                return image
+            }
+            return nil
+        }.value
+
+        if let loaded {
+            guard !Task.isCancelled else { return }
+            image = loaded
+            return
+        }
+
+        guard let url = remoteURL else {
+            loadFailed = true
+            return
+        }
+
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard !Task.isCancelled else { return }
+            let remoteImage = await Task.detached(priority: .userInitiated) {
+                GaryxConversationImageDecoder.image(from: data, maxPixelSize: 4096)
+            }.value
+            guard !Task.isCancelled else { return }
+            if let remoteImage {
+                image = remoteImage
+            } else {
+                loadFailed = true
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            loadFailed = true
+        }
+    }
+
+    private var remoteURL: URL? {
+        guard let raw = remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+              raw.hasPrefix("http://") || raw.hasPrefix("https://") else {
+            return nil
+        }
+        return URL(string: raw)
+    }
+}
+
+private struct GaryxZoomableImageCanvas: View {
+    let image: UIImage
+
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    var body: some View {
+        GeometryReader { geometry in
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: geometry.size.width, height: geometry.size.height)
+                .scaleEffect(scale)
+                .offset(offset)
+                .gesture(magnificationGesture)
+                .simultaneousGesture(dragGesture)
+                .onTapGesture(count: 2) {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                        if scale > 1 {
+                            resetZoom()
+                        } else {
+                            scale = 2
+                            lastScale = 2
+                        }
+                    }
+                }
+                .accessibilityLabel("Full screen image")
+        }
+        .background(Color.black)
+    }
+
+    private var magnificationGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                scale = min(max(lastScale * value, 1), 5)
+                if scale <= 1 {
+                    offset = .zero
+                }
+            }
+            .onEnded { _ in
+                lastScale = scale
+                if scale <= 1.02 {
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        resetZoom()
+                    }
+                }
+            }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard scale > 1 else { return }
+                offset = CGSize(
+                    width: lastOffset.width + value.translation.width,
+                    height: lastOffset.height + value.translation.height
+                )
+            }
+            .onEnded { _ in
+                guard scale > 1 else {
+                    resetZoom()
+                    return
+                }
+                lastOffset = offset
+            }
+    }
+
+    private func resetZoom() {
+        scale = 1
+        lastScale = 1
+        offset = .zero
+        lastOffset = .zero
     }
 }
 
@@ -1352,11 +1610,12 @@ private struct GaryxMarkdownImageView: View {
 
     @State private var localImage: UIImage?
     @State private var loadFailed = false
+    @State private var showsPreview = false
 
     private var resolvedURL: URL? {
         let trimmed = source.trimmingCharacters(in: .whitespaces)
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
-           ["http", "https", "data"].contains(scheme) {
+           ["http", "https"].contains(scheme) {
             return url
         }
         return nil
@@ -1374,39 +1633,53 @@ private struct GaryxMarkdownImageView: View {
     }
 
     var body: some View {
-        Group {
-            if let image = localImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-            } else if let url = resolvedURL {
-                AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.18))) { phase in
-                    switch phase {
-                    case .empty:
-                        loadingPlaceholder
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                    case .failure:
-                        failurePlaceholder
-                    @unknown default:
-                        failurePlaceholder
+        Button {
+            showsPreview = true
+        } label: {
+            Group {
+                if let image = localImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                } else if let url = resolvedURL {
+                    AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.18))) { phase in
+                        switch phase {
+                        case .empty:
+                            loadingPlaceholder
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                        case .failure:
+                            failurePlaceholder
+                        @unknown default:
+                            failurePlaceholder
+                        }
                     }
+                } else if loadFailed {
+                    failurePlaceholder
+                } else {
+                    loadingPlaceholder
                 }
-            } else if loadFailed {
-                failurePlaceholder
-            } else {
-                loadingPlaceholder
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        .buttonStyle(.plain)
+        .fullScreenCover(isPresented: $showsPreview) {
+            GaryxFullscreenImagePreview(
+                title: alt.isEmpty ? "Image" : alt,
+                dataUrl: sourceDataUrl,
+                remoteUrl: resolvedURL?.absoluteString,
+                filePath: localFilePath
+            )
         }
         .accessibilityLabel(alt.isEmpty ? "Image" : alt)
+        .accessibilityHint("Opens full screen preview")
         .task(id: source) {
             await loadLocalImageIfPossible()
         }
@@ -1449,9 +1722,21 @@ private struct GaryxMarkdownImageView: View {
 
     @MainActor
     private func loadLocalImageIfPossible() async {
+        if let sourceDataUrl {
+            let image = await Task.detached(priority: .utility) {
+                GaryxConversationImageDecoder.image(fromDataUrl: sourceDataUrl, maxPixelSize: 720)
+            }.value
+            guard !Task.isCancelled else { return }
+            if let image {
+                localImage = image
+            } else {
+                loadFailed = true
+            }
+            return
+        }
         guard let path = localFilePath else { return }
         let image = await Task.detached(priority: .utility) {
-            UIImage(contentsOfFile: path)
+            GaryxConversationImageDecoder.image(fromFile: path, maxPixelSize: 720)
         }.value
         guard !Task.isCancelled else { return }
         if let image {
@@ -1459,6 +1744,11 @@ private struct GaryxMarkdownImageView: View {
         } else {
             loadFailed = true
         }
+    }
+
+    private var sourceDataUrl: String? {
+        let trimmed = source.trimmingCharacters(in: .whitespaces)
+        return trimmed.hasPrefix("data:") ? trimmed : nil
     }
 }
 
