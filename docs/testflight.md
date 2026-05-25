@@ -32,15 +32,14 @@ of the job.
 - `GARYX_APP_SKU` defaults to `garyx-ios`.
 - `IOS_BUNDLE_ID` defaults to `com.garyx.mobile`.
 - `IOS_WIDGET_BUNDLE_ID` defaults to `<IOS_BUNDLE_ID>.RecentThreadsWidget`.
-- `IOS_APP_GROUP_ID` defaults to `group.<IOS_BUNDLE_ID>`.
 - `TESTFLIGHT_GROUP_NAME` defaults to `Garyx Experimental`.
 
 ## Workflow Behavior
 
 The workflow can do two independent things:
 
-- Register/update the App Store Connect app, app and widget Bundle IDs, shared
-  App Groups capability, internal beta group, and internal testers.
+- Register/update the App Store Connect app, app and widget Bundle IDs,
+  internal beta group, and internal testers.
 - Archive, export, upload the iOS app to TestFlight, wait for Apple processing,
   and assign the build to the internal beta group.
 
@@ -49,6 +48,13 @@ when they already exist. `TESTFLIGHT_TESTER_EMAILS` must refer to App Store
 Connect users who can be assigned as internal testers. If Apple rejects a tester
 assignment because of the account state, the workflow logs a warning and keeps
 publishing the build to the internal beta group.
+
+The shared App Group must be configured in Apple Developer manually for both the
+app Bundle ID and the widget Bundle ID. For the default bundle IDs, assign
+`group.com.garyx.mobile` to `com.garyx.mobile` and
+`com.garyx.mobile.RecentThreadsWidget`. App Store Connect API keys can register
+Bundle IDs and let Xcode manage provisioning profiles, but they cannot assign a
+specific App Group identifier through the supported Bundle ID capabilities API.
 
 The upload path verifies that the archived app contains AppIcon outputs before
 exporting the IPA. After upload, it waits for the requested build number to reach

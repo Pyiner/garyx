@@ -160,89 +160,6 @@ async function ensureBundleId({ appName, bundleId }) {
   return created.data;
 }
 
-function appGroupSettings(appGroupId) {
-  return [
-    {
-      key: "APP_GROUP_IDS",
-      options: [
-        {
-          key: appGroupId,
-          enabled: true,
-        },
-      ],
-    },
-  ];
-}
-
-function hasEnabledAppGroup(settings, appGroupId) {
-  return settings?.some(
-    (setting) =>
-      setting.key === "APP_GROUP_IDS" &&
-      setting.options?.some(
-        (option) => option.key === appGroupId && option.enabled === true,
-      ),
-  );
-}
-
-async function ensureAppGroupsCapability({ bundleIdResource, appGroupId }) {
-  const capabilities = await ascRequest(
-    "GET",
-    `/v1/bundleIds/${bundleIdResource.id}/bundleIdCapabilities`,
-  );
-  const existing = capabilities.data?.find(
-    (capability) => capability.attributes?.capabilityType === "APP_GROUPS",
-  );
-  const settings = appGroupSettings(appGroupId);
-
-  if (existing) {
-    if (hasEnabledAppGroup(existing.attributes?.settings, appGroupId)) {
-      console.log(
-        `App Groups capability already configured: ${bundleIdResource.attributes.identifier}`,
-      );
-      return existing;
-    }
-    const updated = await ascRequest(
-      "PATCH",
-      `/v1/bundleIdCapabilities/${existing.id}`,
-      {
-        data: {
-          id: existing.id,
-          type: "bundleIdCapabilities",
-          attributes: {
-            settings,
-          },
-        },
-      },
-    );
-    console.log(
-      `Updated App Groups capability: ${bundleIdResource.attributes.identifier}`,
-    );
-    return updated.data;
-  }
-
-  const created = await ascRequest("POST", "/v1/bundleIdCapabilities", {
-    data: {
-      type: "bundleIdCapabilities",
-      attributes: {
-        capabilityType: "APP_GROUPS",
-        settings,
-      },
-      relationships: {
-        bundleId: {
-          data: {
-            id: bundleIdResource.id,
-            type: "bundleIds",
-          },
-        },
-      },
-    },
-  });
-  console.log(
-    `Enabled App Groups capability: ${bundleIdResource.attributes.identifier}`,
-  );
-  return created.data;
-}
-
 async function ensureApp({ appName, bundleId, sku, primaryLocale }) {
   const byBundleId = await findFirst(
     `/v1/apps?filter[bundleId]=${encodeFilter(bundleId)}&limit=1`,
@@ -403,23 +320,14 @@ async function main() {
     "IOS_WIDGET_BUNDLE_ID",
     `${bundleId}.RecentThreadsWidget`,
   );
-  const appGroupId = optionalEnv("IOS_APP_GROUP_ID", `group.${bundleId}`);
   const sku = optionalEnv("GARYX_APP_SKU", "garyx-ios");
   const primaryLocale = optionalEnv("APP_STORE_PRIMARY_LOCALE", "en-US");
   const groupName = optionalEnv("TESTFLIGHT_GROUP_NAME", "Garyx Experimental");
 
-  const appBundleId = await ensureBundleId({ appName, bundleId });
-  const widgetBundleIdResource = await ensureBundleId({
+  await ensureBundleId({ appName, bundleId });
+  await ensureBundleId({
     appName: `${appName} Recent Threads Widget`,
     bundleId: widgetBundleId,
-  });
-  await ensureAppGroupsCapability({
-    bundleIdResource: appBundleId,
-    appGroupId,
-  });
-  await ensureAppGroupsCapability({
-    bundleIdResource: widgetBundleIdResource,
-    appGroupId,
   });
 
   const app = await ensureApp({ appName, bundleId, sku, primaryLocale });
