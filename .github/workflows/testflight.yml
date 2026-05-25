@@ -30,6 +30,7 @@ jobs:
       GARYX_APP_SKU: ${{ vars.GARYX_APP_SKU || 'garyx-ios' }}
       IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID || 'com.garyx.mobile' }}
       IOS_WIDGET_BUNDLE_ID: ${{ vars.IOS_WIDGET_BUNDLE_ID || 'com.garyx.mobile.RecentThreadsWidget' }}
+      IOS_APP_GROUP_ID: ${{ vars.IOS_APP_GROUP_ID || 'group.com.garyx.mobile' }}
       TESTFLIGHT_GROUP_NAME: ${{ vars.TESTFLIGHT_GROUP_NAME || 'Garyx Experimental' }}
       TESTFLIGHT_TESTER_EMAILS: ${{ secrets.TESTFLIGHT_TESTER_EMAILS }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -159,6 +160,7 @@ jobs:
             echo "Could not read the imported distribution certificate serial." >&2
             exit 1
           fi
+          echo "::add-mask::$certificate_serial"
 
           echo "SIGNING_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
           echo "IOS_DISTRIBUTION_CERTIFICATE_SERIAL=$certificate_serial" >> "$GITHUB_ENV"
@@ -172,6 +174,36 @@ jobs:
           mkdir -p "$profile_dir"
           IOS_PROFILE_INSTALL_DIR="$profile_dir" \
             node scripts/appstore-connect/prepare-ios-profiles.mjs
+
+      - name: Validate App Store provisioning profiles
+        if: inputs.upload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          validate_profile() {
+            local label="$1"
+            local profile_path="$2"
+            local bundle_id="$3"
+            local plist_path="$RUNNER_TEMP/${label}-profile.plist"
+
+            security cms -D -i "$profile_path" > "$plist_path"
+            local app_identifier
+            app_identifier="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$plist_path")"
+            if [[ "$app_identifier" != *".$bundle_id" ]]; then
+              echo "$label profile has app identifier '$app_identifier', expected bundle '$bundle_id'." >&2
+              exit 1
+            fi
+
+            local app_group
+            app_group="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.security.application-groups:0' "$plist_path" 2>/dev/null || true)"
+            if [[ "$app_group" != "$IOS_APP_GROUP_ID" ]]; then
+              echo "$label profile does not include expected App Group '$IOS_APP_GROUP_ID'." >&2
+              exit 1
+            fi
+          }
+
+          validate_profile "app" "$IOS_APP_PROVISIONING_PROFILE_PATH" "$IOS_BUNDLE_ID"
+          validate_profile "widget" "$IOS_WIDGET_PROVISIONING_PROFILE_PATH" "$IOS_WIDGET_BUNDLE_ID"
 
       - name: Archive Garyx iOS app
         if: inputs.upload_build

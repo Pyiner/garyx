@@ -140,9 +140,11 @@ function normalizeSerial(value) {
 async function findBundleId(identifier) {
   const response = await ascRequest(
     "GET",
-    `/v1/bundleIds?filter[identifier]=${encodeFilter(identifier)}&limit=1`,
+    `/v1/bundleIds?filter[identifier]=${encodeFilter(identifier)}&limit=200`,
   );
-  const bundleId = response.data?.[0];
+  const bundleId = response.data?.find(
+    (candidate) => candidate.attributes?.identifier === identifier,
+  );
   if (!bundleId) {
     throw new Error(`Bundle ID not found: ${identifier}`);
   }
@@ -251,5 +253,7 @@ const widgetProfile = await ensureProfile({
 
 await appendEnv({
   IOS_APP_PROVISIONING_PROFILE_SPECIFIER: appProfile.name,
+  IOS_APP_PROVISIONING_PROFILE_PATH: appProfile.path,
   IOS_WIDGET_PROVISIONING_PROFILE_SPECIFIER: widgetProfile.name,
+  IOS_WIDGET_PROVISIONING_PROFILE_PATH: widgetProfile.path,
 });
