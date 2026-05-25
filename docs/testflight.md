@@ -12,7 +12,6 @@ workflow; iOS builds are uploaded only when this workflow is run manually.
 - `APP_STORE_CONNECT_API_KEY_P8`
 - `IOS_DISTRIBUTION_CERTIFICATE_P12_BASE64`
 - `IOS_DISTRIBUTION_CERTIFICATE_PASSWORD`
-- `IOS_PROVISIONING_PROFILE_BASE64`
 - `TESTFLIGHT_TESTER_EMAILS`
 
 `APP_STORE_CONNECT_API_KEY_P8` may be stored either with real newlines or with
@@ -20,9 +19,12 @@ escaped `\n` newlines. The workflow writes the key to the temporary runner
 keychain path and never prints it.
 
 The iOS signing secrets are used only when `upload_build` is enabled. The
-workflow imports the distribution certificate and App Store provisioning profile
-into a temporary keychain, uses manual signing for archive/export, then deletes
-the keychain at the end of the job.
+workflow imports the distribution certificate into a temporary keychain, then
+uses Xcode automatic provisioning with the App Store Connect API key for the app
+and its widget extension. Automatic provisioning is required because the iOS app
+and widget share an App Group entitlement, so stale single-target provisioning
+profiles can break archive signing. The temporary keychain is deleted at the end
+of the job.
 
 ## Optional GitHub Variables
 
