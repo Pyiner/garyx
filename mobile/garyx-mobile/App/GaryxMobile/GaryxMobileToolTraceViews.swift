@@ -24,15 +24,7 @@ struct GaryxToolTraceGroupView: View {
                         .font(GaryxFont.system(size: 13, weight: .regular))
                         .frame(width: 16, height: 16)
 
-                    Text(group.summary)
-                        .font(GaryxFont.footnote())
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-
-                    if group.isActive {
-                        ProgressView()
-                            .scaleEffect(0.62)
-                    }
+                    summaryText
 
                     Image(systemName: "chevron.down")
                         .font(GaryxFont.system(size: 10, weight: .semibold))
@@ -63,6 +55,25 @@ struct GaryxToolTraceGroupView: View {
             withAnimation(.easeOut(duration: 0.21)) {
                 expanded = shouldExpand
             }
+        }
+    }
+
+    @ViewBuilder
+    private var summaryText: some View {
+        if group.isActive {
+            GaryxShimmerText(
+                text: group.summary,
+                font: GaryxFont.footnote(),
+                baseColor: GaryxTheme.secondaryText,
+                peakColor: GaryxTheme.primaryText
+            )
+            .lineLimit(1)
+            .truncationMode(.tail)
+        } else {
+            Text(group.summary)
+                .font(GaryxFont.footnote())
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
     }
 }
