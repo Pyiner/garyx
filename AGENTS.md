@@ -222,6 +222,11 @@ needs installed-app validation.
   global gateway stream for push events, and run a selected-thread history
   reconcile loop while the app is active so passive inbound messages still
   appear if a stream event is missed.
+- Mobile recent-thread polling is also a transcript data trigger: when a visible
+  summary transitions from active/running to inactive/completed, hydrate that
+  thread's latest history into the mobile message cache immediately. Opening the
+  thread detail should show the cached final result first, not wait for the
+  detail view's initial history request.
 - While a mobile thread is running, show the bottom Thinking indicator when no
   assistant/tool activity is present yet; do not synthesize an empty Working
   turn row for a trailing user-only turn. Pure assistant/reasoning text is not a

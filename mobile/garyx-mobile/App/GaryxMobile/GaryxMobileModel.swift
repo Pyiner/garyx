@@ -447,6 +447,7 @@ final class GaryxMobileModel: ObservableObject {
     private var selectedThreadRecoveryTask: Task<Void, Never>?
     private var selectedThreadRecoveryThreadId: String?
     private var selectedThreadHistoryRequestId: UUID?
+    private var completedThreadHistoryHydrationTasks: [String: Task<Void, Never>] = [:]
     private var nextThreadListOffset = 0
     private var selectedThreadNextHistoryBeforeIndex: Int?
     private var sceneRefreshTask: Task<Void, Never>?
@@ -2007,6 +2008,8 @@ final class GaryxMobileModel: ObservableObject {
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
         selectedThreadHistoryRequestId = nil
+        completedThreadHistoryHydrationTasks.values.forEach { $0.cancel() }
+        completedThreadHistoryHydrationTasks = [:]
         resetSelectedThreadHistoryPagination()
         resetThreadListPagination()
         sceneRefreshTask?.cancel()
@@ -2439,6 +2442,8 @@ final class GaryxMobileModel: ObservableObject {
     func refreshThreads(silent: Bool = false) async {
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
+        let previousThreadSummaries = Self.mergedThreadSummaries(threads + [selectedThread].compactMap { $0 })
+        let previouslyRemoteBusyThreadIds = remoteBusyThreadIds
         if !silent {
             isLoadingThreads = true
         }
@@ -2465,9 +2470,16 @@ final class GaryxMobileModel: ObservableObject {
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             let existingThreads = silent ? threads : []
-            threads = Self.mergedThreadSummaries(existingThreads + nextThreads)
+            let refreshedThreads = Self.mergedThreadSummaries(nextThreads)
+            threads = Self.mergedThreadSummaries(existingThreads + refreshedThreads)
             persistRecentThreadsWidgetSnapshot()
             refreshRemoteBusyIdsForVisibleThreads()
+            hydrateCompletedRecentThreadHistories(
+                previousThreads: previousThreadSummaries,
+                previouslyRemoteBusyThreadIds: previouslyRemoteBusyThreadIds,
+                refreshedThreads: refreshedThreads,
+                runtimeGeneration: runtimeGeneration
+            )
             if let previousSelectedId,
                let updatedSelection = threads.first(where: { $0.id == previousSelectedId }) {
                 selectedThread = updatedSelection
@@ -2708,6 +2720,94 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
         remoteBusyThreadIds = refreshedBusyIds
+    }
+
+    private func hydrateCompletedRecentThreadHistories(
+        previousThreads: [GaryxThreadSummary],
+        previouslyRemoteBusyThreadIds: Set<String>,
+        refreshedThreads: [GaryxThreadSummary],
+        runtimeGeneration: UUID
+    ) {
+        guard hasGatewaySettings else { return }
+        let previousThreadsById = Dictionary(uniqueKeysWithValues: previousThreads.map { ($0.id, $0) })
+        for thread in refreshedThreads {
+            let threadId = thread.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !threadId.isEmpty,
+                  shouldHydrateCompletedRecentThread(
+                    previousThread: previousThreadsById[threadId],
+                    previousRemoteBusyThreadIds: previouslyRemoteBusyThreadIds,
+                    refreshedThread: thread
+                  ) else {
+                continue
+            }
+            hydrateCompletedRecentThreadHistory(
+                threadId: threadId,
+                runtimeGeneration: runtimeGeneration
+            )
+        }
+    }
+
+    private func shouldHydrateCompletedRecentThread(
+        previousThread: GaryxThreadSummary?,
+        previousRemoteBusyThreadIds: Set<String>,
+        refreshedThread: GaryxThreadSummary
+    ) -> Bool {
+        let threadId = refreshedThread.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !threadId.isEmpty,
+              selectedThread?.id != threadId,
+              activeTasksByThread[threadId] == nil,
+              !isThreadSummaryRunning(refreshedThread) else {
+            return false
+        }
+        return previousThread.map(isThreadSummaryRunning) == true
+            || previousRemoteBusyThreadIds.contains(threadId)
+    }
+
+    private func hydrateCompletedRecentThreadHistory(threadId: String, runtimeGeneration: UUID) {
+        guard completedThreadHistoryHydrationTasks[threadId] == nil else { return }
+        completedThreadHistoryHydrationTasks[threadId] = Task { [weak self] in
+            guard let self else { return }
+            await hydrateCompletedRecentThreadHistoryNow(
+                threadId: threadId,
+                runtimeGeneration: runtimeGeneration
+            )
+        }
+    }
+
+    private func hydrateCompletedRecentThreadHistoryNow(threadId: String, runtimeGeneration: UUID) async {
+        defer {
+            completedThreadHistoryHydrationTasks[threadId] = nil
+        }
+        guard runtimeGeneration == gatewayRuntimeGeneration,
+              hasGatewaySettings else {
+            return
+        }
+        do {
+            let transcript = try await client().threadHistory(
+                threadId: threadId,
+                limit: Self.threadHistoryPageLimit,
+                userQueryLimit: Self.threadHistoryUserQueryLimit
+            )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            applyThreadTranscriptToCache(
+                transcript,
+                threadId: threadId,
+                preservingLoadedOlderPages: true,
+                scheduleRecoveryIfSelected: false
+            )
+        } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            let message = displayMessage(for: error)
+            if Self.isTransientGatewayErrorMessage(message) {
+                gatewaySettingsStatus = "Waiting to sync with gateway"
+            }
+        }
+    }
+
+    private func isThreadSummaryRunning(_ thread: GaryxThreadSummary) -> Bool {
+        let runState = thread.runState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let activeRunId = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return runState == "running" || !activeRunId.isEmpty
     }
 
     func selectThread(_ thread: GaryxThreadSummary) async {
@@ -2962,13 +3062,30 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     private func applySelectedThreadTranscript(_ transcript: GaryxThreadTranscript, threadId: String) {
+        applyThreadTranscriptToCache(
+            transcript,
+            threadId: threadId,
+            preservingLoadedOlderPages: true,
+            scheduleRecoveryIfSelected: true
+        )
+        startSelectedThreadReconcileLoop()
+    }
+
+    private func applyThreadTranscriptToCache(
+        _ transcript: GaryxThreadTranscript,
+        threadId: String,
+        preservingLoadedOlderPages: Bool,
+        scheduleRecoveryIfSelected: Bool
+    ) {
         selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
         updateThreadRuntimeState(threadId: threadId, transcript: transcript)
-        updateSelectedThreadHistoryPagination(
-            threadId: threadId,
-            transcript: transcript,
-            preservingLoadedOlderPages: true
-        )
+        if selectedThread?.id == threadId {
+            updateSelectedThreadHistoryPagination(
+                threadId: threadId,
+                transcript: transcript,
+                preservingLoadedOlderPages: preservingLoadedOlderPages
+            )
+        }
         let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
         setMessages(
             mergedMessages(
@@ -2979,8 +3096,9 @@ final class GaryxMobileModel: ObservableObject {
             for: threadId,
             reconcileActiveAssistant: true
         )
-        scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
-        startSelectedThreadReconcileLoop()
+        if scheduleRecoveryIfSelected {
+            scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
+        }
     }
 
     func loadOlderSelectedThreadHistory() async {
