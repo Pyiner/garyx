@@ -29,6 +29,7 @@ jobs:
       GARYX_APP_NAME: ${{ vars.GARYX_APP_NAME || 'Garyx' }}
       GARYX_APP_SKU: ${{ vars.GARYX_APP_SKU || 'garyx-ios' }}
       IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID || 'com.garyx.mobile' }}
+      IOS_WIDGET_BUNDLE_ID: ${{ vars.IOS_WIDGET_BUNDLE_ID || 'com.garyx.mobile.RecentThreadsWidget' }}
       TESTFLIGHT_GROUP_NAME: ${{ vars.TESTFLIGHT_GROUP_NAME || 'Garyx Experimental' }}
       TESTFLIGHT_TESTER_EMAILS: ${{ secrets.TESTFLIGHT_TESTER_EMAILS }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -147,7 +148,30 @@ jobs:
             -k "$keychain_password" \
             "$keychain_path"
 
+          certificate_pem="$signing_dir/distribution.pem"
+          security find-certificate -p "$keychain_path" > "$certificate_pem"
+          certificate_serial="$(
+            openssl x509 -in "$certificate_pem" -noout -serial |
+            cut -d= -f2 |
+            tr -d '[:space:]'
+          )"
+          if [[ -z "$certificate_serial" ]]; then
+            echo "Could not read the imported distribution certificate serial." >&2
+            exit 1
+          fi
+
           echo "SIGNING_KEYCHAIN_PATH=$keychain_path" >> "$GITHUB_ENV"
+          echo "IOS_DISTRIBUTION_CERTIFICATE_SERIAL=$certificate_serial" >> "$GITHUB_ENV"
+
+      - name: Create and install App Store provisioning profiles
+        if: inputs.upload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          profile_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$profile_dir"
+          IOS_PROFILE_INSTALL_DIR="$profile_dir" \
+            node scripts/appstore-connect/prepare-ios-profiles.mjs
 
       - name: Archive Garyx iOS app
         if: inputs.upload_build
@@ -161,14 +185,13 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/GaryxMobile.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$APP_STORE_CONNECT_API_KEY_PATH" \
-            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID" \
             archive \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CURRENT_PROJECT_VERSION="$GARYX_IOS_BUILD_NUMBER" \
-            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            IOS_APP_PROVISIONING_PROFILE_SPECIFIER="$IOS_APP_PROVISIONING_PROFILE_SPECIFIER" \
+            IOS_WIDGET_PROVISIONING_PROFILE_SPECIFIER="$IOS_WIDGET_PROVISIONING_PROFILE_SPECIFIER" \
             OTHER_CODE_SIGN_FLAGS="--keychain $SIGNING_KEYCHAIN_PATH"
 
       - name: Verify archived app icon
@@ -212,9 +235,18 @@ jobs:
             <key>destination</key>
             <string>export</string>
             <key>signingStyle</key>
-            <string>automatic</string>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
             <key>teamID</key>
             <string>${APPLE_TEAM_ID}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${IOS_BUNDLE_ID}</key>
+              <string>${IOS_APP_PROVISIONING_PROFILE_SPECIFIER}</string>
+              <key>${IOS_WIDGET_BUNDLE_ID}</key>
+              <string>${IOS_WIDGET_PROVISIONING_PROFILE_SPECIFIER}</string>
+            </dict>
             <key>stripSwiftSymbols</key>
             <true/>
             <key>uploadSymbols</key>
@@ -226,11 +258,7 @@ jobs:
             -exportArchive \
             -archivePath "$RUNNER_TEMP/GaryxMobile.xcarchive" \
             -exportPath "$RUNNER_TEMP/GaryxMobileExport" \
-            -exportOptionsPlist "$export_options" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath "$APP_STORE_CONNECT_API_KEY_PATH" \
-            -authenticationKeyID "$APP_STORE_CONNECT_API_KEY_ID" \
-            -authenticationKeyIssuerID "$APP_STORE_CONNECT_API_ISSUER_ID"
+            -exportOptionsPlist "$export_options"
 
       - name: Upload IPA to TestFlight
         if: inputs.upload_build
