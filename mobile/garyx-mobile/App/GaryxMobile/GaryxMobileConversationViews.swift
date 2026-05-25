@@ -1509,6 +1509,16 @@ struct GaryxMarkdownText: View {
                     )
                 case .image(let alt, let source):
                     GaryxMarkdownImageView(alt: alt, source: source)
+                case .table(let table):
+                    GaryxMarkdownTableView(
+                        table: table,
+                        foreground: foreground,
+                        background: codeBackground,
+                        border: codeBorder,
+                        fillsAvailableWidth: fillsAvailableWidth,
+                        allowsRelativeFileLinks: allowsRelativeFileLinks,
+                        onFileLinkTap: onFileLinkTap
+                    )
                 }
             }
         }
@@ -1584,7 +1594,7 @@ private struct GaryxMarkdownParagraphView: View {
     private var openURLAction: OpenURLAction {
         OpenURLAction { url in
             guard let onFileLinkTap else { return .systemAction }
-            let target = Self.fileLinkTarget(
+            let target = GaryxMarkdownLinkTarget.fileTarget(
                 from: url,
                 allowsRelativeFileLinks: allowsRelativeFileLinks
             )
@@ -1592,25 +1602,6 @@ private struct GaryxMarkdownParagraphView: View {
             onFileLinkTap(target)
             return .handled
         }
-    }
-
-    private static func fileLinkTarget(
-        from url: URL,
-        allowsRelativeFileLinks: Bool
-    ) -> String {
-        if let path = GaryxMobileFileLink.localFilePath(from: url) {
-            return path
-        }
-        guard allowsRelativeFileLinks else { return "" }
-
-        let raw = url.relativeString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !raw.isEmpty,
-              !raw.hasPrefix("#"),
-              !raw.hasPrefix("?"),
-              url.scheme == nil else {
-            return ""
-        }
-        return raw
     }
 
     private static func bulletText(from line: String) -> String? {
@@ -1638,6 +1629,27 @@ private struct GaryxMarkdownParagraphView: View {
         }
         let textStart = trimmed.index(after: afterDot)
         return ("\(digitPrefix).", String(trimmed[textStart...]))
+    }
+}
+
+private enum GaryxMarkdownLinkTarget {
+    static func fileTarget(
+        from url: URL,
+        allowsRelativeFileLinks: Bool
+    ) -> String {
+        if let path = GaryxMobileFileLink.localFilePath(from: url) {
+            return path
+        }
+        guard allowsRelativeFileLinks else { return "" }
+
+        let raw = url.relativeString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty,
+              !raw.hasPrefix("#"),
+              !raw.hasPrefix("?"),
+              url.scheme == nil else {
+            return ""
+        }
+        return raw
     }
 }
 
@@ -1675,6 +1687,165 @@ private struct GaryxCodeBlockView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(border, lineWidth: 1)
+        }
+    }
+}
+
+private enum GaryxMarkdownTableColumnAlignment {
+    case leading
+    case center
+    case trailing
+
+    var frameAlignment: Alignment {
+        switch self {
+        case .leading:
+            return .leading
+        case .center:
+            return .center
+        case .trailing:
+            return .trailing
+        }
+    }
+
+    var textAlignment: TextAlignment {
+        switch self {
+        case .leading:
+            return .leading
+        case .center:
+            return .center
+        case .trailing:
+            return .trailing
+        }
+    }
+}
+
+private struct GaryxMarkdownTable {
+    struct Column {
+        let title: String
+        let alignment: GaryxMarkdownTableColumnAlignment
+    }
+
+    let columns: [Column]
+    let rows: [[String]]
+}
+
+private struct GaryxMarkdownTableView: View {
+    let table: GaryxMarkdownTable
+    let foreground: Color
+    let background: Color
+    let border: Color
+    let fillsAvailableWidth: Bool
+    var allowsRelativeFileLinks = false
+    var onFileLinkTap: ((String) -> Void)?
+
+    private var columnWidths: [CGFloat] {
+        table.columns.indices.map { index in
+            let headerLength = table.columns[index].title.count
+            let rowLength = table.rows
+                .compactMap { index < $0.count ? $0[index].count : nil }
+                .max() ?? 0
+            let maxLength = max(headerLength, rowLength)
+            return min(max(CGFloat(maxLength) * 7.2 + 32, 86), 220)
+        }
+    }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 0) {
+                rowView(
+                    cells: table.columns.map(\.title),
+                    isHeader: true,
+                    rowIndex: -1
+                )
+
+                if !table.rows.isEmpty {
+                    Rectangle()
+                        .fill(border)
+                        .frame(height: 1)
+                }
+
+                ForEach(Array(table.rows.enumerated()), id: \.offset) { rowIndex, cells in
+                    rowView(cells: cells, isHeader: false, rowIndex: rowIndex)
+
+                    if rowIndex < table.rows.count - 1 {
+                        Rectangle()
+                            .fill(border.opacity(0.72))
+                            .frame(height: 1)
+                    }
+                }
+            }
+            .background(background.opacity(0.58), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(border, lineWidth: 1)
+            }
+        }
+        .frame(maxWidth: fillsAvailableWidth ? .infinity : nil, alignment: .leading)
+    }
+
+    private func rowView(cells: [String], isHeader: Bool, rowIndex: Int) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(table.columns.indices, id: \.self) { columnIndex in
+                let column = table.columns[columnIndex]
+                let text = columnIndex < cells.count ? cells[columnIndex] : ""
+
+                cellView(
+                    text: text,
+                    column: column,
+                    width: columnWidths[columnIndex],
+                    isHeader: isHeader
+                )
+
+                if columnIndex < table.columns.count - 1 {
+                    Rectangle()
+                        .fill(border.opacity(0.72))
+                        .frame(width: 1)
+                }
+            }
+        }
+        .background(rowBackground(isHeader: isHeader, rowIndex: rowIndex))
+    }
+
+    private func cellView(
+        text: String,
+        column: GaryxMarkdownTable.Column,
+        width: CGFloat,
+        isHeader: Bool
+    ) -> some View {
+        Text(GaryxMarkdownText.attributedString(from: text.isEmpty ? " " : text))
+            .font(isHeader ? GaryxFont.callout(weight: .semibold) : GaryxFont.callout())
+            .foregroundStyle(foreground)
+            .tint(GaryxTheme.accent)
+            .multilineTextAlignment(column.alignment.textAlignment)
+            .environment(\.openURL, openURLAction)
+            .textSelection(.enabled)
+            .lineSpacing(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: width, alignment: column.alignment.frameAlignment)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+    }
+
+    private func rowBackground(isHeader: Bool, rowIndex: Int) -> Color {
+        if isHeader {
+            return background.opacity(0.88)
+        }
+        if rowIndex.isMultiple(of: 2) {
+            return Color.clear
+        }
+        return background.opacity(0.26)
+    }
+
+    private var openURLAction: OpenURLAction {
+        OpenURLAction { url in
+            guard let onFileLinkTap else { return .systemAction }
+            let target = GaryxMarkdownLinkTarget.fileTarget(
+                from: url,
+                allowsRelativeFileLinks: allowsRelativeFileLinks
+            )
+            guard !target.isEmpty else { return .systemAction }
+            onFileLinkTap(target)
+            return .handled
         }
     }
 }
@@ -1832,6 +2003,7 @@ private struct GaryxMarkdownBlock: Identifiable {
         case markdown(String)
         case code(language: String?, text: String)
         case image(alt: String, source: String)
+        case table(GaryxMarkdownTable)
     }
 
     let id: Int
@@ -1843,6 +2015,7 @@ private struct GaryxMarkdownBlock: Identifiable {
         var codeLines: [String] = []
         var codeLanguage: String?
         var insideFence = false
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
 
         func appendMarkdown() {
             let value = markdownLines.joined(separator: "\n")
@@ -1859,11 +2032,14 @@ private struct GaryxMarkdownBlock: Identifiable {
             codeLanguage = nil
         }
 
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if !insideFence, let image = parseStandaloneImage(trimmed) {
                 appendMarkdown()
                 blocks.append(GaryxMarkdownBlock(id: blocks.count, kind: .image(alt: image.alt, source: image.source)))
+                index += 1
                 continue
             }
             if trimmed.hasPrefix("```") {
@@ -1876,13 +2052,23 @@ private struct GaryxMarkdownBlock: Identifiable {
                     let language = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
                     codeLanguage = language.isEmpty ? nil : language
                 }
+                index += 1
                 continue
             }
 
             if insideFence {
                 codeLines.append(line)
+                index += 1
+                continue
+            }
+
+            if let parsedTable = parseTable(lines: lines, startIndex: index) {
+                appendMarkdown()
+                blocks.append(GaryxMarkdownBlock(id: blocks.count, kind: .table(parsedTable.table)))
+                index = parsedTable.nextIndex
             } else {
                 markdownLines.append(line)
+                index += 1
             }
         }
 
@@ -1895,6 +2081,139 @@ private struct GaryxMarkdownBlock: Identifiable {
             blocks.append(GaryxMarkdownBlock(id: 0, kind: .markdown(text)))
         }
         return blocks
+    }
+
+    private static func parseTable(
+        lines: [String],
+        startIndex: Int
+    ) -> (table: GaryxMarkdownTable, nextIndex: Int)? {
+        guard startIndex + 1 < lines.count,
+              let headerCells = splitTableRow(lines[startIndex]),
+              headerCells.count >= 2,
+              headerCells.contains(where: { !$0.isEmpty }),
+              let separatorCells = splitTableRow(lines[startIndex + 1]),
+              separatorCells.count == headerCells.count,
+              separatorCells.allSatisfy(isTableSeparator) else {
+            return nil
+        }
+
+        var nextIndex = startIndex + 2
+        var rows: [[String]] = []
+        while nextIndex < lines.count {
+            let line = lines[nextIndex]
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("```"),
+                  let rowCells = splitTableRow(line),
+                  rowCells.count >= 2 else {
+                break
+            }
+            rows.append(normalizedTableRow(rowCells, columnCount: headerCells.count))
+            nextIndex += 1
+        }
+
+        let columns = zip(headerCells, separatorCells).map { header, separator in
+            GaryxMarkdownTable.Column(
+                title: header,
+                alignment: tableAlignment(from: separator)
+            )
+        }
+        return (GaryxMarkdownTable(columns: columns, rows: rows), nextIndex)
+    }
+
+    private static func splitTableRow(_ line: String) -> [String]? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard containsUnescapedPipe(trimmed) else { return nil }
+
+        var row = trimmed
+        if row.first == "|" {
+            row.removeFirst()
+        }
+        if let lastIndex = row.indices.last, row[lastIndex] == "|", !isEscapedPipe(in: row, at: lastIndex) {
+            row.removeLast()
+        }
+
+        var cells: [String] = []
+        var current = ""
+        var isEscaping = false
+        for character in row {
+            if isEscaping {
+                if character == "|" {
+                    current.append(character)
+                } else {
+                    current.append("\\")
+                    current.append(character)
+                }
+                isEscaping = false
+            } else if character == "\\" {
+                isEscaping = true
+            } else if character == "|" {
+                cells.append(current.trimmingCharacters(in: .whitespaces))
+                current.removeAll(keepingCapacity: true)
+            } else {
+                current.append(character)
+            }
+        }
+        if isEscaping {
+            current.append("\\")
+        }
+        cells.append(current.trimmingCharacters(in: .whitespaces))
+        return cells.count >= 2 ? cells : nil
+    }
+
+    private static func containsUnescapedPipe(_ value: String) -> Bool {
+        for index in value.indices where value[index] == "|" {
+            if !isEscapedPipe(in: value, at: index) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isEscapedPipe(in value: String, at index: String.Index) -> Bool {
+        var slashCount = 0
+        var cursor = index
+        while cursor > value.startIndex {
+            cursor = value.index(before: cursor)
+            if value[cursor] == "\\" {
+                slashCount += 1
+            } else {
+                break
+            }
+        }
+        return slashCount % 2 == 1
+    }
+
+    private static func isTableSeparator(_ cell: String) -> Bool {
+        let trimmed = cell.trimmingCharacters(in: .whitespaces)
+        let body = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+        guard body.count >= 3 else { return false }
+        return body.allSatisfy { $0 == "-" }
+    }
+
+    private static func tableAlignment(from separator: String) -> GaryxMarkdownTableColumnAlignment {
+        let trimmed = separator.trimmingCharacters(in: .whitespaces)
+        let hasLeadingColon = trimmed.hasPrefix(":")
+        let hasTrailingColon = trimmed.hasSuffix(":")
+        if hasLeadingColon && hasTrailingColon {
+            return .center
+        }
+        if hasTrailingColon {
+            return .trailing
+        }
+        return .leading
+    }
+
+    private static func normalizedTableRow(_ cells: [String], columnCount: Int) -> [String] {
+        if cells.count == columnCount {
+            return cells
+        }
+        if cells.count > columnCount {
+            var normalized = Array(cells.prefix(max(columnCount - 1, 0)))
+            let remaining = cells.dropFirst(max(columnCount - 1, 0)).joined(separator: " | ")
+            normalized.append(remaining)
+            return normalized
+        }
+        return cells + Array(repeating: "", count: columnCount - cells.count)
     }
 
     private static func parseStandaloneImage(_ trimmed: String) -> (alt: String, source: String)? {
