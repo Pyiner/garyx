@@ -1805,14 +1805,19 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertNil(GaryxMobileThreadLink.parse(URL(string: "garyx://mobile/connect?gatewayUrl=http://gateway.local")!))
     }
 
-    func testWidgetStorePersistsOnlyFiveRecentThreads() {
+    func testWidgetStorePersistsScrollableRecentThreads() {
         let defaults = UserDefaults(suiteName: "garyx.mobile.widget.tests")!
         GaryxMobileWidgetStore.clear(defaults: defaults)
         let threads = (1...7).map { index in
             GaryxMobileWidgetThread(
                 id: "thread::\(index)",
                 title: "Thread \(index)",
-                workspaceName: "Workspace"
+                workspaceName: "Workspace",
+                agentId: "agent::test",
+                agentName: "Test Agent",
+                avatarDataUrl: "data:image/png;base64,dGVzdA==",
+                providerType: "codex",
+                builtIn: true
             )
         }
 
@@ -1823,8 +1828,38 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
 
         let snapshot = GaryxMobileWidgetStore.loadRecentThreads(defaults: defaults)
-        XCTAssertEqual(snapshot.threads.map(\.id), ["thread::1", "thread::2", "thread::3", "thread::4", "thread::5"])
+        XCTAssertEqual(snapshot.threads.map(\.id), [
+            "thread::1",
+            "thread::2",
+            "thread::3",
+            "thread::4",
+            "thread::5",
+            "thread::6",
+            "thread::7",
+        ])
+        XCTAssertEqual(GaryxMobileWidgetStore.visibleThreadLimit, 5)
+        XCTAssertEqual(snapshot.threads.first?.agentName, "Test Agent")
+        XCTAssertEqual(snapshot.threads.first?.builtIn, true)
         XCTAssertEqual(snapshot.refreshedAt, Date(timeIntervalSince1970: 100))
+        GaryxMobileWidgetStore.clear(defaults: defaults)
+    }
+
+    func testWidgetStoreCapsStoredThreadsForSnapshotSize() {
+        let defaults = UserDefaults(suiteName: "garyx.mobile.widget.tests")!
+        GaryxMobileWidgetStore.clear(defaults: defaults)
+        let threads = (1...25).map { index in
+            GaryxMobileWidgetThread(
+                id: "thread::\(index)",
+                title: "Thread \(index)",
+                workspaceName: "Workspace"
+            )
+        }
+
+        GaryxMobileWidgetStore.saveRecentThreads(threads, defaults: defaults)
+
+        let snapshot = GaryxMobileWidgetStore.loadRecentThreads(defaults: defaults)
+        XCTAssertEqual(snapshot.threads.count, GaryxMobileWidgetStore.storedThreadLimit)
+        XCTAssertEqual(snapshot.threads.last?.id, "thread::20")
         GaryxMobileWidgetStore.clear(defaults: defaults)
     }
 

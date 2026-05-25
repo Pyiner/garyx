@@ -288,6 +288,15 @@ final class GaryxMobileModel: ObservableObject {
         var text: String
     }
 
+    private struct WidgetAgentIdentity {
+        var id: String?
+        var name: String?
+        var avatarDataUrl: String?
+        var providerType: String?
+        var isTeam: Bool
+        var builtIn: Bool
+    }
+
     @Published var gatewayURL: String
     @Published var gatewayAuthToken: String
     @Published var gatewayProfiles: [GaryxGatewayProfile]
@@ -1856,8 +1865,10 @@ final class GaryxMobileModel: ObservableObject {
         do {
             let page = try await client().setThreadPinned(threadId: normalizedId, pinned: pinned)
             applyPinnedThreadIds(page.threadIds)
+            persistRecentThreadsWidgetSnapshot()
         } catch {
             pinnedThreadIds = previousIds
+            persistRecentThreadsWidgetSnapshot()
             lastError = displayMessage(for: error)
         }
     }
@@ -2455,22 +2466,85 @@ final class GaryxMobileModel: ObservableObject {
         for thread in threads where summariesById[thread.id] == nil {
             summariesById[thread.id] = thread
         }
-        let widgetThreads = recentThreadIds.compactMap { threadId -> GaryxMobileWidgetThread? in
+        let orderedThreadIds = normalizedThreadIds((pinnedThreadIds + recentThreadIds).map { Optional($0) })
+        let widgetThreads = orderedThreadIds.compactMap { threadId -> GaryxMobileWidgetThread? in
             guard let thread = summariesById[threadId] else { return nil }
             let workspaceName = thread.workspacePath?
                 .garyxLastPathComponent
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let identity = widgetAgentIdentity(for: thread)
             return GaryxMobileWidgetThread(
                 id: thread.id,
                 title: thread.title,
                 workspaceName: workspaceName,
                 updatedAt: thread.updatedAt ?? thread.createdAt,
                 activeRunId: thread.activeRunId,
-                runState: thread.runState
+                runState: thread.runState,
+                agentId: identity.id,
+                agentName: identity.name,
+                avatarDataUrl: identity.avatarDataUrl,
+                providerType: identity.providerType,
+                isTeam: identity.isTeam,
+                builtIn: identity.builtIn
             )
         }
-        GaryxMobileWidgetStore.saveRecentThreads(Array(widgetThreads.prefix(GaryxMobileWidgetStore.threadLimit)))
+        GaryxMobileWidgetStore.saveRecentThreads(widgetThreads)
         WidgetCenter.shared.reloadTimelines(ofKind: GaryxRecentThreadsWidgetConstants.kind)
+    }
+
+    private func widgetAgentIdentity(for thread: GaryxThreadSummary) -> WidgetAgentIdentity {
+        let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !teamId.isEmpty {
+            if let team = teams.first(where: { $0.id == teamId }) {
+                return WidgetAgentIdentity(
+                    id: team.id,
+                    name: team.displayName,
+                    avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl,
+                    providerType: nil,
+                    isTeam: true,
+                    builtIn: false
+                )
+            }
+            return WidgetAgentIdentity(
+                id: teamId,
+                name: thread.teamName,
+                avatarDataUrl: nil,
+                providerType: nil,
+                isTeam: true,
+                builtIn: false
+            )
+        }
+
+        let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !agentId.isEmpty {
+            if let agent = agents.first(where: { $0.id == agentId }) {
+                return WidgetAgentIdentity(
+                    id: agent.id,
+                    name: agent.displayName,
+                    avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
+                    providerType: agent.providerType,
+                    isTeam: false,
+                    builtIn: agent.builtIn
+                )
+            }
+            return WidgetAgentIdentity(
+                id: agentId,
+                name: nil,
+                avatarDataUrl: nil,
+                providerType: thread.providerType,
+                isTeam: false,
+                builtIn: false
+            )
+        }
+
+        return WidgetAgentIdentity(
+            id: nil,
+            name: nil,
+            avatarDataUrl: nil,
+            providerType: thread.providerType,
+            isTeam: false,
+            builtIn: false
+        )
     }
 
     @discardableResult
@@ -2528,6 +2602,7 @@ final class GaryxMobileModel: ObservableObject {
                 seenRecentIds.insert(thread.id).inserted ? thread.id : nil
             }
             threads = Self.mergedThreadSummaries(threads + page.threads)
+            persistRecentThreadsWidgetSnapshot()
             refreshRemoteBusyIdsForVisibleThreads()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
@@ -6636,6 +6711,9 @@ final class GaryxMobileModel: ObservableObject {
         if didUpdateTargets {
             agentTargetsLoadPhase = .loaded
             ensureSelectedAgentTarget()
+            if !threads.isEmpty {
+                persistRecentThreadsWidgetSnapshot()
+            }
         }
         return didUpdateTargets
     }
@@ -6765,6 +6843,9 @@ final class GaryxMobileModel: ObservableObject {
         } else {
             agents.insert(agent, at: 0)
         }
+        if !threads.isEmpty {
+            persistRecentThreadsWidgetSnapshot()
+        }
     }
 
     private func replaceTeam(_ team: GaryxTeamSummary) {
@@ -6772,6 +6853,9 @@ final class GaryxMobileModel: ObservableObject {
             teams[index] = team
         } else {
             teams.insert(team, at: 0)
+        }
+        if !threads.isEmpty {
+            persistRecentThreadsWidgetSnapshot()
         }
     }
 

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import WidgetKit
 
 struct GaryxRecentThreadsEntry: TimelineEntry {
@@ -12,9 +13,37 @@ struct GaryxRecentThreadsProvider: TimelineProvider {
             date: Date(),
             snapshot: GaryxMobileWidgetSnapshot(
                 threads: [
-                    GaryxMobileWidgetThread(id: "thread::sample-1", title: "Mobile release polish", workspaceName: "Garyx"),
-                    GaryxMobileWidgetThread(id: "thread::sample-2", title: "Automation follow-up", workspaceName: "Garyx"),
-                    GaryxMobileWidgetThread(id: "thread::sample-3", title: "Gateway runtime check", workspaceName: "Garyx"),
+                    GaryxMobileWidgetThread(
+                        id: "thread::sample-1",
+                        title: "Design review",
+                        workspaceName: "Local workspace",
+                        agentId: "codex-agent",
+                        agentName: "Codex Agent",
+                        providerType: "codex",
+                        builtIn: true
+                    ),
+                    GaryxMobileWidgetThread(
+                        id: "thread::sample-2",
+                        title: "Mobile polish",
+                        workspaceName: "Local workspace",
+                        activeRunId: "run::sample",
+                        runState: "running",
+                        agentId: "claude-agent",
+                        agentName: "Claude Agent",
+                        providerType: "claude",
+                        builtIn: true
+                    ),
+                    GaryxMobileWidgetThread(
+                        id: "thread::sample-3",
+                        title: "Agent handoff",
+                        workspaceName: "Demo bot",
+                        agentId: "demo-team",
+                        agentName: "Demo Team",
+                        isTeam: true
+                    ),
+                    GaryxMobileWidgetThread(id: "thread::sample-4", title: "Release notes", workspaceName: "Garyx"),
+                    GaryxMobileWidgetThread(id: "thread::sample-5", title: "Gateway runtime check", workspaceName: "Garyx"),
+                    GaryxMobileWidgetThread(id: "thread::sample-6", title: "Automation follow-up", workspaceName: "Garyx"),
                 ]
             )
         )
@@ -38,7 +67,7 @@ struct GaryxRecentThreadsWidgetView: View {
     @Environment(\.widgetFamily) private var widgetFamily
 
     private var threads: [GaryxMobileWidgetThread] {
-        Array(entry.snapshot.threads.prefix(GaryxMobileWidgetStore.threadLimit))
+        entry.snapshot.threads
     }
 
     private var metrics: GaryxRecentThreadsWidgetMetrics {
@@ -46,20 +75,7 @@ struct GaryxRecentThreadsWidgetView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: metrics.headerToListSpacing) {
-            HStack(spacing: 6) {
-                Image(systemName: "bubble.left.and.text.bubble.right.fill")
-                    .font(.system(size: metrics.headerIconSize, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Text("Gary X")
-                    .font(.system(size: metrics.headerFontSize, weight: .semibold))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 6)
-                Text("Recent")
-                    .font(.system(size: metrics.headerBadgeFontSize, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
             if threads.isEmpty {
                 Spacer(minLength: 0)
                 Text("No recent threads")
@@ -70,67 +86,86 @@ struct GaryxRecentThreadsWidgetView: View {
                     .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             } else {
-                VStack(spacing: metrics.rowSpacing) {
-                    ForEach(threads) { thread in
-                        if let url = GaryxMobileThreadLink.make(threadId: thread.id) {
-                            Link(destination: url) {
-                                GaryxRecentThreadWidgetRow(thread: thread, metrics: metrics)
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: metrics.rowSpacing) {
+                        ForEach(Array(threads.enumerated()), id: \.element.id) { index, thread in
+                            if let url = GaryxMobileThreadLink.make(threadId: thread.id) {
+                                Link(destination: url) {
+                                    GaryxRecentThreadWidgetRow(
+                                        thread: thread,
+                                        metrics: metrics,
+                                        showsSeparator: index < threads.count - 1
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            } else {
+                                GaryxRecentThreadWidgetRow(
+                                    thread: thread,
+                                    metrics: metrics,
+                                    showsSeparator: index < threads.count - 1
+                                )
                             }
-                        } else {
-                            GaryxRecentThreadWidgetRow(thread: thread, metrics: metrics)
                         }
                     }
                 }
+                .scrollIndicators(.hidden)
+                .frame(maxHeight: metrics.visibleListHeight)
             }
         }
         .padding(metrics.contentPadding)
-        .containerBackground(.background, for: .widget)
+        .containerBackground(for: .widget) {
+            ContainerRelativeShape()
+                .fill(.thinMaterial)
+        }
         .widgetURL(threads.first.flatMap { GaryxMobileThreadLink.make(threadId: $0.id) })
     }
 }
 
 private struct GaryxRecentThreadsWidgetMetrics {
     let contentPadding: CGFloat
-    let headerToListSpacing: CGFloat
-    let headerIconSize: CGFloat
-    let headerFontSize: CGFloat
-    let headerBadgeFontSize: CGFloat
+    let rowContentSpacing: CGFloat
     let rowSpacing: CGFloat
-    let rowMinHeight: CGFloat
-    let rowDotSize: CGFloat
+    let rowHeight: CGFloat
+    let avatarSize: CGFloat
+    let avatarIconSize: CGFloat
+    let runningDotSize: CGFloat
     let rowTitleFontSize: CGFloat
     let rowWorkspaceFontSize: CGFloat
     let rowWorkspaceSpacing: CGFloat
-    let rowShowsWorkspace: Bool
+    let chevronSize: CGFloat
+
+    var visibleListHeight: CGFloat {
+        let visibleRows = CGFloat(GaryxMobileWidgetStore.visibleThreadLimit)
+        let visibleSpacings = max(0, visibleRows - 1) * rowSpacing
+        return rowHeight * visibleRows + visibleSpacings
+    }
 
     init(family: WidgetFamily) {
         switch family {
         case .systemMedium:
             contentPadding = 12
-            headerToListSpacing = 7
-            headerIconSize = 13
-            headerFontSize = 13
-            headerBadgeFontSize = 10
-            rowSpacing = 2
-            rowMinHeight = 19
-            rowDotSize = 5
-            rowTitleFontSize = 11
-            rowWorkspaceFontSize = 9
+            rowContentSpacing = 8
+            rowSpacing = 0
+            rowHeight = 24
+            avatarSize = 19
+            avatarIconSize = 8
+            runningDotSize = 5
+            rowTitleFontSize = 10.5
+            rowWorkspaceFontSize = 8.5
             rowWorkspaceSpacing = 0
-            rowShowsWorkspace = false
+            chevronSize = 8
         default:
             contentPadding = 14
-            headerToListSpacing = 8
-            headerIconSize = 14
-            headerFontSize = 14
-            headerBadgeFontSize = 11
-            rowSpacing = 5
-            rowMinHeight = 22
-            rowDotSize = 6
+            rowContentSpacing = 10
+            rowSpacing = 0
+            rowHeight = 32
+            avatarSize = 24
+            avatarIconSize = 10
+            runningDotSize = 6
             rowTitleFontSize = 12
-            rowWorkspaceFontSize = 10
+            rowWorkspaceFontSize = 9.5
             rowWorkspaceSpacing = 1
-            rowShowsWorkspace = true
+            chevronSize = 9
         }
     }
 }
@@ -138,6 +173,7 @@ private struct GaryxRecentThreadsWidgetMetrics {
 private struct GaryxRecentThreadWidgetRow: View {
     let thread: GaryxMobileWidgetThread
     let metrics: GaryxRecentThreadsWidgetMetrics
+    let showsSeparator: Bool
 
     private var isRunning: Bool {
         let activeRun = thread.activeRunId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -146,10 +182,8 @@ private struct GaryxRecentThreadWidgetRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(isRunning ? Color.accentColor : Color.secondary.opacity(0.4))
-                .frame(width: metrics.rowDotSize, height: metrics.rowDotSize)
+        HStack(spacing: metrics.rowContentSpacing) {
+            GaryxWidgetAgentAvatar(thread: thread, metrics: metrics)
 
             VStack(alignment: .leading, spacing: metrics.rowWorkspaceSpacing) {
                 Text(thread.title)
@@ -157,7 +191,7 @@ private struct GaryxRecentThreadWidgetRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                if metrics.rowShowsWorkspace, !thread.workspaceName.isEmpty {
+                if !thread.workspaceName.isEmpty {
                     Text(thread.workspaceName)
                         .font(.system(size: metrics.rowWorkspaceFontSize, weight: .medium))
                         .foregroundStyle(.secondary)
@@ -167,11 +201,137 @@ private struct GaryxRecentThreadWidgetRow: View {
 
             Spacer(minLength: 4)
 
+            if isRunning {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: metrics.runningDotSize, height: metrics.runningDotSize)
+            }
+
             Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .semibold))
+                .font(.system(size: metrics.chevronSize, weight: .semibold))
                 .foregroundStyle(.tertiary)
         }
-        .frame(maxWidth: .infinity, minHeight: metrics.rowMinHeight, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: metrics.rowHeight, maxHeight: metrics.rowHeight, alignment: .leading)
+        .contentShape(Rectangle())
+        .overlay(alignment: .bottom) {
+            if showsSeparator {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.08))
+                    .frame(height: 0.5)
+                    .padding(.leading, metrics.avatarSize + metrics.rowContentSpacing)
+            }
+        }
+    }
+}
+
+private struct GaryxWidgetAgentAvatar: View {
+    let thread: GaryxMobileWidgetThread
+    let metrics: GaryxRecentThreadsWidgetMetrics
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(fallbackBackground)
+
+            if let image = GaryxWidgetDataURLImageCache.image(from: thread.avatarDataUrl) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: metrics.avatarSize, height: metrics.avatarSize)
+                    .clipShape(Circle())
+            } else if thread.isTeam {
+                Image(systemName: "person.2.fill")
+                    .font(.system(size: metrics.avatarIconSize, weight: .semibold))
+                    .foregroundStyle(fallbackForeground)
+            } else if let symbol = providerSymbol {
+                Image(systemName: symbol)
+                    .font(.system(size: metrics.avatarIconSize, weight: .semibold))
+                    .foregroundStyle(fallbackForeground)
+            } else {
+                Text(initials)
+                    .font(.system(size: metrics.avatarIconSize, weight: .bold))
+                    .foregroundStyle(fallbackForeground)
+                    .minimumScaleFactor(0.7)
+            }
+        }
+        .frame(width: metrics.avatarSize, height: metrics.avatarSize)
+        .overlay {
+            Circle()
+                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var providerSymbol: String? {
+        let source = "\(thread.agentId ?? "") \(thread.providerType ?? "")".lowercased()
+        if source.contains("codex") || source.contains("openai") || source.contains("gpt") {
+            return "sparkles"
+        }
+        if source.contains("claude") || source.contains("anthropic") {
+            return "brain.head.profile"
+        }
+        if source.contains("gemini") || source.contains("google") {
+            return "diamond.fill"
+        }
+        return nil
+    }
+
+    private var initials: String {
+        let source = (thread.agentName ?? thread.agentId ?? thread.title)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty else { return "A" }
+        let words = source
+            .replacingOccurrences(of: "(", with: " ")
+            .replacingOccurrences(of: ")", with: " ")
+            .split { $0 == " " || $0 == "/" || $0 == "_" || $0 == "-" }
+        if words.count >= 2, let first = words[0].first, let second = words[1].first {
+            return "\(first)\(second)".uppercased()
+        }
+        return String(source.prefix(2)).uppercased()
+    }
+
+    private var fallbackBackground: Color {
+        if thread.builtIn {
+            return Color.primary.opacity(0.10)
+        }
+        let colors = [
+            Color(red: 0.86, green: 0.93, blue: 0.96),
+            Color(red: 0.91, green: 0.88, blue: 0.97),
+            Color(red: 0.92, green: 0.96, blue: 0.88),
+            Color(red: 0.97, green: 0.91, blue: 0.86),
+        ]
+        let source = "\(thread.agentName ?? "")\(thread.agentId ?? "")\(thread.title)"
+        let seed = source.unicodeScalars.reduce(0) { ($0 &+ Int($1.value)) % 997 }
+        return colors[seed % colors.count]
+    }
+
+    private var fallbackForeground: Color {
+        thread.builtIn ? Color.primary.opacity(0.72) : Color.primary.opacity(0.66)
+    }
+}
+
+private enum GaryxWidgetDataURLImageCache {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 64
+        cache.totalCostLimit = 16 * 1024 * 1024
+        return cache
+    }()
+
+    static func image(from rawValue: String?) -> UIImage? {
+        let raw = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        let cacheKey = NSString(string: raw)
+        if let cached = cache.object(forKey: cacheKey) {
+            return cached
+        }
+        let encoded = raw.split(separator: ",", maxSplits: 1).last.map(String.init) ?? raw
+        guard let data = Data(base64Encoded: encoded),
+              let image = UIImage(data: data) else {
+            return nil
+        }
+        cache.setObject(image, forKey: cacheKey, cost: data.count)
+        return image
     }
 }
 
