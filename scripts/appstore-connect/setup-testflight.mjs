@@ -187,7 +187,7 @@ function hasEnabledAppGroup(settings, appGroupId) {
 async function ensureAppGroupsCapability({ bundleIdResource, appGroupId }) {
   const capabilities = await ascRequest(
     "GET",
-    `/v1/bundleIds/${bundleIdResource.id}/bundleIdCapabilities?limit=200`,
+    `/v1/bundleIds/${bundleIdResource.id}/bundleIdCapabilities`,
   );
   const existing = capabilities.data?.find(
     (capability) => capability.attributes?.capabilityType === "APP_GROUPS",
