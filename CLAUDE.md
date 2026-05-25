@@ -153,6 +153,9 @@ needs installed-app validation.
   actions; horizontal swipes are reserved for navigation/sidebar gestures.
 - Agent and team rows should use the same avatar data as the Mac app when
   available, with compact circular fallbacks rather than generic list icons.
+- Mobile agent target selectors should use the shared
+  `GaryxAgentTargetPickerControl` and `GaryxAgentAvatarView` rather than local
+  Menu/Picker rows with generic person icons.
 - The iOS home-screen recent-threads widget should start directly with thread
   rows, not a title/header row. Put pinned threads first but render them exactly
   like other rows, use agent/team avatars as the leading image, and let the
