@@ -231,7 +231,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          app_path="$RUNNER_TEMP/GaryxMobile.xcarchive/Products/Applications/Garyx.app"
+          apps_dir="$RUNNER_TEMP/GaryxMobile.xcarchive/Products/Applications"
+          app_count="$(find "$apps_dir" -maxdepth 1 -type d -name '*.app' -print | wc -l | tr -d '[:space:]')"
+          if [[ "$app_count" != "1" ]]; then
+            echo "Expected exactly one archived app bundle in $apps_dir; found $app_count." >&2
+            find "$apps_dir" -maxdepth 1 -type d -name '*.app' -print >&2
+            exit 1
+          fi
+          app_path="$(find "$apps_dir" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          echo "Verifying archived app bundle: $(basename "$app_path")"
           if [[ ! -f "$app_path/AppIcon60x60@2x.png" ]]; then
             echo "Archived app is missing the iPhone app icon." >&2
             exit 1
