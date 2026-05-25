@@ -31,14 +31,16 @@ of the job.
 - `GARYX_APP_NAME` defaults to `Garyx`.
 - `GARYX_APP_SKU` defaults to `garyx-ios`.
 - `IOS_BUNDLE_ID` defaults to `com.garyx.mobile`.
+- `IOS_WIDGET_BUNDLE_ID` defaults to `<IOS_BUNDLE_ID>.RecentThreadsWidget`.
+- `IOS_APP_GROUP_ID` defaults to `group.<IOS_BUNDLE_ID>`.
 - `TESTFLIGHT_GROUP_NAME` defaults to `Garyx Experimental`.
 
 ## Workflow Behavior
 
 The workflow can do two independent things:
 
-- Register/update the App Store Connect app, Bundle ID, internal beta group, and
-  internal testers.
+- Register/update the App Store Connect app, app and widget Bundle IDs, shared
+  App Groups capability, internal beta group, and internal testers.
 - Archive, export, upload the iOS app to TestFlight, wait for Apple processing,
   and assign the build to the internal beta group.
 
