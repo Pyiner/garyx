@@ -3531,7 +3531,7 @@ struct GaryxMobileSettingsPanel: View {
 
     var body: some View {
         GaryxPanelScaffold(
-            title: "Settings",
+            title: settingsTitle,
             subtitle: model.activeSettingsTab.label,
             onRefresh: { await model.connectAndRefresh() },
             leadingActionLabel: settingsLeadingActionLabel,
@@ -3586,6 +3586,10 @@ struct GaryxMobileSettingsPanel: View {
                 GaryxCreateMcpServerCard()
             }
         }
+    }
+
+    private var settingsTitle: String {
+        model.activeSettingsTab == .manage ? "Settings" : model.activeSettingsTab.label
     }
 
     private var settingsLeadingActionLabel: String? {

@@ -146,14 +146,13 @@ struct GaryxPanelHeaderTitle: View {
             .lineLimit(1)
             .truncationMode(.tail)
             .padding(.horizontal, 14)
-        .frame(height: 44, alignment: .leading)
-        .frame(maxWidth: 282, alignment: .leading)
-        .garyxAdaptiveGlass(
-            .regular,
-            isInteractive: false,
-            fallbackMaterial: .ultraThinMaterial,
-            in: Capsule()
-        )
+            .frame(height: 44, alignment: .leading)
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: false,
+                fallbackMaterial: .ultraThinMaterial,
+                in: Capsule()
+            )
     }
 }
 
@@ -321,6 +320,9 @@ struct GaryxSwipeAction {
 struct GaryxSwipeActionRow<Content: View>: View {
     let actions: [GaryxSwipeAction]
     let content: Content
+    private let actionMenuWidth: CGFloat = 36
+    private let actionMenuTrailingInset: CGFloat = 10
+    private let actionMenuContentGap: CGFloat = 8
 
     init(actions: [GaryxSwipeAction], @ViewBuilder content: () -> Content) {
         self.actions = actions
@@ -332,12 +334,13 @@ struct GaryxSwipeActionRow<Content: View>: View {
             content
         } else {
             content
+                .padding(.trailing, actionMenuWidth + actionMenuTrailingInset + actionMenuContentGap)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(GaryxTheme.surface)
                 .contentShape(Rectangle())
                 .accessibilityHint("Use the actions button for item actions.")
                 .modifier(GaryxSwipeRowAccessibilityActions(actions: actions, onAction: handle))
-                .overlay(alignment: .bottomTrailing) {
+                .overlay(alignment: .trailing) {
                     Menu {
                         ForEach(Array(actions.enumerated()), id: \.offset) { _, action in
                             Button(role: action.menuRole) {
@@ -350,7 +353,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
                         Image(systemName: "ellipsis")
                             .font(GaryxFont.system(size: 17, weight: .semibold))
                             .foregroundStyle(.secondary)
-                            .frame(width: 36, height: 28)
+                            .frame(width: actionMenuWidth, height: 28)
                             .garyxAdaptiveGlass(
                                 .regular,
                                 isInteractive: true,
@@ -361,8 +364,7 @@ struct GaryxSwipeActionRow<Content: View>: View {
                             .contentShape(Capsule())
                     }
                     .buttonStyle(GaryxItemActionMenuButtonStyle())
-                    .padding(.trailing, 10)
-                    .padding(.bottom, 8)
+                    .padding(.trailing, actionMenuTrailingInset)
                     .accessibilityLabel("Item actions")
                 }
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -813,6 +815,8 @@ struct GaryxStatusPill: View {
         Text(text)
             .font(GaryxFont.system(size: 11, weight: .semibold))
             .foregroundStyle(color)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 7)
             .padding(.vertical, 3)
             .background(color.opacity(0.10), in: Capsule())
