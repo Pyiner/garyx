@@ -44,7 +44,7 @@ struct GaryxBotsContent: View {
                         ForEach(Array(bots.enumerated()), id: \.element.id) { index, bot in
                             GaryxConfiguredBotConfigRow(bot: bot)
                             if index < bots.count - 1 {
-                                GaryxCompactGroupDivider()
+                                GaryxCompactRowDivider()
                             }
                         }
                     }
@@ -67,32 +67,41 @@ struct GaryxConfiguredBotConfigRow: View {
 
     var body: some View {
         GaryxSwipeActionRow(actions: actions) {
-            HStack(alignment: .center, spacing: 10) {
-                GaryxChannelLogoView(
-                    channel: bot.channel,
-                    label: bot.displayName,
-                    iconDataUrl: iconDataUrl,
-                    diameter: 28
-                )
+            Button {
+                showsEditForm = true
+            } label: {
+                HStack(alignment: .center, spacing: 10) {
+                    GaryxChannelLogoView(
+                        channel: bot.channel,
+                        label: bot.displayName,
+                        iconDataUrl: iconDataUrl,
+                        diameter: 28
+                    )
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(bot.displayName)
-                        .font(GaryxFont.subheadline(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(detailLine)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(bot.displayName)
+                            .font(GaryxFont.subheadline(weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text(detailLine)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+
+                    Spacer(minLength: 6)
+
+                    GaryxStatusPill(text: bot.enabled ? "Enabled" : "Paused", tone: bot.enabled ? .good : .muted)
                 }
-
-                Spacer(minLength: 6)
-
-                GaryxStatusPill(text: bot.enabled ? "Enabled" : "Paused", tone: bot.enabled ? .good : .muted)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 8)
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open \(bot.displayName)")
+            .accessibilityHint("Shows bot account details.")
         }
         .fullScreenCover(isPresented: $showsEditForm) {
             GaryxBotAccountForm(account: bot)

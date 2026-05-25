@@ -1756,7 +1756,14 @@ struct GaryxAgentCard: View {
 
     var body: some View {
         GaryxSwipeActionRow(actions: agentSwipeActions) {
-            VStack(alignment: .leading, spacing: 10) {
+            Button {
+                if agent.builtIn {
+                    model.setSelectedAgentTarget(agent.id)
+                } else {
+                    fillDraft()
+                    showsEditForm = true
+                }
+            } label: {
                 GaryxAgentIdentityRow(
                     id: agent.id,
                     title: agent.displayName,
@@ -1768,6 +1775,7 @@ struct GaryxAgentCard: View {
                     selected: model.selectedAgentTargetId == agent.id
                 )
             }
+            .buttonStyle(.plain)
             .contentShape(Rectangle())
         }
         .onAppear(perform: fillDraft)
@@ -1895,24 +1903,21 @@ struct GaryxTeamCard: View {
 
     var body: some View {
         GaryxSwipeActionRow(actions: teamSwipeActions) {
-            VStack(alignment: .leading, spacing: 10) {
+            Button {
+                fillDraft()
+                showsEditForm = true
+            } label: {
                 GaryxAgentIdentityRow(
                     id: team.id,
                     title: team.displayName,
-                    subtitle: "",
+                    subtitle: team.workflowText,
                     kind: .team,
                     avatarDataUrl: team.avatarDataUrl,
                     providerType: "",
                     selected: model.selectedAgentTargetId == team.id
                 )
-                if !team.workflowText.isEmpty {
-                    Text(team.workflowText)
-                        .font(GaryxFont.footnote())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .padding(.horizontal, 10)
-                }
             }
+            .buttonStyle(.plain)
             .contentShape(Rectangle())
         }
         .onAppear(perform: fillDraft)
@@ -4347,44 +4352,6 @@ struct GaryxSettingsProviderContent: View {
                     }
                 }
             }
-
-            GaryxSectionBlock(title: "Default Agent") {
-                if model.agentTargets.isEmpty, model.shouldShowAgentTargetsEmptyState {
-                    GaryxEmptyPanelView(
-                        icon: "person.crop.circle.badge.exclamationmark",
-                        title: model.agentTargetsEmptyTitle,
-                        text: model.agentTargetsEmptyText
-                    )
-                } else if model.agentTargets.isEmpty {
-                    GaryxLoadingPanelView(title: "Loading agents...")
-                } else {
-                    GaryxCompactListGroup {
-                        ForEach(Array(model.agentTargets.enumerated()), id: \.element.id) { index, target in
-                            Button {
-                                model.setSelectedAgentTarget(target.id)
-                            } label: {
-                                GaryxAgentIdentityRow(
-                                    id: target.id,
-                                    title: target.title,
-                                    subtitle: target.subtitle,
-                                    kind: target.kind,
-                                    avatarDataUrl: target.avatarDataUrl,
-                                    providerType: target.providerType,
-                                    builtIn: target.builtIn,
-                                    selected: model.selectedAgentTargetId == target.id
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            if index < model.agentTargets.count - 1 {
-                                GaryxCompactRowDivider()
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .task {
-            await model.refreshAgentTargetsIfNeeded()
         }
     }
 }
