@@ -179,6 +179,11 @@ needs installed-app validation.
 - Mobile workspace and bot browsing belongs visually under Automation as the
   `Workspace & Bots` sibling row in the sidebar, not inside the Automation page.
   Do not put workspace or bot drilldowns back into the root thread list.
+- Mobile bot rows that have multiple bound/openable conversations should expose
+  a drilldown list like workspace rows. Keep the primary bot tap opening the
+  root/default thread when one exists, but do not hide child conversations just
+  because their threads are absent from the recent-thread page or because they
+  are direct-message conversations.
 - Mobile Automation rows should be plain tappable rows without leading icons or
   left-swipe actions. Tapping an automation opens its edit/detail page; list-row
   secondary actions live behind the row's ellipsis glass action menu.

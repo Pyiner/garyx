@@ -454,7 +454,6 @@ private struct GaryxSidebarBotsSection: View {
     }
 
     var body: some View {
-        let visibleThreadIds = model.sidebarVisibleThreadIds
         VStack(alignment: .leading, spacing: 0) {
             if let selectedGroup {
                 GaryxBotThreadDetailSection(
@@ -467,9 +466,10 @@ private struct GaryxSidebarBotsSection: View {
                         .padding(.bottom, 4)
 
                     ForEach(groups) { group in
+                        let childEntries = group.sidebarChildConversationEntries()
                         GaryxSidebarBotRow(
                             group: group,
-                            canDrillDown: !group.sidebarChildConversationEntries(visibleThreadIds: visibleThreadIds).isEmpty,
+                            canDrillDown: !group.rootCanOpen || childEntries.count > 1,
                             onSelect: {
                                 withAnimation(GaryxMobileMotion.sidebarDrilldown) {
                                     activeDrilldown = .bot(group.id)
@@ -498,16 +498,10 @@ private struct GaryxSidebarBotRow: View {
     let onSelect: () -> Void
     let onOpenRoot: () -> Void
 
-    private var rootCanOpen: Bool {
-        let mainThreadId = group.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let defaultOpenThreadId = group.defaultOpenThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return group.rootBehavior != "expand_only" || !mainThreadId.isEmpty || !defaultOpenThreadId.isEmpty
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             Button {
-                if rootCanOpen {
+                if group.rootCanOpen {
                     onOpenRoot()
                 } else if canDrillDown {
                     onSelect()
@@ -559,6 +553,12 @@ private struct GaryxBotSidebarConversationEntry: Identifiable, Equatable {
 }
 
 extension GaryxMobileBotGroup {
+    fileprivate var rootCanOpen: Bool {
+        let mainThreadId = self.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let defaultOpenThreadId = self.defaultOpenThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return rootBehavior != "expand_only" || !mainThreadId.isEmpty || !defaultOpenThreadId.isEmpty
+    }
+
     var compactDetailLine: String {
         let channelName = garyxBotChannelDisplayName(channel)
         let account = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -574,7 +574,7 @@ extension GaryxMobileBotGroup {
         .joined(separator: " / ")
     }
 
-    fileprivate func sidebarChildConversationEntries(visibleThreadIds: Set<String>) -> [GaryxBotSidebarConversationEntry] {
+    fileprivate func sidebarChildConversationEntries() -> [GaryxBotSidebarConversationEntry] {
         var entries: [GaryxBotSidebarConversationEntry] = []
         var seenThreadIds = Set<String>()
         let rootThreadId = mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -582,7 +582,7 @@ extension GaryxMobileBotGroup {
         if !conversationNodes.isEmpty {
             for node in conversationNodes {
                 let threadId = node.endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard let threadId, !threadId.isEmpty, visibleThreadIds.contains(threadId) else {
+                guard let threadId, !threadId.isEmpty else {
                     continue
                 }
                 if threadId == rootThreadId {
@@ -609,11 +609,7 @@ extension GaryxMobileBotGroup {
 
         for endpoint in endpoints {
             let threadId = endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let conversationKind = endpoint.conversationKind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-            guard let threadId, !threadId.isEmpty, conversationKind == "group" || conversationKind == "topic" else {
-                continue
-            }
-            guard visibleThreadIds.contains(threadId) else {
+            guard let threadId, !threadId.isEmpty else {
                 continue
             }
             if threadId == rootThreadId {
@@ -670,7 +666,7 @@ private struct GaryxBotThreadDetailSection: View {
     let group: GaryxMobileBotGroup
 
     private var entries: [GaryxBotSidebarConversationEntry] {
-        group.sidebarChildConversationEntries(visibleThreadIds: model.sidebarVisibleThreadIds)
+        group.sidebarChildConversationEntries()
     }
 
     var body: some View {
