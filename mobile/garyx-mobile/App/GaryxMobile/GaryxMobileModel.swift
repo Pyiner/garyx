@@ -3,214 +3,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WidgetKit
 
-enum GaryxMobileConnectionState: Equatable {
-    case disconnected
-    case checking
-    case ready(version: String?)
-    case failed(String)
-
-    var label: String {
-        switch self {
-        case .disconnected:
-            "Disconnected"
-        case .checking:
-            "Checking"
-        case .ready:
-            "Connected"
-        case .failed:
-            "Offline"
-        }
-    }
-}
-
-enum GaryxMobilePanel: String, CaseIterable, Identifiable {
-    case chat
-    case dreams
-    case tasks
-    case workspaces
-    case automations
-    case agents
-    case skills
-    case commands
-    case mcp
-    case autoResearch
-    case workspaceBots
-    case bots
-    case settings
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .chat:
-            "Chat"
-        case .dreams:
-            "Dreams"
-        case .tasks:
-            "Tasks"
-        case .workspaces:
-            "Workspaces"
-        case .automations:
-            "Automation"
-        case .agents:
-            "Agents"
-        case .skills:
-            "Skills"
-        case .commands:
-            "Commands"
-        case .mcp:
-            "MCP"
-        case .autoResearch:
-            "Auto Research"
-        case .workspaceBots:
-            "Workspace & Bots"
-        case .bots:
-            "Bots"
-        case .settings:
-            "Settings"
-        }
-    }
-
-    var iconName: String {
-        switch self {
-        case .chat:
-            "bubble.left.and.text.bubble.right.fill"
-        case .dreams:
-            "moon.stars.fill"
-        case .tasks:
-            "checklist.checked"
-        case .workspaces:
-            "folder"
-        case .automations:
-            "clock.arrow.circlepath"
-        case .agents:
-            "person.2.wave.2.fill"
-        case .skills:
-            "wand.and.stars"
-        case .commands:
-            "command"
-        case .mcp:
-            "point.3.connected.trianglepath.dotted"
-        case .autoResearch:
-            "atom"
-        case .workspaceBots:
-            "folder"
-        case .bots:
-            "bubble.left.and.bubble.right"
-        case .settings:
-            "gearshape"
-        }
-    }
-}
-
-enum GaryxMobileSettingsTab: String, CaseIterable, Identifiable {
-    case manage
-    case gateway
-    case provider
-    case channels
-    case commands
-    case mcp
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .manage:
-            "All Settings"
-        case .gateway:
-            "Gateway"
-        case .provider:
-            "Provider"
-        case .channels:
-            "Channels"
-        case .commands:
-            "Commands"
-        case .mcp:
-            "MCP"
-        }
-    }
-
-    var iconName: String {
-        switch self {
-        case .manage:
-            "list.bullet"
-        case .gateway:
-            "server.rack"
-        case .provider:
-            "sparkles"
-        case .channels:
-            "bubble.left.and.bubble.right.fill"
-        case .commands:
-            "command"
-        case .mcp:
-            "point.3.connected.trianglepath.dotted"
-        }
-    }
-}
-
-enum GaryxMobileLoadPhase: Equatable {
-    case idle
-    case loading
-    case loaded
-    case failed(String)
-
-    var isLoading: Bool {
-        if case .loading = self {
-            return true
-        }
-        return false
-    }
-
-    var hasResolved: Bool {
-        switch self {
-        case .loaded, .failed:
-            return true
-        case .idle, .loading:
-            return false
-        }
-    }
-
-    var failureMessage: String? {
-        if case .failed(let message) = self {
-            return message
-        }
-        return nil
-    }
-}
-
-enum GaryxMobileLeadingEdgeAction {
-    case openSidebar
-    case mainPanelBack
-    case settingsOverview
-    case workspaceBotsOverview
-}
-
-enum GaryxMobilePanelOpenSource {
-    case current
-    case sidebar
-    case replace
-}
-
-struct GaryxMobilePanelRoute: Equatable {
-    let panel: GaryxMobilePanel
-    let settingsTab: GaryxMobileSettingsTab
-}
-
-struct GaryxMobileAgentTarget: Identifiable, Equatable {
-    enum Kind: Equatable {
-        case agent
-        case team
-    }
-
-    let id: String
-    let title: String
-    let subtitle: String
-    let kind: Kind
-    let avatarDataUrl: String
-    let providerType: String
-    let builtIn: Bool
-}
-
 struct GaryxMobileBotGroup: Identifiable, Equatable {
     let id: String
     let channel: String
@@ -241,6 +33,11 @@ private struct GaryxPendingQueuedInput {
     var text: String
     var attachments: [GaryxMobileComposerAttachment]
     var clientIntentId: String
+}
+
+private struct GaryxEnsuredThread {
+    var thread: GaryxThreadSummary
+    var adoptedSelection: Bool
 }
 
 struct GaryxGatewayProfile: Identifiable, Codable, Equatable {
@@ -339,21 +136,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var isSending = false
     @Published var activeRunThreadId: String?
     @Published private(set) var remoteBusyThreadIds: Set<String> = []
-    @Published var activePanel: GaryxMobilePanel = .chat {
-        didSet {
-            guard activePanel != oldValue else { return }
-            if !isApplyingMainPanelRoute {
-                mainPanelBackStack.removeAll()
-            }
-            if activePanel != .workspaceBots {
-                workspaceBotsDrilldownActive = false
-            }
-        }
-    }
-    @Published var activeSettingsTab: GaryxMobileSettingsTab = .manage
-    @Published var workspaceBotsDrilldownActive = false
-    @Published var workspaceBotsBackRequest = 0
-    @Published private(set) var mainPanelBackStack: [GaryxMobilePanelRoute] = []
+    @Published private var navigationState = GaryxMobileNavigationState()
     @Published private var storedLastError: String?
     var lastError: String? {
         get {
@@ -471,13 +254,14 @@ final class GaryxMobileModel: ObservableObject {
     private var selectedThreadRecoveryThreadId: String?
     private var selectedThreadHistoryRequestId: UUID?
     private var completedThreadHistoryHydrationTasks: [String: Task<Void, Never>] = [:]
+    private var remoteStateRefreshRequestId: UUID?
     private var nextThreadListOffset = 0
     private var selectedThreadNextHistoryBeforeIndex: Int?
     private var sceneRefreshTask: Task<Void, Never>?
     private var pendingBotId: String?
     private var pendingBotWorkspace: String?
     private var pendingBotAgentId: String?
-    private var isApplyingMainPanelRoute = false
+    private var selectedThreadDraftGeneration = UUID()
     #if DEBUG
     private(set) var debugSnapshotActive = false
     #endif
@@ -747,6 +531,44 @@ final class GaryxMobileModel: ObservableObject {
     nonisolated private static func normalizedWorkspacePathKey(_ path: String) -> String {
         path.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\\", with: "/")
+    }
+
+    var activePanel: GaryxMobilePanel {
+        get { navigationState.activePanel }
+        set {
+            guard navigationState.activePanel != newValue else { return }
+            var nextState = navigationState
+            nextState.setActivePanel(newValue)
+            navigationState = nextState
+        }
+    }
+
+    var activeSettingsTab: GaryxMobileSettingsTab {
+        get { navigationState.activeSettingsTab }
+        set {
+            guard navigationState.activeSettingsTab != newValue else { return }
+            var nextState = navigationState
+            nextState.activeSettingsTab = newValue
+            navigationState = nextState
+        }
+    }
+
+    var workspaceBotsDrilldownActive: Bool {
+        get { navigationState.workspaceBotsDrilldownActive }
+        set {
+            guard navigationState.workspaceBotsDrilldownActive != newValue else { return }
+            var nextState = navigationState
+            nextState.setWorkspaceBotsDrilldownActive(newValue)
+            navigationState = nextState
+        }
+    }
+
+    var workspaceBotsBackRequest: Int {
+        navigationState.workspaceBotsBackRequest
+    }
+
+    var mainPanelBackStack: [GaryxMobilePanelRoute] {
+        navigationState.mainPanelBackStack
     }
 
     var hasGatewaySettings: Bool {
@@ -1061,31 +883,7 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     var agentTargets: [GaryxMobileAgentTarget] {
-        let agentItems = agents
-            .filter { $0.standalone }
-            .map {
-                GaryxMobileAgentTarget(
-                    id: $0.id,
-                    title: $0.displayName.isEmpty ? $0.id : $0.displayName,
-                    subtitle: "",
-                    kind: .agent,
-                    avatarDataUrl: $0.avatarDataUrl,
-                    providerType: $0.providerType,
-                    builtIn: $0.builtIn
-                )
-            }
-        let teamItems = teams.map {
-            GaryxMobileAgentTarget(
-                id: $0.id,
-                title: $0.displayName.isEmpty ? $0.id : $0.displayName,
-                subtitle: "\($0.memberAgentIds.count) agents",
-                kind: .team,
-                avatarDataUrl: $0.avatarDataUrl,
-                providerType: "",
-                builtIn: false
-            )
-        }
-        return agentItems + teamItems
+        GaryxMobileAgentTargetMapper.makeTargets(agents: agents, teams: teams)
     }
 
     var isLoadingRemoteState: Bool {
@@ -1127,43 +925,33 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     var selectedAgentTarget: GaryxMobileAgentTarget? {
-        agentTargets.first(where: { $0.id == selectedAgentTargetId })
+        GaryxMobileAgentTargetMapper.selectedTarget(
+            id: selectedAgentTargetId,
+            targets: agentTargets
+        )
     }
 
     var selectedAgentLabel: String {
-        selectedAgentTarget?.title ?? selectedAgentTargetId
+        GaryxMobileAgentTargetMapper.selectedAgentLabel(
+            selectedAgentTargetId: selectedAgentTargetId,
+            target: selectedAgentTarget
+        )
     }
 
     var selectedThreadAgentTarget: GaryxMobileAgentTarget? {
-        guard let thread = selectedThread else {
-            return selectedAgentTarget
-        }
-        if let teamId = thread.teamId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !teamId.isEmpty,
-           let target = agentTargets.first(where: { $0.id == teamId }) {
-            return target
-        }
-        if let agentId = thread.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !agentId.isEmpty,
-           let target = agentTargets.first(where: { $0.id == agentId }) {
-            return target
-        }
-        return nil
+        GaryxMobileAgentTargetMapper.selectedThreadTarget(
+            thread: selectedThread,
+            selectedAgentTargetId: selectedAgentTargetId,
+            targets: agentTargets
+        )
     }
 
     var selectedThreadAgentLabel: String {
-        if let target = selectedThreadAgentTarget {
-            return target.title
-        }
-        if let teamName = selectedThread?.teamName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !teamName.isEmpty {
-            return teamName
-        }
-        if let agentId = selectedThread?.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !agentId.isEmpty {
-            return agentId
-        }
-        return selectedAgentLabel
+        GaryxMobileAgentTargetMapper.selectedThreadAgentLabel(
+            thread: selectedThread,
+            target: selectedThreadAgentTarget,
+            fallbackSelectedAgentLabel: selectedAgentLabel
+        )
     }
 
     var mobileBotGroups: [GaryxMobileBotGroup] {
@@ -1379,72 +1167,21 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func openPanel(_ panel: GaryxMobilePanel, source: GaryxMobilePanelOpenSource = .current) {
-        let targetPanel: GaryxMobilePanel = switch panel {
-        case .bots, .workspaces:
-            .workspaceBots
-        default:
-            panel
-        }
-        guard targetPanel != .dreams || dreamsAutoScanEnabled else {
-            openPanel(.chat, source: .replace)
-            setSidebarVisible(false)
-            return
-        }
-
-        let targetRoute = GaryxMobilePanelRoute(
-            panel: targetPanel,
-            settingsTab: targetPanel == .settings ? activeSettingsTab : .manage
-        )
-        openPanelRoute(targetRoute, source: source)
-    }
-
-    private func openPanelRoute(_ route: GaryxMobilePanelRoute, source: GaryxMobilePanelOpenSource) {
-        let currentRoute = currentMainPanelRoute
-        switch source {
-        case .current:
-            if currentRoute != route, mainPanelBackStack.last != currentRoute {
-                mainPanelBackStack.append(currentRoute)
-            }
-        case .sidebar, .replace:
-            mainPanelBackStack.removeAll()
-        }
-
-        applyMainPanelRoute(route)
+        var nextState = navigationState
+        nextState.openPanel(panel, dreamsAutoScanEnabled: dreamsAutoScanEnabled, source: source)
+        navigationState = nextState
         setSidebarVisible(false)
     }
 
-    private var currentMainPanelRoute: GaryxMobilePanelRoute {
-        GaryxMobilePanelRoute(panel: activePanel, settingsTab: activeSettingsTab)
-    }
-
-    private func applyMainPanelRoute(_ route: GaryxMobilePanelRoute) {
-        isApplyingMainPanelRoute = true
-        activePanel = route.panel
-        activeSettingsTab = route.panel == .settings ? route.settingsTab : .manage
-        if route.panel != .workspaceBots {
-            workspaceBotsDrilldownActive = false
-        }
-        isApplyingMainPanelRoute = false
-    }
-
     func openSettings(tab: GaryxMobileSettingsTab = .manage, source: GaryxMobilePanelOpenSource = .sidebar) {
-        openPanelRoute(
-            GaryxMobilePanelRoute(panel: .settings, settingsTab: tab),
-            source: source
-        )
+        var nextState = navigationState
+        nextState.openSettings(tab: tab, source: source)
+        navigationState = nextState
+        setSidebarVisible(false)
     }
 
     var mainPanelLeadingEdgeAction: GaryxMobileLeadingEdgeAction {
-        if activePanel == .workspaceBots, workspaceBotsDrilldownActive {
-            return .workspaceBotsOverview
-        }
-        if activePanel == .settings, activeSettingsTab != .manage {
-            return .settingsOverview
-        }
-        if !mainPanelBackStack.isEmpty {
-            return .mainPanelBack
-        }
-        return .openSidebar
+        navigationState.leadingEdgeAction
     }
 
     var mainPanelLeadingEdgeActionLabel: String {
@@ -1469,20 +1206,25 @@ final class GaryxMobileModel: ObservableObject {
         case .settingsOverview:
             showSettingsOverview()
         case .workspaceBotsOverview:
-            workspaceBotsBackRequest &+= 1
+            var nextState = navigationState
+            nextState.requestWorkspaceBotsOverview()
+            navigationState = nextState
         }
     }
 
     func showSettingsOverview() {
-        activeSettingsTab = .manage
+        var nextState = navigationState
+        nextState.showSettingsOverview()
+        navigationState = nextState
     }
 
     func goBackInMainPanel() {
-        guard let previousRoute = mainPanelBackStack.popLast() else {
+        var nextState = navigationState
+        guard nextState.goBackInMainPanel() else {
             setSidebarVisible(true)
             return
         }
-        applyMainPanelRoute(previousRoute)
+        navigationState = nextState
         setSidebarVisible(false)
     }
 
@@ -2423,6 +2165,8 @@ final class GaryxMobileModel: ObservableObject {
     func refreshRemoteState() async {
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
+        let requestId = UUID()
+        remoteStateRefreshRequestId = requestId
         remoteStateLoadPhase = .loading
         if agentTargets.isEmpty {
             agentTargetsLoadPhase = .loading
@@ -2446,7 +2190,7 @@ final class GaryxMobileModel: ObservableObject {
 
             let nextAgents = try? await agentsResult
             let nextTeams = try? await teamsResult
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             applyAgentTargets(agents: nextAgents, teams: nextTeams)
 
             let nextSkills = try? await skillsResult
@@ -2461,7 +2205,7 @@ final class GaryxMobileModel: ObservableObject {
             let nextConfiguredBots = try? await configuredBotsResult
             let nextBotConsoles = try? await botConsolesResult
             let nextChannelPlugins = try? await channelPluginsResult
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
 
             skills = nextSkills ?? skills
             if let page = nextTasksPage {
@@ -2486,12 +2230,16 @@ final class GaryxMobileModel: ObservableObject {
             await mergeMissingSidebarRequiredThreads(
                 using: gateway,
                 extraThreadIds: [selectedThread?.id],
-                runtimeGeneration: runtimeGeneration
+                runtimeGeneration: runtimeGeneration,
+                remoteStateRefreshRequestId: requestId
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             ensureSelectedWorkspace()
-            await refreshProviderModelsForVisibleAgents(runtimeGeneration: runtimeGeneration)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            await refreshProviderModelsForVisibleAgents(
+                runtimeGeneration: runtimeGeneration,
+                remoteStateRefreshRequestId: requestId
+            )
+            guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             if agentTargetsLoadPhase.isLoading {
                 agentTargetsLoadPhase = agentTargets.isEmpty
                     ? .failed("Agents could not be loaded.")
@@ -2499,7 +2247,7 @@ final class GaryxMobileModel: ObservableObject {
             }
             remoteStateLoadPhase = .loaded
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             let message = displayMessage(for: error)
             remoteStateLoadPhase = .failed(message)
             if agentTargetsLoadPhase.isLoading {
@@ -2507,6 +2255,10 @@ final class GaryxMobileModel: ObservableObject {
             }
             lastError = message
         }
+    }
+
+    private func isCurrentRemoteStateRefresh(_ requestId: UUID, runtimeGeneration: UUID) -> Bool {
+        runtimeGeneration == gatewayRuntimeGeneration && remoteStateRefreshRequestId == requestId
     }
 
     private func applyGatewayRuntimeSettings(_ settings: [String: GaryxJSONValue]) {
@@ -2536,7 +2288,6 @@ final class GaryxMobileModel: ObservableObject {
             }
         }
         do {
-            let previousSelectedId = selectedThread?.id
             let gatewayClient = try client()
             async let threadsPage = gatewayClient.listRecentThreads(limit: Self.threadListPageLimit)
             async let threadPinsPage = gatewayClient.listThreadPins()
@@ -2545,7 +2296,8 @@ final class GaryxMobileModel: ObservableObject {
             applyPinnedThreadIds(pinsPage.threadIds)
             applyRecentThreadsPage(page, preservesLoadedPages: silent)
             var nextThreads = page.threads
-            let requiredThreadIds = normalizedThreadIds(pinsPage.threadIds + [previousSelectedId])
+            let selectionIdForThisRefresh = selectedThread?.id
+            let requiredThreadIds = normalizedThreadIds(pinsPage.threadIds + [selectionIdForThisRefresh])
             nextThreads += await fetchMissingThreadSummaries(
                 using: gatewayClient,
                 requiredThreadIds: requiredThreadIds,
@@ -2563,11 +2315,13 @@ final class GaryxMobileModel: ObservableObject {
                 refreshedThreads: refreshedThreads,
                 runtimeGeneration: runtimeGeneration
             )
-            if let previousSelectedId,
-               let updatedSelection = threads.first(where: { $0.id == previousSelectedId }) {
+            let currentSelectedId = selectedThread?.id
+            if let selectionIdForThisRefresh,
+               currentSelectedId == selectionIdForThisRefresh,
+               let updatedSelection = threads.first(where: { $0.id == selectionIdForThisRefresh }) {
                 selectedThread = updatedSelection
                 draftThreadTitle = updatedSelection.title
-            } else if previousSelectedId != nil {
+            } else if currentSelectedId == selectionIdForThisRefresh, selectionIdForThisRefresh != nil {
                 selectedThread = nil
                 draftThreadTitle = ""
                 resetComposerDraft()
@@ -2896,6 +2650,7 @@ final class GaryxMobileModel: ObservableObject {
     func selectThread(_ thread: GaryxThreadSummary) async {
         let previousThreadId = selectedThread?.id
         if previousThreadId != thread.id {
+            advanceSelectedThreadDraftGeneration()
             resetComposerDraft()
             selectedThreadRecoveryTask?.cancel()
             selectedThreadRecoveryTask = nil
@@ -2916,6 +2671,7 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func openNewThreadDraft() {
+        advanceSelectedThreadDraftGeneration()
         selectedThreadRecoveryTask?.cancel()
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
@@ -3013,6 +2769,7 @@ final class GaryxMobileModel: ObservableObject {
         pendingBotId = Self.botSelectorId(channel: group.channel, accountId: group.accountId)
         pendingBotWorkspace = workspace.isEmpty ? nil : workspace
         pendingBotAgentId = agentId.isEmpty ? nil : agentId
+        advanceSelectedThreadDraftGeneration()
         cancelSelectedThreadReconcileLoop()
         selectedThread = nil
         resetSelectedThreadHistoryPagination()
@@ -3611,6 +3368,7 @@ final class GaryxMobileModel: ObservableObject {
         )
         let assistantId = "local-assistant-\(UUID().uuidString)"
         var optimisticThreadId = selectedThread?.id
+        let draftOptimisticMessages = [userMessage]
         if let optimisticThreadId {
             finishActiveAssistantSegmentBeforeUserTurn(for: optimisticThreadId)
             mutateMessages(for: optimisticThreadId) { messages in
@@ -3618,14 +3376,15 @@ final class GaryxMobileModel: ObservableObject {
             }
             activeAssistantMessageIdsByThread[optimisticThreadId] = assistantId
         } else {
-            messages = [userMessage]
+            messages = draftOptimisticMessages
         }
 
         do {
-            let thread = try await ensureSelectedThread()
+            let ensuredThread = try await ensureSelectedThreadForDraftCreation()
+            let thread = ensuredThread.thread
             if optimisticThreadId == nil {
                 optimisticThreadId = thread.id
-                setMessages(messages, for: thread.id)
+                setMessages(draftOptimisticMessages, for: thread.id)
                 activeAssistantMessageIdsByThread[thread.id] = assistantId
             }
             if activeTasksByThread[thread.id] != nil {
@@ -4525,16 +4284,26 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
-    func loadProviderModels(providerType: String, runtimeGeneration: UUID? = nil) async {
+    func loadProviderModels(
+        providerType: String,
+        runtimeGeneration: UUID? = nil,
+        remoteStateRefreshRequestId: UUID? = nil
+    ) async {
         let provider = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !provider.isEmpty else { return }
         let observedGeneration = runtimeGeneration ?? gatewayRuntimeGeneration
         do {
             let models = try await client().providerModels(providerType: provider)
-            guard observedGeneration == gatewayRuntimeGeneration else { return }
+            guard observedGeneration == gatewayRuntimeGeneration,
+                  isCurrentRemoteStateScopedRequest(remoteStateRefreshRequestId) else {
+                return
+            }
             providerModelsByType[provider] = models
         } catch {
-            guard observedGeneration == gatewayRuntimeGeneration else { return }
+            guard observedGeneration == gatewayRuntimeGeneration,
+                  isCurrentRemoteStateScopedRequest(remoteStateRefreshRequestId) else {
+                return
+            }
             lastError = displayMessage(for: error)
         }
     }
@@ -6619,12 +6388,26 @@ final class GaryxMobileModel: ObservableObject {
         return false
     }
 
+    private func advanceSelectedThreadDraftGeneration() {
+        selectedThreadDraftGeneration = UUID()
+    }
+
     private func ensureSelectedThread() async throws -> GaryxThreadSummary {
+        try await ensureThreadForCurrentDraft(adoptIfDraftStillCurrent: false).thread
+    }
+
+    private func ensureSelectedThreadForDraftCreation() async throws -> GaryxEnsuredThread {
+        try await ensureThreadForCurrentDraft(adoptIfDraftStillCurrent: true)
+    }
+
+    private func ensureThreadForCurrentDraft(adoptIfDraftStillCurrent: Bool) async throws -> GaryxEnsuredThread {
         if let selectedThread {
-            return selectedThread
+            return GaryxEnsuredThread(thread: selectedThread, adoptedSelection: true)
         }
+        let draftGeneration = selectedThreadDraftGeneration
         let pendingWorkspace = pendingBotWorkspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let pendingAgentId = pendingBotAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let pendingBotIdForThread = pendingBotId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let workspace = pendingWorkspace.isEmpty
             ? newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
             : pendingWorkspace
@@ -6640,16 +6423,21 @@ final class GaryxMobileModel: ObservableObject {
                 metadata: ["client": "garyx-mobile"]
             )
         )
-        selectedThread = thread
-        draftThreadTitle = thread.title
         threads.insert(thread, at: 0)
-        if let pendingBotId = pendingBotId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !pendingBotId.isEmpty {
-            _ = try await client().bindBot(botId: pendingBotId, threadId: thread.id)
-            clearPendingBotDraft()
+        let canAdoptSelection = !adoptIfDraftStillCurrent
+            || (selectedThread == nil && selectedThreadDraftGeneration == draftGeneration)
+        if canAdoptSelection {
+            selectedThread = thread
+            draftThreadTitle = thread.title
+        }
+        if !pendingBotIdForThread.isEmpty {
+            _ = try await client().bindBot(botId: pendingBotIdForThread, threadId: thread.id)
+            if canAdoptSelection {
+                clearPendingBotDraft()
+            }
             await refreshRemoteState()
         }
-        return thread
+        return GaryxEnsuredThread(thread: thread, adoptedSelection: canAdoptSelection)
     }
 
     private func startGlobalEventStream() {
@@ -7045,7 +6833,8 @@ final class GaryxMobileModel: ObservableObject {
     private func mergeMissingSidebarRequiredThreads(
         using gatewayClient: GaryxGatewayClient,
         extraThreadIds: [String?] = [],
-        runtimeGeneration: UUID? = nil
+        runtimeGeneration: UUID? = nil,
+        remoteStateRefreshRequestId: UUID? = nil
     ) async {
         let observedGeneration = runtimeGeneration ?? gatewayRuntimeGeneration
         let requiredThreadIds = sidebarRequiredThreadIds(
@@ -7057,10 +6846,18 @@ final class GaryxMobileModel: ObservableObject {
             requiredThreadIds: requiredThreadIds,
             existingThreadIds: Set(threads.map(\.id))
         )
-        guard observedGeneration == gatewayRuntimeGeneration else { return }
+        guard observedGeneration == gatewayRuntimeGeneration,
+              isCurrentRemoteStateScopedRequest(remoteStateRefreshRequestId) else {
+            return
+        }
         if !missingThreads.isEmpty {
             threads = Self.mergedThreadSummaries(threads + missingThreads)
         }
+    }
+
+    private func isCurrentRemoteStateScopedRequest(_ requestId: UUID?) -> Bool {
+        guard let requestId else { return true }
+        return remoteStateRefreshRequestId == requestId
     }
 
     private func fetchMissingThreadSummaries(
@@ -7134,10 +6931,18 @@ final class GaryxMobileModel: ObservableObject {
         return merged
     }
 
-    private func refreshProviderModelsForVisibleAgents(runtimeGeneration: UUID? = nil) async {
+    private func refreshProviderModelsForVisibleAgents(
+        runtimeGeneration: UUID? = nil,
+        remoteStateRefreshRequestId: UUID? = nil
+    ) async {
         let providerTypes = Set(agents.map(\.providerType).filter { !$0.isEmpty })
         for providerType in providerTypes where providerModelsByType[providerType] == nil {
-            await loadProviderModels(providerType: providerType, runtimeGeneration: runtimeGeneration)
+            guard isCurrentRemoteStateScopedRequest(remoteStateRefreshRequestId) else { return }
+            await loadProviderModels(
+                providerType: providerType,
+                runtimeGeneration: runtimeGeneration,
+                remoteStateRefreshRequestId: remoteStateRefreshRequestId
+            )
         }
     }
 

@@ -249,6 +249,10 @@ needs installed-app validation.
   `GaryxFormGroupedSection` patterns. Create/edit flows should use the same
   top cancel/save chrome as Automation; reserve inline save buttons for nested
   file or document actions inside an editor, not whole-page form submission.
+- Pure mobile route state, presentation mapping, formatting, and business-rule
+  transformations should live under `mobile/garyx-mobile/Sources/GaryxMobileCore`
+  with SwiftPM tests. Keep the app target focused on SwiftUI view composition,
+  bindings, platform adapters, and side-effect orchestration.
 - Keep mobile SwiftUI feature surfaces in feature-specific files rather than
   adding large view trees to `GaryxMobileViews.swift`; use small shared helpers
   in the main views file only when they are genuinely reused across surfaces.
