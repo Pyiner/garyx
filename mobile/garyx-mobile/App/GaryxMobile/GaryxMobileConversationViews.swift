@@ -403,6 +403,7 @@ private struct GaryxHeaderAgentControl: View {
     var body: some View {
         if model.selectedThread == nil {
             Button {
+                Task { await model.refreshAgentTargetsIfNeeded() }
                 showsAgentPicker = true
             } label: {
                 GaryxAgentPickerLabel(
@@ -442,7 +443,11 @@ private struct GaryxAgentPickerPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if model.agentTargets.isEmpty {
-                Text("No agents available")
+                Text(
+                    model.isLoadingAgentTargets || model.isLoadingRemoteState
+                        ? "Loading agents..."
+                        : "No agents available"
+                )
                     .font(GaryxFont.callout())
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

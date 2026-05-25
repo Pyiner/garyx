@@ -316,6 +316,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var tasks: [GaryxTaskSummary] = []
     @Published var automations: [GaryxAutomationSummary] = []
     @Published var isLoadingRemoteState = false
+    @Published var isLoadingAgentTargets = false
     @Published var selectedAgentTargetId: String
     @Published var newThreadWorkspace: String
     @Published var newThreadWorkspaceMode: String
@@ -1897,6 +1898,7 @@ final class GaryxMobileModel: ObservableObject {
         cancelActiveSocket()
         isSending = false
         remoteBusyThreadIds = []
+        isLoadingAgentTargets = false
         connectionState = .disconnected
         threads = []
         pinnedThreadIds = []
@@ -2055,7 +2057,9 @@ final class GaryxMobileModel: ObservableObject {
                 case .ready:
                     startGlobalEventStream()
                     startSelectedThreadReconcileLoop()
+                    async let agentTargetsRefresh: Void = refreshAgentTargets()
                     await refreshThreads()
+                    await agentTargetsRefresh
                     guard !Task.isCancelled else { return }
                     if let selectedThreadId, selectedThread?.id == selectedThreadId {
                         await loadSelectedThreadHistory()
@@ -2161,7 +2165,9 @@ final class GaryxMobileModel: ObservableObject {
             gatewaySettingsStatus = "Saved and connected"
             connectionState = .ready(version: status.version)
             startGlobalEventStream()
+            async let agentTargetsRefresh: Void = refreshAgentTargets()
             await refreshThreads()
+            await agentTargetsRefresh
             await refreshRemoteState()
             startSelectedThreadReconcileLoop()
         } catch {
@@ -2177,6 +2183,33 @@ final class GaryxMobileModel: ObservableObject {
             if scheduleReconnectOnFailure {
                 startGatewayReconnectLoop()
             }
+        }
+    }
+
+    func refreshAgentTargetsIfNeeded() async {
+        guard agentTargets.isEmpty else { return }
+        await refreshAgentTargets()
+    }
+
+    func refreshAgentTargets() async {
+        guard hasGatewaySettings else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        isLoadingAgentTargets = true
+        defer {
+            if runtimeGeneration == gatewayRuntimeGeneration {
+                isLoadingAgentTargets = false
+            }
+        }
+        do {
+            let gateway = try client()
+            async let agentsResult: [GaryxAgentSummary]? = try? gateway.listAgents()
+            async let teamsResult: [GaryxTeamSummary]? = try? gateway.listTeams()
+            let (nextAgents, nextTeams) = await (agentsResult, teamsResult)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            applyAgentTargets(agents: nextAgents, teams: nextTeams)
+        } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            lastError = displayMessage(for: error)
         }
     }
 
@@ -2208,6 +2241,9 @@ final class GaryxMobileModel: ObservableObject {
 
             let nextAgents = try? await agentsResult
             let nextTeams = try? await teamsResult
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            applyAgentTargets(agents: nextAgents, teams: nextTeams)
+
             let nextSkills = try? await skillsResult
             let nextTasksPage = try? await tasksResult
             let nextDreamsPage = try? await dreamsResult
@@ -2222,8 +2258,6 @@ final class GaryxMobileModel: ObservableObject {
             let nextChannelPlugins = try? await channelPluginsResult
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
 
-            agents = nextAgents ?? agents
-            teams = nextTeams ?? teams
             skills = nextSkills ?? skills
             if let page = nextTasksPage {
                 tasks = page.tasks
@@ -2250,7 +2284,6 @@ final class GaryxMobileModel: ObservableObject {
                 runtimeGeneration: runtimeGeneration
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            ensureSelectedAgentTarget()
             ensureSelectedWorkspace()
             await refreshProviderModelsForVisibleAgents(runtimeGeneration: runtimeGeneration)
         } catch {
@@ -6505,6 +6538,21 @@ final class GaryxMobileModel: ObservableObject {
             return threadId
         case .ping, .unknown:
             return ""
+        }
+    }
+
+    private func applyAgentTargets(agents nextAgents: [GaryxAgentSummary]?, teams nextTeams: [GaryxTeamSummary]?) {
+        var didUpdateTargets = false
+        if let nextAgents {
+            agents = nextAgents
+            didUpdateTargets = true
+        }
+        if let nextTeams {
+            teams = nextTeams
+            didUpdateTargets = true
+        }
+        if didUpdateTargets {
+            ensureSelectedAgentTarget()
         }
     }
 
