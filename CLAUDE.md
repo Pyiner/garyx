@@ -208,6 +208,9 @@ needs installed-app validation.
   user-turn model that mirrors the Mac app: completed final assistant answers
   stay outside turn collapsibles, intermediate activity folds under the turn,
   and tool groups default collapsed unless the containing turn is expanded.
+- Mobile thread history should mirror the Mac app's user-turn pagination:
+  request the latest 10 user turns by default, keep older pages behind
+  `before_index`, and prefetch those older pages as the user scrolls upward.
 - Mobile chat live updates should mirror the Mac app's layered model: keep the
   global gateway stream for push events, and run a selected-thread history
   reconcile loop while the app is active so passive inbound messages still

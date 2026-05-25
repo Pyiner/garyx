@@ -3,22 +3,45 @@ import SwiftUI
 struct GaryxMobileTurnRowsView: View {
     let rows: [GaryxMobileTurnRow]
     let forceRunningLastTurn: Bool
+    let prefetchBoundaryRowCount: Int
+    let onNearHistoryBoundary: () -> Void
+
+    init(
+        rows: [GaryxMobileTurnRow],
+        forceRunningLastTurn: Bool,
+        prefetchBoundaryRowCount: Int = 0,
+        onNearHistoryBoundary: @escaping () -> Void = {}
+    ) {
+        self.rows = rows
+        self.forceRunningLastTurn = forceRunningLastTurn
+        self.prefetchBoundaryRowCount = prefetchBoundaryRowCount
+        self.onNearHistoryBoundary = onNearHistoryBoundary
+    }
 
     var body: some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { rowIndex, row in
-            if let userBlock = row.userBlock {
-                GaryxMobileTranscriptBlockView(block: userBlock)
-            }
+            turnRowContent(rowIndex: rowIndex, row: row)
+                .onAppear {
+                    guard rowIndex <= prefetchBoundaryRowCount else { return }
+                    onNearHistoryBoundary()
+                }
+        }
+    }
 
-            ForEach(Array(row.activityRows.enumerated()), id: \.element.id) { activityIndex, activityRow in
-                let forceRunning = forceRunningLastTurn
-                    && rowIndex == rows.count - 1
-                    && activityIndex == row.activityRows.count - 1
-                GaryxMobileTurnActivityRowView(
-                    row: activityRow,
-                    forceRunning: forceRunning
-                )
-            }
+    @ViewBuilder
+    private func turnRowContent(rowIndex: Int, row: GaryxMobileTurnRow) -> some View {
+        if let userBlock = row.userBlock {
+            GaryxMobileTranscriptBlockView(block: userBlock)
+        }
+
+        ForEach(Array(row.activityRows.enumerated()), id: \.element.id) { activityIndex, activityRow in
+            let forceRunning = forceRunningLastTurn
+                && rowIndex == rows.count - 1
+                && activityIndex == row.activityRows.count - 1
+            GaryxMobileTurnActivityRowView(
+                row: activityRow,
+                forceRunning: forceRunning
+            )
         }
     }
 }

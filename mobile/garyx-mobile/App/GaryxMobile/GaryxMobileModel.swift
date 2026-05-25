@@ -2863,32 +2863,44 @@ final class GaryxMobileModel: ObservableObject {
                 isLoadingSelectedThreadHistory = false
             }
         }
+        let shouldFastLoadVisibleMessages = cachedMessages(for: threadId).isEmpty
         do {
+            if shouldFastLoadVisibleMessages {
+                let visibleTranscript = try await client().threadHistory(
+                    threadId: threadId,
+                    limit: Self.threadHistoryPageLimit,
+                    userQueryLimit: Self.threadHistoryUserQueryLimit,
+                    includeToolMessages: false
+                )
+                guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
+                applySelectedThreadTranscript(visibleTranscript, threadId: threadId)
+                isLoadingSelectedThreadHistory = false
+
+                do {
+                    let fullTranscript = try await client().threadHistory(
+                        threadId: threadId,
+                        limit: Self.threadHistoryPageLimit,
+                        userQueryLimit: Self.threadHistoryUserQueryLimit
+                    )
+                    guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
+                    applySelectedThreadTranscript(fullTranscript, threadId: threadId)
+                } catch {
+                    guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
+                    let message = displayMessage(for: error)
+                    if Self.isTransientGatewayErrorMessage(message) {
+                        gatewaySettingsStatus = "Waiting to sync with gateway"
+                    }
+                }
+                return
+            }
+
             let transcript = try await client().threadHistory(
                 threadId: threadId,
                 limit: Self.threadHistoryPageLimit,
                 userQueryLimit: Self.threadHistoryUserQueryLimit
             )
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
-            selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
-            updateThreadRuntimeState(threadId: threadId, transcript: transcript)
-            updateSelectedThreadHistoryPagination(
-                threadId: threadId,
-                transcript: transcript,
-                preservingLoadedOlderPages: true
-            )
-            let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
-            setMessages(
-                mergedMessages(
-                    remoteMessages,
-                    withLocal: cachedMessages(for: threadId),
-                    preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
-                ),
-                for: threadId,
-                reconcileActiveAssistant: true
-            )
-            scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
-            startSelectedThreadReconcileLoop()
+            applySelectedThreadTranscript(transcript, threadId: threadId)
         } catch {
             guard self.selectedThread?.id == threadId, selectedThreadHistoryRequestId == requestId else { return }
             if cachedMessages(for: threadId).isEmpty {
@@ -2896,6 +2908,28 @@ final class GaryxMobileModel: ObservableObject {
             }
             lastError = displayMessage(for: error)
         }
+    }
+
+    private func applySelectedThreadTranscript(_ transcript: GaryxThreadTranscript, threadId: String) {
+        selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
+        updateThreadRuntimeState(threadId: threadId, transcript: transcript)
+        updateSelectedThreadHistoryPagination(
+            threadId: threadId,
+            transcript: transcript,
+            preservingLoadedOlderPages: true
+        )
+        let remoteMessages = mobileMessages(from: transcript, threadId: threadId, live: remoteBusyThreadIds.contains(threadId))
+        setMessages(
+            mergedMessages(
+                remoteMessages,
+                withLocal: cachedMessages(for: threadId),
+                preserveRemoteBeforeIndex: preserveRemoteBeforeIndex(from: transcript)
+            ),
+            for: threadId,
+            reconcileActiveAssistant: true
+        )
+        scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
+        startSelectedThreadReconcileLoop()
     }
 
     func loadOlderSelectedThreadHistory() async {

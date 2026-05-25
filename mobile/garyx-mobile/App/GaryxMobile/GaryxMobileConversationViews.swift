@@ -5,6 +5,10 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+private let garyxHistoryPrefetchBoundaryRows = 3
+private let garyxHistoryPrefetchMinDistance: CGFloat = 640
+private let garyxHistoryPrefetchViewportMultiplier: CGFloat = 1.5
+
 private func garyxDismissKeyboard() {
     UIApplication.shared.sendAction(
         #selector(UIResponder.resignFirstResponder),
@@ -62,6 +66,14 @@ private struct GaryxConversationBottomOffsetKey: PreferenceKey {
     }
 }
 
+private struct GaryxConversationTopOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat?
+
+    static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+        value = nextValue() ?? value
+    }
+}
+
 private struct GaryxConversationViewportHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
 
@@ -74,6 +86,8 @@ struct GaryxConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @FocusState private var isComposerFocused: Bool
     @State private var scrollPreservationThreadId: String?
+    @State private var pendingHistoryPrefetchThreadId: String?
+    @State private var conversationTopOffset: CGFloat?
     @State private var conversationBottomOffset: CGFloat = 0
     @State private var conversationViewportHeight: CGFloat = 0
     @State private var isNearConversationBottom = true
@@ -121,11 +135,16 @@ struct GaryxConversationView: View {
                 }
                 .onChange(of: model.selectedThread?.id) { _, _ in
                     scrollPreservationThreadId = model.selectedThread?.id
+                    pendingHistoryPrefetchThreadId = nil
+                    conversationTopOffset = nil
                     isNearConversationBottom = true
                     showsScrollToBottomButton = false
                     scheduleScrollToConversationTail(proxy, animated: false)
                 }
                 .onChange(of: model.messages) { oldValue, newValue in
+                    defer {
+                        prefetchOlderHistoryIfNeeded()
+                    }
                     if shouldPreserveScrollForPrependedHistory(oldValue: oldValue, newValue: newValue) {
                         return
                     }
@@ -155,6 +174,17 @@ struct GaryxConversationView: View {
     private var messageScroll: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
+                Color.clear
+                    .frame(height: 1)
+                    .background {
+                        GeometryReader { geometry in
+                            Color.clear.preference(
+                                key: GaryxConversationTopOffsetKey.self,
+                                value: geometry.frame(in: .named("garyx-conversation-scroll")).minY
+                            )
+                        }
+                    }
+
                 if model.messages.isEmpty, model.isLoadingSelectedThreadHistory {
                     GaryxThreadHistoryLoadingView()
                         .padding(.top, 96)
@@ -176,8 +206,11 @@ struct GaryxConversationView: View {
                     }
                     GaryxMobileTurnRowsView(
                         rows: model.selectedThreadTurnRows(),
-                        forceRunningLastTurn: model.isSelectedThreadSending
-                    )
+                        forceRunningLastTurn: model.isSelectedThreadSending,
+                        prefetchBoundaryRowCount: garyxHistoryPrefetchBoundaryRows
+                    ) {
+                        prefetchOlderHistoryIfNeeded(ignoreDistance: true)
+                    }
                     if model.showsTailThinkingIndicator {
                         GaryxThinkingLabel()
                             .id("tail-thinking")
@@ -213,9 +246,14 @@ struct GaryxConversationView: View {
             conversationBottomOffset = value
             updateConversationBottomState()
         }
+        .onPreferenceChange(GaryxConversationTopOffsetKey.self) { value in
+            conversationTopOffset = value
+            prefetchOlderHistoryIfNeeded()
+        }
         .onPreferenceChange(GaryxConversationViewportHeightKey.self) { value in
             conversationViewportHeight = value
             updateConversationBottomState()
+            prefetchOlderHistoryIfNeeded()
         }
         .scrollDisabled(isComposerFocused)
         .scrollDismissesKeyboard(.never)
@@ -268,6 +306,39 @@ struct GaryxConversationView: View {
         let isNearBottom = distanceFromBottom <= 96
         isNearConversationBottom = isNearBottom
         showsScrollToBottomButton = !isNearBottom && !model.messages.isEmpty
+        prefetchOlderHistoryIfNeeded()
+    }
+
+    private func prefetchOlderHistoryIfNeeded(ignoreDistance: Bool = false) {
+        guard let threadId = model.selectedThread?.id,
+              model.selectedThreadHasMoreHistoryBefore,
+              !model.isLoadingOlderThreadHistory,
+              pendingHistoryPrefetchThreadId != threadId,
+              !isNearConversationBottom,
+              ignoreDistance || isNearLoadedHistoryStart else {
+            return
+        }
+        pendingHistoryPrefetchThreadId = threadId
+        Task {
+            await model.loadOlderSelectedThreadHistory()
+            await MainActor.run {
+                if pendingHistoryPrefetchThreadId == threadId {
+                    pendingHistoryPrefetchThreadId = nil
+                }
+            }
+        }
+    }
+
+    private var isNearLoadedHistoryStart: Bool {
+        guard let conversationTopOffset,
+              conversationViewportHeight > 0 else {
+            return false
+        }
+        let prefetchDistance = max(
+            garyxHistoryPrefetchMinDistance,
+            conversationViewportHeight * garyxHistoryPrefetchViewportMultiplier
+        )
+        return conversationTopOffset >= -prefetchDistance
     }
 
     private func shouldPreserveScrollForPrependedHistory(
