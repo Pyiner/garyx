@@ -62,6 +62,14 @@ struct GaryxGatewaySetupView: View {
     @State private var didInitializeDraft = false
 
     var body: some View {
+        if isSheet, showsSetupDetails {
+            gatewaySettingsSheet
+        } else {
+            gatewaySetupNavigation
+        }
+    }
+
+    private var gatewaySetupNavigation: some View {
         NavigationStack {
             Group {
                 if showsSetupDetails {
@@ -96,6 +104,39 @@ struct GaryxGatewaySetupView: View {
                     GaryxGlobalErrorToastHost(topOffset: 8)
                 }
             }
+        }
+    }
+
+    private var gatewaySettingsSheet: some View {
+        GaryxFormSheet(
+            title: "Gateway",
+            canSave: canSaveGateway && !setupIsBusy,
+            onCancel: closeSettingsSheet,
+            onSave: { Task { await saveGatewaySettings() } }
+        ) {
+            VStack(alignment: .leading, spacing: 22) {
+                if let failureMessage {
+                    GaryxFormErrorText(text: failureMessage)
+                }
+
+                GaryxFormGroupedSection(title: "Connection") {
+                    TextField("Gateway URL", text: $draftGatewayURL)
+                        .textContentType(.URL)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    SecureField("Gateway Token", text: $draftGatewayAuthToken)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                }
+            }
+        }
+        .onAppear(perform: initializeDraft)
+        .overlay(alignment: .top) {
+            GaryxGlobalErrorToastHost(topOffset: 8)
         }
     }
 
@@ -158,12 +199,7 @@ struct GaryxGatewaySetupView: View {
                     systemImage: setupIsBusy ? nil : "checkmark.circle.fill"
                 ) {
                     Task {
-                        model.gatewayURL = draftGatewayURL
-                        model.gatewayAuthToken = draftGatewayAuthToken
-                        await model.connectAndRefresh()
-                        if isSheet, case .ready = model.connectionState {
-                            dismiss()
-                        }
+                        await saveGatewaySettings()
                     }
                 }
                 .disabled(!canSaveGateway || setupIsBusy)
@@ -210,6 +246,21 @@ struct GaryxGatewaySetupView: View {
         draftGatewayURL = startsEmpty ? "" : model.gatewayURL
         draftGatewayAuthToken = startsEmpty ? "" : model.gatewayAuthToken
         didInitializeDraft = true
+    }
+
+    private func closeSettingsSheet() {
+        model.showsSettings = false
+        dismiss()
+    }
+
+    private func saveGatewaySettings() async {
+        guard canSaveGateway, !setupIsBusy else { return }
+        model.gatewayURL = draftGatewayURL
+        model.gatewayAuthToken = draftGatewayAuthToken
+        await model.connectAndRefresh()
+        if isSheet, case .ready = model.connectionState {
+            closeSettingsSheet()
+        }
     }
 
     private var setupIsBusy: Bool {
@@ -849,9 +900,7 @@ struct GaryxTasksView: View {
             }
         }
         .fullScreenCover(isPresented: $showsCreateTask) {
-            GaryxFormSheet(title: "New Task") {
-                GaryxCreateTaskCard()
-            }
+            GaryxCreateTaskCard()
         }
     }
 }
@@ -1087,111 +1136,90 @@ struct GaryxCreateTaskCard: View {
     @State private var notificationTargetId = "none"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GaryxFieldLabel("Task")
-            TextField("Title", text: $model.draftTaskTitle)
-                .garyxInputStyle()
-            TextField("Details", text: $model.draftTaskBody, axis: .vertical)
-                .lineLimit(3...8)
-                .garyxInputStyle()
-
-            GaryxFieldLabel("Assignee")
-                .padding(.top, 4)
-            Menu {
-                ForEach(model.agentTargets) { target in
-                    Button {
-                        model.setSelectedAgentTarget(target.id)
-                    } label: {
-                        Label(target.title, systemImage: target.kind == .team ? "person.3" : "person")
-                    }
-                }
-            } label: {
-                GaryxAgentPickerLabel(
-                    target: model.selectedAgentTarget,
-                    title: model.selectedAgentLabel,
-                    showsChevron: true,
-                    style: .compact
-                )
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(GaryxTheme.input, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .disabled(model.agentTargets.isEmpty)
-            if model.agentTargets.isEmpty {
-                Text(model.agentTargetsPlaceholderText)
-                    .font(GaryxFont.caption())
-                    .foregroundStyle(.secondary)
-            }
-
-            GaryxFieldLabel("Workspace")
-                .padding(.top, 4)
-            TextField("Workspace directory", text: $workspacePath)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-
-            GaryxFieldLabel("Notification")
-                .padding(.top, 4)
-            Menu {
-                Button {
-                    notificationTargetId = "none"
-                } label: {
-                    Label("Do not notify", systemImage: notificationTargetId == "none" ? "checkmark" : "bell.slash")
-                }
-                if !model.mobileBotGroups.isEmpty {
-                    Divider()
-                    ForEach(model.mobileBotGroups) { group in
-                        Button {
-                            notificationTargetId = group.id
-                        } label: {
-                            Label(group.title, systemImage: notificationTargetId == group.id ? "checkmark" : "bell")
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Text(notificationTargetLabel)
-                        .font(GaryxFont.callout(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.down")
-                        .font(GaryxFont.system(size: 10, weight: .bold))
-                        .foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 42)
-                .background(GaryxTheme.input, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-            .buttonStyle(.plain)
-
-            Toggle("Start immediately", isOn: $startImmediately)
-                .font(GaryxFont.callout(weight: .medium))
-
-            Button {
-                Task {
-                    model.setNewThreadWorkspace(workspacePath)
-                    await model.createTaskFromDraft(
-                        start: startImmediately,
-                        notificationTarget: notificationTargetRequest
-                    )
-                    if model.draftTaskTitle.isEmpty, model.draftTaskBody.isEmpty {
-                        dismiss()
-                    }
-                }
-            } label: {
-                Label("Create Task", systemImage: "plus")
-            }
-            .buttonStyle(GaryxPrimaryCompactButtonStyle())
-            .disabled(!canCreate)
+        GaryxFormSheet(
+            title: "New Task",
+            canSave: canCreate,
+            onSave: { Task { await createTask() } }
+        ) {
+            formContent
         }
-        .garyxCardStyle()
         .task {
             await model.refreshAgentTargetsIfNeeded()
         }
         .onAppear {
             workspacePath = model.newThreadWorkspace
+        }
+    }
+
+    private var formContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            GaryxFormGroupedSection(title: "Task") {
+                TextField("Title", text: $model.draftTaskTitle)
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("Details", text: $model.draftTaskBody, axis: .vertical)
+                    .lineLimit(3...8)
+                    .garyxFormTextArea(minHeight: 128)
+            }
+
+            GaryxFormGroupedSection(title: "Assignee") {
+                if model.agentTargets.isEmpty {
+                    Text(model.agentTargetsPlaceholderText)
+                        .font(GaryxFont.callout())
+                        .foregroundStyle(.secondary)
+                        .padding(16)
+                } else {
+                    GaryxFormRow(title: "Agent") {
+                        Menu {
+                            ForEach(model.agentTargets) { target in
+                                Button {
+                                    model.setSelectedAgentTarget(target.id)
+                                } label: {
+                                    Label(target.title, systemImage: target.kind == .team ? "person.3" : "person")
+                                }
+                            }
+                        } label: {
+                            GaryxFormMenuValueLabel(value: model.selectedAgentLabel)
+                        }
+                    }
+                }
+            }
+
+            GaryxFormGroupedSection(title: "Workspace") {
+                TextField("Workspace directory", text: $workspacePath)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+            }
+
+            GaryxFormGroupedSection(title: "Notification") {
+                GaryxFormRow(title: "Target") {
+                    Menu {
+                        Button {
+                            notificationTargetId = "none"
+                        } label: {
+                            Label("Do not notify", systemImage: notificationTargetId == "none" ? "checkmark" : "bell.slash")
+                        }
+                        if !model.mobileBotGroups.isEmpty {
+                            Divider()
+                            ForEach(model.mobileBotGroups) { group in
+                                Button {
+                                    notificationTargetId = group.id
+                                } label: {
+                                    Label(group.title, systemImage: notificationTargetId == group.id ? "checkmark" : "bell")
+                                }
+                            }
+                        }
+                    } label: {
+                        GaryxFormMenuValueLabel(value: notificationTargetLabel)
+                    }
+                }
+                Divider().padding(.leading, 16)
+                GaryxFormRow(title: "Start immediately") {
+                    Toggle("Start immediately", isOn: $startImmediately)
+                        .labelsHidden()
+                }
+            }
         }
     }
 
@@ -1211,6 +1239,18 @@ struct GaryxCreateTaskCard: View {
     private var notificationTargetRequest: GaryxTaskNotificationTargetRequest {
         guard let group = selectedNotificationGroup else { return .none }
         return .bot(channel: group.channel, accountId: group.accountId)
+    }
+
+    private func createTask() async {
+        guard canCreate else { return }
+        model.setNewThreadWorkspace(workspacePath)
+        await model.createTaskFromDraft(
+            start: startImmediately,
+            notificationTarget: notificationTargetRequest
+        )
+        if model.draftTaskTitle.isEmpty, model.draftTaskBody.isEmpty {
+            dismiss()
+        }
     }
 }
 
@@ -1376,42 +1416,47 @@ struct GaryxTaskDetailCard: View {
     let task: GaryxTaskSummary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(task.title)
-                        .font(GaryxFont.title3(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(3)
-                    Spacer(minLength: 0)
-                    GaryxStatusPill(text: task.status.label, tone: task.status.tone)
+        VStack(alignment: .leading, spacing: 22) {
+            GaryxFormGroupedSection(title: "Task") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(task.title)
+                            .font(GaryxFont.title3(weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(3)
+                        Spacer(minLength: 0)
+                        GaryxStatusPill(text: task.status.label, tone: task.status.tone)
+                    }
+                    Text(task.displayId)
+                        .font(GaryxFont.caption(weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
-                Text(task.displayId)
-                    .font(GaryxFont.caption(weight: .medium))
-                    .foregroundStyle(.secondary)
+                .padding(16)
             }
 
-            GaryxCompactListGroup {
-                GaryxTaskMetaLine(label: "Assignee", value: task.assigneeDisplayLabel)
-                GaryxCompactRowDivider()
-                GaryxTaskMetaLine(label: "Runtime", value: task.runtimeAgentId.isEmpty ? "Not assigned" : task.runtimeAgentId)
-                GaryxCompactRowDivider()
-                GaryxTaskMetaLine(label: "Thread", value: task.threadId.isEmpty ? "No thread" : task.threadId)
-                GaryxCompactRowDivider()
-                GaryxTaskMetaLine(label: "Replies", value: "\(task.replyCount)")
-                GaryxCompactRowDivider()
-                GaryxTaskMetaLine(label: "Updated", value: task.formattedUpdatedAt)
-                if let creator = task.creator {
-                    GaryxCompactRowDivider()
-                    GaryxTaskMetaLine(label: "Creator", value: creator.label)
-                }
-                if let updatedBy = task.updatedBy {
-                    GaryxCompactRowDivider()
-                    GaryxTaskMetaLine(label: "Updated by", value: updatedBy.label)
-                }
-                if let source = task.source {
-                    GaryxCompactRowDivider()
-                    GaryxTaskMetaLine(label: "Source", value: source.detailLabel)
+            GaryxFormGroupedSection(title: "Details") {
+                VStack(spacing: 0) {
+                    GaryxTaskMetaLine(label: "Assignee", value: task.assigneeDisplayLabel)
+                    Divider().padding(.leading, 16)
+                    GaryxTaskMetaLine(label: "Runtime", value: task.runtimeAgentId.isEmpty ? "Not assigned" : task.runtimeAgentId)
+                    Divider().padding(.leading, 16)
+                    GaryxTaskMetaLine(label: "Thread", value: task.threadId.isEmpty ? "No thread" : task.threadId)
+                    Divider().padding(.leading, 16)
+                    GaryxTaskMetaLine(label: "Replies", value: "\(task.replyCount)")
+                    Divider().padding(.leading, 16)
+                    GaryxTaskMetaLine(label: "Updated", value: task.formattedUpdatedAt)
+                    if let creator = task.creator {
+                        Divider().padding(.leading, 16)
+                        GaryxTaskMetaLine(label: "Creator", value: creator.label)
+                    }
+                    if let updatedBy = task.updatedBy {
+                        Divider().padding(.leading, 16)
+                        GaryxTaskMetaLine(label: "Updated by", value: updatedBy.label)
+                    }
+                    if let source = task.source {
+                        Divider().padding(.leading, 16)
+                        GaryxTaskMetaLine(label: "Source", value: source.detailLabel)
+                    }
                 }
             }
 
@@ -1422,7 +1467,6 @@ struct GaryxTaskDetailCard: View {
                 )
             }
         }
-        .garyxCardStyle()
     }
 }
 
@@ -1432,47 +1476,47 @@ struct GaryxTaskAssignCard: View {
     let task: GaryxTaskSummary
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GaryxFieldLabel("Assign To")
-            if model.agentTargets.isEmpty, model.shouldShowAgentTargetsEmptyState {
-                GaryxEmptyPanelView(
-                    icon: "person.crop.circle.badge.exclamationmark",
-                    title: model.agentTargetsEmptyTitle,
-                    text: model.agentTargetsEmptyText
-                )
-            } else if model.agentTargets.isEmpty {
-                GaryxLoadingPanelView(title: "Loading agents...")
-            } else {
-                GaryxCompactListGroup {
-                    ForEach(Array(model.agentTargets.enumerated()), id: \.element.id) { index, target in
-                        Button {
-                            Task {
-                                await model.assignTask(task, agentId: target.id)
-                                dismiss()
+        VStack(alignment: .leading, spacing: 22) {
+            GaryxFormGroupedSection(title: "Assign To") {
+                if model.agentTargets.isEmpty, model.shouldShowAgentTargetsEmptyState {
+                    GaryxEmptyPanelView(
+                        icon: "person.crop.circle.badge.exclamationmark",
+                        title: model.agentTargetsEmptyTitle,
+                        text: model.agentTargetsEmptyText
+                    )
+                } else if model.agentTargets.isEmpty {
+                    GaryxLoadingPanelView(title: "Loading agents...")
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(model.agentTargets.enumerated()), id: \.element.id) { index, target in
+                            Button {
+                                Task {
+                                    await model.assignTask(task, agentId: target.id)
+                                    dismiss()
+                                }
+                            } label: {
+                                GaryxAgentIdentityRow(
+                                    id: target.id,
+                                    title: target.title,
+                                    subtitle: target.subtitle,
+                                    kind: target.kind,
+                                    avatarDataUrl: target.avatarDataUrl,
+                                    providerType: target.providerType,
+                                    builtIn: target.builtIn,
+                                    selected: task.assignee?.agentId == target.id
+                                        || task.assigneeLabel == target.id
+                                        || task.runtimeAgentId == target.id
+                                )
                             }
-                        } label: {
-                            GaryxAgentIdentityRow(
-                                id: target.id,
-                                title: target.title,
-                                subtitle: target.subtitle,
-                                kind: target.kind,
-                                avatarDataUrl: target.avatarDataUrl,
-                                providerType: target.providerType,
-                                builtIn: target.builtIn,
-                                selected: task.assignee?.agentId == target.id
-                                    || task.assigneeLabel == target.id
-                                    || task.runtimeAgentId == target.id
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        if index < model.agentTargets.count - 1 {
-                            GaryxCompactRowDivider()
+                            .buttonStyle(.plain)
+                            if index < model.agentTargets.count - 1 {
+                                Divider().padding(.leading, 16)
+                            }
                         }
                     }
                 }
             }
         }
-        .garyxCardStyle()
         .task {
             await model.refreshAgentTargetsIfNeeded()
         }
@@ -1496,6 +1540,8 @@ struct GaryxTaskMetaLine: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+        .padding(.horizontal, 16)
+        .frame(minHeight: 46, alignment: .leading)
     }
 }
 
@@ -1572,13 +1618,11 @@ struct GaryxAgentsView: View {
             }
         }
         .fullScreenCover(item: $creationSheet) { sheet in
-            GaryxFormSheet(title: sheet.title) {
-                switch sheet {
-                case .agent:
-                    GaryxCreateAgentCard()
-                case .team:
-                    GaryxCreateTeamCard()
-                }
+            switch sheet {
+            case .agent:
+                GaryxCreateAgentCard()
+            case .team:
+                GaryxCreateTeamCard()
             }
         }
     }
@@ -1589,41 +1633,58 @@ struct GaryxCreateAgentCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GaryxFieldLabel("New Agent")
-            TextField("Agent ID", text: $model.draftAgentId)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Display name", text: $model.draftAgentName)
-                .garyxInputStyle()
-            TextField("Provider", text: $model.draftAgentProvider)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Model", text: $model.draftAgentModel)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Default workspace directory", text: $model.draftAgentWorkspace)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("System Prompt", text: $model.draftAgentPrompt, axis: .vertical)
-                .lineLimit(2...6)
-                .garyxInputStyle()
-            Button {
-                Task {
-                    if await model.createAgentFromDraft() {
-                        dismiss()
-                    }
+        GaryxFormSheet(
+            title: "New Agent",
+            canSave: canCreate,
+            onSave: { Task { await createAgent() } }
+        ) {
+            VStack(alignment: .leading, spacing: 22) {
+                GaryxFormGroupedSection(title: "Identity") {
+                    TextField("Agent ID", text: $model.draftAgentId)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    TextField("Display name", text: $model.draftAgentName)
+                        .garyxFormTextField()
                 }
-            } label: {
-                Label("Create Agent", systemImage: "plus")
+
+                GaryxFormGroupedSection(title: "Model") {
+                    TextField("Provider", text: $model.draftAgentProvider)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    TextField("Model", text: $model.draftAgentModel)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                }
+
+                GaryxFormGroupedSection(title: "Defaults") {
+                    TextField("Default workspace directory", text: $model.draftAgentWorkspace)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    TextField("System Prompt", text: $model.draftAgentPrompt, axis: .vertical)
+                        .lineLimit(2...6)
+                        .garyxFormTextArea()
+                }
             }
-            .buttonStyle(GaryxPrimaryCompactButtonStyle())
         }
-        .garyxCardStyle()
+    }
+
+    private var canCreate: Bool {
+        !model.draftAgentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.draftAgentProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func createAgent() async {
+        guard canCreate else { return }
+        if await model.createAgentFromDraft() {
+            dismiss()
+        }
     }
 }
 
@@ -1632,37 +1693,52 @@ struct GaryxCreateTeamCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GaryxFieldLabel("New Team")
-            TextField("Team ID", text: $model.draftTeamId)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Display name", text: $model.draftTeamName)
-                .garyxInputStyle()
-            TextField("Leader Agent", text: $model.draftTeamLeaderId)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Members", text: $model.draftTeamMemberIds)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Workflow", text: $model.draftTeamWorkflow, axis: .vertical)
-                .lineLimit(2...6)
-                .garyxInputStyle()
-            Button {
-                Task {
-                    if await model.createTeamFromDraft() {
-                        dismiss()
-                    }
+        GaryxFormSheet(
+            title: "New Team",
+            canSave: canCreate,
+            onSave: { Task { await createTeam() } }
+        ) {
+            VStack(alignment: .leading, spacing: 22) {
+                GaryxFormGroupedSection(title: "Identity") {
+                    TextField("Team ID", text: $model.draftTeamId)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    TextField("Display name", text: $model.draftTeamName)
+                        .garyxFormTextField()
                 }
-            } label: {
-                Label("Create Team", systemImage: "person.2.badge.plus")
+
+                GaryxFormGroupedSection(title: "Members") {
+                    TextField("Leader Agent", text: $model.draftTeamLeaderId)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    TextField("Members", text: $model.draftTeamMemberIds)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                }
+
+                GaryxFormGroupedSection(title: "Workflow") {
+                    TextField("Workflow", text: $model.draftTeamWorkflow, axis: .vertical)
+                        .lineLimit(2...6)
+                        .garyxFormTextArea()
+                }
             }
-            .buttonStyle(GaryxPrimaryCompactButtonStyle())
         }
-        .garyxCardStyle()
+    }
+
+    private var canCreate: Bool {
+        !model.draftTeamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func createTeam() async {
+        guard canCreate else { return }
+        if await model.createTeamFromDraft() {
+            dismiss()
+        }
     }
 }
 
@@ -1696,49 +1772,12 @@ struct GaryxAgentCard: View {
         }
         .onAppear(perform: fillDraft)
         .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxFormSheet(title: "Edit Agent") {
-                VStack(alignment: .leading, spacing: 12) {
-                    GaryxFieldLabel("Agent")
-                    TextField("Agent ID", text: $agentId)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Display name", text: $displayName)
-                        .garyxInputStyle()
-                    TextField("Provider", text: $providerType)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Model", text: $modelName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Default workspace directory", text: $workspace)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("System Prompt", text: $systemPrompt, axis: .vertical)
-                        .lineLimit(2...6)
-                        .garyxInputStyle()
-                    Button {
-                        Task {
-                            await model.updateAgent(
-                                agent,
-                                agentId: agentId,
-                                displayName: displayName,
-                                providerType: providerType,
-                                modelName: modelName,
-                                workspace: workspace,
-                                systemPrompt: systemPrompt
-                            )
-                            showsEditForm = false
-                        }
-                    } label: {
-                        Label("Save Agent", systemImage: "checkmark")
-                    }
-                    .buttonStyle(GaryxPrimaryCompactButtonStyle())
-                }
-                .garyxCardStyle()
+            GaryxFormSheet(
+                title: "Edit Agent",
+                canSave: canSaveAgent,
+                onSave: { Task { await saveAgent() } }
+            ) {
+                agentFormFields
             }
         }
         .confirmationDialog("Delete agent?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
@@ -1785,6 +1824,62 @@ struct GaryxAgentCard: View {
         workspace = agent.defaultWorkspaceDir
         systemPrompt = agent.systemPrompt
     }
+
+    private var agentFormFields: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            GaryxFormGroupedSection(title: "Identity") {
+                TextField("Agent ID", text: $agentId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("Display name", text: $displayName)
+                    .garyxFormTextField()
+            }
+
+            GaryxFormGroupedSection(title: "Model") {
+                TextField("Provider", text: $providerType)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("Model", text: $modelName)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+            }
+
+            GaryxFormGroupedSection(title: "Defaults") {
+                TextField("Default workspace directory", text: $workspace)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("System Prompt", text: $systemPrompt, axis: .vertical)
+                    .lineLimit(2...6)
+                    .garyxFormTextArea()
+            }
+        }
+    }
+
+    private var canSaveAgent: Bool {
+        !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func saveAgent() async {
+        guard canSaveAgent else { return }
+        await model.updateAgent(
+            agent,
+            agentId: agentId,
+            displayName: displayName,
+            providerType: providerType,
+            modelName: modelName,
+            workspace: workspace,
+            systemPrompt: systemPrompt
+        )
+        showsEditForm = false
+    }
 }
 
 struct GaryxTeamCard: View {
@@ -1822,44 +1917,12 @@ struct GaryxTeamCard: View {
         }
         .onAppear(perform: fillDraft)
         .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxFormSheet(title: "Edit Team") {
-                VStack(alignment: .leading, spacing: 12) {
-                    GaryxFieldLabel("Team")
-                    TextField("Team ID", text: $teamId)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Display name", text: $displayName)
-                        .garyxInputStyle()
-                    TextField("Leader Agent", text: $leaderAgentId)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Members", text: $memberAgentIds)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Workflow", text: $workflowText, axis: .vertical)
-                        .lineLimit(2...6)
-                        .garyxInputStyle()
-                    Button {
-                        Task {
-                            await model.updateTeam(
-                                team,
-                                teamId: teamId,
-                                displayName: displayName,
-                                leaderAgentId: leaderAgentId,
-                                memberAgentIds: memberAgentIds,
-                                workflowText: workflowText
-                            )
-                            showsEditForm = false
-                        }
-                    } label: {
-                        Label("Save Team", systemImage: "checkmark")
-                    }
-                    .buttonStyle(GaryxPrimaryCompactButtonStyle())
-                }
-                .garyxCardStyle()
+            GaryxFormSheet(
+                title: "Edit Team",
+                canSave: canSaveTeam,
+                onSave: { Task { await saveTeam() } }
+            ) {
+                teamFormFields
             }
         }
         .confirmationDialog("Delete team?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
@@ -1897,6 +1960,55 @@ struct GaryxTeamCard: View {
         leaderAgentId = team.leaderAgentId
         memberAgentIds = team.memberAgentIds.joined(separator: ", ")
         workflowText = team.workflowText
+    }
+
+    private var teamFormFields: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            GaryxFormGroupedSection(title: "Identity") {
+                TextField("Team ID", text: $teamId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("Display name", text: $displayName)
+                    .garyxFormTextField()
+            }
+
+            GaryxFormGroupedSection(title: "Members") {
+                TextField("Leader Agent", text: $leaderAgentId)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("Members", text: $memberAgentIds)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+            }
+
+            GaryxFormGroupedSection(title: "Workflow") {
+                TextField("Workflow", text: $workflowText, axis: .vertical)
+                    .lineLimit(2...6)
+                    .garyxFormTextArea()
+            }
+        }
+    }
+
+    private var canSaveTeam: Bool {
+        !teamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func saveTeam() async {
+        guard canSaveTeam else { return }
+        await model.updateTeam(
+            team,
+            teamId: teamId,
+            displayName: displayName,
+            leaderAgentId: leaderAgentId,
+            memberAgentIds: memberAgentIds,
+            workflowText: workflowText
+        )
+        showsEditForm = false
     }
 }
 
@@ -1950,9 +2062,7 @@ struct GaryxSkillsView: View {
             }
         }
         .fullScreenCover(isPresented: $showsCreateSkill) {
-            GaryxFormSheet(title: "New Skill") {
-                GaryxCreateSkillCard()
-            }
+            GaryxCreateSkillCard()
         }
         .fullScreenCover(isPresented: skillEditorPresented) {
             GaryxFormSheet(title: "Skill Editor", onDone: requestCloseSkillEditor) {
@@ -1999,32 +2109,44 @@ struct GaryxCreateSkillCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GaryxFieldLabel("New Skill")
-            TextField("ID", text: $model.draftSkillId)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Name", text: $model.draftSkillName)
-                .garyxInputStyle()
-            TextField("Description", text: $model.draftSkillDescription, axis: .vertical)
-                .lineLimit(2...4)
-                .garyxInputStyle()
-            TextField("Body", text: $model.draftSkillBody, axis: .vertical)
-                .lineLimit(2...5)
-                .garyxInputStyle()
-            Button {
-                Task {
-                    if await model.createSkillFromDraft() {
-                        dismiss()
-                    }
+        GaryxFormSheet(
+            title: "New Skill",
+            canSave: canCreate,
+            onSave: { Task { await createSkill() } }
+        ) {
+            VStack(alignment: .leading, spacing: 22) {
+                GaryxFormGroupedSection(title: "Identity") {
+                    TextField("ID", text: $model.draftSkillId)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    TextField("Name", text: $model.draftSkillName)
+                        .garyxFormTextField()
                 }
-            } label: {
-                Label("Create Skill", systemImage: "plus")
+
+                GaryxFormGroupedSection(title: "Content") {
+                    TextField("Description", text: $model.draftSkillDescription, axis: .vertical)
+                        .lineLimit(2...4)
+                        .garyxFormTextArea(minHeight: 104)
+                    Divider().padding(.leading, 16)
+                    TextField("Body", text: $model.draftSkillBody, axis: .vertical)
+                        .lineLimit(2...5)
+                        .garyxFormTextArea()
+                }
             }
-            .buttonStyle(GaryxPrimaryCompactButtonStyle())
         }
-        .garyxCardStyle()
+    }
+
+    private var canCreate: Bool {
+        !model.draftSkillId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func createSkill() async {
+        guard canCreate else { return }
+        if await model.createSkillFromDraft() {
+            dismiss()
+        }
     }
 }
 
@@ -2064,25 +2186,21 @@ struct GaryxSkillCard: View {
         }
         .onAppear(perform: fillDraft)
         .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxFormSheet(title: "Edit Skill") {
-                VStack(alignment: .leading, spacing: 12) {
-                    GaryxFieldLabel("Skill")
-                    TextField("Name", text: $name)
-                        .garyxInputStyle()
-                    TextField("Description", text: $description, axis: .vertical)
-                        .lineLimit(2...4)
-                        .garyxInputStyle()
-                    Button {
-                        Task {
-                            await model.updateSkill(skill, name: name, description: description)
-                            showsEditForm = false
-                        }
-                    } label: {
-                        Label("Save", systemImage: "checkmark")
+            GaryxFormSheet(
+                title: "Edit Skill",
+                canSave: canSaveSkill,
+                onSave: { Task { await saveSkill() } }
+            ) {
+                VStack(alignment: .leading, spacing: 22) {
+                    GaryxFormGroupedSection(title: "Skill") {
+                        TextField("Name", text: $name)
+                            .garyxFormTextField()
+                        Divider().padding(.leading, 16)
+                        TextField("Description", text: $description, axis: .vertical)
+                            .lineLimit(2...4)
+                            .garyxFormTextArea(minHeight: 112)
                     }
-                    .buttonStyle(GaryxPrimaryCompactButtonStyle())
                 }
-                .garyxCardStyle()
             }
         }
         .confirmationDialog("Delete skill?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
@@ -2117,6 +2235,16 @@ struct GaryxSkillCard: View {
         name = skill.name
         description = skill.description
     }
+
+    private var canSaveSkill: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func saveSkill() async {
+        guard canSaveSkill else { return }
+        await model.updateSkill(skill, name: name, description: description)
+        showsEditForm = false
+    }
 }
 
 struct GaryxSkillEditorCard: View {
@@ -2127,60 +2255,63 @@ struct GaryxSkillEditorCard: View {
 
     var body: some View {
         if let editor = model.selectedSkillEditor {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    GaryxFieldLabel("Skill Editor")
-                    Spacer()
-                    Text(editor.skill.name)
-                        .font(GaryxFont.caption(weight: .semibold))
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 22) {
+                GaryxFormGroupedSection(title: editor.skill.name) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(editor.entries) { node in
+                            GaryxSkillEntryRow(skillId: editor.skill.id, node: node, depth: 0) { path in
+                                requestOpenSkillFile(skillId: editor.skill.id, path: path)
+                            }
+                        }
+                    }
+                    .padding(16)
                 }
 
-                ForEach(editor.entries) { node in
-                    GaryxSkillEntryRow(skillId: editor.skill.id, node: node, depth: 0) { path in
-                        requestOpenSkillFile(skillId: editor.skill.id, path: path)
+                GaryxFormGroupedSection(title: "New Entry") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        TextField("path/to/file.md", text: $model.draftSkillEntryPath)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .garyxFormTextField()
+                        Divider().padding(.leading, 16)
+                        Picker("Type", selection: $model.draftSkillEntryType) {
+                            Text("New File").tag("file")
+                            Text("New Folder").tag("directory")
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 12)
+                        Button {
+                            Task { await model.createSkillEntry() }
+                        } label: {
+                            Label("Create", systemImage: "plus")
+                        }
+                        .buttonStyle(GaryxSecondaryButtonStyle())
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 12)
                     }
                 }
-
-                HStack(spacing: 8) {
-                    TextField("path/to/file.md", text: $model.draftSkillEntryPath)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    Picker("Type", selection: $model.draftSkillEntryType) {
-                        Text("New File").tag("file")
-                        Text("New Folder").tag("directory")
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 148)
-                }
-                Button {
-                    Task { await model.createSkillEntry() }
-                } label: {
-                    Label("Create", systemImage: "plus")
-                }
-                .buttonStyle(GaryxSecondaryButtonStyle())
 
                 if let document = model.selectedSkillDocument {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(document.path)
-                            .font(GaryxFont.caption(weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        TextField("Content", text: $model.selectedSkillFileContent, axis: .vertical)
-                            .lineLimit(6...16)
-                            .garyxInputStyle()
+                    GaryxFormGroupedSection(title: document.path) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            TextField("Content", text: $model.selectedSkillFileContent, axis: .vertical)
+                                .lineLimit(6...16)
+                                .garyxFormTextArea(minHeight: 220)
+                                .disabled(!document.editable)
+                            Button {
+                                Task { await model.saveSelectedSkillFile() }
+                            } label: {
+                                Label("Save", systemImage: "square.and.arrow.down")
+                            }
+                            .buttonStyle(GaryxPrimaryCompactButtonStyle())
                             .disabled(!document.editable)
-                        Button {
-                            Task { await model.saveSelectedSkillFile() }
-                        } label: {
-                            Label("Save", systemImage: "square.and.arrow.down")
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 12)
                         }
-                        .buttonStyle(GaryxPrimaryCompactButtonStyle())
-                        .disabled(!document.editable)
                     }
                 }
             }
-            .garyxCardStyle()
             .confirmationDialog(
                 "Discard unsaved skill changes?",
                 isPresented: $showsDiscardFileSwitchConfirmation,
@@ -2295,9 +2426,7 @@ struct GaryxCommandsView: View {
             }
         }
         .fullScreenCover(isPresented: $showsCreateCommand) {
-            GaryxFormSheet(title: "Add Command") {
-                GaryxCreateSlashCommandCard()
-            }
+            GaryxCreateSlashCommandCard()
         }
     }
 }
@@ -2336,29 +2465,39 @@ struct GaryxCreateSlashCommandCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GaryxFieldLabel("Add Command")
-            TextField("Command name", text: $model.draftSlashName)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Description", text: $model.draftSlashDescription)
-                .garyxInputStyle()
-            TextField("Content", text: $model.draftSlashPrompt, axis: .vertical)
-                .lineLimit(2...5)
-                .garyxInputStyle()
-            Button {
-                Task {
-                    if await model.createSlashCommandFromDraft() {
-                        dismiss()
-                    }
+        GaryxFormSheet(
+            title: "Add Command",
+            canSave: canCreate,
+            onSave: { Task { await createCommand() } }
+        ) {
+            VStack(alignment: .leading, spacing: 22) {
+                GaryxFormGroupedSection(title: "Command") {
+                    TextField("Command name", text: $model.draftSlashName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    TextField("Description", text: $model.draftSlashDescription)
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    TextField("Content", text: $model.draftSlashPrompt, axis: .vertical)
+                        .lineLimit(2...5)
+                        .garyxFormTextArea()
                 }
-            } label: {
-                Label("Save Command", systemImage: "plus")
             }
-            .buttonStyle(GaryxPrimaryCompactButtonStyle())
         }
-        .garyxCardStyle()
+    }
+
+    private var canCreate: Bool {
+        !model.draftSlashName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.draftSlashPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func createCommand() async {
+        guard canCreate else { return }
+        if await model.createSlashCommandFromDraft() {
+            dismiss()
+        }
     }
 }
 
@@ -2403,34 +2542,26 @@ struct GaryxSlashCommandCard: View {
             prompt = command.prompt
         }
         .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxFormSheet(title: "Edit Command") {
-                VStack(alignment: .leading, spacing: 12) {
-                    GaryxFieldLabel("Command")
-                    TextField("name", text: $name)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Description", text: $description)
-                        .garyxInputStyle()
-                    TextField("Prompt", text: $prompt, axis: .vertical)
-                        .lineLimit(2...6)
-                        .garyxInputStyle()
-                    Button {
-                        Task {
-                            await model.updateSlashCommand(
-                                command,
-                                name: name,
-                                description: description,
-                                prompt: prompt
-                            )
-                            showsEditForm = false
-                        }
-                    } label: {
-                        Label("Save", systemImage: "checkmark")
+            GaryxFormSheet(
+                title: "Edit Command",
+                canSave: canSaveCommand,
+                onSave: { Task { await saveCommand() } }
+            ) {
+                VStack(alignment: .leading, spacing: 22) {
+                    GaryxFormGroupedSection(title: "Command") {
+                        TextField("Name", text: $name)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .garyxFormTextField()
+                        Divider().padding(.leading, 16)
+                        TextField("Description", text: $description)
+                            .garyxFormTextField()
+                        Divider().padding(.leading, 16)
+                        TextField("Prompt", text: $prompt, axis: .vertical)
+                            .lineLimit(2...6)
+                            .garyxFormTextArea()
                     }
-                    .buttonStyle(GaryxPrimaryCompactButtonStyle())
                 }
-                .garyxCardStyle()
             }
         }
         .confirmationDialog("Delete command?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
@@ -2456,6 +2587,22 @@ struct GaryxSlashCommandCard: View {
             }
         ]
     }
+
+    private var canSaveCommand: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func saveCommand() async {
+        guard canSaveCommand else { return }
+        await model.updateSlashCommand(
+            command,
+            name: name,
+            description: description,
+            prompt: prompt
+        )
+        showsEditForm = false
+    }
 }
 
 struct GaryxMcpServersView: View {
@@ -2475,9 +2622,7 @@ struct GaryxMcpServersView: View {
             }
         }
         .fullScreenCover(isPresented: $showsCreateMcp) {
-            GaryxFormSheet(title: "Add Server") {
-                GaryxCreateMcpServerCard()
-            }
+            GaryxCreateMcpServerCard()
         }
     }
 }
@@ -2516,50 +2661,89 @@ struct GaryxCreateMcpServerCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GaryxFieldLabel("Add Server")
-            TextField("Name", text: $model.draftMcpName)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Start command", text: $model.draftMcpCommand)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Arguments", text: $model.draftMcpArgs)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Environment variables", text: $model.draftMcpEnv, axis: .vertical)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .lineLimit(2...4)
-                .garyxInputStyle()
-            TextField("Working directory", text: $model.draftMcpWorkingDir)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("URL", text: $model.draftMcpUrl)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxInputStyle()
-            TextField("Headers", text: $model.draftMcpHeaders, axis: .vertical)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .lineLimit(2...4)
-                .garyxInputStyle()
-            Button {
-                Task {
-                    if await model.createMcpServerFromDraft() {
-                        dismiss()
-                    }
-                }
-            } label: {
-                Label("Save", systemImage: "plus")
-            }
-            .buttonStyle(GaryxPrimaryCompactButtonStyle())
+        GaryxFormSheet(
+            title: "Add Server",
+            canSave: canCreate,
+            onSave: { Task { await createServer() } }
+        ) {
+            GaryxMcpServerFormFields(
+                name: $model.draftMcpName,
+                command: $model.draftMcpCommand,
+                args: $model.draftMcpArgs,
+                env: $model.draftMcpEnv,
+                workingDir: $model.draftMcpWorkingDir,
+                url: $model.draftMcpUrl,
+                headers: $model.draftMcpHeaders
+            )
         }
-        .garyxCardStyle()
+    }
+
+    private var canCreate: Bool {
+        !model.draftMcpName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func createServer() async {
+        guard canCreate else { return }
+        if await model.createMcpServerFromDraft() {
+            dismiss()
+        }
+    }
+}
+
+private struct GaryxMcpServerFormFields: View {
+    @Binding var name: String
+    @Binding var command: String
+    @Binding var args: String
+    @Binding var env: String
+    @Binding var workingDir: String
+    @Binding var url: String
+    @Binding var headers: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            GaryxFormGroupedSection(title: "Server") {
+                TextField("Name", text: $name)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("Working directory", text: $workingDir)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+            }
+
+            GaryxFormGroupedSection(title: "Command") {
+                TextField("Start command", text: $command)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("Arguments", text: $args)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("Environment variables", text: $env, axis: .vertical)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .lineLimit(2...4)
+                    .garyxFormTextArea(minHeight: 112)
+            }
+
+            GaryxFormGroupedSection(title: "HTTP") {
+                TextField("URL", text: $url)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .garyxFormTextField()
+                Divider().padding(.leading, 16)
+                TextField("Headers", text: $headers, axis: .vertical)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .lineLimit(2...4)
+                    .garyxFormTextArea(minHeight: 112)
+            }
+        }
     }
 }
 
@@ -2604,59 +2788,20 @@ struct GaryxMcpServerCard: View {
         }
         .onAppear(perform: fillDraft)
         .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxFormSheet(title: "Edit MCP Server") {
-                VStack(alignment: .leading, spacing: 12) {
-                    GaryxFieldLabel("MCP Server")
-                    TextField("Name", text: $name)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Start command", text: $command)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Arguments", text: $args)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Environment variables", text: $env, axis: .vertical)
-                        .lineLimit(2...4)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Working directory", text: $workingDir)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("URL", text: $url)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    TextField("Headers", text: $headers, axis: .vertical)
-                        .lineLimit(2...4)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    Button {
-                        Task {
-                            await model.updateMcpServer(
-                                server,
-                                name: name,
-                                command: command,
-                                argsText: args,
-                                envText: env,
-                                workingDir: workingDir,
-                                url: url,
-                                headersText: headers
-                            )
-                            showsEditForm = false
-                        }
-                    } label: {
-                        Label("Save", systemImage: "checkmark")
-                    }
-                    .buttonStyle(GaryxPrimaryCompactButtonStyle())
-                }
-                .garyxCardStyle()
+            GaryxFormSheet(
+                title: "Edit MCP Server",
+                canSave: canSaveServer,
+                onSave: { Task { await saveServer() } }
+            ) {
+                GaryxMcpServerFormFields(
+                    name: $name,
+                    command: $command,
+                    args: $args,
+                    env: $env,
+                    workingDir: $workingDir,
+                    url: $url,
+                    headers: $headers
+                )
             }
         }
         .confirmationDialog("Delete MCP server?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
@@ -2692,6 +2837,25 @@ struct GaryxMcpServerCard: View {
         workingDir = server.workingDir ?? ""
         url = server.url ?? ""
         headers = server.headers.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: "\n")
+    }
+
+    private var canSaveServer: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func saveServer() async {
+        guard canSaveServer else { return }
+        await model.updateMcpServer(
+            server,
+            name: name,
+            command: command,
+            argsText: args,
+            envText: env,
+            workingDir: workingDir,
+            url: url,
+            headersText: headers
+        )
+        showsEditForm = false
     }
 }
 
@@ -2737,9 +2901,7 @@ struct GaryxAutoResearchView: View {
             }
         }
         .fullScreenCover(isPresented: $showsCreateRun) {
-            GaryxFormSheet(title: "Create Auto Research Run") {
-                GaryxCreateAutoResearchCard()
-            }
+            GaryxCreateAutoResearchCard()
         }
         .sheet(item: $detailRun) { run in
             GaryxAutoResearchDetailSheet(run: run)
@@ -2752,48 +2914,49 @@ struct GaryxCreateAutoResearchCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GaryxFieldLabel("Create Auto Research Run")
-            TextField("Goal", text: $model.draftAutoResearchGoal, axis: .vertical)
-                .lineLimit(2...5)
-                .garyxInputStyle()
-            if workspacePaths.isEmpty {
-                Text("No workspaces available")
-                    .font(GaryxFont.caption(weight: .medium))
-                    .foregroundStyle(.secondary)
-            } else {
-                Picker("Workspace", selection: workspaceSelection) {
-                    ForEach(workspacePaths, id: \.self) { path in
-                        Text(path.garyxLastPathComponent).tag(path)
-                    }
+        GaryxFormSheet(
+            title: "Create Auto Research Run",
+            canSave: canStart,
+            onSave: { Task { await createRun() } }
+        ) {
+            VStack(alignment: .leading, spacing: 22) {
+                GaryxFormGroupedSection(title: "Goal") {
+                    TextField("Goal", text: $model.draftAutoResearchGoal, axis: .vertical)
+                        .lineLimit(2...5)
+                        .garyxFormTextArea()
                 }
-                .pickerStyle(.menu)
-                .garyxInputStyle()
-            }
-            HStack {
-                TextField("Iterations", text: $model.draftAutoResearchIterations)
-                    .keyboardType(.numberPad)
-                    .garyxInputStyle()
-                TextField("Budget min", text: $model.draftAutoResearchTimeBudgetMinutes)
-                    .keyboardType(.numberPad)
-                    .garyxInputStyle()
-            }
-            HStack {
-                Spacer(minLength: 0)
-                Button {
-                    Task {
-                        if await model.createAutoResearchRunFromDraft() {
-                            dismiss()
+
+                GaryxFormGroupedSection(title: "Workspace") {
+                    if workspacePaths.isEmpty {
+                        Text("No workspaces available")
+                            .font(GaryxFont.callout())
+                            .foregroundStyle(.secondary)
+                            .padding(16)
+                    } else {
+                        GaryxFormRow(title: "Workspace") {
+                            Picker("Workspace", selection: workspaceSelection) {
+                                ForEach(workspacePaths, id: \.self) { path in
+                                    Text(path.garyxLastPathComponent).tag(path)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .tint(.secondary)
                         }
                     }
-                } label: {
-                    Label("Start", systemImage: "play.fill")
                 }
-                .buttonStyle(GaryxPrimaryCompactButtonStyle())
-                .disabled(!canStart)
+
+                GaryxFormGroupedSection(title: "Limits") {
+                    TextField("Iterations", text: $model.draftAutoResearchIterations)
+                        .keyboardType(.numberPad)
+                        .garyxFormTextField()
+                    Divider().padding(.leading, 16)
+                    TextField("Budget min", text: $model.draftAutoResearchTimeBudgetMinutes)
+                        .keyboardType(.numberPad)
+                        .garyxFormTextField()
+                }
             }
         }
-        .garyxCardStyle()
         .onAppear(perform: ensureWorkspaceSelection)
     }
 
@@ -2828,6 +2991,13 @@ struct GaryxCreateAutoResearchCard: View {
         let nextSelection = effectiveWorkspacePath
         if model.selectedWorkspacePath != nextSelection {
             model.selectedWorkspacePath = nextSelection
+        }
+    }
+
+    private func createRun() async {
+        guard canStart else { return }
+        if await model.createAutoResearchRunFromDraft() {
+            dismiss()
         }
     }
 
@@ -3596,19 +3766,13 @@ struct GaryxMobileSettingsPanel: View {
             GaryxGatewaySetupView(isSheet: true, startsEmpty: true)
         }
         .fullScreenCover(isPresented: $showsCreateBot) {
-            GaryxFormSheet(title: "Add Bot") {
-                GaryxBotAccountForm(account: nil)
-            }
+            GaryxBotAccountForm(account: nil)
         }
         .fullScreenCover(isPresented: $showsCreateCommand) {
-            GaryxFormSheet(title: "Add Command") {
-                GaryxCreateSlashCommandCard()
-            }
+            GaryxCreateSlashCommandCard()
         }
         .fullScreenCover(isPresented: $showsCreateMcp) {
-            GaryxFormSheet(title: "Add Server") {
-                GaryxCreateMcpServerCard()
-            }
+            GaryxCreateMcpServerCard()
         }
     }
 
@@ -4084,36 +4248,28 @@ struct GaryxSavedGatewayProfileRow: View {
         }
         .onAppear(perform: fillDraft)
         .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxFormSheet(title: "Edit Gateway") {
-                VStack(alignment: .leading, spacing: 12) {
-                    GaryxFieldLabel("Gateway")
-                    TextField("Name", text: $label)
-                        .garyxInputStyle()
-                    TextField("Gateway URL", text: $gatewayUrl)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    SecureField("Gateway Token", text: $token)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    Button {
-                        if model.updateGatewayProfile(
-                            profile,
-                            label: label,
-                            gatewayUrl: gatewayUrl,
-                            token: token
-                        ) {
-                            showsEditForm = false
-                        }
-                    } label: {
-                        Label("Save Gateway", systemImage: "checkmark")
+            GaryxFormSheet(
+                title: "Edit Gateway",
+                canSave: canSaveGateway,
+                onSave: saveGateway
+            ) {
+                VStack(alignment: .leading, spacing: 22) {
+                    GaryxFormGroupedSection(title: "Gateway") {
+                        TextField("Name", text: $label)
+                            .garyxFormTextField()
+                        Divider().padding(.leading, 16)
+                        TextField("Gateway URL", text: $gatewayUrl)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .garyxFormTextField()
+                        Divider().padding(.leading, 16)
+                        SecureField("Gateway Token", text: $token)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .garyxFormTextField()
                     }
-                    .buttonStyle(GaryxPrimaryCompactButtonStyle())
-                    .disabled(gatewayUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                .garyxCardStyle()
             }
         }
         .confirmationDialog("Delete gateway?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
@@ -4145,6 +4301,22 @@ struct GaryxSavedGatewayProfileRow: View {
         label = profile.label
         gatewayUrl = profile.gatewayUrl
         token = model.gatewayProfileToken(profile)
+    }
+
+    private var canSaveGateway: Bool {
+        !gatewayUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func saveGateway() {
+        guard canSaveGateway else { return }
+        if model.updateGatewayProfile(
+            profile,
+            label: label,
+            gatewayUrl: gatewayUrl,
+            token: token
+        ) {
+            showsEditForm = false
+        }
     }
 }
 

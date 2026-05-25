@@ -695,45 +695,13 @@ struct GaryxAutomationEditorScaffold<Content: View>: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            GaryxAutomationPalette.pageBackground
-                .ignoresSafeArea()
-
-            ScrollView {
-                content
-                    .padding(.horizontal, 18)
-                    .padding(.top, 92)
-                    .padding(.bottom, 28)
-                    .frame(maxWidth: 560)
-                    .frame(maxWidth: .infinity)
-            }
-
-            ZStack {
-                HStack {
-                    Button(action: onCancel) {
-                        GaryxToolbarIcon(systemName: "xmark")
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Cancel")
-
-                    Spacer(minLength: 0)
-
-                    Button(action: onSave) {
-                        GaryxToolbarIcon(systemName: "checkmark")
-                            .opacity(canSave ? 1 : 0.42)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSave)
-                    .accessibilityLabel("Save")
-                }
-
-                Text(title)
-                    .font(GaryxFont.title3(weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 18)
-            .padding(.top, 10)
+        GaryxFormSheet(
+            title: title,
+            canSave: canSave,
+            onCancel: onCancel,
+            onSave: onSave
+        ) {
+            content
         }
     }
 }
@@ -1200,8 +1168,8 @@ struct GaryxAutomationThreadPickerEmptyState: View {
 }
 
 enum GaryxAutomationPalette {
-    static let pageBackground = Color(.systemGroupedBackground).opacity(0.72)
-    static let cardBackground = Color(.systemBackground)
+    static let pageBackground = GaryxFormPalette.pageBackground
+    static let cardBackground = GaryxFormPalette.cardBackground
 }
 
 private extension String {

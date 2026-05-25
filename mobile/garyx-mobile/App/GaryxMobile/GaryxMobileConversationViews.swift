@@ -797,24 +797,28 @@ struct GaryxEmptyConversationView: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 28)
         .fullScreenCover(isPresented: $showsWorkspaceEditor) {
-            GaryxFormSheet(title: "Workspace") {
+            GaryxFormSheet(
+                title: "Workspace",
+                canSave: !workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                onSave: saveWorkspace
+            ) {
                 VStack(alignment: .leading, spacing: 12) {
-                    GaryxFieldLabel("Directory")
-                    TextField("Workspace path", text: $workspacePathDraft)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxInputStyle()
-                    Button {
-                        model.setNewThreadWorkspace(workspacePathDraft)
-                        showsWorkspaceEditor = false
-                    } label: {
-                        Label("Use Directory", systemImage: "folder")
+                    GaryxFormGroupedSection(title: "Directory") {
+                        TextField("Workspace path", text: $workspacePathDraft)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .garyxFormTextField()
                     }
-                    .buttonStyle(GaryxPrimaryCompactButtonStyle())
                 }
-                .garyxCardStyle()
             }
         }
+    }
+
+    private func saveWorkspace() {
+        let trimmed = workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        model.setNewThreadWorkspace(workspacePathDraft)
+        showsWorkspaceEditor = false
     }
 
     private var workspacePicker: some View {
