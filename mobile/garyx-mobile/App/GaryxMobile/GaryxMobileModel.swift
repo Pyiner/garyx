@@ -5893,12 +5893,13 @@ final class GaryxMobileModel: ObservableObject {
         }
 
         for item in transcript {
-            if item.role == .toolUse || item.role == .toolResult {
+            let toolTraceKind = GaryxMobileTranscriptToolTraceClassifier.kind(for: item)
+            if toolTraceKind != nil {
                 guard let entry = GaryxMobileToolTraceEntry(transcript: item) else {
                     continue
                 }
                 var group = pendingToolGroup ?? GaryxMobileToolTraceGroup(entries: [], live: false)
-                if item.role == .toolResult, mergeToolResult(entry, into: &group) {
+                if toolTraceKind == .toolResult, mergeToolResult(entry, into: &group) {
                     pendingToolGroup = group
                     continue
                 }
@@ -6776,7 +6777,7 @@ private struct GaryxMobileToolTracePayload {
     }
 
     static func fromTranscript(_ message: GaryxTranscriptMessage) -> GaryxMobileToolTracePayload {
-        let eventKind: GaryxMobileToolTraceEventKind = message.role == .toolResult ? .toolResult : .toolUse
+        let eventKind = eventKind(fromTranscript: message)
         return from(
             value: message.message ?? message.content ?? GaryxJSONValue.decoded(from: message.text),
             eventKind: eventKind,
@@ -6954,11 +6955,11 @@ private struct GaryxMobileToolTracePayload {
 
 private extension GaryxMobileToolTraceEntry {
     init?(transcript message: GaryxTranscriptMessage) {
+        let eventKind = GaryxMobileToolTracePayload.eventKind(fromTranscript: message)
         let payload = GaryxMobileToolTracePayload.fromTranscript(message)
         guard payload.shouldRender else {
             return nil
         }
-        let eventKind: GaryxMobileToolTraceEventKind = message.role == .toolResult ? .toolResult : .toolUse
         self.init(
             id: "\(message.id):\(eventKind.idSuffix)",
             toolUseId: payload.toolUseId,
@@ -7033,6 +7034,15 @@ private extension GaryxMobileToolTracePayload {
             return false
         }
         return true
+    }
+
+    static func eventKind(fromTranscript message: GaryxTranscriptMessage) -> GaryxMobileToolTraceEventKind {
+        switch GaryxMobileTranscriptToolTraceClassifier.kind(for: message) {
+        case .toolResult:
+            return .toolResult
+        case .toolUse, .none:
+            return .toolUse
+        }
     }
 
     var normalizedToolName: String {

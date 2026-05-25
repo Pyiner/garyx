@@ -245,6 +245,125 @@ struct GaryxMobileToolTraceEntry: Identifiable, Equatable {
     }
 }
 
+enum GaryxMobileTranscriptToolTraceKind: Equatable {
+    case toolUse
+    case toolResult
+}
+
+enum GaryxMobileTranscriptToolTraceClassifier {
+    static func kind(for message: GaryxTranscriptMessage) -> GaryxMobileTranscriptToolTraceKind? {
+        switch message.role {
+        case .toolUse:
+            return .toolUse
+        case .toolResult:
+            return .toolResult
+        default:
+            break
+        }
+
+        guard message.toolRelated else {
+            return nil
+        }
+
+        let kind = message.kind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        if kind.contains("result") {
+            return .toolResult
+        }
+        if kind.contains("use") {
+            return .toolUse
+        }
+
+        let object = message.garyxToolTraceObject
+        if object?.garyxBoolValue(forKeys: ["tool_use_result", "toolUseResult"]) == true {
+            return .toolResult
+        }
+        if object?.garyxContainsMeaningfulValue(forKeys: ["result", "output", "stdout", "stderr"]) == true {
+            return .toolResult
+        }
+        return .toolUse
+    }
+}
+
+private extension GaryxTranscriptMessage {
+    var garyxToolTraceObject: [String: GaryxJSONValue]? {
+        let value = message ?? content ?? GaryxJSONValue.garyxDecoded(from: text)
+        return value?.garyxDecodedIfNeeded.garyxObjectValue
+    }
+}
+
+private extension GaryxJSONValue {
+    static func garyxDecoded(from text: String) -> GaryxJSONValue? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("{") || trimmed.hasPrefix("[") else { return nil }
+        return try? JSONDecoder().decode(GaryxJSONValue.self, from: Data(trimmed.utf8))
+    }
+
+    var garyxDecodedIfNeeded: GaryxJSONValue {
+        if case .string(let value) = self,
+           let decoded = GaryxJSONValue.garyxDecoded(from: value) {
+            return decoded
+        }
+        return self
+    }
+
+    var garyxObjectValue: [String: GaryxJSONValue]? {
+        if case .object(let value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var garyxBoolValue: Bool? {
+        switch self {
+        case .bool(let value):
+            return value
+        case .string(let value):
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["true", "yes", "1"].contains(normalized) {
+                return true
+            }
+            if ["false", "no", "0"].contains(normalized) {
+                return false
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    var garyxIsMeaningful: Bool {
+        switch self {
+        case .null:
+            return false
+        case .string(let value):
+            return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .array(let values):
+            return !values.isEmpty
+        case .object(let values):
+            return !values.isEmpty
+        case .number, .bool:
+            return true
+        }
+    }
+}
+
+private extension Dictionary where Key == String, Value == GaryxJSONValue {
+    func garyxBoolValue(forKeys keys: [String]) -> Bool? {
+        for key in keys {
+            if let value = self[key]?.garyxBoolValue {
+                return value
+            }
+        }
+        return nil
+    }
+
+    func garyxContainsMeaningfulValue(forKeys keys: [String]) -> Bool {
+        keys.contains { key in
+            self[key]?.garyxIsMeaningful == true
+        }
+    }
+}
+
 struct GaryxMobileComposerAttachment: Identifiable, Equatable {
     var id: String
     var kind: String

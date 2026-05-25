@@ -803,6 +803,66 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(transcript.pageInfo?.nextBeforeIndex, 2)
     }
 
+    func testTranscriptToolTraceClassifierIncludesAssistantToolRelatedMessages() throws {
+        let transcript = try JSONDecoder().decode(
+            GaryxThreadTranscript.self,
+            from: Data(
+                """
+                {
+                  "ok": true,
+                  "messages": [
+                    {
+                      "index": 1,
+                      "role": "assistant",
+                      "kind": "tool_trace",
+                      "tool_related": true,
+                      "likely_user_visible": false,
+                      "text": "Read App.swift",
+                      "message": {
+                        "tool_name": "Read",
+                        "input": { "file_path": "App.swift" }
+                      }
+                    },
+                    {
+                      "index": 2,
+                      "role": "assistant",
+                      "kind": "tool_trace",
+                      "tool_related": true,
+                      "likely_user_visible": false,
+                      "text": "Read complete",
+                      "message": {
+                        "tool_use_result": true,
+                        "tool_use_id": "toolu-test",
+                        "content": "Read complete"
+                      }
+                    },
+                    {
+                      "index": 3,
+                      "role": "assistant",
+                      "kind": "assistant_reply",
+                      "tool_related": false,
+                      "likely_user_visible": true,
+                      "text": "Final answer"
+                    }
+                  ],
+                  "pending_user_inputs": [],
+                  "message_stats": { "returned_messages": 3 }
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(
+            GaryxMobileTranscriptToolTraceClassifier.kind(for: transcript.messages[0]),
+            .toolUse
+        )
+        XCTAssertEqual(
+            GaryxMobileTranscriptToolTraceClassifier.kind(for: transcript.messages[1]),
+            .toolResult
+        )
+        XCTAssertNil(GaryxMobileTranscriptToolTraceClassifier.kind(for: transcript.messages[2]))
+    }
+
     func testStructuredContentRendererExtractsTextAndAttachments() {
         let content: GaryxJSONValue = .array([
             .object([
