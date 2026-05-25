@@ -1170,17 +1170,7 @@ struct GaryxCreateTaskCard: View {
                         .padding(16)
                 } else {
                     GaryxFormRow(title: "Agent") {
-                        Menu {
-                            ForEach(model.agentTargets) { target in
-                                Button {
-                                    model.setSelectedAgentTarget(target.id)
-                                } label: {
-                                    Label(target.title, systemImage: target.kind == .team ? "person.3" : "person")
-                                }
-                            }
-                        } label: {
-                            GaryxFormMenuValueLabel(value: model.selectedAgentLabel)
-                        }
+                        GaryxAgentTargetPickerControl(selectedAgentTargetId: selectedAgentTargetBinding)
                     }
                 }
             }
@@ -1239,6 +1229,14 @@ struct GaryxCreateTaskCard: View {
     private var notificationTargetRequest: GaryxTaskNotificationTargetRequest {
         guard let group = selectedNotificationGroup else { return .none }
         return .bot(channel: group.channel, accountId: group.accountId)
+    }
+
+    private var selectedAgentTargetBinding: Binding<String> {
+        Binding {
+            model.selectedAgentTargetId
+        } set: { value in
+            model.setSelectedAgentTarget(value)
+        }
     }
 
     private func createTask() async {

@@ -851,27 +851,9 @@ struct GaryxAutomationAgentSelectorRow: View {
             GaryxAutomationReadOnlyRow(title: "Agent", value: model.agentTargetsPlaceholderText)
         } else {
             GaryxAutomationFormRow(title: "Agent") {
-                Menu {
-                    ForEach(model.agentTargets) { target in
-                        Button {
-                            agentTargetId = target.id
-                        } label: {
-                            Label(target.title, systemImage: target.kind == .team ? "person.3" : "person")
-                        }
-                    }
-                } label: {
-                    GaryxAutomationMenuValueLabel(value: selectedAgentLabel)
-                }
+                GaryxAgentTargetPickerControl(selectedAgentTargetId: $agentTargetId)
             }
         }
-    }
-
-    private var selectedAgentLabel: String {
-        let selected = agentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let target = model.agentTargets.first(where: { $0.id == selected }) {
-            return target.title
-        }
-        return selected.isEmpty ? model.selectedAgentLabel : selected
     }
 }
 

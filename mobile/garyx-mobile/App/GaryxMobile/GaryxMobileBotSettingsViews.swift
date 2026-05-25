@@ -294,15 +294,13 @@ struct GaryxBotAccountForm: View {
 
     private var agentPicker: some View {
         GaryxFormRow(title: "Agent") {
-            Picker("Agent", selection: $agentId) {
-                Text("Claude").tag("claude")
-                ForEach(model.agentTargets) { target in
-                    Text(target.title).tag(target.id)
-                }
+            if model.agentTargets.isEmpty {
+                Text(model.agentTargetsPlaceholderText)
+                    .font(GaryxFont.callout())
+                    .foregroundStyle(.secondary)
+            } else {
+                GaryxAgentTargetPickerControl(selectedAgentTargetId: $agentId)
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .tint(.secondary)
         }
     }
 

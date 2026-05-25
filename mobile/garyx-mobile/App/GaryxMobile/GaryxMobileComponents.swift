@@ -903,6 +903,342 @@ struct GaryxAgentAvatarView: View {
     }
 }
 
+struct GaryxAgentPickerLabel: View {
+    enum Style {
+        case prominent
+        case compact
+        case form
+    }
+
+    let target: GaryxMobileAgentTarget?
+    let title: String
+    let showsChevron: Bool
+    var style: Style = .prominent
+
+    var body: some View {
+        HStack(spacing: horizontalSpacing) {
+            if let target {
+                GaryxAgentAvatarView(
+                    agentId: target.id,
+                    avatarDataUrl: target.avatarDataUrl,
+                    kind: target.kind,
+                    label: target.title,
+                    providerType: target.providerType,
+                    builtIn: target.builtIn,
+                    diameter: avatarDiameter
+                )
+            } else {
+                Image(systemName: "person.crop.circle")
+                    .font(GaryxFont.system(size: fallbackIconSize, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(title.isEmpty ? "Agent" : title)
+                .font(labelFont)
+                .foregroundStyle(labelForeground)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .minimumScaleFactor(0.8)
+                .layoutPriority(1)
+
+            if showsChevron {
+                Image(systemName: "chevron.down")
+                    .font(GaryxFont.system(size: chevronSize, weight: .bold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, horizontalPadding)
+        .frame(height: labelHeight, alignment: .leading)
+        .if(isProminent) { view in
+            view.background {
+                Capsule()
+                    .fill(Color(.systemBackground).opacity(0.42))
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+        }
+        .overlay {
+            Capsule()
+                .stroke(Color.primary.opacity(isProminent ? 0.03 : 0), lineWidth: 1)
+        }
+        .contentShape(Capsule())
+    }
+
+    private var avatarDiameter: CGFloat {
+        switch style {
+        case .prominent:
+            29
+        case .compact:
+            16
+        case .form:
+            24
+        }
+    }
+
+    private var fallbackIconSize: CGFloat {
+        switch style {
+        case .prominent:
+            22
+        case .compact:
+            13
+        case .form:
+            18
+        }
+    }
+
+    private var chevronSize: CGFloat {
+        switch style {
+        case .prominent:
+            10
+        case .compact, .form:
+            8
+        }
+    }
+
+    private var horizontalSpacing: CGFloat {
+        switch style {
+        case .prominent, .form:
+            8
+        case .compact:
+            6
+        }
+    }
+
+    private var horizontalPadding: CGFloat {
+        switch style {
+        case .prominent:
+            12
+        case .compact, .form:
+            0
+        }
+    }
+
+    private var labelHeight: CGFloat {
+        switch style {
+        case .prominent:
+            44
+        case .compact:
+            19
+        case .form:
+            40
+        }
+    }
+
+    private var labelFont: Font {
+        switch style {
+        case .prominent:
+            GaryxFont.body(weight: .semibold)
+        case .compact:
+            GaryxFont.caption(weight: .semibold)
+        case .form:
+            GaryxFont.callout(weight: .medium)
+        }
+    }
+
+    private var labelForeground: Color {
+        switch style {
+        case .prominent, .form:
+            .primary
+        case .compact:
+            .secondary
+        }
+    }
+
+    private var isProminent: Bool {
+        switch style {
+        case .prominent:
+            true
+        case .compact, .form:
+            false
+        }
+    }
+}
+
+struct GaryxAgentTargetPickerControl: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Binding var selectedAgentTargetId: String
+    var style: GaryxAgentPickerLabel.Style = .form
+    var showsConfigure = false
+    var onConfigure: (() -> Void)?
+    @State private var showsPicker = false
+
+    var body: some View {
+        Button {
+            Task { await model.refreshAgentTargetsIfNeeded() }
+            showsPicker = true
+        } label: {
+            GaryxAgentPickerLabel(
+                target: selectedTarget,
+                title: selectedLabel,
+                showsChevron: true,
+                style: style
+            )
+        }
+        .buttonStyle(.plain)
+        .popover(
+            isPresented: $showsPicker,
+            attachmentAnchor: .rect(.bounds),
+            arrowEdge: .top
+        ) {
+            GaryxAgentTargetPickerPopover(
+                selectedAgentTargetId: $selectedAgentTargetId,
+                showsConfigure: showsConfigure,
+                onConfigure: onConfigure
+            )
+            .environmentObject(model)
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var selectedTarget: GaryxMobileAgentTarget? {
+        model.agentTargets.first { $0.id == normalizedSelection }
+    }
+
+    private var selectedLabel: String {
+        selectedTarget?.title ?? (normalizedSelection.isEmpty ? model.agentTargetsPlaceholderText : normalizedSelection)
+    }
+
+    private var normalizedSelection: String {
+        selectedAgentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct GaryxAgentTargetPickerPopover: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Binding var selectedAgentTargetId: String
+    var showsConfigure = false
+    var onConfigure: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if model.agentTargets.isEmpty {
+                Text(model.agentTargetsPlaceholderText)
+                    .font(GaryxFont.callout())
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 16)
+            } else {
+                Text("Latest")
+                    .font(GaryxFont.footnote(weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 8)
+
+                if model.agentTargets.count <= 5 {
+                    ForEach(model.agentTargets) { target in
+                        agentRow(for: target)
+                    }
+                } else {
+                    if !agentTargets.isEmpty {
+                        ForEach(agentTargets) { target in
+                            agentRow(for: target)
+                        }
+                    }
+
+                    if !teamTargets.isEmpty {
+                        Divider()
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 8)
+
+                        ForEach(teamTargets) { target in
+                            agentRow(for: target)
+                        }
+                    }
+                }
+            }
+
+            if showsConfigure {
+                Divider()
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 8)
+
+                Button {
+                    dismiss()
+                    onConfigure?()
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(GaryxFont.system(size: 17, weight: .semibold))
+                            .frame(width: 30)
+
+                        Text("Configure")
+                            .font(GaryxFont.callout(weight: .medium))
+
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(.primary)
+                    .frame(height: 48)
+                    .padding(.horizontal, 20)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .frame(width: 308)
+        .background(.regularMaterial)
+    }
+
+    private var agentTargets: [GaryxMobileAgentTarget] {
+        model.agentTargets.filter { $0.kind == .agent }
+    }
+
+    private var teamTargets: [GaryxMobileAgentTarget] {
+        model.agentTargets.filter { $0.kind == .team }
+    }
+
+    private func agentRow(for target: GaryxMobileAgentTarget) -> some View {
+        Button {
+            selectedAgentTargetId = target.id
+            dismiss()
+        } label: {
+            HStack(spacing: 14) {
+                Group {
+                    if selectedAgentTargetId == target.id {
+                        Image(systemName: "checkmark")
+                            .font(GaryxFont.system(size: 18, weight: .semibold))
+                            .foregroundStyle(.primary)
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(width: 30)
+
+                GaryxAgentAvatarView(
+                    agentId: target.id,
+                    avatarDataUrl: target.avatarDataUrl,
+                    kind: target.kind,
+                    label: target.title,
+                    providerType: target.providerType,
+                    builtIn: target.builtIn,
+                    diameter: 30
+                )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(target.title)
+                        .font(GaryxFont.callout(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if !target.subtitle.isEmpty {
+                        Text(target.subtitle)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .frame(height: 54)
+            .padding(.horizontal, 20)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct GaryxAgentIdentityRow: View {
     let id: String
     let title: String
