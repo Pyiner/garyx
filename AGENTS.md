@@ -226,6 +226,10 @@ needs installed-app validation.
   default. Use top navigation actions to open full-screen add/edit flows, not
   compact sheets or always-visible forms, and keep the main page focused on
   current state and lists.
+- Mobile form sheets should use the shared `GaryxFormSheet` and
+  `GaryxFormGroupedSection` patterns. Create/edit flows should use the same
+  top cancel/save chrome as Automation; reserve inline save buttons for nested
+  file or document actions inside an editor, not whole-page form submission.
 - Keep mobile SwiftUI feature surfaces in feature-specific files rather than
   adding large view trees to `GaryxMobileViews.swift`; use small shared helpers
   in the main views file only when they are genuinely reused across surfaces.
