@@ -31,7 +31,9 @@ struct GaryxBotsContent: View {
         let bots = model.configuredBotAccountSettings
         VStack(alignment: .leading, spacing: 10) {
             if bots.isEmpty {
-                if !model.isLoadingRemoteState {
+                if model.isRemoteStatePending {
+                    GaryxLoadingPanelView(title: "Loading bots...")
+                } else {
                     GaryxEmptyPanelView(
                         icon: "bubble.left.and.bubble.right",
                         title: "No bots configured",
@@ -230,6 +232,13 @@ struct GaryxBotAccountForm: View {
         }
         .garyxCardStyle()
         .onAppear(perform: initializeIfNeeded)
+        .task {
+            await model.refreshAgentTargetsIfNeeded()
+            applyDefaultAgentIfNeeded()
+        }
+        .onChange(of: model.agentTargets) { _, _ in
+            applyDefaultAgentIfNeeded()
+        }
         .onChange(of: channel) { _, _ in
             guard initialized, !isEditing else { return }
             resetGeneratedAccountIdIfNeeded()
@@ -293,6 +302,15 @@ struct GaryxBotAccountForm: View {
             workspaceMode = "local"
             resetGeneratedAccountIdIfNeeded()
             applySchemaDefaults(replacing: false)
+        }
+    }
+
+    private func applyDefaultAgentIfNeeded() {
+        guard initialized, !isEditing, !model.agentTargets.isEmpty else { return }
+        if !model.agentTargets.contains(where: { $0.id == agentId }) {
+            agentId = model.agentTargets.first(where: { $0.id == "claude" })?.id
+                ?? model.agentTargets.first?.id
+                ?? agentId
         }
     }
 

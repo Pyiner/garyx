@@ -443,11 +443,7 @@ private struct GaryxAgentPickerPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if model.agentTargets.isEmpty {
-                Text(
-                    model.isLoadingAgentTargets || model.isLoadingRemoteState
-                        ? "Loading agents..."
-                        : "No agents available"
-                )
+                Text(model.agentTargetsPlaceholderText)
                     .font(GaryxFont.callout())
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

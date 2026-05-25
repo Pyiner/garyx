@@ -16,7 +16,9 @@ struct GaryxAutomationsView: View {
     var body: some View {
         GaryxAutomationScaffold(title: "Automation") {
             VStack(alignment: .leading, spacing: 16) {
-                if model.automations.isEmpty {
+                if model.automations.isEmpty, model.isRemoteStatePending {
+                    GaryxLoadingPanelView(title: "Loading automations...")
+                } else if model.automations.isEmpty {
                     GaryxEmptyPanelView(
                         icon: "clock.badge",
                         title: "No automations yet. Create your first scheduled prompt.",

@@ -148,6 +148,36 @@ enum GaryxMobileSettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+enum GaryxMobileLoadPhase: Equatable {
+    case idle
+    case loading
+    case loaded
+    case failed(String)
+
+    var isLoading: Bool {
+        if case .loading = self {
+            return true
+        }
+        return false
+    }
+
+    var hasResolved: Bool {
+        switch self {
+        case .loaded, .failed:
+            return true
+        case .idle, .loading:
+            return false
+        }
+    }
+
+    var failureMessage: String? {
+        if case .failed(let message) = self {
+            return message
+        }
+        return nil
+    }
+}
+
 enum GaryxMobileLeadingEdgeAction {
     case openSidebar
     case settingsOverview
@@ -315,8 +345,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var skills: [GaryxSkillSummary] = []
     @Published var tasks: [GaryxTaskSummary] = []
     @Published var automations: [GaryxAutomationSummary] = []
-    @Published var isLoadingRemoteState = false
-    @Published var isLoadingAgentTargets = false
+    @Published private(set) var remoteStateLoadPhase: GaryxMobileLoadPhase = .idle
+    @Published private(set) var agentTargetsLoadPhase: GaryxMobileLoadPhase = .idle
     @Published var selectedAgentTargetId: String
     @Published var newThreadWorkspace: String
     @Published var newThreadWorkspaceMode: String
@@ -991,6 +1021,44 @@ final class GaryxMobileModel: ObservableObject {
         return agentItems + teamItems
     }
 
+    var isLoadingRemoteState: Bool {
+        remoteStateLoadPhase.isLoading
+    }
+
+    var hasResolvedRemoteState: Bool {
+        remoteStateLoadPhase.hasResolved
+    }
+
+    var isRemoteStatePending: Bool {
+        hasGatewaySettings && !remoteStateLoadPhase.hasResolved
+    }
+
+    var isLoadingAgentTargets: Bool {
+        agentTargetsLoadPhase.isLoading
+    }
+
+    var shouldShowAgentTargetsEmptyState: Bool {
+        agentTargets.isEmpty && agentTargetsLoadPhase.hasResolved
+    }
+
+    var agentTargetsEmptyTitle: String {
+        if agentTargetsLoadPhase.failureMessage != nil {
+            return "Unable to load agents."
+        }
+        return "No agents available."
+    }
+
+    var agentTargetsEmptyText: String {
+        agentTargetsLoadPhase.failureMessage ?? ""
+    }
+
+    var agentTargetsPlaceholderText: String {
+        if isLoadingAgentTargets || !agentTargetsLoadPhase.hasResolved {
+            return "Loading agents..."
+        }
+        return agentTargetsEmptyTitle
+    }
+
     var selectedAgentTarget: GaryxMobileAgentTarget? {
         agentTargets.first(where: { $0.id == selectedAgentTargetId })
     }
@@ -1388,7 +1456,8 @@ final class GaryxMobileModel: ObservableObject {
         isSending = false
         isLoadingThreads = false
         resetThreadListPagination()
-        isLoadingRemoteState = false
+        remoteStateLoadPhase = .loaded
+        agentTargetsLoadPhase = .loaded
         resetSelectedThreadHistoryPagination()
         lastError = nil
         showsSettings = false
@@ -1898,7 +1967,7 @@ final class GaryxMobileModel: ObservableObject {
         cancelActiveSocket()
         isSending = false
         remoteBusyThreadIds = []
-        isLoadingAgentTargets = false
+        agentTargetsLoadPhase = .idle
         connectionState = .disconnected
         threads = []
         pinnedThreadIds = []
@@ -1947,7 +2016,7 @@ final class GaryxMobileModel: ObservableObject {
         autoResearchDetailsByRunId = [:]
         autoResearchIterationsByRunId = [:]
         isLoadingThreads = false
-        isLoadingRemoteState = false
+        remoteStateLoadPhase = .idle
         isLoadingSelectedThreadHistory = false
     }
 
@@ -2187,40 +2256,37 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     func refreshAgentTargetsIfNeeded() async {
-        guard agentTargets.isEmpty else { return }
+        guard agentTargets.isEmpty, !agentTargetsLoadPhase.isLoading else { return }
         await refreshAgentTargets()
     }
 
     func refreshAgentTargets() async {
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
-        isLoadingAgentTargets = true
-        defer {
-            if runtimeGeneration == gatewayRuntimeGeneration {
-                isLoadingAgentTargets = false
-            }
-        }
+        agentTargetsLoadPhase = .loading
         do {
             let gateway = try client()
             async let agentsResult: [GaryxAgentSummary]? = try? gateway.listAgents()
             async let teamsResult: [GaryxTeamSummary]? = try? gateway.listTeams()
             let (nextAgents, nextTeams) = await (agentsResult, teamsResult)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            applyAgentTargets(agents: nextAgents, teams: nextTeams)
+            if !applyAgentTargets(agents: nextAgents, teams: nextTeams) {
+                agentTargetsLoadPhase = .failed("Agents could not be loaded.")
+            }
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            lastError = displayMessage(for: error)
+            let message = displayMessage(for: error)
+            agentTargetsLoadPhase = .failed(message)
+            lastError = message
         }
     }
 
     func refreshRemoteState() async {
         guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
-        isLoadingRemoteState = true
-        defer {
-            if runtimeGeneration == gatewayRuntimeGeneration {
-                isLoadingRemoteState = false
-            }
+        remoteStateLoadPhase = .loading
+        if agentTargets.isEmpty {
+            agentTargetsLoadPhase = .loading
         }
         do {
             let gateway = try client()
@@ -2286,9 +2352,21 @@ final class GaryxMobileModel: ObservableObject {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             ensureSelectedWorkspace()
             await refreshProviderModelsForVisibleAgents(runtimeGeneration: runtimeGeneration)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            if agentTargetsLoadPhase.isLoading {
+                agentTargetsLoadPhase = agentTargets.isEmpty
+                    ? .failed("Agents could not be loaded.")
+                    : .loaded
+            }
+            remoteStateLoadPhase = .loaded
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            lastError = displayMessage(for: error)
+            let message = displayMessage(for: error)
+            remoteStateLoadPhase = .failed(message)
+            if agentTargetsLoadPhase.isLoading {
+                agentTargetsLoadPhase = .failed(message)
+            }
+            lastError = message
         }
     }
 
@@ -6541,7 +6619,11 @@ final class GaryxMobileModel: ObservableObject {
         }
     }
 
-    private func applyAgentTargets(agents nextAgents: [GaryxAgentSummary]?, teams nextTeams: [GaryxTeamSummary]?) {
+    @discardableResult
+    private func applyAgentTargets(
+        agents nextAgents: [GaryxAgentSummary]?,
+        teams nextTeams: [GaryxTeamSummary]?
+    ) -> Bool {
         var didUpdateTargets = false
         if let nextAgents {
             agents = nextAgents
@@ -6552,8 +6634,10 @@ final class GaryxMobileModel: ObservableObject {
             didUpdateTargets = true
         }
         if didUpdateTargets {
+            agentTargetsLoadPhase = .loaded
             ensureSelectedAgentTarget()
         }
+        return didUpdateTargets
     }
 
     private func ensureSelectedAgentTarget() {

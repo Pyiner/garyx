@@ -827,7 +827,9 @@ struct GaryxTasksView: View {
             onRefresh: { await model.refreshRemoteState() }
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                if model.tasks.isEmpty {
+                if model.tasks.isEmpty, model.isRemoteStatePending {
+                    GaryxLoadingPanelView(title: "Loading tasks...")
+                } else if model.tasks.isEmpty {
                     GaryxEmptyPanelView(
                         icon: "checklist",
                         title: "No tasks yet.",
@@ -870,7 +872,9 @@ struct GaryxDreamsView: View {
                     }
                 }
 
-                if model.dreams.isEmpty {
+                if model.dreams.isEmpty, model.isRemoteStatePending || model.isScanningDreams {
+                    GaryxLoadingPanelView(title: "Loading dreams...")
+                } else if model.dreams.isEmpty {
                     GaryxEmptyPanelView(
                         icon: "moon.stars",
                         title: "No dreams yet.",
@@ -1114,6 +1118,11 @@ struct GaryxCreateTaskCard: View {
             }
             .buttonStyle(.plain)
             .disabled(model.agentTargets.isEmpty)
+            if model.agentTargets.isEmpty {
+                Text(model.agentTargetsPlaceholderText)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+            }
 
             GaryxFieldLabel("Workspace")
                 .padding(.top, 4)
@@ -1178,6 +1187,9 @@ struct GaryxCreateTaskCard: View {
             .disabled(!canCreate)
         }
         .garyxCardStyle()
+        .task {
+            await model.refreshAgentTargetsIfNeeded()
+        }
         .onAppear {
             workspacePath = model.newThreadWorkspace
         }
@@ -1281,10 +1293,9 @@ struct GaryxTaskListRow: View {
             Button("Rename") {
                 openRenamePrompt()
             }
-            if !model.agentTargets.isEmpty {
-                Button("Assign") {
-                    showsAssignSheet = true
-                }
+            Button("Assign") {
+                Task { await model.refreshAgentTargetsIfNeeded() }
+                showsAssignSheet = true
             }
             Button("Details") {
                 showsTaskDetails = true
@@ -1423,12 +1434,14 @@ struct GaryxTaskAssignCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             GaryxFieldLabel("Assign To")
-            if model.agentTargets.isEmpty {
+            if model.agentTargets.isEmpty, model.shouldShowAgentTargetsEmptyState {
                 GaryxEmptyPanelView(
                     icon: "person.crop.circle.badge.exclamationmark",
-                    title: "No agents available.",
-                    text: ""
+                    title: model.agentTargetsEmptyTitle,
+                    text: model.agentTargetsEmptyText
                 )
+            } else if model.agentTargets.isEmpty {
+                GaryxLoadingPanelView(title: "Loading agents...")
             } else {
                 GaryxCompactListGroup {
                     ForEach(Array(model.agentTargets.enumerated()), id: \.element.id) { index, target in
@@ -1460,6 +1473,9 @@ struct GaryxTaskAssignCard: View {
             }
         }
         .garyxCardStyle()
+        .task {
+            await model.refreshAgentTargetsIfNeeded()
+        }
     }
 }
 
@@ -1907,7 +1923,9 @@ struct GaryxSkillsView: View {
             onRefresh: { await model.refreshRemoteState() }
         ) {
             VStack(alignment: .leading, spacing: 18) {
-                if model.skills.isEmpty {
+                if model.skills.isEmpty, model.isRemoteStatePending {
+                    GaryxLoadingPanelView(title: "Loading skills...")
+                } else if model.skills.isEmpty {
                     GaryxEmptyPanelView(
                         icon: "wand.and.stars",
                         title: "No skills installed. Create your first skill.",
@@ -2289,7 +2307,9 @@ struct GaryxCommandsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            if model.slashCommands.isEmpty {
+            if model.slashCommands.isEmpty, model.isRemoteStatePending {
+                GaryxLoadingPanelView(title: "Loading shortcuts...")
+            } else if model.slashCommands.isEmpty {
                 GaryxEmptyPanelView(
                     icon: "command",
                     title: "No shortcuts yet",
@@ -2467,7 +2487,9 @@ struct GaryxMcpServersContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            if model.mcpServers.isEmpty {
+            if model.mcpServers.isEmpty, model.isRemoteStatePending {
+                GaryxLoadingPanelView(title: "Loading MCP servers...")
+            } else if model.mcpServers.isEmpty {
                 GaryxEmptyPanelView(
                     icon: "point.3.connected.trianglepath.dotted",
                     title: "No MCP servers yet",
@@ -2685,7 +2707,9 @@ struct GaryxAutoResearchView: View {
             onRefresh: { await model.refreshRemoteState() }
         ) {
             VStack(alignment: .leading, spacing: 18) {
-                if model.autoResearchRuns.isEmpty {
+                if model.autoResearchRuns.isEmpty, model.isRemoteStatePending {
+                    GaryxLoadingPanelView(title: "Loading Auto Research runs...")
+                } else if model.autoResearchRuns.isEmpty {
                     GaryxEmptyPanelView(
                         icon: "atom",
                         title: "No Auto Research runs",
@@ -4153,29 +4177,42 @@ struct GaryxSettingsProviderContent: View {
             }
 
             GaryxSectionBlock(title: "Default Agent") {
-                GaryxCompactListGroup {
-                    ForEach(Array(model.agentTargets.enumerated()), id: \.element.id) { index, target in
-                        Button {
-                            model.setSelectedAgentTarget(target.id)
-                        } label: {
-                            GaryxAgentIdentityRow(
-                                id: target.id,
-                                title: target.title,
-                                subtitle: target.subtitle,
-                                kind: target.kind,
-                                avatarDataUrl: target.avatarDataUrl,
-                                providerType: target.providerType,
-                                builtIn: target.builtIn,
-                                selected: model.selectedAgentTargetId == target.id
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        if index < model.agentTargets.count - 1 {
-                            GaryxCompactRowDivider()
+                if model.agentTargets.isEmpty, model.shouldShowAgentTargetsEmptyState {
+                    GaryxEmptyPanelView(
+                        icon: "person.crop.circle.badge.exclamationmark",
+                        title: model.agentTargetsEmptyTitle,
+                        text: model.agentTargetsEmptyText
+                    )
+                } else if model.agentTargets.isEmpty {
+                    GaryxLoadingPanelView(title: "Loading agents...")
+                } else {
+                    GaryxCompactListGroup {
+                        ForEach(Array(model.agentTargets.enumerated()), id: \.element.id) { index, target in
+                            Button {
+                                model.setSelectedAgentTarget(target.id)
+                            } label: {
+                                GaryxAgentIdentityRow(
+                                    id: target.id,
+                                    title: target.title,
+                                    subtitle: target.subtitle,
+                                    kind: target.kind,
+                                    avatarDataUrl: target.avatarDataUrl,
+                                    providerType: target.providerType,
+                                    builtIn: target.builtIn,
+                                    selected: model.selectedAgentTargetId == target.id
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            if index < model.agentTargets.count - 1 {
+                                GaryxCompactRowDivider()
+                            }
                         }
                     }
                 }
             }
+        }
+        .task {
+            await model.refreshAgentTargetsIfNeeded()
         }
     }
 }

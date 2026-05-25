@@ -1003,6 +1003,23 @@ struct GaryxEmptyPanelView: View {
     }
 }
 
+struct GaryxLoadingPanelView: View {
+    let title: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.regular)
+            Text(title)
+                .font(GaryxFont.callout(weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 36)
+    }
+}
+
 struct GaryxFieldLabel: View {
     let text: String
 
