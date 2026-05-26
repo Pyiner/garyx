@@ -7,10 +7,7 @@ extension GaryxMobileModel {
     var activePanel: GaryxMobilePanel {
         get { navigationState.activePanel }
         set {
-            guard navigationState.activePanel != newValue else { return }
-            var nextState = navigationState
-            nextState.setActivePanel(newValue)
-            navigationState = nextState
+            setActivePanel(newValue)
         }
     }
 
@@ -18,6 +15,7 @@ extension GaryxMobileModel {
         get { navigationState.activeSettingsTab }
         set {
             guard navigationState.activeSettingsTab != newValue else { return }
+            invalidatePendingThreadOpen()
             var nextState = navigationState
             nextState.activeSettingsTab = newValue
             navigationState = nextState
@@ -28,6 +26,7 @@ extension GaryxMobileModel {
         get { navigationState.workspaceBotsDrilldown }
         set {
             guard navigationState.workspaceBotsDrilldown != newValue else { return }
+            invalidatePendingThreadOpen()
             var nextState = navigationState
             nextState.setWorkspaceBotsDrilldown(newValue)
             navigationState = nextState
@@ -49,7 +48,21 @@ extension GaryxMobileModel {
         }
     }
 
+    func setActivePanel(
+        _ panel: GaryxMobilePanel,
+        invalidatesPendingThreadOpen: Bool = true
+    ) {
+        guard navigationState.activePanel != panel else { return }
+        if invalidatesPendingThreadOpen {
+            invalidatePendingThreadOpen()
+        }
+        var nextState = navigationState
+        nextState.setActivePanel(panel)
+        navigationState = nextState
+    }
+
     func openPanel(_ panel: GaryxMobilePanel, source: GaryxMobilePanelOpenSource = .current) {
+        invalidatePendingThreadOpen()
         var nextState = navigationState
         nextState.openPanel(panel, dreamsAutoScanEnabled: dreamsAutoScanEnabled, source: source)
         navigationState = nextState
@@ -57,6 +70,7 @@ extension GaryxMobileModel {
     }
 
     func openSettings(tab: GaryxMobileSettingsTab = .manage, source: GaryxMobilePanelOpenSource = .sidebar) {
+        invalidatePendingThreadOpen()
         var nextState = navigationState
         nextState.openSettings(tab: tab, source: source)
         navigationState = nextState
@@ -96,12 +110,14 @@ extension GaryxMobileModel {
     }
 
     func showSettingsOverview() {
+        invalidatePendingThreadOpen()
         var nextState = navigationState
         nextState.showSettingsOverview()
         navigationState = nextState
     }
 
     func goBackInMainPanel() {
+        invalidatePendingThreadOpen()
         var nextState = navigationState
         guard nextState.goBackInMainPanel() else {
             setSidebarVisible(true)

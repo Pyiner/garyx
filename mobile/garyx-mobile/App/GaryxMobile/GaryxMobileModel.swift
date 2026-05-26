@@ -210,6 +210,7 @@ final class GaryxMobileModel: ObservableObject {
     var pendingBotAgentId: String?
     var pendingBotDraftGeneration: UUID?
     var selectedThreadDraftGeneration = UUID()
+    var pendingThreadOpenRequestId = UUID()
     #if DEBUG
     var debugSnapshotActive = false
     #endif

@@ -566,8 +566,8 @@ private struct GaryxBotThreadDetailSection: View {
                             trailingTimestamp: timestamp,
                             canArchive: canArchive(entry),
                             onSelect: {
-                                guard let threadId = entry.threadId, entry.openable else { return }
-                                Task { await model.openBotThread(threadId) }
+                                guard entry.openable else { return }
+                                Task { await model.selectThread(thread) }
                             },
                             onArchive: {
                                 Task { await model.archiveBotConversationEndpoint(entry.endpoint) }

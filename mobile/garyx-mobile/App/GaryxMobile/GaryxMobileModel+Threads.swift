@@ -454,7 +454,13 @@ extension GaryxMobileModel {
         return runState == "running" || !activeRunId.isEmpty
     }
 
-    func selectThread(_ thread: GaryxThreadSummary) async {
+    func selectThread(
+        _ thread: GaryxThreadSummary,
+        invalidatesPendingThreadOpen: Bool = true
+    ) async {
+        if invalidatesPendingThreadOpen {
+            invalidatePendingThreadOpen()
+        }
         let previousThreadId = selectedThread?.id
         if previousThreadId != thread.id {
             advanceSelectedThreadDraftGeneration()
@@ -468,7 +474,7 @@ extension GaryxMobileModel {
         selectedThread = thread
         clearPendingBotDraft()
         draftThreadTitle = thread.title
-        activePanel = .chat
+        setActivePanel(.chat, invalidatesPendingThreadOpen: invalidatesPendingThreadOpen)
         setSidebarVisible(false)
         if previousThreadId != thread.id {
             messages = cachedMessages(for: thread.id)
@@ -478,6 +484,7 @@ extension GaryxMobileModel {
     }
 
     func openNewThreadDraft() {
+        invalidatePendingThreadOpen()
         advanceSelectedThreadDraftGeneration()
         selectedThreadRecoveryTask?.cancel()
         selectedThreadRecoveryTask = nil
@@ -497,11 +504,13 @@ extension GaryxMobileModel {
     }
 
     func createThread() async {
+        invalidatePendingThreadOpen()
         clearPendingBotDraft()
         await createThread(workspaceOverride: nil)
     }
 
     func createThreadFromCurrentDraft() async {
+        invalidatePendingThreadOpen()
         guard currentPendingBotDraft() != nil else {
             await createThread()
             return
@@ -522,6 +531,7 @@ extension GaryxMobileModel {
     }
 
     func createThread(workspaceOverride: String?, agentOverride: String? = nil) async {
+        invalidatePendingThreadOpen()
         do {
             saveGatewaySettings()
             let workspace = (workspaceOverride ?? newThreadWorkspace).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -559,6 +569,7 @@ extension GaryxMobileModel {
     }
 
     func createThread(inWorkspace workspacePath: String) async {
+        invalidatePendingThreadOpen()
         clearPendingBotDraft()
         await createThread(workspaceOverride: workspacePath)
     }
@@ -573,6 +584,7 @@ extension GaryxMobileModel {
 
         let workspace = group.workspaceDir?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let agentId = group.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        invalidatePendingThreadOpen()
         advanceSelectedThreadDraftGeneration()
         pendingBotId = Self.botSelectorId(channel: group.channel, accountId: group.accountId)
         pendingBotWorkspace = workspace.isEmpty ? nil : workspace

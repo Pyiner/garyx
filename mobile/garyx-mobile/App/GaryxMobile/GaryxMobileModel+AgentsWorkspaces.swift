@@ -5,25 +5,78 @@ import WidgetKit
 
 extension GaryxMobileModel {
     func openThread(id: String) async {
-        if let thread = threads.first(where: { $0.id == id }) {
+        let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !threadId.isEmpty else { return }
+        let requestId = beginPendingThreadOpen()
+
+        if let thread = threads.first(where: { $0.id == threadId }) {
+            guard isCurrentPendingThreadOpen(requestId) else { return }
             await selectThread(thread)
-            activePanel = .chat
             return
         }
+
+        await selectThread(
+            Self.placeholderThreadSummary(id: threadId),
+            invalidatesPendingThreadOpen: false
+        )
+        guard isCurrentPendingThreadOpen(requestId) else { return }
+
         await refreshThreads()
-        if let thread = threads.first(where: { $0.id == id }) {
-            await selectThread(thread)
-            activePanel = .chat
+        guard isCurrentPendingThreadOpen(requestId) else { return }
+        if let thread = threads.first(where: { $0.id == threadId }) {
+            applyOpenedThreadSummary(thread)
             return
         }
         do {
-            let thread = try await client().getThread(threadId: id)
+            let thread = try await client().getThread(threadId: threadId)
+            guard isCurrentPendingThreadOpen(requestId) else { return }
             threads = Self.mergedThreadSummaries(threads + [thread])
-            await selectThread(thread)
-            activePanel = .chat
+            applyOpenedThreadSummary(thread)
         } catch {
+            guard isCurrentPendingThreadOpen(requestId) else { return }
             lastError = displayMessage(for: error)
         }
+    }
+
+    func beginPendingThreadOpen() -> UUID {
+        let requestId = UUID()
+        pendingThreadOpenRequestId = requestId
+        return requestId
+    }
+
+    func invalidatePendingThreadOpen() {
+        pendingThreadOpenRequestId = UUID()
+    }
+
+    func isCurrentPendingThreadOpen(_ requestId: UUID) -> Bool {
+        pendingThreadOpenRequestId == requestId
+    }
+
+    func applyOpenedThreadSummary(_ thread: GaryxThreadSummary) {
+        threads = Self.mergedThreadSummaries(threads + [thread])
+        guard selectedThread?.id == thread.id else { return }
+        selectedThread = thread
+        draftThreadTitle = thread.title
+    }
+
+    static func placeholderThreadSummary(id: String) -> GaryxThreadSummary {
+        GaryxThreadSummary(
+            id: id,
+            title: "Loading thread",
+            createdAt: nil,
+            updatedAt: nil,
+            lastMessagePreview: "",
+            workspacePath: nil,
+            messageCount: nil,
+            agentId: nil,
+            teamId: nil,
+            teamName: nil,
+            providerType: nil,
+            recentRunId: nil,
+            activeRunId: nil,
+            runState: nil,
+            worktreePath: nil
+        )
     }
 
     func setSelectedAgentTarget(_ id: String) {
