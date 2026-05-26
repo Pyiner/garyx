@@ -644,6 +644,7 @@ struct GaryxMessageBubble: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var retrying = false
+    @State private var filePreviewSheet: GaryxMessageFilePreviewSheet?
 
     var body: some View {
         Group {
@@ -653,6 +654,12 @@ struct GaryxMessageBubble: View {
             } else {
                 messageRow
             }
+        }
+        .fullScreenCover(item: $filePreviewSheet) { sheet in
+            GaryxFullscreenWorkspaceFilePreview(preview: sheet.preview) {
+                filePreviewSheet = nil
+            }
+            .environmentObject(model)
         }
     }
 
@@ -749,7 +756,10 @@ struct GaryxMessageBubble: View {
     }
 
     private func openMessageFileLink(_ target: String) {
-        Task { await model.openLocalFilePreview(target) }
+        Task {
+            guard let preview = await model.localFilePreview(target) else { return }
+            filePreviewSheet = GaryxMessageFilePreviewSheet(preview: preview)
+        }
     }
 
     @ViewBuilder
@@ -792,6 +802,11 @@ struct GaryxMessageBubble: View {
                 .multilineTextAlignment(.trailing)
         }
     }
+}
+
+private struct GaryxMessageFilePreviewSheet: Identifiable {
+    let id = UUID()
+    let preview: GaryxWorkspaceFilePreview
 }
 
 struct GaryxMessageAttachmentStack: View {

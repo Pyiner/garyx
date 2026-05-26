@@ -370,6 +370,17 @@ extension GaryxMobileModel {
         await openWorkspaceFilePreview(resolved)
     }
 
+    func localFilePreview(_ target: String) async -> GaryxWorkspaceFilePreview? {
+        guard let resolved = GaryxMobileFileLink.previewTarget(
+            fromLink: target,
+            workspacePaths: knownWorkspacePaths
+        ) else {
+            lastError = "Garyx could not resolve this local file for preview."
+            return nil
+        }
+        return await workspaceFilePreview(resolved)
+    }
+
     func openWorkspacePreviewLink(
         _ target: String,
         from preview: GaryxWorkspaceFilePreview
@@ -385,6 +396,23 @@ extension GaryxMobileModel {
             return
         }
         await openWorkspaceFilePreview(resolved)
+    }
+
+    func workspaceFilePreviewLink(
+        _ target: String,
+        from preview: GaryxWorkspaceFilePreview
+    ) async -> GaryxWorkspaceFilePreview? {
+        let workspacePaths = knownWorkspacePaths + [preview.workspaceDir]
+        guard let resolved = GaryxMobileFileLink.previewTarget(
+            fromLink: target,
+            workspacePaths: workspacePaths,
+            currentWorkspaceDir: preview.workspaceDir,
+            currentFilePath: preview.path
+        ) else {
+            lastError = "Garyx could not resolve this local file for preview."
+            return nil
+        }
+        return await workspaceFilePreview(resolved)
     }
 
     func openWorkspaceFilePreview(_ target: GaryxMobileWorkspaceFileTarget) async {
@@ -430,6 +458,22 @@ extension GaryxMobileModel {
                 runtimeGeneration: runtimeGeneration
             ) else { return }
             lastError = displayMessage(for: error)
+        }
+    }
+
+    private func workspaceFilePreview(_ target: GaryxMobileWorkspaceFileTarget) async -> GaryxWorkspaceFilePreview? {
+        let workspace = target.workspaceDir.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filePath = target.path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workspace.isEmpty, !filePath.isEmpty else { return nil }
+
+        do {
+            return try await client().previewWorkspaceFile(
+                workspaceDir: workspace,
+                path: filePath
+            )
+        } catch {
+            lastError = displayMessage(for: error)
+            return nil
         }
     }
 
