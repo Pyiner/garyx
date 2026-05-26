@@ -346,23 +346,23 @@ private struct GaryxWorkspacePathPickerSheet: View {
             .padding(.top, 22)
             .padding(.bottom, 14)
 
+            GaryxGlassPathField(placeholder: placeholder, path: $draft)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 8)
+
+            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !garyxIsAbsoluteWorkspacePath(draft) {
+                GaryxFormErrorText(text: "Use an absolute directory path.")
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 8)
+            }
+
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            TextField(placeholder, text: $draft)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .garyxFormTextField()
-                            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                               !garyxIsAbsoluteWorkspacePath(draft) {
-                                GaryxFormErrorText(text: "Use an absolute directory path.")
-                            }
-                            GaryxWorkspacePathBrowser(path: $draft, paths: workspacePaths)
-                                .padding(.horizontal, 8)
-                                .padding(.bottom, 8)
-                        }
-                        .padding(.vertical, 10)
+                        GaryxWorkspacePathBrowser(path: $draft, paths: workspacePaths)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
                     }
                     if allowsEmpty {
                         Button {
@@ -429,6 +429,57 @@ private struct GaryxWorkspacePathPickerSheet: View {
     }
 }
 
+private struct GaryxGlassPathField: View {
+    let placeholder: String
+    @Binding var path: String
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+
+        HStack(spacing: 10) {
+            Image(systemName: "folder")
+                .font(GaryxFont.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            TextField(placeholder, text: $path)
+                .font(GaryxFont.subheadline())
+                .foregroundStyle(.primary)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .lineLimit(1)
+
+            if !path.isEmpty {
+                Button {
+                    path = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(GaryxFont.system(size: 15, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear path")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 38)
+        .garyxAdaptiveGlass(
+            .regular,
+            isInteractive: true,
+            tint: Color(.systemBackground).opacity(0.92),
+            fallbackMaterial: .ultraThinMaterial,
+            in: shape
+        )
+        .overlay {
+            shape
+                .stroke(Color.white.opacity(0.34), lineWidth: 0.7)
+        }
+        .overlay {
+            shape
+                .stroke(Color.primary.opacity(0.055), lineWidth: 1)
+        }
+    }
+}
+
 private struct GaryxWorkspacePathBrowser: View {
     @Binding var path: String
     let paths: [String]
@@ -462,7 +513,7 @@ private struct GaryxWorkspacePathBrowser: View {
                             .font(GaryxFont.system(size: 13, weight: .semibold))
                             .foregroundStyle(.primary)
                             .frame(width: 32, height: 32)
-                            .background(Color(.tertiarySystemFill), in: Circle())
+                            .background(Color(.tertiarySystemFill).opacity(0.72), in: Circle())
                     }
                     .buttonStyle(.plain)
                     .disabled(currentPath.isEmpty)
@@ -494,7 +545,7 @@ private struct GaryxWorkspacePathBrowser: View {
                             .foregroundStyle(.primary)
                             .padding(.horizontal, 10)
                             .frame(height: 30)
-                            .background(Color(.tertiarySystemFill), in: Capsule())
+                            .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
@@ -555,10 +606,10 @@ private struct GaryxWorkspacePathBrowserRow: View {
         Button(action: action) {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
-                    Image(systemName: node.children.isEmpty ? "folder" : "folder.fill")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                    Image(systemName: "folder")
+                        .font(GaryxFont.system(size: 15, weight: .medium))
                         .foregroundStyle(.secondary)
-                        .frame(width: 24)
+                        .frame(width: 28, height: 28)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(node.name)
                             .font(GaryxFont.subheadline(weight: .semibold))
@@ -573,14 +624,22 @@ private struct GaryxWorkspacePathBrowserRow: View {
                     Spacer(minLength: 0)
                     if isSelected {
                         GaryxSelectionCheckmark(size: 12)
-                    } else if !node.children.isEmpty {
+                    }
+                    if !node.children.isEmpty {
                         Image(systemName: "chevron.right")
                             .font(GaryxFont.system(size: 12, weight: .semibold))
                             .foregroundStyle(.tertiary)
                     }
                 }
                 .padding(.horizontal, 8)
-                .frame(minHeight: 52)
+                .padding(.vertical, 8)
+                .frame(minHeight: 50)
+                .background {
+                    if isSelected {
+                        Color(.tertiarySystemFill).opacity(0.56)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
                 if showsSeparator {
                     Divider().padding(.leading, 42)
                 }
