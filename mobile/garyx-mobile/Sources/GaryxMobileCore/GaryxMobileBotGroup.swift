@@ -100,7 +100,7 @@ internal enum GaryxMobileBotGroupBuilder {
                     channel: bot.channel,
                     accountId: bot.accountId,
                     title: bot.displayName,
-                    subtitle: "\(GaryxMobileBotChannelDisplayName.name(bot.channel)) Bot · \(bot.accountId)",
+                    subtitle: "\(GaryxChannelIdentityPresentation.displayName(for: bot.channel)) Bot · \(bot.accountId)",
                     agentId: nonEmpty(bot.agentId),
                     rootBehavior: bot.rootBehavior,
                     status: bot.enabled ? "idle" : "disabled",
@@ -123,8 +123,8 @@ internal enum GaryxMobileBotGroupBuilder {
                     id: key,
                     channel: first.channel,
                     accountId: first.accountId,
-                    title: "\(GaryxMobileBotChannelDisplayName.name(first.channel)) / \(first.accountId)",
-                    subtitle: "\(GaryxMobileBotChannelDisplayName.name(first.channel)) Bot · \(first.accountId)",
+                    title: "\(GaryxChannelIdentityPresentation.displayName(for: first.channel)) / \(first.accountId)",
+                    subtitle: "\(GaryxChannelIdentityPresentation.displayName(for: first.channel)) Bot · \(first.accountId)",
                     agentId: nil,
                     rootBehavior: "open_default",
                     status: "idle",
@@ -215,7 +215,7 @@ extension GaryxMobileBotGroup {
     }
 
     internal var compactDetailLine: String {
-        let channelName = GaryxMobileBotChannelDisplayName.name(channel)
+        let channelName = GaryxChannelIdentityPresentation.displayName(for: channel)
         let account = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
         let botId = account.isEmpty ? channelName : "\(channelName) · \(account)"
         let agent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -300,24 +300,4 @@ private func garyxBotConversationEntrySort(
         return titleOrder == .orderedAscending
     }
     return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
-}
-
-private enum GaryxMobileBotChannelDisplayName {
-    static func name(_ channel: String) -> String {
-        let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch normalized {
-        case "telegram":
-            return "Telegram"
-        case "feishu":
-            return "Feishu"
-        case "weixin":
-            return "Weixin"
-        case "discord":
-            return "Discord"
-        case "api":
-            return "API"
-        default:
-            return normalized.isEmpty ? "Channel" : normalized.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
 }

@@ -644,41 +644,19 @@ private struct GaryxWorkspaceThreadGroupView: View {
     let onSelect: () -> Void
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 10) {
-                Image(systemName: isSelected ? "folder.fill" : "folder")
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
-                    .foregroundStyle(isSelected ? .primary : .secondary)
-                    .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
-
-                Text(group.name)
-                    .font(GaryxFont.subheadline(weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
-            .frame(height: GaryxSidebarMetrics.rowHeight)
-            .background {
-                if isSelected {
-                    Color(.tertiarySystemFill).opacity(0.56)
-                        .clipShape(
-                            RoundedRectangle(
-                                cornerRadius: GaryxSidebarMetrics.rowCornerRadius,
-                                style: .continuous
-                            )
-                        )
-                }
-            }
-            .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        GaryxDisclosureListRow(
+            title: group.name,
+            systemImage: "folder",
+            selectedSystemImage: "folder.fill",
+            isSelected: isSelected,
+            iconFrame: GaryxSidebarMetrics.iconFrame,
+            horizontalPadding: GaryxSidebarMetrics.rowInnerHorizontalPadding,
+            verticalPadding: 0,
+            minHeight: GaryxSidebarMetrics.rowHeight,
+            titleWeight: .medium,
+            action: onSelect
+        )
+        .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
     }
 }
 
@@ -730,30 +708,16 @@ private struct GaryxSidebarDisclosureRow: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: systemName)
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
-
-                Text(title)
-                    .font(GaryxFont.subheadline(weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
-            .frame(height: GaryxSidebarMetrics.rowHeight)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(title)
+        GaryxDisclosureListRow(
+            title: title,
+            systemImage: systemName,
+            iconFrame: GaryxSidebarMetrics.iconFrame,
+            horizontalPadding: GaryxSidebarMetrics.rowInnerHorizontalPadding,
+            verticalPadding: 0,
+            minHeight: GaryxSidebarMetrics.rowHeight,
+            titleWeight: .medium,
+            action: action
+        )
     }
 }
 

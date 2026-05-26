@@ -137,7 +137,7 @@ struct GaryxConfiguredBotConfigRow: View {
     private var detailLine: String {
         let workspace = bot.workspaceDir?.garyxLastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let agent = bot.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let base = "\(garyxConfiguredBotChannelDisplayName(bot.channel)) Bot · \(bot.accountId)"
+        let base = "\(GaryxChannelIdentityPresentation.displayName(for: bot.channel)) Bot · \(bot.accountId)"
         if !workspace.isEmpty {
             return "\(base) · \(workspace)"
         }
@@ -593,24 +593,6 @@ private struct GaryxBotSchemaField: Identifiable, Equatable {
                 }
                 return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending
             }
-    }
-}
-
-private func garyxConfiguredBotChannelDisplayName(_ channel: String) -> String {
-    let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines)
-    switch normalized.lowercased() {
-    case "telegram":
-        return "Telegram"
-    case "feishu":
-        return "Feishu"
-    case "weixin":
-        return "Weixin"
-    case "discord":
-        return "Discord"
-    case "api":
-        return "API"
-    default:
-        return normalized.isEmpty ? "Channel" : normalized
     }
 }
 

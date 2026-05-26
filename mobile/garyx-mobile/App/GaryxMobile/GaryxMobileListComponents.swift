@@ -58,6 +58,70 @@ struct GaryxCompactGroupDivider: View {
     }
 }
 
+struct GaryxDisclosureListRow: View {
+    let title: String
+    var subtitle: String?
+    var systemImage: String?
+    var selectedSystemImage: String?
+    var isSelected = false
+    var iconFrame: CGFloat = 28
+    var horizontalPadding: CGFloat = 16
+    var verticalPadding: CGFloat = 9
+    var minHeight: CGFloat = 52
+    var titleWeight: Font.Weight = .semibold
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                if let imageName {
+                    Image(systemName: imageName)
+                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .foregroundStyle(isSelected ? .primary : .secondary)
+                        .frame(width: iconFrame, height: iconFrame)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(GaryxFont.subheadline(weight: titleWeight))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .frame(minHeight: minHeight)
+            .background {
+                if isSelected {
+                    Color(.tertiarySystemFill).opacity(0.56)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    private var imageName: String? {
+        isSelected ? (selectedSystemImage ?? systemImage) : systemImage
+    }
+}
+
 /// Row-level secondary actions rendered as a trailing ellipsis menu.
 /// Horizontal row swipes are reserved for navigation/sidebar gestures.
 struct GaryxRowAction {

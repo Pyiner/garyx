@@ -44,90 +44,15 @@ struct GaryxChannelLogoView: View {
     }
 
     private var builtInFallbackImage: UIImage? {
-        switch channel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "telegram":
-            UIImage(named: "ChannelTelegram")
-        case "discord":
-            UIImage(named: "ChannelDiscord")
-        case "feishu":
-            UIImage(named: "ChannelFeishu")
-        case "weixin":
-            UIImage(named: "ChannelWeixin")
-        default:
-            nil
-        }
+        channelPresentation.fallbackAssetName.flatMap { UIImage(named: $0) }
     }
 
     private var fallbackLabel: String {
-        let source = label.isEmpty ? channel : label
-        let words = source
-            .replacingOccurrences(of: "_", with: " ")
-            .replacingOccurrences(of: "-", with: " ")
-            .split(separator: " ")
-        let initials = words.prefix(2).compactMap { $0.first }.map { String($0).uppercased() }.joined()
-        return initials.isEmpty ? "B" : initials
-    }
-}
-
-private enum GaryxProviderAvatar {
-    case codex
-    case openAI
-    case claude
-    case gemini
-    case generic
-
-    var symbol: String? {
-        switch self {
-        case .codex:
-            "chevron.left.forwardslash.chevron.right"
-        case .openAI:
-            "circle.hexagongrid.fill"
-        case .claude:
-            "sparkles"
-        case .gemini:
-            "diamond.fill"
-        case .generic:
-            nil
-        }
+        channelPresentation.fallbackInitials
     }
 
-    var background: Color {
-        switch self {
-        case .codex:
-            Color(red: 0.08, green: 0.10, blue: 0.12)
-        case .openAI:
-            Color(red: 0.10, green: 0.47, blue: 0.40)
-        case .claude:
-            Color(red: 0.50, green: 0.37, blue: 0.26)
-        case .gemini:
-            Color(red: 0.23, green: 0.38, blue: 0.86)
-        case .generic:
-            Color(.secondarySystemBackground)
-        }
-    }
-
-    var foreground: Color {
-        switch self {
-        case .generic:
-            Color(.secondaryLabel)
-        default:
-            Color.white
-        }
-    }
-
-    func iconSize(for diameter: CGFloat) -> CGFloat {
-        switch self {
-        case .codex:
-            diameter * 0.32
-        case .openAI:
-            diameter * 0.42
-        case .claude:
-            diameter * 0.40
-        case .gemini:
-            diameter * 0.34
-        case .generic:
-            diameter * 0.36
-        }
+    private var channelPresentation: GaryxChannelIdentityPresentation {
+        GaryxChannelIdentityPresentation.make(channel: channel, label: label)
     }
 }
 
@@ -192,50 +117,28 @@ struct GaryxAgentAvatarView: View {
             Image(systemName: "person.2.fill")
                 .font(GaryxFont.system(size: diameter * 0.36, weight: .semibold))
                 .foregroundStyle(fallbackForeground)
-        } else if let symbol = providerAvatar.symbol {
+        } else if let symbol = providerPresentation.symbolName {
             Image(systemName: symbol)
-                .font(GaryxFont.system(size: providerAvatar.iconSize(for: diameter), weight: .semibold))
+                .font(GaryxFont.system(size: providerIconSize, weight: .semibold))
                 .foregroundStyle(fallbackForeground)
         } else {
-            Text(agentInitials)
+            Text(providerPresentation.fallbackInitials)
                 .font(GaryxFont.system(size: diameter * 0.32, weight: .bold))
                 .foregroundStyle(fallbackForeground)
         }
     }
 
-    private var providerAvatar: GaryxProviderAvatar {
-        let source = "\(agentId) \(providerType)".lowercased()
-        if source.contains("codex") {
-            return .codex
-        }
-        if source.contains("openai") || source.contains("gpt") {
-            return .openAI
-        }
-        if source.contains("claude") || source.contains("anthropic") {
-            return .claude
-        }
-        if source.contains("gemini") || source.contains("google") {
-            return .gemini
-        }
-        return .generic
-    }
-
-    private var agentInitials: String {
-        let source = (label.isEmpty ? agentId : label).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !source.isEmpty else { return "A" }
-        let words = source
-            .replacingOccurrences(of: "(", with: " ")
-            .replacingOccurrences(of: ")", with: " ")
-            .split { $0 == " " || $0 == "/" || $0 == "_" || $0 == "-" }
-        if words.count >= 2, let first = words[0].first, let second = words[1].first {
-            return "\(first)\(second)".uppercased()
-        }
-        return String(source.prefix(2)).uppercased()
+    private var providerPresentation: GaryxProviderPresentation {
+        GaryxProviderPresentation.make(
+            agentId: agentId,
+            providerType: providerType,
+            fallbackName: label
+        )
     }
 
     private var fallbackBackground: Color {
         if builtIn, kind == .agent {
-            return providerAvatar.background
+            return providerBackground
         }
 
         let colors = [
@@ -253,9 +156,39 @@ struct GaryxAgentAvatarView: View {
             return Color(.systemGray)
         }
         if builtIn {
-            return providerAvatar.foreground
+            return providerPresentation.kind == .generic ? Color(.secondaryLabel) : Color.white
         }
         return GaryxTheme.accent
+    }
+
+    private var providerBackground: Color {
+        switch providerPresentation.kind {
+        case .codex:
+            Color(red: 0.08, green: 0.10, blue: 0.12)
+        case .openAI:
+            Color(red: 0.10, green: 0.47, blue: 0.40)
+        case .claude:
+            Color(red: 0.50, green: 0.37, blue: 0.26)
+        case .gemini:
+            Color(red: 0.23, green: 0.38, blue: 0.86)
+        case .generic:
+            Color(.secondarySystemBackground)
+        }
+    }
+
+    private var providerIconSize: CGFloat {
+        switch providerPresentation.kind {
+        case .codex:
+            diameter * 0.32
+        case .openAI:
+            diameter * 0.42
+        case .claude:
+            diameter * 0.40
+        case .gemini:
+            diameter * 0.34
+        case .generic:
+            diameter * 0.36
+        }
     }
 }
 

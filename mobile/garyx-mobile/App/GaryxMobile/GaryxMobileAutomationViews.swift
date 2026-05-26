@@ -315,7 +315,12 @@ struct GaryxCreateAutomationSheet: View {
             onCancel: { dismiss() },
             onSave: save
         ) {
-            automationFormFields
+            GaryxAutomationFormFields(
+                draft: $draft,
+                workspacePaths: workspacePaths,
+                threadOptions: threadOptions,
+                showsThreadPicker: $showsThreadPicker
+            )
         }
         .onAppear(perform: ensureTargetSelection)
         .task {
@@ -335,78 +340,6 @@ struct GaryxCreateAutomationSheet: View {
                 onSelect: selectThread
             )
         }
-    }
-
-    private var automationFormFields: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            GaryxFormGroupedSection(title: "Title") {
-                TextField("Automation name", text: $draft.label)
-                    .font(GaryxFont.body())
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 52, alignment: .leading)
-            }
-
-            GaryxFormGroupedSection(title: "Target") {
-                Picker("Run In", selection: $draft.targetsExistingThread) {
-                    Text("New Thread").tag(false)
-                    Text("Existing Thread").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .padding(12)
-
-                Divider().padding(.leading, 16)
-                createTargetPicker
-            }
-
-            GaryxFormGroupedSection(title: "Schedule") {
-                GaryxAutomationScheduleEditor(draft: $draft.schedule)
-            }
-
-            GaryxFormGroupedSection(title: "Prompt") {
-                TextField("What should Garyx do?", text: $draft.prompt, axis: .vertical)
-                    .font(GaryxFont.body())
-                    .lineLimit(5...12)
-                    .padding(16)
-                    .frame(minHeight: 142, alignment: .topLeading)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var createTargetPicker: some View {
-        if draft.targetsExistingThread {
-            GaryxFormSelectionRow(
-                title: "Thread",
-                value: selectedThreadTitle,
-                placeholder: "Choose recent thread"
-            ) {
-                showsThreadPicker = true
-            }
-        } else if workspacePaths.isEmpty {
-            createAgentPicker
-            Divider().padding(.leading, 16)
-            GaryxFormReadOnlyRow(title: "Workspace", value: "No workspaces available")
-        } else {
-            createAgentPicker
-            Divider().padding(.leading, 16)
-            GaryxFormRow(title: "Workspace") {
-                Menu {
-                    ForEach(workspacePaths, id: \.self) { path in
-                        Button {
-                            draft.workspacePath = path
-                        } label: {
-                            Text(path.automationLastPathComponent)
-                        }
-                    }
-                } label: {
-                    GaryxFormMenuValueLabel(value: effectiveWorkspacePath.automationLastPathComponent)
-                }
-            }
-        }
-    }
-
-    private var createAgentPicker: some View {
-        GaryxAutomationAgentSelectorRow(agentTargetId: $draft.agentTargetId)
     }
 
     private var workspacePaths: [String] {
@@ -439,12 +372,6 @@ struct GaryxCreateAutomationSheet: View {
 
     private var canCreate: Bool {
         draft.canSubmit(workspacePaths: workspacePaths, threadOptions: threadOptions)
-    }
-
-    private var selectedThreadTitle: String {
-        threadOptions
-            .first(where: { $0.id == effectiveThreadId })?
-            .title ?? effectiveThreadId
     }
 
     private func ensureTargetSelection() {
@@ -501,13 +428,7 @@ struct GaryxEditAutomationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
     let automation: GaryxAutomationSummary
-    @State private var label = ""
-    @State private var prompt = ""
-    @State private var schedule = GaryxAutomationScheduleDraft()
-    @State private var targetsExistingThread = false
-    @State private var agentTargetId = ""
-    @State private var targetThreadId = ""
-    @State private var workspacePath = ""
+    @State private var draft = GaryxAutomationDraft()
     @State private var isSaving = false
     @State private var showsThreadPicker = false
 
@@ -518,45 +439,19 @@ struct GaryxEditAutomationSheet: View {
             onCancel: { dismiss() },
             onSave: save
         ) {
-            VStack(alignment: .leading, spacing: 22) {
-                GaryxFormGroupedSection(title: "Title") {
-                    TextField("Automation name", text: $label)
-                        .font(GaryxFont.body())
-                        .padding(.horizontal, 16)
-                        .frame(minHeight: 52, alignment: .leading)
-                }
-
-                GaryxFormGroupedSection(title: "Target") {
-                    Picker("Run In", selection: $targetsExistingThread) {
-                        Text("New Thread").tag(false)
-                        Text("Existing Thread").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .padding(12)
-
-                    Divider().padding(.leading, 16)
-                    editTargetPicker
-                }
-
-                GaryxFormGroupedSection(title: "Schedule") {
-                    GaryxAutomationScheduleEditor(draft: $schedule)
-                }
-
-                GaryxFormGroupedSection(title: "Prompt") {
-                    TextField("What should Garyx do?", text: $prompt, axis: .vertical)
-                        .font(GaryxFont.body())
-                        .lineLimit(5...12)
-                        .padding(16)
-                        .frame(minHeight: 142, alignment: .topLeading)
-                }
-            }
+            GaryxAutomationFormFields(
+                draft: $draft,
+                workspacePaths: editWorkspaceOptions,
+                threadOptions: editThreadOptions,
+                showsThreadPicker: $showsThreadPicker
+            )
         }
         .onAppear(perform: fillDraft)
         .task {
             await model.refreshAgentTargetsIfNeeded()
             ensureEditAgentSelection()
         }
-        .onChange(of: targetsExistingThread) { _, _ in
+        .onChange(of: draft.targetsExistingThread) { _, _ in
             ensureEditTargetSelection()
             ensureEditAgentSelection()
         }
@@ -565,75 +460,22 @@ struct GaryxEditAutomationSheet: View {
         }
         .sheet(isPresented: $showsThreadPicker) {
             GaryxAutomationThreadPickerSheet(
-                selectedThreadId: effectiveEditThreadId,
+                selectedThreadId: draft.effectiveThreadId(threadOptions: editThreadOptions),
                 onSelect: selectThread
             )
         }
     }
 
-    @ViewBuilder
-    private var editTargetPicker: some View {
-        if targetsExistingThread {
-            GaryxFormSelectionRow(
-                title: "Thread",
-                value: selectedThreadTitle,
-                placeholder: "Choose recent thread"
-            ) {
-                showsThreadPicker = true
-            }
-        } else if editWorkspaceOptions.isEmpty {
-            editAgentPicker
-            Divider().padding(.leading, 16)
-            GaryxFormReadOnlyRow(title: "Workspace", value: "No workspaces available")
-        } else {
-            editAgentPicker
-            Divider().padding(.leading, 16)
-            GaryxFormRow(title: "Workspace") {
-                Menu {
-                    ForEach(editWorkspaceOptions, id: \.self) { path in
-                        Button {
-                            workspacePath = path
-                        } label: {
-                            Text(path.automationLastPathComponent)
-                        }
-                    }
-                } label: {
-                    GaryxFormMenuValueLabel(value: effectiveEditWorkspacePath.automationLastPathComponent)
-                }
-            }
-        }
-    }
-
-    private var editAgentPicker: some View {
-        GaryxAutomationAgentSelectorRow(agentTargetId: $agentTargetId)
-    }
-
     private var editWorkspaceOptions: [String] {
         var seen = Set<String>()
-        return ([workspacePath] + model.knownWorkspacePaths)
+        return ([draft.workspacePath] + model.knownWorkspacePaths)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .filter { seen.insert($0).inserted }
     }
 
-    private var effectiveEditWorkspacePath: String {
-        let selected = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty, editWorkspaceOptions.contains(selected) {
-            return selected
-        }
-        return editWorkspaceOptions.first ?? ""
-    }
-
-    private var effectiveEditThreadId: String {
-        let selected = targetThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty {
-            return selected
-        }
-        return editThreadOptions.first?.id ?? ""
-    }
-
     private var effectiveEditAgentTargetId: String {
-        let selected = agentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selected = draft.trimmedAgentTargetId
         if !selected.isEmpty {
             return selected
         }
@@ -645,16 +487,7 @@ struct GaryxEditAutomationSheet: View {
     }
 
     private var canSave: Bool {
-        !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (targetsExistingThread ? !effectiveEditThreadId.isEmpty : !effectiveEditWorkspacePath.isEmpty)
-            && (targetsExistingThread || !effectiveEditAgentTargetId.isEmpty)
-    }
-
-    private var selectedThreadTitle: String {
-        editThreadOptions
-            .first(where: { $0.id == effectiveEditThreadId })?
-            .title ?? effectiveEditThreadId
+        draft.canSubmit(workspacePaths: editWorkspaceOptions, threadOptions: editThreadOptions)
     }
 
     private var editThreadOptions: [GaryxThreadSummary] {
@@ -662,63 +495,50 @@ struct GaryxEditAutomationSheet: View {
     }
 
     private func fillDraft() {
-        label = automation.label
-        prompt = automation.prompt
-        schedule = GaryxAutomationScheduleDraft(schedule: automation.schedule)
         let target = automation.targetThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        targetsExistingThread = !target.isEmpty
-        agentTargetId = automation.agentId
-        targetThreadId = target
         let targetWorkspace = target.isEmpty
             ? ""
             : editThreadOptions.first(where: { $0.id == target })?.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let automationWorkspace = automation.workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        workspacePath = automationWorkspace.isEmpty ? targetWorkspace : automationWorkspace
+        draft = GaryxAutomationDraft(
+            label: automation.label,
+            prompt: automation.prompt,
+            agentTargetId: automation.agentId,
+            schedule: GaryxAutomationScheduleDraft(schedule: automation.schedule),
+            targetsExistingThread: !target.isEmpty,
+            targetThreadId: target,
+            workspacePath: automationWorkspace.isEmpty ? targetWorkspace : automationWorkspace
+        )
         ensureEditTargetSelection()
     }
 
     private func ensureEditTargetSelection() {
-        if targetsExistingThread {
-            let nextThreadId = effectiveEditThreadId
-            if targetThreadId != nextThreadId {
-                targetThreadId = nextThreadId
-            }
-            if let thread = editThreadOptions.first(where: { $0.id == nextThreadId }),
-               let nextWorkspace = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !nextWorkspace.isEmpty {
-                workspacePath = nextWorkspace
-            }
-        } else {
-            let nextWorkspace = effectiveEditWorkspacePath
-            if workspacePath != nextWorkspace {
-                workspacePath = nextWorkspace
-            }
-        }
+        draft.ensureTargetSelection(workspacePaths: editWorkspaceOptions, threadOptions: editThreadOptions)
         ensureEditAgentSelection()
     }
 
     private func ensureEditAgentSelection() {
-        guard !targetsExistingThread else { return }
-        let current = agentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !draft.targetsExistingThread else { return }
+        let current = draft.trimmedAgentTargetId
         let validIds = Set(model.agentTargets.map(\.id))
         if !current.isEmpty, validIds.isEmpty || validIds.contains(current) {
             return
         }
         let selected = model.selectedAgentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
         if !selected.isEmpty, validIds.isEmpty || validIds.contains(selected) {
-            agentTargetId = selected
+            draft.agentTargetId = selected
             return
         }
         if let first = model.agentTargets.first {
-            agentTargetId = first.id
+            draft.agentTargetId = first.id
         }
     }
 
     private func selectThread(_ thread: GaryxThreadSummary) {
-        targetThreadId = thread.id
+        draft.targetThreadId = thread.id
         if let nextWorkspace = thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines),
            !nextWorkspace.isEmpty {
-            workspacePath = nextWorkspace
+            draft.workspacePath = nextWorkspace
         }
     }
 
@@ -728,19 +548,107 @@ struct GaryxEditAutomationSheet: View {
         Task {
             let updated = await model.updateAutomation(
                 automation,
-                label: label,
-                prompt: prompt,
-                agentId: targetsExistingThread ? "" : effectiveEditAgentTargetId,
-                schedule: schedule.schedule,
-                targetsExistingThread: targetsExistingThread,
-                targetThreadId: effectiveEditThreadId,
-                workspacePath: effectiveEditWorkspacePath
+                label: draft.label,
+                prompt: draft.prompt,
+                agentId: draft.targetsExistingThread ? "" : effectiveEditAgentTargetId,
+                schedule: draft.schedule.schedule,
+                targetsExistingThread: draft.targetsExistingThread,
+                targetThreadId: draft.effectiveThreadId(threadOptions: editThreadOptions),
+                workspacePath: draft.effectiveWorkspacePath(workspacePaths: editWorkspaceOptions)
             )
             isSaving = false
             if updated {
                 dismiss()
             }
         }
+    }
+}
+
+struct GaryxAutomationFormFields: View {
+    @Binding var draft: GaryxAutomationDraft
+    let workspacePaths: [String]
+    let threadOptions: [GaryxThreadSummary]
+    @Binding var showsThreadPicker: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            GaryxFormGroupedSection(title: "Title") {
+                TextField("Automation name", text: $draft.label)
+                    .font(GaryxFont.body())
+                    .padding(.horizontal, 16)
+                    .frame(minHeight: 52, alignment: .leading)
+            }
+
+            GaryxFormGroupedSection(title: "Target") {
+                Picker("Run In", selection: $draft.targetsExistingThread) {
+                    Text("New Thread").tag(false)
+                    Text("Existing Thread").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding(12)
+
+                Divider().padding(.leading, 16)
+                targetPicker
+            }
+
+            GaryxFormGroupedSection(title: "Schedule") {
+                GaryxAutomationScheduleEditor(draft: $draft.schedule)
+            }
+
+            GaryxFormGroupedSection(title: "Prompt") {
+                TextField("What should Garyx do?", text: $draft.prompt, axis: .vertical)
+                    .font(GaryxFont.body())
+                    .lineLimit(5...12)
+                    .padding(16)
+                    .frame(minHeight: 142, alignment: .topLeading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var targetPicker: some View {
+        if draft.targetsExistingThread {
+            GaryxFormSelectionRow(
+                title: "Thread",
+                value: selectedThreadTitle,
+                placeholder: "Choose recent thread"
+            ) {
+                showsThreadPicker = true
+            }
+        } else if workspacePaths.isEmpty {
+            agentPicker
+            Divider().padding(.leading, 16)
+            GaryxFormReadOnlyRow(title: "Workspace", value: "No workspaces available")
+        } else {
+            agentPicker
+            Divider().padding(.leading, 16)
+            GaryxFormRow(title: "Workspace") {
+                Menu {
+                    ForEach(workspacePaths, id: \.self) { path in
+                        Button {
+                            draft.workspacePath = path
+                        } label: {
+                            Text(path.automationLastPathComponent)
+                        }
+                    }
+                } label: {
+                    GaryxFormMenuValueLabel(
+                        value: draft.effectiveWorkspacePath(workspacePaths: workspacePaths).automationLastPathComponent
+                    )
+                }
+            }
+        }
+    }
+
+    private var agentPicker: some View {
+        GaryxAutomationAgentSelectorRow(agentTargetId: $draft.agentTargetId)
+    }
+
+    private var selectedThreadTitle: String {
+        let threadId = draft.effectiveThreadId(threadOptions: threadOptions)
+        return threadOptions
+            .first(where: { $0.id == threadId })?
+            .title ?? threadId
     }
 }
 

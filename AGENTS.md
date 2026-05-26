@@ -156,6 +156,10 @@ needs installed-app validation.
 - Mobile agent target selectors should use the shared
   `GaryxAgentTargetPickerControl` and `GaryxAgentAvatarView` rather than local
   Menu/Picker rows with generic person icons.
+- Mobile provider, agent, and channel identity labels/icons should resolve
+  through `GaryxProviderPresentation` and `GaryxChannelIdentityPresentation` in
+  `GaryxMobileCore`. Do not add local provider/channel switch tables in views,
+  widgets, or settings.
 - The iOS home-screen recent-threads widget should start directly with thread
   rows, not a title/header row. Put pinned threads first but render them exactly
   like other rows, use agent/team avatars as the leading image, and let the

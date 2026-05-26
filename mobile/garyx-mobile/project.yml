@@ -48,6 +48,7 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: Widget/GaryxRecentThreadsWidget
+      - path: Sources/GaryxMobileCore/GaryxMobileIdentityPresentation.swift
       - path: Sources/GaryxMobileCore/GaryxMobileWidgetData.swift
     settings:
       base:

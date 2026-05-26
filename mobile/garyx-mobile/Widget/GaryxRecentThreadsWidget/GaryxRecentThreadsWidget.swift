@@ -228,12 +228,12 @@ private struct GaryxWidgetAgentAvatar: View {
                 Image(systemName: "person.2.fill")
                     .font(.system(size: metrics.avatarIconSize, weight: .semibold))
                     .foregroundStyle(.secondary)
-            } else if let symbol = providerSymbol {
+            } else if let symbol = providerPresentation.symbolName {
                 Image(systemName: symbol)
                     .font(.system(size: metrics.avatarIconSize, weight: .semibold))
                     .foregroundStyle(.secondary)
             } else {
-                Text(initials)
+                Text(providerPresentation.fallbackInitials)
                     .font(.system(size: metrics.avatarIconSize, weight: .bold))
                     .foregroundStyle(.secondary)
                     .minimumScaleFactor(0.7)
@@ -243,32 +243,12 @@ private struct GaryxWidgetAgentAvatar: View {
         .accessibilityHidden(true)
     }
 
-    private var providerSymbol: String? {
-        let source = "\(thread.agentId ?? "") \(thread.providerType ?? "")".lowercased()
-        if source.contains("codex") || source.contains("openai") || source.contains("gpt") {
-            return "sparkles"
-        }
-        if source.contains("claude") || source.contains("anthropic") {
-            return "brain.head.profile"
-        }
-        if source.contains("gemini") || source.contains("google") {
-            return "diamond.fill"
-        }
-        return nil
-    }
-
-    private var initials: String {
-        let source = (thread.agentName ?? thread.agentId ?? thread.title)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !source.isEmpty else { return "A" }
-        let words = source
-            .replacingOccurrences(of: "(", with: " ")
-            .replacingOccurrences(of: ")", with: " ")
-            .split { $0 == " " || $0 == "/" || $0 == "_" || $0 == "-" }
-        if words.count >= 2, let first = words[0].first, let second = words[1].first {
-            return "\(first)\(second)".uppercased()
-        }
-        return String(source.prefix(2)).uppercased()
+    private var providerPresentation: GaryxProviderPresentation {
+        GaryxProviderPresentation.make(
+            agentId: thread.agentId,
+            providerType: thread.providerType,
+            fallbackName: thread.agentName ?? thread.title
+        )
     }
 }
 

@@ -202,39 +202,13 @@ struct GaryxSettingsPanelLinkRow: View {
     let panel: GaryxMobilePanel
 
     var body: some View {
-        Button {
+        GaryxDisclosureListRow(
+            title: panel.label,
+            subtitle: subtitle,
+            systemImage: panel.iconName
+        ) {
             model.openPanel(panel)
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: panel.iconName)
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(panel.label)
-                        .font(GaryxFont.subheadline(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 9)
-            .frame(minHeight: 52)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(panel.label)
     }
 
     private var subtitle: String {
@@ -270,39 +244,13 @@ struct GaryxSettingsTabLinkRow: View {
     let tab: GaryxMobileSettingsTab
 
     var body: some View {
-        Button {
+        GaryxDisclosureListRow(
+            title: tab.label,
+            subtitle: subtitle,
+            systemImage: tab.iconName
+        ) {
             model.activeSettingsTab = tab
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: tab.iconName)
-                    .font(GaryxFont.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 28, height: 28)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(tab.label)
-                        .font(GaryxFont.subheadline(weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                    Text(subtitle)
-                        .font(GaryxFont.caption())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 9)
-            .frame(minHeight: 52)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(tab.label)
     }
 
     private var subtitle: String {
@@ -618,8 +566,8 @@ struct GaryxSettingsProviderContent: View {
                         let providers = model.providerModelsByType
                             .values
                             .sorted { lhs, rhs in
-                                let lhsName = garyxProviderDisplayName(lhs.providerType)
-                                let rhsName = garyxProviderDisplayName(rhs.providerType)
+                                let lhsName = GaryxProviderPresentation.displayName(for: lhs.providerType)
+                                let rhsName = GaryxProviderPresentation.displayName(for: rhs.providerType)
                                 if lhsName != rhsName {
                                     return lhsName < rhsName
                                 }
@@ -649,7 +597,7 @@ struct GaryxProviderModelsRow: View {
                 .frame(width: 20, height: 20)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(garyxProviderDisplayName(provider.providerType))
+                Text(providerPresentation.displayName)
                     .font(GaryxFont.subheadline(weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
@@ -668,20 +616,11 @@ struct GaryxProviderModelsRow: View {
     }
 
     private var iconName: String {
-        let source = provider.providerType.lowercased()
-        if source.contains("codex") {
-            return "chevron.left.forwardslash.chevron.right"
-        }
-        if source.contains("claude") || source.contains("anthropic") {
-            return "sparkles"
-        }
-        if source.contains("gemini") || source.contains("google") {
-            return "diamond.fill"
-        }
-        if source.contains("gpt") || source.contains("openai") {
-            return "circle.hexagongrid.fill"
-        }
-        return "cpu"
+        providerPresentation.symbolName ?? "cpu"
+    }
+
+    private var providerPresentation: GaryxProviderPresentation {
+        GaryxProviderPresentation.make(providerType: provider.providerType)
     }
 
     private var hasError: Bool {
@@ -710,31 +649,5 @@ struct GaryxProviderModelsRow: View {
             return provider.source.isEmpty ? "Provider metadata" : provider.source.capitalized
         }
         return parts.joined(separator: " · ")
-    }
-}
-
-private func garyxProviderDisplayName(_ providerType: String) -> String {
-    switch providerType {
-    case "codex_app_server":
-        return "Codex"
-    case "claude_code":
-        return "Claude Code"
-    case "gemini_cli":
-        return "Gemini CLI"
-    case "gpt":
-        return "OpenAI"
-    case "anthropic", "claude_llm":
-        return "Anthropic"
-    case "google", "gemini_llm":
-        return "Google"
-    default:
-        let words = providerType
-            .replacingOccurrences(of: "_", with: " ")
-            .replacingOccurrences(of: "-", with: " ")
-            .split(separator: " ")
-            .map { word in
-                word.prefix(1).uppercased() + word.dropFirst()
-            }
-        return words.isEmpty ? "Provider" : words.joined(separator: " ")
     }
 }
