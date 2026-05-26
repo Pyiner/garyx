@@ -555,9 +555,9 @@ extension GaryxMobileModel {
         }
     }
 
-
     func advanceSelectedThreadDraftGeneration() {
         selectedThreadDraftGeneration = UUID()
+        pendingBotDraftGeneration = nil
     }
 
     func ensureSelectedThread() async throws -> GaryxThreadSummary {
@@ -573,9 +573,10 @@ extension GaryxMobileModel {
             return GaryxEnsuredThread(thread: selectedThread, adoptedSelection: true)
         }
         let draftGeneration = selectedThreadDraftGeneration
-        let pendingWorkspace = pendingBotWorkspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let pendingAgentId = pendingBotAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let pendingBotIdForThread = pendingBotId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let pendingBotDraft = currentPendingBotDraft()
+        let pendingWorkspace = pendingBotDraft?.workspace ?? ""
+        let pendingAgentId = pendingBotDraft?.agentId ?? ""
+        let pendingBotIdForThread = pendingBotDraft?.botId ?? ""
         let workspace = pendingWorkspace.isEmpty
             ? newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
             : pendingWorkspace
@@ -600,11 +601,38 @@ extension GaryxMobileModel {
         }
         if !pendingBotIdForThread.isEmpty {
             _ = try await client().bindBot(botId: pendingBotIdForThread, threadId: thread.id)
-            if canAdoptSelection {
-                clearPendingBotDraft()
-            }
+            clearPendingBotDraftIfCurrent(
+                botId: pendingBotIdForThread,
+                workspace: pendingWorkspace,
+                agentId: pendingAgentId,
+                draftGeneration: draftGeneration
+            )
             await refreshRemoteState()
         }
         return GaryxEnsuredThread(thread: thread, adoptedSelection: canAdoptSelection)
+    }
+
+    func currentPendingBotDraft() -> (botId: String, workspace: String, agentId: String)? {
+        guard pendingBotDraftGeneration == selectedThreadDraftGeneration else { return nil }
+        let botId = pendingBotId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !botId.isEmpty else { return nil }
+        let workspace = pendingBotWorkspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let agentId = pendingBotAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (botId: botId, workspace: workspace, agentId: agentId)
+    }
+
+    func clearPendingBotDraftIfCurrent(
+        botId: String,
+        workspace: String,
+        agentId: String,
+        draftGeneration: UUID
+    ) {
+        guard pendingBotDraftGeneration == draftGeneration,
+              pendingBotId?.trimmingCharacters(in: .whitespacesAndNewlines) == botId,
+              (pendingBotWorkspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == workspace,
+              (pendingBotAgentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") == agentId else {
+            return
+        }
+        clearPendingBotDraft()
     }
 }

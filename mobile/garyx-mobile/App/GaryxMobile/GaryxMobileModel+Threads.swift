@@ -502,7 +502,7 @@ extension GaryxMobileModel {
     }
 
     func createThreadFromCurrentDraft() async {
-        guard pendingBotId != nil else {
+        guard currentPendingBotDraft() != nil else {
             await createThread()
             return
         }
@@ -573,10 +573,11 @@ extension GaryxMobileModel {
 
         let workspace = group.workspaceDir?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let agentId = group.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        advanceSelectedThreadDraftGeneration()
         pendingBotId = Self.botSelectorId(channel: group.channel, accountId: group.accountId)
         pendingBotWorkspace = workspace.isEmpty ? nil : workspace
         pendingBotAgentId = agentId.isEmpty ? nil : agentId
-        advanceSelectedThreadDraftGeneration()
+        pendingBotDraftGeneration = selectedThreadDraftGeneration
         cancelSelectedThreadReconcileLoop()
         selectedThread = nil
         resetSelectedThreadHistoryPagination()

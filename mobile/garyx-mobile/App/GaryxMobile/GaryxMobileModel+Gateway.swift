@@ -228,6 +228,7 @@ extension GaryxMobileModel {
         pendingBotId = nil
         pendingBotWorkspace = nil
         pendingBotAgentId = nil
+        pendingBotDraftGeneration = nil
     }
 
     func handleScenePhase(_ phase: ScenePhase) {
@@ -387,11 +388,13 @@ extension GaryxMobileModel {
             async let teamsResult: [GaryxTeamSummary]? = try? gateway.listTeams()
             let (nextAgents, nextTeams) = await (agentsResult, teamsResult)
             guard isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
+            agentTargetsRefreshRequestId = nil
             if !applyAgentTargets(agents: nextAgents, teams: nextTeams) {
                 agentTargetsLoadPhase = .failed("Agents could not be loaded.")
             }
         } catch {
             guard isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
+            agentTargetsRefreshRequestId = nil
             let message = displayMessage(for: error)
             agentTargetsLoadPhase = .failed(message)
             lastError = message
@@ -403,9 +406,9 @@ extension GaryxMobileModel {
         let runtimeGeneration = gatewayRuntimeGeneration
         let requestId = UUID()
         remoteStateRefreshRequestId = requestId
-        agentTargetsRefreshRequestId = requestId
+        let ownsAgentTargetsLoadPhase = agentTargets.isEmpty && agentTargetsRefreshRequestId == nil
         remoteStateLoadPhase = .loading
-        if agentTargets.isEmpty {
+        if ownsAgentTargetsLoadPhase {
             agentTargetsLoadPhase = .loading
         }
         do {
@@ -428,9 +431,7 @@ extension GaryxMobileModel {
             let nextAgents = try? await agentsResult
             let nextTeams = try? await teamsResult
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
-            if isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) {
-                applyAgentTargets(agents: nextAgents, teams: nextTeams)
-            }
+            applyAgentTargets(agents: nextAgents, teams: nextTeams)
 
             let nextSkills = try? await skillsResult
             let nextTasksPage = try? await tasksResult
@@ -479,7 +480,8 @@ extension GaryxMobileModel {
                 remoteStateRefreshRequestId: requestId
             )
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
-            if isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration),
+            if ownsAgentTargetsLoadPhase,
+               agentTargetsRefreshRequestId == nil,
                agentTargetsLoadPhase.isLoading {
                 agentTargetsLoadPhase = agentTargets.isEmpty
                     ? .failed("Agents could not be loaded.")
@@ -490,7 +492,8 @@ extension GaryxMobileModel {
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             let message = displayMessage(for: error)
             remoteStateLoadPhase = .failed(message)
-            if isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration),
+            if ownsAgentTargetsLoadPhase,
+               agentTargetsRefreshRequestId == nil,
                agentTargetsLoadPhase.isLoading {
                 agentTargetsLoadPhase = .failed(message)
             }
