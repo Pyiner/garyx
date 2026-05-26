@@ -1,0 +1,25 @@
+{
+  "generated": "2026-05-26T00:56:52Z",
+  "sections": [
+    {
+      "id": "mockups",
+      "label": "Mockups",
+      "groups": [
+        {
+          "slug": "store-form",
+          "files": [
+            {
+              "label": "index.html",
+              "path": "mockups/store-form/index.html"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "design-systems",
+      "label": "Design Systems",
+      "groups": []
+    }
+  ]
+}

@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>松间小铺 | 店铺服务表单</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar" aria-label="页面顶部">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">松</div>
+          <div>
+            <strong>松间小铺</strong>
+            <span>社区咖啡、轻食与手作礼盒</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button class="button" type="button" id="randomize">
+            <span class="button-icon refresh" aria-hidden="true"></span>
+            随机填充
+          </button>
+          <a class="button" href="#store-form">填写表单</a>
+        </div>
+      </header>
+
+      <section class="intro" aria-labelledby="page-title">
+        <div class="intro-copy">
+          <h1 id="page-title">店铺订单与服务申请表</h1>
+          <p>
+            处理自取、配送、包场、礼盒定制。默认是随机示例，可替换为真实业务字段。
+          </p>
+        </div>
+        <div class="status-strip" aria-label="今日店铺状态">
+          <div>
+            <strong>18:30</strong>
+            <span>今日最晚确认时间</span>
+          </div>
+          <div>
+            <strong>6 款</strong>
+            <span>可选商品组合</span>
+          </div>
+          <div>
+            <strong>24h</strong>
+            <span>预计处理周期</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <form class="form-panel" id="store-form">
+          <div class="panel-head">
+            <div>
+              <h2>填写申请</h2>
+              <p>店员按提交时间处理。联系方式均为占位内容。</p>
+            </div>
+            <span class="badge">测试表单</span>
+          </div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="customerName">称呼</label>
+              <input id="customerName" name="customerName" value="测试顾客" autocomplete="name" required />
+            </div>
+            <div class="field">
+              <label for="phone">联系电话</label>
+              <input id="phone" name="phone" value="1000000001" inputmode="tel" required />
+            </div>
+            <div class="field">
+              <label for="email">邮箱</label>
+              <input id="email" name="email" type="email" value="customer@example.com" autocomplete="email" required />
+            </div>
+            <div class="field">
+              <label for="date">期望日期</label>
+              <input id="date" name="date" type="date" required />
+            </div>
+            <div class="field full">
+              <label for="address">配送或活动地址</label>
+              <input id="address" name="address" value="示例路 100 号" required />
+            </div>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <fieldset>
+            <legend>服务类型</legend>
+            <div class="choice-grid">
+              <label class="choice">
+                <input type="radio" name="service" value="到店自取订单" checked />
+                <strong>到店自取订单</strong>
+                <span>适合咖啡、轻食、当日小批量商品。</span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="service" value="同城配送订单" />
+                <strong>同城配送订单</strong>
+                <span>适合礼盒、花束、常温烘焙商品。</span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="service" value="活动包场申请" />
+                <strong>活动包场申请</strong>
+                <span>适合读书会、品牌快闪、小型分享会。</span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="service" value="企业礼盒定制" />
+                <strong>企业礼盒定制</strong>
+                <span>适合节日福利、客户拜访、会议茶歇。</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="section-divider"></div>
+
+          <fieldset>
+            <legend>商品选择</legend>
+            <div class="product-grid">
+              <label class="product">
+                <input type="checkbox" name="product" value="手冲咖啡豆" data-price="88" checked />
+                <img src="https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?auto=format&amp;fit=crop&amp;w=900&amp;q=80" alt="手冲咖啡豆" />
+                <span class="product-text">
+                  <strong>手冲咖啡豆</strong>
+                  <span>¥88 / 袋</span>
+                </span>
+              </label>
+              <label class="product">
+                <input type="checkbox" name="product" value="季节果酱礼盒" data-price="128" />
+                <img src="https://images.unsplash.com/photo-1601493700631-2b16ec4b4716?auto=format&amp;fit=crop&amp;w=900&amp;q=80" alt="季节果酱礼盒" />
+                <span class="product-text">
+                  <strong>季节果酱礼盒</strong>
+                  <span>¥128 / 组</span>
+                </span>
+              </label>
+              <label class="product">
+                <input type="checkbox" name="product" value="午后茶歇盒" data-price="168" checked />
+                <img src="https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?auto=format&amp;fit=crop&amp;w=900&amp;q=80" alt="午后茶歇盒" />
+                <span class="product-text">
+                  <strong>午后茶歇盒</strong>
+                  <span>¥168 / 份</span>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
+          <div class="section-divider"></div>
+
+          <div class="field-grid">
+            <div class="field">
+              <label for="delivery">交付方式</label>
+              <select id="delivery" name="delivery">
+                <option>到店自取</option>
+                <option>同城配送</option>
+                <option>店员电话确认</option>
+                <option>活动当天布置</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="timeSlot">时间段</label>
+              <select id="timeSlot" name="timeSlot">
+                <option>10:00 - 12:00</option>
+                <option>13:00 - 15:00</option>
+                <option>15:00 - 17:00</option>
+                <option>17:00 - 19:00</option>
+              </select>
+            </div>
+            <div class="field full">
+              <label for="budget">预算上限</label>
+              <div class="slider-row">
+                <input id="budget" name="budget" type="range" min="100" max="2000" step="50" value="500" />
+                <output class="budget-value" id="budgetValue" for="budget">¥500</output>
+              </div>
+            </div>
+            <div class="field full">
+              <label for="notes">备注</label>
+              <textarea id="notes" name="notes">请尽量使用少糖选项，礼盒外包装使用中性配色。</textarea>
+            </div>
+          </div>
+
+          <div class="section-divider"></div>
+
+          <label class="consent">
+            <input type="checkbox" required checked />
+            <span>我确认以上内容为测试提交，并同意店铺用占位联系方式进行模拟处理。</span>
+          </label>
+
+          <div class="form-actions">
+            <button class="button" type="reset">清空</button>
+            <button class="button primary" type="submit">
+              <span class="button-icon send" aria-hidden="true"></span>
+              提交申请
+            </button>
+          </div>
+        </form>
+
+        <aside class="summary-panel" aria-label="申请摘要">
+          <div class="summary-hero">
+            <div class="summary-hero-text">
+              <strong>今日可接单</strong>
+              <span>咖啡、轻食、礼盒、活动支持</span>
+            </div>
+          </div>
+          <div class="summary-body">
+            <div class="summary-line">
+              <span>服务</span>
+              <strong id="summaryService">到店自取订单</strong>
+            </div>
+            <div class="summary-line">
+              <span>交付</span>
+              <strong id="summaryDelivery">到店自取</strong>
+            </div>
+            <div class="summary-line">
+              <span>日期</span>
+              <strong id="summaryDate">待选择</strong>
+            </div>
+
+            <div class="mini-products" id="summaryProducts"></div>
+
+            <div class="total-row">
+              <span>预估小计</span>
+              <strong id="summaryTotal">¥0</strong>
+            </div>
+
+            <p class="fine-print">
+              当前页面仅生成前端模拟结果。接入真实业务时，可把提交动作替换为 API 请求或低代码表单回调。
+            </p>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
