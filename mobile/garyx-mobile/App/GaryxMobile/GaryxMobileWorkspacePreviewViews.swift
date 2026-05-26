@@ -89,7 +89,7 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
 
             previewContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea(edges: currentPreview.previewKind == "html" ? .all : [])
+                .ignoresSafeArea(edges: currentPreview.previewKind == "html" ? [.horizontal, .bottom] : [])
         }
         .overlay(alignment: .topTrailing) {
             closeButton
