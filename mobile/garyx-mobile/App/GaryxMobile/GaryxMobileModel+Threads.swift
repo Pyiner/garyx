@@ -128,13 +128,6 @@ extension GaryxMobileModel {
                let updatedSelection = threads.first(where: { $0.id == selectionIdForThisRefresh }) {
                 selectedThread = updatedSelection
                 draftThreadTitle = updatedSelection.title
-            } else if currentSelectedId == selectionIdForThisRefresh, selectionIdForThisRefresh != nil {
-                selectedThread = nil
-                draftThreadTitle = ""
-                resetComposerDraft()
-                messages = []
-                cancelSelectedThreadReconcileLoop()
-                resetSelectedThreadHistoryPagination()
             }
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }

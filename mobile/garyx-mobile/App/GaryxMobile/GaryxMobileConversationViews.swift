@@ -190,6 +190,9 @@ struct GaryxConversationView: View {
                     if model.showsTailThinkingIndicator {
                         GaryxThinkingLabel()
                             .padding(.top, 96)
+                    } else if model.selectedThread != nil {
+                        GaryxSelectedThreadEmptyConversationView()
+                            .padding(.top, 96)
                     } else {
                         GaryxEmptyConversationView()
                             .padding(.top, 96)
@@ -602,6 +605,45 @@ struct GaryxEmptyConversationView: View {
         } set: { value in
             model.setNewThreadWorkspace(value)
         }
+    }
+}
+
+private struct GaryxSelectedThreadEmptyConversationView: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(model.selectedThread?.title ?? "Thread")
+                .font(GaryxFont.title3(weight: .semibold))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+
+            Text("No messages loaded")
+                .font(GaryxFont.callout())
+                .foregroundStyle(.secondary)
+
+            Button {
+                Task { await model.loadSelectedThreadHistory() }
+            } label: {
+                Label("Reload", systemImage: "arrow.clockwise")
+                    .font(GaryxFont.callout(weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14)
+            .frame(height: 38)
+            .garyxAdaptiveGlass(
+                .regular,
+                isInteractive: true,
+                fallbackMaterial: .ultraThinMaterial,
+                in: Capsule()
+            )
+            .disabled(model.isLoadingSelectedThreadHistory)
+        }
+        .frame(maxWidth: 300)
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 28)
     }
 }
 
