@@ -785,7 +785,7 @@ export interface DesktopBotConsoleSummary {
 }
 
 export interface DesktopRemoteStateError {
-  source: "threads" | "thread_pins" | "endpoints" | "configured_bots" | "bot_consoles" | "automations";
+  source: "threads" | "thread_pins" | "endpoints" | "workspaces" | "configured_bots" | "bot_consoles" | "automations";
   label: string;
   message: string;
 }
@@ -794,7 +794,6 @@ export interface DesktopState {
   settings: DesktopSettings;
   gatewayProfiles: DesktopGatewayProfile[];
   workspaces: DesktopWorkspace[];
-  hiddenWorkspacePaths: string[];
   selectedWorkspacePath: string | null;
   pinnedThreadIds: string[];
   threads: DesktopThreadSummary[];

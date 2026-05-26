@@ -1,5 +1,56 @@
 import Foundation
 
+public struct GaryxWorkspaceSummary: Decodable, Identifiable, Equatable, Sendable {
+    public var id: String { path }
+    public var name: String
+    public var path: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case path
+        case workspaceDir = "workspaceDir"
+        case workspaceDirSnake = "workspace_dir"
+    }
+
+    public init(name: String, path: String) {
+        self.name = name
+        self.path = path
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        path = try container.garyxDecodeFirstString(.path, .workspaceDir, .workspaceDirSnake) ?? ""
+        name = try container.garyxDecodeFirstString(.name) ?? path.garyxLastPathComponent
+    }
+}
+
+public struct GaryxWorkspacesPage: Decodable, Equatable, Sendable {
+    public var workspaces: [GaryxWorkspaceSummary]
+
+    enum CodingKeys: String, CodingKey {
+        case workspaces
+    }
+
+    public init(workspaces: [GaryxWorkspaceSummary]) {
+        self.workspaces = workspaces
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        workspaces = try container.decodeIfPresent([GaryxWorkspaceSummary].self, forKey: .workspaces) ?? []
+    }
+}
+
+public struct GaryxWorkspaceUpsertRequest: Encodable, Equatable, Sendable {
+    public var path: String
+    public var name: String?
+
+    public init(path: String, name: String? = nil) {
+        self.path = path
+        self.name = name
+    }
+}
+
 public struct GaryxWorkspaceGitStatus: Decodable, Equatable, Sendable {
     public var workspaceDir: String
     public var isGitRepo: Bool

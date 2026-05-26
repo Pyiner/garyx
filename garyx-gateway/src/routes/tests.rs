@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use axum::body::Body;
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
-use garyx_models::config::{ApiAccount, GaryxConfig};
+use garyx_models::config::{ApiAccount, GaryxConfig, WorkspaceConfig};
 use garyx_models::provider::{
     ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
 };
@@ -1474,6 +1474,103 @@ async fn git_status_marks_only_git_root_as_worktree_capable() {
                 .as_ref()
         )
     );
+}
+
+#[tokio::test]
+async fn workspaces_route_uses_only_configured_workspaces() {
+    let mut config = test_config();
+    config.workspaces = vec![WorkspaceConfig {
+        name: Some("Saved Repo".to_owned()),
+        path: "/workspace/saved-repo".to_owned(),
+    }];
+    let state = AppStateBuilder::new(config).build();
+    create_thread_record(
+        &state.threads.thread_store,
+        ThreadEnsureOptions {
+            label: Some("Inferred only".to_owned()),
+            workspace_dir: Some("/workspace/inferred-only".to_owned()),
+            workspace_mode: Default::default(),
+            worktree_base_dir: None,
+            agent_id: None,
+            metadata: HashMap::new(),
+            provider_type: None,
+            sdk_session_id: None,
+            thread_kind: None,
+            origin_channel: None,
+            origin_account_id: None,
+            origin_from_id: None,
+            is_group: None,
+        },
+    )
+    .await
+    .unwrap();
+    let router = build_router(state);
+
+    let request = authed_request()
+        .uri("/api/workspaces")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let workspaces = payload["workspaces"].as_array().unwrap();
+
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0]["path"], "/workspace/saved-repo");
+    assert_eq!(workspaces[0]["name"], "Saved Repo");
+    assert!(
+        !workspaces
+            .iter()
+            .any(|workspace| workspace["path"] == "/workspace/inferred-only")
+    );
+}
+
+#[tokio::test]
+async fn workspaces_route_persists_add_and_delete() {
+    let temp = tempdir().unwrap();
+    let config_path = temp.path().join("garyx.json");
+    let mut config = test_config();
+    config.gateway.auth_token = crate::test_support::TEST_GATEWAY_TOKEN.to_owned();
+    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let state = AppStateBuilder::new(config)
+        .with_config_path(config_path.clone())
+        .build();
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/workspaces")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "path": "/workspace/saved",
+                "name": "Saved"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(state.config_snapshot().workspaces.len(), 1);
+
+    let persisted: GaryxConfig =
+        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    assert_eq!(persisted.workspaces[0].path, "/workspace/saved");
+
+    let request = authed_request()
+        .method("DELETE")
+        .uri(format!(
+            "/api/workspaces?path={}",
+            urlencoding::encode("/workspace/saved")
+        ))
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(state.config_snapshot().workspaces.is_empty());
 }
 
 #[tokio::test]

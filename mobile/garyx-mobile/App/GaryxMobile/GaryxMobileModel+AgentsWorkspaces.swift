@@ -89,8 +89,6 @@ extension GaryxMobileModel {
         newThreadWorkspace = trimmed
         if trimmed.isEmpty {
             newThreadWorkspaceMode = "local"
-        } else {
-            rememberUserWorkspacePath(trimmed, persists: false)
         }
         saveGatewayScopedUserState()
         if !trimmed.isEmpty, workspaceGitStatuses[trimmed] == nil {
@@ -98,23 +96,20 @@ extension GaryxMobileModel {
         }
     }
 
-    func addUserWorkspacePath(_ path: String) {
+    func addUserWorkspacePath(_ path: String) async {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        rememberUserWorkspacePath(trimmed, persists: true)
+        do {
+            let workspaces = try await client().addWorkspace(path: trimmed, name: trimmed.garyxLastPathComponent)
+            userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
+                savedWorkspacePaths: workspaces.map(\.path)
+            )
+        } catch {
+            lastError = error.localizedDescription
+            return
+        }
         if workspaceGitStatuses[trimmed] == nil {
             Task { await refreshWorkspaceGitStatus(for: trimmed) }
-        }
-    }
-
-    private func rememberUserWorkspacePath(_ path: String, persists: Bool) {
-        let next = GaryxMobileWorkspacePresentation.userWorkspacePaths(
-            savedWorkspacePaths: userWorkspacePaths + [path]
-        )
-        guard next != userWorkspacePaths else { return }
-        userWorkspacePaths = next
-        if persists {
-            saveGatewayScopedUserState()
         }
     }
 

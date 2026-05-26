@@ -121,6 +121,7 @@ import {
   endpointThreadTitle,
   isSelectableNewThreadWorkspace,
   mergeThread,
+  newThreadWorkspaceOptions,
   pickPreferredWorkspace,
   selectedAutomation,
   selectedThread,
@@ -128,6 +129,7 @@ import {
   teamBlocksEqual,
   visibleWorkspaceList,
   workspaceForThread,
+  workspaceSuggestionFromPath,
 } from "../thread-model";
 import {
   bindEndpointToThread,
@@ -2624,9 +2626,33 @@ export function AppShell() {
     () => visibleWorkspaceList(desktopState),
     [desktopState],
   );
+  const pendingWorkspaceSuggestion = useMemo(
+    () =>
+      pendingWorkspaceEntry || workspaceSuggestionFromPath(pendingWorkspacePath),
+    [pendingWorkspaceEntry, pendingWorkspacePath],
+  );
+  const activeThreadWorkspaceSuggestion = useMemo(
+    () =>
+      activeThreadWorkspace ||
+      workspaceSuggestionFromPath(activeThread?.workspacePath, {
+        createdAt: activeThread?.createdAt,
+        updatedAt: activeThread?.updatedAt,
+      }),
+    [
+      activeThreadWorkspace,
+      activeThread?.workspacePath,
+      activeThread?.createdAt,
+      activeThread?.updatedAt,
+    ],
+  );
   const selectableNewThreadWorkspaces = useMemo(
-    () => workspacePickerWorkspaces.filter(isSelectableNewThreadWorkspace),
-    [workspacePickerWorkspaces],
+    () =>
+      newThreadWorkspaceOptions(
+        workspacePickerWorkspaces,
+        pendingWorkspaceSuggestion,
+        activeThreadWorkspaceSuggestion,
+      ),
+    [workspacePickerWorkspaces, pendingWorkspaceSuggestion, activeThreadWorkspaceSuggestion],
   );
   const availableWorkspaceCount = selectableNewThreadWorkspaces.length;
   const activeAutomationThread = automationForLatestThread(
@@ -2634,14 +2660,14 @@ export function AppShell() {
     selectedThreadId,
   );
   const pendingNewThreadWorkspaceEntry = isSelectableNewThreadWorkspace(
-    pendingWorkspaceEntry,
+    pendingWorkspaceSuggestion,
   )
-    ? pendingWorkspaceEntry
+    ? pendingWorkspaceSuggestion
     : null;
   const activeThreadNewThreadWorkspace = isSelectableNewThreadWorkspace(
-    activeThreadWorkspace,
+    activeThreadWorkspaceSuggestion,
   )
-    ? activeThreadWorkspace
+    ? activeThreadWorkspaceSuggestion
     : null;
   const selectedNewThreadWorkspaceEntry = isSelectableNewThreadWorkspace(
     selectedWorkspaceEntry,
@@ -6588,20 +6614,11 @@ export function AppShell() {
       return (workspace.path || "").trim().toLowerCase() === workspaceKey;
     }) || null;
     if (previousState && removedWorkspace) {
-      const trimmedWorkspacePath = workspacePath.trim();
       setDesktopState({
         ...previousState,
         workspaces: previousState.workspaces.filter((workspace) => {
           return (workspace.path || "").trim().toLowerCase() !== workspaceKey;
         }),
-        hiddenWorkspacePaths: trimmedWorkspacePath
-          ? Array.from(
-              new Set([
-                ...(previousState.hiddenWorkspacePaths || []),
-                trimmedWorkspacePath,
-              ]),
-            )
-          : previousState.hiddenWorkspacePaths,
         selectedWorkspacePath:
           (previousState.selectedWorkspacePath || "").trim().toLowerCase() === workspaceKey
             ? null
@@ -6637,9 +6654,6 @@ export function AppShell() {
           return {
             ...current,
             workspaces: [...current.workspaces, removedWorkspace],
-            hiddenWorkspacePaths: (current.hiddenWorkspacePaths || []).filter((entry) => {
-              return entry.trim().toLowerCase() !== workspaceKey;
-            }),
             selectedWorkspacePath:
               (previousState.selectedWorkspacePath || "").trim().toLowerCase() === workspaceKey
                 ? previousState.selectedWorkspacePath

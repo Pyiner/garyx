@@ -209,10 +209,10 @@ needs installed-app validation.
   inferred aggregates. The Bots root list must strictly match configured bot
   accounts from `/api/configured-bots`; endpoint-only/channel conversation data
   may populate child drilldowns for those configured bots but must never create
-  root bot rows. The Workspace root list must show only user-saved workspaces;
-  paths inferred from recent threads, automations, auto-research runs, endpoints,
-  or temporary workspaces may be form suggestions or file-link resolution hints
-  only, not root navigation entries.
+  root bot rows. The Workspace root list must show only user-saved workspaces
+  from `/api/workspaces`; paths inferred from recent threads, automations,
+  auto-research runs, endpoints, or temporary workspaces may be form suggestions
+  or file-link resolution hints only, not root navigation entries.
 - Mobile bot rows that have multiple bound/openable conversations should expose
   a drilldown list like workspace rows. Keep the primary bot tap opening the
   root/default thread when one exists, but do not hide child conversations just
@@ -302,6 +302,11 @@ needs installed-app validation.
   child directories just to decide whether to show expansion affordances,
   especially on macOS where probing protected folders can trigger privacy
   prompts.
+- Desktop workspace lists must contain only user-added workspaces persisted by
+  the gateway `/api/workspaces` state. Remote thread `workspacePath` values are
+  metadata for those threads and may influence sorting or file-link resolution,
+  but must not create inferred workspace rows or hidden-workspace suppression
+  state.
 - Agent selectors should show only the agent or team identity. Do not append
   provider names such as Claude, Codex, or Gemini to selector labels or details;
   provider metadata belongs in dedicated settings/details surfaces outside

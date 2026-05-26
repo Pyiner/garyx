@@ -82,9 +82,11 @@ struct GaryxWorkspacesView: View {
     private func addWorkspace() {
         let path = workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !path.isEmpty else { return }
-        model.addUserWorkspacePath(path)
         showsAddWorkspace = false
-        Task { await model.selectWorkspace(path) }
+        Task {
+            await model.addUserWorkspacePath(path)
+            await model.selectWorkspace(path)
+        }
     }
 }
 

@@ -48,6 +48,7 @@ import type {
   DesktopSkillEntryNode,
   DesktopSkillFileDocument,
   DesktopSkillInfo,
+  DesktopWorkspace,
   DesktopWorkspaceFileEntry,
   DesktopWorkspaceFileListing,
   DesktopWorkspaceFilePreview,
@@ -3185,6 +3186,100 @@ type WorkspaceGitStatusPayload = {
   is_dirty?: boolean;
   isDirty?: boolean;
 };
+
+type WorkspacePayload = {
+  name?: string | null;
+  path?: string | null;
+  workspace_dir?: string | null;
+  workspaceDir?: string | null;
+};
+
+function workspaceNameFromPathPayload(path: string): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  if (!normalized) {
+    return "Workspace";
+  }
+  const segments = normalized.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] || normalized;
+}
+
+function mapWorkspace(value: WorkspacePayload): DesktopWorkspace | null {
+  const path = (
+    value.path ||
+    value.workspaceDir ||
+    value.workspace_dir ||
+    ""
+  ).trim();
+  if (!path) {
+    return null;
+  }
+  const name = (value.name || "").trim() || workspaceNameFromPathPayload(path);
+  const now = new Date().toISOString();
+  return {
+    name,
+    path,
+    kind: "local",
+    createdAt: now,
+    updatedAt: now,
+    available: true,
+  };
+}
+
+function mapWorkspaces(payload: { workspaces?: WorkspacePayload[] | null }): DesktopWorkspace[] {
+  return Array.isArray(payload.workspaces)
+    ? payload.workspaces
+        .map(mapWorkspace)
+        .filter((workspace): workspace is DesktopWorkspace => Boolean(workspace))
+    : [];
+}
+
+export async function fetchWorkspaces(
+  settings: DesktopSettings,
+): Promise<DesktopWorkspace[]> {
+  const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
+    settings,
+    "/api/workspaces",
+    { signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS) },
+  );
+  return mapWorkspaces(payload);
+}
+
+export async function addRemoteWorkspace(
+  settings: DesktopSettings,
+  input: { path: string; name?: string | null },
+): Promise<DesktopWorkspace[]> {
+  const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
+    settings,
+    "/api/workspaces",
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({
+        path: input.path,
+        name: input.name || undefined,
+      }),
+    },
+  );
+  return mapWorkspaces(payload);
+}
+
+export async function deleteRemoteWorkspace(
+  settings: DesktopSettings,
+  input: { path: string },
+): Promise<DesktopWorkspace[]> {
+  const query = new URLSearchParams({
+    path: input.path,
+  });
+  const payload = await requestJson<{ workspaces?: WorkspacePayload[] }>(
+    settings,
+    `/api/workspaces?${query.toString()}`,
+    {
+      method: "DELETE",
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  return mapWorkspaces(payload);
+}
 
 export async function getWorkspaceGitStatus(
   settings: DesktopSettings,

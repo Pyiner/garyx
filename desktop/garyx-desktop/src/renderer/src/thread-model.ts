@@ -171,6 +171,38 @@ export function workspaceForThread(
   return selectedWorkspace(state, thread.workspacePath || null);
 }
 
+function workspaceNameFromPath(path: string): string {
+  const trimmed = path.trim().replace(/[\\/]+$/, '');
+  if (!trimmed) {
+    return 'Workspace';
+  }
+  const segments = trimmed.split(/[\\/]/).filter(Boolean);
+  return segments[segments.length - 1] || trimmed;
+}
+
+export function workspaceSuggestionFromPath(
+  path?: string | null,
+  timestamps?: { createdAt?: string | null; updatedAt?: string | null },
+): DesktopWorkspace | null {
+  const workspacePath = path?.trim() || '';
+  if (!workspacePath) {
+    return null;
+  }
+  const createdAt =
+    timestamps?.createdAt?.trim() ||
+    timestamps?.updatedAt?.trim() ||
+    '1970-01-01T00:00:00.000Z';
+  return {
+    name: workspaceNameFromPath(workspacePath),
+    path: workspacePath,
+    kind: 'local',
+    createdAt,
+    updatedAt: timestamps?.updatedAt?.trim() || createdAt,
+    available: true,
+    managed: true,
+  };
+}
+
 export function isAvailableWorkspace(
   workspace: DesktopWorkspace | null | undefined,
 ): workspace is DesktopWorkspace {
@@ -224,10 +256,39 @@ export function visibleWorkspaceList(state: DesktopState | null): DesktopWorkspa
     return Boolean(
       workspace.kind === 'local' &&
         key &&
+        !workspace.managed &&
         !isManagedWorktreePath(workspace.path) &&
         !worktreeKeys.has(key),
     );
   });
+}
+
+export function newThreadWorkspaceOptions(
+  savedWorkspaces: DesktopWorkspace[],
+  ...suggestions: Array<DesktopWorkspace | null | undefined>
+): DesktopWorkspace[] {
+  const options: DesktopWorkspace[] = [];
+  const seenKeys = new Set<string>();
+  const append = (workspace: DesktopWorkspace | null | undefined) => {
+    if (!isSelectableNewThreadWorkspace(workspace)) {
+      return;
+    }
+    const key = workspacePathKey(workspace.path);
+    if (!key || seenKeys.has(key)) {
+      return;
+    }
+    seenKeys.add(key);
+    options.push(workspace);
+  };
+
+  for (const suggestion of suggestions) {
+    append(suggestion);
+  }
+  for (const workspace of savedWorkspaces) {
+    append(workspace);
+  }
+
+  return options;
 }
 
 export function pickPreferredWorkspace(

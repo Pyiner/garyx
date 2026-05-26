@@ -26,6 +26,8 @@ import {
 import {
   createRemoteAutomation,
   createRemoteThread,
+  addRemoteWorkspace,
+  deleteRemoteWorkspace,
   deleteRemoteAutomation,
   deleteRemoteThread,
   fetchAutomations,
@@ -34,6 +36,7 @@ import {
   fetchConfiguredBots,
   fetchThreadPins,
   fetchThreads,
+  fetchWorkspaces,
   mapChannelEndpoint,
   runRemoteAutomationNow,
   setRemoteThreadPinned,
@@ -481,9 +484,7 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
     value && typeof value === 'object' && 'botBindings' in value
       ? (value as Partial<DesktopState> & { botBindings?: Record<string, string> }).botBindings
       : undefined;
-  const rawWorkspaces = Array.isArray(value?.workspaces)
-    ? value.workspaces.filter((workspace) => workspace?.path?.trim())
-    : [];
+  const rawWorkspaces: Partial<DesktopWorkspace>[] = [];
   const threads: DesktopThreadSummary[] = Array.isArray(value?.threads)
     ? value.threads
     : Array.isArray(value?.sessions)
@@ -493,7 +494,7 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
   for (const workspace of rawWorkspaces) {
     const normalizedWorkspace = normalizeWorkspace(workspace);
     const workspacePath = normalizedWorkspace.path?.trim();
-    if (!workspacePath) {
+    if (!workspacePath || normalizedWorkspace.managed) {
       continue;
     }
     normalizedWorkspacesByPath.set(
@@ -510,16 +511,6 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
     settings,
     gatewayProfiles,
     workspaces,
-    hiddenWorkspacePaths: Array.isArray(value?.hiddenWorkspacePaths)
-      ? Array.from(
-          new Set(
-            value.hiddenWorkspacePaths
-              .filter((path): path is string => typeof path === 'string')
-              .map((path) => path.trim())
-              .filter((path) => path.length > 0),
-          ),
-        )
-      : [],
     selectedWorkspacePath: value?.selectedWorkspacePath ?? null,
     pinnedThreadIds: normalizePinnedThreadIds(value?.pinnedThreadIds),
     threads,
@@ -575,16 +566,6 @@ async function canonicalizeWorkspacePath(path: string): Promise<string> {
 
   const resolved = resolvePath(trimmed);
   return realpath(resolved);
-}
-
-function removeHiddenWorkspacePath(
-  hiddenWorkspacePaths: string[],
-  workspacePath: string,
-): string[] {
-  const workspaceKey = normalizeWorkspacePathKey(workspacePath);
-  return hiddenWorkspacePaths.filter((entry) => (
-    normalizeWorkspacePathKey(entry) !== workspaceKey
-  ));
 }
 
 async function resolveWorkspaceAvailability(workspace: DesktopWorkspace): Promise<DesktopWorkspace> {
@@ -698,12 +679,19 @@ async function fetchRemoteSlice<T>(
   }
 }
 
+async function remoteWorkspacesWithAvailability(
+  workspaces: DesktopWorkspace[],
+): Promise<DesktopWorkspace[]> {
+  return Promise.all(workspaces.map((workspace) => resolveWorkspaceAvailability(workspace)));
+}
+
 async function mergeRemoteDesktopState(localState: DesktopState): Promise<DesktopState> {
-  const [threadsResult, pinsResult, endpointsResult, configuredBotsResult, botConsolesResult, automationsResult] =
+  const [threadsResult, pinsResult, endpointsResult, workspacesResult, configuredBotsResult, botConsolesResult, automationsResult] =
     await Promise.all([
       fetchRemoteSlice('threads', 'threads', localState.threads, () => fetchThreads(localState.settings)),
       fetchRemoteSlice('thread_pins', 'thread pins', localState.pinnedThreadIds, () => fetchThreadPins(localState.settings)),
       fetchRemoteSlice('endpoints', 'endpoints', localState.endpoints, () => fetchChannelEndpoints(localState.settings)),
+      fetchRemoteSlice('workspaces', 'workspaces', localState.workspaces, () => fetchWorkspaces(localState.settings)),
       fetchRemoteSlice(
         'configured_bots',
         'configured bots',
@@ -717,6 +705,7 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
     threadsResult.error,
     pinsResult.error,
     endpointsResult.error,
+    workspacesResult.error,
     configuredBotsResult.error,
     botConsolesResult.error,
     automationsResult.error,
@@ -724,82 +713,12 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
   const remoteThreads = threadsResult.value;
   const remotePinnedThreadIds = pinsResult.value;
   const remoteEndpoints = endpointsResult.value;
+  const remoteWorkspaces = workspacesResult.value;
   const remoteConfiguredBots = configuredBotsResult.value;
   const remoteBotConsoles = botConsolesResult.value;
   const remoteAutomations = automationsResult.value;
 
-  const workspaces = [...localState.workspaces];
-  const workspaceByPath = new Map<string, DesktopWorkspace>();
-  const workspaceByPathLower = new Map<string, DesktopWorkspace>();
-  const registerWorkspacePath = (path: string | null | undefined, workspace: DesktopWorkspace) => {
-    const trimmed = path?.trim() || '';
-    if (!trimmed) {
-      return;
-    }
-    workspaceByPath.set(trimmed, workspace);
-    workspaceByPathLower.set(normalizeWorkspacePathKey(trimmed), workspace);
-  };
-  for (const workspace of workspaces) {
-    const path = workspace.path?.trim();
-    if (!path) {
-      continue;
-    }
-    registerWorkspacePath(path, workspace);
-  }
-
-  const hiddenWorkspacePathKeys = new Set(
-    (localState.hiddenWorkspacePaths || [])
-      .filter((path): path is string => typeof path === 'string' && path.trim().length > 0)
-      .map(normalizeWorkspacePathKey),
-  );
-  const inferredWorkspacePaths = new Map<string, string>();
-  const collectInferredWorkspacePath = (value?: string | null) => {
-    const trimmed = value?.trim() || '';
-    if (!trimmed) {
-      return;
-    }
-    const key = normalizeWorkspacePathKey(trimmed);
-    if (
-      hiddenWorkspacePathKeys.has(key) ||
-      workspaceByPathLower.has(key) ||
-      inferredWorkspacePaths.has(key)
-    ) {
-      return;
-    }
-    inferredWorkspacePaths.set(key, trimmed);
-  };
-
-  for (const thread of remoteThreads) {
-    collectInferredWorkspacePath(thread.workspacePath);
-  }
-
-  if (inferredWorkspacePaths.size) {
-    const inferredWorkspaces = await Promise.all(
-      Array.from(inferredWorkspacePaths.values()).map(async (path) => {
-        const now = new Date().toISOString();
-        const workspace = await resolveWorkspaceAvailability({
-          name: workspaceNameFromPath(path),
-          path,
-          kind: 'local',
-          createdAt: now,
-          updatedAt: now,
-          available: true,
-          managed: true,
-        });
-        return workspace;
-      }),
-    );
-    for (const workspace of inferredWorkspaces) {
-      const workspacePath = workspace.path?.trim() || '';
-      const workspaceKey = normalizeWorkspacePathKey(workspacePath);
-      let resolvedWorkspace = workspaceByPathLower.get(workspaceKey);
-      if (!resolvedWorkspace) {
-        resolvedWorkspace = workspace;
-        workspaces.push(resolvedWorkspace);
-      }
-      registerWorkspacePath(resolvedWorkspace.path, resolvedWorkspace);
-    }
-  }
+  const workspaces = await remoteWorkspacesWithAvailability(remoteWorkspaces);
 
   const threads = remoteThreads.map((thread) => ({
     ...thread,
@@ -1040,65 +959,35 @@ export async function addDesktopWorkspace(path: string): Promise<{
   state: DesktopState;
   workspace: DesktopWorkspace;
 }> {
-  const current = await getLocalDesktopState();
+  const current = await getDesktopState();
   const canonicalPath = await canonicalizeWorkspacePath(path);
-  const duplicate = current.workspaces.find((workspace) => {
-    return workspace.kind === 'local'
-      && normalizeWorkspacePathKey(workspace.path || '') === normalizeWorkspacePathKey(canonicalPath);
-  });
-
-  if (duplicate) {
-    const workspace = duplicate.managed
-      ? {
-          ...duplicate,
-          name: workspaceNameFromPath(canonicalPath),
-          path: canonicalPath,
-          updatedAt: new Date().toISOString(),
-          available: true,
-          managed: false,
-        }
-      : duplicate;
-    const selectedState = withSortedEntities({
-      ...current,
-      workspaces: current.workspaces.map((entry) => {
-        return normalizeWorkspacePathKey(entry.path || '') === normalizeWorkspacePathKey(canonicalPath)
-          ? workspace
-          : entry;
-      }),
-      hiddenWorkspacePaths: removeHiddenWorkspacePath(
-        current.hiddenWorkspacePaths || [],
-        canonicalPath,
-      ),
-      selectedWorkspacePath: workspace.path,
-    });
-    await writeState(selectedState);
-    return {
-      state: await getDesktopState(),
-      workspace,
-    };
-  }
-
-  const now = new Date().toISOString();
-  const workspace: DesktopWorkspace = {
-    name: workspaceNameFromPath(canonicalPath),
+  const remoteWorkspaces = await addRemoteWorkspace(current.settings, {
     path: canonicalPath,
-    kind: 'local',
-    createdAt: now,
-    updatedAt: now,
-    available: true,
-  };
-
+    name: workspaceNameFromPath(canonicalPath),
+  });
+  const workspaces = await remoteWorkspacesWithAvailability(remoteWorkspaces);
+  const workspace =
+    workspaces.find((entry) => normalizeWorkspacePathKey(entry.path || '') === normalizeWorkspacePathKey(canonicalPath))
+    || {
+      name: workspaceNameFromPath(canonicalPath),
+      path: canonicalPath,
+      kind: 'local' as const,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      available: true,
+    };
+  const local = await getLocalDesktopState();
+  await writeState(withSortedEntities({
+    ...local,
+    workspaces: [],
+    selectedWorkspacePath: workspace.path,
+  }, { preserveMissingSelectedWorkspace: true }));
   const next = withSortedEntities({
     ...current,
-    workspaces: [...current.workspaces, workspace],
-    hiddenWorkspacePaths: removeHiddenWorkspacePath(
-      current.hiddenWorkspacePaths || [],
-      canonicalPath,
-    ),
+    workspaces,
     selectedWorkspacePath: workspace.path,
-  });
-  await writeState(next);
-  return { state: await getDesktopState(), workspace };
+  }, { preserveMissingSelectedWorkspace: true });
+  return { state: next, workspace };
 }
 
 export async function relinkDesktopWorkspace(
@@ -1123,24 +1012,27 @@ export async function removeDesktopWorkspace(workspacePath: string): Promise<Des
   const current = await getDesktopState();
   const workspace = requireWorkspace(current, workspacePath);
   const workspaceKey = normalizeWorkspacePathKey(workspace.path || workspacePath);
-  const hiddenWorkspacePath = workspace.path?.trim() || workspacePath.trim();
-
+  const remoteWorkspaces = await deleteRemoteWorkspace(current.settings, {
+    path: workspace.path || workspacePath,
+  });
+  const workspaces = await remoteWorkspacesWithAvailability(remoteWorkspaces);
   const local = await getLocalDesktopState();
-  const nextHiddenWorkspacePaths = hiddenWorkspacePath
-    ? Array.from(new Set([...(local.hiddenWorkspacePaths || []), hiddenWorkspacePath]))
-    : local.hiddenWorkspacePaths || [];
-
-  const next = withSortedEntities({
+  await writeState(withSortedEntities({
     ...local,
-    workspaces: local.workspaces.filter((entry) => normalizeWorkspacePathKey(entry.path || '') !== workspaceKey),
-    hiddenWorkspacePaths: nextHiddenWorkspacePaths,
+    workspaces: [],
     selectedWorkspacePath:
       normalizeWorkspacePathKey(local.selectedWorkspacePath || '') === workspaceKey
         ? null
         : local.selectedWorkspacePath,
+  }, { preserveMissingSelectedWorkspace: true }));
+  return withSortedEntities({
+    ...current,
+    workspaces,
+    selectedWorkspacePath:
+      normalizeWorkspacePathKey(current.selectedWorkspacePath || '') === workspaceKey
+        ? null
+        : current.selectedWorkspacePath,
   });
-  await writeState(next);
-  return getDesktopState();
 }
 
 export async function setDesktopThreadPinned(input: {

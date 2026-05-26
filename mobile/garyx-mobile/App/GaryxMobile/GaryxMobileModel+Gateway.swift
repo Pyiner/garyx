@@ -35,7 +35,6 @@ extension GaryxMobileModel {
         let agentKey = scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId)
         let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
         let workspaceModeKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
-        let userWorkspacesKey = scopedSettingsKey(GaryxMobileSettingsKeys.userWorkspacePaths)
         selectedAgentTargetId = defaults.string(forKey: agentKey)
             ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId) : nil)
             ?? "claude"
@@ -46,12 +45,7 @@ extension GaryxMobileModel {
             defaults.string(forKey: workspaceModeKey)
                 ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceMode) : nil)
         )
-        userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
-            savedWorkspacePaths: defaults.stringArray(forKey: userWorkspacesKey)
-                ?? (fallbackToLegacy ? defaults.stringArray(forKey: GaryxMobileSettingsKeys.userWorkspacePaths) : nil)
-                ?? [],
-            additionalPaths: [newThreadWorkspace]
-        )
+        userWorkspacePaths = []
     }
 
     func saveGatewayScopedUserState() {
@@ -64,10 +58,8 @@ extension GaryxMobileModel {
             Self.normalizedWorkspaceMode(newThreadWorkspaceMode),
             forKey: scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
         )
-        defaults.set(
-            userWorkspacePaths,
-            forKey: scopedSettingsKey(GaryxMobileSettingsKeys.userWorkspacePaths)
-        )
+        defaults.removeObject(forKey: scopedSettingsKey(GaryxMobileSettingsKeys.userWorkspacePaths))
+        defaults.removeObject(forKey: GaryxMobileSettingsKeys.userWorkspacePaths)
     }
 
     func resetGatewayRuntimeState() {
@@ -118,6 +110,7 @@ extension GaryxMobileModel {
         channelEndpoints = []
         configuredBots = []
         botConsoles = []
+        userWorkspacePaths = []
         botStatusesById = [:]
         channelPlugins = []
         gatewaySettingsDocument = [:]
@@ -415,6 +408,7 @@ extension GaryxMobileModel {
             async let mcpServersResult = gateway.listMcpServers()
             async let autoResearchRunsResult = gateway.listAutoResearchRuns()
             async let channelEndpointsResult = gateway.listChannelEndpoints()
+            async let workspacesResult = gateway.listWorkspaces()
             async let configuredBotsResult = gateway.listConfiguredBots()
             async let botConsolesResult = gateway.listBotConsoles()
             async let channelPluginsResult = gateway.listChannelPlugins()
@@ -433,6 +427,7 @@ extension GaryxMobileModel {
             let nextMcpServers = try? await mcpServersResult
             let nextAutoResearchRuns = try? await autoResearchRunsResult
             let nextChannelEndpoints = try? await channelEndpointsResult
+            let nextWorkspaces = try? await workspacesResult
             let nextConfiguredBots = try? await configuredBotsResult
             let nextBotConsoles = try? await botConsolesResult
             let nextChannelPlugins = try? await channelPluginsResult
@@ -455,6 +450,11 @@ extension GaryxMobileModel {
             mcpServers = nextMcpServers ?? mcpServers
             autoResearchRuns = nextAutoResearchRuns ?? autoResearchRuns
             channelEndpoints = nextChannelEndpoints ?? channelEndpoints
+            if let nextWorkspaces {
+                userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
+                    savedWorkspacePaths: nextWorkspaces.map(\.path)
+                )
+            }
             configuredBots = nextConfiguredBots ?? configuredBots
             botConsoles = nextBotConsoles ?? botConsoles
             channelPlugins = nextChannelPlugins ?? channelPlugins

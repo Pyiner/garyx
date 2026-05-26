@@ -40,6 +40,7 @@ mod tool_image;
 mod wikis;
 pub mod workspace_files;
 mod workspace_mode;
+pub mod workspaces;
 
 #[cfg(all(test, feature = "real-provider-tests"))]
 mod downstream_real_tests;

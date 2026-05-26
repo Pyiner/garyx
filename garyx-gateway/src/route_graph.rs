@@ -5,7 +5,7 @@ use axum::{Router, extract::DefaultBodyLimit};
 use crate::server::AppState;
 use crate::{
     api, app_db, automation, chat, commands, dashboard, dreams, gateway_auth, mcp, mcp_config,
-    routes, tasks, tool_image, workspace_files,
+    routes, tasks, tool_image, workspace_files, workspaces,
 };
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -123,6 +123,12 @@ fn thread_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/workspaces/git-status",
             axum::routing::get(routes::workspace_git_status),
+        )
+        .route(
+            "/api/workspaces",
+            axum::routing::get(workspaces::list_workspaces)
+                .post(workspaces::upsert_workspace)
+                .delete(workspaces::delete_workspace),
         )
         .route(
             "/api/configured-bots",

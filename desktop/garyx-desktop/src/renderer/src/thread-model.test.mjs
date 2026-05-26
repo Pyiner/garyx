@@ -32,7 +32,6 @@ function makeState(overrides = {}) {
     settings: {},
     gatewayProfiles: [],
     workspaces: [],
-    hiddenWorkspacePaths: [],
     selectedWorkspacePath: null,
     pinnedThreadIds: [],
     threads: [],
@@ -49,7 +48,7 @@ function makeState(overrides = {}) {
   };
 }
 
-test('workspace sidebar groups exclude only worktree directories', () => {
+test('workspace sidebar groups use only user-saved workspace rows', () => {
   const manualEmpty = makeWorkspace('/Users/test/manual-empty');
   const manualWithThread = makeWorkspace('/Users/test/manual-with-thread');
   const inferredWithThread = makeWorkspace('/Users/test/inferred-with-thread', {
@@ -93,13 +92,10 @@ test('workspace sidebar groups exclude only worktree directories', () => {
 
   assert.deepEqual(
     groups.map((group) => group.workspace.path),
-    [manualEmpty.path, inferredWithThread.path, manualWithThread.path],
+    [manualEmpty.path, manualWithThread.path],
   );
   assert.equal(groups.find((group) => group.workspace.path === manualEmpty.path)?.threads.length, 0);
-  assert.deepEqual(
-    groups.find((group) => group.workspace.path === inferredWithThread.path)?.threads.map((thread) => thread.id),
-    ['thread-inferred'],
-  );
+  assert.equal(groups.find((group) => group.workspace.path === inferredWithThread.path), undefined);
   assert.deepEqual(
     groups.find((group) => group.workspace.path === manualWithThread.path)?.threads.map((thread) => thread.id),
     ['thread-manual'],
