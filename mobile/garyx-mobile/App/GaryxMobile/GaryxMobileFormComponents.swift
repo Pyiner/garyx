@@ -307,13 +307,6 @@ struct GaryxWorkspacePathPickerField: View {
                             .font(GaryxFont.body(weight: selectedPath.isEmpty ? .regular : .semibold))
                             .foregroundStyle(selectedPath.isEmpty ? .secondary : .primary)
                             .lineLimit(1)
-                        if !selectedPath.isEmpty {
-                            Text(workspacePathCompactLabel(selectedPath))
-                                .font(GaryxFont.caption())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "chevron.up.chevron.down")
@@ -433,38 +426,22 @@ struct GaryxWorkspaceSelectSheet: View {
                                     Divider().padding(.leading, 52)
                                 }
                             }
+                            Divider().padding(.leading, 52)
+                            workspaceOptionRow(
+                                title: isAddingWorkspace ? "Adding workspace..." : "Add workspace",
+                                detail: "",
+                                systemName: isAddingWorkspace ? "hourglass" : "plus.circle",
+                                isSelected: false,
+                                showsChevron: true
+                            ) {
+                                addWorkspacePath = ""
+                                showsAddWorkspace = true
+                            }
+                            .disabled(isAddingWorkspace)
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
                     }
-
-                    Button {
-                        addWorkspacePath = ""
-                        showsAddWorkspace = true
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: isAddingWorkspace ? "hourglass" : "plus.circle")
-                                .font(GaryxFont.system(size: 15, weight: .semibold))
-                                .frame(width: 28, height: 28)
-                            Text(isAddingWorkspace ? "Adding workspace..." : "Add workspace")
-                                .font(GaryxFont.body(weight: .semibold))
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(GaryxFont.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 18)
-                        .frame(minHeight: 50)
-                        .garyxAdaptiveGlass(
-                            .regular,
-                            isInteractive: true,
-                            fallbackMaterial: .ultraThinMaterial,
-                            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(isAddingWorkspace)
                 }
                 .padding(.horizontal, 22)
                 .padding(.bottom, 28)
@@ -491,6 +468,7 @@ struct GaryxWorkspaceSelectSheet: View {
         systemName: String,
         isSelected: Bool,
         badge: String? = nil,
+        showsChevron: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -512,7 +490,7 @@ struct GaryxWorkspaceSelectSheet: View {
                         }
                     }
                     if !detail.isEmpty {
-                        Text(workspacePathCompactLabel(detail))
+                        Text(normalizedWorkspacePath(detail))
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -522,11 +500,15 @@ struct GaryxWorkspaceSelectSheet: View {
                 Spacer(minLength: 0)
                 if isSelected {
                     GaryxSelectionCheckmark(size: 12)
+                } else if showsChevron {
+                    Image(systemName: "chevron.right")
+                        .font(GaryxFont.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
                 }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
-            .frame(minHeight: 50)
+            .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

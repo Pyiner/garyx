@@ -582,12 +582,6 @@ struct GaryxEmptyConversationView: View {
                 Text(model.newThreadWorkspaceLabel)
                     .font(GaryxFont.body(weight: .semibold))
                     .lineLimit(1)
-                if !model.newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text(model.newThreadWorkspace)
-                        .font(GaryxFont.caption(weight: .semibold))
-                        .foregroundStyle(Color(.systemBackground).opacity(0.76))
-                        .lineLimit(1)
-                }
                 Image(systemName: "chevron.up.chevron.down")
                     .font(GaryxFont.system(size: 10, weight: .bold))
             }
