@@ -3,25 +3,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 import WidgetKit
 
-struct GaryxMobileBotGroup: Identifiable, Equatable {
-    let id: String
-    let channel: String
-    let accountId: String
-    let title: String
-    let subtitle: String
-    let agentId: String?
-    let rootBehavior: String
-    let status: String
-    let endpointCount: Int
-    let boundEndpointCount: Int
-    let workspaceDir: String?
-    let mainThreadId: String?
-    let defaultOpenThreadId: String?
-    let endpoints: [GaryxChannelEndpoint]
-    let conversationNodes: [GaryxBotConversationNode]
-    let iconDataUrl: String?
-}
-
 private struct GaryxPendingUploadPreview {
     var name: String
     var mediaType: String
@@ -38,37 +19,6 @@ private struct GaryxPendingQueuedInput {
 private struct GaryxEnsuredThread {
     var thread: GaryxThreadSummary
     var adoptedSelection: Bool
-}
-
-struct GaryxGatewayProfile: Identifiable, Codable, Equatable {
-    var id: String
-    var label: String
-    var gatewayUrl: String
-    var updatedAt: Date
-    var hasToken: Bool
-}
-
-struct GaryxConfiguredBotAccountSettings: Identifiable, Equatable {
-    var id: String { "\(channel):\(accountId)" }
-    var channel: String
-    var accountId: String
-    var displayName: String
-    var enabled: Bool
-    var agentId: String?
-    var workspaceDir: String?
-    var workspaceMode: String?
-    var config: [String: GaryxJSONValue]
-}
-
-struct GaryxConfiguredBotAccountInput: Equatable {
-    var channel: String
-    var accountId: String
-    var displayName: String
-    var enabled: Bool
-    var agentId: String?
-    var workspaceDir: String?
-    var workspaceMode: String?
-    var config: [String: GaryxJSONValue]
 }
 
 @MainActor
@@ -386,152 +336,12 @@ final class GaryxMobileModel: ObservableObject {
         return url.host ?? gatewayUrl
     }
 
-    private static func botGroupKey(channel: String, accountId: String) -> String {
-        "\(channel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())::\(accountId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
-    }
-
     private static func botSelectorId(channel: String, accountId: String) -> String {
         "\(channel.trimmingCharacters(in: .whitespacesAndNewlines)):\(accountId.trimmingCharacters(in: .whitespacesAndNewlines))"
     }
 
-    private static func removeChannelAccount(
-        from settings: inout [String: GaryxJSONValue],
-        channel: String,
-        accountId: String
-    ) -> Bool {
-        guard var channels = settings["channels"]?.objectValue else { return false }
-        let channelKey = channels.keys.first {
-            $0.caseInsensitiveCompare(channel.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
-        }
-        guard let channelKey,
-              var channelConfig = channels[channelKey]?.objectValue,
-              var accounts = channelConfig["accounts"]?.objectValue,
-              accounts.keys.contains(accountId) else {
-            return false
-        }
-
-        accounts.removeValue(forKey: accountId)
-        channelConfig["accounts"] = .object(accounts)
-        channels[channelKey] = .object(channelConfig)
-        settings["channels"] = .object(channels)
-        return true
-    }
-
-    private static func configuredBotAccountSettings(
-        from settings: [String: GaryxJSONValue]
-    ) -> [GaryxConfiguredBotAccountSettings] {
-        guard let channels = settings["channels"]?.objectValue else { return [] }
-        var accounts: [GaryxConfiguredBotAccountSettings] = []
-        for (channel, channelValue) in channels where channel != "api" {
-            guard let channelConfig = channelValue.objectValue,
-                  let accountValues = channelConfig["accounts"]?.objectValue else {
-                continue
-            }
-            for (accountId, rawAccount) in accountValues {
-                guard let account = rawAccount.objectValue else { continue }
-                let name = account.stringValue(forKeys: ["name"])
-                let config = account.objectValue(forKeys: ["config"]) ?? [:]
-                accounts.append(
-                    GaryxConfiguredBotAccountSettings(
-                        channel: channel,
-                        accountId: accountId,
-                        displayName: name ?? accountId,
-                        enabled: account.boolValue(forKeys: ["enabled"]) ?? true,
-                        agentId: account.stringValue(forKeys: ["agent_id", "agentId"]),
-                        workspaceDir: account.stringValue(forKeys: ["workspace_dir", "workspaceDir"]),
-                        workspaceMode: account.stringValue(forKeys: ["workspace_mode", "workspaceMode"]),
-                        config: config
-                    )
-                )
-            }
-        }
-        return accounts.sorted { lhs, rhs in
-            let channelOrder = lhs.channel.localizedCaseInsensitiveCompare(rhs.channel)
-            if channelOrder != .orderedSame {
-                return channelOrder == .orderedAscending
-            }
-            let nameOrder = lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName)
-            if nameOrder != .orderedSame {
-                return nameOrder == .orderedAscending
-            }
-            return lhs.accountId.localizedCaseInsensitiveCompare(rhs.accountId) == .orderedAscending
-        }
-    }
-
-    private static func setChannelAccount(
-        in settings: inout [String: GaryxJSONValue],
-        originalChannel: String?,
-        originalAccountId: String?,
-        input: GaryxConfiguredBotAccountInput
-    ) -> Bool {
-        let channel = input.channel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let accountId = input.accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !channel.isEmpty, !accountId.isEmpty else { return false }
-
-        var channels = settings["channels"]?.objectValue ?? [:]
-        if let originalChannel,
-           let originalAccountId,
-           (originalChannel.caseInsensitiveCompare(channel) != .orderedSame || originalAccountId != accountId) {
-            _ = removeChannelAccount(from: &settings, channel: originalChannel, accountId: originalAccountId)
-            channels = settings["channels"]?.objectValue ?? channels
-        }
-
-        var channelConfig = channels[channel]?.objectValue ?? [:]
-        var accounts = channelConfig["accounts"]?.objectValue ?? [:]
-        var account: [String: GaryxJSONValue] = [
-            "enabled": .bool(input.enabled),
-            "config": .object(input.config),
-        ]
-        if let name = input.displayName.garyxTrimmedNilIfEmpty {
-            account["name"] = .string(name)
-        }
-        if let agentId = input.agentId?.garyxTrimmedNilIfEmpty {
-            account["agent_id"] = .string(agentId)
-        }
-        if let workspaceDir = input.workspaceDir?.garyxTrimmedNilIfEmpty {
-            account["workspace_dir"] = .string(workspaceDir)
-        }
-        if let workspaceMode = input.workspaceMode?.garyxTrimmedNilIfEmpty {
-            account["workspace_mode"] = .string(workspaceMode)
-        }
-        accounts[accountId] = .object(account)
-        channelConfig["accounts"] = .object(accounts)
-        channels[channel] = .object(channelConfig)
-        settings["channels"] = .object(channels)
-        return true
-    }
-
-    private static func channelDisplayName(_ channel: String) -> String {
-        let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch normalized.lowercased() {
-        case "telegram":
-            return "Telegram"
-        case "feishu":
-            return "Feishu"
-        case "weixin":
-            return "Weixin"
-        case "discord":
-            return "Discord"
-        case "api":
-            return "API"
-        default:
-            return normalized.isEmpty ? "Channel" : normalized
-        }
-    }
-
     nonisolated static func isVisibleMobileWorkspacePath(_ path: String) -> Bool {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        let normalized = trimmed.replacingOccurrences(of: "\\", with: "/")
-        if normalized.contains("/.garyx/worktrees/") || normalized.contains("/.codex/worktrees/") {
-            return false
-        }
-        return true
-    }
-
-    nonisolated private static func normalizedWorkspacePathKey(_ path: String) -> String {
-        path.trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: "\\", with: "/")
+        GaryxMobileWorkspacePresentation.isVisibleWorkspacePath(path)
     }
 
     var activePanel: GaryxMobilePanel {
@@ -573,7 +383,7 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     var configuredBotAccountSettings: [GaryxConfiguredBotAccountSettings] {
-        Self.configuredBotAccountSettings(from: gatewaySettingsDocument)
+        GaryxConfiguredBotAccountsDocument.accounts(from: gatewaySettingsDocument)
     }
 
     var canConnectGateway: Bool {
@@ -952,146 +762,19 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     var mobileBotGroups: [GaryxMobileBotGroup] {
-        let endpointsByGroup = Dictionary(grouping: channelEndpoints) { endpoint in
-            Self.botGroupKey(channel: endpoint.channel, accountId: endpoint.accountId)
-        }
-        var configuredByGroup: [String: GaryxConfiguredBot] = [:]
-        var groups: [String: GaryxMobileBotGroup] = [:]
-        var order: [String] = []
-        var orderedKeys = Set<String>()
-
-        func rememberOrder(_ key: String) {
-            if orderedKeys.insert(key).inserted {
-                order.append(key)
-            }
-        }
-
-        for bot in configuredBots {
-            let key = Self.botGroupKey(channel: bot.channel, accountId: bot.accountId)
-            if configuredByGroup[key] == nil {
-                configuredByGroup[key] = bot
-            }
-            rememberOrder(key)
-        }
-
-        func remember(_ group: GaryxMobileBotGroup) {
-            let key = Self.botGroupKey(channel: group.channel, accountId: group.accountId)
-            rememberOrder(key)
-            groups[key] = group
-        }
-
-        func iconDataUrl(for channel: String) -> String? {
-            GaryxChannelIconResolver.iconDataUrl(for: channel, plugins: channelPlugins)
-        }
-
-        func nonEmpty(_ value: String?) -> String? {
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return trimmed.isEmpty ? nil : trimmed
-        }
-
-        for console in botConsoles {
-            let key = Self.botGroupKey(channel: console.channel, accountId: console.accountId)
-            let endpoints = endpointsByGroup[key] ?? []
-            let decodedEndpointCount = endpoints.count
-            let decodedBoundCount = endpoints.filter { $0.threadId?.isEmpty == false }.count
-            let configured = configuredByGroup[key]
-            remember(
-                GaryxMobileBotGroup(
-                    id: console.id.isEmpty ? "\(console.channel)::\(console.accountId)" : console.id,
-                    channel: console.channel,
-                    accountId: console.accountId,
-                    title: console.title,
-                    subtitle: console.subtitle,
-                    agentId: nonEmpty(console.agentId) ?? nonEmpty(configured?.agentId),
-                    rootBehavior: console.rootBehavior,
-                    status: console.status,
-                    endpointCount: max(console.endpointCount, decodedEndpointCount),
-                    boundEndpointCount: max(console.boundEndpointCount, decodedBoundCount),
-                    workspaceDir: nonEmpty(console.workspaceDir) ?? nonEmpty(configured?.workspaceDir),
-                    mainThreadId: nonEmpty(console.mainThreadId) ?? nonEmpty(configured?.mainThreadId),
-                    defaultOpenThreadId: nonEmpty(console.defaultOpenThreadId)
-                        ?? nonEmpty(configured?.defaultOpenThreadId)
-                        ?? nonEmpty(configured?.mainThreadId),
-                    endpoints: endpoints,
-                    conversationNodes: console.conversationNodes,
-                    iconDataUrl: iconDataUrl(for: console.channel)
-                )
-            )
-        }
-
-        for bot in configuredBots {
-            let key = Self.botGroupKey(channel: bot.channel, accountId: bot.accountId)
-            if groups[key] != nil {
-                continue
-            }
-            let endpoints = endpointsByGroup[key] ?? []
-            remember(
-                GaryxMobileBotGroup(
-                    id: "\(bot.channel)::\(bot.accountId)",
-                    channel: bot.channel,
-                    accountId: bot.accountId,
-                    title: bot.displayName,
-                    subtitle: "\(Self.channelDisplayName(bot.channel)) Bot · \(bot.accountId)",
-                    agentId: nonEmpty(bot.agentId),
-                    rootBehavior: bot.rootBehavior,
-                    status: bot.enabled ? "idle" : "disabled",
-                    endpointCount: endpoints.count,
-                    boundEndpointCount: endpoints.filter { $0.threadId?.isEmpty == false }.count,
-                    workspaceDir: nonEmpty(bot.workspaceDir),
-                    mainThreadId: nonEmpty(bot.mainThreadId),
-                    defaultOpenThreadId: nonEmpty(bot.defaultOpenThreadId) ?? nonEmpty(bot.mainThreadId),
-                    endpoints: endpoints,
-                    conversationNodes: [],
-                    iconDataUrl: iconDataUrl(for: bot.channel)
-                )
-            )
-        }
-
-        if groups.isEmpty {
-            for (key, endpoints) in endpointsByGroup.sorted(by: { $0.key < $1.key }) {
-                guard let first = endpoints.first else { continue }
-                remember(
-                    GaryxMobileBotGroup(
-                        id: key,
-                        channel: first.channel,
-                        accountId: first.accountId,
-                        title: "\(Self.channelDisplayName(first.channel)) / \(first.accountId)",
-                        subtitle: "\(Self.channelDisplayName(first.channel)) Bot · \(first.accountId)",
-                        agentId: nil,
-                        rootBehavior: "open_default",
-                        status: "idle",
-                        endpointCount: endpoints.count,
-                        boundEndpointCount: endpoints.filter { $0.threadId?.isEmpty == false }.count,
-                        workspaceDir: nil,
-                        mainThreadId: nil,
-                        defaultOpenThreadId: endpoints.first(where: { $0.threadId?.isEmpty == false })?.threadId,
-                        endpoints: endpoints,
-                        conversationNodes: [],
-                        iconDataUrl: iconDataUrl(for: first.channel)
-                    )
-                )
-            }
-        }
-
-        return order.compactMap { groups[$0] }
+        GaryxMobileBotGroupBuilder.groups(
+            channelEndpoints: channelEndpoints,
+            configuredBots: configuredBots,
+            botConsoles: botConsoles,
+            channelPlugins: channelPlugins
+        )
     }
 
     var selectedThreadBotGroup: GaryxMobileBotGroup? {
-        guard let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
-              !threadId.isEmpty else {
-            return nil
-        }
-        return mobileBotGroups.first { group in
-            if group.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) == threadId {
-                return true
-            }
-            if group.defaultOpenThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) == threadId {
-                return true
-            }
-            return group.endpoints.contains { endpoint in
-                endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) == threadId
-            }
-        }
+        GaryxMobileBotGroupBuilder.selectedGroup(
+            threadId: selectedThread?.id,
+            groups: mobileBotGroups
+        )
     }
 
     var activeTaskCount: Int {
@@ -1111,23 +794,13 @@ final class GaryxMobileModel: ObservableObject {
     }
 
     var knownWorkspacePaths: [String] {
-        var seen = Set<String>()
-        let worktreePaths = Set(
-            threads
-                .compactMap(\.worktreePath)
-                .map(Self.normalizedWorkspacePathKey)
+        GaryxMobileWorkspacePresentation.knownWorkspacePaths(
+            threadWorkspacePaths: threads.map(\.workspacePath),
+            threadWorktreePaths: threads.map(\.worktreePath),
+            automationWorkspacePaths: automations.map(\.workspacePath),
+            autoResearchWorkspaceDirs: autoResearchRuns.map(\.workspaceDir),
+            additionalPaths: [newThreadWorkspace, selectedWorkspacePath]
         )
-        let values = threads.compactMap(\.workspacePath)
-            + automations.map(\.workspacePath)
-            + autoResearchRuns.compactMap(\.workspaceDir)
-            + [newThreadWorkspace, selectedWorkspacePath]
-        return values
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .filter(Self.isVisibleMobileWorkspacePath)
-            .filter { !worktreePaths.contains(Self.normalizedWorkspacePathKey($0)) }
-            .filter { seen.insert($0).inserted }
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
     var runningResearchCount: Int {
@@ -5143,7 +4816,7 @@ final class GaryxMobileModel: ObservableObject {
             }
 
             var settings = try await client().gatewaySettings()
-            guard Self.setChannelAccount(
+            guard GaryxConfiguredBotAccountsDocument.setAccount(
                 in: &settings,
                 originalChannel: original?.channel,
                 originalAccountId: original?.accountId,
@@ -5181,7 +4854,7 @@ final class GaryxMobileModel: ObservableObject {
         defer { isSavingBotSettings = false }
         do {
             var settings = try await client().gatewaySettings()
-            guard Self.removeChannelAccount(
+            guard GaryxConfiguredBotAccountsDocument.removeAccount(
                 from: &settings,
                 channel: account.channel,
                 accountId: account.accountId
@@ -5213,7 +4886,7 @@ final class GaryxMobileModel: ObservableObject {
     func deleteConfiguredBotAccount(_ bot: GaryxConfiguredBot) async {
         do {
             var settings = try await client().gatewaySettings()
-            guard Self.removeChannelAccount(
+            guard GaryxConfiguredBotAccountsDocument.removeAccount(
                 from: &settings,
                 channel: bot.channel,
                 accountId: bot.accountId
@@ -7633,61 +7306,4 @@ private extension String {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    func garyxSingleLineTruncated(limit: Int) -> String {
-        let normalized = replacingOccurrences(of: "\r", with: "\n")
-            .split(whereSeparator: \.isNewline)
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty } ?? trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalized.count > limit else { return normalized }
-        let end = normalized.index(normalized.startIndex, offsetBy: max(0, limit - 1))
-        return "\(normalized[..<end])…"
-    }
-
-    var garyxSafeToolSummary: String? {
-        let summary = garyxSingleLineTruncated(limit: 120)
-        guard !summary.isEmpty, summary != "{", summary != "[", !summary.hasPrefix("{\"") else {
-            return nil
-        }
-        return summary
-    }
-
-    var garyxPathTail: String {
-        let normalized = replacingOccurrences(of: "\\", with: "/")
-        let parts = normalized.split(separator: "/").map(String.init)
-        guard parts.count > 2 else { return normalized }
-        return parts.suffix(2).joined(separator: "/")
-    }
-
-    var garyxShellSummary: String {
-        var normalized = trimmingCharacters(in: .whitespacesAndNewlines)
-        let launchers = [
-            "/bin/bash -lc ",
-            "bash -lc ",
-            "/bin/sh -lc ",
-            "sh -lc ",
-            "/bin/zsh -lc ",
-            "zsh -lc ",
-        ]
-        for launcher in launchers where normalized.hasPrefix(launcher) {
-            normalized = String(normalized.dropFirst(launcher.count)).garyxUnwrappedQuotes
-            break
-        }
-        normalized = normalized
-            .replacingOccurrences(of: #" 2>&1\b"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized.garyxSingleLineTruncated(limit: 112)
-    }
-
-    private var garyxUnwrappedQuotes: String {
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 2,
-              let first = trimmed.first,
-              let last = trimmed.last,
-              (first == "\"" || first == "'"),
-              first == last else {
-            return trimmed
-        }
-        return String(trimmed.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
 }
