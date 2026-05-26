@@ -28,8 +28,6 @@ final class GaryxMobileModel: ObservableObject {
     static let threadHistoryUserQueryLimit = 10
     static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
     static let assistantDeltaFlushDelayNanos: UInt64 = 50_000_000
-    static let gatewayReconnectInitialDelayNanos: UInt64 = 1_000_000_000
-    static let gatewayReconnectMaxDelayNanos: UInt64 = 10_000_000_000
 
     struct MessageListSignature: Equatable {
         let count: Int
@@ -184,8 +182,6 @@ final class GaryxMobileModel: ObservableObject {
     var globalEventStreamTask: Task<Void, Never>?
     var globalEventStreamGeneration: UUID?
     var globalEventStreamActive = false
-    var gatewayReconnectTask: Task<Void, Never>?
-    var gatewayReconnectGeneration: UUID?
     var selectedThreadReconcileTask: Task<Void, Never>?
     var selectedThreadReconcileThreadId: String?
     var selectedThreadActivitySignatures: [String: String] = [:]

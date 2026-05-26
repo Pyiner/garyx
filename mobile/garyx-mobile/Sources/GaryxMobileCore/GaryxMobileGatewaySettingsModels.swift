@@ -8,6 +8,31 @@ struct GaryxGatewayProfile: Identifiable, Codable, Equatable {
     var hasToken: Bool
 }
 
+enum GaryxGatewaySetupConnectionPhase: Equatable {
+    case disconnected
+    case checking
+    case failed
+    case ready
+}
+
+enum GaryxGatewaySetupPresentation {
+    static func showsDetails(
+        isSheet: Bool,
+        startsEmpty: Bool,
+        hasGatewaySettings: Bool,
+        phase: GaryxGatewaySetupConnectionPhase
+    ) -> Bool {
+        if isSheet || startsEmpty { return true }
+        if !hasGatewaySettings { return true }
+        switch phase {
+        case .disconnected, .checking, .failed:
+            return true
+        case .ready:
+            return false
+        }
+    }
+}
+
 enum GaryxGatewayProfileStorage {
     static func load(defaults: UserDefaults, key: String) -> [GaryxGatewayProfile] {
         guard let data = defaults.data(forKey: key) else {

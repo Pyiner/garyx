@@ -2,6 +2,39 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
+    func testGatewaySetupShowsDetailsWhileCheckingExistingGateway() {
+        XCTAssertTrue(
+            GaryxGatewaySetupPresentation.showsDetails(
+                isSheet: false,
+                startsEmpty: false,
+                hasGatewaySettings: true,
+                phase: .checking
+            )
+        )
+    }
+
+    func testGatewaySetupShowsDetailsAfterExistingGatewayFailure() {
+        XCTAssertTrue(
+            GaryxGatewaySetupPresentation.showsDetails(
+                isSheet: false,
+                startsEmpty: false,
+                hasGatewaySettings: true,
+                phase: .failed
+            )
+        )
+    }
+
+    func testGatewaySetupCanHideDetailsWhenExistingGatewayIsReady() {
+        XCTAssertFalse(
+            GaryxGatewaySetupPresentation.showsDetails(
+                isSheet: false,
+                startsEmpty: false,
+                hasGatewaySettings: true,
+                phase: .ready
+            )
+        )
+    }
+
     func testGatewayProfileStorageNormalizesDedupesAndLabelsProfiles() {
         let older = makeProfile(
             id: "old",

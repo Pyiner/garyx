@@ -213,13 +213,24 @@ struct GaryxGatewaySetupView: View {
     }
 
     private var showsSetupDetails: Bool {
-        if isSheet || startsEmpty { return true }
-        if !model.hasGatewaySettings { return true }
+        GaryxGatewaySetupPresentation.showsDetails(
+            isSheet: isSheet,
+            startsEmpty: startsEmpty,
+            hasGatewaySettings: model.hasGatewaySettings,
+            phase: setupConnectionPhase
+        )
+    }
+
+    private var setupConnectionPhase: GaryxGatewaySetupConnectionPhase {
         switch model.connectionState {
+        case .disconnected:
+            return .disconnected
+        case .checking:
+            return .checking
         case .failed:
-            return true
-        case .checking, .disconnected, .ready:
-            return false
+            return .failed
+        case .ready:
+            return .ready
         }
     }
 

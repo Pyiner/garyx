@@ -71,9 +71,6 @@ extension GaryxMobileModel {
         resetThreadListPagination()
         sceneRefreshTask?.cancel()
         sceneRefreshTask = nil
-        gatewayReconnectTask?.cancel()
-        gatewayReconnectTask = nil
-        gatewayReconnectGeneration = nil
         cancelSelectedThreadReconcileLoop()
         selectedThreadActivitySignatures = [:]
         cancelGlobalEventStream()
@@ -252,15 +249,12 @@ extension GaryxMobileModel {
                 case .checking:
                     break
                 case .disconnected, .failed:
-                    startGatewayReconnectLoop(immediate: true)
+                    break
                 }
             }
         case .background:
             sceneRefreshTask?.cancel()
             sceneRefreshTask = nil
-            gatewayReconnectTask?.cancel()
-            gatewayReconnectTask = nil
-            gatewayReconnectGeneration = nil
             cancelSelectedThreadReconcileLoop()
             cancelGlobalEventStream()
             let runningThreadIds = Array(activeTasksByThread.keys)
@@ -330,13 +324,6 @@ extension GaryxMobileModel {
     }
 
     func connectAndRefresh() async {
-        gatewayReconnectTask?.cancel()
-        gatewayReconnectTask = nil
-        gatewayReconnectGeneration = nil
-        await connectAndRefresh(scheduleReconnectOnFailure: true)
-    }
-
-    func connectAndRefresh(scheduleReconnectOnFailure: Bool) async {
         gatewayURL = normalizedGatewayURL(gatewayURL)
         gatewayAuthToken = gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
         connectionState = .checking
@@ -360,14 +347,7 @@ extension GaryxMobileModel {
             cancelSelectedThreadReconcileLoop()
             let message = displayMessage(for: error)
             connectionState = .failed(message)
-            if scheduleReconnectOnFailure {
-                lastError = message
-            } else {
-                gatewaySettingsStatus = "Reconnecting gateway"
-            }
-            if scheduleReconnectOnFailure {
-                startGatewayReconnectLoop()
-            }
+            lastError = message
         }
     }
 

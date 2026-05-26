@@ -1107,41 +1107,6 @@ extension GaryxMobileModel {
         globalEventStreamActive = false
     }
 
-    func startGatewayReconnectLoop(immediate: Bool = false) {
-        guard hasGatewaySettings, canConnectGateway else { return }
-        guard gatewayReconnectTask == nil else { return }
-        let generation = UUID()
-        gatewayReconnectGeneration = generation
-        gatewayReconnectTask = Task { [weak self] in
-            guard let self else { return }
-            var delay = immediate ? UInt64(0) : Self.gatewayReconnectInitialDelayNanos
-            while !Task.isCancelled {
-                if delay > 0 {
-                    try? await Task.sleep(nanoseconds: delay)
-                }
-                if Task.isCancelled { break }
-                guard gatewayReconnectGeneration == generation,
-                      hasGatewaySettings,
-                      canConnectGateway else { break }
-                if case .ready = connectionState {
-                    break
-                }
-                await connectAndRefresh(scheduleReconnectOnFailure: false)
-                guard gatewayReconnectGeneration == generation else { break }
-                if case .ready = connectionState {
-                    break
-                }
-                delay = delay == 0
-                    ? Self.gatewayReconnectInitialDelayNanos
-                    : min(delay * 2, Self.gatewayReconnectMaxDelayNanos)
-            }
-            if gatewayReconnectGeneration == generation {
-                gatewayReconnectTask = nil
-                gatewayReconnectGeneration = nil
-            }
-        }
-    }
-
     func runGlobalEventStream(generation: UUID) async {
         var retryDelay: UInt64 = 1_000_000_000
         while !Task.isCancelled, hasGatewaySettings {
