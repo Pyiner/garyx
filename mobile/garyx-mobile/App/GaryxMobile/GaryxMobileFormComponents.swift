@@ -496,22 +496,24 @@ private struct GaryxWorkspacePathBrowser: View {
     var savedPaths: [String]? = nil
     @State private var currentPath = ""
 
-    private var nodes: [GaryxWorkspacePathNode] {
-        workspacePathTree(paths, savedPaths: savedPaths ?? paths)
+    private var entries: [GaryxWorkspacePathEntry] {
+        workspacePathEntries(paths, savedPaths: savedPaths ?? paths)
     }
 
-    private var rows: [GaryxWorkspacePathNode] {
-        guard !currentPath.isEmpty else { return nodes }
-        return findWorkspacePathNode(in: nodes, path: currentPath)?.children ?? []
+    private var rows: [GaryxWorkspaceDirectoryCandidate] {
+        workspaceDirectoryChildren(currentPath: currentPath, entries: entries)
     }
 
-    private var currentNode: GaryxWorkspacePathNode? {
-        guard !currentPath.isEmpty else { return nil }
-        return findWorkspacePathNode(in: nodes, path: currentPath)
+    private var currentEntry: GaryxWorkspacePathEntry? {
+        workspacePathEntry(for: currentPath, entries: entries)
     }
 
     private var normalizedSelectedPath: String {
         normalizedWorkspacePath(path)
+    }
+
+    private var normalizedCurrentPath: String {
+        normalizedWorkspacePath(currentEntry?.originalPath ?? currentPath)
     }
 
     private var canUseCurrentPath: Bool {
@@ -519,7 +521,7 @@ private struct GaryxWorkspacePathBrowser: View {
     }
 
     var body: some View {
-        if !nodes.isEmpty {
+        if !entries.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 10) {
                     Button {
@@ -542,7 +544,7 @@ private struct GaryxWorkspacePathBrowser: View {
                             .font(GaryxFont.subheadline(weight: .semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        Text(currentPath.isEmpty ? "Saved workspace paths" : currentPathDetailLabel)
+                        Text(currentPath.isEmpty ? "Workspace folders" : workspacePathCompactLabel(currentPath))
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -551,13 +553,13 @@ private struct GaryxWorkspacePathBrowser: View {
                     Spacer(minLength: 0)
                     if canUseCurrentPath {
                         Button {
-                            path = currentNode?.originalPath ?? currentPath
+                            path = currentEntry?.originalPath ?? currentPath
                         } label: {
                             HStack(spacing: 5) {
-                                if normalizedSelectedPath == normalizedWorkspacePath(currentPath) {
+                                if normalizedSelectedPath == normalizedCurrentPath {
                                     GaryxSelectionCheckmark(size: 11)
                                 }
-                                Text(normalizedSelectedPath == normalizedWorkspacePath(currentPath) ? "Selected" : "Use")
+                                Text(normalizedSelectedPath == normalizedCurrentPath ? "Selected" : "Use this folder")
                                     .font(GaryxFont.caption(weight: .semibold))
                             }
                             .foregroundStyle(.primary)
@@ -566,8 +568,7 @@ private struct GaryxWorkspacePathBrowser: View {
                             .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(normalizedSelectedPath == normalizedWorkspacePath(currentPath) ? "Current path selected" : "Use current path")
-                        .accessibilityHint(currentNode?.isSavedPath == true ? "Uses a saved workspace path." : "Uses a suggested parent path.")
+                        .accessibilityLabel(normalizedSelectedPath == normalizedCurrentPath ? "Current path selected" : "Use current folder")
                     }
                 }
                 .padding(.horizontal, 8)
@@ -576,35 +577,28 @@ private struct GaryxWorkspacePathBrowser: View {
                 Divider().padding(.leading, 8)
 
                 if rows.isEmpty {
-                    Text("No saved workspace paths here.")
+                    Text("No folders here.")
                         .font(GaryxFont.subheadline())
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 26)
                 } else {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, node in
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, candidate in
                         GaryxWorkspacePathBrowserRow(
-                            node: node,
-                            isSelected: normalizedSelectedPath == normalizedWorkspacePath(node.path),
+                            candidate: candidate,
+                            isSelected: normalizedSelectedPath == normalizedWorkspacePath(candidate.originalPath ?? candidate.path),
                             showsSeparator: index < rows.count - 1
                         ) {
-                            if node.children.isEmpty {
-                                path = node.originalPath ?? node.path
-                            } else {
-                                currentPath = node.path
-                            }
+                            currentPath = candidate.path
                         }
                     }
                 }
             }
             .onAppear {
-                currentPath = initialWorkspaceBrowserPath(nodes: nodes, selectedPath: path)
+                currentPath = initialWorkspaceBrowserPath(entries: entries, selectedPath: path)
             }
             .onChange(of: paths) { _, _ in
-                if !currentPath.isEmpty,
-                   findWorkspacePathNode(in: nodes, path: currentPath) == nil {
-                    currentPath = initialWorkspaceBrowserPath(nodes: nodes, selectedPath: path)
-                }
+                currentPath = initialWorkspaceBrowserPath(entries: entries, selectedPath: path)
             }
         } else {
             Text("No saved workspaces. Enter an absolute path manually.")
@@ -616,18 +610,13 @@ private struct GaryxWorkspacePathBrowser: View {
     }
 
     private var currentPathTitle: String {
-        guard !currentPath.isEmpty else { return "Saved paths" }
-        let tail = currentPath.garyxLastPathComponent
-        return tail.isEmpty ? currentPath : tail
-    }
-
-    private var currentPathDetailLabel: String {
-        "\(workspacePathCompactLabel(currentPath)) · \(currentNode?.isSavedPath == true ? "Saved" : "Suggested")"
+        guard !currentPath.isEmpty else { return "Folders" }
+        return workspaceDirectoryName(currentPath)
     }
 }
 
 private struct GaryxWorkspacePathBrowserRow: View {
-    let node: GaryxWorkspacePathNode
+    let candidate: GaryxWorkspaceDirectoryCandidate
     let isSelected: Bool
     let showsSeparator: Bool
     let action: () -> Void
@@ -641,11 +630,11 @@ private struct GaryxWorkspacePathBrowserRow: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(node.name)
+                        Text(candidate.name)
                             .font(GaryxFont.subheadline(weight: .semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        Text("\(workspacePathCompactLabel(node.path)) · \(node.isSavedPath ? "Saved" : "Suggested")")
+                        Text(workspacePathCompactLabel(candidate.path))
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -655,11 +644,9 @@ private struct GaryxWorkspacePathBrowserRow: View {
                     if isSelected {
                         GaryxSelectionCheckmark(size: 12)
                     }
-                    if !node.children.isEmpty {
-                        Image(systemName: "chevron.right")
-                            .font(GaryxFont.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.tertiary)
-                    }
+                    Image(systemName: "chevron.right")
+                        .font(GaryxFont.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
@@ -680,29 +667,32 @@ private struct GaryxWorkspacePathBrowserRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityValue(isSelected ? "Selected" : "")
-        .accessibilityHint(node.children.isEmpty ? "Select this path" : "Open child paths")
+        .accessibilityHint("Open folder")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var accessibilityLabel: String {
         [
-            node.name,
-            workspacePathCompactLabel(node.path),
-            node.isSavedPath ? "saved workspace path" : "suggested path"
+            candidate.name,
+            workspacePathCompactLabel(candidate.path)
         ].joined(separator: ", ")
     }
 }
 
-private struct GaryxWorkspacePathNode: Identifiable {
-    let id: String
-    let name: String
-    let path: String
-    var originalPath: String?
-    var isSavedPath: Bool
-    var children: [GaryxWorkspacePathNode]
+private struct GaryxWorkspacePathEntry {
+    let normalizedPath: String
+    let originalPath: String
 }
 
-private func workspacePathTree(_ paths: [String], savedPaths: [String]) -> [GaryxWorkspacePathNode] {
+private struct GaryxWorkspaceDirectoryCandidate: Identifiable {
+    let path: String
+    let name: String
+    let originalPath: String?
+
+    var id: String { path }
+}
+
+private func workspacePathEntries(_ paths: [String], savedPaths: [String]) -> [GaryxWorkspacePathEntry] {
     let savedOriginalByNormalized = Dictionary(
         savedPaths.compactMap { rawPath -> (String, String)? in
             let original = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -713,7 +703,7 @@ private func workspacePathTree(_ paths: [String], savedPaths: [String]) -> [Gary
         uniquingKeysWith: { first, _ in first }
     )
     var seen = Set<String>()
-    let entries = paths.compactMap { rawPath -> (normalized: String, original: String, isSaved: Bool)? in
+    return paths.compactMap { rawPath -> GaryxWorkspacePathEntry? in
         let original = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalized = normalizedWorkspacePath(original)
         guard garyxIsAbsoluteWorkspacePath(normalized),
@@ -721,125 +711,85 @@ private func workspacePathTree(_ paths: [String], savedPaths: [String]) -> [Gary
             return nil
         }
         if let savedOriginal = savedOriginalByNormalized[normalized] {
-            return (normalized, savedOriginal, true)
+            return GaryxWorkspacePathEntry(
+                normalizedPath: normalized,
+                originalPath: savedOriginal
+            )
         }
-        return (normalized, original, false)
+        return GaryxWorkspacePathEntry(
+            normalizedPath: normalized,
+            originalPath: original
+        )
     }
-    var roots: [String: GaryxWorkspacePathNode] = [:]
+    .sorted { $0.normalizedPath.localizedStandardCompare($1.normalizedPath) == .orderedAscending }
+}
 
+private func workspaceDirectoryChildren(
+    currentPath: String,
+    entries: [GaryxWorkspacePathEntry]
+) -> [GaryxWorkspaceDirectoryCandidate] {
+    var candidates: [String: GaryxWorkspaceDirectoryCandidate] = [:]
     for entry in entries {
-        let parts = pathComponentsForWorkspaceTree(entry.normalized)
-        var root = roots[parts.root] ?? GaryxWorkspacePathNode(
-            id: parts.root,
-            name: parts.root,
-            path: parts.root,
-            originalPath: nil,
-            isSavedPath: false,
-            children: []
-        )
-        insertWorkspacePath(
-            &root,
-            segments: parts.segments,
-            originalPath: entry.original,
-            isSavedPath: entry.isSaved
-        )
-        roots[parts.root] = root
-    }
-
-    return roots.values
-        .map(sortWorkspacePathNode)
-        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-}
-
-private func insertWorkspacePath(
-    _ node: inout GaryxWorkspacePathNode,
-    segments: [String],
-    originalPath: String,
-    isSavedPath: Bool
-) {
-    guard let segment = segments.first else {
-        node.originalPath = originalPath
-        node.isSavedPath = isSavedPath
-        return
-    }
-    let childPath = childWorkspacePath(parent: node.path, segment: segment)
-    let childIndex = node.children.firstIndex { $0.path == childPath }
-    if let childIndex {
-        insertWorkspacePath(
-            &node.children[childIndex],
-            segments: Array(segments.dropFirst()),
-            originalPath: originalPath,
-            isSavedPath: isSavedPath
-        )
-    } else {
-        var child = GaryxWorkspacePathNode(
-            id: childPath,
-            name: segment,
+        guard let childPath = workspaceImmediateChildPath(
+            parentPath: currentPath,
+            descendantPath: entry.normalizedPath
+        ) else { continue }
+        let exactEntry = workspacePathEntry(for: childPath, entries: entries)
+        candidates[childPath] = GaryxWorkspaceDirectoryCandidate(
             path: childPath,
-            originalPath: nil,
-            isSavedPath: false,
-            children: []
+            name: workspaceDirectoryName(childPath),
+            originalPath: exactEntry?.originalPath
         )
-        insertWorkspacePath(
-            &child,
-            segments: Array(segments.dropFirst()),
-            originalPath: originalPath,
-            isSavedPath: isSavedPath
-        )
-        node.children.append(child)
     }
+    return candidates.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
 }
 
-private func sortWorkspacePathNode(_ node: GaryxWorkspacePathNode) -> GaryxWorkspacePathNode {
-    GaryxWorkspacePathNode(
-        id: node.id,
-        name: node.name,
-        path: node.path,
-        originalPath: node.originalPath,
-        isSavedPath: node.isSavedPath,
-        children: node.children
-            .map(sortWorkspacePathNode)
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    )
-}
-
-private func findWorkspacePathNode(in nodes: [GaryxWorkspacePathNode], path: String) -> GaryxWorkspacePathNode? {
+private func workspacePathEntry(
+    for path: String,
+    entries: [GaryxWorkspacePathEntry]
+) -> GaryxWorkspacePathEntry? {
     let normalized = normalizedWorkspacePath(path)
-    for node in nodes {
-        if normalizedWorkspacePath(node.path) == normalized { return node }
-        if let child = findWorkspacePathNode(in: node.children, path: normalized) {
-            return child
-        }
-    }
-    return nil
+    return entries.first { $0.normalizedPath == normalized }
 }
 
-private func firstWorkspacePath(in nodes: [GaryxWorkspacePathNode]) -> String {
-    for node in nodes {
-        if node.children.isEmpty { return node.path }
-        let child = firstWorkspacePath(in: node.children)
-        if !child.isEmpty { return child }
-    }
-    return ""
-}
-
-private func initialWorkspaceBrowserPath(nodes: [GaryxWorkspacePathNode], selectedPath: String) -> String {
+private func initialWorkspaceBrowserPath(entries: [GaryxWorkspacePathEntry], selectedPath: String) -> String {
     let normalized = normalizedWorkspacePath(selectedPath)
-    if !normalized.isEmpty, findWorkspacePathNode(in: nodes, path: normalized) != nil {
+    if !normalized.isEmpty, garyxIsAbsoluteWorkspacePath(normalized) {
         return parentWorkspacePath(normalized)
     }
-    let first = firstWorkspacePath(in: nodes)
-    return first.isEmpty ? "" : parentWorkspacePath(first)
+    guard let first = entries.first?.normalizedPath else { return "" }
+    return parentWorkspacePath(first)
 }
 
 private func parentWorkspacePath(_ path: String) -> String {
     let normalized = normalizedWorkspacePath(path)
-    let parts = pathComponentsForWorkspaceTree(normalized)
+    let parts = pathComponentsForWorkspacePath(normalized)
     guard !parts.segments.isEmpty else { return "" }
     guard parts.segments.count > 1 else { return parts.root }
     return parts.segments.dropLast().reduce(parts.root) { current, segment in
         childWorkspacePath(parent: current, segment: segment)
     }
+}
+
+private func workspaceImmediateChildPath(parentPath: String, descendantPath: String) -> String? {
+    let parent = normalizedWorkspacePath(parentPath)
+    let descendant = normalizedWorkspacePath(descendantPath)
+    guard !descendant.isEmpty, descendant != parent else { return nil }
+    if parent.isEmpty {
+        let parts = pathComponentsForWorkspacePath(descendant)
+        guard let first = parts.segments.first else { return parts.root }
+        return childWorkspacePath(parent: parts.root, segment: first)
+    }
+    if parent == "/" || parent == "//" || parent.hasSuffix(":") {
+        let parts = pathComponentsForWorkspacePath(descendant)
+        guard parts.root == parent, let first = parts.segments.first else { return nil }
+        return childWorkspacePath(parent: parent, segment: first)
+    }
+    let prefix = parent.hasSuffix("/") ? parent : "\(parent)/"
+    guard descendant.hasPrefix(prefix) else { return nil }
+    let remainder = String(descendant.dropFirst(prefix.count))
+    guard let nextSegment = remainder.split(separator: "/", maxSplits: 1).first else { return nil }
+    return childWorkspacePath(parent: parent, segment: String(nextSegment))
 }
 
 private func normalizedWorkspacePath(_ path: String) -> String {
@@ -852,7 +802,7 @@ private func normalizedWorkspacePath(_ path: String) -> String {
     return trimmed
 }
 
-private func pathComponentsForWorkspaceTree(_ path: String) -> (root: String, segments: [String]) {
+private func pathComponentsForWorkspacePath(_ path: String) -> (root: String, segments: [String]) {
     let normalized = normalizedWorkspacePath(path)
     if normalized.hasPrefix("//") {
         return ("//", normalized.dropFirst(2).split(separator: "/").map(String.init))
@@ -867,6 +817,11 @@ private func pathComponentsForWorkspaceTree(_ path: String) -> (root: String, se
         return (root, rest.split(separator: "/").map(String.init))
     }
     return ("/", normalized.split(separator: "/").map(String.init))
+}
+
+private func workspaceDirectoryName(_ path: String) -> String {
+    let tail = path.garyxLastPathComponent
+    return tail.isEmpty ? path : tail
 }
 
 private func childWorkspacePath(parent: String, segment: String) -> String {

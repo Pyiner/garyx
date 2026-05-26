@@ -319,6 +319,10 @@ needs installed-app validation.
   mobile, gateway, and CLI flows must pass and persist the path string directly.
   Do not add workspace ids; workspaces are directory filters/bookmarks, not
   separate domain entities.
+- Desktop and mobile workspace path pickers should look like lightweight
+  directory browsers: show the current folder, immediate child folders, a back
+  action, and an explicit "use this folder" action. Do not render saved
+  workspace paths as an exposed tree.
 - Agent selectors should show only the agent or team identity. Do not append
   provider names such as Claude, Codex, or Gemini to selector labels or details;
   provider metadata belongs in dedicated settings/details surfaces outside
