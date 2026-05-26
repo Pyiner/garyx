@@ -299,11 +299,11 @@ struct GaryxWorkspacePathPickerField: View {
                 .garyxFormTextField()
             if !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                !garyxIsAbsoluteWorkspacePath(path) {
-                GaryxFormErrorText(text: "Use an absolute directory path.")
+                GaryxFormErrorText(text: "Use an absolute path.")
             }
             GaryxWorkspacePathBrowser(path: $path, paths: workspacePaths)
-            .padding(.horizontal, 8)
-            .padding(.bottom, 8)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
         }
     }
 }
@@ -318,6 +318,10 @@ private struct GaryxWorkspacePathPickerSheet: View {
     @State private var draft = ""
 
     var body: some View {
+        let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isInvalidDraft = !trimmedDraft.isEmpty && !garyxIsAbsoluteWorkspacePath(trimmedDraft)
+        let noWorkspaceSelected = trimmedDraft.isEmpty
+
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 12) {
                 Text(title)
@@ -346,16 +350,15 @@ private struct GaryxWorkspacePathPickerSheet: View {
             .padding(.top, 22)
             .padding(.bottom, 14)
 
-            GaryxGlassPathField(placeholder: placeholder, path: $draft)
-                .padding(.horizontal, 22)
-                .padding(.bottom, 8)
+            VStack(alignment: .leading, spacing: 6) {
+                GaryxGlassPathField(placeholder: placeholder, path: $draft)
 
-            if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               !garyxIsAbsoluteWorkspacePath(draft) {
-                GaryxFormErrorText(text: "Use an absolute directory path.")
-                    .padding(.horizontal, 22)
-                    .padding(.bottom, 8)
+                if isInvalidDraft {
+                    GaryxFormErrorText(text: "Use an absolute path.")
+                }
             }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 14)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -375,8 +378,11 @@ private struct GaryxWorkspacePathPickerSheet: View {
                                 Text("No workspace")
                                     .font(GaryxFont.body(weight: .medium))
                                 Spacer(minLength: 0)
+                                if noWorkspaceSelected {
+                                    GaryxSelectionCheckmark(size: 12)
+                                }
                             }
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(noWorkspaceSelected ? .primary : .secondary)
                             .padding(.horizontal, 18)
                             .frame(minHeight: 50)
                             .garyxAdaptiveGlass(
@@ -447,6 +453,7 @@ private struct GaryxGlassPathField: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .lineLimit(1)
+                .accessibilityLabel("Workspace path")
 
             if !path.isEmpty {
                 Button {
@@ -518,6 +525,8 @@ private struct GaryxWorkspacePathBrowser: View {
                     .buttonStyle(.plain)
                     .disabled(currentPath.isEmpty)
                     .opacity(currentPath.isEmpty ? 0.36 : 1)
+                    .accessibilityLabel("Back")
+                    .accessibilityHint("Go to parent folder")
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(currentPathTitle)
@@ -548,6 +557,7 @@ private struct GaryxWorkspacePathBrowser: View {
                             .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel(normalizedSelectedPath == normalizedWorkspacePath(currentPath) ? "Current folder selected" : "Use current folder")
                     }
                 }
                 .padding(.horizontal, 8)
@@ -586,6 +596,12 @@ private struct GaryxWorkspacePathBrowser: View {
                     currentPath = initialWorkspaceBrowserPath(nodes: nodes, selectedPath: path)
                 }
             }
+        } else {
+            Text("No saved workspaces. Enter an absolute path manually.")
+                .font(GaryxFont.subheadline())
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
         }
     }
 
@@ -641,7 +657,7 @@ private struct GaryxWorkspacePathBrowserRow: View {
                     }
                 }
                 if showsSeparator {
-                    Divider().padding(.leading, 42)
+                    Divider().padding(.leading, 46)
                 }
             }
             .contentShape(Rectangle())

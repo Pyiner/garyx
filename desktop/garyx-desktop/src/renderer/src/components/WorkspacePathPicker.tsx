@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { ArrowLeft, Check, ChevronRight, Folder, FolderOpen } from 'lucide-react';
 
 import type { DesktopWorkspace } from '@shared/contracts';
@@ -13,7 +13,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Field, FieldDescription, FieldGroup } from '@/components/ui/field';
+import { Field, FieldDescription, FieldError, FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { useI18n } from '@/i18n';
@@ -250,6 +250,11 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
         </div>
         {canUseCurrent ? (
           <Button
+            aria-label={
+              isCurrentSelected
+                ? t('Current folder selected')
+                : `${t('Use folder')} ${workspaceCompactPath(currentPath)}`
+            }
             disabled={disabled}
             onClick={() => onSelect(currentPath)}
             size="sm"
@@ -269,8 +274,19 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
               const normalizedNodePath = normalizeWorkspacePath(node.workspace?.path || node.path);
               const isSelected = normalizedSelected === normalizedNodePath;
               const hasChildren = node.children.length > 0;
+              const rowActionLabel = hasChildren ? t('Open folder') : t('Select folder');
+              const rowLabel = [
+                node.name,
+                workspaceCompactPath(node.path),
+                isSelected ? t('selected') : '',
+                rowActionLabel,
+              ]
+                .filter(Boolean)
+                .join(', ');
               return (
                 <button
+                  aria-current={isSelected ? 'true' : undefined}
+                  aria-label={rowLabel}
                   className={cn(
                     'flex min-h-11 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors',
                     disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent hover:text-accent-foreground',
@@ -292,10 +308,11 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
                       {workspaceCompactPath(node.path)}
                     </span>
                   </span>
-                  {isSelected ? (
-                    <Check aria-hidden className="size-4 text-foreground" />
-                  ) : hasChildren ? (
-                    <ChevronRight aria-hidden className="size-4 text-muted-foreground" />
+                  {isSelected || hasChildren ? (
+                    <span className="flex items-center gap-1.5">
+                      {isSelected ? <Check aria-hidden className="size-4 text-foreground" /> : null}
+                      {hasChildren ? <ChevronRight aria-hidden className="size-4 text-muted-foreground" /> : null}
+                    </span>
                   ) : null}
                 </button>
               );
@@ -322,9 +339,17 @@ export function WorkspacePathPicker({
   showKnownTree = true,
 }: WorkspacePathPickerProps) {
   const { t } = useI18n();
+  const generatedId = useId();
+  const inputId = id ?? `workspace-path-${generatedId}`;
+  const errorId = `${inputId}-error`;
+  const hintId = `${inputId}-hint`;
   const tree = useMemo(() => buildWorkspaceTree(workspaces), [workspaces]);
   const trimmed = value.trim();
   const invalid = Boolean(trimmed && !isAbsoluteWorkspacePath(trimmed));
+  const describedBy = [
+    invalid ? errorId : null,
+    !allowEmpty && !trimmed ? hintId : null,
+  ].filter(Boolean).join(' ') || undefined;
 
   async function handleBrowse() {
     const picked = await window.garyxDesktop.pickDirectory({
@@ -340,9 +365,11 @@ export function WorkspacePathPicker({
       <Field className="gap-2" data-invalid={invalid || undefined}>
         <div className="flex items-center gap-2">
           <Input
+            aria-describedby={describedBy}
+            aria-invalid={invalid || undefined}
             className="flex-1"
             disabled={disabled}
-            id={id}
+            id={inputId}
             onChange={(event) => onChange(event.target.value)}
             placeholder={placeholder || t('/path/to/project')}
             type="text"
@@ -361,18 +388,16 @@ export function WorkspacePathPicker({
           </Button>
         </div>
         {invalid ? (
-          <FieldDescription className="text-destructive">
-            {t('Workspace paths must be absolute directories.')}
-          </FieldDescription>
+          <FieldError id={errorId}>{t('Use an absolute path.')}</FieldError>
         ) : null}
         {!allowEmpty && !trimmed ? (
-          <FieldDescription>{t('Choose or enter an absolute directory path.')}</FieldDescription>
+          <FieldDescription id={hintId}>{t('Choose or enter an absolute path.')}</FieldDescription>
         ) : null}
       </Field>
       {showKnownTree && tree.length ? (
         <Field className="gap-2">
           <div className="flex items-center justify-between gap-2">
-            <FieldDescription>{t('Saved folders')}</FieldDescription>
+            <FieldDescription>{t('Saved workspace paths')}</FieldDescription>
             <Badge variant="outline">{workspaces.length}</Badge>
           </div>
           <WorkspacePathBrowser
@@ -413,7 +438,7 @@ export function WorkspacePathPickerDialog({
         if (!nextOpen && !saving) onCancel();
       }}
     >
-      <DialogContent className="sm:max-w-[680px]" size="wide">
+      <DialogContent size="wide">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
