@@ -241,6 +241,7 @@ struct GaryxWorkspacePathSelectionRow: View {
     let title: String
     @Binding var path: String
     let workspacePaths: [String]
+    var savedWorkspacePaths: [String]? = nil
     var placeholder: String = "Choose workspace"
     var allowsEmpty: Bool = true
     @State private var showsPicker = false
@@ -273,6 +274,7 @@ struct GaryxWorkspacePathSelectionRow: View {
                 title: title,
                 path: $path,
                 workspacePaths: workspacePaths,
+                savedWorkspacePaths: savedWorkspacePaths ?? workspacePaths,
                 placeholder: placeholder,
                 allowsEmpty: allowsEmpty
             )
@@ -313,6 +315,7 @@ private struct GaryxWorkspacePathPickerSheet: View {
     let title: String
     @Binding var path: String
     let workspacePaths: [String]
+    let savedWorkspacePaths: [String]
     let placeholder: String
     let allowsEmpty: Bool
     @State private var draft = ""
@@ -363,7 +366,7 @@ private struct GaryxWorkspacePathPickerSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                        GaryxWorkspacePathBrowser(path: $draft, paths: workspacePaths)
+                        GaryxWorkspacePathBrowser(path: $draft, paths: workspacePaths, savedPaths: savedWorkspacePaths)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
                     }
@@ -490,10 +493,11 @@ private struct GaryxGlassPathField: View {
 private struct GaryxWorkspacePathBrowser: View {
     @Binding var path: String
     let paths: [String]
+    var savedPaths: [String]? = nil
     @State private var currentPath = ""
 
     private var nodes: [GaryxWorkspacePathNode] {
-        workspacePathTree(paths)
+        workspacePathTree(paths, savedPaths: savedPaths ?? paths)
     }
 
     private var rows: [GaryxWorkspacePathNode] {
@@ -547,7 +551,7 @@ private struct GaryxWorkspacePathBrowser: View {
                     Spacer(minLength: 0)
                     if canUseCurrentPath {
                         Button {
-                            path = currentPath
+                            path = currentNode?.originalPath ?? currentPath
                         } label: {
                             HStack(spacing: 5) {
                                 if normalizedSelectedPath == normalizedWorkspacePath(currentPath) {
@@ -585,7 +589,7 @@ private struct GaryxWorkspacePathBrowser: View {
                             showsSeparator: index < rows.count - 1
                         ) {
                             if node.children.isEmpty {
-                                path = node.path
+                                path = node.originalPath ?? node.path
                             } else {
                                 currentPath = node.path
                             }
@@ -693,26 +697,52 @@ private struct GaryxWorkspacePathNode: Identifiable {
     let id: String
     let name: String
     let path: String
+    var originalPath: String?
     var isSavedPath: Bool
     var children: [GaryxWorkspacePathNode]
 }
 
-private func workspacePathTree(_ paths: [String]) -> [GaryxWorkspacePathNode] {
-    let normalized = paths
-        .map(normalizedWorkspacePath)
-        .filter { garyxIsAbsoluteWorkspacePath($0) }
+private func workspacePathTree(_ paths: [String], savedPaths: [String]) -> [GaryxWorkspacePathNode] {
+    let savedOriginalByNormalized = Dictionary(
+        savedPaths.compactMap { rawPath -> (String, String)? in
+            let original = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalized = normalizedWorkspacePath(original)
+            guard garyxIsAbsoluteWorkspacePath(normalized) else { return nil }
+            return (normalized, original)
+        },
+        uniquingKeysWith: { first, _ in first }
+    )
+    var seen = Set<String>()
+    let entries = paths.compactMap { rawPath -> (normalized: String, original: String, isSaved: Bool)? in
+        let original = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = normalizedWorkspacePath(original)
+        guard garyxIsAbsoluteWorkspacePath(normalized),
+              seen.insert(normalized).inserted else {
+            return nil
+        }
+        if let savedOriginal = savedOriginalByNormalized[normalized] {
+            return (normalized, savedOriginal, true)
+        }
+        return (normalized, original, false)
+    }
     var roots: [String: GaryxWorkspacePathNode] = [:]
 
-    for path in normalized {
-        let parts = pathComponentsForWorkspaceTree(path)
+    for entry in entries {
+        let parts = pathComponentsForWorkspaceTree(entry.normalized)
         var root = roots[parts.root] ?? GaryxWorkspacePathNode(
             id: parts.root,
             name: parts.root,
             path: parts.root,
+            originalPath: nil,
             isSavedPath: false,
             children: []
         )
-        insertWorkspacePath(&root, segments: parts.segments)
+        insertWorkspacePath(
+            &root,
+            segments: parts.segments,
+            originalPath: entry.original,
+            isSavedPath: entry.isSaved
+        )
         roots[parts.root] = root
     }
 
@@ -723,25 +753,39 @@ private func workspacePathTree(_ paths: [String]) -> [GaryxWorkspacePathNode] {
 
 private func insertWorkspacePath(
     _ node: inout GaryxWorkspacePathNode,
-    segments: [String]
+    segments: [String],
+    originalPath: String,
+    isSavedPath: Bool
 ) {
     guard let segment = segments.first else {
-        node.isSavedPath = true
+        node.originalPath = originalPath
+        node.isSavedPath = isSavedPath
         return
     }
     let childPath = childWorkspacePath(parent: node.path, segment: segment)
     let childIndex = node.children.firstIndex { $0.path == childPath }
     if let childIndex {
-        insertWorkspacePath(&node.children[childIndex], segments: Array(segments.dropFirst()))
+        insertWorkspacePath(
+            &node.children[childIndex],
+            segments: Array(segments.dropFirst()),
+            originalPath: originalPath,
+            isSavedPath: isSavedPath
+        )
     } else {
         var child = GaryxWorkspacePathNode(
             id: childPath,
             name: segment,
             path: childPath,
+            originalPath: nil,
             isSavedPath: false,
             children: []
         )
-        insertWorkspacePath(&child, segments: Array(segments.dropFirst()))
+        insertWorkspacePath(
+            &child,
+            segments: Array(segments.dropFirst()),
+            originalPath: originalPath,
+            isSavedPath: isSavedPath
+        )
         node.children.append(child)
     }
 }
@@ -751,6 +795,7 @@ private func sortWorkspacePathNode(_ node: GaryxWorkspacePathNode) -> GaryxWorks
         id: node.id,
         name: node.name,
         path: node.path,
+        originalPath: node.originalPath,
         isSavedPath: node.isSavedPath,
         children: node.children
             .map(sortWorkspacePathNode)

@@ -259,7 +259,7 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
                 : `${isCurrentSaved ? t('Use saved path') : t('Use suggested path')} ${workspaceCompactPath(currentPath)}`
             }
             disabled={disabled}
-            onClick={() => onSelect(currentPath)}
+            onClick={() => onSelect(currentNode?.workspace?.path || currentPath)}
             size="sm"
             type="button"
             variant={isCurrentSelected ? 'secondary' : 'outline'}
