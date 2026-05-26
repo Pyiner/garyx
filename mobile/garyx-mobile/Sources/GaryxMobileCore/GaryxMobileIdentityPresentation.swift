@@ -32,8 +32,7 @@ public struct GaryxProviderPresentation: Equatable {
     ) -> GaryxProviderPresentation {
         let provider = providerType?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let agent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let source = "\(agent) \(provider)"
-        let kind = kind(for: source)
+        let kind = kind(for: provider.isEmpty ? agent : provider)
         let label = fallbackName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let display = provider.isEmpty
             ? (label.isEmpty ? (agent.isEmpty ? "Agent" : agent) : label)
@@ -154,6 +153,14 @@ public struct GaryxChannelIdentityPresentation: Equatable {
             fallbackAssetName: fallbackAssetName(for: normalized),
             fallbackInitials: initials(for: label.isEmpty ? displayName : label)
         )
+    }
+
+    public static func displayName(for channel: String, catalogDisplayName: String?) -> String {
+        let catalogDisplayName = catalogDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !catalogDisplayName.isEmpty {
+            return catalogDisplayName
+        }
+        return displayName(for: channel)
     }
 
     public static func displayName(for channel: String) -> String {

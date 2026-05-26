@@ -291,6 +291,29 @@ final class GaryxMobileBotGroupTests: XCTestCase {
         XCTAssertEqual(group.defaultOpenThreadId, "thread-alpha")
     }
 
+    func testBuilderUsesPluginDisplayNameForCustomChannels() throws {
+        let endpoint = try makeEndpoint(
+            key: "lark_im:test-bot:alpha",
+            channel: "lark_im",
+            accountId: "test-bot",
+            label: "Alpha",
+            threadId: "thread-alpha"
+        )
+
+        let groups = GaryxMobileBotGroupBuilder.groups(
+            channelEndpoints: [endpoint],
+            configuredBots: [],
+            botConsoles: [],
+            channelPlugins: [try makePlugin(id: "lark_im", iconDataUrl: "data:image/png;base64,AA==", displayName: "Lark IM")]
+        )
+
+        let group = try XCTUnwrap(groups.first)
+        XCTAssertEqual(group.channelDisplayName, "Lark IM")
+        XCTAssertEqual(group.title, "Lark IM / test-bot")
+        XCTAssertEqual(group.subtitle, "Lark IM Bot · test-bot")
+        XCTAssertEqual(group.compactDetailLine, "Lark IM · test-bot")
+    }
+
     func testBuilderIncludesEndpointOnlyGroupsAlongsideConfiguredBots() throws {
         let configured = try makeConfiguredBot(
             channel: "telegram",
@@ -349,6 +372,7 @@ final class GaryxMobileBotGroupTests: XCTestCase {
         GaryxMobileBotGroup(
             id: "\(channel)::\(accountId)",
             channel: channel,
+            channelDisplayName: GaryxChannelIdentityPresentation.displayName(for: channel),
             accountId: accountId,
             title: "Test Bot",
             subtitle: "Synthetic bot",
@@ -485,12 +509,12 @@ final class GaryxMobileBotGroupTests: XCTestCase {
         return try decode(GaryxBotConsoleSummary.self, from: object)
     }
 
-    private func makePlugin(id: String, iconDataUrl: String) throws -> GaryxChannelPluginCatalogEntry {
+    private func makePlugin(id: String, iconDataUrl: String, displayName: String? = nil) throws -> GaryxChannelPluginCatalogEntry {
         try decode(
             GaryxChannelPluginCatalogEntry.self,
             from: [
                 "id": id,
-                "display_name": id.capitalized,
+                "display_name": displayName ?? id.capitalized,
                 "icon_data_url": iconDataUrl,
                 "schema": [:],
                 "config_methods": [],

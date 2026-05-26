@@ -137,7 +137,7 @@ struct GaryxConfiguredBotConfigRow: View {
     private var detailLine: String {
         let workspace = bot.workspaceDir?.garyxLastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let agent = bot.agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let base = "\(GaryxChannelIdentityPresentation.displayName(for: bot.channel)) Bot · \(bot.accountId)"
+        let base = "\(channelDisplayName) Bot · \(bot.accountId)"
         if !workspace.isEmpty {
             return "\(base) · \(workspace)"
         }
@@ -145,6 +145,13 @@ struct GaryxConfiguredBotConfigRow: View {
             return "\(base) · \(agent)"
         }
         return base
+    }
+
+    private var channelDisplayName: String {
+        GaryxChannelIdentityPresentation.displayName(
+            for: bot.channel,
+            catalogDisplayName: GaryxChannelIconResolver.displayName(for: bot.channel, plugins: model.channelPlugins)
+        )
     }
 
     private var iconDataUrl: String? {

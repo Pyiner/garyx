@@ -24,6 +24,17 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.fallbackInitials, "CA")
     }
 
+    func testProviderPresentationPrefersProviderTypeOverAgentId() {
+        let presentation = GaryxProviderPresentation.make(
+            agentId: "gemini-specialist",
+            providerType: "claude_code",
+            fallbackName: "Claude Specialist"
+        )
+        XCTAssertEqual(presentation.kind, .claude)
+        XCTAssertEqual(presentation.symbolName, "sparkles")
+        XCTAssertEqual(presentation.displayName, "Claude Code")
+    }
+
     func testChannelPresentationNormalizesDisplayNamesAssetsAndInitials() {
         let telegram = GaryxChannelIdentityPresentation.make(channel: "telegram", label: "Mobile Bot")
         XCTAssertEqual(telegram.displayName, "Telegram")
@@ -34,5 +45,16 @@ final class GaryxMobileIdentityPresentationTests: XCTestCase {
         XCTAssertEqual(custom.displayName, "Custom Channel")
         XCTAssertNil(custom.fallbackAssetName)
         XCTAssertEqual(custom.fallbackInitials, "CC")
+    }
+
+    func testChannelPresentationPrefersCatalogDisplayName() {
+        XCTAssertEqual(
+            GaryxChannelIdentityPresentation.displayName(for: "lark_im", catalogDisplayName: "Lark IM"),
+            "Lark IM"
+        )
+        XCTAssertEqual(
+            GaryxChannelIdentityPresentation.displayName(for: "lark_im", catalogDisplayName: " "),
+            "Lark Im"
+        )
     }
 }

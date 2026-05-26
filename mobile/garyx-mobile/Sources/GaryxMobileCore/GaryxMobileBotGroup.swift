@@ -3,6 +3,7 @@ import Foundation
 internal struct GaryxMobileBotGroup: Identifiable, Equatable {
     let id: String
     let channel: String
+    let channelDisplayName: String
     let accountId: String
     let title: String
     let subtitle: String
@@ -58,6 +59,13 @@ internal enum GaryxMobileBotGroupBuilder {
             GaryxChannelIconResolver.iconDataUrl(for: channel, plugins: channelPlugins)
         }
 
+        func displayName(for channel: String) -> String {
+            GaryxChannelIdentityPresentation.displayName(
+                for: channel,
+                catalogDisplayName: GaryxChannelIconResolver.displayName(for: channel, plugins: channelPlugins)
+            )
+        }
+
         for console in botConsoles {
             let key = botGroupKey(channel: console.channel, accountId: console.accountId)
             let endpoints = endpointsByGroup[key] ?? []
@@ -68,6 +76,7 @@ internal enum GaryxMobileBotGroupBuilder {
                 GaryxMobileBotGroup(
                     id: console.id.isEmpty ? "\(console.channel)::\(console.accountId)" : console.id,
                     channel: console.channel,
+                    channelDisplayName: displayName(for: console.channel),
                     accountId: console.accountId,
                     title: console.title,
                     subtitle: console.subtitle,
@@ -98,9 +107,10 @@ internal enum GaryxMobileBotGroupBuilder {
                 GaryxMobileBotGroup(
                     id: "\(bot.channel)::\(bot.accountId)",
                     channel: bot.channel,
+                    channelDisplayName: displayName(for: bot.channel),
                     accountId: bot.accountId,
                     title: bot.displayName,
-                    subtitle: "\(GaryxChannelIdentityPresentation.displayName(for: bot.channel)) Bot · \(bot.accountId)",
+                    subtitle: "\(displayName(for: bot.channel)) Bot · \(bot.accountId)",
                     agentId: nonEmpty(bot.agentId),
                     rootBehavior: bot.rootBehavior,
                     status: bot.enabled ? "idle" : "disabled",
@@ -122,9 +132,10 @@ internal enum GaryxMobileBotGroupBuilder {
                 GaryxMobileBotGroup(
                     id: key,
                     channel: first.channel,
+                    channelDisplayName: displayName(for: first.channel),
                     accountId: first.accountId,
-                    title: "\(GaryxChannelIdentityPresentation.displayName(for: first.channel)) / \(first.accountId)",
-                    subtitle: "\(GaryxChannelIdentityPresentation.displayName(for: first.channel)) Bot · \(first.accountId)",
+                    title: "\(displayName(for: first.channel)) / \(first.accountId)",
+                    subtitle: "\(displayName(for: first.channel)) Bot · \(first.accountId)",
                     agentId: nil,
                     rootBehavior: "open_default",
                     status: "idle",
@@ -215,7 +226,9 @@ extension GaryxMobileBotGroup {
     }
 
     internal var compactDetailLine: String {
-        let channelName = GaryxChannelIdentityPresentation.displayName(for: channel)
+        let channelName = channelDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? GaryxChannelIdentityPresentation.displayName(for: channel)
+            : channelDisplayName
         let account = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
         let botId = account.isEmpty ? channelName : "\(channelName) · \(account)"
         let agent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
