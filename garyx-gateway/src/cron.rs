@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
 use chrono::{DateTime, Local, LocalResult, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
@@ -10,7 +10,8 @@ use garyx_bridge::MultiProviderBridge;
 use garyx_channels::{ChannelDispatcher, OutboundMessage, SendMessageResult};
 use garyx_models::ChannelOutboundContent;
 use garyx_models::config::{
-    CronAction, CronConfig, CronJobConfig, CronJobKind, CronSchedule, McpServerConfig,
+    CronAction, CronConfig, CronJobConfig, CronJobKind, CronSchedule, InternalDispatchJobPayload,
+    McpServerConfig,
 };
 use garyx_models::provider::{AgentRunRequest, StreamBoundaryKind, StreamEvent};
 use garyx_models::thread_logs::{ThreadLogEvent, ThreadLogSink, is_canonical_thread_id};
@@ -27,7 +28,9 @@ use crate::agent_identity::create_thread_for_agent_reference;
 use crate::agent_teams::AgentTeamStore;
 use crate::custom_agents::CustomAgentStore;
 use crate::delivery_target::resolve_delivery_target_with_recovery;
+use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::managed_mcp_metadata::inject_managed_mcp_servers;
+use crate::server::AppState;
 use crate::skills::sync_default_external_user_skills;
 
 const MAX_INTERVAL_SECS: u64 = i64::MAX as u64;
@@ -92,6 +95,12 @@ pub struct CronJob {
     pub created_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_at: Option<DateTime<Utc>>,
+    /// System-managed marker. Mirrors `CronJobConfig.system` and is hidden
+    /// from the default user-facing list. `#[serde(default)]` keeps old
+    /// persisted jobs (written before this field existed) deserializable
+    /// as `system = false`.
+    #[serde(default)]
+    pub system: bool,
 }
 
 impl CronJob {
@@ -118,6 +127,7 @@ impl CronJob {
             run_count: 0,
             created_at: now,
             last_run_at: None,
+            system: cfg.system,
         }
     }
 
@@ -268,6 +278,46 @@ fn is_automation_prompt_job(job: &CronJob) -> bool {
         && has_non_empty_cron_text(job.message.as_deref())
 }
 
+/// Render the synthetic user-turn body for a fired `schedule_followup` job.
+///
+/// The body has two sections: a `<garyx_followup_metadata>` block so the
+/// resumed agent (and telemetry) can identify the turn as a followup, and
+/// then the verbatim prompt the caller passed to `schedule_followup`.
+///
+/// `scheduled_for` is the wall-clock time the cron tick actually fired at —
+/// equal to `payload.scheduled_at + payload.delay_seconds_requested` unless a
+/// later `schedule_followup` call replaced the job. The metadata exposes
+/// both so the resumed agent can reason about the actual delay it
+/// experienced.
+pub(crate) fn build_followup_body(
+    schedule_id: &str,
+    payload: &InternalDispatchJobPayload,
+    scheduled_for: DateTime<Utc>,
+) -> String {
+    let mut lines = Vec::with_capacity(8);
+    lines.push("<garyx_followup_metadata>".to_owned());
+    lines.push(format!("schedule_id: {schedule_id}"));
+    lines.push(format!(
+        "scheduled_at: {}",
+        payload.scheduled_at.to_rfc3339()
+    ));
+    lines.push(format!("scheduled_for: {}", scheduled_for.to_rfc3339()));
+    lines.push(format!(
+        "delay_seconds_requested: {}",
+        payload.delay_seconds_requested
+    ));
+    if let Some(reason) = payload.reason.as_deref() {
+        lines.push(format!("reason: {reason}"));
+    }
+    if let Some(originating) = payload.originating_run_id.as_deref() {
+        lines.push(format!("originating_run_id: {originating}"));
+    }
+    lines.push("</garyx_followup_metadata>".to_owned());
+    lines.push(String::new());
+    lines.push(payload.prompt.clone());
+    lines.join("\n")
+}
+
 fn uses_generated_automation_thread_job(job: &CronJob) -> bool {
     is_automation_prompt_job(job)
         && has_non_empty_cron_text(job.workspace_dir.as_deref())
@@ -408,6 +458,14 @@ pub struct CronService {
     event_tx: Option<broadcast::Sender<String>>,
     /// Optional bridge+router runtime for agent-turn/system-event actions.
     dispatch_runtime: Arc<RwLock<Option<CronDispatchRuntime>>>,
+    /// Weak handle to the owning [`AppState`]. Populated by
+    /// `AppStateBuilder::build` *after* the `Arc<AppState>` exists, so the
+    /// scheduler can call back into [`dispatch_internal_message_to_thread`]
+    /// without forming an `Arc<AppState>` ↔ `Arc<CronService>` cycle.
+    ///
+    /// Uses [`OnceLock`] because the weak ref is established exactly once at
+    /// startup and never replaced.
+    app_state_weak: Arc<OnceLock<Weak<AppState>>>,
 }
 
 impl CronService {
@@ -424,7 +482,19 @@ impl CronService {
             scheduler_task: None,
             event_tx: None,
             dispatch_runtime: Arc::new(RwLock::new(None)),
+            app_state_weak: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Install the back-reference to the owning [`AppState`].
+    ///
+    /// Must be called once after `Arc::new(AppState)` so internal-dispatch
+    /// cron jobs (e.g. those produced by `mcp__garyx__schedule_followup`)
+    /// can synthesize a user turn into the target thread when they fire.
+    /// Subsequent calls are no-ops: the `Arc<AppState>` identity is stable
+    /// for the gateway's lifetime.
+    pub fn set_app_state(&self, weak: Weak<AppState>) {
+        let _ = self.app_state_weak.set(weak);
     }
 
     /// Attach a broadcast channel for publishing lifecycle events.
@@ -505,6 +575,7 @@ impl CronService {
                 existing.thread_id = cfg_job.thread_id.clone();
                 existing.delete_after_run = cfg_job.delete_after_run;
                 existing.enabled = cfg_job.enabled;
+                existing.system = cfg_job.system;
                 if schedule_changed {
                     existing.next_run = CronJob::compute_next_run(&existing.schedule, Utc::now());
                 }
@@ -544,6 +615,7 @@ impl CronService {
         let data_dir = self.data_dir.clone();
         let event_tx = self.event_tx.clone();
         let dispatch_runtime = self.dispatch_runtime.clone();
+        let app_state_weak = self.app_state_weak.clone();
 
         let task = tokio::spawn(async move {
             tracing::info!("cron scheduler started");
@@ -562,6 +634,7 @@ impl CronService {
                             &data_dir,
                             event_tx.as_ref(),
                             &dispatch_runtime,
+                            &app_state_weak,
                         ).await;
                     }
                 }
@@ -581,8 +654,25 @@ impl CronService {
         }
     }
 
-    /// List all jobs.
+    /// List jobs visible to user-facing surfaces (default).
+    ///
+    /// System-managed jobs (e.g. those scheduled by the
+    /// `schedule_followup` MCP tool) are filtered out so they don't pollute
+    /// the user's automation list. Use [`Self::list_all`] when the caller
+    /// genuinely needs every job — including the system-managed ones — such
+    /// as the scheduler's own internal accounting or tests.
     pub async fn list(&self) -> Vec<CronJob> {
+        self.jobs
+            .read()
+            .await
+            .values()
+            .filter(|job| !job.system)
+            .cloned()
+            .collect()
+    }
+
+    /// List every job, including system-managed ones.
+    pub async fn list_all(&self) -> Vec<CronJob> {
         self.jobs.read().await.values().cloned().collect()
     }
 
@@ -633,6 +723,30 @@ impl CronService {
         Ok(job)
     }
 
+    /// Insert-or-replace a job by id, atomically capturing any prior job.
+    ///
+    /// Used by `schedule_followup` to dedupe per `(thread_id, run_id)` —
+    /// callers derive a deterministic id and call `upsert`; the returned
+    /// `previous` slot tells them whether they replaced an existing schedule
+    /// (and, if so, what its terms were).
+    pub async fn upsert(&self, cfg: CronJobConfig) -> std::io::Result<(CronJob, Option<CronJob>)> {
+        validate_cron_schedule(&cfg.schedule)?;
+        ensure_dirs(&self.data_dir).await?;
+        let new_job = CronJob::from_config(&cfg);
+        let previous = self
+            .jobs
+            .write()
+            .await
+            .insert(new_job.id.clone(), new_job.clone());
+        persist_job(&self.data_dir, &new_job).await?;
+        if previous.is_some() {
+            tracing::info!(job_id = %cfg.id, "cron job replaced via upsert");
+        } else {
+            tracing::info!(job_id = %cfg.id, "cron job added via upsert");
+        }
+        Ok((new_job, previous))
+    }
+
     /// Update an existing job in-place, preserving runtime counters/state.
     pub async fn update(&self, id: &str, cfg: CronJobConfig) -> std::io::Result<Option<CronJob>> {
         validate_cron_schedule(&cfg.schedule)?;
@@ -654,6 +768,7 @@ impl CronService {
             job.thread_id = cfg.thread_id;
             job.delete_after_run = cfg.delete_after_run;
             job.enabled = cfg.enabled;
+            job.system = cfg.system;
             job.next_run = CronJob::compute_next_run(&job.schedule, Utc::now());
 
             job.clone()
@@ -710,6 +825,7 @@ impl CronService {
                             &self.active_agent_runs,
                             self.event_tx.as_ref(),
                             &self.dispatch_runtime,
+                            &self.app_state_weak,
                         )
                         .await,
                         prepared_thread_id,
@@ -932,6 +1048,7 @@ impl CronService {
     }
 
     /// Called every tick to find and execute due jobs.
+    #[allow(clippy::too_many_arguments)]
     async fn tick(
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         runs: &Arc<RwLock<VecDeque<RunRecord>>>,
@@ -939,6 +1056,7 @@ impl CronService {
         data_dir: &Path,
         event_tx: Option<&broadcast::Sender<String>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
+        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
     ) {
         // Collect due job IDs under a read lock.
         let due_ids: Vec<String> = {
@@ -976,6 +1094,7 @@ impl CronService {
                                 active_agent_runs,
                                 event_tx,
                                 dispatch_runtime,
+                                app_state_weak,
                             )
                             .await,
                             prepared_thread_id,
@@ -1029,6 +1148,7 @@ impl CronService {
         active_agent_runs: &Arc<RwLock<HashMap<String, String>>>,
         event_tx: Option<&broadcast::Sender<String>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
+        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
     ) -> RunRecord {
         let run_id = Uuid::new_v4().to_string();
         let started_at = Utc::now();
@@ -1047,39 +1167,48 @@ impl CronService {
             let _ = tx.send(event.to_string());
         }
 
-        let (status, error) = match &job.action {
-            CronAction::Log => {
-                tracing::info!(job_id = %job.id, "cron log action fired");
-                (JobRunStatus::Success, None)
-            }
-            CronAction::SystemEvent | CronAction::AgentTurn => {
-                let message = job
-                    .message
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_default()
-                    .to_owned();
-                if message.is_empty() {
-                    (
-                        JobRunStatus::Failed,
-                        Some("cron message payload is empty".to_owned()),
-                    )
-                } else {
-                    match Self::dispatch_agent_turn(
-                        job,
-                        &run_id,
-                        &message,
-                        active_agent_runs,
-                        dispatch_runtime,
-                    )
-                    .await
-                    {
-                        Ok(()) => (JobRunStatus::Success, None),
-                        Err(e) => (JobRunStatus::Failed, Some(e)),
-                    }
+        let (status, error) = match &job.kind {
+            CronJobKind::InternalDispatch { payload } => {
+                match Self::dispatch_internal_followup(job, &run_id, payload, app_state_weak).await
+                {
+                    Ok(()) => (JobRunStatus::Success, None),
+                    Err(e) => (JobRunStatus::Failed, Some(e)),
                 }
             }
+            CronJobKind::AutomationPrompt => match &job.action {
+                CronAction::Log => {
+                    tracing::info!(job_id = %job.id, "cron log action fired");
+                    (JobRunStatus::Success, None)
+                }
+                CronAction::SystemEvent | CronAction::AgentTurn => {
+                    let message = job
+                        .message
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_default()
+                        .to_owned();
+                    if message.is_empty() {
+                        (
+                            JobRunStatus::Failed,
+                            Some("cron message payload is empty".to_owned()),
+                        )
+                    } else {
+                        match Self::dispatch_agent_turn(
+                            job,
+                            &run_id,
+                            &message,
+                            active_agent_runs,
+                            dispatch_runtime,
+                        )
+                        .await
+                        {
+                            Ok(()) => (JobRunStatus::Success, None),
+                            Err(e) => (JobRunStatus::Failed, Some(e)),
+                        }
+                    }
+                }
+            },
         };
 
         let finished_at = Utc::now();
@@ -1117,6 +1246,74 @@ impl CronService {
             thread_id: Self::trimmed_non_empty(job.thread_id.as_deref()),
             error,
         }
+    }
+
+    /// Build a synthetic user-turn body from a `schedule_followup` payload and
+    /// inject it into the originating thread via
+    /// [`dispatch_internal_message_to_thread`].
+    ///
+    /// The synthetic body is prefixed with a `<garyx_followup_metadata>` block
+    /// so the resumed agent can correlate the followup with its own earlier
+    /// `schedule_followup` call (and so telemetry can distinguish followups
+    /// from organic user input).
+    async fn dispatch_internal_followup(
+        job: &CronJob,
+        run_id: &str,
+        payload: &InternalDispatchJobPayload,
+        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+    ) -> Result<(), String> {
+        let thread_id = Self::trimmed_non_empty(job.thread_id.as_deref())
+            .ok_or_else(|| format!("cron internal-dispatch job {} is missing thread_id", job.id))?;
+
+        let app_state = app_state_weak
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| "cron app_state back-reference is not installed".to_owned())?;
+
+        let scheduled_for = job.next_run;
+        let body = build_followup_body(&job.id, payload, scheduled_for);
+
+        let mut extra_metadata = HashMap::new();
+        extra_metadata.insert(
+            "schedule_followup".to_owned(),
+            serde_json::Value::Bool(true),
+        );
+        extra_metadata.insert(
+            "schedule_followup_job_id".to_owned(),
+            serde_json::Value::String(job.id.clone()),
+        );
+        extra_metadata.insert(
+            "schedule_followup_scheduled_at".to_owned(),
+            serde_json::Value::String(payload.scheduled_at.to_rfc3339()),
+        );
+        extra_metadata.insert(
+            "schedule_followup_scheduled_for".to_owned(),
+            serde_json::Value::String(scheduled_for.to_rfc3339()),
+        );
+        if let Some(reason) = payload.reason.as_deref() {
+            extra_metadata.insert(
+                "schedule_followup_reason".to_owned(),
+                serde_json::Value::String(reason.to_owned()),
+            );
+        }
+        if let Some(originating) = payload.originating_run_id.as_deref() {
+            extra_metadata.insert(
+                "schedule_followup_originating_run_id".to_owned(),
+                serde_json::Value::String(originating.to_owned()),
+            );
+        }
+
+        dispatch_internal_message_to_thread(
+            &app_state,
+            &thread_id,
+            run_id,
+            &body,
+            InternalDispatchOptions {
+                extra_metadata,
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     async fn dispatch_agent_turn(

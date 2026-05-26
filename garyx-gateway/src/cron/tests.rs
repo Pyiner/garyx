@@ -191,6 +191,7 @@ fn make_job_config(id: &str, interval_secs: u64) -> CronJobConfig {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     }
 }
 
@@ -271,6 +272,7 @@ async fn test_add_rejects_invalid_once_timestamp() {
             thread_id: None,
             delete_after_run: false,
             enabled: true,
+            system: false,
         })
         .await
         .unwrap_err();
@@ -300,6 +302,7 @@ async fn test_add_trims_once_timestamp_schedule() {
             thread_id: None,
             delete_after_run: false,
             enabled: true,
+            system: false,
         })
         .await
         .unwrap();
@@ -332,6 +335,7 @@ async fn test_add_accepts_once_protocol_timestamp() {
             thread_id: None,
             delete_after_run: false,
             enabled: true,
+            system: false,
         })
         .await
         .unwrap();
@@ -384,6 +388,7 @@ async fn test_load_updates_automation_fields_from_config() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -403,6 +408,7 @@ async fn test_load_updates_automation_fields_from_config() {
             thread_id: Some("thread::manual".to_owned()),
             delete_after_run: false,
             enabled: true,
+            system: false,
         }],
     })
     .await
@@ -447,6 +453,7 @@ async fn test_load_skips_invalid_persisted_schedule() {
             run_count: 0,
             created_at: Utc::now(),
             last_run_at: None,
+            system: false,
         },
     )
     .await
@@ -495,6 +502,7 @@ async fn test_load_skips_invalid_config_schedule() {
                 thread_id: None,
                 delete_after_run: false,
                 enabled: true,
+                system: false,
             },
         ],
     };
@@ -578,6 +586,7 @@ async fn test_run_now_disables_once_job_after_success() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -615,6 +624,7 @@ async fn test_tick_failure_does_not_advance_schedule() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -634,6 +644,7 @@ async fn test_tick_failure_does_not_advance_schedule() {
         tmp.path(),
         None,
         &svc.dispatch_runtime,
+        &svc.app_state_weak,
     )
     .await;
 
@@ -675,6 +686,7 @@ async fn test_run_now_delete_after_run_removes_job_and_file() {
         thread_id: None,
         delete_after_run: true,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -928,6 +940,7 @@ async fn test_dispatch_agent_turn_recovers_thread_target_delivery_from_store() {
         run_count: 0,
         created_at: Utc::now(),
         last_run_at: None,
+        system: false,
     };
 
     let active_agent_runs = Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
@@ -958,6 +971,7 @@ async fn test_successful_automation_run_persists_thread_id() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -1017,6 +1031,7 @@ async fn test_bound_automation_run_reuses_existing_thread() {
         thread_id: Some(target_thread_id.to_owned()),
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -1088,6 +1103,7 @@ async fn test_bound_automation_missing_target_thread_fails_without_cleanup() {
         thread_id: Some(missing_thread_id.to_owned()),
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -1148,6 +1164,7 @@ async fn test_failed_automation_run_now_cleans_up_failed_thread() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -1208,6 +1225,7 @@ async fn test_run_now_disabled_job_is_skipped() {
         thread_id: None,
         delete_after_run: false,
         enabled: false,
+        system: false,
     })
     .await
     .unwrap();
@@ -1242,6 +1260,7 @@ async fn test_update_job_keeps_runtime_state() {
                 thread_id: None,
                 delete_after_run: true,
                 enabled: false,
+                system: false,
             },
         )
         .await
@@ -1290,6 +1309,7 @@ async fn test_once_schedule_disables_after_fire() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     };
     let mut job = CronJob::from_config(&cfg);
     job.advance();
@@ -1314,6 +1334,7 @@ async fn test_once_schedule_past_time_is_not_due() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     };
     let job = CronJob::from_config(&cfg);
     assert!(
@@ -1342,6 +1363,7 @@ async fn test_cron_expression_next_run() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     };
 
     let job = CronJob::from_config(&cfg);
@@ -1400,6 +1422,7 @@ async fn test_config_merge_preserves_runtime_state() {
             thread_id: None,
             delete_after_run: false,
             enabled: true,
+            system: false,
         }],
     };
     svc.load(&cfg).await.unwrap();
@@ -1442,6 +1465,7 @@ async fn test_load_recomputes_next_run_after_schedule_change() {
             thread_id: None,
             delete_after_run: false,
             enabled: true,
+            system: false,
         }],
     })
     .await
@@ -1485,6 +1509,7 @@ async fn test_stop_waits_for_inflight_cron_tick() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -1548,6 +1573,7 @@ async fn test_tick_and_run_now_do_not_execute_same_job_twice() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();
@@ -1585,6 +1611,7 @@ async fn test_tick_and_run_now_do_not_execute_same_job_twice() {
         tmp.path(),
         None,
         &svc.dispatch_runtime,
+        &svc.app_state_weak,
     )
     .await;
     let _ = run_now_task.await.unwrap();
@@ -1608,4 +1635,417 @@ async fn test_start_is_idempotent() {
 
     svc.stop().await;
     assert!(svc.stop_tx.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// AXON-687: schedule_followup + InternalDispatch wiring
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_legacy_cron_job_json_without_system_deserializes() {
+    // Persisted state written by versions of the gateway that predate the
+    // `system` field must still round-trip. Mirrors the on-disk schema
+    // before AXON-687 — note there is no `system` field at all.
+    let legacy = serde_json::json!({
+        "id": "legacy-job",
+        "kind": "automation_prompt",
+        "schedule": { "type": "interval", "interval_secs": 60 },
+        "action": "log",
+        "delete_after_run": false,
+        "enabled": true,
+        "next_run": "2026-05-26T00:00:00Z",
+        "last_status": "never_run",
+        "created_at": "2026-05-26T00:00:00Z"
+    });
+    let job: CronJob = serde_json::from_value(legacy).expect("legacy CronJob json must parse");
+    assert!(!job.system, "missing `system` field must default to false");
+    assert_eq!(job.id, "legacy-job");
+    assert_eq!(job.kind, CronJobKind::AutomationPrompt);
+}
+
+#[tokio::test]
+async fn test_internal_dispatch_kind_serde_roundtrip() {
+    let payload = garyx_models::config::InternalDispatchJobPayload {
+        prompt: "continue with the report".to_owned(),
+        reason: Some("background build finished".to_owned()),
+        originating_run_id: Some("run-abc".to_owned()),
+        scheduled_at: Utc::now(),
+        delay_seconds_requested: 300,
+    };
+    let kind = CronJobKind::InternalDispatch {
+        payload: payload.clone(),
+    };
+    let json = serde_json::to_value(&kind).unwrap();
+    // Externally tagged: {"internal_dispatch": { ... }}
+    assert!(
+        json.get("internal_dispatch").is_some(),
+        "InternalDispatch must serialize externally-tagged: {json}"
+    );
+    let parsed: CronJobKind = serde_json::from_value(json).unwrap();
+    assert_eq!(parsed, kind);
+
+    // And AutomationPrompt must still serialize as a bare string for
+    // backwards compatibility.
+    let auto = CronJobKind::AutomationPrompt;
+    let json = serde_json::to_value(&auto).unwrap();
+    assert_eq!(json, serde_json::json!("automation_prompt"));
+}
+
+#[tokio::test]
+async fn test_list_hides_system_jobs_by_default() {
+    let tmp = TempDir::new().unwrap();
+    let svc = CronService::new(tmp.path().to_path_buf());
+
+    svc.add(CronJobConfig {
+        id: "user-visible".to_owned(),
+        kind: Default::default(),
+        label: None,
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: CronAction::Log,
+        target: None,
+        message: None,
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: None,
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .unwrap();
+
+    svc.add(CronJobConfig {
+        id: "hidden-system".to_owned(),
+        kind: Default::default(),
+        label: None,
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: CronAction::Log,
+        target: None,
+        message: None,
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: None,
+        delete_after_run: false,
+        enabled: true,
+        system: true,
+    })
+    .await
+    .unwrap();
+
+    let visible_ids: Vec<String> = svc.list().await.into_iter().map(|j| j.id).collect();
+    assert_eq!(visible_ids, vec!["user-visible".to_owned()]);
+
+    let all_ids: std::collections::BTreeSet<String> =
+        svc.list_all().await.into_iter().map(|j| j.id).collect();
+    let expected: std::collections::BTreeSet<String> = ["user-visible", "hidden-system"]
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect();
+    assert_eq!(all_ids, expected);
+
+    // `get` still returns system jobs by id — the filter is list-only.
+    assert!(svc.get("hidden-system").await.is_some());
+}
+
+#[tokio::test]
+async fn test_upsert_returns_replaced_previous() {
+    let tmp = TempDir::new().unwrap();
+    let svc = CronService::new(tmp.path().to_path_buf());
+
+    let make_cfg = |delay: u64| CronJobConfig {
+        id: "dedupe-target".to_owned(),
+        kind: CronJobKind::InternalDispatch {
+            payload: garyx_models::config::InternalDispatchJobPayload {
+                prompt: format!("delay={delay}"),
+                reason: None,
+                originating_run_id: Some("run-1".to_owned()),
+                scheduled_at: Utc::now(),
+                delay_seconds_requested: delay,
+            },
+        },
+        label: None,
+        schedule: CronSchedule::Once {
+            at: (Utc::now() + chrono::Duration::seconds(delay as i64)).to_rfc3339(),
+        },
+        ui_schedule: None,
+        action: CronAction::Log,
+        target: None,
+        message: None,
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: Some("thread::test".to_owned()),
+        delete_after_run: true,
+        enabled: true,
+        system: true,
+    };
+
+    let (first, replaced_first) = svc.upsert(make_cfg(60)).await.unwrap();
+    assert!(
+        replaced_first.is_none(),
+        "first upsert should not report a previous"
+    );
+    assert_eq!(first.id, "dedupe-target");
+
+    let (second, replaced_second) = svc.upsert(make_cfg(120)).await.unwrap();
+    assert_eq!(second.id, "dedupe-target");
+    let prev = replaced_second.expect("second upsert must surface the replaced job");
+    assert_eq!(prev.id, "dedupe-target");
+    match prev.kind {
+        CronJobKind::InternalDispatch { payload } => {
+            assert_eq!(payload.delay_seconds_requested, 60);
+        }
+        _ => panic!("previous kind should be InternalDispatch"),
+    }
+}
+
+#[test]
+fn test_build_followup_body_contains_metadata_block() {
+    let scheduled_at = chrono::DateTime::parse_from_rfc3339("2026-05-26T07:25:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let scheduled_for = chrono::DateTime::parse_from_rfc3339("2026-05-26T07:30:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let payload = garyx_models::config::InternalDispatchJobPayload {
+        prompt: "resume the export".to_owned(),
+        reason: Some("background job completed".to_owned()),
+        originating_run_id: Some("run-xyz".to_owned()),
+        scheduled_at,
+        delay_seconds_requested: 300,
+    };
+    let body =
+        crate::cron::build_followup_body("followup_deadbeefdeadbeef", &payload, scheduled_for);
+    assert!(body.starts_with("<garyx_followup_metadata>"));
+    assert!(body.contains("schedule_id: followup_deadbeefdeadbeef"));
+    assert!(body.contains("delay_seconds_requested: 300"));
+    assert!(body.contains("scheduled_for: 2026-05-26T07:30:00+00:00"));
+    assert!(body.contains("reason: background job completed"));
+    assert!(body.contains("originating_run_id: run-xyz"));
+    assert!(body.contains("</garyx_followup_metadata>"));
+    // Verbatim prompt must follow the metadata block on its own paragraph.
+    assert!(body.contains("\n\nresume the export"));
+}
+
+#[tokio::test]
+async fn test_followup_job_id_is_deterministic_and_distinguishes_runs() {
+    // Same (thread, run) → same job id (dedupe key); different run → different id.
+    use crate::mcp::tools::schedule_followup::followup_job_id;
+    let a = followup_job_id("thread::abc", "run-1");
+    let b = followup_job_id("thread::abc", "run-1");
+    let c = followup_job_id("thread::abc", "run-2");
+    let d = followup_job_id("thread::other", "run-1");
+    assert_eq!(a, b);
+    assert_ne!(a, c);
+    assert_ne!(a, d);
+    assert!(a.starts_with("followup_"));
+}
+
+#[tokio::test]
+async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn() {
+    // End-to-end: schedule a delay-soon followup via `upsert`, drive the
+    // cron tick manually, and assert that the bridge provider sees a
+    // synthetic user turn whose body begins with the
+    // `<garyx_followup_metadata>` block. This is the AXON-687 acceptance
+    // criterion that closes the schedule→tick→dispatch loop.
+    use crate::composition::app_bootstrap::AppStateBuilder;
+    use crate::mcp::tools::schedule_followup::followup_job_id;
+    use garyx_bridge::{AgentLoopProvider, BridgeError};
+    use garyx_models::config::GaryxConfig;
+    use garyx_models::provider::{
+        ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
+    };
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Default)]
+    struct RecordingProvider {
+        calls: StdMutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait]
+    impl AgentLoopProvider for RecordingProvider {
+        fn provider_type(&self) -> ProviderType {
+            ProviderType::ClaudeCode
+        }
+        fn is_ready(&self) -> bool {
+            true
+        }
+        async fn initialize(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+        async fn shutdown(&mut self) -> Result<(), BridgeError> {
+            Ok(())
+        }
+        async fn run_streaming(
+            &self,
+            options: &ProviderRunOptions,
+            on_chunk: garyx_bridge::provider_trait::StreamCallback,
+        ) -> Result<ProviderRunResult, BridgeError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((options.thread_id.clone(), options.message.clone()));
+            on_chunk(StreamEvent::Done);
+            Ok(ProviderRunResult {
+                run_id: "ok".to_owned(),
+                thread_id: options.thread_id.clone(),
+                response: "ok".to_owned(),
+                session_messages: vec![],
+                sdk_session_id: None,
+                actual_model: None,
+                thread_title: None,
+                success: true,
+                error: None,
+                input_tokens: 0,
+                output_tokens: 0,
+                cost: 0.0,
+                duration_ms: 0,
+            })
+        }
+        async fn get_or_create_session(&self, session_key: &str) -> Result<String, BridgeError> {
+            Ok(session_key.to_owned())
+        }
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let cron = Arc::new(CronService::new(tmp.path().to_path_buf()));
+
+    let bridge = Arc::new(garyx_bridge::MultiProviderBridge::new());
+    let provider = Arc::new(RecordingProvider::default());
+    bridge
+        .register_provider("axon-687-provider", provider.clone())
+        .await;
+    bridge
+        .set_route("telegram", "bot1", "axon-687-provider")
+        .await;
+    bridge.set_default_provider_key("axon-687-provider").await;
+
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_bridge(bridge.clone())
+        .with_cron_service(cron.clone())
+        .with_auto_research_store(Arc::new(crate::auto_research::AutoResearchStore::new()))
+        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
+        .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
+        .build();
+    bridge
+        .set_thread_store(state.threads.thread_store.clone())
+        .await;
+    bridge.set_event_tx(state.ops.events.sender()).await;
+
+    // Seed a thread with the channel binding so dispatch_internal_message
+    // can resolve a delivery context. Synthetic placeholder ids only —
+    // never real chat ids.
+    let thread_id = "thread::axon687-followup";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            serde_json::json!({
+                "thread_id": thread_id,
+                "channel": "telegram",
+                "account_id": "bot1",
+                "from_id": "test-user",
+                "is_group": false,
+                "messages": [],
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "bot1",
+                    "binding_key": "test-user",
+                    "chat_id": "test-user",
+                    "display_label": "test-user"
+                }],
+                "delivery_context": {
+                    "channel": "telegram",
+                    "account_id": "bot1",
+                    "chat_id": "test-user",
+                    "user_id": "test-user",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "test-user",
+                    "thread_id": "test-user",
+                    "metadata": {}
+                }
+            }),
+        )
+        .await;
+
+    // Schedule an internal-dispatch job that should fire in ~500ms.
+    // Bypass the MCP tool's 60s minimum on purpose — this test runs in CI
+    // and we want the tick to fire deterministically, not wait a minute.
+    let run_id = "run-from-test";
+    let job_id = followup_job_id(thread_id, run_id);
+    let scheduled_at = Utc::now();
+    let scheduled_for = scheduled_at + chrono::Duration::milliseconds(500);
+    let payload = garyx_models::config::InternalDispatchJobPayload {
+        prompt: "resume verification".to_owned(),
+        reason: Some("test reason".to_owned()),
+        originating_run_id: Some(run_id.to_owned()),
+        scheduled_at,
+        delay_seconds_requested: 60,
+    };
+    cron.upsert(CronJobConfig {
+        id: job_id.clone(),
+        kind: CronJobKind::InternalDispatch {
+            payload: payload.clone(),
+        },
+        label: None,
+        schedule: CronSchedule::Once {
+            at: scheduled_for.to_rfc3339(),
+        },
+        ui_schedule: None,
+        action: CronAction::Log,
+        target: None,
+        message: None,
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: Some(thread_id.to_owned()),
+        delete_after_run: true,
+        enabled: true,
+        system: true,
+    })
+    .await
+    .unwrap();
+
+    // Wait past the firing window, then drive the tick directly.
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    CronService::tick(
+        &cron.jobs,
+        &cron.runs,
+        &cron.active_agent_runs,
+        tmp.path(),
+        None,
+        &cron.dispatch_runtime,
+        &cron.app_state_weak,
+    )
+    .await;
+
+    // Allow the bridge's spawn-and-stream path to land.
+    let calls = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let snapshot = provider.calls.lock().unwrap().clone();
+            if !snapshot.is_empty() {
+                break snapshot;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("provider should receive the synthetic followup user turn");
+
+    assert_eq!(calls.len(), 1, "exactly one synthetic dispatch expected");
+    assert_eq!(calls[0].0, thread_id);
+    let body = &calls[0].1;
+    assert!(
+        body.starts_with("<garyx_followup_metadata>"),
+        "body must lead with metadata block, got: {body}"
+    );
+    assert!(body.contains(&format!("schedule_id: {job_id}")));
+    assert!(body.contains("delay_seconds_requested: 60"));
+    assert!(body.contains("reason: test reason"));
+    assert!(body.contains("originating_run_id: run-from-test"));
+    assert!(
+        body.contains("\n\nresume verification"),
+        "verbatim prompt must follow the metadata block"
+    );
 }

@@ -463,7 +463,7 @@ impl AppStateBuilder {
 
         let live_config = Arc::new(LiveConfigCell::new(self.config.clone()));
         let events = EventStreamHub::new(self.event_tx);
-        Arc::new(AppState {
+        let state = Arc::new(AppState {
             runtime: RuntimeState {
                 start_time,
                 health_checker: HealthChecker::new(start_time),
@@ -501,7 +501,19 @@ impl AppStateBuilder {
                 channel_swap: self.channel_swap,
                 channel_plugin_manager: self.channel_plugin_manager,
             },
-        })
+        });
+
+        // Install the weak back-reference into the CronService so
+        // internal-dispatch cron jobs (e.g. `schedule_followup`) can call back
+        // into the `AppState` to dispatch synthetic user turns when they fire.
+        // Must happen after `Arc::new(AppState)` to avoid an Arc<AppState> ↔
+        // Arc<CronService> cycle; `OnceLock::set` makes it idempotent in case
+        // build() is ever called more than once for the same cron service.
+        if let Some(cron_service) = state.ops.cron_service.as_ref() {
+            cron_service.set_app_state(Arc::downgrade(&state));
+        }
+
+        state
     }
 }
 

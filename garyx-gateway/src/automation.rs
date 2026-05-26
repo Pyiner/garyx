@@ -751,6 +751,7 @@ pub(crate) fn build_automation_job(
         thread_id: target_thread_id,
         delete_after_run: false,
         enabled,
+        system: false,
     })
 }
 
