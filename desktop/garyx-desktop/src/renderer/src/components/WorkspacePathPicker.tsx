@@ -242,18 +242,18 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
         </Button>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">
-            {currentPath ? workspaceLeafName(currentPath) || currentPath : t('Known folders')}
+            {currentPath ? workspaceLeafName(currentPath) || currentPath : t('Saved paths')}
           </div>
           <div className="truncate text-xs text-muted-foreground">
-            {currentPath ? workspaceCompactPath(currentPath) : t('Saved workspace roots')}
+            {currentPath ? workspaceCompactPath(currentPath) : t('Saved workspace paths')}
           </div>
         </div>
         {canUseCurrent ? (
           <Button
             aria-label={
               isCurrentSelected
-                ? t('Current folder selected')
-                : `${t('Use folder')} ${workspaceCompactPath(currentPath)}`
+                ? t('Current path selected')
+                : `${t('Use path')} ${workspaceCompactPath(currentPath)}`
             }
             disabled={disabled}
             onClick={() => onSelect(currentPath)}
@@ -262,7 +262,7 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
             variant={isCurrentSelected ? 'secondary' : 'outline'}
           >
             {isCurrentSelected ? <Check /> : <FolderOpen />}
-            {isCurrentSelected ? t('Selected') : t('Use folder')}
+            {isCurrentSelected ? t('Selected') : t('Use path')}
           </Button>
         ) : null}
       </div>
@@ -320,7 +320,7 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
           </div>
         ) : (
           <div className="px-3 py-8 text-center text-sm text-muted-foreground">
-            {t('No saved folders at this level.')}
+            {t('No saved paths at this level.')}
           </div>
         )}
       </div>

@@ -8226,7 +8226,7 @@ export function AppShell() {
       <WorkspacePathPickerDialog
         open={Boolean(addWorkspaceDialog)}
         title={t("Add Workspace")}
-        description={t("Choose or enter an absolute directory path.")}
+        description={t("Choose or enter an absolute path.")}
         initialPath={addWorkspaceDialog?.initialPath || ""}
         saving={workspaceMutation === "add"}
         workspaces={workspacePickerWorkspaces}

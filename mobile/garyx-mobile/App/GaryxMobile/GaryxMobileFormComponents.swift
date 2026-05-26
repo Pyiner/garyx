@@ -557,7 +557,7 @@ private struct GaryxWorkspacePathBrowser: View {
                             .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel(normalizedSelectedPath == normalizedWorkspacePath(currentPath) ? "Current folder selected" : "Use current folder")
+                        .accessibilityLabel(normalizedSelectedPath == normalizedWorkspacePath(currentPath) ? "Current path selected" : "Use current path")
                     }
                 }
                 .padding(.horizontal, 8)
@@ -566,7 +566,7 @@ private struct GaryxWorkspacePathBrowser: View {
                 Divider().padding(.leading, 8)
 
                 if rows.isEmpty {
-                    Text("No saved folders here.")
+                    Text("No saved workspace paths here.")
                         .font(GaryxFont.subheadline())
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity)
@@ -606,7 +606,7 @@ private struct GaryxWorkspacePathBrowser: View {
     }
 
     private var currentPathTitle: String {
-        guard !currentPath.isEmpty else { return "Saved folders" }
+        guard !currentPath.isEmpty else { return "Saved paths" }
         let tail = currentPath.garyxLastPathComponent
         return tail.isEmpty ? currentPath : tail
     }
