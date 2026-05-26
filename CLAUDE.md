@@ -129,6 +129,10 @@ needs installed-app validation.
   readable and deferential. Toolbar icons should default to monochrome
   `primary` styling; do not turn general navigation/actions blue unless color
   communicates a specific state or destructive/accent action.
+- Mobile generic selected states should use monochrome `primary` styling via
+  shared selection components such as `GaryxSelectionCheckmark`. Do not use
+  green/accent checkmarks for ordinary selection; reserve color for semantic
+  success, running, destructive, or warning states.
 - Mobile glass styling should use Garyx's shared adaptive glass components,
   backed by Apple's official Liquid Glass APIs when the active Xcode/iOS SDK
   supports them. Do not introduce third-party glass libraries; keep SDK-gated

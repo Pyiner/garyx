@@ -450,10 +450,15 @@ struct GaryxSavedGatewayProfileRow: View {
     var body: some View {
         GaryxRowActionMenu(actions: profileSwipeActions) {
             HStack(spacing: 9) {
-                Image(systemName: isCurrent ? "checkmark.circle.fill" : "network")
-                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                    .foregroundStyle(isCurrent ? GaryxTheme.accent : .secondary)
-                    .frame(width: 20, height: 20)
+                if isCurrent {
+                    GaryxSelectionCheckmark(style: .circle, size: 14)
+                        .frame(width: 20, height: 20)
+                } else {
+                    Image(systemName: "network")
+                        .font(GaryxFont.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(profile.label)

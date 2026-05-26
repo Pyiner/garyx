@@ -997,9 +997,7 @@ private extension GaryxSidebarThreadRowView {
                         .fill(.secondary)
                         .frame(width: 7, height: 7)
                 case .checkmark:
-                    Image(systemName: "checkmark")
-                        .font(GaryxFont.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                    GaryxSelectionCheckmark(size: 13)
                 case .none:
                     EmptyView()
                 }

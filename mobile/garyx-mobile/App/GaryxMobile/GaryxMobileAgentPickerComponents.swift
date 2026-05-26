@@ -485,9 +485,7 @@ struct GaryxAgentTargetPickerPopover: View {
             HStack(spacing: 14) {
                 Group {
                     if selectedAgentTargetId == target.id {
-                        Image(systemName: "checkmark")
-                            .font(GaryxFont.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.primary)
+                        GaryxSelectionCheckmark(size: 18)
                     } else {
                         Color.clear
                     }
@@ -562,9 +560,7 @@ struct GaryxAgentIdentityRow: View {
             }
             Spacer()
             if selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(GaryxFont.system(size: 19, weight: .semibold))
-                    .foregroundStyle(GaryxTheme.accent)
+                GaryxSelectionCheckmark(style: .circle, size: 19)
             }
         }
         .padding(10)
@@ -581,7 +577,7 @@ struct GaryxSelectableRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: iconName)
-                .foregroundStyle(selected ? GaryxTheme.accent : .secondary)
+                .foregroundStyle(selected ? .primary : .secondary)
                 .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
@@ -596,8 +592,7 @@ struct GaryxSelectableRow: View {
             }
             Spacer()
             if selected {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(GaryxTheme.accent)
+                GaryxSelectionCheckmark(style: .circle)
             }
         }
         .padding(10)

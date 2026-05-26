@@ -122,6 +122,33 @@ struct GaryxDisclosureListRow: View {
     }
 }
 
+struct GaryxSelectionCheckmark: View {
+    enum Style {
+        case plain
+        case circle
+    }
+
+    var style: Style = .plain
+    var size: CGFloat = 14
+    var weight: Font.Weight = .semibold
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(GaryxFont.system(size: size, weight: weight))
+            .foregroundStyle(.primary)
+            .accessibilityHidden(true)
+    }
+
+    private var systemName: String {
+        switch style {
+        case .plain:
+            "checkmark"
+        case .circle:
+            "checkmark.circle.fill"
+        }
+    }
+}
+
 /// Row-level secondary actions rendered as a trailing ellipsis menu.
 /// Horizontal row swipes are reserved for navigation/sidebar gestures.
 struct GaryxRowAction {

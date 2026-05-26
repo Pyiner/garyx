@@ -127,9 +127,7 @@ struct GaryxWorkspacePathRow: View {
                 Spacer(minLength: 0)
 
                 if isSelected {
-                    Image(systemName: "checkmark")
-                        .font(GaryxFont.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                    GaryxSelectionCheckmark(size: 12)
                 }
             }
             .padding(.horizontal, 16)
