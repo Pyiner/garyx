@@ -484,9 +484,7 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
     value && typeof value === 'object' && 'botBindings' in value
       ? (value as Partial<DesktopState> & { botBindings?: Record<string, string> }).botBindings
       : undefined;
-  const rawWorkspaces: Partial<DesktopWorkspace>[] = Array.isArray(value?.workspaces)
-    ? value.workspaces
-    : [];
+  const rawWorkspaces: Partial<DesktopWorkspace>[] = [];
   const threads: DesktopThreadSummary[] = Array.isArray(value?.threads)
     ? value.threads
     : Array.isArray(value?.sessions)
@@ -687,20 +685,13 @@ async function remoteWorkspacesWithAvailability(
   return Promise.all(workspaces.map((workspace) => resolveWorkspaceAvailability(workspace)));
 }
 
-function workspaceRootFallback(
-  remoteWorkspaces: DesktopWorkspace[],
-  localWorkspaces: DesktopWorkspace[],
-): DesktopWorkspace[] {
-  return remoteWorkspaces.length > 0 ? remoteWorkspaces : localWorkspaces;
-}
-
 async function mergeRemoteDesktopState(localState: DesktopState): Promise<DesktopState> {
   const [threadsResult, pinsResult, endpointsResult, workspacesResult, configuredBotsResult, botConsolesResult, automationsResult] =
     await Promise.all([
       fetchRemoteSlice('threads', 'threads', localState.threads, () => fetchThreads(localState.settings)),
       fetchRemoteSlice('thread_pins', 'thread pins', localState.pinnedThreadIds, () => fetchThreadPins(localState.settings)),
       fetchRemoteSlice('endpoints', 'endpoints', localState.endpoints, () => fetchChannelEndpoints(localState.settings)),
-      fetchRemoteSlice('workspaces', 'workspaces', localState.workspaces, () => fetchWorkspaces(localState.settings)),
+      fetchRemoteSlice('workspaces', 'workspaces', [], () => fetchWorkspaces(localState.settings)),
       fetchRemoteSlice(
         'configured_bots',
         'configured bots',
@@ -722,7 +713,7 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
   const remoteThreads = threadsResult.value;
   const remotePinnedThreadIds = pinsResult.value;
   const remoteEndpoints = endpointsResult.value;
-  const remoteWorkspaces = workspaceRootFallback(workspacesResult.value, localState.workspaces);
+  const remoteWorkspaces = workspacesResult.value;
   const remoteConfiguredBots = configuredBotsResult.value;
   const remoteBotConsoles = botConsolesResult.value;
   const remoteAutomations = automationsResult.value;
@@ -988,7 +979,7 @@ export async function addDesktopWorkspace(path: string): Promise<{
   const local = await getLocalDesktopState();
   await writeState(withSortedEntities({
     ...local,
-    workspaces,
+    workspaces: [],
     selectedWorkspacePath: workspace.path,
   }, { preserveMissingSelectedWorkspace: true }));
   const next = withSortedEntities({
@@ -1028,7 +1019,7 @@ export async function removeDesktopWorkspace(workspacePath: string): Promise<Des
   const local = await getLocalDesktopState();
   await writeState(withSortedEntities({
     ...local,
-    workspaces,
+    workspaces: [],
     selectedWorkspacePath:
       normalizeWorkspacePathKey(local.selectedWorkspacePath || '') === workspaceKey
         ? null

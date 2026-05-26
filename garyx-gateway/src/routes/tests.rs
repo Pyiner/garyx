@@ -6,7 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use axum::body::Body;
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
-use garyx_models::config::{ApiAccount, GaryxConfig, WorkspaceConfig};
+use garyx_models::config::{
+    ApiAccount, CronAction, CronJobConfig, CronJobKind, CronSchedule, GaryxConfig,
+    PluginAccountEntry,
+};
 use garyx_models::provider::{
     ProviderMessage, ProviderRunOptions, ProviderRunResult, ProviderType, StreamEvent,
 };
@@ -17,7 +20,7 @@ use std::process::Command;
 use tempfile::{TempDir, tempdir};
 use tower::ServiceExt;
 
-use crate::garyx_db::{DreamSpanDraft, DreamTopicDraft};
+use crate::garyx_db::{DreamSpanDraft, DreamTopicDraft, WorkspaceDraft};
 use crate::route_graph::build_router;
 use crate::server::AppStateBuilder;
 use crate::thread_logs::ThreadFileLogger;
@@ -1477,12 +1480,35 @@ async fn git_status_marks_only_git_root_as_worktree_capable() {
 }
 
 #[tokio::test]
-async fn workspaces_route_uses_only_configured_workspaces() {
+async fn workspaces_route_seeds_from_config_only_when_workspace_table_is_empty() {
     let mut config = test_config();
-    config.workspaces = vec![WorkspaceConfig {
-        name: Some("Saved Repo".to_owned()),
-        path: "/workspace/saved-repo".to_owned(),
-    }];
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            PluginAccountEntry {
+                name: Some("Bot Repo".to_owned()),
+                workspace_dir: Some("/workspace/bot-repo".to_owned()),
+                ..PluginAccountEntry::default()
+            },
+        );
+    config.cron.jobs.push(CronJobConfig {
+        id: "cron::nightly".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Nightly Repo".to_owned()),
+        schedule: CronSchedule::default(),
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("Run nightly check".to_owned()),
+        workspace_dir: Some("/workspace/cron-repo".to_owned()),
+        agent_id: None,
+        thread_id: None,
+        delete_after_run: false,
+        enabled: true,
+    });
     let state = AppStateBuilder::new(config).build();
     create_thread_record(
         &state.threads.thread_store,
@@ -1518,9 +1544,19 @@ async fn workspaces_route_uses_only_configured_workspaces() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     let workspaces = payload["workspaces"].as_array().unwrap();
 
-    assert_eq!(workspaces.len(), 1);
-    assert_eq!(workspaces[0]["path"], "/workspace/saved-repo");
-    assert_eq!(workspaces[0]["name"], "Saved Repo");
+    assert_eq!(workspaces.len(), 2);
+    assert!(
+        workspaces
+            .iter()
+            .any(|workspace| workspace["path"] == "/workspace/bot-repo"
+                && workspace["name"] == "Bot Repo")
+    );
+    assert!(
+        workspaces
+            .iter()
+            .any(|workspace| workspace["path"] == "/workspace/cron-repo"
+                && workspace["name"] == "Nightly Repo")
+    );
     assert!(
         !workspaces
             .iter()
@@ -1530,14 +1566,9 @@ async fn workspaces_route_uses_only_configured_workspaces() {
 
 #[tokio::test]
 async fn workspaces_route_persists_add_and_delete() {
-    let temp = tempdir().unwrap();
-    let config_path = temp.path().join("garyx.json");
     let mut config = test_config();
     config.gateway.auth_token = crate::test_support::TEST_GATEWAY_TOKEN.to_owned();
-    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
-    let state = AppStateBuilder::new(config)
-        .with_config_path(config_path.clone())
-        .build();
+    let state = AppStateBuilder::new(config).build();
     let router = build_router(state.clone());
 
     let request = authed_request()
@@ -1554,11 +1585,10 @@ async fn workspaces_route_persists_add_and_delete() {
         .unwrap();
     let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(state.config_snapshot().workspaces.len(), 1);
-
-    let persisted: GaryxConfig =
-        serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-    assert_eq!(persisted.workspaces[0].path, "/workspace/saved");
+    assert_eq!(
+        state.ops.garyx_db.list_workspaces().unwrap()[0].path,
+        "/workspace/saved"
+    );
 
     let request = authed_request()
         .method("DELETE")
@@ -1570,7 +1600,59 @@ async fn workspaces_route_persists_add_and_delete() {
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(state.config_snapshot().workspaces.is_empty());
+    assert!(state.ops.garyx_db.list_workspaces().unwrap().is_empty());
+    assert_eq!(state.ops.garyx_db.count_workspace_rows().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn workspaces_route_does_not_seed_when_only_deleted_rows_exist() {
+    let mut config = test_config();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "main".to_owned(),
+            PluginAccountEntry {
+                name: Some("Deleted Bot Workspace".to_owned()),
+                workspace_dir: Some("/workspace/from-config".to_owned()),
+                ..PluginAccountEntry::default()
+            },
+        );
+    config.channels.api.accounts.insert(
+        "not-a-bot".to_owned(),
+        ApiAccount {
+            workspace_dir: Some("/workspace/from-config".to_owned()),
+            ..ApiAccount::default()
+        },
+    );
+    let state = AppStateBuilder::new(config).build();
+    state
+        .ops
+        .garyx_db
+        .upsert_workspace(WorkspaceDraft {
+            name: None,
+            path: "/workspace/from-config".to_owned(),
+        })
+        .unwrap();
+    state
+        .ops
+        .garyx_db
+        .delete_workspace("/workspace/from-config")
+        .unwrap();
+    let router = build_router(state);
+
+    let request = authed_request()
+        .uri("/api/workspaces")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["workspaces"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

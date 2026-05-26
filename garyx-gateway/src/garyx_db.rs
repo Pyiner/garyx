@@ -63,6 +63,20 @@ pub struct RecentThreadDraft {
     pub last_active_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WorkspaceRecord {
+    pub name: Option<String>,
+    pub path: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceDraft {
+    pub name: Option<String>,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct DreamSpanRecord {
     pub span_id: String,
@@ -217,6 +231,104 @@ impl GaryxDbService {
             params![thread_id],
         )?;
         Ok(removed > 0)
+    }
+
+    pub fn list_workspaces(&self) -> GaryxDbResult<Vec<WorkspaceRecord>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT name, path, created_at, updated_at
+             FROM workspaces
+             WHERE deleted_at IS NULL
+             ORDER BY lower(COALESCE(NULLIF(name, ''), path)) ASC, lower(path) ASC",
+        )?;
+        let rows = stmt.query_map([], workspace_from_row)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn count_workspace_rows(&self) -> GaryxDbResult<usize> {
+        let conn = self.conn()?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM workspaces", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    pub fn upsert_workspace(&self, draft: WorkspaceDraft) -> GaryxDbResult<WorkspaceRecord> {
+        let path = normalize_workspace_path(&draft.path)?;
+        let name = normalize_optional(draft.name.as_deref());
+        let now = now_string();
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO workspaces (path, name, created_at, updated_at, deleted_at)
+             VALUES (?1, ?2, ?3, ?3, NULL)
+             ON CONFLICT(path) DO UPDATE SET
+                name = excluded.name,
+                updated_at = excluded.updated_at,
+                deleted_at = NULL",
+            params![path, name, now],
+        )?;
+        workspace_by_path(&conn, &path)?
+            .ok_or_else(|| GaryxDbError::BadRequest("workspace was not saved".to_owned()))
+    }
+
+    pub fn delete_workspace(&self, path: &str) -> GaryxDbResult<bool> {
+        let path = normalize_workspace_path(path)?;
+        let now = now_string();
+        let conn = self.conn()?;
+        let removed = conn.execute(
+            "UPDATE workspaces
+             SET updated_at = ?2, deleted_at = ?2
+             WHERE path = ?1 AND deleted_at IS NULL",
+            params![path, now],
+        )?;
+        if removed == 0 {
+            conn.execute(
+                "INSERT INTO workspaces (path, name, created_at, updated_at, deleted_at)
+                 VALUES (?1, NULL, ?2, ?2, ?2)
+                 ON CONFLICT(path) DO NOTHING",
+                params![path, now],
+            )?;
+        }
+        Ok(removed > 0)
+    }
+
+    pub fn seed_workspaces_if_empty(&self, drafts: Vec<WorkspaceDraft>) -> GaryxDbResult<bool> {
+        let mut normalized = Vec::new();
+        let mut seen = BTreeSet::new();
+        for draft in drafts {
+            let path = normalize_workspace_path(&draft.path)?;
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            normalized.push(WorkspaceDraft {
+                name: normalize_optional(draft.name.as_deref()),
+                path,
+            });
+        }
+        if normalized.is_empty() {
+            return Ok(false);
+        }
+
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM workspaces", [], |row| row.get(0))?;
+        if count > 0 {
+            tx.commit()?;
+            return Ok(false);
+        }
+
+        let now = now_string();
+        for draft in normalized {
+            tx.execute(
+                "INSERT INTO workspaces (path, name, created_at, updated_at, deleted_at)
+                 VALUES (?1, ?2, ?3, ?3, NULL)",
+                params![draft.path, draft.name, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(true)
     }
 
     pub fn list_recent_threads(
@@ -1308,6 +1420,14 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         CREATE INDEX IF NOT EXISTS idx_recent_threads_last_active
             ON recent_threads(last_active_at DESC);
 
+        CREATE TABLE IF NOT EXISTS workspaces (
+            path TEXT PRIMARY KEY,
+            name TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            deleted_at TEXT
+        ) STRICT;
+
         CREATE TABLE IF NOT EXISTS dream_topics (
             dream_id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -1354,6 +1474,13 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         ) STRICT;
         "#,
     )?;
+    ensure_workspaces_deleted_at_column(conn)?;
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_workspaces_active_name_path
+            ON workspaces(deleted_at, lower(COALESCE(NULLIF(name, ''), path)), lower(path));
+        "#,
+    )?;
     Ok(())
 }
 
@@ -1386,6 +1513,41 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|candidate| !candidate.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn normalize_workspace_path(path: &str) -> GaryxDbResult<String> {
+    Ok(normalize_required("workspace path", path)?.replace('\\', "/"))
+}
+
+fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(workspaces)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == "deleted_at" {
+            return Ok(());
+        }
+    }
+    conn.execute("ALTER TABLE workspaces ADD COLUMN deleted_at TEXT", [])?;
+    Ok(())
+}
+
+fn workspace_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceRecord> {
+    Ok(WorkspaceRecord {
+        name: row.get(0)?,
+        path: row.get(1)?,
+        created_at: row.get(2)?,
+        updated_at: row.get(3)?,
+    })
+}
+
+fn workspace_by_path(conn: &Connection, path: &str) -> GaryxDbResult<Option<WorkspaceRecord>> {
+    Ok(conn
+        .query_row(
+            "SELECT name, path, created_at, updated_at FROM workspaces WHERE path = ?1",
+            params![path],
+            workspace_from_row,
+        )
+        .optional()?)
 }
 
 fn attach_dream_spans(conn: &Connection, topics: &mut [DreamTopicRecord]) -> GaryxDbResult<()> {
@@ -1462,6 +1624,110 @@ mod tests {
         let db = GaryxDbService::memory().expect("db opens");
         assert!(matches!(
             db.pin_thread("   "),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn workspaces_round_trip_in_app_state_db() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let first = db
+            .upsert_workspace(WorkspaceDraft {
+                name: Some(" Repo B ".to_owned()),
+                path: " /workspace/repo-b ".to_owned(),
+            })
+            .expect("upsert first");
+        assert_eq!(first.name.as_deref(), Some("Repo B"));
+        assert_eq!(first.path, "/workspace/repo-b");
+
+        db.upsert_workspace(WorkspaceDraft {
+            name: None,
+            path: "/workspace/repo-a".to_owned(),
+        })
+        .expect("upsert second");
+        let updated = db
+            .upsert_workspace(WorkspaceDraft {
+                name: Some("Repo A".to_owned()),
+                path: "/workspace/repo-a".to_owned(),
+            })
+            .expect("update second");
+        assert_eq!(updated.name.as_deref(), Some("Repo A"));
+
+        let workspaces = db.list_workspaces().expect("list workspaces");
+        assert_eq!(
+            workspaces
+                .iter()
+                .map(|workspace| workspace.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/workspace/repo-a", "/workspace/repo-b"],
+        );
+
+        assert!(db.delete_workspace("/workspace/repo-a").expect("delete"));
+        assert!(
+            !db.delete_workspace("/workspace/repo-a")
+                .expect("delete again")
+        );
+        assert_eq!(db.count_workspace_rows().expect("count rows"), 2);
+        assert_eq!(
+            db.list_workspaces()
+                .expect("list remaining")
+                .into_iter()
+                .map(|workspace| workspace.path)
+                .collect::<Vec<_>>(),
+            vec!["/workspace/repo-b"],
+        );
+    }
+
+    #[test]
+    fn workspace_seed_only_runs_before_any_workspace_row_exists() {
+        let db = GaryxDbService::memory().expect("db opens");
+        assert!(
+            db.seed_workspaces_if_empty(vec![WorkspaceDraft {
+                name: None,
+                path: "/workspace/from-config".to_owned(),
+            }])
+            .expect("seed initial")
+        );
+        assert!(
+            !db.seed_workspaces_if_empty(vec![WorkspaceDraft {
+                name: None,
+                path: "/workspace/ignored".to_owned(),
+            }])
+            .expect("skip second seed")
+        );
+        assert_eq!(
+            db.list_workspaces()
+                .expect("list active")
+                .into_iter()
+                .map(|workspace| workspace.path)
+                .collect::<Vec<_>>(),
+            vec!["/workspace/from-config"],
+        );
+
+        assert!(
+            db.delete_workspace("/workspace/from-config")
+                .expect("soft delete")
+        );
+        assert_eq!(db.count_workspace_rows().expect("count tombstone"), 1);
+        assert!(db.list_workspaces().expect("list after delete").is_empty());
+        assert!(
+            !db.seed_workspaces_if_empty(vec![WorkspaceDraft {
+                name: None,
+                path: "/workspace/from-config".to_owned(),
+            }])
+            .expect("tombstone prevents reseed")
+        );
+        assert!(db.list_workspaces().expect("list remains empty").is_empty());
+    }
+
+    #[test]
+    fn empty_workspace_path_is_rejected() {
+        let db = GaryxDbService::memory().expect("db opens");
+        assert!(matches!(
+            db.upsert_workspace(WorkspaceDraft {
+                name: None,
+                path: "   ".to_owned(),
+            }),
             Err(GaryxDbError::BadRequest(_))
         ));
     }

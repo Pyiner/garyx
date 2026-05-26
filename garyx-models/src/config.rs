@@ -1159,15 +1159,6 @@ impl Default for DreamsConfig {
     }
 }
 
-/// User-saved workspace entry shown by app workspace root lists.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct WorkspaceConfig {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub path: String,
-}
-
 /// Root configuration for Garyx.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct GaryxConfig {
@@ -1189,8 +1180,6 @@ pub struct GaryxConfig {
     pub cron: CronConfig,
     #[serde(default)]
     pub commands: Vec<SlashCommand>,
-    #[serde(default)]
-    pub workspaces: Vec<WorkspaceConfig>,
     #[serde(default)]
     pub mcp_servers: HashMap<String, McpServerConfig>,
     #[serde(default)]

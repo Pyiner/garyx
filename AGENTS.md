@@ -210,9 +210,13 @@ needs installed-app validation.
   accounts from `/api/configured-bots`; endpoint-only/channel conversation data
   may populate child drilldowns for those configured bots but must never create
   root bot rows. The Workspace root list must show only user-saved workspaces
-  from `/api/workspaces`; paths inferred from recent threads, automations,
-  auto-research runs, endpoints, or temporary workspaces may be form suggestions
-  or file-link resolution hints only, not root navigation entries.
+  from `/api/workspaces`, backed by the gateway application SQLite state. If
+  that workspace table has no rows, the gateway may seed it once from configured
+  bot accounts and scheduled automation jobs; deleted rows are soft-deleted and
+  count as existing state, so they must prevent future inferred reseeding. Paths
+  inferred from recent threads, auto-research runs, endpoints, or temporary
+  workspaces may be form suggestions or file-link resolution hints only, not
+  root navigation entries.
 - Mobile bot rows that have multiple bound/openable conversations should expose
   a drilldown list like workspace rows. Keep the primary bot tap opening the
   root/default thread when one exists, but do not hide child conversations just
@@ -303,11 +307,12 @@ needs installed-app validation.
   especially on macOS where probing protected folders can trigger privacy
   prompts.
 - Desktop workspace lists must contain only user-added workspaces persisted by
-  the gateway `/api/workspaces` state. If that gateway state is empty, the Mac
-  app may display previously cached user-added local workspaces as a compatibility
-  fallback, but remote thread `workspacePath` values remain metadata for those
-  threads and may influence sorting or file-link resolution only. They must not
-  create inferred workspace rows or hidden-workspace suppression state.
+  the gateway `/api/workspaces` application SQLite state. The Mac app must not
+  fall back to locally cached workspace rows; backend initialization and
+  soft-delete tombstones own the root-list state. Remote thread `workspacePath`
+  values remain metadata for those threads and may influence sorting or
+  file-link resolution only. They must not create inferred workspace rows or
+  hidden-workspace suppression state.
 - Agent selectors should show only the agent or team identity. Do not append
   provider names such as Claude, Codex, or Gemini to selector labels or details;
   provider metadata belongs in dedicated settings/details surfaces outside
