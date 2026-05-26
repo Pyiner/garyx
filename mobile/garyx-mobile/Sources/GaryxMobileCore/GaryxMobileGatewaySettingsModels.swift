@@ -8,6 +8,73 @@ struct GaryxGatewayProfile: Identifiable, Codable, Equatable {
     var hasToken: Bool
 }
 
+enum GaryxGatewayProfileStorage {
+    static func load(defaults: UserDefaults, key: String) -> [GaryxGatewayProfile] {
+        guard let data = defaults.data(forKey: key) else {
+            return []
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let profiles = try? decoder.decode([GaryxGatewayProfile].self, from: data) else {
+            return []
+        }
+        return normalizedProfiles(profiles)
+    }
+
+    static func normalizedProfiles(_ profiles: [GaryxGatewayProfile]) -> [GaryxGatewayProfile] {
+        var byKey: [String: GaryxGatewayProfile] = [:]
+        for profile in profiles {
+            let url = normalizedURL(profile.gatewayUrl)
+            guard !url.isEmpty else { continue }
+            let key = url.lowercased()
+            var normalized = profile
+            normalized.gatewayUrl = url
+            normalized.id = stableId(for: url)
+            normalized.label = profile.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            if normalized.label.isEmpty {
+                normalized.label = label(for: url)
+            }
+            if let current = byKey[key], current.updatedAt >= normalized.updatedAt {
+                continue
+            }
+            byKey[key] = normalized
+        }
+        return byKey.values
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .prefix(8)
+            .map { $0 }
+    }
+
+    static func normalizedURL(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return trimmed.replacingOccurrences(
+            of: "/+$",
+            with: "",
+            options: .regularExpression
+        )
+    }
+
+    static func stableId(for gatewayUrl: String) -> String {
+        var hash: UInt64 = 14695981039346656037
+        for byte in gatewayUrl.lowercased().utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return String(format: "gateway::%016llx", hash)
+    }
+
+    static func label(for gatewayUrl: String) -> String {
+        guard let url = URL(string: gatewayUrl) else {
+            return gatewayUrl
+        }
+        if let host = url.host, let port = url.port {
+            return "\(host):\(port)"
+        }
+        return url.host ?? gatewayUrl
+    }
+}
+
 struct GaryxConfiguredBotAccountSettings: Identifiable, Equatable {
     var id: String { "\(channel):\(accountId)" }
     var channel: String

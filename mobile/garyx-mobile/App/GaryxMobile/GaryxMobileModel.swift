@@ -231,7 +231,7 @@ final class GaryxMobileModel: ObservableObject {
             keychain.saveGatewayAuthToken(legacyToken)
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayToken)
         }
-        gatewayProfiles = Self.loadGatewayProfiles(defaults: defaults)
+        gatewayProfiles = GaryxGatewayProfileStorage.load(defaults: defaults, key: GaryxMobileSettingsKeys.gatewayProfiles)
         selectedAgentTargetId = defaults.string(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId) ?? "claude"
         newThreadWorkspace = defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspace) ?? ""
         newThreadWorkspaceMode = Self.normalizedWorkspaceMode(
@@ -269,71 +269,6 @@ final class GaryxMobileModel: ObservableObject {
     private static func normalizedWorkspaceMode(_ value: String?) -> String {
         let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         return normalized == "worktree" ? "worktree" : "local"
-    }
-
-    private static func loadGatewayProfiles(defaults: UserDefaults) -> [GaryxGatewayProfile] {
-        guard let data = defaults.data(forKey: GaryxMobileSettingsKeys.gatewayProfiles) else {
-            return []
-        }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        guard let profiles = try? decoder.decode([GaryxGatewayProfile].self, from: data) else {
-            return []
-        }
-        return normalizedGatewayProfiles(profiles)
-    }
-
-    private static func normalizedGatewayProfiles(_ profiles: [GaryxGatewayProfile]) -> [GaryxGatewayProfile] {
-        var byKey: [String: GaryxGatewayProfile] = [:]
-        for profile in profiles {
-            let url = normalizedGatewayProfileURL(profile.gatewayUrl)
-            guard !url.isEmpty else { continue }
-            let key = url.lowercased()
-            var normalized = profile
-            normalized.gatewayUrl = url
-            normalized.id = stableGatewayProfileId(for: url)
-            normalized.label = profile.label.trimmingCharacters(in: .whitespacesAndNewlines)
-            if normalized.label.isEmpty {
-                normalized.label = gatewayProfileLabel(for: url)
-            }
-            if let current = byKey[key], current.updatedAt >= normalized.updatedAt {
-                continue
-            }
-            byKey[key] = normalized
-        }
-        return byKey.values
-            .sorted { $0.updatedAt > $1.updatedAt }
-            .prefix(8)
-            .map { $0 }
-    }
-
-    private static func normalizedGatewayProfileURL(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-        return trimmed.replacingOccurrences(
-            of: "/+$",
-            with: "",
-            options: .regularExpression
-        )
-    }
-
-    private static func stableGatewayProfileId(for gatewayUrl: String) -> String {
-        var hash: UInt64 = 14695981039346656037
-        for byte in gatewayUrl.lowercased().utf8 {
-            hash ^= UInt64(byte)
-            hash = hash &* 1099511628211
-        }
-        return String(format: "gateway::%016llx", hash)
-    }
-
-    private static func gatewayProfileLabel(for gatewayUrl: String) -> String {
-        guard let url = URL(string: gatewayUrl) else {
-            return gatewayUrl
-        }
-        if let host = url.host, let port = url.port {
-            return "\(host):\(port)"
-        }
-        return url.host ?? gatewayUrl
     }
 
     private static func botSelectorId(channel: String, accountId: String) -> String {
@@ -971,14 +906,14 @@ final class GaryxMobileModel: ObservableObject {
         gatewayAuthToken = "debug-token"
         gatewayProfiles = [
             GaryxGatewayProfile(
-                id: Self.stableGatewayProfileId(for: "http://127.0.0.1:31337"),
+                id: GaryxGatewayProfileStorage.stableId(for: "http://127.0.0.1:31337"),
                 label: "127.0.0.1:31337",
                 gatewayUrl: "http://127.0.0.1:31337",
                 updatedAt: Date(timeIntervalSince1970: 1_779_172_400),
                 hasToken: true
             ),
             GaryxGatewayProfile(
-                id: Self.stableGatewayProfileId(for: "http://10.0.0.2:31337"),
+                id: GaryxGatewayProfileStorage.stableId(for: "http://10.0.0.2:31337"),
                 label: "10.0.0.2:31337",
                 gatewayUrl: "http://10.0.0.2:31337",
                 updatedAt: Date(timeIntervalSince1970: 1_779_168_800),
@@ -987,7 +922,7 @@ final class GaryxMobileModel: ObservableObject {
         ]
         keychain.saveGatewayProfileToken(
             "debug-token",
-            profileId: Self.stableGatewayProfileId(for: "http://127.0.0.1:31337")
+            profileId: GaryxGatewayProfileStorage.stableId(for: "http://127.0.0.1:31337")
         )
         gatewaySettingsStatus = nil
         connectionState = .ready(version: "debug")
@@ -1462,7 +1397,7 @@ final class GaryxMobileModel: ObservableObject {
     private var currentGatewayScopeId: String {
         let normalized = normalizedGatewayURL(gatewayURL)
         guard !normalized.isEmpty else { return "unconfigured" }
-        return Self.stableGatewayProfileId(for: normalized)
+        return GaryxGatewayProfileStorage.stableId(for: normalized)
     }
 
     private func scopedSettingsKey(_ key: String) -> String {
@@ -1606,7 +1541,7 @@ final class GaryxMobileModel: ObservableObject {
         }
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextId = Self.stableGatewayProfileId(for: normalizedURL)
+        let nextId = GaryxGatewayProfileStorage.stableId(for: normalizedURL)
         let currentURL = normalizedGatewayURL(gatewayURL)
         let currentProfileId = currentGatewayProfile?.id
         let affectsCurrentProfile = currentProfileId == profile.id
@@ -1616,7 +1551,7 @@ final class GaryxMobileModel: ObservableObject {
         let activeTokenChanged = gatewayAuthToken != trimmedToken
         var nextProfile = profile
         nextProfile.id = nextId
-        nextProfile.label = trimmedLabel.isEmpty ? Self.gatewayProfileLabel(for: normalizedURL) : trimmedLabel
+        nextProfile.label = trimmedLabel.isEmpty ? GaryxGatewayProfileStorage.label(for: normalizedURL) : trimmedLabel
         nextProfile.gatewayUrl = normalizedURL
         nextProfile.updatedAt = Date()
         nextProfile.hasToken = !trimmedToken.isEmpty
@@ -1626,7 +1561,7 @@ final class GaryxMobileModel: ObservableObject {
                 || candidate.gatewayUrl.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                     == normalizedURL.lowercased()
         }
-        gatewayProfiles = Self.normalizedGatewayProfiles([nextProfile] + gatewayProfiles)
+        gatewayProfiles = GaryxGatewayProfileStorage.normalizedProfiles([nextProfile] + gatewayProfiles)
         persistGatewayProfiles()
         if profile.id != nextId {
             keychain.deleteGatewayProfileToken(profileId: profile.id)
@@ -1722,13 +1657,13 @@ final class GaryxMobileModel: ObservableObject {
         let url = normalizedGatewayURL(gatewayURL)
         guard !url.isEmpty else { return }
         let profile = GaryxGatewayProfile(
-            id: Self.stableGatewayProfileId(for: url),
-            label: Self.gatewayProfileLabel(for: url),
+            id: GaryxGatewayProfileStorage.stableId(for: url),
+            label: GaryxGatewayProfileStorage.label(for: url),
             gatewayUrl: url,
             updatedAt: Date(),
             hasToken: !gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         )
-        gatewayProfiles = Self.normalizedGatewayProfiles([profile] + gatewayProfiles)
+        gatewayProfiles = GaryxGatewayProfileStorage.normalizedProfiles([profile] + gatewayProfiles)
         persistGatewayProfiles()
         keychain.saveGatewayProfileToken(gatewayAuthToken, profileId: profile.id)
     }

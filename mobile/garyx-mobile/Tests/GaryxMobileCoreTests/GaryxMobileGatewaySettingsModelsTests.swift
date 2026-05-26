@@ -2,6 +2,58 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
+    func testGatewayProfileStorageNormalizesDedupesAndLabelsProfiles() {
+        let older = makeProfile(
+            id: "old",
+            label: "",
+            gatewayUrl: " http://127.0.0.1:31337/ ",
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        let newer = makeProfile(
+            id: "new",
+            label: "Local Gateway",
+            gatewayUrl: "http://127.0.0.1:31337",
+            updatedAt: Date(timeIntervalSince1970: 200)
+        )
+        let remote = makeProfile(
+            id: "remote",
+            label: "",
+            gatewayUrl: "https://gateway.example.test/",
+            updatedAt: Date(timeIntervalSince1970: 150)
+        )
+
+        let profiles = GaryxGatewayProfileStorage.normalizedProfiles([older, remote, newer])
+
+        XCTAssertEqual(profiles.map(\.gatewayUrl), ["http://127.0.0.1:31337", "https://gateway.example.test"])
+        XCTAssertEqual(profiles.map(\.label), ["Local Gateway", "gateway.example.test"])
+        XCTAssertEqual(profiles[0].id, GaryxGatewayProfileStorage.stableId(for: "http://127.0.0.1:31337"))
+        XCTAssertEqual(profiles[1].id, GaryxGatewayProfileStorage.stableId(for: "https://gateway.example.test"))
+    }
+
+    func testGatewayProfileStorageLoadsIso8601ProfilesFromDefaults() throws {
+        let key = "garyx.mobile.gatewayProfiles.test"
+        let suiteName = "GaryxMobileGatewaySettingsModelsTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode([
+            makeProfile(
+                id: "raw",
+                label: "",
+                gatewayUrl: "https://gateway.example.test/",
+                updatedAt: Date(timeIntervalSince1970: 100)
+            ),
+        ])
+        defaults.set(data, forKey: key)
+
+        let profiles = GaryxGatewayProfileStorage.load(defaults: defaults, key: key)
+
+        XCTAssertEqual(profiles.count, 1)
+        XCTAssertEqual(profiles.first?.gatewayUrl, "https://gateway.example.test")
+        XCTAssertEqual(profiles.first?.label, "gateway.example.test")
+    }
+
     func testConfiguredBotAccountsDecodeAndSortGatewaySettingsDocument() {
         let settings: [String: GaryxJSONValue] = [
             "channels": .object([
@@ -115,6 +167,21 @@ final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
                 channel: "discord",
                 accountId: "bot-alpha"
             )
+        )
+    }
+
+    private func makeProfile(
+        id: String,
+        label: String,
+        gatewayUrl: String,
+        updatedAt: Date
+    ) -> GaryxGatewayProfile {
+        GaryxGatewayProfile(
+            id: id,
+            label: label,
+            gatewayUrl: gatewayUrl,
+            updatedAt: updatedAt,
+            hasToken: true
         )
     }
 }
