@@ -1,0 +1,300 @@
+import Foundation
+
+public struct GaryxAutomationsPage: Decodable, Equatable, Sendable {
+    public var automations: [GaryxAutomationSummary]
+}
+
+
+public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendable {
+    public var id: String
+    public var label: String
+    public var prompt: String
+    public var agentId: String
+    public var enabled: Bool
+    public var workspacePath: String
+    public var targetThreadId: String?
+    public var threadId: String?
+    public var nextRun: String
+    public var lastRunAt: String?
+    public var lastStatus: String
+    public var schedule: GaryxAutomationSchedule
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case prompt
+        case agentId = "agent_id"
+        case agentIdCamel = "agentId"
+        case enabled
+        case workspaceDir = "workspace_dir"
+        case workspaceDirCamel = "workspaceDir"
+        case targetThreadId = "target_thread_id"
+        case targetThreadIdCamel = "targetThreadId"
+        case threadId = "thread_id"
+        case threadIdCamel = "threadId"
+        case nextRun = "next_run"
+        case nextRunCamel = "nextRun"
+        case lastRunAt = "last_run_at"
+        case lastRunAtCamel = "lastRunAt"
+        case lastStatus = "last_status"
+        case lastStatusCamel = "lastStatus"
+        case schedule
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.garyxDecodeFirstString(.id) ?? ""
+        label = try container.garyxDecodeFirstString(.label) ?? id
+        prompt = try container.garyxDecodeFirstString(.prompt) ?? ""
+        agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel) ?? "claude"
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        workspacePath = try container.garyxDecodeFirstString(.workspaceDir, .workspaceDirCamel) ?? ""
+        targetThreadId = try container.garyxDecodeFirstString(.targetThreadId, .targetThreadIdCamel)
+        threadId = try container.garyxDecodeFirstString(.threadId, .threadIdCamel)
+        nextRun = try container.garyxDecodeFirstString(.nextRun, .nextRunCamel) ?? ""
+        lastRunAt = try container.garyxDecodeFirstString(.lastRunAt, .lastRunAtCamel)
+        lastStatus = try container.garyxDecodeFirstString(.lastStatus, .lastStatusCamel) ?? "success"
+        schedule = try container.decodeIfPresent(GaryxAutomationSchedule.self, forKey: .schedule) ?? .interval(hours: 24)
+    }
+}
+
+
+public struct GaryxAutomationSchedule: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Equatable, Sendable {
+        case daily
+        case interval
+        case monthly
+        case once
+    }
+
+    public var kind: Kind
+    public var time: String?
+    public var weekdays: [String]
+    public var timezone: String?
+    public var hours: Int?
+    public var at: String?
+    public var day: Int?
+
+    public static func daily(
+        time: String = "09:00",
+        weekdays: [String] = ["mo", "tu", "we", "th", "fr"],
+        timezone: String = "UTC"
+    ) -> Self {
+        Self(kind: .daily, time: time, weekdays: weekdays, timezone: timezone, hours: nil, at: nil, day: nil)
+    }
+
+    public static func interval(hours: Int = 24) -> Self {
+        Self(kind: .interval, time: nil, weekdays: [], timezone: nil, hours: max(1, hours), at: nil, day: nil)
+    }
+
+    public static func monthly(
+        day: Int = 1,
+        time: String = "09:00",
+        timezone: String = "UTC"
+    ) -> Self {
+        Self(kind: .monthly, time: time, weekdays: [], timezone: timezone, hours: nil, at: nil, day: min(max(day, 1), 31))
+    }
+
+    public static func once(at: String) -> Self {
+        Self(kind: .once, time: nil, weekdays: [], timezone: nil, hours: nil, at: at, day: nil)
+    }
+
+    public init(
+        kind: Kind,
+        time: String? = nil,
+        weekdays: [String] = [],
+        timezone: String? = nil,
+        hours: Int? = nil,
+        at: String? = nil,
+        day: Int? = nil
+    ) {
+        self.kind = kind
+        self.time = time
+        self.weekdays = weekdays
+        self.timezone = timezone
+        self.hours = hours
+        self.at = at
+        self.day = day
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case time
+        case weekdays
+        case timezone
+        case hours
+        case at
+        case day
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decodeIfPresent(Kind.self, forKey: .kind) ?? .interval
+        time = try container.decodeIfPresent(String.self, forKey: .time)
+        weekdays = try container.decodeIfPresent([String].self, forKey: .weekdays) ?? []
+        timezone = try container.decodeIfPresent(String.self, forKey: .timezone)
+        hours = try container.decodeIfPresent(Int.self, forKey: .hours)
+        at = try container.decodeIfPresent(String.self, forKey: .at)
+        day = try container.decodeIfPresent(Int.self, forKey: .day)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        switch kind {
+        case .daily:
+            try container.encode(time ?? "09:00", forKey: .time)
+            try container.encode(weekdays, forKey: .weekdays)
+            try container.encode(timezone ?? "UTC", forKey: .timezone)
+        case .interval:
+            try container.encode(max(1, hours ?? 24), forKey: .hours)
+        case .monthly:
+            try container.encode(min(max(day ?? 1, 1), 31), forKey: .day)
+            try container.encode(time ?? "09:00", forKey: .time)
+            try container.encode(timezone ?? "UTC", forKey: .timezone)
+        case .once:
+            try container.encode(at ?? "", forKey: .at)
+        }
+    }
+}
+
+
+public struct GaryxAutomationCreateRequest: Encodable, Equatable, Sendable {
+    public var label: String
+    public var prompt: String
+    public var agentId: String?
+    public var workspaceDir: String?
+    public var targetThreadId: String?
+    public var schedule: GaryxAutomationSchedule
+    public var enabled: Bool?
+
+    public init(
+        label: String,
+        prompt: String,
+        agentId: String? = nil,
+        workspaceDir: String? = nil,
+        targetThreadId: String? = nil,
+        schedule: GaryxAutomationSchedule = .interval(hours: 24),
+        enabled: Bool? = nil
+    ) {
+        self.label = label
+        self.prompt = prompt
+        self.agentId = agentId
+        self.workspaceDir = workspaceDir
+        self.targetThreadId = targetThreadId
+        self.schedule = schedule
+        self.enabled = enabled
+    }
+}
+
+
+public struct GaryxAutomationUpdateRequest: Encodable, Equatable, Sendable {
+    public var label: String?
+    public var prompt: String?
+    public var agentId: String?
+    public var workspaceDir: String?
+    public var targetThreadId: String?
+    public var clearsTargetThreadId: Bool
+    public var schedule: GaryxAutomationSchedule?
+    public var enabled: Bool?
+
+    public init(
+        label: String? = nil,
+        prompt: String? = nil,
+        agentId: String? = nil,
+        workspaceDir: String? = nil,
+        targetThreadId: String? = nil,
+        clearsTargetThreadId: Bool = false,
+        schedule: GaryxAutomationSchedule? = nil,
+        enabled: Bool? = nil
+    ) {
+        self.label = label
+        self.prompt = prompt
+        self.agentId = agentId
+        self.workspaceDir = workspaceDir
+        self.targetThreadId = targetThreadId
+        self.clearsTargetThreadId = clearsTargetThreadId
+        self.schedule = schedule
+        self.enabled = enabled
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case label
+        case prompt
+        case agentId
+        case workspaceDir
+        case targetThreadId
+        case schedule
+        case enabled
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(label, forKey: .label)
+        try container.encodeIfPresent(prompt, forKey: .prompt)
+        try container.encodeIfPresent(agentId, forKey: .agentId)
+        try container.encodeIfPresent(workspaceDir, forKey: .workspaceDir)
+        if let targetThreadId {
+            try container.encode(targetThreadId, forKey: .targetThreadId)
+        } else if clearsTargetThreadId {
+            try container.encodeNil(forKey: .targetThreadId)
+        }
+        try container.encodeIfPresent(schedule, forKey: .schedule)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+    }
+}
+
+
+public struct GaryxAutomationActivityEntry: Decodable, Equatable, Sendable {
+    public var runId: String
+    public var status: String
+    public var startedAt: String
+    public var excerpt: String?
+    public var threadId: String
+
+    enum CodingKeys: String, CodingKey {
+        case runId = "run_id"
+        case runIdCamel = "runId"
+        case status
+        case startedAt = "started_at"
+        case startedAtCamel = "startedAt"
+        case excerpt
+        case threadId = "thread_id"
+        case threadIdCamel = "threadId"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        runId = try container.garyxDecodeFirstString(.runId, .runIdCamel) ?? ""
+        status = try container.garyxDecodeFirstString(.status) ?? "success"
+        startedAt = try container.garyxDecodeFirstString(.startedAt, .startedAtCamel) ?? ""
+        excerpt = try container.garyxDecodeFirstString(.excerpt)
+        threadId = try container.garyxDecodeFirstString(.threadId, .threadIdCamel) ?? ""
+    }
+}
+
+
+public struct GaryxAutomationActivityFeed: Decodable, Equatable, Sendable {
+    public var items: [GaryxAutomationActivityEntry]
+    public var threadId: String
+    public var count: Int
+
+    enum CodingKeys: String, CodingKey {
+        case items
+        case threadId
+        case threadIdSnake = "thread_id"
+        case count
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decodeIfPresent([GaryxAutomationActivityEntry].self, forKey: .items) ?? []
+        threadId = try container.garyxDecodeFirstString(.threadId, .threadIdSnake) ?? ""
+        count = try container.decodeIfPresent(Int.self, forKey: .count) ?? items.count
+    }
+}
+
+
+public struct GaryxAutomationEnabledPatch: Encodable, Equatable, Sendable {
+    public var enabled: Bool
+}

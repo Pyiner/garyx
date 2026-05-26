@@ -291,6 +291,35 @@ final class GaryxMobileBotGroupTests: XCTestCase {
         XCTAssertEqual(group.defaultOpenThreadId, "thread-alpha")
     }
 
+    func testBuilderIncludesEndpointOnlyGroupsAlongsideConfiguredBots() throws {
+        let configured = try makeConfiguredBot(
+            channel: "telegram",
+            accountId: "configured-bot",
+            displayName: "Configured Bot",
+            mainThreadId: "thread-configured"
+        )
+        let endpointOnly = try makeEndpoint(
+            key: "discord:standalone:alpha",
+            channel: "discord",
+            accountId: "standalone",
+            label: "Standalone",
+            threadId: "thread-standalone"
+        )
+
+        let groups = GaryxMobileBotGroupBuilder.groups(
+            channelEndpoints: [endpointOnly],
+            configuredBots: [configured],
+            botConsoles: [],
+            channelPlugins: []
+        )
+
+        XCTAssertEqual(groups.map(\.id), ["telegram::configured-bot", "discord::standalone"])
+        let endpointGroup = try XCTUnwrap(groups.last)
+        XCTAssertEqual(endpointGroup.title, "Discord / standalone")
+        XCTAssertEqual(endpointGroup.defaultOpenThreadId, "thread-standalone")
+        XCTAssertEqual(endpointGroup.sidebarChildConversationEntries().map(\.threadId), ["thread-standalone"])
+    }
+
     func testSelectedGroupRejectsEmptyThreadIdsAndMatchesDefaultThread() {
         let group = makeGroup(
             rootBehavior: "expand_only",

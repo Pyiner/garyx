@@ -116,30 +116,28 @@ internal enum GaryxMobileBotGroupBuilder {
             )
         }
 
-        if groups.isEmpty {
-            for (key, endpoints) in endpointsByGroup.sorted(by: { $0.key < $1.key }) {
-                guard let first = endpoints.first else { continue }
-                remember(
-                    GaryxMobileBotGroup(
-                        id: key,
-                        channel: first.channel,
-                        accountId: first.accountId,
-                        title: "\(GaryxMobileBotChannelDisplayName.name(first.channel)) / \(first.accountId)",
-                        subtitle: "\(GaryxMobileBotChannelDisplayName.name(first.channel)) Bot · \(first.accountId)",
-                        agentId: nil,
-                        rootBehavior: "open_default",
-                        status: "idle",
-                        endpointCount: endpoints.count,
-                        boundEndpointCount: endpoints.filter { $0.threadId?.isEmpty == false }.count,
-                        workspaceDir: nil,
-                        mainThreadId: nil,
-                        defaultOpenThreadId: endpoints.first(where: { $0.threadId?.isEmpty == false })?.threadId,
-                        endpoints: endpoints,
-                        conversationNodes: [],
-                        iconDataUrl: iconDataUrl(for: first.channel)
-                    )
+        for (key, endpoints) in endpointsByGroup.sorted(by: { $0.key < $1.key }) where groups[key] == nil {
+            guard let first = endpoints.first else { continue }
+            remember(
+                GaryxMobileBotGroup(
+                    id: key,
+                    channel: first.channel,
+                    accountId: first.accountId,
+                    title: "\(GaryxMobileBotChannelDisplayName.name(first.channel)) / \(first.accountId)",
+                    subtitle: "\(GaryxMobileBotChannelDisplayName.name(first.channel)) Bot · \(first.accountId)",
+                    agentId: nil,
+                    rootBehavior: "open_default",
+                    status: "idle",
+                    endpointCount: endpoints.count,
+                    boundEndpointCount: endpoints.filter { $0.threadId?.isEmpty == false }.count,
+                    workspaceDir: nil,
+                    mainThreadId: nil,
+                    defaultOpenThreadId: endpoints.first(where: { $0.threadId?.isEmpty == false })?.threadId,
+                    endpoints: endpoints,
+                    conversationNodes: [],
+                    iconDataUrl: iconDataUrl(for: first.channel)
                 )
-            }
+            )
         }
 
         return order.compactMap { groups[$0] }
