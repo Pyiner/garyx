@@ -5,13 +5,40 @@ import WidgetKit
 
 extension GaryxMobileModel {
     func openThread(id: String) async {
+        pendingThreadLinkId = nil
+        let requestId = beginPendingThreadOpen()
+        await openThread(id: id, requestId: requestId)
+    }
+
+    func queuePendingThreadLink(_ id: String) {
         let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !threadId.isEmpty else { return }
+        pendingThreadLinkId = threadId
         let requestId = beginPendingThreadOpen()
+        showPendingThreadLink(threadId, requestId: requestId)
+    }
+
+    func openPendingThreadLinkIfNeeded() async {
+        guard let threadId = pendingThreadLinkId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadId.isEmpty else {
+            pendingThreadLinkId = nil
+            return
+        }
+        guard case .ready = connectionState else { return }
+        let requestId = pendingThreadOpenRequestId
+        await openThread(id: threadId, requestId: requestId)
+        if isCurrentPendingThreadOpen(requestId), selectedThread?.id == threadId {
+            pendingThreadLinkId = nil
+        }
+    }
+
+    private func openThread(id: String, requestId: UUID) async {
+        let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !threadId.isEmpty else { return }
 
         if let thread = threads.first(where: { $0.id == threadId }) {
             guard isCurrentPendingThreadOpen(requestId) else { return }
-            await selectThread(thread)
+            await selectThread(thread, invalidatesPendingThreadOpen: false)
             return
         }
 
@@ -38,6 +65,30 @@ extension GaryxMobileModel {
         }
     }
 
+    private func showPendingThreadLink(_ threadId: String, requestId: UUID) {
+        guard isCurrentPendingThreadOpen(requestId) else { return }
+        let thread = threads.first(where: { $0.id == threadId })
+            ?? (selectedThread?.id == threadId ? selectedThread : nil)
+            ?? Self.placeholderThreadSummary(id: threadId)
+        let previousThreadId = selectedThread?.id
+        if previousThreadId != threadId {
+            advanceSelectedThreadDraftGeneration()
+            resetComposerDraft()
+            selectedThreadRecoveryTask?.cancel()
+            selectedThreadRecoveryTask = nil
+            selectedThreadRecoveryThreadId = nil
+            cancelSelectedThreadReconcileLoop()
+            resetSelectedThreadHistoryPagination()
+            messages = cachedMessages(for: threadId)
+        }
+        selectedThread = thread
+        clearPendingBotDraft()
+        draftThreadTitle = thread.title
+        setActivePanel(.chat, invalidatesPendingThreadOpen: false)
+        setSidebarVisible(false)
+        lastError = nil
+    }
+
     func beginPendingThreadOpen() -> UUID {
         let requestId = UUID()
         pendingThreadOpenRequestId = requestId
@@ -46,6 +97,7 @@ extension GaryxMobileModel {
 
     func invalidatePendingThreadOpen() {
         pendingThreadOpenRequestId = UUID()
+        pendingThreadLinkId = nil
     }
 
     func isCurrentPendingThreadOpen(_ requestId: UUID) -> Bool {

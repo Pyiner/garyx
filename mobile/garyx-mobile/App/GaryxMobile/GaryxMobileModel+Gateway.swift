@@ -68,6 +68,7 @@ extension GaryxMobileModel {
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
         selectedThreadHistoryRequestId = nil
+        pendingThreadLinkId = nil
         completedThreadHistoryHydrationTasks.values.forEach { $0.cancel() }
         completedThreadHistoryHydrationTasks = [:]
         resetSelectedThreadHistoryPagination()
@@ -316,11 +317,13 @@ extension GaryxMobileModel {
 
     func handleOpenURL(_ url: URL) async {
         if let threadId = GaryxMobileThreadLink.parse(url) {
+            queuePendingThreadLink(threadId)
             if case .ready = connectionState {
-                await openThread(id: threadId)
+                await openPendingThreadLinkIfNeeded()
+            } else if canConnectGateway, case .checking = connectionState {
+                return
             } else if canConnectGateway {
                 await connectAndRefresh()
-                await openThread(id: threadId)
             }
             return
         }
@@ -346,6 +349,7 @@ extension GaryxMobileModel {
             await agentTargetsRefresh
             await refreshRemoteState()
             startSelectedThreadReconcileLoop()
+            await openPendingThreadLinkIfNeeded()
         } catch {
             cancelGlobalEventStream()
             cancelSelectedThreadReconcileLoop()
