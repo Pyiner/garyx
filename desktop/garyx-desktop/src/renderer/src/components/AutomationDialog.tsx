@@ -74,6 +74,7 @@ export interface AutomationDialogProps {
   agentOptions: AutomationAgentOption[];
   threadOptions: DesktopThreadSummary[];
   workspaces?: DesktopWorkspace[];
+  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   saving: boolean;
   onDraftChange: (mutator: (draft: AutomationDraft) => AutomationDraft) => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
@@ -325,6 +326,7 @@ export function AutomationDialog({
   agentOptions,
   threadOptions,
   workspaces = [],
+  onAddWorkspace,
   saving,
   onDraftChange,
   onSubmit,
@@ -474,6 +476,7 @@ export function AutomationDialog({
                 onChange={(value) =>
                   onDraftChange((d) => ({ ...d, workspacePath: value }))
                 }
+                onAddWorkspace={onAddWorkspace}
                 placeholder={t('/path/to/project')}
                 value={draft.workspacePath}
                 workspaces={workspaces}

@@ -1,5 +1,4 @@
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { homedir } from "node:os";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   appendFileSync,
   cpSync,
@@ -7,13 +6,10 @@ import {
   mkdirSync,
   renameSync,
 } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
-
 import {
   app,
   BrowserWindow,
   clipboard,
-  dialog,
   ipcMain,
   Menu,
   Tray,
@@ -49,7 +45,6 @@ import type {
   CreateAutomationInput,
   CreateThreadInput,
   DesktopDeepLinkEvent,
-  DesktopLocalDirectoryListing,
   DesktopApiProviderType,
   DeleteSkillEntryInput,
   DeleteSkillInput,
@@ -76,8 +71,6 @@ import type {
   PromoteTaskInput,
   RevealWorkspaceFileInput,
   ReadSkillFileInput,
-  RenameWorkspaceInput,
-  RelinkWorkspaceInput,
   RenameThreadInput,
   RemoveWorkspaceInput,
   RunAutomationNowInput,
@@ -150,6 +143,7 @@ import {
   listCustomAgents,
   listProviderModels,
   listTeams,
+  listWorkspaceDirectories,
   listWorkspaceFiles,
   listMcpServers,
   listSlashCommands,
@@ -200,9 +194,7 @@ import {
   getDesktopState,
   getLocalDesktopSettings,
   markDesktopAutomationSeen,
-  relinkDesktopWorkspace,
   runDesktopAutomationNow,
-  renameDesktopWorkspace,
   renameDesktopThread,
   rememberDesktopGatewayProfile,
   saveDesktopSettings,
@@ -512,58 +504,6 @@ async function resolveSettings(): Promise<DesktopSettings> {
   return getLocalDesktopSettings();
 }
 
-async function pickWorkspaceDirectory(
-  defaultPath?: string | null,
-): Promise<string | null> {
-  const ownerWindow =
-    mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
-  const options: Electron.OpenDialogOptions = {
-    properties: ["openDirectory", "createDirectory"],
-  };
-  if (defaultPath) {
-    options.defaultPath = defaultPath;
-  }
-  const result = ownerWindow
-    ? await dialog.showOpenDialog(ownerWindow, options)
-    : await dialog.showOpenDialog(options);
-  if (result.canceled || result.filePaths.length === 0) {
-    return null;
-  }
-  return result.filePaths[0] || null;
-}
-
-async function resolveLocalDirectoryPath(path?: string | null): Promise<string> {
-  const requested = (path || "").trim();
-  const fallback = homedir();
-  const absolutePath = requested && isAbsolute(requested) ? resolve(requested) : fallback;
-  try {
-    const pathStat = await stat(absolutePath);
-    if (pathStat.isDirectory()) {
-      return absolutePath;
-    }
-    return dirname(absolutePath);
-  } catch {
-    return fallback;
-  }
-}
-
-async function listLocalDirectories(path?: string | null): Promise<DesktopLocalDirectoryListing> {
-  const directoryPath = await resolveLocalDirectoryPath(path);
-  const parentPath = dirname(directoryPath);
-  const entries = await readdir(directoryPath, { withFileTypes: true });
-  return {
-    path: directoryPath,
-    parentPath: parentPath === directoryPath ? null : parentPath,
-    entries: entries
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map((entry) => ({
-        name: entry.name || basename(join(directoryPath, entry.name)),
-        path: join(directoryPath, entry.name),
-      }))
-      .sort((left, right) => left.name.localeCompare(right.name)),
-  };
-}
-
 function resolveWorkspaceFileDisplayPath(input: RevealWorkspaceFileInput): string {
   const workspaceRoot = resolve(input.workspacePath.trim());
   const filePath = input.filePath.trim();
@@ -704,34 +644,12 @@ function registerIpcHandlers(): void {
   );
 
   ipcMain.handle(
-    "garyx:pick-directory",
-    async (_event, input?: { defaultPath?: string | null }) => {
-      return pickWorkspaceDirectory(input?.defaultPath ?? null);
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:list-local-directories",
+    "garyx:list-workspace-directories",
     async (_event, input?: { path?: string | null }) => {
-      return listLocalDirectories(input?.path ?? null);
+      const settings = await resolveSettings();
+      return listWorkspaceDirectories(settings, input);
     },
   );
-
-  ipcMain.handle("garyx:add-workspace", async () => {
-    const selectedPath = await pickWorkspaceDirectory();
-    if (!selectedPath) {
-      return {
-        state: await getDesktopState(),
-        workspace: null,
-        cancelled: true,
-      };
-    }
-    const result = await addDesktopWorkspace(selectedPath);
-    return {
-      ...result,
-      cancelled: false,
-    };
-  });
 
   ipcMain.handle(
     "garyx:add-workspace-by-path",
@@ -741,35 +659,6 @@ function registerIpcHandlers(): void {
         ...result,
         cancelled: false,
       };
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:relink-workspace",
-    async (_event, input: RelinkWorkspaceInput) => {
-      const selectedPath = await pickWorkspaceDirectory();
-      if (!selectedPath) {
-        return {
-          state: await getDesktopState(),
-          workspace: null,
-          cancelled: true,
-        };
-      }
-      const result = await relinkDesktopWorkspace(
-        input.workspacePath,
-        selectedPath,
-      );
-      return {
-        ...result,
-        cancelled: false,
-      };
-    },
-  );
-
-  ipcMain.handle(
-    "garyx:rename-workspace",
-    async (_event, input: RenameWorkspaceInput) => {
-      return renameDesktopWorkspace(input.workspacePath, input.name);
     },
   );
 

@@ -1130,6 +1130,8 @@ struct GaryxSidebarEmptyState: View {
 
 struct GaryxWorkspaceBotsView: View {
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var showsAddWorkspace = false
+    @State private var addWorkspacePath = ""
 
     var body: some View {
         GaryxPanelScaffold(
@@ -1157,12 +1159,34 @@ struct GaryxWorkspaceBotsView: View {
                     }
                 }
             }
+        } actions: {
+            if activeDrilldown == nil {
+                Button {
+                    addWorkspacePath = ""
+                    showsAddWorkspace = true
+                } label: {
+                    GaryxToolbarIcon(systemName: "plus")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add Workspace")
+            }
         }
         .task {
             await refresh()
         }
         .onDisappear {
             model.workspaceBotsDrilldown = nil
+        }
+        .sheet(isPresented: $showsAddWorkspace) {
+            GaryxWorkspacePathPickerSheet(
+                title: "Add Workspace",
+                path: $addWorkspacePath
+            )
+        }
+        .onChange(of: addWorkspacePath) { _, newValue in
+            let path = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard garyxIsAbsoluteWorkspacePath(path) else { return }
+            Task { await addWorkspace(path) }
         }
     }
 
@@ -1191,6 +1215,13 @@ struct GaryxWorkspaceBotsView: View {
     private func refresh() async {
         await model.refreshRemoteState()
         await model.refreshWorkspaceAndBotThreads()
+    }
+
+    private func addWorkspace(_ path: String) async {
+        guard let addedPath = await model.addUserWorkspacePath(path) else { return }
+        await model.selectWorkspace(addedPath)
+        await model.refreshWorkspaceAndBotThreads()
+        model.workspaceBotsDrilldown = .workspace(addedPath)
     }
 
     private func goBack() {

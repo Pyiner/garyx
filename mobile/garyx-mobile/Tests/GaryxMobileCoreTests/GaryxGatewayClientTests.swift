@@ -1304,6 +1304,20 @@ final class GaryxGatewayClientTests: XCTestCase {
                 """.utf8
             )
         )
+        let directoryListing = try JSONDecoder().decode(
+            GaryxWorkspaceDirectoryListing.self,
+            from: Data(
+                """
+                {
+                  "path": "/workspace",
+                  "parentPath": "/",
+                  "entries": [
+                    { "name": "project", "path": "/workspace/project" }
+                  ]
+                }
+                """.utf8
+            )
+        )
         let commands = try JSONDecoder().decode(
             GaryxSlashCommandsPage.self,
             from: Data(
@@ -1388,6 +1402,8 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(workspace.entries.first?.path, "Sources/App.swift")
         XCTAssertTrue(gitStatus.canUseWorktree)
         XCTAssertEqual(gitStatus.currentBranch, "main")
+        XCTAssertEqual(directoryListing.parentPath, "/")
+        XCTAssertEqual(directoryListing.entries.first?.path, "/workspace/project")
         XCTAssertEqual(commands.commands.first?.prompt, "Finish and verify.")
         XCTAssertEqual(mcp.servers.first?.args, ["server.js"])
         XCTAssertEqual(research.items.first?.runId, "research-test")

@@ -116,6 +116,7 @@ type AddBotDialogProps = {
   }) => Promise<StartFeishuChannelAuthResult>;
   /** Retained for prop compatibility; no longer called. */
   onPollFeishuAuth?: (input: { sessionId: string }) => Promise<PollFeishuChannelAuthResult>;
+  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
 };
 
 /**
@@ -229,7 +230,7 @@ function channelInitials(entry: ChannelPluginCatalogEntry | null): string {
 
 export function AddBotDialog(props: AddBotDialogProps) {
   const { t } = useI18n();
-  const { open, initialValues, onClose, onCreateChannel, agentTargets, workspaces = [] } = props;
+  const { open, initialValues, onClose, onCreateChannel, agentTargets, workspaces = [], onAddWorkspace } = props;
   const { entries: allEntries, loading: catalogLoading, error: catalogError } =
     useChannelPluginCatalog();
 
@@ -557,6 +558,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
                     id="add-bot-workspace"
                     value={workspaceDir}
                     onChange={setWorkspaceDir}
+                    onAddWorkspace={onAddWorkspace}
                     placeholder={t("Use the main workspace by default")}
                     workspaces={workspaces}
                   />

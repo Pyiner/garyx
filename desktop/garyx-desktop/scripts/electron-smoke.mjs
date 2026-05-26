@@ -241,6 +241,12 @@ async function createMockGateway(workspaceDir) {
     offlineUntil: 0,
     nextStreamDisconnect: null,
     threadCreateRequests: [],
+    workspaces: [
+      {
+        name: path.basename(workspaceDir),
+        path: workspaceDir,
+      },
+    ],
     sessions: [
       {
         thread_id: THREAD_ID,
@@ -563,6 +569,30 @@ async function createMockGateway(workspaceDir) {
     }
     if (req.method === 'GET' && pathname === '/api/settings') {
       return writeJson(res, 200, { config: {} });
+    }
+    if (req.method === 'GET' && pathname === '/api/workspaces') {
+      return writeJson(res, 200, {
+        workspace_state_initialized: true,
+        workspaces: state.workspaces,
+      });
+    }
+    if (req.method === 'POST' && pathname === '/api/workspaces') {
+      const body = await readJson(req);
+      const requestedPath = String(body.path || body.workspaceDir || body.workspace_dir || '').trim();
+      if (!requestedPath) {
+        return writeJson(res, 400, { error: 'workspace path is required' });
+      }
+      const existing = state.workspaces.find((workspace) => workspace.path === requestedPath);
+      if (!existing) {
+        state.workspaces.push({
+          name: path.basename(requestedPath) || requestedPath,
+          path: requestedPath,
+        });
+      }
+      return writeJson(res, 200, {
+        workspace_state_initialized: true,
+        workspaces: state.workspaces,
+      });
     }
     if (req.method === 'GET' && (pathname === '/api/threads' || pathname === '/api/sessions')) {
       return writeJson(res, 200, {

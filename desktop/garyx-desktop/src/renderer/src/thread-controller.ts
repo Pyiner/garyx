@@ -327,6 +327,7 @@ export async function ensureWorkspaceForNewThread(input: {
   api: GaryxDesktopApi;
   preferredWorkspacePath?: string | null;
   selectableWorkspaceCount: number;
+  onAddWorkspace?: () => Promise<DesktopWorkspace | null>;
   setWorkspaceMutation: (
     value: "assign" | "add" | "relink" | "remove" | null,
   ) => void;
@@ -338,24 +339,13 @@ export async function ensureWorkspaceForNewThread(input: {
   }
 
   if (input.selectableWorkspaceCount === 0) {
-    input.setWorkspaceMutation("add");
-    try {
-      const result = await input.api.addWorkspace();
-      input.setDesktopState(result.state);
-      if (result.cancelled || !result.workspace) {
-        return null;
-      }
-      return result.workspace.path;
-    } catch (workspaceError) {
-      input.setError(
-        workspaceError instanceof Error
-          ? workspaceError.message
-          : "Failed to add workspace",
-      );
-      return null;
-    } finally {
-      input.setWorkspaceMutation(null);
+    if (input.onAddWorkspace) {
+      const workspace = await input.onAddWorkspace();
+      return workspace?.path || null;
     }
+
+    input.setError("Add a workspace before creating a thread.");
+    return null;
   }
 
   input.setError("Choose an available folder before creating a thread.");
@@ -370,6 +360,7 @@ export async function ensureThread(input: {
   pendingAgentId?: string | null;
   preferredWorkspacePath?: string | null;
   selectableWorkspaceCount: number;
+  onAddWorkspace?: () => Promise<DesktopWorkspace | null>;
   setWorkspaceMutation: (
     value: "assign" | "add" | "relink" | "remove" | null,
   ) => void;
@@ -395,6 +386,7 @@ export async function ensureThread(input: {
       api: input.api,
       preferredWorkspacePath: input.preferredWorkspacePath,
       selectableWorkspaceCount: input.selectableWorkspaceCount,
+      onAddWorkspace: input.onAddWorkspace,
       setWorkspaceMutation: input.setWorkspaceMutation,
       setDesktopState: input.setDesktopState,
       setError: input.setError,

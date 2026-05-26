@@ -71,23 +71,13 @@ struct GaryxCreateAutoResearchCard: View {
                 }
 
                 GaryxFormGroupedSection(title: "Workspace") {
-                    if workspacePaths.isEmpty {
-                        Text("No workspaces available")
-                            .font(GaryxFont.callout())
-                            .foregroundStyle(.secondary)
-                            .padding(16)
-                    } else {
-                        GaryxFormRow(title: "Workspace") {
-                            Picker("Workspace", selection: workspaceSelection) {
-                                ForEach(workspacePaths, id: \.self) { path in
-                                    Text(path.garyxLastPathComponent).tag(path)
-                                }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-                            .tint(.secondary)
-                        }
-                    }
+                    GaryxWorkspacePathSelectionRow(
+                        title: "Workspace",
+                        path: workspaceSelection,
+                        workspacePaths: workspacePaths,
+                        placeholder: "Choose workspace",
+                        allowsEmpty: false
+                    )
                 }
 
                 GaryxFormGroupedSection(title: "Limits") {
@@ -118,7 +108,7 @@ struct GaryxCreateAutoResearchCard: View {
 
     private var effectiveWorkspacePath: String {
         let selected = model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty, workspacePaths.contains(selected) {
+        if !selected.isEmpty {
             return selected
         }
         return workspacePaths.first ?? ""
@@ -132,6 +122,9 @@ struct GaryxCreateAutoResearchCard: View {
     }
 
     private func ensureWorkspaceSelection() {
+        guard model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
         let nextSelection = effectiveWorkspacePath
         if model.selectedWorkspacePath != nextSelection {
             model.selectedWorkspacePath = nextSelection

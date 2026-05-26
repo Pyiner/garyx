@@ -282,7 +282,7 @@ type ThreadPageProps = {
   composerTextareaRef: RefObject<HTMLTextAreaElement | null>;
   isComposingRef: MutableRefObject<boolean>;
   ignoreComposerSubmitUntilRef: MutableRefObject<number>;
-  onAddWorkspace: () => void;
+  onAddWorkspace: (path: string) => Promise<DesktopWorkspace | null>;
   onAppendComposerAttachments: (files: File[]) => void;
   onCancelIntent: (threadId: string, intentId: string) => void;
   onComposerChange: (value: string) => void;

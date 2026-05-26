@@ -11,7 +11,6 @@ import { createPortal } from 'react-dom';
 import {
   CheckCircle2,
   Columns3,
-  Folder,
   GitBranch,
   Laptop,
   List,
@@ -21,7 +20,6 @@ import {
   RefreshCcw,
   RotateCcw,
   Send,
-  Search,
   StopCircle,
   Trash,
   UserPlus,
@@ -63,6 +61,7 @@ import {
   FloatingActionMenuSubTrigger,
 } from '../../components/ui/floating-action-menu';
 import { Input } from '../../components/ui/input';
+import { WorkspacePathPicker } from '../../components/WorkspacePathPicker';
 import {
   Select,
   SelectContent,
@@ -82,7 +81,7 @@ type TasksPanelProps = {
   botGroups: DesktopBotConsoleSummary[];
   workspaces: DesktopWorkspace[];
   workspaceMutation: string | null;
-  onAddWorkspace: () => Promise<DesktopWorkspace | null>;
+  onAddWorkspace: (path: string) => Promise<DesktopWorkspace | null>;
   onOpenThread: (threadId: string) => void;
   onToast: (message: string, tone?: ToastTone) => void;
 };
@@ -111,9 +110,6 @@ const TASK_DRAG_MIME = 'application/x-garyx-task-id';
 const ALL_BOTS_FILTER_VALUE = '__all_bots__';
 const UNASSIGNED_ASSIGNEE_VALUE = '__unassigned__';
 const CHOOSE_NOTIFICATION_VALUE = '__choose_notification__';
-const ADD_WORKSPACE_VALUE = '__add_workspace__';
-const NO_WORKSPACE_VALUE = '__no_workspace__';
-const MISSING_WORKSPACE_VALUE_PREFIX = '__missing_workspace__:';
 
 function formatPrincipal(principal: DesktopTaskPrincipal | null | undefined, t: Translate): string {
   if (!principal) {
@@ -577,29 +573,7 @@ export function TasksPanel({
     }
   }
 
-  async function handleDraftWorkspaceChange(value: string) {
-    if (value === ADD_WORKSPACE_VALUE) {
-      try {
-        const workspace = await onAddWorkspace();
-        if (workspace?.path) {
-          setDraftWorkspaceDir(workspace.path);
-          setDraftWorkspaceMode('local');
-        }
-      } catch (workspaceError) {
-        onToast(
-          workspaceError instanceof Error
-            ? workspaceError.message
-            : t('Failed to add workspace'),
-          'error',
-        );
-      }
-      return;
-    }
-    if (value === NO_WORKSPACE_VALUE || value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) {
-      setDraftWorkspaceDir('');
-      setDraftWorkspaceMode('local');
-      return;
-    }
+  function handleDraftWorkspaceChange(value: string) {
     setDraftWorkspaceDir(value);
     setDraftWorkspaceMode('local');
   }
@@ -926,61 +900,18 @@ export function TasksPanel({
               <Field className="tasks-field tasks-field-full">
                 <FieldLabel>{t('Workspace')}</FieldLabel>
                 <div className="tasks-workspace-controls">
-                  <Select
-                    value={draftWorkspaceDir || NO_WORKSPACE_VALUE}
-                    onValueChange={(value) => {
-                      void handleDraftWorkspaceChange(value);
-                    }}
-                  >
-                    <SelectTrigger className="tasks-workspace-trigger">
-                      <SelectValue placeholder={t('Select a workspace')} />
-                    </SelectTrigger>
-                    <SelectContent
-                      align="start"
-                      className="tasks-workspace-select-content"
-                      position="popper"
-                      sideOffset={4}
-                    >
-                      <SelectGroup>
-                        <SelectLabel>
-                          <Search aria-hidden size={14} strokeWidth={1.8} />
-                          {t('Search projects')}
-                        </SelectLabel>
-                        <SelectItem value={NO_WORKSPACE_VALUE}>
-                          {t('No workspace')}
-                        </SelectItem>
-                        {selectableWorkspaces.map((workspace) => {
-                          const value = workspace.path || `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
-                          return (
-                            <SelectItem
-                              disabled={!workspace.path}
-                              key={workspace.path || workspace.name}
-                              value={value}
-                            >
-                              <Folder aria-hidden size={15} strokeWidth={1.8} />
-                              {workspace.name}
-                            </SelectItem>
-                          );
-                        })}
-                        {!selectableWorkspaces.length ? (
-                          <SelectItem disabled value="no-workspaces">
-                            {t('No workspaces available')}
-                          </SelectItem>
-                        ) : null}
-                      </SelectGroup>
-                      <SelectGroup>
-                        <SelectItem
-                          disabled={workspaceMutation === 'add'}
-                          value={ADD_WORKSPACE_VALUE}
-                        >
-                          <Folder aria-hidden size={15} strokeWidth={1.8} />
-                          {workspaceMutation === 'add'
-                            ? t('Opening folder…')
-                            : t('Choose folder…')}
-                        </SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
+                  <WorkspacePathPicker
+                    addWorkspaceLabel={
+                      workspaceMutation === 'add'
+                        ? t('Opening folder…')
+                        : t('Add workspace')
+                    }
+                    onAddWorkspace={onAddWorkspace}
+                    onChange={handleDraftWorkspaceChange}
+                    placeholder={t('Select a workspace')}
+                    value={draftWorkspaceDir}
+                    workspaces={selectableWorkspaces}
+                  />
                   {draftWorktreeCapable ? (
                     <div className="tasks-workspace-mode-row">
                       <span className="tasks-workspace-mode-label">

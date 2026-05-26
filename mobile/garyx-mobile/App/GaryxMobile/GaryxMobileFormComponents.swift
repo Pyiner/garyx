@@ -241,7 +241,6 @@ struct GaryxWorkspacePathSelectionRow: View {
     let title: String
     @Binding var path: String
     let workspacePaths: [String]
-    var savedWorkspacePaths: [String]? = nil
     var placeholder: String = "Choose workspace"
     var allowsEmpty: Bool = true
     @State private var showsPicker = false
@@ -270,11 +269,10 @@ struct GaryxWorkspacePathSelectionRow: View {
         }
         .buttonStyle(.plain)
         .sheet(isPresented: $showsPicker) {
-            GaryxWorkspacePathPickerSheet(
+            GaryxWorkspaceSelectSheet(
                 title: title,
                 path: $path,
                 workspacePaths: workspacePaths,
-                savedWorkspacePaths: savedWorkspacePaths ?? workspacePaths,
                 placeholder: placeholder,
                 allowsEmpty: allowsEmpty
             )
@@ -292,110 +290,278 @@ struct GaryxWorkspacePathPickerField: View {
     @Binding var path: String
     let workspacePaths: [String]
     var placeholder: String = "/path/to/project"
+    @State private var showsPicker = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            TextField(placeholder, text: $path)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .garyxFormTextField()
+            Button {
+                showsPicker = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "folder")
+                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(pathDisplayTitle)
+                            .font(GaryxFont.body(weight: selectedPath.isEmpty ? .regular : .semibold))
+                            .foregroundStyle(selectedPath.isEmpty ? .secondary : .primary)
+                            .lineLimit(1)
+                        if !selectedPath.isEmpty {
+                            Text(workspacePathCompactLabel(selectedPath))
+                                .font(GaryxFont.caption())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(GaryxFont.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 16)
+                .frame(minHeight: 56)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
             if !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                !garyxIsAbsoluteWorkspacePath(path) {
                 GaryxFormErrorText(text: "Use an absolute path.")
             }
-            GaryxWorkspacePathBrowser(path: $path, paths: workspacePaths)
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
+        }
+        .sheet(isPresented: $showsPicker) {
+            GaryxWorkspacePathPickerSheet(
+                title: "Choose workspace",
+                path: $path
+            )
+        }
+    }
+
+    private var selectedPath: String {
+        path.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var pathDisplayTitle: String {
+        guard !selectedPath.isEmpty else { return placeholder }
+        let tail = selectedPath.garyxLastPathComponent
+        return tail.isEmpty ? selectedPath : tail
+    }
+}
+
+struct GaryxWorkspaceSelectSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let title: String
+    @Binding var path: String
+    let workspacePaths: [String]
+    let placeholder: String
+    let allowsEmpty: Bool
+    @State private var showsAddWorkspace = false
+    @State private var addWorkspacePath = ""
+    @State private var isAddingWorkspace = false
+
+    private var trimmedPath: String {
+        path.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var normalizedSelectedPath: String {
+        normalizedWorkspacePath(trimmedPath)
+    }
+
+    private var visibleWorkspacePaths: [String] {
+        var seen = Set<String>()
+        return workspacePaths
+            .compactMap { rawPath -> String? in
+                let path = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !path.isEmpty else { return nil }
+                return seen.insert(normalizedWorkspacePath(path)).inserted ? path : nil
+            }
+    }
+
+    private var selectedPathMissingFromOptions: Bool {
+        !trimmedPath.isEmpty
+            && !visibleWorkspacePaths.contains { normalizedWorkspacePath($0) == normalizedSelectedPath }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            sheetHeader(title: title)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                        VStack(spacing: 0) {
+                            if allowsEmpty {
+                                workspaceOptionRow(
+                                    title: "No workspace",
+                                    detail: "",
+                                    systemName: "minus.circle",
+                                    isSelected: trimmedPath.isEmpty
+                                ) {
+                                    path = ""
+                                    dismiss()
+                                }
+                                if !visibleWorkspacePaths.isEmpty || selectedPathMissingFromOptions {
+                                    Divider().padding(.leading, 52)
+                                }
+                            }
+                            if selectedPathMissingFromOptions {
+                                workspaceOptionRow(
+                                    title: workspaceDisplayName(trimmedPath),
+                                    detail: trimmedPath,
+                                    systemName: "folder",
+                                    isSelected: true,
+                                    badge: "Current"
+                                ) {
+                                    dismiss()
+                                }
+                                if !visibleWorkspacePaths.isEmpty {
+                                    Divider().padding(.leading, 52)
+                                }
+                            }
+                            ForEach(Array(visibleWorkspacePaths.enumerated()), id: \.element) { index, workspace in
+                                workspaceOptionRow(
+                                    title: workspaceDisplayName(workspace),
+                                    detail: workspace,
+                                    systemName: "folder",
+                                    isSelected: normalizedWorkspacePath(workspace) == normalizedSelectedPath
+                                ) {
+                                    path = workspace
+                                    dismiss()
+                                }
+                                if index < visibleWorkspacePaths.count - 1 {
+                                    Divider().padding(.leading, 52)
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                    }
+
+                    Button {
+                        addWorkspacePath = ""
+                        showsAddWorkspace = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: isAddingWorkspace ? "hourglass" : "plus.circle")
+                                .font(GaryxFont.system(size: 15, weight: .semibold))
+                                .frame(width: 28, height: 28)
+                            Text(isAddingWorkspace ? "Adding workspace..." : "Add workspace")
+                                .font(GaryxFont.body(weight: .semibold))
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(GaryxFont.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 18)
+                        .frame(minHeight: 50)
+                        .garyxAdaptiveGlass(
+                            .regular,
+                            isInteractive: true,
+                            fallbackMaterial: .ultraThinMaterial,
+                            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(isAddingWorkspace)
+                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .garyxWorkspacePickerSheetStyle()
+        .sheet(isPresented: $showsAddWorkspace) {
+            GaryxWorkspacePathPickerSheet(
+                title: "Add workspace",
+                path: $addWorkspacePath
+            )
+        }
+        .onChange(of: addWorkspacePath) { _, newValue in
+            let selected = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !selected.isEmpty else { return }
+            Task { await addWorkspace(selected) }
+        }
+    }
+
+    private func workspaceOptionRow(
+        title: String,
+        detail: String,
+        systemName: String,
+        isSelected: Bool,
+        badge: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: systemName)
+                    .font(GaryxFont.system(size: 15, weight: .semibold))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .frame(width: 28, height: 28)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(GaryxFont.subheadline(weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        if let badge {
+                            Text(badge)
+                                .font(GaryxFont.caption(weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if !detail.isEmpty {
+                        Text(workspacePathCompactLabel(detail))
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer(minLength: 0)
+                if isSelected {
+                    GaryxSelectionCheckmark(size: 12)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(minHeight: 50)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func addWorkspace(_ selectedPath: String) async {
+        guard !isAddingWorkspace else { return }
+        isAddingWorkspace = true
+        defer { isAddingWorkspace = false }
+        if let addedPath = await model.addUserWorkspacePath(selectedPath) {
+            path = addedPath
+            showsAddWorkspace = false
+            dismiss()
         }
     }
 }
 
-private struct GaryxWorkspacePathPickerSheet: View {
+struct GaryxWorkspacePathPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     let title: String
     @Binding var path: String
-    let workspacePaths: [String]
-    let savedWorkspacePaths: [String]
-    let placeholder: String
-    let allowsEmpty: Bool
-    @State private var draft = ""
 
     var body: some View {
-        let trimmedDraft = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isInvalidDraft = !trimmedDraft.isEmpty && !garyxIsAbsoluteWorkspacePath(trimmedDraft)
-        let noWorkspaceSelected = trimmedDraft.isEmpty
-
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 12) {
-                Text(title)
-                    .font(GaryxFont.callout(weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                Button {
-                    saveAndDismiss()
-                } label: {
-                    GaryxCompactGlassIcon(systemName: "checkmark")
-                        .opacity(canSave ? 1 : 0.38)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSave)
-                .accessibilityLabel("Save")
-                Button {
-                    dismiss()
-                } label: {
-                    GaryxCompactGlassIcon(systemName: "xmark")
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-            }
-            .padding(.horizontal, 22)
-            .padding(.top, 22)
-            .padding(.bottom, 14)
-
-            VStack(alignment: .leading, spacing: 6) {
-                GaryxGlassPathField(placeholder: placeholder, path: $draft)
-
-                if isInvalidDraft {
-                    GaryxFormErrorText(text: "Use an absolute path.")
-                }
-            }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 14)
+            sheetHeader(title: title)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
-                        GaryxWorkspacePathBrowser(path: $draft, paths: workspacePaths, savedPaths: savedWorkspacePaths)
+                        GaryxWorkspaceDirectoryBrowser(selectedPath: path) { selectedPath in
+                            path = selectedPath
+                            dismiss()
+                        }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
-                    }
-                    if allowsEmpty {
-                        Button {
-                            path = ""
-                            dismiss()
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "xmark.circle")
-                                    .font(GaryxFont.system(size: 14, weight: .semibold))
-                                Text("No workspace")
-                                    .font(GaryxFont.body(weight: .medium))
-                                Spacer(minLength: 0)
-                                if noWorkspaceSelected {
-                                    GaryxSelectionCheckmark(size: 12)
-                                }
-                            }
-                            .foregroundStyle(noWorkspaceSelected ? .primary : .secondary)
-                            .padding(.horizontal, 18)
-                            .frame(minHeight: 50)
-                            .garyxAdaptiveGlass(
-                                .regular,
-                                isInteractive: true,
-                                fallbackMaterial: .ultraThinMaterial,
-                                in: RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            )
-                        }
-                        .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 22)
@@ -403,221 +569,129 @@ private struct GaryxWorkspacePathPickerSheet: View {
             }
             .scrollIndicators(.hidden)
         }
-        .background {
-            Rectangle()
-                .fill(Color(.systemBackground).opacity(0.98))
-                .overlay {
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.28),
-                            Color.white.opacity(0.10)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                }
-                .ignoresSafeArea()
-        }
-        .presentationBackground(.clear)
-        .presentationBackgroundInteraction(.enabled)
-        .presentationDetents([.fraction(0.93), .large])
-        .presentationDragIndicator(.hidden)
-        .presentationCornerRadius(38)
-        .onAppear { draft = path.trimmingCharacters(in: .whitespacesAndNewlines) }
-    }
-
-    private func saveAndDismiss() {
-        path = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        dismiss()
-    }
-
-    private var canSave: Bool {
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return allowsEmpty }
-        return garyxIsAbsoluteWorkspacePath(trimmed)
+        .garyxWorkspacePickerSheetStyle()
     }
 }
 
-private struct GaryxGlassPathField: View {
-    let placeholder: String
-    @Binding var path: String
+private struct GaryxWorkspaceDirectoryBrowser: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let selectedPath: String
+    let onSelect: (String) -> Void
+    @State private var currentPath = ""
+    @State private var parentPath: String?
+    @State private var entries: [GaryxWorkspaceDirectoryEntry] = []
+    @State private var isLoading = true
+    @State private var errorText: String?
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
-
-        HStack(spacing: 10) {
-            Image(systemName: "folder")
-                .font(GaryxFont.system(size: 15, weight: .medium))
-                .foregroundStyle(.secondary)
-
-            TextField(placeholder, text: $path)
-                .font(GaryxFont.subheadline())
-                .foregroundStyle(.primary)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .lineLimit(1)
-                .accessibilityLabel("Workspace path")
-
-            if !path.isEmpty {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
                 Button {
-                    path = ""
+                    if let parentPath {
+                        currentPath = parentPath
+                        Task { await load(path: parentPath) }
+                    }
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(GaryxFont.system(size: 15, weight: .medium))
-                        .foregroundStyle(.tertiary)
+                    Image(systemName: "chevron.left")
+                        .font(GaryxFont.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 32, height: 32)
+                        .background(Color(.tertiarySystemFill).opacity(0.72), in: Circle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Clear path")
-            }
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 38)
-        .garyxAdaptiveGlass(
-            .regular,
-            isInteractive: true,
-            tint: Color(.systemBackground).opacity(0.92),
-            fallbackMaterial: .ultraThinMaterial,
-            in: shape
-        )
-        .overlay {
-            shape
-                .stroke(Color.white.opacity(0.34), lineWidth: 0.7)
-        }
-        .overlay {
-            shape
-                .stroke(Color.primary.opacity(0.055), lineWidth: 1)
-        }
-    }
-}
+                .disabled(parentPath == nil || isLoading)
+                .opacity(parentPath == nil ? 0.36 : 1)
+                .accessibilityLabel("Back")
 
-private struct GaryxWorkspacePathBrowser: View {
-    @Binding var path: String
-    let paths: [String]
-    var savedPaths: [String]? = nil
-    @State private var currentPath = ""
-
-    private var entries: [GaryxWorkspacePathEntry] {
-        workspacePathEntries(paths, savedPaths: savedPaths ?? paths)
-    }
-
-    private var rows: [GaryxWorkspaceDirectoryCandidate] {
-        workspaceDirectoryChildren(currentPath: currentPath, entries: entries)
-    }
-
-    private var currentEntry: GaryxWorkspacePathEntry? {
-        workspacePathEntry(for: currentPath, entries: entries)
-    }
-
-    private var normalizedSelectedPath: String {
-        normalizedWorkspacePath(path)
-    }
-
-    private var normalizedCurrentPath: String {
-        normalizedWorkspacePath(currentEntry?.originalPath ?? currentPath)
-    }
-
-    private var canUseCurrentPath: Bool {
-        !currentPath.isEmpty && garyxIsAbsoluteWorkspacePath(currentPath)
-    }
-
-    var body: some View {
-        if !entries.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(workspaceDisplayName(currentPath).isEmpty ? "Folders" : workspaceDisplayName(currentPath))
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(currentPath.isEmpty ? "Choose a folder" : workspacePathCompactLabel(currentPath))
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
+                if !currentPath.isEmpty {
                     Button {
-                        currentPath = parentWorkspacePath(currentPath)
+                        onSelect(currentPath)
                     } label: {
-                        Image(systemName: "chevron.left")
-                            .font(GaryxFont.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 32, height: 32)
-                            .background(Color(.tertiarySystemFill).opacity(0.72), in: Circle())
+                        HStack(spacing: 5) {
+                            if normalizedWorkspacePath(selectedPath) == normalizedWorkspacePath(currentPath) {
+                                GaryxSelectionCheckmark(size: 11)
+                            }
+                            Text(normalizedWorkspacePath(selectedPath) == normalizedWorkspacePath(currentPath) ? "Selected" : "Use this folder")
+                                .font(GaryxFont.caption(weight: .semibold))
+                        }
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(currentPath.isEmpty)
-                    .opacity(currentPath.isEmpty ? 0.36 : 1)
-                    .accessibilityLabel("Back")
-                    .accessibilityHint("Go to parent folder")
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(currentPathTitle)
-                            .font(GaryxFont.subheadline(weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Text(currentPath.isEmpty ? "Workspace folders" : workspacePathCompactLabel(currentPath))
-                            .font(GaryxFont.caption())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 0)
-                    if canUseCurrentPath {
-                        Button {
-                            path = currentEntry?.originalPath ?? currentPath
-                        } label: {
-                            HStack(spacing: 5) {
-                                if normalizedSelectedPath == normalizedCurrentPath {
-                                    GaryxSelectionCheckmark(size: 11)
-                                }
-                                Text(normalizedSelectedPath == normalizedCurrentPath ? "Selected" : "Use this folder")
-                                    .font(GaryxFont.caption(weight: .semibold))
-                            }
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 10)
-                            .frame(height: 30)
-                            .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(normalizedSelectedPath == normalizedCurrentPath ? "Current path selected" : "Use current folder")
-                    }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 8)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
 
-                Divider().padding(.leading, 8)
+            Divider().padding(.leading, 8)
 
-                if rows.isEmpty {
-                    Text("No folders here.")
-                        .font(GaryxFont.subheadline())
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 26)
-                } else {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, candidate in
-                        GaryxWorkspacePathBrowserRow(
-                            candidate: candidate,
-                            isSelected: normalizedSelectedPath == normalizedWorkspacePath(candidate.originalPath ?? candidate.path),
-                            showsSeparator: index < rows.count - 1
-                        ) {
-                            currentPath = candidate.path
-                        }
+            if isLoading {
+                Text("Loading folders...")
+                    .font(GaryxFont.subheadline())
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 26)
+            } else if let errorText {
+                Text(errorText)
+                    .font(GaryxFont.subheadline())
+                    .foregroundStyle(GaryxTheme.danger)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 26)
+            } else if entries.isEmpty {
+                Text("No folders here.")
+                    .font(GaryxFont.subheadline())
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 26)
+            } else {
+                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                    GaryxWorkspaceDirectoryBrowserRow(
+                        entry: entry,
+                        showsSeparator: index < entries.count - 1
+                    ) {
+                        currentPath = entry.path
+                        Task { await load(path: entry.path) }
                     }
                 }
             }
-            .onAppear {
-                currentPath = initialWorkspaceBrowserPath(entries: entries, selectedPath: path)
-            }
-            .onChange(of: paths) { _, _ in
-                currentPath = initialWorkspaceBrowserPath(entries: entries, selectedPath: path)
-            }
-        } else {
-            Text("No saved workspaces. Enter an absolute path manually.")
-                .font(GaryxFont.subheadline())
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
+        }
+        .task {
+            await load(path: selectedPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : selectedPath)
         }
     }
 
-    private var currentPathTitle: String {
-        guard !currentPath.isEmpty else { return "Folders" }
-        return workspaceDirectoryName(currentPath)
+    private func load(path: String?) async {
+        isLoading = true
+        errorText = nil
+        do {
+            let listing = try await model.listWorkspaceDirectories(path: path)
+            currentPath = listing.path
+            parentPath = listing.parentPath
+            entries = listing.entries
+        } catch {
+            errorText = error.localizedDescription
+            entries = []
+        }
+        isLoading = false
     }
 }
 
-private struct GaryxWorkspacePathBrowserRow: View {
-    let candidate: GaryxWorkspaceDirectoryCandidate
-    let isSelected: Bool
+private struct GaryxWorkspaceDirectoryBrowserRow: View {
+    let entry: GaryxWorkspaceDirectoryEntry
     let showsSeparator: Bool
     let action: () -> Void
 
@@ -630,20 +704,17 @@ private struct GaryxWorkspacePathBrowserRow: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 28, height: 28)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(candidate.name)
+                        Text(entry.name)
                             .font(GaryxFont.subheadline(weight: .semibold))
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        Text(workspacePathCompactLabel(candidate.path))
+                        Text(workspacePathCompactLabel(entry.path))
                             .font(GaryxFont.caption())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 0)
-                    if isSelected {
-                        GaryxSelectionCheckmark(size: 12)
-                    }
                     Image(systemName: "chevron.right")
                         .font(GaryxFont.system(size: 12, weight: .semibold))
                         .foregroundStyle(.tertiary)
@@ -651,12 +722,6 @@ private struct GaryxWorkspacePathBrowserRow: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
                 .frame(minHeight: 50)
-                .background {
-                    if isSelected {
-                        Color(.tertiarySystemFill).opacity(0.56)
-                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    }
-                }
                 if showsSeparator {
                     Divider().padding(.leading, 46)
                 }
@@ -664,132 +729,7 @@ private struct GaryxWorkspacePathBrowserRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityValue(isSelected ? "Selected" : "")
-        .accessibilityHint("Open folder")
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
-
-    private var accessibilityLabel: String {
-        [
-            candidate.name,
-            workspacePathCompactLabel(candidate.path)
-        ].joined(separator: ", ")
-    }
-}
-
-private struct GaryxWorkspacePathEntry {
-    let normalizedPath: String
-    let originalPath: String
-}
-
-private struct GaryxWorkspaceDirectoryCandidate: Identifiable {
-    let path: String
-    let name: String
-    let originalPath: String?
-
-    var id: String { path }
-}
-
-private func workspacePathEntries(_ paths: [String], savedPaths: [String]) -> [GaryxWorkspacePathEntry] {
-    let savedOriginalByNormalized = Dictionary(
-        savedPaths.compactMap { rawPath -> (String, String)? in
-            let original = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalized = normalizedWorkspacePath(original)
-            guard garyxIsAbsoluteWorkspacePath(normalized) else { return nil }
-            return (normalized, original)
-        },
-        uniquingKeysWith: { first, _ in first }
-    )
-    var seen = Set<String>()
-    return paths.compactMap { rawPath -> GaryxWorkspacePathEntry? in
-        let original = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized = normalizedWorkspacePath(original)
-        guard garyxIsAbsoluteWorkspacePath(normalized),
-              seen.insert(normalized).inserted else {
-            return nil
-        }
-        if let savedOriginal = savedOriginalByNormalized[normalized] {
-            return GaryxWorkspacePathEntry(
-                normalizedPath: normalized,
-                originalPath: savedOriginal
-            )
-        }
-        return GaryxWorkspacePathEntry(
-            normalizedPath: normalized,
-            originalPath: original
-        )
-    }
-    .sorted { $0.normalizedPath.localizedStandardCompare($1.normalizedPath) == .orderedAscending }
-}
-
-private func workspaceDirectoryChildren(
-    currentPath: String,
-    entries: [GaryxWorkspacePathEntry]
-) -> [GaryxWorkspaceDirectoryCandidate] {
-    var candidates: [String: GaryxWorkspaceDirectoryCandidate] = [:]
-    for entry in entries {
-        guard let childPath = workspaceImmediateChildPath(
-            parentPath: currentPath,
-            descendantPath: entry.normalizedPath
-        ) else { continue }
-        let exactEntry = workspacePathEntry(for: childPath, entries: entries)
-        candidates[childPath] = GaryxWorkspaceDirectoryCandidate(
-            path: childPath,
-            name: workspaceDirectoryName(childPath),
-            originalPath: exactEntry?.originalPath
-        )
-    }
-    return candidates.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-}
-
-private func workspacePathEntry(
-    for path: String,
-    entries: [GaryxWorkspacePathEntry]
-) -> GaryxWorkspacePathEntry? {
-    let normalized = normalizedWorkspacePath(path)
-    return entries.first { $0.normalizedPath == normalized }
-}
-
-private func initialWorkspaceBrowserPath(entries: [GaryxWorkspacePathEntry], selectedPath: String) -> String {
-    let normalized = normalizedWorkspacePath(selectedPath)
-    if !normalized.isEmpty, garyxIsAbsoluteWorkspacePath(normalized) {
-        return parentWorkspacePath(normalized)
-    }
-    guard let first = entries.first?.normalizedPath else { return "" }
-    return parentWorkspacePath(first)
-}
-
-private func parentWorkspacePath(_ path: String) -> String {
-    let normalized = normalizedWorkspacePath(path)
-    let parts = pathComponentsForWorkspacePath(normalized)
-    guard !parts.segments.isEmpty else { return "" }
-    guard parts.segments.count > 1 else { return parts.root }
-    return parts.segments.dropLast().reduce(parts.root) { current, segment in
-        childWorkspacePath(parent: current, segment: segment)
-    }
-}
-
-private func workspaceImmediateChildPath(parentPath: String, descendantPath: String) -> String? {
-    let parent = normalizedWorkspacePath(parentPath)
-    let descendant = normalizedWorkspacePath(descendantPath)
-    guard !descendant.isEmpty, descendant != parent else { return nil }
-    if parent.isEmpty {
-        let parts = pathComponentsForWorkspacePath(descendant)
-        guard let first = parts.segments.first else { return parts.root }
-        return childWorkspacePath(parent: parts.root, segment: first)
-    }
-    if parent == "/" || parent == "//" || parent.hasSuffix(":") {
-        let parts = pathComponentsForWorkspacePath(descendant)
-        guard parts.root == parent, let first = parts.segments.first else { return nil }
-        return childWorkspacePath(parent: parent, segment: first)
-    }
-    let prefix = parent.hasSuffix("/") ? parent : "\(parent)/"
-    guard descendant.hasPrefix(prefix) else { return nil }
-    let remainder = String(descendant.dropFirst(prefix.count))
-    guard let nextSegment = remainder.split(separator: "/", maxSplits: 1).first else { return nil }
-    return childWorkspacePath(parent: parent, segment: String(nextSegment))
 }
 
 private func normalizedWorkspacePath(_ path: String) -> String {
@@ -802,33 +742,9 @@ private func normalizedWorkspacePath(_ path: String) -> String {
     return trimmed
 }
 
-private func pathComponentsForWorkspacePath(_ path: String) -> (root: String, segments: [String]) {
-    let normalized = normalizedWorkspacePath(path)
-    if normalized.hasPrefix("//") {
-        return ("//", normalized.dropFirst(2).split(separator: "/").map(String.init))
-    }
-    if normalized.hasPrefix("/") {
-        return ("/", normalized.dropFirst().split(separator: "/").map(String.init))
-    }
-    let chars = Array(normalized)
-    if chars.count >= 2, chars[1] == ":" {
-        let root = String(chars[0...1])
-        let rest = String(chars.dropFirst(2)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return (root, rest.split(separator: "/").map(String.init))
-    }
-    return ("/", normalized.split(separator: "/").map(String.init))
-}
-
-private func workspaceDirectoryName(_ path: String) -> String {
+private func workspaceDisplayName(_ path: String) -> String {
     let tail = path.garyxLastPathComponent
     return tail.isEmpty ? path : tail
-}
-
-private func childWorkspacePath(parent: String, segment: String) -> String {
-    if parent == "/" { return "/\(segment)" }
-    if parent == "//" { return "//\(segment)" }
-    if parent.hasSuffix(":") { return "\(parent)/\(segment)" }
-    return "\(parent)/\(segment)"
 }
 
 private func workspacePathCompactLabel(_ path: String) -> String {
@@ -841,6 +757,67 @@ private func workspacePathCompactLabel(_ path: String) -> String {
     let parts = normalized.split(separator: "/").map(String.init)
     guard parts.count > 2 else { return normalized }
     return ".../\(parts.suffix(2).joined(separator: "/"))"
+}
+
+private func sheetHeader(title: String) -> some View {
+    HStack(alignment: .center, spacing: 12) {
+        Text(title)
+            .font(GaryxFont.callout(weight: .medium))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+        Spacer(minLength: 0)
+        Button {
+        } label: {
+            EmptyView()
+        }
+        .hidden()
+    }
+    .overlay(alignment: .trailing) {
+        GaryxDismissButton()
+    }
+    .padding(.horizontal, 22)
+    .padding(.top, 22)
+    .padding(.bottom, 14)
+}
+
+private struct GaryxDismissButton: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Button {
+            dismiss()
+        } label: {
+            GaryxCompactGlassIcon(systemName: "xmark")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close")
+    }
+}
+
+private extension View {
+    func garyxWorkspacePickerSheetStyle() -> some View {
+        self
+            .background {
+                Rectangle()
+                    .fill(Color(.systemBackground).opacity(0.98))
+                    .overlay {
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.28),
+                                Color.white.opacity(0.10)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+                    .ignoresSafeArea()
+            }
+            .presentationBackground(.clear)
+            .presentationBackgroundInteraction(.enabled)
+            .presentationDetents([.fraction(0.93), .large])
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(38)
+    }
 }
 
 enum GaryxFormPalette {

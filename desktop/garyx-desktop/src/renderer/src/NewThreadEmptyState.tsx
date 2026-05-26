@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconDeviceLaptop,
-  IconFolder,
   IconGitBranch,
   IconHistory,
-  IconPlus,
   IconRefresh,
-  IconSearch,
   IconSparkles,
 } from "@tabler/icons-react";
 
@@ -34,14 +31,12 @@ import {
   SelectGroup,
   SelectItem,
   SelectLabel,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { WorkspacePathPicker } from "@/components/WorkspacePathPicker";
 import { useI18n } from "./i18n";
 
-const ADD_WORKSPACE_VALUE = "__add_workspace__";
-const MISSING_WORKSPACE_VALUE_PREFIX = "__missing_workspace__:";
 const GIT_STATUS_CHECK_DELAY_MS = 120;
 const HOME_DREAMS_LIMIT = 4;
 const HOME_DREAMS_CACHE_STALE_MS = 45_000;
@@ -55,7 +50,7 @@ type NewThreadEmptyStateProps = {
   selectableNewThreadWorkspaces: DesktopWorkspace[];
   workspaceMutation: string | null;
   workspaceMode: DesktopWorkspaceMode;
-  onAddWorkspace: () => void;
+  onAddWorkspace: (path: string) => Promise<DesktopWorkspace | null>;
   onSelectWorkspace: (workspacePath: string) => void;
   onWorkspaceModeChange: (workspaceMode: DesktopWorkspaceMode) => void;
   onOpenDreamThread: (threadId: string) => void;
@@ -92,16 +87,19 @@ export function NewThreadEmptyState({
     setResumeError(null);
   }, [resumeOpen, resumeSessionId]);
 
-  const selectedWorkspace = useMemo(
-    () =>
-      selectableNewThreadWorkspaces.find(
-        (workspace) => workspace.path === (newThreadWorkspaceEntry?.path || ""),
-      ) ??
-      selectableNewThreadWorkspaces[0] ??
-      null,
-    [newThreadWorkspaceEntry?.path, selectableNewThreadWorkspaces],
-  );
-  const selectedWorkspacePath = selectedWorkspace?.path?.trim() || "";
+  const explicitWorkspacePath = newThreadWorkspaceEntry?.path?.trim() || "";
+  const selectedWorkspace = useMemo(() => {
+    if (explicitWorkspacePath) {
+      return (
+        selectableNewThreadWorkspaces.find(
+          (workspace) => workspace.path === explicitWorkspacePath,
+        ) ?? null
+      );
+    }
+    return selectableNewThreadWorkspaces[0] ?? null;
+  }, [explicitWorkspacePath, selectableNewThreadWorkspaces]);
+  const selectedWorkspacePath =
+    explicitWorkspacePath || selectedWorkspace?.path?.trim() || "";
   const worktreeCapable = Boolean(
     gitStatusResult?.workspacePath === selectedWorkspacePath &&
       gitStatusResult.status.isGitRepo,
@@ -178,86 +176,28 @@ export function NewThreadEmptyState({
     <>
       <div className="new-thread-empty-state">
         <div className="new-thread-option-row">
-          {selectableNewThreadWorkspaces.length ? (
-            <Select
-              onValueChange={(value) => {
-                if (value === ADD_WORKSPACE_VALUE) {
-                  onAddWorkspace();
-                  return;
-                }
-                if (value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) {
-                  return;
-                }
-                onWorkspaceModeChange("local");
-                onSelectWorkspace(value);
-              }}
-              value={selectedWorkspace?.path ?? ""}
-            >
-              <SelectTrigger
-                aria-label={t("Workspace for the new thread")}
-                className="new-thread-workspace-trigger"
-              >
-                <SelectValue placeholder={t("Select a workspace")} />
-              </SelectTrigger>
-              <SelectContent
-                align="start"
-                className="new-thread-workspace-menu min-w-[var(--radix-select-trigger-width)]"
-                position="popper"
-                side="bottom"
-                sideOffset={-1}
-              >
-                <SelectGroup>
-                  <SelectLabel>
-                    <IconSearch aria-hidden size={16} stroke={1.7} />
-                    {t("Search projects")}
-                  </SelectLabel>
-                  {selectableNewThreadWorkspaces.map((workspace) => {
-                    const value = workspace.path || `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
-                    return (
-                      <SelectItem
-                        disabled={!workspace.available || !workspace.path}
-                        key={workspace.path || workspace.name}
-                        value={value}
-                      >
-                        <IconFolder aria-hidden size={16} stroke={1.7} />
-                        <span className="new-thread-menu-text">
-                          {workspace.available && workspace.path
-                            ? workspace.name
-                            : t("{name} (Unavailable)", { name: workspace.name })}
-                        </span>
-                      </SelectItem>
-                    );
-                  })}
-                </SelectGroup>
-                <SelectSeparator />
-                <SelectGroup>
-                  <SelectItem
-                    value={ADD_WORKSPACE_VALUE}
-                    disabled={workspaceMutation === "add"}
-                  >
-                    <IconFolder aria-hidden size={16} stroke={1.7} />
-                    <span className="new-thread-menu-text">
-                      {workspaceMutation === "add"
-                        ? t("Opening folder…")
-                        : t("Choose folder…")}
-                    </span>
-                  </SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          ) : (
-            <Button
-              variant="outline"
-              className="new-thread-workspace-trigger justify-center"
-              disabled={workspaceMutation === "add"}
-              onClick={onAddWorkspace}
-            >
-              <IconPlus aria-hidden size={14} stroke={1.8} />
-              {workspaceMutation === "add"
+          <WorkspacePathPicker
+            addWorkspaceLabel={
+              workspaceMutation === "add"
                 ? t("Opening folder…")
-                : t("Choose a folder to begin")}
-            </Button>
-          )}
+                : t("Add workspace")
+            }
+            allowEmpty={false}
+            className="new-thread-workspace-picker"
+            contentClassName="new-thread-workspace-menu min-w-[var(--radix-select-trigger-width)]"
+            disabled={workspaceMutation === "add"}
+            fieldClassName="new-thread-workspace-field"
+            onAddWorkspace={onAddWorkspace}
+            onChange={(value) => {
+              if (!value.trim()) return;
+              onWorkspaceModeChange("local");
+              onSelectWorkspace(value);
+            }}
+            placeholder={t("Select a workspace")}
+            triggerClassName="new-thread-workspace-trigger"
+            value={selectedWorkspacePath}
+            workspaces={selectableNewThreadWorkspaces}
+          />
 
           {worktreeCapable ? (
             <Select

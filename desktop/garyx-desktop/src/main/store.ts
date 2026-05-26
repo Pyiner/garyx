@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
-import { dirname, join, basename, resolve as resolvePath } from 'node:path';
+import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { dirname, join, basename } from 'node:path';
 
 import { app } from 'electron';
 
@@ -558,14 +558,22 @@ async function writeState(state: DesktopState): Promise<void> {
   await writeFile(filePath, JSON.stringify(state, null, 2), 'utf8');
 }
 
-async function canonicalizeWorkspacePath(path: string): Promise<string> {
+function isAbsoluteWorkspacePath(path: string): boolean {
+  return path.startsWith('/')
+    || /^[A-Za-z]:[\\/]/.test(path)
+    || path.startsWith('\\\\')
+    || path.startsWith('//');
+}
+
+function canonicalizeWorkspacePath(path: string): string {
   const trimmed = path.trim();
   if (!trimmed) {
     throw new Error('Choose a folder.');
   }
-
-  const resolved = resolvePath(trimmed);
-  return realpath(resolved);
+  if (!isAbsoluteWorkspacePath(trimmed)) {
+    throw new Error('Choose an absolute folder path.');
+  }
+  return trimmed;
 }
 
 async function resolveWorkspaceAvailability(workspace: DesktopWorkspace): Promise<DesktopWorkspace> {
@@ -960,7 +968,7 @@ export async function addDesktopWorkspace(path: string): Promise<{
   workspace: DesktopWorkspace;
 }> {
   const current = await getDesktopState();
-  const canonicalPath = await canonicalizeWorkspacePath(path);
+  const canonicalPath = canonicalizeWorkspacePath(path);
   const remoteWorkspaces = await addRemoteWorkspace(current.settings, {
     path: canonicalPath,
     name: workspaceNameFromPath(canonicalPath),
@@ -988,24 +996,6 @@ export async function addDesktopWorkspace(path: string): Promise<{
     selectedWorkspacePath: workspace.path,
   }, { preserveMissingSelectedWorkspace: true });
   return { state: next, workspace };
-}
-
-export async function relinkDesktopWorkspace(
-  workspacePath: string,
-  path: string,
-): Promise<{ state: DesktopState; workspace: DesktopWorkspace }> {
-  void workspacePath;
-  void path;
-  throw new Error('Folders are selected by path; choose a different folder instead.');
-}
-
-export async function renameDesktopWorkspace(
-  workspacePath: string,
-  name: string,
-): Promise<DesktopState> {
-  void workspacePath;
-  void name;
-  throw new Error('Folder labels come from the directory name.');
 }
 
 export async function removeDesktopWorkspace(workspacePath: string): Promise<DesktopState> {

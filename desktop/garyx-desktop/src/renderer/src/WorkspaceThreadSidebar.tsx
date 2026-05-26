@@ -1,4 +1,4 @@
-import { type CSSProperties, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Trash } from 'lucide-react';
 
@@ -20,15 +20,9 @@ type WorkspaceThreadSidebarProps = {
   workspaceThreadGroups: WorkspaceThreadGroup[];
   workspaceMutation: WorkspaceMutation;
   workspaceMenuOpenPath: string | null;
-  renamingWorkspacePath: string | null;
-  workspaceNameDraft: string;
   setWorkspaceMenuOpenPath: (value: string | ((current: string | null) => string | null) | null) => void;
-  setWorkspaceNameDraft: (value: string) => void;
   onToggleWorkspaceThreads: (workspacePath: string) => void;
   onCreateThreadForWorkspace: (workspacePath: string) => void;
-  onBeginRenameWorkspace: (workspace: DesktopWorkspace) => void;
-  onSubmitRenameWorkspace: (workspacePath: string) => void;
-  onCancelRenameWorkspace: () => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
   onAddWorkspace: () => void;
 };
@@ -38,15 +32,9 @@ export function WorkspaceThreadSidebar({
   workspaceThreadGroups,
   workspaceMutation,
   workspaceMenuOpenPath,
-  renamingWorkspacePath,
-  workspaceNameDraft,
   setWorkspaceMenuOpenPath,
-  setWorkspaceNameDraft,
   onToggleWorkspaceThreads,
   onCreateThreadForWorkspace,
-  onBeginRenameWorkspace,
-  onSubmitRenameWorkspace,
-  onCancelRenameWorkspace,
   onRequestRemoveWorkspace,
   onAddWorkspace,
 }: WorkspaceThreadSidebarProps) {
@@ -160,17 +148,6 @@ export function WorkspaceThreadSidebar({
               activeWorkspacePath?.trim().toLowerCase() ===
                 workspacePath.trim().toLowerCase();
             const isMenuOpen = workspaceMenuOpenPath === workspacePath;
-            const isRenaming = renamingWorkspacePath === workspacePath;
-
-            const handleRenameInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                onSubmitRenameWorkspace(workspacePath);
-              } else if (event.key === 'Escape') {
-                event.preventDefault();
-                onCancelRenameWorkspace();
-              }
-            };
 
             return (
               <section
@@ -194,27 +171,12 @@ export function WorkspaceThreadSidebar({
                         {isWorkspacePanelOpen ? <FolderIcon /> : <FolderOpenIcon />}
                       </span>
                     </span>
-                    {isRenaming ? (
-                      <input
-                        aria-label={t('Rename {name}', { name: workspace.name })}
-                        className="workspace-rename-input"
-                        onChange={(event) => {
-                          setWorkspaceNameDraft(event.target.value);
-                        }}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                        }}
-                        onKeyDown={handleRenameInputKeyDown}
-                        value={workspaceNameDraft}
-                      />
-                    ) : (
-                      <span
-                        className="workspace-name"
-                        title={workspace.path || workspace.name}
-                      >
-                        {workspace.name}
-                      </span>
-                    )}
+                    <span
+                      className="workspace-name"
+                      title={workspace.path || workspace.name}
+                    >
+                      {workspace.name}
+                    </span>
                   </div>
                   {group.status ? (
                     <span
@@ -226,33 +188,7 @@ export function WorkspaceThreadSidebar({
                 </button>
 
                 <div className="workspace-actions">
-                  {isRenaming ? (
-                    <>
-                      <button
-                        className="workspace-action-button workspace-action-confirm"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onSubmitRenameWorkspace(workspacePath);
-                        }}
-                        tabIndex={-1}
-                        type="button"
-                      >
-                        {t('Save')}
-                      </button>
-                      <button
-                        className="workspace-action-button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onCancelRenameWorkspace();
-                        }}
-                        tabIndex={-1}
-                        type="button"
-                      >
-                        {t('Cancel')}
-                      </button>
-                    </>
-                  ) : (
-                    <>
+                  <>
                       <button
                         aria-label={t('Create thread in {name}', { name: workspace.name })}
                         className="workspace-action-icon-button"
@@ -337,8 +273,7 @@ export function WorkspaceThreadSidebar({
                             : null}
                         </div>
                       ) : null}
-                    </>
-                  )}
+                  </>
                 </div>
               </div>
             </section>

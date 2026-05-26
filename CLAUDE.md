@@ -319,10 +319,21 @@ needs installed-app validation.
   mobile, gateway, and CLI flows must pass and persist the path string directly.
   Do not add workspace ids; workspaces are directory filters/bookmarks, not
   separate domain entities.
-- Desktop and mobile workspace path pickers should look like lightweight
-  directory browsers: show the current folder, immediate child folders, a back
-  action, and an explicit "use this folder" action. Do not render saved
-  workspace paths as an exposed tree.
+- Desktop and mobile workspace fields should use a shared workspace select as
+  the primary control. Select options come only from gateway `/api/workspaces`
+  application state, and the selected value returned to business forms is always
+  the absolute path string. If a form already contains a path that is no longer
+  present in the saved workspace list, keep displaying that current path and
+  submit it unchanged until the user picks something else.
+- The final workspace select item should be `Add workspace`. That action opens
+  a lightweight directory browser: show the current folder, immediate child
+  folders, a back action, and an explicit "use this folder" action. After the
+  user chooses a folder, add it through the backend workspace API, refresh the
+  select options, and set the form field to the added absolute path. Do not show
+  directory browsers or raw path inputs as the primary workspace control inside
+  ordinary forms. On desktop, use the shared shadcn-backed in-app browser rather
+  than native file-manager dialogs. On mobile, open this browser in the same
+  large bottom-sheet style as the Automation thread picker.
 - Agent selectors should show only the agent or team identity. Do not append
   provider names such as Claude, Codex, or Gemini to selector labels or details;
   provider metadata belongs in dedicated settings/details surfaces outside

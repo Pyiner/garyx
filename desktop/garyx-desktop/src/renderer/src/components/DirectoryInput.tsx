@@ -8,12 +8,14 @@ type DirectoryInputProps = {
   workspaces?: DesktopWorkspace[];
   id?: string;
   placeholder?: string;
+  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
 };
 
-export function DirectoryInput({ value, onChange, workspaces, id, placeholder }: DirectoryInputProps) {
+export function DirectoryInput({ value, onChange, workspaces, id, placeholder, onAddWorkspace }: DirectoryInputProps) {
   return (
     <WorkspacePathPicker
       id={id}
+      onAddWorkspace={onAddWorkspace}
       onChange={onChange}
       placeholder={placeholder}
       value={value}

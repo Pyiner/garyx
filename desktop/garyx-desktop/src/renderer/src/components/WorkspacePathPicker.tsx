@@ -1,9 +1,8 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { ArrowLeft, Check, ChevronRight, Folder, FolderOpen } from 'lucide-react';
+import { ArrowLeft, Check, ChevronRight, Folder, FolderOpen, FolderPlus, MinusCircle } from 'lucide-react';
 
 import type { DesktopLocalDirectoryEntry, DesktopWorkspace } from '@shared/contracts';
 
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -14,17 +13,23 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Field, FieldDescription, FieldError, FieldGroup } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useI18n } from '@/i18n';
 import { cn } from '@/lib/utils';
 
-type WorkspaceDirectoryNode = {
-  name: string;
-  path: string;
-  workspace: DesktopWorkspace | null;
-  children: WorkspaceDirectoryNode[];
-};
+const EMPTY_WORKSPACE_VALUE = '__garyx_empty_workspace__';
+const ADD_WORKSPACE_VALUE = '__garyx_add_workspace__';
+const CURRENT_WORKSPACE_VALUE = '__garyx_current_workspace__';
 
 export type WorkspacePathPickerProps = {
   value: string;
@@ -34,7 +39,12 @@ export type WorkspacePathPickerProps = {
   placeholder?: string;
   disabled?: boolean;
   allowEmpty?: boolean;
-  showKnownTree?: boolean;
+  className?: string;
+  fieldClassName?: string;
+  triggerClassName?: string;
+  contentClassName?: string;
+  addWorkspaceLabel?: string;
+  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
 };
 
 export type WorkspacePathPickerDialogProps = {
@@ -62,275 +72,60 @@ export function isAbsoluteWorkspacePath(path: string): boolean {
   return normalized.startsWith('//');
 }
 
-function splitAbsolutePath(path: string): { root: string; parts: string[] } | null {
-  const normalized = normalizeWorkspacePath(path);
-  if (!isAbsoluteWorkspacePath(normalized)) return null;
-  const driveMatch = normalized.match(/^([A-Za-z]:)\/?(.*)$/);
-  if (driveMatch) {
-    return {
-      root: driveMatch[1],
-      parts: driveMatch[2].split('/').filter(Boolean),
-    };
-  }
-  if (normalized.startsWith('//')) {
-    const parts = normalized.slice(2).split('/').filter(Boolean);
-    return { root: '//', parts };
-  }
-  return { root: '/', parts: normalized.slice(1).split('/').filter(Boolean) };
-}
-
-function childPath(parent: string, segment: string): string {
-  if (parent === '/') return `/${segment}`;
-  if (parent === '//') return `//${segment}`;
-  if (/^[A-Za-z]:$/.test(parent)) return `${parent}/${segment}`;
-  return `${parent}/${segment}`;
-}
-
-function buildWorkspaceTree(workspaces: DesktopWorkspace[] = []): WorkspaceDirectoryNode[] {
-  const roots = new Map<string, WorkspaceDirectoryNode>();
-
-  for (const workspace of workspaces) {
-    const path = normalizeWorkspacePath(workspace.path || '');
-    if (!path) continue;
-    const split = splitAbsolutePath(path);
-    if (!split) continue;
-
-    let current: WorkspaceDirectoryNode;
-    const existingRoot = roots.get(split.root);
-    if (existingRoot) {
-      current = existingRoot;
-    } else {
-      current = {
-        name: split.root,
-        path: split.root,
-        workspace: null,
-        children: [],
-      };
-      roots.set(split.root, current);
-    }
-
-    let currentPath = split.root;
-    for (const part of split.parts) {
-      currentPath = childPath(currentPath, part);
-      let child: WorkspaceDirectoryNode | undefined = current.children.find((item) => item.name === part);
-      if (!child) {
-        child = {
-          name: part,
-          path: currentPath,
-          workspace: null,
-          children: [],
-        };
-        current.children.push(child);
-      }
-      current = child;
-    }
-    current.workspace = workspace;
-  }
-
-  function sortNode(node: WorkspaceDirectoryNode): WorkspaceDirectoryNode {
-    return {
-      ...node,
-      children: node.children
-        .sort((left, right) => left.name.localeCompare(right.name))
-        .map(sortNode),
-    };
-  }
-
-  return Array.from(roots.values())
-    .sort((left, right) => left.name.localeCompare(right.name))
-    .map(sortNode);
-}
-
-function findWorkspaceNode(nodes: WorkspaceDirectoryNode[], path: string): WorkspaceDirectoryNode | null {
-  const normalized = normalizeWorkspacePath(path);
-  for (const node of nodes) {
-    if (normalizeWorkspacePath(node.path) === normalized) return node;
-    const child = findWorkspaceNode(node.children, normalized);
-    if (child) return child;
-  }
-  return null;
-}
-
-function firstWorkspacePath(nodes: WorkspaceDirectoryNode[]): string {
-  for (const node of nodes) {
-    if (node.workspace?.path) return node.workspace.path;
-    const childPathValue = firstWorkspacePath(node.children);
-    if (childPathValue) return childPathValue;
-  }
-  return '';
-}
-
-function parentWorkspacePath(path: string): string {
-  const normalized = normalizeWorkspacePath(path);
-  const split = splitAbsolutePath(normalized);
-  if (!split || split.parts.length === 0) return '';
-  if (split.parts.length === 1) return split.root;
-  return split.parts.slice(0, -1).reduce((current, part) => childPath(current, part), split.root);
+function workspacePathKey(path?: string | null): string {
+  return normalizeWorkspacePath(path || '').toLowerCase();
 }
 
 function workspaceLeafName(path: string): string {
   const normalized = normalizeWorkspacePath(path);
   if (!normalized) return '';
-  const split = splitAbsolutePath(normalized);
-  if (!split || split.parts.length === 0) return normalized;
-  return split.parts[split.parts.length - 1];
+  const parts = normalized.split('/').filter(Boolean);
+  return parts.at(-1) || normalized;
 }
 
 function workspaceCompactPath(path: string): string {
   const normalized = normalizeWorkspacePath(path);
-  const split = splitAbsolutePath(normalized);
-  if (!split) return normalized;
-  if (split.parts.length <= 2) return normalized;
-  return `.../${split.parts.slice(-2).join('/')}`;
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length <= 2) return normalized;
+  return `.../${parts.slice(-2).join('/')}`;
 }
 
-function initialBrowserPath(nodes: WorkspaceDirectoryNode[], selectedPath: string): string {
-  const normalizedSelected = normalizeWorkspacePath(selectedPath);
-  if (normalizedSelected && findWorkspaceNode(nodes, normalizedSelected)) {
-    return parentWorkspacePath(normalizedSelected);
-  }
-  const firstPath = firstWorkspacePath(nodes);
-  return firstPath ? parentWorkspacePath(firstPath) : '';
+function workspaceLabel(path: string): string {
+  return workspaceLeafName(path) || path;
 }
 
-type WorkspacePathBrowserProps = {
-  nodes: WorkspaceDirectoryNode[];
-  selectedPath: string;
-  disabled?: boolean;
-  onSelect: (path: string) => void;
+type WorkspacePathSummaryProps = {
+  path: string;
+  placeholder: string;
 };
 
-function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect }: WorkspacePathBrowserProps) {
-  const { t } = useI18n();
-  const [currentPath, setCurrentPath] = useState(() => initialBrowserPath(nodes, selectedPath));
-
-  useEffect(() => {
-    setCurrentPath((current) => {
-      if (!current || findWorkspaceNode(nodes, current)) return current;
-      return initialBrowserPath(nodes, selectedPath);
-    });
-  }, [nodes, selectedPath]);
-
-  const currentNode = currentPath ? findWorkspaceNode(nodes, currentPath) : null;
-  const rows = currentPath ? currentNode?.children ?? [] : nodes;
-  const normalizedSelected = normalizeWorkspacePath(selectedPath);
-  const normalizedCurrent = normalizeWorkspacePath(currentPath);
-  const canUseCurrent = Boolean(normalizedCurrent && isAbsoluteWorkspacePath(normalizedCurrent));
-  const isCurrentSelected = canUseCurrent && normalizedSelected === normalizedCurrent;
-  const isCurrentSaved = Boolean(currentNode?.workspace);
-
-  function activateNode(node: WorkspaceDirectoryNode) {
-    if (disabled) return;
-    if (node.children.length > 0) {
-      setCurrentPath(node.path);
-      return;
-    }
-    onSelect(node.workspace?.path || node.path);
-  }
-
+function WorkspacePathSummary({ path, placeholder }: WorkspacePathSummaryProps) {
+  const trimmed = path.trim();
   return (
-    <div className="overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm">
-      <div className="flex items-center gap-2 px-3 py-2.5">
-        <Button
-          aria-label={t('Back')}
-          disabled={!currentPath || disabled}
-          onClick={() => setCurrentPath(parentWorkspacePath(currentPath))}
-          size="icon-sm"
-          type="button"
-          variant="ghost"
-        >
-          <ArrowLeft />
-        </Button>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">
-            {currentPath ? workspaceLeafName(currentPath) || currentPath : t('Saved paths')}
-          </div>
-          <div className="truncate text-xs text-muted-foreground">
-            {currentPath
-              ? `${workspaceCompactPath(currentPath)} · ${isCurrentSaved ? t('Saved') : t('Suggested')}`
-              : t('Saved workspace paths')}
-          </div>
-        </div>
-        {canUseCurrent ? (
-          <Button
-            aria-label={
-              isCurrentSelected
-                ? t('Current path selected')
-                : `${isCurrentSaved ? t('Use saved path') : t('Use suggested path')} ${workspaceCompactPath(currentPath)}`
-            }
-            disabled={disabled}
-            onClick={() => onSelect(currentNode?.workspace?.path || currentPath)}
-            size="sm"
-            type="button"
-            variant={isCurrentSelected ? 'secondary' : 'outline'}
-          >
-            {isCurrentSelected ? <Check /> : <FolderOpen />}
-            {isCurrentSelected ? t('Selected') : isCurrentSaved ? t('Use saved') : t('Use suggested')}
-          </Button>
-        ) : null}
-      </div>
-      <Separator />
-      <div className="max-h-60 overflow-auto p-1">
-        {rows.length ? (
-          <div className="space-y-0.5">
-            {rows.map((node) => {
-              const normalizedNodePath = normalizeWorkspacePath(node.workspace?.path || node.path);
-              const isSelected = normalizedSelected === normalizedNodePath;
-              const hasChildren = node.children.length > 0;
-              const rowActionLabel = hasChildren ? t('Open path') : t('Select path');
-              const pathKindLabel = node.workspace ? t('saved workspace path') : t('suggested path');
-              const rowLabel = [
-                node.name,
-                workspaceCompactPath(node.path),
-                pathKindLabel,
-                isSelected ? t('selected') : '',
-                rowActionLabel,
-              ]
-                .filter(Boolean)
-                .join(', ');
-              return (
-                <button
-                  aria-current={isSelected ? 'true' : undefined}
-                  aria-label={rowLabel}
-                  className={cn(
-                    'flex min-h-11 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors',
-                    disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent hover:text-accent-foreground',
-                    isSelected ? 'bg-accent text-accent-foreground' : '',
-                  )}
-                  disabled={disabled}
-                  key={node.path}
-                  onClick={() => activateNode(node)}
-                  type="button"
-                >
-                  {hasChildren ? (
-                    <FolderOpen aria-hidden className="size-4 text-muted-foreground" />
-                  ) : (
-                    <Folder aria-hidden className="size-4 text-muted-foreground" />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{node.name}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {workspaceCompactPath(node.path)} · {node.workspace ? t('Saved') : t('Suggested')}
-                    </span>
-                  </span>
-                  {isSelected || hasChildren ? (
-                    <span className="flex items-center gap-1.5">
-                      {isSelected ? <Check aria-hidden className="size-4 text-foreground" /> : null}
-                      {hasChildren ? <ChevronRight aria-hidden className="size-4 text-muted-foreground" /> : null}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="px-3 py-8 text-center text-sm text-muted-foreground">
-            {t('No saved paths at this level.')}
-          </div>
-        )}
-      </div>
-    </div>
+    <span className="flex min-w-0 flex-col gap-0.5 text-left">
+      <span className={cn('truncate text-sm', trimmed ? 'font-medium' : 'font-normal text-muted-foreground')}>
+        {trimmed ? workspaceLabel(trimmed) : placeholder}
+      </span>
+      {trimmed ? (
+        <span className="truncate text-xs text-muted-foreground">
+          {trimmed}
+        </span>
+      ) : null}
+    </span>
   );
+}
+
+function normalizeWorkspaceOptions(workspaces: DesktopWorkspace[] = []): string[] {
+  const seen = new Set<string>();
+  return workspaces
+    .map((workspace) => workspace.path?.trim() || '')
+    .filter((path) => {
+      if (!path) return false;
+      const key = workspacePathKey(path);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 type LocalDirectoryBrowserProps = {
@@ -351,11 +146,15 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
   const isCurrentSelected = Boolean(normalizedCurrent && normalizedCurrent === normalizedSelected);
 
   useEffect(() => {
+    setCurrentPath(selectedPath);
+  }, [selectedPath]);
+
+  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     window.garyxDesktop
-      .listLocalDirectories({ path: currentPath || null })
+      .listWorkspaceDirectories({ path: currentPath || null })
       .then((listing) => {
         if (cancelled) return;
         setCurrentPath(listing.path);
@@ -376,8 +175,8 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
   }, [currentPath, t]);
 
   return (
-    <div className="overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm">
-      <div className="flex items-center gap-2 px-3 py-2.5">
+    <div className="overflow-hidden rounded-xl border border-border/70 bg-background text-foreground">
+      <div className="flex items-center gap-2 px-3 py-3">
         <Button
           aria-label={t('Back')}
           disabled={!parentPath || disabled || loading}
@@ -401,7 +200,7 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
         {currentPath ? (
           <Button
             disabled={disabled || loading || isCurrentSelected}
-            onClick={() => onSelect(currentPath)}
+            onClick={() => onSelect(normalizeWorkspacePath(currentPath))}
             size="sm"
             type="button"
             variant={isCurrentSelected ? 'secondary' : 'outline'}
@@ -412,7 +211,7 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
         ) : null}
       </div>
       <Separator />
-      <div className="max-h-60 overflow-auto p-1">
+      <div className="max-h-80 overflow-auto p-1">
         {loading ? (
           <div className="px-3 py-8 text-center text-sm text-muted-foreground">
             {t('Loading folders...')}
@@ -422,7 +221,7 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
             {error}
           </div>
         ) : entries.length ? (
-          <div className="space-y-0.5">
+          <div className="flex flex-col gap-0.5">
             {entries.map((entry) => (
               <button
                 className={cn(
@@ -434,14 +233,14 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
                 onClick={() => setCurrentPath(entry.path)}
                 type="button"
               >
-                <Folder aria-hidden className="size-4 text-muted-foreground" />
+                <Folder aria-hidden className="text-muted-foreground" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{entry.name}</span>
                   <span className="block truncate text-xs text-muted-foreground">
                     {workspaceCompactPath(entry.path)}
                   </span>
                 </span>
-                <ChevronRight aria-hidden className="size-4 text-muted-foreground" />
+                <ChevronRight aria-hidden className="text-muted-foreground" />
               </button>
             ))}
           </div>
@@ -455,6 +254,53 @@ function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: Loc
   );
 }
 
+type WorkspaceAddDialogProps = {
+  open: boolean;
+  initialPath: string;
+  saving?: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAdd: (path: string) => Promise<void>;
+};
+
+function WorkspaceAddDialog({ open, initialPath, saving = false, onOpenChange, onAdd }: WorkspaceAddDialogProps) {
+  const { t } = useI18n();
+  const [draft, setDraft] = useState(initialPath);
+
+  useEffect(() => {
+    if (open) setDraft(initialPath);
+  }, [initialPath, open]);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent size="wide">
+        <DialogHeader>
+          <DialogTitle>{t('Add Workspace')}</DialogTitle>
+          <DialogDescription>{t('Choose a folder')}</DialogDescription>
+        </DialogHeader>
+        <LocalDirectoryBrowser
+          disabled={saving}
+          onSelect={setDraft}
+          selectedPath={draft}
+        />
+        <DialogFooter>
+          <Button disabled={saving} onClick={() => onOpenChange(false)} type="button" variant="outline">
+            {t('Cancel')}
+          </Button>
+          <Button
+            disabled={saving || !isAbsoluteWorkspacePath(draft)}
+            onClick={() => {
+              void onAdd(normalizeWorkspacePath(draft));
+            }}
+            type="button"
+          >
+            {saving ? t('Saving...') : t('Save')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function WorkspacePathPicker({
   value,
   onChange,
@@ -463,81 +309,128 @@ export function WorkspacePathPicker({
   placeholder,
   disabled = false,
   allowEmpty = true,
-  showKnownTree = true,
+  className,
+  fieldClassName,
+  triggerClassName,
+  contentClassName,
+  addWorkspaceLabel,
+  onAddWorkspace,
 }: WorkspacePathPickerProps) {
   const { t } = useI18n();
   const generatedId = useId();
   const inputId = id ?? `workspace-path-${generatedId}`;
   const errorId = `${inputId}-error`;
   const hintId = `${inputId}-hint`;
-  const tree = useMemo(() => buildWorkspaceTree(workspaces), [workspaces]);
+  const [addOpen, setAddOpen] = useState(false);
+  const [savingAdd, setSavingAdd] = useState(false);
+  const optionPaths = useMemo(() => normalizeWorkspaceOptions(workspaces), [workspaces]);
   const trimmed = value.trim();
   const invalid = Boolean(trimmed && !isAbsoluteWorkspacePath(trimmed));
+  const selectedKey = workspacePathKey(trimmed);
+  const selectedOption = optionPaths.find((path) => workspacePathKey(path) === selectedKey) || null;
+  const selectedMissing = Boolean(trimmed && !selectedOption);
+  const selectValue = trimmed
+    ? selectedOption || CURRENT_WORKSPACE_VALUE
+    : allowEmpty
+      ? EMPTY_WORKSPACE_VALUE
+      : undefined;
   const describedBy = [
     invalid ? errorId : null,
     !allowEmpty && !trimmed ? hintId : null,
   ].filter(Boolean).join(' ') || undefined;
-  const [localBrowserVisible, setLocalBrowserVisible] = useState(false);
+
+  async function addWorkspace(path: string) {
+    setSavingAdd(true);
+    try {
+      const added = onAddWorkspace
+        ? await onAddWorkspace(path)
+        : await window.garyxDesktop.addWorkspaceByPath({ path }).then((result) => result.workspace || null);
+      if (!added?.path) {
+        return;
+      }
+      onChange(normalizeWorkspacePath(added.path));
+      setAddOpen(false);
+    } finally {
+      setSavingAdd(false);
+    }
+  }
 
   return (
-    <FieldGroup className="gap-3">
-      <Field className="gap-2" data-invalid={invalid || undefined}>
-        <div className="flex items-center gap-2">
-          <Input
+    <FieldGroup className={cn('gap-2', className)}>
+      <Field className={cn('gap-2', fieldClassName)} data-invalid={invalid || undefined}>
+        <Select
+          disabled={disabled}
+          value={selectValue}
+          onValueChange={(nextValue) => {
+            if (nextValue === ADD_WORKSPACE_VALUE) {
+              setAddOpen(true);
+              return;
+            }
+            if (nextValue === EMPTY_WORKSPACE_VALUE) {
+              onChange('');
+              return;
+            }
+            if (nextValue === CURRENT_WORKSPACE_VALUE) {
+              return;
+            }
+            onChange(nextValue);
+          }}
+        >
+          <SelectTrigger
             aria-describedby={describedBy}
-            aria-label={t('Workspace path')}
             aria-invalid={invalid || undefined}
-            className="flex-1"
-            disabled={disabled}
+            className={cn('h-auto min-h-11 w-full justify-between', triggerClassName)}
             id={inputId}
-            onChange={(event) => onChange(event.target.value)}
-            placeholder={placeholder || t('/path/to/project')}
-            type="text"
-            value={value}
-          />
-          <Button
-            className="shrink-0"
-            disabled={disabled}
-            onClick={() => setLocalBrowserVisible((visible) => !visible)}
-            size="sm"
-            type="button"
-            variant={localBrowserVisible ? 'secondary' : 'outline'}
           >
-            <Folder />
-            {t('Browse...')}
-          </Button>
-        </div>
+            <SelectValue placeholder={placeholder || t('Choose workspace')} />
+          </SelectTrigger>
+          <SelectContent position="popper" align="start" className={contentClassName}>
+            <SelectGroup>
+              <SelectLabel>{t('Workspace')}</SelectLabel>
+              {allowEmpty ? (
+                <SelectItem value={EMPTY_WORKSPACE_VALUE}>
+                  <span className="flex items-center gap-2">
+                    <MinusCircle />
+                    {t('No workspace')}
+                  </span>
+                </SelectItem>
+              ) : null}
+              {selectedMissing ? (
+                <SelectItem value={CURRENT_WORKSPACE_VALUE}>
+                  <WorkspacePathSummary path={trimmed} placeholder={placeholder || t('Choose workspace')} />
+                </SelectItem>
+              ) : null}
+              {optionPaths.map((path) => (
+                <SelectItem key={path} value={path}>
+                  <WorkspacePathSummary path={path} placeholder={placeholder || t('Choose workspace')} />
+                </SelectItem>
+              ))}
+            </SelectGroup>
+            <SelectSeparator />
+            <SelectGroup>
+              <SelectItem value={ADD_WORKSPACE_VALUE}>
+                <span className="flex items-center gap-2">
+                  <FolderPlus />
+                  {addWorkspaceLabel || t('Add workspace…')}
+                </span>
+              </SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
         {invalid ? (
           <FieldError id={errorId}>{t('Use an absolute path.')}</FieldError>
         ) : null}
         {!allowEmpty && !trimmed ? (
-          <FieldDescription id={hintId}>{t('Choose or enter an absolute path.')}</FieldDescription>
+          <FieldDescription id={hintId}>{t('Choose workspace')}</FieldDescription>
         ) : null}
       </Field>
-      {localBrowserVisible ? (
-        <Field className="gap-2">
-          <FieldDescription>{t('Browse local folders')}</FieldDescription>
-          <LocalDirectoryBrowser
-            disabled={disabled}
-            onSelect={onChange}
-            selectedPath={value}
-          />
-        </Field>
-      ) : null}
-      {showKnownTree && tree.length ? (
-        <Field className="gap-2">
-          <div className="flex items-center justify-between gap-2">
-            <FieldDescription>{t('Saved workspace paths')}</FieldDescription>
-            <Badge variant="outline">{workspaces.length}</Badge>
-          </div>
-          <WorkspacePathBrowser
-            disabled={disabled}
-            nodes={tree}
-            onSelect={onChange}
-            selectedPath={value}
-          />
-        </Field>
-      ) : null}
+      <WorkspaceAddDialog
+        initialPath={trimmed}
+        onAdd={addWorkspace}
+        onOpenChange={setAddOpen}
+        open={addOpen}
+        saving={savingAdd}
+      />
     </FieldGroup>
   );
 }
@@ -547,7 +440,6 @@ export function WorkspacePathPickerDialog({
   title,
   description,
   initialPath = '',
-  workspaces = [],
   saving = false,
   onCancel,
   onConfirm,
@@ -573,12 +465,10 @@ export function WorkspacePathPickerDialog({
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
-        <WorkspacePathPicker
-          allowEmpty={false}
+        <LocalDirectoryBrowser
           disabled={saving}
-          onChange={setDraft}
-          value={draft}
-          workspaces={workspaces}
+          onSelect={setDraft}
+          selectedPath={draft}
         />
         <DialogFooter>
           <Button disabled={saving} onClick={onCancel} type="button" variant="outline">

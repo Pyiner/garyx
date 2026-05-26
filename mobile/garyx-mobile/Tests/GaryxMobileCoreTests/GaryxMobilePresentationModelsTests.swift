@@ -54,6 +54,24 @@ final class GaryxMobilePresentationModelsTests: XCTestCase {
         XCTAssertEqual(draft.workspacePath, "/workspace/project-alpha")
     }
 
+    func testAutomationDraftPreservesMissingWorkspacePath() {
+        var draft = GaryxAutomationDraft()
+        draft.label = "Daily summary"
+        draft.prompt = "Summarize updates"
+        draft.agentTargetId = "agent-1"
+        draft.workspacePath = "/workspace/missing-current"
+
+        XCTAssertEqual(
+            draft.effectiveWorkspacePath(workspacePaths: ["/workspace/known"]),
+            "/workspace/missing-current"
+        )
+        XCTAssertTrue(draft.canSubmit(workspacePaths: ["/workspace/known"], threadOptions: []))
+
+        draft.ensureTargetSelection(workspacePaths: ["/workspace/known"], threadOptions: [])
+
+        XCTAssertEqual(draft.workspacePath, "/workspace/missing-current")
+    }
+
     func testAutomationScheduleDraftRoundTripsWeekdaysAndMonthlyClamp() {
         let weekdays = GaryxAutomationScheduleDraft(
             schedule: .daily(time: "09:30", weekdays: ["mo", "tu", "we", "th", "fr"], timezone: "UTC")

@@ -442,7 +442,6 @@ struct GaryxEditAutomationSheet: View {
             GaryxAutomationFormFields(
                 draft: $draft,
                 workspacePaths: editWorkspaceOptions,
-                savedWorkspacePaths: model.userWorkspacePaths,
                 threadOptions: editThreadOptions,
                 showsThreadPicker: $showsThreadPicker
             )
@@ -568,7 +567,6 @@ struct GaryxEditAutomationSheet: View {
 struct GaryxAutomationFormFields: View {
     @Binding var draft: GaryxAutomationDraft
     let workspacePaths: [String]
-    var savedWorkspacePaths: [String]? = nil
     let threadOptions: [GaryxThreadSummary]
     @Binding var showsThreadPicker: Bool
 
@@ -617,10 +615,6 @@ struct GaryxAutomationFormFields: View {
             ) {
                 showsThreadPicker = true
             }
-        } else if workspacePaths.isEmpty {
-            agentPicker
-            Divider().padding(.leading, 16)
-            GaryxFormReadOnlyRow(title: "Workspace", value: "No workspaces available")
         } else {
             agentPicker
             Divider().padding(.leading, 16)
@@ -632,7 +626,6 @@ struct GaryxAutomationFormFields: View {
                 title: "Workspace",
                 path: workspaceBinding,
                 workspacePaths: workspacePaths,
-                savedWorkspacePaths: savedWorkspacePaths ?? workspacePaths,
                 placeholder: "Choose workspace",
                 allowsEmpty: false
             )

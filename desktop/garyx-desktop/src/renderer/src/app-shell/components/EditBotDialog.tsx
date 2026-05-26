@@ -67,6 +67,7 @@ type EditBotDialogProps = {
   context: EditBotDialogContext | null;
   agentTargets: AgentTargetOption[];
   workspaces?: DesktopWorkspace[];
+  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   saving?: boolean;
   onClose: () => void;
   onSave: (input: {
@@ -163,7 +164,7 @@ function channelInitials(entry: ChannelPluginCatalogEntry | null): string {
 
 export function EditBotDialog(props: EditBotDialogProps) {
   const { t } = useI18n();
-  const { open, context, agentTargets, workspaces = [], saving, onClose, onSave } =
+  const { open, context, agentTargets, workspaces = [], onAddWorkspace, saving, onClose, onSave } =
     props;
   const { entries, loading: catalogLoading } = useChannelPluginCatalog();
 
@@ -400,6 +401,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
                     id="edit-bot-workspace"
                     value={workspaceDir}
                     onChange={setWorkspaceDir}
+                    onAddWorkspace={onAddWorkspace}
                     placeholder={t("Use the main workspace by default")}
                     workspaces={workspaces}
                   />

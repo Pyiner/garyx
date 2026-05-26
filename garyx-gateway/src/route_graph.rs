@@ -125,6 +125,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(routes::workspace_git_status),
         )
         .route(
+            "/api/workspaces/directories",
+            axum::routing::get(workspaces::list_workspace_directories),
+        )
+        .route(
             "/api/workspaces",
             axum::routing::get(workspaces::list_workspaces)
                 .post(workspaces::upsert_workspace)

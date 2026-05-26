@@ -547,8 +547,7 @@ private struct GaryxHeaderAgentControl: View {
 
 struct GaryxEmptyConversationView: View {
     @EnvironmentObject private var model: GaryxMobileModel
-    @State private var showsWorkspaceEditor = false
-    @State private var workspacePathDraft = ""
+    @State private var showsWorkspacePicker = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -561,56 +560,20 @@ struct GaryxEmptyConversationView: View {
         .frame(maxWidth: 300)
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 28)
-        .fullScreenCover(isPresented: $showsWorkspaceEditor) {
-            GaryxFormSheet(
+        .sheet(isPresented: $showsWorkspacePicker) {
+            GaryxWorkspaceSelectSheet(
                 title: "Workspace",
-                canSave: !workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                onSave: saveWorkspace
-            ) {
-                VStack(alignment: .leading, spacing: 12) {
-                    GaryxFormGroupedSection(title: "Directory") {
-                        TextField("Workspace path", text: $workspacePathDraft)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .garyxFormTextField()
-                    }
-                }
-            }
+                path: newThreadWorkspaceBinding,
+                workspacePaths: model.userWorkspacePaths,
+                placeholder: "No workspace",
+                allowsEmpty: true
+            )
         }
     }
 
-    private func saveWorkspace() {
-        let trimmed = workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        model.setNewThreadWorkspace(workspacePathDraft)
-        showsWorkspaceEditor = false
-    }
-
     private var workspacePicker: some View {
-        let workspaces = model.userWorkspacePaths
-        return Menu {
-            Button {
-                model.setNewThreadWorkspace("")
-            } label: {
-                Label("No workspace", systemImage: "minus.circle")
-            }
-            if !workspaces.isEmpty {
-                Divider()
-                ForEach(workspaces, id: \.self) { path in
-                    Button {
-                        model.setNewThreadWorkspace(path)
-                    } label: {
-                        Label(workspaceMenuLabel(for: path), systemImage: "folder")
-                    }
-                }
-            }
-            Divider()
-            Button {
-                workspacePathDraft = model.newThreadWorkspace
-                showsWorkspaceEditor = true
-            } label: {
-                Label("Edit path", systemImage: "pencil")
-            }
+        Button {
+            showsWorkspacePicker = true
         } label: {
             HStack(spacing: 10) {
                 Text(model.newThreadWorkspaceLabel)
@@ -622,7 +585,7 @@ struct GaryxEmptyConversationView: View {
                         .foregroundStyle(Color(.systemBackground).opacity(0.76))
                         .lineLimit(1)
                 }
-                Image(systemName: "chevron.down")
+                Image(systemName: "chevron.up.chevron.down")
                     .font(GaryxFont.system(size: 10, weight: .bold))
             }
             .foregroundStyle(Color(.systemBackground))
@@ -633,9 +596,12 @@ struct GaryxEmptyConversationView: View {
         .buttonStyle(.plain)
     }
 
-    private func workspaceMenuLabel(for path: String) -> String {
-        let name = (path as NSString).lastPathComponent
-        return name.isEmpty ? path : name
+    private var newThreadWorkspaceBinding: Binding<String> {
+        Binding {
+            model.newThreadWorkspace
+        } set: { value in
+            model.setNewThreadWorkspace(value)
+        }
     }
 }
 

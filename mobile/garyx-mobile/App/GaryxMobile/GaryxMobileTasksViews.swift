@@ -105,10 +105,13 @@ struct GaryxCreateTaskCard: View {
             }
 
             GaryxFormGroupedSection(title: "Workspace") {
-                TextField("Workspace directory", text: $workspacePath)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxWorkspacePathSelectionRow(
+                    title: "Workspace",
+                    path: $workspacePath,
+                    workspacePaths: model.userWorkspacePaths,
+                    placeholder: "No workspace",
+                    allowsEmpty: true
+                )
             }
 
             GaryxFormGroupedSection(title: "Notification") {

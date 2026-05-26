@@ -84,7 +84,7 @@ struct GaryxAutomationDraft: Equatable {
     }
 
     func effectiveWorkspacePath(workspacePaths: [String]) -> String {
-        if !trimmedWorkspacePath.isEmpty, workspacePaths.contains(trimmedWorkspacePath) {
+        if !trimmedWorkspacePath.isEmpty {
             return trimmedWorkspacePath
         }
         return workspacePaths.first ?? ""

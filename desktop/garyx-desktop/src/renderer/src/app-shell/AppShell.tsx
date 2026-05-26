@@ -1699,10 +1699,6 @@ export function AppShell() {
   const [workspaceMenuOpenPath, setWorkspaceMenuOpenPath] = useState<string | null>(
     null,
   );
-  const [renamingWorkspacePath, setRenamingWorkspacePath] = useState<string | null>(
-    null,
-  );
-  const [workspaceNameDraft, setWorkspaceNameDraft] = useState("");
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const [liveStreamStateByThread, setLiveStreamStateByThread] = useState<
     Record<string, LiveStreamState>
@@ -2655,10 +2651,8 @@ export function AppShell() {
     () =>
       newThreadWorkspaceOptions(
         workspacePickerWorkspaces,
-        pendingWorkspaceSuggestion,
-        activeThreadWorkspaceSuggestion,
       ),
-    [workspacePickerWorkspaces, pendingWorkspaceSuggestion, activeThreadWorkspaceSuggestion],
+    [workspacePickerWorkspaces],
   );
   const availableWorkspaceCount = selectableNewThreadWorkspaces.length;
   const activeAutomationThread = automationForLatestThread(
@@ -2683,7 +2677,6 @@ export function AppShell() {
   const preferredWorkspaceForNewThread = pickPreferredWorkspace(
     selectableNewThreadWorkspaces,
     pendingNewThreadWorkspaceEntry,
-    activeThreadNewThreadWorkspace,
     selectedNewThreadWorkspaceEntry,
   );
   const newThreadWorkspaceEntry =
@@ -3912,14 +3905,9 @@ export function AppShell() {
     if (workspaceMenuOpenPath && !workspacePaths.has(workspaceMenuOpenPath)) {
       setWorkspaceMenuOpenPath(null);
     }
-    if (renamingWorkspacePath && !workspacePaths.has(renamingWorkspacePath)) {
-      setRenamingWorkspacePath(null);
-      setWorkspaceNameDraft("");
-    }
   }, [
     desktopState,
     pendingWorkspacePath,
-    renamingWorkspacePath,
     workspaceMenuOpenPath,
   ]);
 
@@ -6204,6 +6192,7 @@ export function AppShell() {
         ? preferredWorkspaceForNewThread.path
         : null,
       selectableWorkspaceCount: selectableNewThreadWorkspaces.length,
+      onAddWorkspace: handleAddWorkspaceForNewThread,
       setWorkspaceMutation,
       setDesktopState,
       setSelectedThreadId,
@@ -6524,11 +6513,11 @@ export function AppShell() {
     });
   }
 
-  async function handleAddWorkspaceForTask(): Promise<DesktopWorkspace | null> {
+  async function handleAddWorkspaceForNewThread(): Promise<DesktopWorkspace | null> {
     return new Promise((resolve) => {
       setAddWorkspaceDialog({
-        source: "task",
-        initialPath: selectedWorkspaceEntry?.path || pendingWorkspacePath || "",
+        source: "new-thread",
+        initialPath: pendingWorkspacePath || selectedWorkspaceEntry?.path || "",
         resolve,
       });
     });
@@ -6541,83 +6530,39 @@ export function AppShell() {
     });
   }
 
-  async function confirmAddWorkspace(path: string) {
-    const request = addWorkspaceDialog;
-    if (!request) {
-      return;
-    }
+  async function addWorkspacePathFromPicker(path: string): Promise<DesktopWorkspace | null> {
     setError(null);
     setWorkspaceMutation("add");
     try {
       const result = await window.garyxDesktop.addWorkspaceByPath({ path });
       setDesktopState(result.state);
-      if (result.workspace && request.source === "new-thread") {
-        setNewThreadDraftActive(true);
-        setPendingWorkspacePath(result.workspace.path);
-        setPendingWorkspaceMode("local");
-        requestComposerFocus();
-      }
-      closeAddWorkspaceDialog(result.workspace || null);
+      return result.workspace || null;
     } catch (workspaceError) {
       setError(
         workspaceError instanceof Error
           ? workspaceError.message
           : "Failed to add workspace",
       );
+      return null;
     } finally {
       setWorkspaceMutation(null);
     }
   }
 
-  async function handleRelinkWorkspace(workspacePath: string) {
-    setError(null);
-    setWorkspaceMutation("relink");
-    try {
-      const result = await window.garyxDesktop.relinkWorkspace({ workspacePath });
-      setDesktopState(result.state);
-    } catch (relinkError) {
-      setError(
-        relinkError instanceof Error
-          ? relinkError.message
-          : "Failed to relink workspace",
-      );
-    } finally {
-      setWorkspaceMutation(null);
-    }
-  }
-
-  function handleBeginRenameWorkspace(workspace: DesktopWorkspace) {
-    setWorkspaceMenuOpenPath(null);
-    setRenamingWorkspacePath(workspace.path);
-    setWorkspaceNameDraft(workspace.name);
-  }
-
-  function handleCancelRenameWorkspace() {
-    setRenamingWorkspacePath(null);
-    setWorkspaceNameDraft("");
-  }
-
-  async function handleSubmitRenameWorkspace(workspacePath: string) {
-    setError(null);
-    const nextName = workspaceNameDraft.trim();
-    if (!nextName) {
-      setError("Workspace name cannot be empty");
+  async function confirmAddWorkspace(path: string) {
+    const request = addWorkspaceDialog;
+    if (!request) {
       return;
     }
-    try {
-      const nextState = await window.garyxDesktop.renameWorkspace({
-        workspacePath,
-        name: nextName,
-      });
-      setDesktopState(nextState);
-      setRenamingWorkspacePath(null);
-      setWorkspaceNameDraft("");
-    } catch (renameError) {
-      setError(
-        renameError instanceof Error
-          ? renameError.message
-          : "Failed to rename workspace",
-      );
+    const workspace = await addWorkspacePathFromPicker(path);
+    if (workspace) {
+      if (request.source === "new-thread") {
+        setNewThreadDraftActive(true);
+        setPendingWorkspacePath(workspace.path);
+        setPendingWorkspaceMode("local");
+        requestComposerFocus();
+      }
+      closeAddWorkspaceDialog(workspace);
     }
   }
 
@@ -6689,8 +6634,6 @@ export function AppShell() {
 
   async function handleRequestRemoveWorkspace(workspace: DesktopWorkspace) {
     setWorkspaceMenuOpenPath(null);
-    setRenamingWorkspacePath(null);
-    setWorkspaceNameDraft("");
     await handleRemoveWorkspace(workspace.path || "");
   }
 
@@ -8059,8 +8002,6 @@ export function AppShell() {
         onBackToThreads={() => {
           setContentView("thread");
         }}
-        onBeginRenameWorkspace={handleBeginRenameWorkspace}
-        onCancelRenameWorkspace={handleCancelRenameWorkspace}
         onCreateThreadForWorkspace={(workspacePath) => {
           void handleCreateThreadForWorkspace(workspacePath);
         }}
@@ -8145,19 +8086,13 @@ export function AppShell() {
         onSelectSettingsTab={(tabId) => {
           void handleSelectSettingsTab(tabId);
         }}
-        onSubmitRenameWorkspace={(workspacePath) => {
-          void handleSubmitRenameWorkspace(workspacePath);
-        }}
-        renamingWorkspacePath={renamingWorkspacePath}
         pinnedThreadRows={pinnedThreadRows}
         selectedAutomationId={selectedAutomationId}
         selectedThreadId={botRootSelectedThreadId}
         setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
-        setWorkspaceNameDraft={setWorkspaceNameDraft}
         settingsActiveTab={settingsActiveTab}
         workspaceMenuOpenPath={workspaceMenuOpenPath}
         workspaceMutation={workspaceMutation}
-        workspaceNameDraft={workspaceNameDraft}
         workspaceThreadGroups={workspaceThreadGroups}
       />
       {activeBotConversationGroup ? (
@@ -8222,11 +8157,12 @@ export function AppShell() {
         initialValues={addBotInitialValues}
         agentTargets={addBotAgentTargets}
         workspaces={workspacePickerWorkspaces}
+        onAddWorkspace={addWorkspacePathFromPicker}
       />
       <WorkspacePathPickerDialog
         open={Boolean(addWorkspaceDialog)}
         title={t("Add Workspace")}
-        description={t("Choose or enter an absolute path.")}
+        description={t("Choose a folder")}
         initialPath={addWorkspaceDialog?.initialPath || ""}
         saving={workspaceMutation === "add"}
         workspaces={workspacePickerWorkspaces}
@@ -8353,6 +8289,7 @@ export function AppShell() {
                     localSettingsDirty={localSettingsDirty}
                     localSettings={settingsDraft}
                     workspaces={workspacePickerWorkspaces}
+                    onAddWorkspace={addWorkspacePathFromPicker}
                     mcpServers={mcpServers}
                     mcpServersLoading={mcpServersLoading}
                     mcpServersSaving={mcpServersSaving}
@@ -8462,6 +8399,7 @@ export function AppShell() {
                 iterations={autoResearchIterations}
                 candidatesResponse={autoResearchCandidatesResponse}
                 workspaces={desktopState?.workspaces || []}
+                onAddWorkspace={addWorkspacePathFromPicker}
                 runs={autoResearchRuns}
                 runDetail={autoResearchRunDetail}
                 saving={autoResearchSaving}
@@ -8470,6 +8408,7 @@ export function AppShell() {
               <AgentsHubPanel
                 initialTab="agents"
                 workspaces={workspacePickerWorkspaces}
+                onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenMemory={(agent) => {
                   void openMemoryDialog({
                     scope: "agent",
@@ -8484,6 +8423,7 @@ export function AppShell() {
               <AgentsHubPanel
                 initialTab="teams"
                 workspaces={workspacePickerWorkspaces}
+                onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenMemory={(agent) => {
                   void openMemoryDialog({
                     scope: "agent",
@@ -8500,7 +8440,7 @@ export function AppShell() {
               <TasksPanel
                 agents={desktopAgents}
                 botGroups={botGroups}
-                onAddWorkspace={handleAddWorkspaceForTask}
+                onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenThread={(threadId) => {
                   void openExistingThread(threadId);
                 }}
@@ -8588,9 +8528,7 @@ export function AppShell() {
                 newThreadSelectedAgentId={pendingAgentId}
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
                 newThreadWorkspaceMode={pendingWorkspaceMode}
-                onAddWorkspace={() => {
-                  void handleAddWorkspace();
-                }}
+                onAddWorkspace={addWorkspacePathFromPicker}
                 onAppendComposerAttachments={(files) => {
                   void appendComposerAttachments(files);
                 }}
@@ -8771,6 +8709,7 @@ export function AppShell() {
             agentOptions={automationAgentOptions}
             threadOptions={desktopState?.threads || []}
             workspaces={workspacePickerWorkspaces}
+            onAddWorkspace={addWorkspacePathFromPicker}
             saving={
               automationMutation === "create" ||
               automationMutation === `edit:${automationDialog.automationId || ""}`

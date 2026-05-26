@@ -265,7 +265,6 @@ export function visibleWorkspaceList(state: DesktopState | null): DesktopWorkspa
 
 export function newThreadWorkspaceOptions(
   savedWorkspaces: DesktopWorkspace[],
-  ...suggestions: Array<DesktopWorkspace | null | undefined>
 ): DesktopWorkspace[] {
   const options: DesktopWorkspace[] = [];
   const seenKeys = new Set<string>();
@@ -281,9 +280,6 @@ export function newThreadWorkspaceOptions(
     options.push(workspace);
   };
 
-  for (const suggestion of suggestions) {
-    append(suggestion);
-  }
   for (const workspace of savedWorkspaces) {
     append(workspace);
   }

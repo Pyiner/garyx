@@ -43,11 +43,9 @@ type AppLeftRailProps = {
   botGroups: ReturnType<typeof buildBotGroups>;
   pinnedThreadRows: PinnedThreadRow[];
   workspaceThreadGroups: ReturnType<typeof buildWorkspaceThreadGroups>;
-  renamingWorkspacePath: string | null;
   selectedThreadId: string | null;
   workspaceMenuOpenPath: string | null;
   workspaceMutation: 'add' | 'assign' | 'relink' | 'remove' | null;
-  workspaceNameDraft: string;
   onSelectSettingsTab: (tabId: SettingsTabId) => void;
   onBackToThreads: () => void;
   onNewThread: () => void;
@@ -66,13 +64,9 @@ type AppLeftRailProps = {
   onToggleWorkspaceThreadGroup: (workspacePath: string) => void;
   onAddBot: () => void;
   onAddWorkspace: () => void;
-  onBeginRenameWorkspace: (workspace: DesktopWorkspace) => void;
-  onCancelRenameWorkspace: () => void;
   onCreateThreadForWorkspace: (workspacePath: string) => void;
   onRequestRemoveWorkspace: (workspace: DesktopWorkspace) => void;
-  onSubmitRenameWorkspace: (workspacePath: string) => void;
   setWorkspaceMenuOpenPath: Dispatch<SetStateAction<string | null>>;
-  setWorkspaceNameDraft: Dispatch<SetStateAction<string>>;
   onOpenSettings: () => void;
   onSidebarResizeStart: (event: React.PointerEvent<HTMLDivElement>) => void;
   sidebarResizing: boolean;
@@ -98,11 +92,9 @@ export function AppLeftRail({
   botGroups,
   pinnedThreadRows,
   workspaceThreadGroups,
-  renamingWorkspacePath,
   selectedThreadId,
   workspaceMenuOpenPath,
   workspaceMutation,
-  workspaceNameDraft,
   onSelectSettingsTab,
   onBackToThreads,
   onNewThread,
@@ -121,13 +113,9 @@ export function AppLeftRail({
   onToggleWorkspaceThreadGroup,
   onAddBot,
   onAddWorkspace,
-  onBeginRenameWorkspace,
-  onCancelRenameWorkspace,
   onCreateThreadForWorkspace,
   onRequestRemoveWorkspace,
-  onSubmitRenameWorkspace,
   setWorkspaceMenuOpenPath,
-  setWorkspaceNameDraft,
   onOpenSettings,
   onSidebarResizeStart,
   sidebarResizing,
@@ -271,18 +259,12 @@ export function AppLeftRail({
           <WorkspaceThreadSidebar
             activeWorkspacePath={activeWorkspaceThreadGroupPath}
             onAddWorkspace={onAddWorkspace}
-            onBeginRenameWorkspace={onBeginRenameWorkspace}
-            onCancelRenameWorkspace={onCancelRenameWorkspace}
             onCreateThreadForWorkspace={onCreateThreadForWorkspace}
             onRequestRemoveWorkspace={onRequestRemoveWorkspace}
-            onSubmitRenameWorkspace={onSubmitRenameWorkspace}
             onToggleWorkspaceThreads={onToggleWorkspaceThreadGroup}
-            renamingWorkspacePath={renamingWorkspacePath}
             setWorkspaceMenuOpenPath={setWorkspaceMenuOpenPath}
-            setWorkspaceNameDraft={setWorkspaceNameDraft}
             workspaceMenuOpenPath={workspaceMenuOpenPath}
             workspaceMutation={workspaceMutation}
-            workspaceNameDraft={workspaceNameDraft}
             workspaceThreadGroups={workspaceThreadGroups}
           />
 

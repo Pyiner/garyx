@@ -85,6 +85,37 @@ public struct GaryxWorkspaceGitStatus: Decodable, Equatable, Sendable {
     }
 }
 
+public struct GaryxWorkspaceDirectoryEntry: Decodable, Identifiable, Equatable, Sendable {
+    public var id: String { path }
+    public var name: String
+    public var path: String
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case path
+    }
+}
+
+public struct GaryxWorkspaceDirectoryListing: Decodable, Equatable, Sendable {
+    public var path: String
+    public var parentPath: String?
+    public var entries: [GaryxWorkspaceDirectoryEntry]
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case parentPath
+        case parentPathSnake = "parent_path"
+        case entries
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        path = try container.garyxDecodeFirstString(.path) ?? ""
+        parentPath = try container.garyxDecodeFirstString(.parentPath, .parentPathSnake)
+        entries = try container.decodeIfPresent([GaryxWorkspaceDirectoryEntry].self, forKey: .entries) ?? []
+    }
+}
+
 
 public struct GaryxWorkspaceFileEntry: Decodable, Identifiable, Equatable, Sendable {
     public var id: String { path }

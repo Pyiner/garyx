@@ -29,6 +29,7 @@ type CreateRunDialogProps = {
   saving: boolean;
   workspaces: DesktopWorkspace[];
   defaultWorkspacePath: string;
+  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   onSubmit: (input: CreateAutoResearchRunInput) => Promise<void>;
   onClose: () => void;
 };
@@ -37,6 +38,7 @@ export function CreateRunDialog({
   saving,
   workspaces,
   defaultWorkspacePath,
+  onAddWorkspace,
   onSubmit,
   onClose,
 }: CreateRunDialogProps) {
@@ -105,6 +107,7 @@ export function CreateRunDialog({
             <WorkspacePathPicker
               id="auto-research-workspace"
               allowEmpty={false}
+              onAddWorkspace={onAddWorkspace}
               onChange={setSelectedWorkspacePath}
               value={selectedWorkspacePath}
               workspaces={workspaces}

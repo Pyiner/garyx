@@ -76,6 +76,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { buildAgentTargetOptions, type AgentTargetOption } from './app-shell/agent-options';
 import { AddBotDialog } from './app-shell/components/AddBotDialog';
 import { AgentOptionAvatar } from './app-shell/components/AgentOptionAvatar';
+import { WorkspacePathPicker } from './components/WorkspacePathPicker';
 import { MoreDotsIcon } from './app-shell/icons';
 import { ChannelPluginCatalogPanel } from './channel-plugins/ChannelPluginCatalogPanel';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
@@ -112,6 +113,7 @@ type GatewaySettingsPanelProps = {
   teams?: DesktopTeam[];
   skills?: DesktopSkillInfo[];
   workspaces?: DesktopWorkspace[];
+  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   onCreateSlashCommand?: (input: UpsertSlashCommandInput) => Promise<void>;
   onUpdateSlashCommand?: (input: UpdateSlashCommandInput) => Promise<void>;
   onDeleteSlashCommand?: (name: string) => Promise<void>;
@@ -1322,6 +1324,7 @@ export function GatewaySettingsPanel({
   teams = [],
   skills = [],
   workspaces = [],
+  onAddWorkspace,
   onCreateSlashCommand = noopAsync,
   onUpdateSlashCommand = noopAsync,
   onDeleteSlashCommand = noopAsync,
@@ -2652,6 +2655,7 @@ export function GatewaySettingsPanel({
       <EditBotDialog
         agentTargets={agentTargets}
         context={editingBot}
+        onAddWorkspace={onAddWorkspace}
         onClose={() => setEditingBot(null)}
         onSave={async ({ kind, accountId, patch }) => {
           onMutateGatewayDraft((next) => {
@@ -2679,6 +2683,7 @@ export function GatewaySettingsPanel({
       />
       <AddBotDialog
         agentTargets={agentTargets}
+        onAddWorkspace={onAddWorkspace}
         onClose={() => {
           setIsAddingChannel(false);
         }}
@@ -3319,16 +3324,19 @@ export function GatewaySettingsPanel({
 
                 <div className="space-y-1.5">
                   <Label className="text-[11px] font-medium text-[#666663]">{t('Working directory')}</Label>
-                  <Input
-                    className="h-8 rounded-[8px] border-[#e7e7e5] bg-white text-[13px] shadow-none"
-                    placeholder="/path/to/workspace"
-                    value={mcpServerDraft.workingDir}
-                    onChange={(event) => {
+                  <WorkspacePathPicker
+                    allowEmpty
+                    onAddWorkspace={onAddWorkspace}
+                    onChange={(value) => {
                       setMcpServerDraft((current) => ({
                         ...current,
-                        workingDir: event.target.value,
+                        workingDir: value,
                       }));
                     }}
+                    placeholder={t('Choose workspace')}
+                    triggerClassName="min-h-8 rounded-[8px] border-[#e7e7e5] bg-white px-3 py-1.5 text-[13px] shadow-none"
+                    value={mcpServerDraft.workingDir}
+                    workspaces={workspaces}
                   />
                 </div>
               </>

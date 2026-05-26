@@ -48,6 +48,7 @@ import type {
   DesktopSkillEntryNode,
   DesktopSkillFileDocument,
   DesktopSkillInfo,
+  DesktopLocalDirectoryListing,
   DesktopWorkspace,
   DesktopWorkspaceFileEntry,
   DesktopWorkspaceFileListing,
@@ -3301,6 +3302,41 @@ export async function getWorkspaceGitStatus(
     repoRoot: payload.repoRoot ?? payload.repo_root ?? null,
     currentBranch: payload.currentBranch ?? payload.current_branch ?? null,
     isDirty: Boolean(payload.isDirty ?? payload.is_dirty),
+  };
+}
+
+export async function listWorkspaceDirectories(
+  settings: DesktopSettings,
+  input?: { path?: string | null },
+): Promise<DesktopLocalDirectoryListing> {
+  const query = new URLSearchParams();
+  if (input?.path?.trim()) {
+    query.set("path", input.path.trim());
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const payload = await requestJson<{
+    path?: string;
+    parentPath?: string | null;
+    parent_path?: string | null;
+    entries?: Array<{ name?: string | null; path?: string | null }> | null;
+  }>(
+    settings,
+    `/api/workspaces/directories${suffix}`,
+    {
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  return {
+    path: payload.path || "",
+    parentPath: payload.parentPath ?? payload.parent_path ?? null,
+    entries: Array.isArray(payload.entries)
+      ? payload.entries
+          .map((entry) => ({
+            name: entry.name?.trim() || entry.path?.trim() || "",
+            path: entry.path?.trim() || "",
+          }))
+          .filter((entry) => Boolean(entry.path))
+      : [],
   };
 }
 

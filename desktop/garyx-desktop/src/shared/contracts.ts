@@ -1450,15 +1450,6 @@ export interface RemoveWorkspaceInput {
   workspacePath: string;
 }
 
-export interface RelinkWorkspaceInput {
-  workspacePath: string;
-}
-
-export interface RenameWorkspaceInput {
-  workspacePath: string;
-  name: string;
-}
-
 export interface SendMessageInput {
   threadId: string;
   // Compatibility fallback for older callers. Prefer `threadId`.
@@ -1604,20 +1595,12 @@ export interface GaryxDesktopApi {
     options?: GatewaySettingsSaveRequestOptions,
   ) => Promise<GatewaySettingsSaveResult>;
   selectWorkspace: (input: SelectWorkspaceInput) => Promise<DesktopState>;
-  addWorkspace: () => Promise<WorkspaceMutationResult>;
-  pickDirectory: (input?: {
-    defaultPath?: string | null;
-  }) => Promise<string | null>;
-  listLocalDirectories: (input?: {
+  listWorkspaceDirectories: (input?: {
     path?: string | null;
   }) => Promise<DesktopLocalDirectoryListing>;
   addWorkspaceByPath: (
     input: AddWorkspaceByPathInput,
   ) => Promise<WorkspaceMutationResult>;
-  relinkWorkspace: (
-    input: RelinkWorkspaceInput,
-  ) => Promise<WorkspaceMutationResult>;
-  renameWorkspace: (input: RenameWorkspaceInput) => Promise<DesktopState>;
   removeWorkspace: (input: RemoveWorkspaceInput) => Promise<DesktopState>;
   selectAutomation: (input: SelectAutomationInput) => Promise<DesktopState>;
   markAutomationSeen: (input: MarkAutomationSeenInput) => Promise<DesktopState>;

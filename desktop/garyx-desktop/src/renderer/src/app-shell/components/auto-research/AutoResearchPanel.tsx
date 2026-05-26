@@ -60,6 +60,7 @@ type AutoResearchPanelProps = {
   candidatesResponse: CandidatesResponse | null;
   workspaces: DesktopWorkspace[];
   currentWorkspace: DesktopWorkspace | null;
+  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   onCreateRun: (input: CreateAutoResearchRunInput) => Promise<void>;
   onRefresh: (runId: string) => Promise<void>;
   onSelectRun: (runId: string) => Promise<void>;
@@ -303,6 +304,7 @@ export function AutoResearchPanel({
   candidatesResponse,
   workspaces,
   currentWorkspace,
+  onAddWorkspace,
   onCreateRun,
   onRefresh,
   onSelectRun,
@@ -601,7 +603,7 @@ export function AutoResearchPanel({
         )}
 
         {createDialogOpen ? (
-          <CreateRunDialog defaultWorkspacePath={defaultWorkspacePath} onClose={() => setCreateDialogOpen(false)} onSubmit={handleCreateRun} saving={saving} workspaces={workspaces} />
+          <CreateRunDialog defaultWorkspacePath={defaultWorkspacePath} onAddWorkspace={onAddWorkspace} onClose={() => setCreateDialogOpen(false)} onSubmit={handleCreateRun} saving={saving} workspaces={workspaces} />
         ) : null}
       </div>
     );
@@ -702,7 +704,7 @@ export function AutoResearchPanel({
       )}
 
       {createDialogOpen ? (
-        <CreateRunDialog defaultWorkspacePath={defaultWorkspacePath} onClose={() => setCreateDialogOpen(false)} onSubmit={handleCreateRun} saving={saving} workspaces={workspaces} />
+        <CreateRunDialog defaultWorkspacePath={defaultWorkspacePath} onAddWorkspace={onAddWorkspace} onClose={() => setCreateDialogOpen(false)} onSubmit={handleCreateRun} saving={saving} workspaces={workspaces} />
       ) : null}
     </div>
   );

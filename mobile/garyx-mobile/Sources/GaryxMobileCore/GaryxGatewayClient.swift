@@ -526,6 +526,14 @@ public final class GaryxGatewayClient {
         return page.workspaces
     }
 
+    public func listWorkspaceDirectories(path: String? = nil) async throws -> GaryxWorkspaceDirectoryListing {
+        var queryItems: [URLQueryItem] = []
+        if let path, !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            queryItems.append(URLQueryItem(name: "path", value: path))
+        }
+        return try await get("/api/workspaces/directories", queryItems: queryItems)
+    }
+
     @discardableResult
     public func addWorkspace(path: String, name: String? = nil) async throws -> [GaryxWorkspaceSummary] {
         let page: GaryxWorkspacesPage = try await post(

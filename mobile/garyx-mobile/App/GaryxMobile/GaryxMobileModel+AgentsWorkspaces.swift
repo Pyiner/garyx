@@ -148,9 +148,10 @@ extension GaryxMobileModel {
         }
     }
 
-    func addUserWorkspacePath(_ path: String) async {
+    @discardableResult
+    func addUserWorkspacePath(_ path: String) async -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return nil }
         do {
             let workspaces = try await client().addWorkspace(path: trimmed, name: trimmed.garyxLastPathComponent)
             userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
@@ -158,11 +159,16 @@ extension GaryxMobileModel {
             )
         } catch {
             lastError = error.localizedDescription
-            return
+            return nil
         }
         if workspaceGitStatuses[trimmed] == nil {
             Task { await refreshWorkspaceGitStatus(for: trimmed) }
         }
+        return trimmed
+    }
+
+    func listWorkspaceDirectories(path: String?) async throws -> GaryxWorkspaceDirectoryListing {
+        try await client().listWorkspaceDirectories(path: path)
     }
 
     func setNewThreadWorkspaceMode(_ mode: String) {

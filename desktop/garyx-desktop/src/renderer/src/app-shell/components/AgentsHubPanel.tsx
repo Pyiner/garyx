@@ -141,6 +141,7 @@ type TeamDraft = {
 type AgentsHubPanelProps = {
   initialTab?: HubTab;
   workspaces?: DesktopWorkspace[];
+  onAddWorkspace?: (path: string) => Promise<DesktopWorkspace | null>;
   onStartThread?: (agentOrTeamId: string) => void;
   onOpenMemory?: (agent: DesktopCustomAgent) => void;
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
@@ -463,6 +464,7 @@ function stopEvent(event: React.MouseEvent<HTMLElement>) {
 export function AgentsHubPanel({
   initialTab = 'agents',
   workspaces = [],
+  onAddWorkspace,
   onStartThread,
   onOpenMemory,
   onToast,
@@ -1622,6 +1624,7 @@ export function AgentsHubPanel({
                   onChange={(value) => {
                     setAgentDraft((current) => ({ ...current, defaultWorkspaceDir: value }));
                   }}
+                  onAddWorkspace={onAddWorkspace}
                   placeholder={t('/path/to/project')}
                   value={agentDraft.defaultWorkspaceDir}
                   workspaces={workspaces}

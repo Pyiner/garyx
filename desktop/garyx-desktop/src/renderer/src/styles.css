@@ -5565,6 +5565,16 @@ code {
   flex-wrap: wrap;
 }
 
+.new-thread-workspace-picker {
+  width: auto;
+  gap: 0;
+}
+
+.new-thread-workspace-field {
+  width: auto;
+  gap: 0;
+}
+
 button.new-thread-workspace-trigger {
   display: inline-flex;
   align-items: center;

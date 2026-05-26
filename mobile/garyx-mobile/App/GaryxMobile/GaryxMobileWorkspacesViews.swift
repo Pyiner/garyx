@@ -7,7 +7,7 @@ struct GaryxWorkspacesView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var isPickingFiles = false
     @State private var showsAddWorkspace = false
-    @State private var workspacePathDraft = ""
+    @State private var addWorkspacePath = ""
 
     var body: some View {
         GaryxPanelScaffold(
@@ -19,7 +19,7 @@ struct GaryxWorkspacesView: View {
         } actions: {
             HStack(spacing: 8) {
                 Button {
-                    workspacePathDraft = ""
+                    addWorkspacePath = ""
                     showsAddWorkspace = true
                 } label: {
                     GaryxToolbarIcon(systemName: "plus")
@@ -43,20 +43,16 @@ struct GaryxWorkspacesView: View {
         .onChange(of: model.userWorkspacePaths) { _, _ in
             Task { await model.prepareWorkspaceBrowser() }
         }
-        .fullScreenCover(isPresented: $showsAddWorkspace) {
-            GaryxFormSheet(
+        .sheet(isPresented: $showsAddWorkspace) {
+            GaryxWorkspacePathPickerSheet(
                 title: "Add Workspace",
-                canSave: garyxIsAbsoluteWorkspacePath(workspacePathDraft),
-                onSave: addWorkspace
-            ) {
-                GaryxFormGroupedSection(title: "Directory") {
-                    GaryxWorkspacePathPickerField(
-                        path: $workspacePathDraft,
-                        workspacePaths: model.userWorkspacePaths,
-                        placeholder: "/path/to/project"
-                    )
-                }
-            }
+                path: $addWorkspacePath
+            )
+        }
+        .onChange(of: addWorkspacePath) { _, newValue in
+            let path = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard garyxIsAbsoluteWorkspacePath(path) else { return }
+            Task { await addWorkspace(path) }
         }
         .fileImporter(
             isPresented: $isPickingFiles,
@@ -80,14 +76,9 @@ struct GaryxWorkspacesView: View {
         return directory.isEmpty ? name : "\(name) / \(directory)"
     }
 
-    private func addWorkspace() {
-        let path = workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard garyxIsAbsoluteWorkspacePath(path) else { return }
-        showsAddWorkspace = false
-        Task {
-            await model.addUserWorkspacePath(path)
-            await model.selectWorkspace(path)
-        }
+    private func addWorkspace(_ path: String) async {
+        guard let addedPath = await model.addUserWorkspacePath(path) else { return }
+        await model.selectWorkspace(addedPath)
     }
 }
 
