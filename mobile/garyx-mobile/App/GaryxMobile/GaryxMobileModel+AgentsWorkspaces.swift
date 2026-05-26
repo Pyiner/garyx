@@ -152,12 +152,16 @@ extension GaryxMobileModel {
     func addUserWorkspacePath(_ path: String) async -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             let workspaces = try await client().addWorkspace(path: trimmed, name: trimmed.garyxLastPathComponent)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
             userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
                 savedWorkspacePaths: workspaces.map(\.path)
             )
+            persistCatalogCacheSnapshot()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
             lastError = error.localizedDescription
             return nil
         }
@@ -218,6 +222,7 @@ extension GaryxMobileModel {
         let workspace = draftAgentWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
         let prompt = draftAgentPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !agentId.isEmpty, !displayName.isEmpty, !provider.isEmpty else { return false }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             let agent = try await client().createAgent(
                 GaryxCustomAgentRequest(
@@ -229,6 +234,7 @@ extension GaryxMobileModel {
                     systemPrompt: prompt
                 )
             )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
             draftAgentId = ""
             draftAgentName = ""
             draftAgentModel = ""
@@ -238,6 +244,7 @@ extension GaryxMobileModel {
             setSelectedAgentTarget(agent.id)
             return true
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
             lastError = displayMessage(for: error)
             return false
         }
@@ -258,7 +265,22 @@ extension GaryxMobileModel {
         let nextModelName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextWorkspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextAgentId.isEmpty, !nextDisplayName.isEmpty, !nextProviderType.isEmpty else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
+            var baseAgent = agent
+            if catalogSnapshotRestored {
+                let latestAgents = try await client().listAgents()
+                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+                guard let latestAgent = latestAgents.first(where: { $0.id == agent.id }) else {
+                    lastError = "Agent details are still loading. Try again after refresh."
+                    return
+                }
+                baseAgent = latestAgent
+            }
+            let nextSystemPrompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            let preservedSystemPrompt = agent.systemPrompt.isEmpty
+                && nextSystemPrompt.isEmpty
+                && !baseAgent.systemPrompt.isEmpty
             let updated = try await client().updateAgent(
                 agentId: agent.id,
                 request: GaryxCustomAgentRequest(
@@ -266,22 +288,24 @@ extension GaryxMobileModel {
                     displayName: nextDisplayName,
                     providerType: nextProviderType,
                     model: nextModelName.isEmpty ? nil : nextModelName,
-                    modelReasoningEffort: agent.modelReasoningEffort.isEmpty ? nil : agent.modelReasoningEffort,
-                    modelServiceTier: agent.modelServiceTier.isEmpty ? nil : agent.modelServiceTier,
-                    providerEnv: agent.providerEnv.isEmpty ? nil : agent.providerEnv,
-                    authSource: agent.authSource.isEmpty ? nil : agent.authSource,
-                    baseUrl: agent.baseUrl.isEmpty ? nil : agent.baseUrl,
-                    codexHome: agent.codexHome.isEmpty ? nil : agent.codexHome,
-                    maxToolIterations: agent.maxToolIterations,
-                    requestTimeoutSeconds: agent.requestTimeoutSeconds,
+                    modelReasoningEffort: baseAgent.modelReasoningEffort.isEmpty ? nil : baseAgent.modelReasoningEffort,
+                    modelServiceTier: baseAgent.modelServiceTier.isEmpty ? nil : baseAgent.modelServiceTier,
+                    providerEnv: baseAgent.providerEnv.isEmpty ? nil : baseAgent.providerEnv,
+                    authSource: baseAgent.authSource.isEmpty ? nil : baseAgent.authSource,
+                    baseUrl: baseAgent.baseUrl.isEmpty ? nil : baseAgent.baseUrl,
+                    codexHome: baseAgent.codexHome.isEmpty ? nil : baseAgent.codexHome,
+                    maxToolIterations: baseAgent.maxToolIterations,
+                    requestTimeoutSeconds: baseAgent.requestTimeoutSeconds,
                     defaultWorkspaceDir: nextWorkspace.isEmpty ? nil : nextWorkspace,
-                    avatarDataUrl: agent.avatarDataUrl.isEmpty ? nil : agent.avatarDataUrl,
-                    systemPrompt: systemPrompt
+                    avatarDataUrl: baseAgent.avatarDataUrl.isEmpty ? nil : baseAgent.avatarDataUrl,
+                    systemPrompt: preservedSystemPrompt ? baseAgent.systemPrompt : systemPrompt
                 )
             )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             replaceAgent(updated)
             setSelectedAgentTarget(updated.id)
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -300,6 +324,7 @@ extension GaryxMobileModel {
         let nextMembers = Self.normalizedTeamMemberIds(memberAgentIds, leaderAgentId: nextLeader)
         let nextWorkflow = workflowText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextTeamId.isEmpty, !nextDisplayName.isEmpty, !nextLeader.isEmpty else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             let updated = try await client().updateTeam(
                 teamId: team.id,
@@ -312,20 +337,26 @@ extension GaryxMobileModel {
                     avatarDataUrl: team.avatarDataUrl.isEmpty ? nil : team.avatarDataUrl
                 )
             )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             replaceTeam(updated)
             setSelectedAgentTarget(updated.id)
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func deleteAgent(_ agent: GaryxAgentSummary) async {
         guard !agent.builtIn else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             _ = try await client().deleteAgent(agentId: agent.id)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             agents.removeAll { $0.id == agent.id }
             ensureSelectedAgentTarget()
+            persistCatalogCacheSnapshot()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -361,6 +392,7 @@ extension GaryxMobileModel {
         let members = Self.normalizedTeamMemberIds(draftTeamMemberIds, leaderAgentId: leader)
         let workflow = draftTeamWorkflow.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !teamId.isEmpty, !name.isEmpty, !leader.isEmpty else { return false }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             let team = try await client().createTeam(
                 GaryxTeamRequest(
@@ -371,6 +403,7 @@ extension GaryxMobileModel {
                     workflowText: workflow
                 )
             )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
             draftTeamId = ""
             draftTeamName = ""
             draftTeamLeaderId = ""
@@ -380,17 +413,22 @@ extension GaryxMobileModel {
             setSelectedAgentTarget(team.id)
             return true
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
             lastError = displayMessage(for: error)
             return false
         }
     }
 
     func deleteTeam(_ team: GaryxTeamSummary) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             _ = try await client().deleteTeam(teamId: team.id)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             teams.removeAll { $0.id == team.id }
             ensureSelectedAgentTarget()
+            persistCatalogCacheSnapshot()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -731,6 +769,7 @@ extension GaryxMobileModel {
         if !threads.isEmpty {
             persistRecentThreadsWidgetSnapshot()
         }
+        persistCatalogCacheSnapshot()
     }
 
     func replaceTeam(_ team: GaryxTeamSummary) {
@@ -742,6 +781,7 @@ extension GaryxMobileModel {
         if !threads.isEmpty {
             persistRecentThreadsWidgetSnapshot()
         }
+        persistCatalogCacheSnapshot()
     }
 
     static func normalizedTeamMemberIds(_ rawValue: String, leaderAgentId: String) -> [String] {

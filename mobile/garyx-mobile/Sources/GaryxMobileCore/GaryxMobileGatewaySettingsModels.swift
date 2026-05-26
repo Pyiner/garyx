@@ -121,6 +121,26 @@ struct GaryxConfiguredBotAccountInput: Equatable {
     var workspaceDir: String?
     var workspaceMode: String?
     var config: [String: GaryxJSONValue]
+    var configEditedKeys: Set<String>? = nil
+
+    func mergingFetchedConfigForCachedProjection(_ fetchedConfig: [String: GaryxJSONValue]) -> Self {
+        var next = self
+        var mergedConfig = fetchedConfig
+        let configPatch: [String: GaryxJSONValue]
+        if let configEditedKeys {
+            for key in configEditedKeys {
+                mergedConfig.removeValue(forKey: key)
+            }
+            configPatch = config.filter { configEditedKeys.contains($0.key) }
+        } else {
+            configPatch = config
+        }
+        for (key, value) in configPatch {
+            mergedConfig[key] = value
+        }
+        next.config = mergedConfig
+        return next
+    }
 }
 
 enum GaryxConfiguredBotAccountsDocument {

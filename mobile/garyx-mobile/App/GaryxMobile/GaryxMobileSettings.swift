@@ -9,6 +9,7 @@ enum GaryxMobileSettingsKeys {
     static let newThreadWorkspace = "garyx.mobile.newThreadWorkspace"
     static let newThreadWorkspaceMode = "garyx.mobile.newThreadWorkspaceMode"
     static let userWorkspacePaths = "garyx.mobile.userWorkspacePaths"
+    static let catalogCacheSnapshot = "garyx.mobile.catalogCacheSnapshot"
     static let pinnedThreadIds = "garyx.mobile.pinnedThreadIds"
     static let gatewayProfiles = "garyx.mobile.gatewayProfiles"
     static let keychainService = "com.garyx.mobile"

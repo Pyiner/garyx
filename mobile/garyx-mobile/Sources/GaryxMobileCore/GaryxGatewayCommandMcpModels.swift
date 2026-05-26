@@ -11,6 +11,12 @@ public struct GaryxSlashCommand: Decodable, Identifiable, Equatable, Sendable {
     public var description: String
     public var prompt: String
 
+    public init(name: String, description: String = "", prompt: String = "") {
+        self.name = name
+        self.description = description
+        self.prompt = prompt
+    }
+
     enum CodingKeys: String, CodingKey {
         case name
         case description
@@ -56,6 +62,30 @@ public struct GaryxMcpServer: Decodable, Identifiable, Equatable, Sendable {
     public var url: String?
     public var bearerTokenEnv: String?
     public var headers: [String: String]
+
+    public init(
+        name: String,
+        transport: String = "stdio",
+        command: String = "",
+        args: [String] = [],
+        env: [String: String] = [:],
+        enabled: Bool = true,
+        workingDir: String? = nil,
+        url: String? = nil,
+        bearerTokenEnv: String? = nil,
+        headers: [String: String] = [:]
+    ) {
+        self.name = name
+        self.transport = transport
+        self.command = command
+        self.args = args
+        self.env = env
+        self.enabled = enabled
+        self.workingDir = workingDir
+        self.url = url
+        self.bearerTokenEnv = bearerTokenEnv
+        self.headers = headers
+    }
 
     enum CodingKeys: String, CodingKey {
         case name

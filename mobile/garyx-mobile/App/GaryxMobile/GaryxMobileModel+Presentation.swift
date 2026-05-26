@@ -9,7 +9,22 @@ extension GaryxMobileModel {
     }
 
     var configuredBotAccountSettings: [GaryxConfiguredBotAccountSettings] {
-        GaryxConfiguredBotAccountsDocument.accounts(from: gatewaySettingsDocument)
+        let accounts = GaryxConfiguredBotAccountsDocument.accounts(from: gatewaySettingsDocument)
+        if !accounts.isEmpty || !gatewaySettingsDocument.isEmpty {
+            return accounts
+        }
+        return configuredBots.map { bot in
+            GaryxConfiguredBotAccountSettings(
+                channel: bot.channel,
+                accountId: bot.accountId,
+                displayName: bot.displayName,
+                enabled: bot.enabled,
+                agentId: bot.agentId,
+                workspaceDir: bot.workspaceDir,
+                workspaceMode: bot.workspaceMode,
+                config: [:]
+            )
+        }
     }
 
     var canConnectGateway: Bool {

@@ -19,6 +19,34 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
     public var lastStatus: String
     public var schedule: GaryxAutomationSchedule
 
+    public init(
+        id: String,
+        label: String,
+        prompt: String,
+        agentId: String,
+        enabled: Bool = true,
+        workspacePath: String,
+        targetThreadId: String? = nil,
+        threadId: String? = nil,
+        nextRun: String = "",
+        lastRunAt: String? = nil,
+        lastStatus: String = "success",
+        schedule: GaryxAutomationSchedule = .interval(hours: 24)
+    ) {
+        self.id = id
+        self.label = label
+        self.prompt = prompt
+        self.agentId = agentId
+        self.enabled = enabled
+        self.workspacePath = workspacePath
+        self.targetThreadId = targetThreadId
+        self.threadId = threadId
+        self.nextRun = nextRun
+        self.lastRunAt = lastRunAt
+        self.lastStatus = lastStatus
+        self.schedule = schedule
+    }
+
     enum CodingKeys: String, CodingKey {
         case id
         case label

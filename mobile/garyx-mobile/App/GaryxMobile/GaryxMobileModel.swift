@@ -201,8 +201,12 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadRecoveryThreadId: String?
     var selectedThreadHistoryRequestId: UUID?
     var completedThreadHistoryHydrationTasks: [String: Task<Void, Never>] = [:]
+    var activeGatewayScopeId = ""
+    var catalogSnapshotRestored = false
+    var connectRefreshRequestId: UUID?
     var remoteStateRefreshRequestId: UUID?
     var agentTargetsRefreshRequestId: UUID?
+    var agentTargetsStateRequestId: UUID?
     var nextThreadListOffset = 0
     var selectedThreadNextHistoryBeforeIndex: Int?
     var sceneRefreshTask: Task<Void, Never>?

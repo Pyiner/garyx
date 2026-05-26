@@ -32,6 +32,8 @@ extension GaryxMobileModel {
     }
 
     func loadGatewayScopedUserState(fallbackToLegacy: Bool) {
+        activeGatewayScopeId = currentGatewayScopeId
+        catalogSnapshotRestored = false
         let agentKey = scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId)
         let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
         let workspaceModeKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
@@ -46,6 +48,7 @@ extension GaryxMobileModel {
                 ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceMode) : nil)
         )
         userWorkspacePaths = []
+        restoreCachedCatalogState()
     }
 
     func saveGatewayScopedUserState() {
@@ -80,8 +83,10 @@ extension GaryxMobileModel {
         cancelGlobalEventStream()
         cancelActiveSocket()
         isSending = false
+        connectRefreshRequestId = nil
         remoteStateRefreshRequestId = nil
         agentTargetsRefreshRequestId = nil
+        agentTargetsStateRequestId = nil
         remoteBusyThreadIds = []
         agentTargetsLoadPhase = .idle
         connectionState = .disconnected
@@ -114,6 +119,7 @@ extension GaryxMobileModel {
         userWorkspacePaths = []
         botStatusesById = [:]
         channelPlugins = []
+        catalogSnapshotRestored = false
         gatewaySettingsDocument = [:]
         isSavingBotSettings = false
         providerModelsByType = [:]
@@ -199,7 +205,8 @@ extension GaryxMobileModel {
 
         if affectsCurrentProfile {
             saveGatewayScopedUserState()
-            if currentURLChanged || activeTokenChanged {
+            let didResetRuntime = currentURLChanged || activeTokenChanged
+            if didResetRuntime {
                 resetGatewayRuntimeState()
             }
             gatewayURL = normalizedURL
@@ -208,7 +215,7 @@ extension GaryxMobileModel {
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayURL)
             defaults.removeObject(forKey: GaryxMobileSettingsKeys.legacyGatewayToken)
             keychain.saveGatewayAuthToken(gatewayAuthToken)
-            if currentURLChanged {
+            if didResetRuntime {
                 loadGatewayScopedUserState(fallbackToLegacy: false)
             }
         }
@@ -333,12 +340,24 @@ extension GaryxMobileModel {
     func connectAndRefresh() async {
         gatewayURL = normalizedGatewayURL(gatewayURL)
         gatewayAuthToken = gatewayAuthToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if activeGatewayScopeId != currentGatewayScopeId {
+            resetGatewayRuntimeState()
+            loadGatewayScopedUserState(fallbackToLegacy: false)
+        }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        let gatewayScopeId = currentGatewayScopeId
+        let requestId = UUID()
+        connectRefreshRequestId = requestId
         connectionState = .checking
         lastError = nil
         gatewaySettingsStatus = nil
         do {
-            let status = try await client().status()
-            _ = try await client().chatHealth()
+            let gateway = try client()
+            let status = try await gateway.status()
+            _ = try await gateway.chatHealth()
+            guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
+                return
+            }
             saveGatewaySettings()
             rememberCurrentGatewayProfile()
             gatewaySettingsStatus = "Saved and connected"
@@ -348,9 +367,17 @@ extension GaryxMobileModel {
             await refreshThreads()
             await agentTargetsRefresh
             await refreshRemoteState()
+            guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
+                return
+            }
+            connectRefreshRequestId = nil
             startSelectedThreadReconcileLoop()
             await openPendingThreadLinkIfNeeded()
         } catch {
+            guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
+                return
+            }
+            connectRefreshRequestId = nil
             cancelGlobalEventStream()
             cancelSelectedThreadReconcileLoop()
             let message = displayMessage(for: error)
@@ -369,22 +396,45 @@ extension GaryxMobileModel {
         let runtimeGeneration = gatewayRuntimeGeneration
         let requestId = UUID()
         agentTargetsRefreshRequestId = requestId
-        agentTargetsLoadPhase = .loading
+        agentTargetsStateRequestId = requestId
+        let hadAgentTargetsBeforeRefresh = !agentTargets.isEmpty
+        let ownsAgentTargetsLoadPhase = agentTargets.isEmpty
+        if ownsAgentTargetsLoadPhase {
+            agentTargetsLoadPhase = .loading
+        }
         do {
             let gateway = try client()
-            async let agentsResult: [GaryxAgentSummary]? = try? gateway.listAgents()
-            async let teamsResult: [GaryxTeamSummary]? = try? gateway.listTeams()
-            let (nextAgents, nextTeams) = await (agentsResult, teamsResult)
+            async let agentsResult = garyxCaptureCatalog { try await gateway.listAgents() }
+            async let teamsResult = garyxCaptureCatalog { try await gateway.listTeams() }
+            let (agentsOutcome, teamsOutcome) = await (agentsResult, teamsResult)
             guard isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             agentTargetsRefreshRequestId = nil
-            if !applyAgentTargets(agents: nextAgents, teams: nextTeams) {
-                agentTargetsLoadPhase = .failed("Agents could not be loaded.")
+            if agentTargetsStateRequestId == requestId {
+                agentTargetsStateRequestId = nil
+            }
+            let nextAgents = agentsOutcome.successValue
+            let nextTeams = teamsOutcome.successValue
+            if nextAgents != nil || nextTeams != nil {
+                applyAgentTargets(agents: nextAgents, teams: nextTeams)
+            }
+            if agentsOutcome.isFailure || teamsOutcome.isFailure {
+                let message = catalogRefreshFailureMessage(
+                    from: [AnyCatalogResult(agentsOutcome), AnyCatalogResult(teamsOutcome)]
+                )
+                    ?? "Agents could not be loaded."
+                agentTargetsLoadPhase = hadAgentTargetsBeforeRefresh ? .loaded : .failed(message)
+                lastError = message
+            } else {
+                agentTargetsLoadPhase = .loaded
             }
         } catch {
             guard isCurrentAgentTargetsRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             agentTargetsRefreshRequestId = nil
+            if agentTargetsStateRequestId == requestId {
+                agentTargetsStateRequestId = nil
+            }
             let message = displayMessage(for: error)
-            agentTargetsLoadPhase = .failed(message)
+            agentTargetsLoadPhase = hadAgentTargetsBeforeRefresh ? .loaded : .failed(message)
             lastError = message
         }
     }
@@ -394,51 +444,78 @@ extension GaryxMobileModel {
         let runtimeGeneration = gatewayRuntimeGeneration
         let requestId = UUID()
         remoteStateRefreshRequestId = requestId
-        let ownsAgentTargetsLoadPhase = agentTargets.isEmpty && agentTargetsRefreshRequestId == nil
+        let supersededAgentTargetsRefresh = agentTargetsRefreshRequestId != nil
+        agentTargetsRefreshRequestId = nil
+        agentTargetsStateRequestId = requestId
+        let hadAgentTargetsBeforeRefresh = !agentTargets.isEmpty
+        let ownsAgentTargetsLoadPhase = agentTargets.isEmpty
+            || supersededAgentTargetsRefresh
+            || agentTargetsLoadPhase.isLoading
         remoteStateLoadPhase = .loading
         if ownsAgentTargetsLoadPhase {
             agentTargetsLoadPhase = .loading
         }
         do {
             let gateway = try client()
-            async let agentsResult = gateway.listAgents()
-            async let teamsResult = gateway.listTeams()
-            async let skillsResult = gateway.listSkills()
-            async let tasksResult = gateway.listTasks(includeDone: true, limit: 120)
-            async let dreamsResult = gateway.listDreams(sinceHours: 24, limit: 80)
-            async let gatewaySettingsResult = gateway.gatewaySettings()
-            async let automationsResult = gateway.listAutomations()
-            async let slashCommandsResult = gateway.listSlashCommands()
-            async let mcpServersResult = gateway.listMcpServers()
-            async let autoResearchRunsResult = gateway.listAutoResearchRuns()
-            async let channelEndpointsResult = gateway.listChannelEndpoints()
-            async let workspacesResult = gateway.listWorkspaces()
-            async let configuredBotsResult = gateway.listConfiguredBots()
-            async let botConsolesResult = gateway.listBotConsoles()
-            async let channelPluginsResult = gateway.listChannelPlugins()
+            async let agentsResult = garyxCaptureCatalog { try await gateway.listAgents() }
+            async let teamsResult = garyxCaptureCatalog { try await gateway.listTeams() }
+            async let skillsResult = garyxCaptureCatalog { try await gateway.listSkills() }
+            async let tasksResult = garyxCaptureCatalog { try await gateway.listTasks(includeDone: true, limit: 120) }
+            async let dreamsResult: GaryxDreamsPage? = try? gateway.listDreams(sinceHours: 24, limit: 80)
+            async let gatewaySettingsResult: [String: GaryxJSONValue]? = try? gateway.gatewaySettings()
+            async let automationsResult = garyxCaptureCatalog { try await gateway.listAutomations() }
+            async let slashCommandsResult = garyxCaptureCatalog { try await gateway.listSlashCommands() }
+            async let mcpServersResult = garyxCaptureCatalog { try await gateway.listMcpServers() }
+            async let autoResearchRunsResult: [GaryxAutoResearchRun]? = try? gateway.listAutoResearchRuns()
+            async let channelEndpointsResult = garyxCaptureCatalog { try await gateway.listChannelEndpoints() }
+            async let workspacesResult = garyxCaptureCatalog { try await gateway.listWorkspaces() }
+            async let configuredBotsResult = garyxCaptureCatalog { try await gateway.listConfiguredBots() }
+            async let botConsolesResult = garyxCaptureCatalog { try await gateway.listBotConsoles() }
+            async let channelPluginsResult = garyxCaptureCatalog { try await gateway.listChannelPlugins() }
 
-            let nextAgents = try? await agentsResult
-            let nextTeams = try? await teamsResult
+            let nextAgents = await agentsResult
+            let nextTeams = await teamsResult
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
-            applyAgentTargets(agents: nextAgents, teams: nextTeams)
+            let ownsAgentTargetsState = agentTargetsStateRequestId == requestId
+            if ownsAgentTargetsState, (nextAgents.successValue != nil || nextTeams.successValue != nil) {
+                applyAgentTargets(agents: nextAgents.successValue, teams: nextTeams.successValue)
+            }
 
-            let nextSkills = try? await skillsResult
-            let nextTasksPage = try? await tasksResult
-            let nextDreamsPage = try? await dreamsResult
-            let nextGatewaySettings = try? await gatewaySettingsResult
-            let nextAutomations = try? await automationsResult
-            let nextSlashCommands = try? await slashCommandsResult
-            let nextMcpServers = try? await mcpServersResult
-            let nextAutoResearchRuns = try? await autoResearchRunsResult
-            let nextChannelEndpoints = try? await channelEndpointsResult
-            let nextWorkspaces = try? await workspacesResult
-            let nextConfiguredBots = try? await configuredBotsResult
-            let nextBotConsoles = try? await botConsolesResult
-            let nextChannelPlugins = try? await channelPluginsResult
+            let nextSkills = await skillsResult
+            let nextTasksPage = await tasksResult
+            let nextDreamsPage = await dreamsResult
+            let nextGatewaySettings = await gatewaySettingsResult
+            let nextAutomations = await automationsResult
+            let nextSlashCommands = await slashCommandsResult
+            let nextMcpServers = await mcpServersResult
+            let nextAutoResearchRuns = await autoResearchRunsResult
+            let nextChannelEndpoints = await channelEndpointsResult
+            let nextWorkspaces = await workspacesResult
+            let nextConfiguredBots = await configuredBotsResult
+            let nextBotConsoles = await botConsolesResult
+            let nextChannelPlugins = await channelPluginsResult
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
 
-            skills = nextSkills ?? skills
-            if let page = nextTasksPage {
+            let cacheableResults: [AnyCatalogResult] = [
+                .init(nextAgents),
+                .init(nextTeams),
+                .init(nextSkills),
+                .init(nextTasksPage),
+                .init(nextAutomations),
+                .init(nextSlashCommands),
+                .init(nextMcpServers),
+                .init(nextChannelEndpoints),
+                .init(nextWorkspaces),
+                .init(nextConfiguredBots),
+                .init(nextBotConsoles),
+                .init(nextChannelPlugins),
+            ]
+            let cacheableRefreshSucceeded = cacheableResults.allSatisfy(\.isSuccess)
+
+            if case let .success(value) = nextSkills {
+                skills = value
+            }
+            if case let .success(page) = nextTasksPage {
                 tasks = page.tasks
             }
             if let page = nextDreamsPage {
@@ -449,19 +526,33 @@ extension GaryxMobileModel {
                 gatewaySettingsDocument = settings
                 applyGatewayRuntimeSettings(settings)
             }
-            automations = nextAutomations ?? automations
-            slashCommands = nextSlashCommands ?? slashCommands
-            mcpServers = nextMcpServers ?? mcpServers
+            if case let .success(value) = nextAutomations {
+                automations = value
+            }
+            if case let .success(value) = nextSlashCommands {
+                slashCommands = value
+            }
+            if case let .success(value) = nextMcpServers {
+                mcpServers = value
+            }
             autoResearchRuns = nextAutoResearchRuns ?? autoResearchRuns
-            channelEndpoints = nextChannelEndpoints ?? channelEndpoints
-            if let nextWorkspaces {
+            if case let .success(value) = nextChannelEndpoints {
+                channelEndpoints = value
+            }
+            if case let .success(nextWorkspaces) = nextWorkspaces {
                 userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
                     savedWorkspacePaths: nextWorkspaces.map(\.path)
                 )
             }
-            configuredBots = nextConfiguredBots ?? configuredBots
-            botConsoles = nextBotConsoles ?? botConsoles
-            channelPlugins = nextChannelPlugins ?? channelPlugins
+            if case let .success(value) = nextConfiguredBots {
+                configuredBots = value
+            }
+            if case let .success(value) = nextBotConsoles {
+                botConsoles = value
+            }
+            if case let .success(value) = nextChannelPlugins {
+                channelPlugins = value
+            }
             await mergeMissingSidebarRequiredThreads(
                 using: gateway,
                 extraThreadIds: [selectedThread?.id],
@@ -475,22 +566,43 @@ extension GaryxMobileModel {
                 remoteStateRefreshRequestId: requestId
             )
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
-            if ownsAgentTargetsLoadPhase,
-               agentTargetsRefreshRequestId == nil,
-               agentTargetsLoadPhase.isLoading {
+            let stillOwnsAgentTargetsState = agentTargetsStateRequestId == requestId
+            if cacheableRefreshSucceeded, stillOwnsAgentTargetsState {
+                persistCatalogCacheSnapshot()
+                catalogSnapshotRestored = false
+            }
+            if stillOwnsAgentTargetsState, nextAgents.isFailure || nextTeams.isFailure {
+                let message = catalogRefreshFailureMessage(
+                    from: [AnyCatalogResult(nextAgents), AnyCatalogResult(nextTeams)]
+                )
+                    ?? "Agents could not be loaded."
+                agentTargetsLoadPhase = hadAgentTargetsBeforeRefresh ? .loaded : .failed(message)
+                lastError = message
+            } else if ownsAgentTargetsLoadPhase, stillOwnsAgentTargetsState {
                 agentTargetsLoadPhase = agentTargets.isEmpty
                     ? .failed("Agents could not be loaded.")
                     : .loaded
             }
-            remoteStateLoadPhase = .loaded
+            if stillOwnsAgentTargetsState {
+                agentTargetsStateRequestId = nil
+            }
+            if cacheableRefreshSucceeded {
+                remoteStateLoadPhase = .loaded
+            } else {
+                let message = catalogRefreshFailureMessage(
+                    from: cacheableResults
+                ) ?? "Some catalog data could not be loaded."
+                remoteStateLoadPhase = .failed(message)
+            }
         } catch {
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             let message = displayMessage(for: error)
             remoteStateLoadPhase = .failed(message)
-            if ownsAgentTargetsLoadPhase,
-               agentTargetsRefreshRequestId == nil,
-               agentTargetsLoadPhase.isLoading {
-                agentTargetsLoadPhase = .failed(message)
+            if agentTargetsStateRequestId == requestId {
+                agentTargetsLoadPhase = hadAgentTargetsBeforeRefresh ? .loaded : .failed(message)
+            }
+            if agentTargetsStateRequestId == requestId {
+                agentTargetsStateRequestId = nil
             }
             lastError = message
         }
@@ -504,6 +616,16 @@ extension GaryxMobileModel {
         runtimeGeneration == gatewayRuntimeGeneration && agentTargetsRefreshRequestId == requestId
     }
 
+    func isCurrentConnectRefresh(_ requestId: UUID, runtimeGeneration: UUID, scopeId: String? = nil) -> Bool {
+        connectRefreshRequestId == requestId && isCurrentGatewayRuntime(runtimeGeneration, scopeId: scopeId)
+    }
+
+    func isCurrentGatewayRuntime(_ runtimeGeneration: UUID, scopeId: String? = nil) -> Bool {
+        guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+        guard let scopeId else { return true }
+        return scopeId == currentGatewayScopeId
+    }
+
     func applyGatewayRuntimeSettings(_ settings: [String: GaryxJSONValue]) {
         dreamsAutoScanEnabled = settings
             .objectValue(forKeys: ["dreams"])?
@@ -515,5 +637,50 @@ extension GaryxMobileModel {
                 activePanel = .chat
             }
         }
+    }
+
+    private func catalogRefreshFailureMessage(from outcomes: [AnyCatalogResult]) -> String? {
+        guard let error = outcomes.first(where: { !$0.isSuccess })?.error else { return nil }
+        return displayMessage(for: error)
+    }
+}
+
+private struct AnyCatalogResult {
+    let isSuccess: Bool
+    let error: Error?
+
+    init<Value>(_ result: Result<Value, Error>) {
+        switch result {
+        case .success:
+            isSuccess = true
+            error = nil
+        case .failure(let failure):
+            isSuccess = false
+            error = failure
+        }
+    }
+}
+
+private func garyxCaptureCatalog<Value>(_ operation: () async throws -> Value) async -> Result<Value, Error> {
+    do {
+        return .success(try await operation())
+    } catch {
+        return .failure(error)
+    }
+}
+
+private extension Result {
+    var successValue: Success? {
+        if case let .success(value) = self {
+            return value
+        }
+        return nil
+    }
+
+    var isFailure: Bool {
+        if case .failure = self {
+            return true
+        }
+        return false
     }
 }

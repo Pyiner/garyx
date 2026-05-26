@@ -19,19 +19,27 @@ extension GaryxMobileModel {
 
     func bindBotToSelectedThread(_ bot: GaryxConfiguredBot) async {
         guard let threadId = selectedThread?.id else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
-            botStatusesById[bot.id] = try await client().bindBot(botId: bot.id, threadId: threadId)
+            let status = try await client().bindBot(botId: bot.id, threadId: threadId)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            botStatusesById[bot.id] = status
             await refreshRemoteState()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func unbindBot(_ bot: GaryxConfiguredBot) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
-            botStatusesById[bot.id] = try await client().unbindBot(botId: bot.id)
+            let status = try await client().unbindBot(botId: bot.id)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            botStatusesById[bot.id] = status
             await refreshRemoteState()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -59,36 +67,70 @@ extension GaryxMobileModel {
         }
 
         isSavingBotSettings = true
-        defer { isSavingBotSettings = false }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        defer {
+            if runtimeGeneration == gatewayRuntimeGeneration {
+                isSavingBotSettings = false
+            }
+        }
         do {
+            var settings = try await client().gatewaySettings()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
+            let settingsAccounts = GaryxConfiguredBotAccountsDocument.accounts(from: settings)
+            let existingInputAccount = settingsAccounts.first {
+                $0.channel.caseInsensitiveCompare(channel) == .orderedSame && $0.accountId == accountId
+            }
+            let existingOriginalAccount = original.flatMap { original in
+                settingsAccounts.first {
+                    $0.channel.caseInsensitiveCompare(original.channel) == .orderedSame
+                        && $0.accountId == original.accountId
+                }
+            }
+            let existingAccount = existingOriginalAccount ?? existingInputAccount
+            var inputToSave = input
+            if original != nil,
+               original?.config.isEmpty ?? true,
+               original?.channel.caseInsensitiveCompare(channel) == .orderedSame,
+               let existingAccount {
+                inputToSave = inputToSave.mergingFetchedConfigForCachedProjection(existingAccount.config)
+            }
+            if original != nil,
+               original?.workspaceMode?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
+               input.workspaceMode?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
+               let existingWorkspaceMode = existingAccount?.workspaceMode?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !existingWorkspaceMode.isEmpty {
+                inputToSave.workspaceMode = existingWorkspaceMode
+            }
             let validation = try await client().validateChannelAccount(
                 pluginId: channel,
                 request: GaryxChannelAccountValidationRequest(
                     accountId: accountId,
                     enabled: input.enabled,
-                    config: input.config
+                    config: inputToSave.config
                 )
             )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
             guard validation.validated else {
                 lastError = validation.message
                 return false
             }
 
-            var settings = try await client().gatewaySettings()
             guard GaryxConfiguredBotAccountsDocument.setAccount(
                 in: &settings,
                 originalChannel: original?.channel,
                 originalAccountId: original?.accountId,
-                input: input
+                input: inputToSave
             ) else {
                 lastError = "Bot account could not be saved"
                 return false
             }
             _ = try await client().saveGatewaySettings(settings, merge: false)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
             gatewaySettingsDocument = settings
             await refreshRemoteState()
             return true
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
             lastError = displayMessage(for: error)
             return false
         }
@@ -110,9 +152,15 @@ extension GaryxMobileModel {
 
     func deleteConfiguredBotAccount(_ account: GaryxConfiguredBotAccountSettings) async {
         isSavingBotSettings = true
-        defer { isSavingBotSettings = false }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        defer {
+            if runtimeGeneration == gatewayRuntimeGeneration {
+                isSavingBotSettings = false
+            }
+        }
         do {
             var settings = try await client().gatewaySettings()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             guard GaryxConfiguredBotAccountsDocument.removeAccount(
                 from: &settings,
                 channel: account.channel,
@@ -122,6 +170,7 @@ extension GaryxMobileModel {
                 return
             }
             _ = try await client().saveGatewaySettings(settings, merge: false)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             gatewaySettingsDocument = settings
             configuredBots.removeAll {
                 $0.channel.caseInsensitiveCompare(account.channel) == .orderedSame
@@ -136,15 +185,19 @@ extension GaryxMobileModel {
                     && $0.accountId == account.accountId
             }
             botStatusesById.removeValue(forKey: account.id)
+            persistCatalogCacheSnapshot()
             await refreshRemoteState()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func deleteConfiguredBotAccount(_ bot: GaryxConfiguredBot) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             var settings = try await client().gatewaySettings()
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             guard GaryxConfiguredBotAccountsDocument.removeAccount(
                 from: &settings,
                 channel: bot.channel,
@@ -154,6 +207,7 @@ extension GaryxMobileModel {
                 return
             }
             _ = try await client().saveGatewaySettings(settings, merge: false)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             configuredBots.removeAll { $0.id == bot.id }
             channelEndpoints.removeAll { endpoint in
                 endpoint.channel.caseInsensitiveCompare(bot.channel) == .orderedSame
@@ -164,27 +218,35 @@ extension GaryxMobileModel {
                     && $0.accountId == bot.accountId
             }
             botStatusesById.removeValue(forKey: bot.id)
+            persistCatalogCacheSnapshot()
             await refreshRemoteState()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func bindEndpointToSelectedThread(_ endpoint: GaryxChannelEndpoint) async {
         guard let threadId = selectedThread?.id else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             _ = try await client().bindChannelEndpoint(endpointKey: endpoint.endpointKey, threadId: threadId)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             await refreshRemoteState()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func detachEndpoint(_ endpoint: GaryxChannelEndpoint) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             _ = try await client().detachChannelEndpoint(endpointKey: endpoint.endpointKey)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             await refreshRemoteState()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }
@@ -217,17 +279,20 @@ extension GaryxMobileModel {
             endpointKeys.insert(currentEndpointKey)
         }
 
+        let runtimeGeneration = gatewayRuntimeGeneration
         do {
             for endpointKey in endpointKeys {
                 _ = try await client().detachChannelEndpoint(endpointKey: endpointKey)
             }
             _ = try await client().deleteThread(threadId: normalizedThreadId)
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             removeArchivedThreadLocally(normalizedThreadId)
             channelEndpoints.removeAll { endpoint in
                 let endpointThreadId = endpoint.threadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 return endpointKeys.contains(endpoint.endpointKey)
                     || endpointThreadId == normalizedThreadId
             }
+            persistCatalogCacheSnapshot()
             if selectedThread?.id == normalizedThreadId {
                 selectedThread = nil
                 draftThreadTitle = ""
@@ -243,6 +308,7 @@ extension GaryxMobileModel {
             await refreshRemoteState()
             await refreshThreads()
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
         }
     }

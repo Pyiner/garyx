@@ -26,6 +26,48 @@ public struct GaryxAgentSummary: Decodable, Identifiable, Equatable, Sendable {
     public var createdAt: String?
     public var updatedAt: String?
 
+    public init(
+        id: String,
+        displayName: String,
+        providerType: String,
+        model: String,
+        modelReasoningEffort: String = "",
+        modelServiceTier: String = "",
+        providerEnv: [String: String] = [:],
+        authSource: String = "",
+        baseUrl: String = "",
+        codexHome: String = "",
+        maxToolIterations: Int? = nil,
+        requestTimeoutSeconds: Int? = nil,
+        defaultWorkspaceDir: String = "",
+        avatarDataUrl: String = "",
+        systemPrompt: String = "",
+        builtIn: Bool = false,
+        standalone: Bool = true,
+        createdAt: String? = nil,
+        updatedAt: String? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.providerType = providerType
+        self.model = model
+        self.modelReasoningEffort = modelReasoningEffort
+        self.modelServiceTier = modelServiceTier
+        self.providerEnv = providerEnv
+        self.authSource = authSource
+        self.baseUrl = baseUrl
+        self.codexHome = codexHome
+        self.maxToolIterations = maxToolIterations
+        self.requestTimeoutSeconds = requestTimeoutSeconds
+        self.defaultWorkspaceDir = defaultWorkspaceDir
+        self.avatarDataUrl = avatarDataUrl
+        self.systemPrompt = systemPrompt
+        self.builtIn = builtIn
+        self.standalone = standalone
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+
     enum CodingKeys: String, CodingKey {
         case agentId = "agent_id"
         case agentIdCamel = "agentId"
@@ -122,6 +164,26 @@ public struct GaryxTeamSummary: Decodable, Identifiable, Equatable, Sendable {
     public var avatarDataUrl: String
     public var createdAt: String?
     public var updatedAt: String?
+
+    public init(
+        id: String,
+        displayName: String,
+        leaderAgentId: String,
+        memberAgentIds: [String],
+        workflowText: String = "",
+        avatarDataUrl: String = "",
+        createdAt: String? = nil,
+        updatedAt: String? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.leaderAgentId = leaderAgentId
+        self.memberAgentIds = memberAgentIds
+        self.workflowText = workflowText
+        self.avatarDataUrl = avatarDataUrl
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
 
     enum CodingKeys: String, CodingKey {
         case teamId = "team_id"

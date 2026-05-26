@@ -172,6 +172,11 @@ needs installed-app validation.
   transformations should live under `mobile/garyx-mobile/Sources/GaryxMobileCore`
   with SwiftPM tests. Keep app-target files focused on SwiftUI composition,
   bindings, platform adapters, and side-effect orchestration.
+- Mobile low-frequency catalog data such as agents, teams, workspaces, bots,
+  skills, automations, tasks, slash commands, and MCP servers should use
+  gateway-scoped stale-while-refresh caching. Restored rows are display
+  projections only; edit paths that preserve hidden gateway fields must fetch
+  authoritative data before saving.
 - Keep mobile SwiftUI feature surfaces in feature-specific files rather than
   adding large view trees to `GaryxMobileViews.swift`.
 

@@ -13,6 +13,22 @@ public struct GaryxSkillSummary: Decodable, Identifiable, Equatable, Sendable {
     public var enabled: Bool
     public var sourcePath: String
 
+    public init(
+        id: String,
+        name: String,
+        description: String = "",
+        installed: Bool = true,
+        enabled: Bool = true,
+        sourcePath: String = ""
+    ) {
+        self.id = id
+        self.name = name
+        self.description = description
+        self.installed = installed
+        self.enabled = enabled
+        self.sourcePath = sourcePath
+    }
+
     enum CodingKeys: String, CodingKey {
         case id
         case name

@@ -44,6 +44,36 @@ public struct GaryxTaskSummary: Decodable, Identifiable, Equatable, Sendable {
     public var replyCount: Int
     public var updatedAt: String?
 
+    public init(
+        id: String,
+        threadId: String,
+        number: Int = 0,
+        title: String,
+        status: GaryxTaskStatus = .todo,
+        creator: GaryxTaskPrincipal? = nil,
+        assignee: GaryxTaskPrincipal? = nil,
+        assigneeLabel: String = "",
+        source: GaryxTaskSource? = nil,
+        updatedBy: GaryxTaskPrincipal? = nil,
+        runtimeAgentId: String = "",
+        replyCount: Int = 0,
+        updatedAt: String? = nil
+    ) {
+        self.id = id
+        self.threadId = threadId
+        self.number = number
+        self.title = title
+        self.status = status
+        self.creator = creator
+        self.assignee = assignee
+        self.assigneeLabel = assigneeLabel.isEmpty ? assignee?.label ?? "" : assigneeLabel
+        self.source = source
+        self.updatedBy = updatedBy
+        self.runtimeAgentId = runtimeAgentId
+        self.replyCount = replyCount
+        self.updatedAt = updatedAt
+    }
+
     enum CodingKeys: String, CodingKey {
         case task
         case threadId = "thread_id"
@@ -111,6 +141,22 @@ public struct GaryxTaskSource: Decodable, Equatable, Sendable {
     public var channel: String?
     public var accountId: String?
 
+    public init(
+        threadId: String? = nil,
+        taskId: String? = nil,
+        taskThreadId: String? = nil,
+        botId: String? = nil,
+        channel: String? = nil,
+        accountId: String? = nil
+    ) {
+        self.threadId = threadId
+        self.taskId = taskId
+        self.taskThreadId = taskThreadId
+        self.botId = botId
+        self.channel = channel
+        self.accountId = accountId
+    }
+
     enum CodingKeys: String, CodingKey {
         case threadId = "thread_id"
         case threadIdCamel = "threadId"
@@ -141,6 +187,12 @@ public struct GaryxTaskPrincipal: Decodable, Equatable, Sendable {
     public var kind: String
     public var agentId: String?
     public var userId: String?
+
+    public init(kind: String, agentId: String? = nil, userId: String? = nil) {
+        self.kind = kind
+        self.agentId = agentId
+        self.userId = userId
+    }
 
     public var label: String {
         if kind == "agent", let agentId, !agentId.isEmpty {

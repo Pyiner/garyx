@@ -19,6 +19,32 @@ public struct GaryxChannelEndpoint: Decodable, Identifiable, Equatable, Sendable
     public var conversationKind: String?
     public var conversationLabel: String?
 
+    public init(
+        endpointKey: String,
+        channel: String,
+        accountId: String,
+        displayLabel: String,
+        threadId: String? = nil,
+        threadLabel: String? = nil,
+        workspaceDir: String? = nil,
+        lastInboundAt: String? = nil,
+        lastDeliveryAt: String? = nil,
+        conversationKind: String? = nil,
+        conversationLabel: String? = nil
+    ) {
+        self.endpointKey = endpointKey
+        self.channel = channel
+        self.accountId = accountId
+        self.displayLabel = displayLabel
+        self.threadId = threadId
+        self.threadLabel = threadLabel
+        self.workspaceDir = workspaceDir
+        self.lastInboundAt = lastInboundAt
+        self.lastDeliveryAt = lastDeliveryAt
+        self.conversationKind = conversationKind
+        self.conversationLabel = conversationLabel
+    }
+
     enum CodingKeys: String, CodingKey {
         case endpointKey = "endpoint_key"
         case endpointKeyCamel = "endpointKey"
@@ -73,10 +99,37 @@ public struct GaryxConfiguredBot: Decodable, Identifiable, Equatable, Sendable {
     public var enabled: Bool
     public var agentId: String?
     public var workspaceDir: String?
+    public var workspaceMode: String?
     public var rootBehavior: String
     public var mainEndpointStatus: String
     public var mainThreadId: String?
     public var defaultOpenThreadId: String?
+
+    public init(
+        channel: String,
+        accountId: String,
+        displayName: String,
+        enabled: Bool = true,
+        agentId: String? = nil,
+        workspaceDir: String? = nil,
+        workspaceMode: String? = nil,
+        rootBehavior: String = "open_default",
+        mainEndpointStatus: String = "unresolved",
+        mainThreadId: String? = nil,
+        defaultOpenThreadId: String? = nil
+    ) {
+        self.channel = channel
+        self.accountId = accountId
+        self.displayName = displayName
+        self.enabled = enabled
+        self.agentId = agentId
+        self.workspaceDir = workspaceDir
+        self.workspaceMode = workspaceMode
+        self.rootBehavior = rootBehavior
+        self.mainEndpointStatus = mainEndpointStatus
+        self.mainThreadId = mainThreadId
+        self.defaultOpenThreadId = defaultOpenThreadId
+    }
 
     enum CodingKeys: String, CodingKey {
         case channel
@@ -90,6 +143,8 @@ public struct GaryxConfiguredBot: Decodable, Identifiable, Equatable, Sendable {
         case agentIdCamel = "agentId"
         case workspaceDir = "workspace_dir"
         case workspaceDirCamel = "workspaceDir"
+        case workspaceMode = "workspace_mode"
+        case workspaceModeCamel = "workspaceMode"
         case rootBehavior = "root_behavior"
         case rootBehaviorCamel = "rootBehavior"
         case mainEndpointStatus = "main_endpoint_status"
@@ -108,6 +163,7 @@ public struct GaryxConfiguredBot: Decodable, Identifiable, Equatable, Sendable {
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
         agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
         workspaceDir = try container.garyxDecodeFirstString(.workspaceDir, .workspaceDirCamel)
+        workspaceMode = try container.garyxDecodeFirstString(.workspaceMode, .workspaceModeCamel)
         rootBehavior = try container.garyxDecodeFirstString(.rootBehavior, .rootBehaviorCamel) ?? "open_default"
         mainEndpointStatus = try container.garyxDecodeFirstString(.mainEndpointStatus, .mainEndpointStatusCamel) ?? "unresolved"
         mainThreadId = try container.garyxDecodeFirstString(.mainThreadId, .mainThreadIdCamel)
@@ -129,6 +185,24 @@ public struct GaryxBotConversationNode: Decodable, Identifiable, Equatable, Send
     public var badge: String?
     public var latestActivity: String?
     public var openable: Bool
+
+    public init(
+        id: String,
+        endpoint: GaryxChannelEndpoint,
+        kind: String,
+        title: String,
+        badge: String? = nil,
+        latestActivity: String? = nil,
+        openable: Bool = false
+    ) {
+        self.id = id
+        self.endpoint = endpoint
+        self.kind = kind
+        self.title = title
+        self.badge = badge
+        self.latestActivity = latestActivity
+        self.openable = openable
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -170,6 +244,40 @@ public struct GaryxBotConsoleSummary: Decodable, Identifiable, Equatable, Sendab
     public var mainThreadId: String?
     public var defaultOpenThreadId: String?
     public var conversationNodes: [GaryxBotConversationNode]
+
+    public init(
+        id: String,
+        channel: String,
+        accountId: String,
+        title: String,
+        subtitle: String = "",
+        agentId: String? = nil,
+        rootBehavior: String = "open_default",
+        status: String = "idle",
+        latestActivity: String? = nil,
+        endpointCount: Int = 0,
+        boundEndpointCount: Int = 0,
+        workspaceDir: String? = nil,
+        mainThreadId: String? = nil,
+        defaultOpenThreadId: String? = nil,
+        conversationNodes: [GaryxBotConversationNode] = []
+    ) {
+        self.id = id
+        self.channel = channel
+        self.accountId = accountId
+        self.title = title
+        self.subtitle = subtitle
+        self.agentId = agentId
+        self.rootBehavior = rootBehavior
+        self.status = status
+        self.latestActivity = latestActivity
+        self.endpointCount = endpointCount
+        self.boundEndpointCount = boundEndpointCount
+        self.workspaceDir = workspaceDir
+        self.mainThreadId = mainThreadId
+        self.defaultOpenThreadId = defaultOpenThreadId
+        self.conversationNodes = conversationNodes
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -238,6 +346,12 @@ public struct GaryxChannelPluginConfigMethod: Decodable, Equatable, Sendable {
     public var title: String?
     public var description: String?
 
+    public init(kind: String, title: String? = nil, description: String? = nil) {
+        self.kind = kind
+        self.title = title
+        self.description = description
+    }
+
     enum CodingKeys: String, CodingKey {
         case kind
         case title
@@ -253,6 +367,22 @@ public struct GaryxChannelPluginCatalogEntry: Decodable, Identifiable, Equatable
     public var iconDataUrl: String?
     public var schema: [String: GaryxJSONValue]
     public var configMethods: [GaryxChannelPluginConfigMethod]
+
+    public init(
+        id: String,
+        displayName: String,
+        description: String? = nil,
+        iconDataUrl: String? = nil,
+        schema: [String: GaryxJSONValue] = [:],
+        configMethods: [GaryxChannelPluginConfigMethod] = []
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.description = description
+        self.iconDataUrl = iconDataUrl
+        self.schema = schema
+        self.configMethods = configMethods
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
