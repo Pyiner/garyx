@@ -1,4 +1,5 @@
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
 import {
   appendFileSync,
   cpSync,
@@ -6,6 +7,7 @@ import {
   mkdirSync,
   renameSync,
 } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
 
 import {
   app,
@@ -47,6 +49,7 @@ import type {
   CreateAutomationInput,
   CreateThreadInput,
   DesktopDeepLinkEvent,
+  DesktopLocalDirectoryListing,
   DesktopApiProviderType,
   DeleteSkillEntryInput,
   DeleteSkillInput,
@@ -529,6 +532,38 @@ async function pickWorkspaceDirectory(
   return result.filePaths[0] || null;
 }
 
+async function resolveLocalDirectoryPath(path?: string | null): Promise<string> {
+  const requested = (path || "").trim();
+  const fallback = homedir();
+  const absolutePath = requested && isAbsolute(requested) ? resolve(requested) : fallback;
+  try {
+    const pathStat = await stat(absolutePath);
+    if (pathStat.isDirectory()) {
+      return absolutePath;
+    }
+    return dirname(absolutePath);
+  } catch {
+    return fallback;
+  }
+}
+
+async function listLocalDirectories(path?: string | null): Promise<DesktopLocalDirectoryListing> {
+  const directoryPath = await resolveLocalDirectoryPath(path);
+  const parentPath = dirname(directoryPath);
+  const entries = await readdir(directoryPath, { withFileTypes: true });
+  return {
+    path: directoryPath,
+    parentPath: parentPath === directoryPath ? null : parentPath,
+    entries: entries
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .map((entry) => ({
+        name: entry.name || basename(join(directoryPath, entry.name)),
+        path: join(directoryPath, entry.name),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+  };
+}
+
 function resolveWorkspaceFileDisplayPath(input: RevealWorkspaceFileInput): string {
   const workspaceRoot = resolve(input.workspacePath.trim());
   const filePath = input.filePath.trim();
@@ -672,6 +707,13 @@ function registerIpcHandlers(): void {
     "garyx:pick-directory",
     async (_event, input?: { defaultPath?: string | null }) => {
       return pickWorkspaceDirectory(input?.defaultPath ?? null);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:list-local-directories",
+    async (_event, input?: { path?: string | null }) => {
+      return listLocalDirectories(input?.path ?? null);
     },
   );
 

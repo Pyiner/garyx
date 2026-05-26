@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { ArrowLeft, Check, ChevronRight, Folder, FolderOpen } from 'lucide-react';
 
-import type { DesktopWorkspace } from '@shared/contracts';
+import type { DesktopLocalDirectoryEntry, DesktopWorkspace } from '@shared/contracts';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -333,6 +333,128 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
   );
 }
 
+type LocalDirectoryBrowserProps = {
+  selectedPath: string;
+  disabled?: boolean;
+  onSelect: (path: string) => void;
+};
+
+function LocalDirectoryBrowser({ selectedPath, disabled = false, onSelect }: LocalDirectoryBrowserProps) {
+  const { t } = useI18n();
+  const [currentPath, setCurrentPath] = useState(selectedPath);
+  const [parentPath, setParentPath] = useState<string | null>(null);
+  const [entries, setEntries] = useState<DesktopLocalDirectoryEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const normalizedSelected = normalizeWorkspacePath(selectedPath);
+  const normalizedCurrent = normalizeWorkspacePath(currentPath);
+  const isCurrentSelected = Boolean(normalizedCurrent && normalizedCurrent === normalizedSelected);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    window.garyxDesktop
+      .listLocalDirectories({ path: currentPath || null })
+      .then((listing) => {
+        if (cancelled) return;
+        setCurrentPath(listing.path);
+        setParentPath(listing.parentPath);
+        setEntries(listing.entries);
+      })
+      .catch((nextError) => {
+        if (cancelled) return;
+        setError(nextError instanceof Error ? nextError.message : t('Unable to load folders.'));
+        setEntries([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPath, t]);
+
+  return (
+    <div className="overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <Button
+          aria-label={t('Back')}
+          disabled={!parentPath || disabled || loading}
+          onClick={() => {
+            if (parentPath) setCurrentPath(parentPath);
+          }}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+        >
+          <ArrowLeft />
+        </Button>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">
+            {workspaceLeafName(currentPath) || currentPath || t('Folders')}
+          </div>
+          <div className="truncate text-xs text-muted-foreground">
+            {currentPath || t('Choose a folder')}
+          </div>
+        </div>
+        {currentPath ? (
+          <Button
+            disabled={disabled || loading || isCurrentSelected}
+            onClick={() => onSelect(currentPath)}
+            size="sm"
+            type="button"
+            variant={isCurrentSelected ? 'secondary' : 'outline'}
+          >
+            {isCurrentSelected ? <Check /> : <FolderOpen />}
+            {isCurrentSelected ? t('Selected') : t('Use this folder')}
+          </Button>
+        ) : null}
+      </div>
+      <Separator />
+      <div className="max-h-60 overflow-auto p-1">
+        {loading ? (
+          <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+            {t('Loading folders...')}
+          </div>
+        ) : error ? (
+          <div className="px-3 py-8 text-center text-sm text-destructive">
+            {error}
+          </div>
+        ) : entries.length ? (
+          <div className="space-y-0.5">
+            {entries.map((entry) => (
+              <button
+                className={cn(
+                  'flex min-h-11 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors',
+                  disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent hover:text-accent-foreground',
+                )}
+                disabled={disabled}
+                key={entry.path}
+                onClick={() => setCurrentPath(entry.path)}
+                type="button"
+              >
+                <Folder aria-hidden className="size-4 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{entry.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {workspaceCompactPath(entry.path)}
+                  </span>
+                </span>
+                <ChevronRight aria-hidden className="size-4 text-muted-foreground" />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+            {t('No folders here.')}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function WorkspacePathPicker({
   value,
   onChange,
@@ -355,15 +477,7 @@ export function WorkspacePathPicker({
     invalid ? errorId : null,
     !allowEmpty && !trimmed ? hintId : null,
   ].filter(Boolean).join(' ') || undefined;
-
-  async function handleBrowse() {
-    const picked = await window.garyxDesktop.pickDirectory({
-      defaultPath: trimmed || null,
-    });
-    if (picked) {
-      onChange(picked);
-    }
-  }
+  const [localBrowserVisible, setLocalBrowserVisible] = useState(false);
 
   return (
     <FieldGroup className="gap-3">
@@ -384,10 +498,10 @@ export function WorkspacePathPicker({
           <Button
             className="shrink-0"
             disabled={disabled}
-            onClick={handleBrowse}
+            onClick={() => setLocalBrowserVisible((visible) => !visible)}
             size="sm"
             type="button"
-            variant="outline"
+            variant={localBrowserVisible ? 'secondary' : 'outline'}
           >
             <Folder />
             {t('Browse...')}
@@ -400,6 +514,16 @@ export function WorkspacePathPicker({
           <FieldDescription id={hintId}>{t('Choose or enter an absolute path.')}</FieldDescription>
         ) : null}
       </Field>
+      {localBrowserVisible ? (
+        <Field className="gap-2">
+          <FieldDescription>{t('Browse local folders')}</FieldDescription>
+          <LocalDirectoryBrowser
+            disabled={disabled}
+            onSelect={onChange}
+            selectedPath={value}
+          />
+        </Field>
+      ) : null}
       {showKnownTree && tree.length ? (
         <Field className="gap-2">
           <div className="flex items-center justify-between gap-2">

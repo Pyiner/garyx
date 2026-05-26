@@ -43,6 +43,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:select-workspace", input),
   addWorkspace: () => ipcRenderer.invoke("garyx:add-workspace"),
   pickDirectory: (input) => ipcRenderer.invoke("garyx:pick-directory", input),
+  listLocalDirectories: (input) =>
+    ipcRenderer.invoke("garyx:list-local-directories", input),
   addWorkspaceByPath: (input) =>
     ipcRenderer.invoke("garyx:add-workspace-by-path", input),
   relinkWorkspace: (input) =>

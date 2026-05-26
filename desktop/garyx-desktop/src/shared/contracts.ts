@@ -83,6 +83,17 @@ export interface DesktopWorkspace {
   managed?: boolean;
 }
 
+export interface DesktopLocalDirectoryEntry {
+  name: string;
+  path: string;
+}
+
+export interface DesktopLocalDirectoryListing {
+  path: string;
+  parentPath: string | null;
+  entries: DesktopLocalDirectoryEntry[];
+}
+
 export interface DesktopChannelEndpoint {
   endpointKey: string;
   channel: string;
@@ -1597,6 +1608,9 @@ export interface GaryxDesktopApi {
   pickDirectory: (input?: {
     defaultPath?: string | null;
   }) => Promise<string | null>;
+  listLocalDirectories: (input?: {
+    path?: string | null;
+  }) => Promise<DesktopLocalDirectoryListing>;
   addWorkspaceByPath: (
     input: AddWorkspaceByPathInput,
   ) => Promise<WorkspaceMutationResult>;
