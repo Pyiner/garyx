@@ -1,8 +1,9 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
-import { Check, ChevronRight, Folder, FolderOpen } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Check, ChevronRight, Folder, FolderOpen } from 'lucide-react';
 
 import type { DesktopWorkspace } from '@shared/contracts';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -12,14 +13,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Field, FieldDescription, FieldGroup } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
 import { useI18n } from '@/i18n';
+import { cn } from '@/lib/utils';
 
-type WorkspaceTreeNode = {
+type WorkspaceDirectoryNode = {
   name: string;
   path: string;
   workspace: DesktopWorkspace | null;
-  children: WorkspaceTreeNode[];
+  children: WorkspaceDirectoryNode[];
 };
 
 export type WorkspacePathPickerProps = {
@@ -58,13 +62,6 @@ export function isAbsoluteWorkspacePath(path: string): boolean {
   return normalized.startsWith('//');
 }
 
-function displayWorkspaceName(workspace: DesktopWorkspace): string {
-  const name = workspace.name?.trim();
-  if (name) return name;
-  const path = normalizeWorkspacePath(workspace.path || '');
-  return path.split('/').filter(Boolean).pop() || path || 'Workspace';
-}
-
 function splitAbsolutePath(path: string): { root: string; parts: string[] } | null {
   const normalized = normalizeWorkspacePath(path);
   if (!isAbsoluteWorkspacePath(normalized)) return null;
@@ -89,8 +86,8 @@ function childPath(parent: string, segment: string): string {
   return `${parent}/${segment}`;
 }
 
-function buildWorkspaceTree(workspaces: DesktopWorkspace[] = []): WorkspaceTreeNode[] {
-  const roots = new Map<string, WorkspaceTreeNode>();
+function buildWorkspaceTree(workspaces: DesktopWorkspace[] = []): WorkspaceDirectoryNode[] {
+  const roots = new Map<string, WorkspaceDirectoryNode>();
 
   for (const workspace of workspaces) {
     const path = normalizeWorkspacePath(workspace.path || '');
@@ -98,7 +95,7 @@ function buildWorkspaceTree(workspaces: DesktopWorkspace[] = []): WorkspaceTreeN
     const split = splitAbsolutePath(path);
     if (!split) continue;
 
-    let current: WorkspaceTreeNode;
+    let current: WorkspaceDirectoryNode;
     const existingRoot = roots.get(split.root);
     if (existingRoot) {
       current = existingRoot;
@@ -115,7 +112,7 @@ function buildWorkspaceTree(workspaces: DesktopWorkspace[] = []): WorkspaceTreeN
     let currentPath = split.root;
     for (const part of split.parts) {
       currentPath = childPath(currentPath, part);
-      let child: WorkspaceTreeNode | undefined = current.children.find((item) => item.name === part);
+      let child: WorkspaceDirectoryNode | undefined = current.children.find((item) => item.name === part);
       if (!child) {
         child = {
           name: part,
@@ -130,7 +127,7 @@ function buildWorkspaceTree(workspaces: DesktopWorkspace[] = []): WorkspaceTreeN
     current.workspace = workspace;
   }
 
-  function sortNode(node: WorkspaceTreeNode): WorkspaceTreeNode {
+  function sortNode(node: WorkspaceDirectoryNode): WorkspaceDirectoryNode {
     return {
       ...node,
       children: node.children
@@ -144,121 +141,174 @@ function buildWorkspaceTree(workspaces: DesktopWorkspace[] = []): WorkspaceTreeN
     .map(sortNode);
 }
 
-function allExpandablePaths(nodes: WorkspaceTreeNode[]): string[] {
-  const out: string[] = [];
-  function visit(node: WorkspaceTreeNode) {
-    if (node.children.length) {
-      out.push(node.path);
-      node.children.forEach(visit);
-    }
+function findWorkspaceNode(nodes: WorkspaceDirectoryNode[], path: string): WorkspaceDirectoryNode | null {
+  const normalized = normalizeWorkspacePath(path);
+  for (const node of nodes) {
+    if (normalizeWorkspacePath(node.path) === normalized) return node;
+    const child = findWorkspaceNode(node.children, normalized);
+    if (child) return child;
   }
-  nodes.forEach(visit);
-  return out;
+  return null;
 }
 
-type WorkspacePathTreeProps = {
-  nodes: WorkspaceTreeNode[];
+function firstWorkspacePath(nodes: WorkspaceDirectoryNode[]): string {
+  for (const node of nodes) {
+    if (node.workspace?.path) return node.workspace.path;
+    const childPathValue = firstWorkspacePath(node.children);
+    if (childPathValue) return childPathValue;
+  }
+  return '';
+}
+
+function parentWorkspacePath(path: string): string {
+  const normalized = normalizeWorkspacePath(path);
+  const split = splitAbsolutePath(normalized);
+  if (!split || split.parts.length === 0) return '';
+  if (split.parts.length === 1) return split.root;
+  return split.parts.slice(0, -1).reduce((current, part) => childPath(current, part), split.root);
+}
+
+function workspaceLeafName(path: string): string {
+  const normalized = normalizeWorkspacePath(path);
+  if (!normalized) return '';
+  const split = splitAbsolutePath(normalized);
+  if (!split || split.parts.length === 0) return normalized;
+  return split.parts[split.parts.length - 1];
+}
+
+function workspaceCompactPath(path: string): string {
+  const normalized = normalizeWorkspacePath(path);
+  const split = splitAbsolutePath(normalized);
+  if (!split) return normalized;
+  if (split.parts.length <= 2) return normalized;
+  return `.../${split.parts.slice(-2).join('/')}`;
+}
+
+function initialBrowserPath(nodes: WorkspaceDirectoryNode[], selectedPath: string): string {
+  const normalizedSelected = normalizeWorkspacePath(selectedPath);
+  if (normalizedSelected && findWorkspaceNode(nodes, normalizedSelected)) {
+    return parentWorkspacePath(normalizedSelected);
+  }
+  const firstPath = firstWorkspacePath(nodes);
+  return firstPath ? parentWorkspacePath(firstPath) : '';
+}
+
+type WorkspacePathBrowserProps = {
+  nodes: WorkspaceDirectoryNode[];
   selectedPath: string;
+  disabled?: boolean;
   onSelect: (path: string) => void;
 };
 
-function WorkspacePathTree({ nodes, selectedPath, onSelect }: WorkspacePathTreeProps) {
+function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect }: WorkspacePathBrowserProps) {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(allExpandablePaths(nodes)));
+  const [currentPath, setCurrentPath] = useState(() => initialBrowserPath(nodes, selectedPath));
 
   useEffect(() => {
-    setExpanded(new Set(allExpandablePaths(nodes)));
-  }, [nodes]);
+    setCurrentPath((current) => {
+      if (!current || findWorkspaceNode(nodes, current)) return current;
+      return initialBrowserPath(nodes, selectedPath);
+    });
+  }, [nodes, selectedPath]);
 
-  function renderNode(node: WorkspaceTreeNode, depth: number): ReactNode {
-    const isExpanded = expanded.has(node.path);
-    const isSelectable = Boolean(node.workspace?.path);
-    const isSelected = normalizeWorkspacePath(selectedPath) === normalizeWorkspacePath(node.workspace?.path || '');
-    const hasChildren = node.children.length > 0;
+  const currentNode = currentPath ? findWorkspaceNode(nodes, currentPath) : null;
+  const rows = currentPath ? currentNode?.children ?? [] : nodes;
+  const normalizedSelected = normalizeWorkspacePath(selectedPath);
+  const normalizedCurrent = normalizeWorkspacePath(currentPath);
+  const canUseCurrent = Boolean(normalizedCurrent && isAbsoluteWorkspacePath(normalizedCurrent));
+  const isCurrentSelected = canUseCurrent && normalizedSelected === normalizedCurrent;
 
-    return (
-      <div key={node.path}>
-        <div
-          className={[
-            'flex min-h-8 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
-            isSelectable ? 'hover:bg-muted/70' : 'text-muted-foreground',
-            !isSelectable && !hasChildren ? 'cursor-default' : 'cursor-pointer',
-            isSelected ? 'bg-muted text-foreground' : '',
-          ].join(' ')}
-          onClick={() => {
-            if (isSelectable && node.workspace?.path) {
-              onSelect(node.workspace.path);
-              return;
-            }
-            if (hasChildren) {
-              setExpanded((current) => {
-                const next = new Set(current);
-                if (next.has(node.path)) next.delete(node.path);
-                else next.add(node.path);
-                return next;
-              });
-            }
-          }}
-          role={isSelectable || hasChildren ? 'button' : undefined}
-          tabIndex={isSelectable || hasChildren ? 0 : undefined}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') return;
-            event.preventDefault();
-            if (isSelectable && node.workspace?.path) {
-              onSelect(node.workspace.path);
-              return;
-            }
-            if (hasChildren) {
-              setExpanded((current) => {
-                const next = new Set(current);
-                if (next.has(node.path)) next.delete(node.path);
-                else next.add(node.path);
-                return next;
-              });
-            }
-          }}
-        >
-          <span style={{ width: depth * 14 }} aria-hidden />
-          {hasChildren ? (
-            <button
-              aria-label={isExpanded ? t('Collapse folder') : t('Expand folder')}
-              className="grid size-5 place-items-center rounded-sm text-muted-foreground hover:bg-muted"
-              onClick={(event) => {
-                event.stopPropagation();
-                setExpanded((current) => {
-                  const next = new Set(current);
-                  if (next.has(node.path)) next.delete(node.path);
-                  else next.add(node.path);
-                  return next;
-                });
-              }}
-              type="button"
-            >
-              <ChevronRight
-                aria-hidden
-                className={isExpanded ? 'rotate-90 transition-transform' : 'transition-transform'}
-                size={14}
-              />
-            </button>
-          ) : (
-            <span className="size-5" aria-hidden />
-          )}
-          {hasChildren && isExpanded ? (
-            <FolderOpen aria-hidden className="size-4 text-muted-foreground" />
-          ) : (
-            <Folder aria-hidden className="size-4 text-muted-foreground" />
-          )}
-          <span className="min-w-0 flex-1 truncate">
-            {node.workspace ? displayWorkspaceName(node.workspace) : node.name}
-          </span>
-          {isSelected ? <Check aria-hidden className="size-4 text-foreground" /> : null}
-        </div>
-        {hasChildren && isExpanded ? node.children.map((child) => renderNode(child, depth + 1)) : null}
-      </div>
-    );
+  function activateNode(node: WorkspaceDirectoryNode) {
+    if (disabled) return;
+    if (node.children.length > 0) {
+      setCurrentPath(node.path);
+      return;
+    }
+    onSelect(node.workspace?.path || node.path);
   }
 
-  return <div className="space-y-0.5">{nodes.map((node) => renderNode(node, 0))}</div>;
+  return (
+    <div className="overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <Button
+          aria-label={t('Back')}
+          disabled={!currentPath || disabled}
+          onClick={() => setCurrentPath(parentWorkspacePath(currentPath))}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+        >
+          <ArrowLeft />
+        </Button>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">
+            {currentPath ? workspaceLeafName(currentPath) || currentPath : t('Known folders')}
+          </div>
+          <div className="truncate text-xs text-muted-foreground">
+            {currentPath ? workspaceCompactPath(currentPath) : t('Saved workspace roots')}
+          </div>
+        </div>
+        {canUseCurrent ? (
+          <Button
+            disabled={disabled}
+            onClick={() => onSelect(currentPath)}
+            size="sm"
+            type="button"
+            variant={isCurrentSelected ? 'secondary' : 'outline'}
+          >
+            {isCurrentSelected ? <Check /> : <FolderOpen />}
+            {isCurrentSelected ? t('Selected') : t('Use folder')}
+          </Button>
+        ) : null}
+      </div>
+      <Separator />
+      <div className="max-h-60 overflow-auto p-1">
+        {rows.length ? (
+          <div className="space-y-0.5">
+            {rows.map((node) => {
+              const normalizedNodePath = normalizeWorkspacePath(node.workspace?.path || node.path);
+              const isSelected = normalizedSelected === normalizedNodePath;
+              const hasChildren = node.children.length > 0;
+              return (
+                <button
+                  className={cn(
+                    'flex min-h-11 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition-colors',
+                    disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-accent hover:text-accent-foreground',
+                    isSelected ? 'bg-accent text-accent-foreground' : '',
+                  )}
+                  disabled={disabled}
+                  key={node.path}
+                  onClick={() => activateNode(node)}
+                  type="button"
+                >
+                  {hasChildren ? (
+                    <FolderOpen aria-hidden className="size-4 text-muted-foreground" />
+                  ) : (
+                    <Folder aria-hidden className="size-4 text-muted-foreground" />
+                  )}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">{node.name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {workspaceCompactPath(node.path)}
+                    </span>
+                  </span>
+                  {isSelected ? (
+                    <Check aria-hidden className="size-4 text-foreground" />
+                  ) : hasChildren ? (
+                    <ChevronRight aria-hidden className="size-4 text-muted-foreground" />
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+            {t('No saved folders at this level.')}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function WorkspacePathPicker({
@@ -286,44 +336,54 @@ export function WorkspacePathPicker({
   }
 
   return (
-    <div className="grid gap-2">
-      <div className="flex items-center gap-2">
-        <Input
-          className="flex-1"
-          disabled={disabled}
-          id={id}
-          onChange={(event) => onChange(event.target.value)}
-          placeholder={placeholder || t('/path/to/project')}
-          type="text"
-          value={value}
-        />
-        <Button
-          className="shrink-0"
-          disabled={disabled}
-          onClick={handleBrowse}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          {t('Browse...')}
-        </Button>
-      </div>
-      {invalid ? (
-        <div className="text-xs text-destructive">
-          {t('Workspace paths must be absolute directories.')}
+    <FieldGroup className="gap-3">
+      <Field className="gap-2" data-invalid={invalid || undefined}>
+        <div className="flex items-center gap-2">
+          <Input
+            className="flex-1"
+            disabled={disabled}
+            id={id}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={placeholder || t('/path/to/project')}
+            type="text"
+            value={value}
+          />
+          <Button
+            className="shrink-0"
+            disabled={disabled}
+            onClick={handleBrowse}
+            size="sm"
+            type="button"
+            variant="outline"
+          >
+            <Folder />
+            {t('Browse...')}
+          </Button>
         </div>
-      ) : null}
-      {!allowEmpty && !trimmed ? (
-        <div className="text-xs text-muted-foreground">
-          {t('Choose or enter an absolute directory path.')}
-        </div>
-      ) : null}
+        {invalid ? (
+          <FieldDescription className="text-destructive">
+            {t('Workspace paths must be absolute directories.')}
+          </FieldDescription>
+        ) : null}
+        {!allowEmpty && !trimmed ? (
+          <FieldDescription>{t('Choose or enter an absolute directory path.')}</FieldDescription>
+        ) : null}
+      </Field>
       {showKnownTree && tree.length ? (
-        <div className="max-h-56 overflow-auto rounded-md border bg-background/80 p-1">
-          <WorkspacePathTree nodes={tree} selectedPath={value} onSelect={onChange} />
-        </div>
+        <Field className="gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <FieldDescription>{t('Saved folders')}</FieldDescription>
+            <Badge variant="outline">{workspaces.length}</Badge>
+          </div>
+          <WorkspacePathBrowser
+            disabled={disabled}
+            nodes={tree}
+            onSelect={onChange}
+            selectedPath={value}
+          />
+        </Field>
       ) : null}
-    </div>
+    </FieldGroup>
   );
 }
 
