@@ -484,7 +484,9 @@ function normalizeState(value?: Partial<DesktopState>): DesktopState {
     value && typeof value === 'object' && 'botBindings' in value
       ? (value as Partial<DesktopState> & { botBindings?: Record<string, string> }).botBindings
       : undefined;
-  const rawWorkspaces: Partial<DesktopWorkspace>[] = [];
+  const rawWorkspaces: Partial<DesktopWorkspace>[] = Array.isArray(value?.workspaces)
+    ? value.workspaces
+    : [];
   const threads: DesktopThreadSummary[] = Array.isArray(value?.threads)
     ? value.threads
     : Array.isArray(value?.sessions)
@@ -685,6 +687,13 @@ async function remoteWorkspacesWithAvailability(
   return Promise.all(workspaces.map((workspace) => resolveWorkspaceAvailability(workspace)));
 }
 
+function workspaceRootFallback(
+  remoteWorkspaces: DesktopWorkspace[],
+  localWorkspaces: DesktopWorkspace[],
+): DesktopWorkspace[] {
+  return remoteWorkspaces.length > 0 ? remoteWorkspaces : localWorkspaces;
+}
+
 async function mergeRemoteDesktopState(localState: DesktopState): Promise<DesktopState> {
   const [threadsResult, pinsResult, endpointsResult, workspacesResult, configuredBotsResult, botConsolesResult, automationsResult] =
     await Promise.all([
@@ -713,7 +722,7 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
   const remoteThreads = threadsResult.value;
   const remotePinnedThreadIds = pinsResult.value;
   const remoteEndpoints = endpointsResult.value;
-  const remoteWorkspaces = workspacesResult.value;
+  const remoteWorkspaces = workspaceRootFallback(workspacesResult.value, localState.workspaces);
   const remoteConfiguredBots = configuredBotsResult.value;
   const remoteBotConsoles = botConsolesResult.value;
   const remoteAutomations = automationsResult.value;
@@ -979,7 +988,7 @@ export async function addDesktopWorkspace(path: string): Promise<{
   const local = await getLocalDesktopState();
   await writeState(withSortedEntities({
     ...local,
-    workspaces: [],
+    workspaces,
     selectedWorkspacePath: workspace.path,
   }, { preserveMissingSelectedWorkspace: true }));
   const next = withSortedEntities({
@@ -1019,7 +1028,7 @@ export async function removeDesktopWorkspace(workspacePath: string): Promise<Des
   const local = await getLocalDesktopState();
   await writeState(withSortedEntities({
     ...local,
-    workspaces: [],
+    workspaces,
     selectedWorkspacePath:
       normalizeWorkspacePathKey(local.selectedWorkspacePath || '') === workspaceKey
         ? null

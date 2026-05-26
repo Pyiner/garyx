@@ -303,10 +303,11 @@ needs installed-app validation.
   especially on macOS where probing protected folders can trigger privacy
   prompts.
 - Desktop workspace lists must contain only user-added workspaces persisted by
-  the gateway `/api/workspaces` state. Remote thread `workspacePath` values are
-  metadata for those threads and may influence sorting or file-link resolution,
-  but must not create inferred workspace rows or hidden-workspace suppression
-  state.
+  the gateway `/api/workspaces` state. If that gateway state is empty, the Mac
+  app may display previously cached user-added local workspaces as a compatibility
+  fallback, but remote thread `workspacePath` values remain metadata for those
+  threads and may influence sorting or file-link resolution only. They must not
+  create inferred workspace rows or hidden-workspace suppression state.
 - Agent selectors should show only the agent or team identity. Do not append
   provider names such as Claude, Codex, or Gemini to selector labels or details;
   provider metadata belongs in dedicated settings/details surfaces outside
