@@ -217,6 +217,7 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
   const normalizedCurrent = normalizeWorkspacePath(currentPath);
   const canUseCurrent = Boolean(normalizedCurrent && isAbsoluteWorkspacePath(normalizedCurrent));
   const isCurrentSelected = canUseCurrent && normalizedSelected === normalizedCurrent;
+  const isCurrentSaved = Boolean(currentNode?.workspace);
 
   function activateNode(node: WorkspaceDirectoryNode) {
     if (disabled) return;
@@ -245,7 +246,9 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
             {currentPath ? workspaceLeafName(currentPath) || currentPath : t('Saved paths')}
           </div>
           <div className="truncate text-xs text-muted-foreground">
-            {currentPath ? workspaceCompactPath(currentPath) : t('Saved workspace paths')}
+            {currentPath
+              ? `${workspaceCompactPath(currentPath)} · ${isCurrentSaved ? t('Saved') : t('Suggested')}`
+              : t('Saved workspace paths')}
           </div>
         </div>
         {canUseCurrent ? (
@@ -253,7 +256,7 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
             aria-label={
               isCurrentSelected
                 ? t('Current path selected')
-                : `${t('Use path')} ${workspaceCompactPath(currentPath)}`
+                : `${isCurrentSaved ? t('Use saved path') : t('Use suggested path')} ${workspaceCompactPath(currentPath)}`
             }
             disabled={disabled}
             onClick={() => onSelect(currentPath)}
@@ -262,7 +265,7 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
             variant={isCurrentSelected ? 'secondary' : 'outline'}
           >
             {isCurrentSelected ? <Check /> : <FolderOpen />}
-            {isCurrentSelected ? t('Selected') : t('Use path')}
+            {isCurrentSelected ? t('Selected') : isCurrentSaved ? t('Use saved') : t('Use suggested')}
           </Button>
         ) : null}
       </div>
@@ -274,10 +277,12 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
               const normalizedNodePath = normalizeWorkspacePath(node.workspace?.path || node.path);
               const isSelected = normalizedSelected === normalizedNodePath;
               const hasChildren = node.children.length > 0;
-              const rowActionLabel = hasChildren ? t('Open folder') : t('Select folder');
+              const rowActionLabel = hasChildren ? t('Open path') : t('Select path');
+              const pathKindLabel = node.workspace ? t('saved workspace path') : t('suggested path');
               const rowLabel = [
                 node.name,
                 workspaceCompactPath(node.path),
+                pathKindLabel,
                 isSelected ? t('selected') : '',
                 rowActionLabel,
               ]
@@ -305,7 +310,7 @@ function WorkspacePathBrowser({ nodes, selectedPath, disabled = false, onSelect 
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{node.name}</span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {workspaceCompactPath(node.path)}
+                      {workspaceCompactPath(node.path)} · {node.workspace ? t('Saved') : t('Suggested')}
                     </span>
                   </span>
                   {isSelected || hasChildren ? (
@@ -366,6 +371,7 @@ export function WorkspacePathPicker({
         <div className="flex items-center gap-2">
           <Input
             aria-describedby={describedBy}
+            aria-label={t('Workspace path')}
             aria-invalid={invalid || undefined}
             className="flex-1"
             disabled={disabled}
