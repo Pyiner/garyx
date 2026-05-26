@@ -214,7 +214,7 @@ struct GaryxSettingsPanelLinkRow: View {
     private var subtitle: String {
         switch panel {
         case .workspaces:
-            "\(model.knownWorkspacePaths.count) workspaces"
+            "\(model.userWorkspacePaths.count) workspaces"
         case .dreams:
             "\(model.dreams.count) topics"
         case .tasks:
@@ -233,9 +233,7 @@ struct GaryxSettingsPanelLinkRow: View {
     }
 
     private var visibleWorkspaceCount: Int {
-        model.knownWorkspacePaths
-            .filter(GaryxMobileModel.isVisibleMobileWorkspacePath)
-            .count
+        model.userWorkspacePaths.count
     }
 }
 

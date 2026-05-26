@@ -205,6 +205,14 @@ needs installed-app validation.
 - Mobile workspace and bot browsing belongs visually under Automation as the
   `Workspace & Bots` sibling row in the sidebar, not inside the Automation page.
   Do not put workspace or bot drilldowns back into the root thread list.
+- Mobile `Workspace & Bots` root lists must be source-of-truth lists, not
+  inferred aggregates. The Bots root list must strictly match configured bot
+  accounts from `/api/configured-bots`; endpoint-only/channel conversation data
+  may populate child drilldowns for those configured bots but must never create
+  root bot rows. The Workspace root list must show only user-saved workspaces;
+  paths inferred from recent threads, automations, auto-research runs, endpoints,
+  or temporary workspaces may be form suggestions or file-link resolution hints
+  only, not root navigation entries.
 - Mobile bot rows that have multiple bound/openable conversations should expose
   a drilldown list like workspace rows. Keep the primary bot tap opening the
   root/default thread when one exists, but do not hide child conversations just

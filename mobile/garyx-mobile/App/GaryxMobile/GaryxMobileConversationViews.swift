@@ -587,7 +587,7 @@ struct GaryxEmptyConversationView: View {
     }
 
     private var workspacePicker: some View {
-        let workspaces = model.knownWorkspacePaths.filter(GaryxMobileModel.isVisibleMobileWorkspacePath)
+        let workspaces = model.userWorkspacePaths
         return Menu {
             Button {
                 model.setNewThreadWorkspace("")

@@ -30,29 +30,8 @@ internal enum GaryxMobileBotGroupBuilder {
         let endpointsByGroup = Dictionary(grouping: channelEndpoints) { endpoint in
             botGroupKey(channel: endpoint.channel, accountId: endpoint.accountId)
         }
-        var configuredByGroup: [String: GaryxConfiguredBot] = [:]
-        var groups: [String: GaryxMobileBotGroup] = [:]
-        var order: [String] = []
-        var orderedKeys = Set<String>()
-
-        func rememberOrder(_ key: String) {
-            if orderedKeys.insert(key).inserted {
-                order.append(key)
-            }
-        }
-
-        for bot in configuredBots {
-            let key = botGroupKey(channel: bot.channel, accountId: bot.accountId)
-            if configuredByGroup[key] == nil {
-                configuredByGroup[key] = bot
-            }
-            rememberOrder(key)
-        }
-
-        func remember(_ group: GaryxMobileBotGroup) {
-            let key = botGroupKey(channel: group.channel, accountId: group.accountId)
-            rememberOrder(key)
-            groups[key] = group
+        let consolesByGroup = Dictionary(grouping: botConsoles) { console in
+            botGroupKey(channel: console.channel, accountId: console.accountId)
         }
 
         func iconDataUrl(for channel: String) -> String? {
@@ -66,92 +45,35 @@ internal enum GaryxMobileBotGroupBuilder {
             )
         }
 
-        for console in botConsoles {
-            let key = botGroupKey(channel: console.channel, accountId: console.accountId)
+        return configuredBots.map { bot in
+            let key = botGroupKey(channel: bot.channel, accountId: bot.accountId)
+            let console = consolesByGroup[key]?.first
             let endpoints = endpointsByGroup[key] ?? []
             let decodedEndpointCount = endpoints.count
             let decodedBoundCount = endpoints.filter { $0.threadId?.isEmpty == false }.count
-            let configured = configuredByGroup[key]
-            remember(
-                GaryxMobileBotGroup(
-                    id: console.id.isEmpty ? "\(console.channel)::\(console.accountId)" : console.id,
-                    channel: console.channel,
-                    channelDisplayName: displayName(for: console.channel),
-                    accountId: console.accountId,
-                    title: console.title,
-                    subtitle: console.subtitle,
-                    agentId: nonEmpty(console.agentId) ?? nonEmpty(configured?.agentId),
-                    rootBehavior: console.rootBehavior,
-                    status: console.status,
-                    endpointCount: max(console.endpointCount, decodedEndpointCount),
-                    boundEndpointCount: max(console.boundEndpointCount, decodedBoundCount),
-                    workspaceDir: nonEmpty(console.workspaceDir) ?? nonEmpty(configured?.workspaceDir),
-                    mainThreadId: nonEmpty(console.mainThreadId) ?? nonEmpty(configured?.mainThreadId),
-                    defaultOpenThreadId: nonEmpty(console.defaultOpenThreadId)
-                        ?? nonEmpty(configured?.defaultOpenThreadId)
-                        ?? nonEmpty(configured?.mainThreadId),
-                    endpoints: endpoints,
-                    conversationNodes: console.conversationNodes,
-                    iconDataUrl: iconDataUrl(for: console.channel)
-                )
+            return GaryxMobileBotGroup(
+                id: "\(bot.channel)::\(bot.accountId)",
+                channel: bot.channel,
+                channelDisplayName: displayName(for: bot.channel),
+                accountId: bot.accountId,
+                title: bot.displayName,
+                subtitle: "\(displayName(for: bot.channel)) Bot · \(bot.accountId)",
+                agentId: nonEmpty(bot.agentId) ?? nonEmpty(console?.agentId),
+                rootBehavior: bot.rootBehavior,
+                status: bot.enabled ? (console?.status ?? "idle") : "disabled",
+                endpointCount: max(console?.endpointCount ?? 0, decodedEndpointCount),
+                boundEndpointCount: max(console?.boundEndpointCount ?? 0, decodedBoundCount),
+                workspaceDir: nonEmpty(bot.workspaceDir) ?? nonEmpty(console?.workspaceDir),
+                mainThreadId: nonEmpty(bot.mainThreadId) ?? nonEmpty(console?.mainThreadId),
+                defaultOpenThreadId: nonEmpty(bot.defaultOpenThreadId)
+                    ?? nonEmpty(bot.mainThreadId)
+                    ?? nonEmpty(console?.defaultOpenThreadId)
+                    ?? nonEmpty(console?.mainThreadId),
+                endpoints: endpoints,
+                conversationNodes: console?.conversationNodes ?? [],
+                iconDataUrl: iconDataUrl(for: bot.channel)
             )
         }
-
-        for bot in configuredBots {
-            let key = botGroupKey(channel: bot.channel, accountId: bot.accountId)
-            if groups[key] != nil {
-                continue
-            }
-            let endpoints = endpointsByGroup[key] ?? []
-            remember(
-                GaryxMobileBotGroup(
-                    id: "\(bot.channel)::\(bot.accountId)",
-                    channel: bot.channel,
-                    channelDisplayName: displayName(for: bot.channel),
-                    accountId: bot.accountId,
-                    title: bot.displayName,
-                    subtitle: "\(displayName(for: bot.channel)) Bot · \(bot.accountId)",
-                    agentId: nonEmpty(bot.agentId),
-                    rootBehavior: bot.rootBehavior,
-                    status: bot.enabled ? "idle" : "disabled",
-                    endpointCount: endpoints.count,
-                    boundEndpointCount: endpoints.filter { $0.threadId?.isEmpty == false }.count,
-                    workspaceDir: nonEmpty(bot.workspaceDir),
-                    mainThreadId: nonEmpty(bot.mainThreadId),
-                    defaultOpenThreadId: nonEmpty(bot.defaultOpenThreadId) ?? nonEmpty(bot.mainThreadId),
-                    endpoints: endpoints,
-                    conversationNodes: [],
-                    iconDataUrl: iconDataUrl(for: bot.channel)
-                )
-            )
-        }
-
-        for (key, endpoints) in endpointsByGroup.sorted(by: { $0.key < $1.key }) where groups[key] == nil {
-            guard let first = endpoints.first else { continue }
-            remember(
-                GaryxMobileBotGroup(
-                    id: key,
-                    channel: first.channel,
-                    channelDisplayName: displayName(for: first.channel),
-                    accountId: first.accountId,
-                    title: "\(displayName(for: first.channel)) / \(first.accountId)",
-                    subtitle: "\(displayName(for: first.channel)) Bot · \(first.accountId)",
-                    agentId: nil,
-                    rootBehavior: "open_default",
-                    status: "idle",
-                    endpointCount: endpoints.count,
-                    boundEndpointCount: endpoints.filter { $0.threadId?.isEmpty == false }.count,
-                    workspaceDir: nil,
-                    mainThreadId: nil,
-                    defaultOpenThreadId: endpoints.first(where: { $0.threadId?.isEmpty == false })?.threadId,
-                    endpoints: endpoints,
-                    conversationNodes: [],
-                    iconDataUrl: iconDataUrl(for: first.channel)
-                )
-            )
-        }
-
-        return order.compactMap { groups[$0] }
     }
 
     internal static func selectedGroup(threadId: String?, groups: [GaryxMobileBotGroup]) -> GaryxMobileBotGroup? {

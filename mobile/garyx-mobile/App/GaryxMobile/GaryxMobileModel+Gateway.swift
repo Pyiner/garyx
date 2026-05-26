@@ -35,6 +35,7 @@ extension GaryxMobileModel {
         let agentKey = scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId)
         let workspaceKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspace)
         let workspaceModeKey = scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
+        let userWorkspacesKey = scopedSettingsKey(GaryxMobileSettingsKeys.userWorkspacePaths)
         selectedAgentTargetId = defaults.string(forKey: agentKey)
             ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.selectedAgentTargetId) : nil)
             ?? "claude"
@@ -44,6 +45,12 @@ extension GaryxMobileModel {
         newThreadWorkspaceMode = Self.normalizedWorkspaceMode(
             defaults.string(forKey: workspaceModeKey)
                 ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceMode) : nil)
+        )
+        userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
+            savedWorkspacePaths: defaults.stringArray(forKey: userWorkspacesKey)
+                ?? (fallbackToLegacy ? defaults.stringArray(forKey: GaryxMobileSettingsKeys.userWorkspacePaths) : nil)
+                ?? [],
+            additionalPaths: [newThreadWorkspace]
         )
     }
 
@@ -56,6 +63,10 @@ extension GaryxMobileModel {
         defaults.set(
             Self.normalizedWorkspaceMode(newThreadWorkspaceMode),
             forKey: scopedSettingsKey(GaryxMobileSettingsKeys.newThreadWorkspaceMode)
+        )
+        defaults.set(
+            userWorkspacePaths,
+            forKey: scopedSettingsKey(GaryxMobileSettingsKeys.userWorkspacePaths)
         )
     }
 

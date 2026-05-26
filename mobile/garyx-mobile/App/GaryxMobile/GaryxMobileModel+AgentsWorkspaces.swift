@@ -89,10 +89,32 @@ extension GaryxMobileModel {
         newThreadWorkspace = trimmed
         if trimmed.isEmpty {
             newThreadWorkspaceMode = "local"
+        } else {
+            rememberUserWorkspacePath(trimmed, persists: false)
         }
         saveGatewayScopedUserState()
         if !trimmed.isEmpty, workspaceGitStatuses[trimmed] == nil {
             Task { await refreshWorkspaceGitStatus(for: trimmed) }
+        }
+    }
+
+    func addUserWorkspacePath(_ path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        rememberUserWorkspacePath(trimmed, persists: true)
+        if workspaceGitStatuses[trimmed] == nil {
+            Task { await refreshWorkspaceGitStatus(for: trimmed) }
+        }
+    }
+
+    private func rememberUserWorkspacePath(_ path: String, persists: Bool) {
+        let next = GaryxMobileWorkspacePresentation.userWorkspacePaths(
+            savedWorkspacePaths: userWorkspacePaths + [path]
+        )
+        guard next != userWorkspacePaths else { return }
+        userWorkspacePaths = next
+        if persists {
+            saveGatewayScopedUserState()
         }
     }
 
@@ -415,7 +437,7 @@ extension GaryxMobileModel {
     func openLocalFilePreview(_ target: String) async {
         guard let resolved = GaryxMobileFileLink.previewTarget(
             fromLink: target,
-            workspacePaths: knownWorkspacePaths
+            workspacePaths: workspacePathSuggestions
         ) else {
             lastError = "Garyx could not resolve this local file for preview."
             return
@@ -426,7 +448,7 @@ extension GaryxMobileModel {
     func localFilePreview(_ target: String) async -> GaryxWorkspaceFilePreview? {
         guard let resolved = GaryxMobileFileLink.previewTarget(
             fromLink: target,
-            workspacePaths: knownWorkspacePaths
+            workspacePaths: workspacePathSuggestions
         ) else {
             lastError = "Garyx could not resolve this local file for preview."
             return nil
@@ -438,7 +460,7 @@ extension GaryxMobileModel {
         _ target: String,
         from preview: GaryxWorkspaceFilePreview
     ) async {
-        let workspacePaths = knownWorkspacePaths + [preview.workspaceDir]
+        let workspacePaths = workspacePathSuggestions + [preview.workspaceDir]
         guard let resolved = GaryxMobileFileLink.previewTarget(
             fromLink: target,
             workspacePaths: workspacePaths,
@@ -455,7 +477,7 @@ extension GaryxMobileModel {
         _ target: String,
         from preview: GaryxWorkspaceFilePreview
     ) async -> GaryxWorkspaceFilePreview? {
-        let workspacePaths = knownWorkspacePaths + [preview.workspaceDir]
+        let workspacePaths = workspacePathSuggestions + [preview.workspaceDir]
         guard let resolved = GaryxMobileFileLink.previewTarget(
             fromLink: target,
             workspacePaths: workspacePaths,

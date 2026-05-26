@@ -291,8 +291,7 @@ private extension GaryxMobileModel {
         let grouped = Dictionary(grouping: threads) { thread in
             thread.workspacePath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
-        let paths = knownWorkspacePaths
-            .filter(GaryxMobileModel.isVisibleMobileWorkspacePath)
+        let paths = userWorkspacePaths
         let duplicateNames = Dictionary(grouping: paths, by: { $0.garyxLastPathComponent })
             .filter { !$0.key.isEmpty && $0.value.count > 1 }
         return paths
@@ -510,10 +509,19 @@ private struct GaryxSidebarBotRow: View {
                         diameter: 22
                     )
 
-                    Text(group.title)
-                        .font(GaryxFont.subheadline(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(group.title)
+                            .font(GaryxFont.subheadline(weight: .medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        if !group.compactDetailLine.isEmpty {
+                            Text(group.compactDetailLine)
+                                .font(GaryxFont.caption())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
 
                     Spacer(minLength: 0)
                 }

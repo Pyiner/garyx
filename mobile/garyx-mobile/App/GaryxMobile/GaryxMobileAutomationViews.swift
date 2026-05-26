@@ -343,7 +343,7 @@ struct GaryxCreateAutomationSheet: View {
     }
 
     private var workspacePaths: [String] {
-        model.knownWorkspacePaths
+        model.userWorkspacePaths
     }
 
     private var threadOptions: [GaryxThreadSummary] {
@@ -468,7 +468,7 @@ struct GaryxEditAutomationSheet: View {
 
     private var editWorkspaceOptions: [String] {
         var seen = Set<String>()
-        return ([draft.workspacePath] + model.knownWorkspacePaths)
+        return ([draft.workspacePath] + model.userWorkspacePaths)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .filter { seen.insert($0).inserted }

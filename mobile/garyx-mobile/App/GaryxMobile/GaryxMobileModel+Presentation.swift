@@ -232,12 +232,13 @@ extension GaryxMobileModel {
         automations.filter(\.enabled).count
     }
 
-    var knownWorkspacePaths: [String] {
-        GaryxMobileWorkspacePresentation.knownWorkspacePaths(
+    var workspacePathSuggestions: [String] {
+        GaryxMobileWorkspacePresentation.workspacePathSuggestions(
             threadWorkspacePaths: threads.map(\.workspacePath),
             threadWorktreePaths: threads.map(\.worktreePath),
             automationWorkspacePaths: automations.map(\.workspacePath),
             autoResearchWorkspaceDirs: autoResearchRuns.map(\.workspaceDir),
+            savedWorkspacePaths: userWorkspacePaths,
             additionalPaths: [newThreadWorkspace, selectedWorkspacePath]
         )
     }

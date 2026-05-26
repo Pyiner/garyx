@@ -2,13 +2,15 @@ import XCTest
 @testable import GaryxMobileCore
 
 final class GaryxMobileWorkspacePresentationTests: XCTestCase {
-    func testKnownWorkspacePathsDedupeSortAndHideWorktrees() {
-        let paths = GaryxMobileWorkspacePresentation.knownWorkspacePaths(
+    func testWorkspacePathSuggestionsDedupeSortAndHideDynamicPaths() {
+        let paths = GaryxMobileWorkspacePresentation.workspacePathSuggestions(
             threadWorkspacePaths: [
                 " /workspace/project-beta ",
                 "/workspace/project-alpha",
                 "/workspace/.garyx/worktrees/hidden",
                 "/workspace/shared-worktree",
+                "/tmp",
+                "/tmp/garyx-agent-loop-smoke.4TKK7O",
             ],
             threadWorktreePaths: [
                 "/workspace/shared-worktree",
@@ -22,9 +24,14 @@ final class GaryxMobileWorkspacePresentationTests: XCTestCase {
                 "/workspace/.codex/worktrees/hidden",
                 "C:/workspace/generated-worktree",
             ],
+            savedWorkspacePaths: [
+                "/workspace/project-saved",
+            ],
             additionalPaths: [
                 "",
                 " /workspace/project-delta ",
+                "/private/tmp",
+                "/workspace/garyx-agent-loop-smoke.qZWS5r",
             ]
         )
 
@@ -35,6 +42,25 @@ final class GaryxMobileWorkspacePresentationTests: XCTestCase {
                 "/workspace/project-beta",
                 "/workspace/project-delta",
                 "/workspace/project-gamma",
+                "/workspace/project-saved",
+            ]
+        )
+    }
+
+    func testUserWorkspacePathsOnlyUseExplicitSavedValues() {
+        let paths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
+            savedWorkspacePaths: [
+                " /workspace/project-beta ",
+                "/workspace/project-alpha",
+                "/workspace/project-beta",
+            ]
+        )
+
+        XCTAssertEqual(
+            paths,
+            [
+                "/workspace/project-alpha",
+                "/workspace/project-beta",
             ]
         )
     }
@@ -44,5 +70,9 @@ final class GaryxMobileWorkspacePresentationTests: XCTestCase {
         XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath(" "))
         XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/workspace/.garyx/worktrees/session"))
         XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/workspace/.codex/worktrees/session"))
+        XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/tmp"))
+        XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/private/tmp"))
+        XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/tmp/garyx-agent-loop-smoke.4TKK7O"))
+        XCTAssertFalse(GaryxMobileWorkspacePresentation.isVisibleWorkspacePath("/workspace/garyx-agent-loop-smoke.qZWS5r"))
     }
 }

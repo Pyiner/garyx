@@ -113,6 +113,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var selectedAgentTargetId: String
     @Published var newThreadWorkspace: String
     @Published var newThreadWorkspaceMode: String
+    @Published var userWorkspacePaths: [String] = []
     @Published var draftTaskTitle = ""
     @Published var draftTaskBody = ""
     @Published var lastAutomationRun: GaryxAutomationActivityEntry?

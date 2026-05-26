@@ -6,6 +6,8 @@ import UniformTypeIdentifiers
 struct GaryxWorkspacesView: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var isPickingFiles = false
+    @State private var showsAddWorkspace = false
+    @State private var workspacePathDraft = ""
 
     var body: some View {
         GaryxPanelScaffold(
@@ -15,20 +17,45 @@ struct GaryxWorkspacesView: View {
         ) {
             GaryxWorkspacesContent()
         } actions: {
-            Button {
-                isPickingFiles = true
-            } label: {
-                GaryxToolbarIcon(systemName: model.isUploadingWorkspaceFiles ? "hourglass" : "square.and.arrow.up")
+            HStack(spacing: 8) {
+                Button {
+                    workspacePathDraft = ""
+                    showsAddWorkspace = true
+                } label: {
+                    GaryxToolbarIcon(systemName: "plus")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add Workspace")
+
+                Button {
+                    isPickingFiles = true
+                } label: {
+                    GaryxToolbarIcon(systemName: model.isUploadingWorkspaceFiles ? "hourglass" : "square.and.arrow.up")
+                }
+                .buttonStyle(.plain)
+                .disabled(model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isUploadingWorkspaceFiles)
+                .accessibilityLabel("Upload Files")
             }
-            .buttonStyle(.plain)
-            .disabled(model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.isUploadingWorkspaceFiles)
-            .accessibilityLabel("Upload Files")
         }
         .task {
             await model.prepareWorkspaceBrowser()
         }
-        .onChange(of: model.knownWorkspacePaths) { _, _ in
+        .onChange(of: model.userWorkspacePaths) { _, _ in
             Task { await model.prepareWorkspaceBrowser() }
+        }
+        .fullScreenCover(isPresented: $showsAddWorkspace) {
+            GaryxFormSheet(
+                title: "Add Workspace",
+                canSave: !workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                onSave: addWorkspace
+            ) {
+                GaryxFormGroupedSection(title: "Directory") {
+                    TextField("Workspace path", text: $workspacePathDraft)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .garyxFormTextField()
+                }
+            }
         }
         .fileImporter(
             isPresented: $isPickingFiles,
@@ -46,10 +73,18 @@ struct GaryxWorkspacesView: View {
 
     private var subtitle: String {
         let workspace = model.selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !workspace.isEmpty else { return "\(model.knownWorkspacePaths.count) workspaces" }
+        guard !workspace.isEmpty else { return "\(model.userWorkspacePaths.count) workspaces" }
         let name = workspace.garyxLastPathComponent.isEmpty ? workspace : workspace.garyxLastPathComponent
         let directory = model.selectedWorkspaceDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         return directory.isEmpty ? name : "\(name) / \(directory)"
+    }
+
+    private func addWorkspace() {
+        let path = workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return }
+        model.addUserWorkspacePath(path)
+        showsAddWorkspace = false
+        Task { await model.selectWorkspace(path) }
     }
 }
 
@@ -57,7 +92,7 @@ struct GaryxWorkspacesContent: View {
     @EnvironmentObject private var model: GaryxMobileModel
 
     var body: some View {
-        let paths = model.knownWorkspacePaths
+        let paths = model.userWorkspacePaths
         VStack(alignment: .leading, spacing: 12) {
             if paths.isEmpty {
                 GaryxEmptyPanelView(

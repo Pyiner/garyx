@@ -105,7 +105,7 @@ struct GaryxCreateAutoResearchCard: View {
     }
 
     private var workspacePaths: [String] {
-        model.knownWorkspacePaths
+        model.userWorkspacePaths
     }
 
     private var workspaceSelection: Binding<String> {
