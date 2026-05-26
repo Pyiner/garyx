@@ -212,13 +212,50 @@ struct GaryxEmptyPanelView: View {
     let text: String
 
     var body: some View {
+        GaryxStateView(
+            style: .panel,
+            state: .empty(icon: icon),
+            title: title,
+            text: text
+        )
+    }
+}
+
+struct GaryxLoadingPanelView: View {
+    let title: String
+
+    var body: some View {
+        GaryxStateView(
+            style: .panel,
+            state: .loading,
+            title: title
+        )
+    }
+}
+
+struct GaryxStateView: View {
+    enum Style {
+        case panel
+        case inline
+    }
+
+    enum State {
+        case loading
+        case empty(icon: String)
+    }
+
+    let style: Style
+    let state: State
+    let title: String
+    var text = ""
+
+    var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(GaryxFont.title2(weight: .medium))
-                .foregroundStyle(.secondary)
+            indicator
             Text(title)
-                .font(GaryxFont.body(weight: .semibold))
-                .foregroundStyle(.primary)
+                .font(titleFont)
+                .foregroundStyle(titleColor)
+                .multilineTextAlignment(.center)
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(text)
                     .font(GaryxFont.callout())
@@ -229,24 +266,70 @@ struct GaryxEmptyPanelView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
-        .padding(.vertical, 36)
+        .padding(.vertical, verticalPadding)
+    }
+
+    @ViewBuilder
+    private var indicator: some View {
+        switch state {
+        case .loading:
+            ProgressView()
+                .controlSize(.regular)
+        case .empty(let icon):
+            Image(systemName: icon)
+                .font(iconFont)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var titleFont: Font {
+        switch style {
+        case .panel:
+            GaryxFont.body(weight: .semibold)
+        case .inline:
+            GaryxFont.callout(weight: .semibold)
+        }
+    }
+
+    private var titleColor: Color {
+        switch style {
+        case .panel:
+            .primary
+        case .inline:
+            .secondary
+        }
+    }
+
+    private var iconFont: Font {
+        switch style {
+        case .panel:
+            GaryxFont.title2(weight: .medium)
+        case .inline:
+            GaryxFont.system(size: 28, weight: .medium)
+        }
+    }
+
+    private var verticalPadding: CGFloat {
+        switch style {
+        case .panel:
+            36
+        case .inline:
+            42
+        }
     }
 }
 
-struct GaryxLoadingPanelView: View {
+struct GaryxInlineStateView: View {
     let title: String
+    var icon: String?
+    var isLoading = false
 
     var body: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.regular)
-            Text(title)
-                .font(GaryxFont.callout(weight: .medium))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 24)
-        .padding(.vertical, 36)
+        GaryxStateView(
+            style: .inline,
+            state: isLoading ? .loading : .empty(icon: icon ?? "info.circle"),
+            title: title
+        )
     }
 }
 

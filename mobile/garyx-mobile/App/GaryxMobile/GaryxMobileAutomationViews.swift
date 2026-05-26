@@ -988,21 +988,11 @@ struct GaryxAutomationThreadPickerEmptyState: View {
     let isLoading: Bool
 
     var body: some View {
-        VStack(spacing: 12) {
-            if isLoading {
-                ProgressView()
-                    .controlSize(.regular)
-            } else {
-                Image(systemName: "bubble.left.and.text.bubble.right")
-                    .font(GaryxFont.system(size: 28, weight: .medium))
-                    .foregroundStyle(.secondary)
-            }
-            Text(isLoading ? "Loading recent threads" : "No matching recent threads")
-                .font(GaryxFont.callout(weight: .semibold))
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 42)
+        GaryxInlineStateView(
+            title: isLoading ? "Loading recent threads" : "No matching recent threads",
+            icon: "bubble.left.and.text.bubble.right",
+            isLoading: isLoading
+        )
     }
 }
 
