@@ -16,23 +16,14 @@ import {
 } from '../../../components/ui/dialog';
 import { Input } from '../../../components/ui/input';
 import { Label } from '../../../components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../../../components/ui/select';
 import { Textarea } from '../../../components/ui/textarea';
+import { WorkspacePathPicker, isAbsoluteWorkspacePath } from '../../../components/WorkspacePathPicker';
 
 import {
   DEFAULT_MAX_ITERATIONS,
   DEFAULT_TIME_BUDGET_MINUTES,
 } from './types';
 import { useI18n } from '../../../i18n';
-
-const MISSING_WORKSPACE_VALUE_PREFIX = '__missing_workspace__:';
 
 type CreateRunDialogProps = {
   saving: boolean;
@@ -56,13 +47,11 @@ export function CreateRunDialog({
   const [selectedWorkspacePath, setSelectedWorkspacePath] = useState(defaultWorkspacePath);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const selectableWorkspaces = workspaces.filter((workspace) => workspace.available && workspace.path);
-
   const parsedMaxIterations = Number.parseInt(maxIterations, 10);
   const parsedTimeBudgetMinutes = Number.parseInt(timeBudgetMinutes, 10);
   const canCreateRun = Boolean(
     goal.trim()
-    && selectedWorkspacePath
+    && isAbsoluteWorkspacePath(selectedWorkspacePath)
     && Number.isFinite(parsedMaxIterations)
     && parsedMaxIterations > 0
     && Number.isFinite(parsedTimeBudgetMinutes)
@@ -113,37 +102,13 @@ export function CreateRunDialog({
 
           <div className="codex-form-field">
             <Label className="codex-form-label" htmlFor="auto-research-workspace">{t('Workspace')}</Label>
-            <Select
-              onValueChange={(value) => {
-                if (value.startsWith(MISSING_WORKSPACE_VALUE_PREFIX)) return;
-                setSelectedWorkspacePath(value);
-              }}
+            <WorkspacePathPicker
+              id="auto-research-workspace"
+              allowEmpty={false}
+              onChange={setSelectedWorkspacePath}
               value={selectedWorkspacePath}
-            >
-              <SelectTrigger aria-label={t('Workspace')} className="w-full" id="auto-research-workspace">
-                <SelectValue placeholder={t('Choose workspace')} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {selectableWorkspaces.length ? (
-                    selectableWorkspaces.map((workspace) => {
-                      const value = workspace.path || `${MISSING_WORKSPACE_VALUE_PREFIX}${workspace.name}`;
-                      return (
-                        <SelectItem
-                          disabled={!workspace.path}
-                          key={workspace.path || workspace.name}
-                          value={value}
-                        >
-                          {workspace.name}
-                        </SelectItem>
-                      );
-                    })
-                  ) : (
-                    <SelectItem disabled value="no-workspaces">{t('No workspaces available')}</SelectItem>
-                  )}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              workspaces={workspaces}
+            />
           </div>
 
           <button

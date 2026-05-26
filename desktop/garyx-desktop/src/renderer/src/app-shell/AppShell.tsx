@@ -72,6 +72,7 @@ import type { SettingsTabId } from "../settings-tabs";
 import { GatewayProfileHistoryButton } from "../GatewayProfileHistoryButton";
 import { SettingsErrorBoundary } from "../SettingsErrorBoundary";
 import { Input } from "../components/ui/input";
+import { WorkspacePathPickerDialog } from "../components/WorkspacePathPicker";
 import { AddBotDialog } from "./components/AddBotDialog";
 import { DreamsPanel } from "./components/DreamsPanel";
 import { BotConversationSidebar } from "../BotConversationSidebar";
@@ -1690,6 +1691,11 @@ export function AppShell() {
   const [workspaceMutation, setWorkspaceMutation] = useState<
     "add" | "assign" | "relink" | "remove" | null
   >(null);
+  const [addWorkspaceDialog, setAddWorkspaceDialog] = useState<{
+    source: "new-thread" | "task";
+    initialPath?: string;
+    resolve?: (workspace: DesktopWorkspace | null) => void;
+  } | null>(null);
   const [workspaceMenuOpenPath, setWorkspaceMenuOpenPath] = useState<string | null>(
     null,
   );
@@ -6512,42 +6518,52 @@ export function AppShell() {
   }
 
   async function handleAddWorkspace() {
+    setAddWorkspaceDialog({
+      source: "new-thread",
+      initialPath: pendingWorkspacePath || selectedWorkspaceEntry?.path || "",
+    });
+  }
+
+  async function handleAddWorkspaceForTask(): Promise<DesktopWorkspace | null> {
+    return new Promise((resolve) => {
+      setAddWorkspaceDialog({
+        source: "task",
+        initialPath: selectedWorkspaceEntry?.path || pendingWorkspacePath || "",
+        resolve,
+      });
+    });
+  }
+
+  function closeAddWorkspaceDialog(workspace: DesktopWorkspace | null = null) {
+    setAddWorkspaceDialog((current) => {
+      current?.resolve?.(workspace);
+      return null;
+    });
+  }
+
+  async function confirmAddWorkspace(path: string) {
+    const request = addWorkspaceDialog;
+    if (!request) {
+      return;
+    }
     setError(null);
     setWorkspaceMutation("add");
     try {
-      const result = await window.garyxDesktop.addWorkspace();
+      const result = await window.garyxDesktop.addWorkspaceByPath({ path });
       setDesktopState(result.state);
-      if (result.workspace) {
+      if (result.workspace && request.source === "new-thread") {
         setNewThreadDraftActive(true);
         setPendingWorkspacePath(result.workspace.path);
         setPendingWorkspaceMode("local");
         requestComposerFocus();
       }
+      closeAddWorkspaceDialog(result.workspace || null);
     } catch (workspaceError) {
       setError(
         workspaceError instanceof Error
           ? workspaceError.message
           : "Failed to add workspace",
       );
-    } finally {
-      setWorkspaceMutation(null);
-    }
-  }
-
-  async function handleAddWorkspaceForTask(): Promise<DesktopWorkspace | null> {
-    setError(null);
-    setWorkspaceMutation("add");
-    try {
-      const result = await window.garyxDesktop.addWorkspace();
-      setDesktopState(result.state);
-      return result.workspace || null;
-    } catch (workspaceError) {
-      setError(
-        workspaceError instanceof Error
-          ? workspaceError.message
-          : "Failed to add workspace",
-      );
-      throw workspaceError;
     } finally {
       setWorkspaceMutation(null);
     }
@@ -8205,6 +8221,17 @@ export function AppShell() {
         open={addBotDialogOpen}
         initialValues={addBotInitialValues}
         agentTargets={addBotAgentTargets}
+        workspaces={workspacePickerWorkspaces}
+      />
+      <WorkspacePathPickerDialog
+        open={Boolean(addWorkspaceDialog)}
+        title={t("Add Workspace")}
+        description={t("Choose or enter an absolute directory path.")}
+        initialPath={addWorkspaceDialog?.initialPath || ""}
+        saving={workspaceMutation === "add"}
+        workspaces={workspacePickerWorkspaces}
+        onCancel={() => closeAddWorkspaceDialog(null)}
+        onConfirm={confirmAddWorkspace}
       />
 
       {isBrowserView ? (
@@ -8325,6 +8352,7 @@ export function AppShell() {
                     gatewayStatusMessage={gatewaySettingsStatus}
                     localSettingsDirty={localSettingsDirty}
                     localSettings={settingsDraft}
+                    workspaces={workspacePickerWorkspaces}
                     mcpServers={mcpServers}
                     mcpServersLoading={mcpServersLoading}
                     mcpServersSaving={mcpServersSaving}
@@ -8441,6 +8469,7 @@ export function AppShell() {
             ) : isAgentsView ? (
               <AgentsHubPanel
                 initialTab="agents"
+                workspaces={workspacePickerWorkspaces}
                 onOpenMemory={(agent) => {
                   void openMemoryDialog({
                     scope: "agent",
@@ -8454,6 +8483,7 @@ export function AppShell() {
             ) : isTeamsView ? (
               <AgentsHubPanel
                 initialTab="teams"
+                workspaces={workspacePickerWorkspaces}
                 onOpenMemory={(agent) => {
                   void openMemoryDialog({
                     scope: "agent",
@@ -8740,6 +8770,7 @@ export function AppShell() {
             state={automationDialog}
             agentOptions={automationAgentOptions}
             threadOptions={desktopState?.threads || []}
+            workspaces={workspacePickerWorkspaces}
             saving={
               automationMutation === "create" ||
               automationMutation === `edit:${automationDialog.automationId || ""}`

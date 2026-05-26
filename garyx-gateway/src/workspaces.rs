@@ -37,6 +37,18 @@ fn workspace_path_key(path: &str) -> String {
     path.trim().replace('\\', "/")
 }
 
+fn is_absolute_workspace_path(path: &str) -> bool {
+    let normalized = workspace_path_key(path);
+    if normalized.starts_with('/') || normalized.starts_with("//") {
+        return true;
+    }
+    let bytes = normalized.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && bytes[2] == b'/'
+}
+
 fn push_workspace_draft(
     drafts: &mut BTreeMap<String, WorkspaceDraft>,
     path: Option<&str>,
@@ -49,6 +61,9 @@ fn push_workspace_draft(
     else {
         return;
     };
+    if !is_absolute_workspace_path(&path) {
+        return;
+    }
     let key = workspace_path_key(&path);
     drafts.entry(key).or_insert_with(|| WorkspaceDraft {
         name: name

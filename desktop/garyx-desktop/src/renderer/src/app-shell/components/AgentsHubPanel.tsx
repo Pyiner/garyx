@@ -19,6 +19,7 @@ import type {
   DesktopProviderIconDescriptor,
   DesktopProviderModels,
   DesktopTeam,
+  DesktopWorkspace,
   UpdateCustomAgentInput,
   UpdateTeamInput,
 } from '@shared/contracts';
@@ -53,6 +54,7 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
+import { WorkspacePathPicker } from '../../components/WorkspacePathPicker';
 import { useI18n } from '../../i18n';
 import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
@@ -138,6 +140,7 @@ type TeamDraft = {
 
 type AgentsHubPanelProps = {
   initialTab?: HubTab;
+  workspaces?: DesktopWorkspace[];
   onStartThread?: (agentOrTeamId: string) => void;
   onOpenMemory?: (agent: DesktopCustomAgent) => void;
   onToast?: (message: string, tone?: 'success' | 'error' | 'info', durationMs?: number) => void;
@@ -459,6 +462,7 @@ function stopEvent(event: React.MouseEvent<HTMLElement>) {
 
 export function AgentsHubPanel({
   initialTab = 'agents',
+  workspaces = [],
   onStartThread,
   onOpenMemory,
   onToast,
@@ -1613,13 +1617,14 @@ export function AgentsHubPanel({
                 <Label className="codex-form-label" htmlFor="agent-dialog-default-workspace">
                   {t('Default workspace directory')}
                 </Label>
-                <Input
+                <WorkspacePathPicker
                   id="agent-dialog-default-workspace"
-                  onChange={(event) => {
-                    setAgentDraft((current) => ({ ...current, defaultWorkspaceDir: event.target.value }));
+                  onChange={(value) => {
+                    setAgentDraft((current) => ({ ...current, defaultWorkspaceDir: value }));
                   }}
                   placeholder={t('/path/to/project')}
                   value={agentDraft.defaultWorkspaceDir}
+                  workspaces={workspaces}
                 />
                 <span className="codex-form-hint">
                   {t('Used when a new bot or task thread has no explicit workspace.')}

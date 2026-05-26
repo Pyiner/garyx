@@ -214,6 +214,8 @@ needs installed-app validation.
   that workspace table has no rows, the gateway may seed it once from configured
   bot accounts and scheduled automation jobs; deleted rows are soft-deleted and
   count as existing state, so they must prevent future inferred reseeding. Paths
+  are always stored and compared as absolute directory strings; do not introduce
+  separate workspace ids or primary keys in mobile state. Paths
   inferred from recent threads, auto-research runs, endpoints, or temporary
   workspaces may be form suggestions or file-link resolution hints only, not
   root navigation entries.
@@ -313,6 +315,10 @@ needs installed-app validation.
   values remain metadata for those threads and may influence sorting or
   file-link resolution only. They must not create inferred workspace rows or
   hidden-workspace suppression state.
+- Workspace identity is the absolute directory path everywhere: desktop,
+  mobile, gateway, and CLI flows must pass and persist the path string directly.
+  Do not add workspace ids; workspaces are directory filters/bookmarks, not
+  separate domain entities.
 - Agent selectors should show only the agent or team identity. Do not append
   provider names such as Claude, Codex, or Gemini to selector labels or details;
   provider metadata belongs in dedicated settings/details surfaces outside

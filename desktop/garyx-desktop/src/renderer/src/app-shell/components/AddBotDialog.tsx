@@ -29,6 +29,7 @@ import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 
 import type {
   ChannelPluginCatalogEntry,
+  DesktopWorkspace,
   DesktopWorkspaceMode,
   PollFeishuChannelAuthResult,
   PollWeixinChannelAuthResult,
@@ -78,6 +79,7 @@ type AddBotDialogProps = {
     baseUrl?: string;
   } | null;
   agentTargets: AgentTargetOption[];
+  workspaces?: DesktopWorkspace[];
   onClose: () => void;
   onCreateChannel: (input: {
     channel: string;
@@ -227,7 +229,7 @@ function channelInitials(entry: ChannelPluginCatalogEntry | null): string {
 
 export function AddBotDialog(props: AddBotDialogProps) {
   const { t } = useI18n();
-  const { open, initialValues, onClose, onCreateChannel, agentTargets } = props;
+  const { open, initialValues, onClose, onCreateChannel, agentTargets, workspaces = [] } = props;
   const { entries: allEntries, loading: catalogLoading, error: catalogError } =
     useChannelPluginCatalog();
 
@@ -556,6 +558,7 @@ export function AddBotDialog(props: AddBotDialogProps) {
                     value={workspaceDir}
                     onChange={setWorkspaceDir}
                     placeholder={t("Use the main workspace by default")}
+                    workspaces={workspaces}
                   />
                 </div>
 

@@ -1509,6 +1509,21 @@ async fn workspaces_route_seeds_from_config_only_when_workspace_table_is_empty()
         delete_after_run: false,
         enabled: true,
     });
+    config.cron.jobs.push(CronJobConfig {
+        id: "cron::relative".to_owned(),
+        kind: CronJobKind::AutomationPrompt,
+        label: Some("Relative Repo".to_owned()),
+        schedule: CronSchedule::default(),
+        ui_schedule: None,
+        action: CronAction::AgentTurn,
+        target: None,
+        message: Some("Run relative check".to_owned()),
+        workspace_dir: Some("relative/repo".to_owned()),
+        agent_id: None,
+        thread_id: None,
+        delete_after_run: false,
+        enabled: true,
+    });
     let state = AppStateBuilder::new(config).build();
     create_thread_record(
         &state.threads.thread_store,
@@ -1562,6 +1577,11 @@ async fn workspaces_route_seeds_from_config_only_when_workspace_table_is_empty()
             .iter()
             .any(|workspace| workspace["path"] == "/workspace/inferred-only")
     );
+    assert!(
+        !workspaces
+            .iter()
+            .any(|workspace| workspace["path"] == "relative/repo")
+    );
 }
 
 #[tokio::test]
@@ -1602,6 +1622,29 @@ async fn workspaces_route_persists_add_and_delete() {
     assert_eq!(response.status(), StatusCode::OK);
     assert!(state.ops.garyx_db.list_workspaces().unwrap().is_empty());
     assert_eq!(state.ops.garyx_db.count_workspace_rows().unwrap(), 1);
+}
+
+#[tokio::test]
+async fn workspaces_route_rejects_relative_path() {
+    let mut config = test_config();
+    config.gateway.auth_token = crate::test_support::TEST_GATEWAY_TOKEN.to_owned();
+    let state = AppStateBuilder::new(config).build();
+    let router = build_router(state);
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/workspaces")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({
+                "path": "relative/project",
+                "name": "Relative"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

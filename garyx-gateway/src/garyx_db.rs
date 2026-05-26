@@ -1516,7 +1516,24 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
 }
 
 fn normalize_workspace_path(path: &str) -> GaryxDbResult<String> {
-    Ok(normalize_required("workspace path", path)?.replace('\\', "/"))
+    let normalized = normalize_required("workspace path", path)?.replace('\\', "/");
+    if !is_absolute_workspace_path(&normalized) {
+        return Err(GaryxDbError::BadRequest(
+            "workspace path must be absolute".to_owned(),
+        ));
+    }
+    Ok(normalized)
+}
+
+fn is_absolute_workspace_path(path: &str) -> bool {
+    if path.starts_with('/') || path.starts_with("//") {
+        return true;
+    }
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && bytes[2] == b'/'
 }
 
 fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
@@ -1727,6 +1744,18 @@ mod tests {
             db.upsert_workspace(WorkspaceDraft {
                 name: None,
                 path: "   ".to_owned(),
+            }),
+            Err(GaryxDbError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn relative_workspace_path_is_rejected() {
+        let db = GaryxDbService::memory().expect("db opens");
+        assert!(matches!(
+            db.upsert_workspace(WorkspaceDraft {
+                name: None,
+                path: "relative/project".to_owned(),
             }),
             Err(GaryxDbError::BadRequest(_))
         ));

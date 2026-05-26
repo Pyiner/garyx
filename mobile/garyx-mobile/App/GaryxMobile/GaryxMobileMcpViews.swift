@@ -71,7 +71,8 @@ struct GaryxCreateMcpServerCard: View {
                 env: $model.draftMcpEnv,
                 workingDir: $model.draftMcpWorkingDir,
                 url: $model.draftMcpUrl,
-                headers: $model.draftMcpHeaders
+                headers: $model.draftMcpHeaders,
+                workspacePaths: model.userWorkspacePaths
             )
         }
     }
@@ -96,6 +97,7 @@ private struct GaryxMcpServerFormFields: View {
     @Binding var workingDir: String
     @Binding var url: String
     @Binding var headers: String
+    let workspacePaths: [String]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
@@ -105,10 +107,13 @@ private struct GaryxMcpServerFormFields: View {
                     .autocorrectionDisabled()
                     .garyxFormTextField()
                 Divider().padding(.leading, 16)
-                TextField("Working directory", text: $workingDir)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxWorkspacePathSelectionRow(
+                    title: "Working directory",
+                    path: $workingDir,
+                    workspacePaths: workspacePaths,
+                    placeholder: "Optional",
+                    allowsEmpty: true
+                )
             }
 
             GaryxFormGroupedSection(title: "Command") {
@@ -198,7 +203,8 @@ struct GaryxMcpServerCard: View {
                     env: $env,
                     workingDir: $workingDir,
                     url: $url,
-                    headers: $headers
+                    headers: $headers,
+                    workspacePaths: model.userWorkspacePaths
                 )
             }
         }

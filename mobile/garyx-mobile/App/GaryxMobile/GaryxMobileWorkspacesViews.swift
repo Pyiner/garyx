@@ -46,14 +46,15 @@ struct GaryxWorkspacesView: View {
         .fullScreenCover(isPresented: $showsAddWorkspace) {
             GaryxFormSheet(
                 title: "Add Workspace",
-                canSave: !workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                canSave: garyxIsAbsoluteWorkspacePath(workspacePathDraft),
                 onSave: addWorkspace
             ) {
                 GaryxFormGroupedSection(title: "Directory") {
-                    TextField("Workspace path", text: $workspacePathDraft)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxWorkspacePathPickerField(
+                        path: $workspacePathDraft,
+                        workspacePaths: model.userWorkspacePaths,
+                        placeholder: "/path/to/project"
+                    )
                 }
             }
         }
@@ -81,7 +82,7 @@ struct GaryxWorkspacesView: View {
 
     private func addWorkspace() {
         let path = workspacePathDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty else { return }
+        guard garyxIsAbsoluteWorkspacePath(path) else { return }
         showsAddWorkspace = false
         Task {
             await model.addUserWorkspacePath(path)

@@ -622,21 +622,17 @@ struct GaryxAutomationFormFields: View {
         } else {
             agentPicker
             Divider().padding(.leading, 16)
-            GaryxFormRow(title: "Workspace") {
-                Menu {
-                    ForEach(workspacePaths, id: \.self) { path in
-                        Button {
-                            draft.workspacePath = path
-                        } label: {
-                            Text(path.automationLastPathComponent)
-                        }
-                    }
-                } label: {
-                    GaryxFormMenuValueLabel(
-                        value: draft.effectiveWorkspacePath(workspacePaths: workspacePaths).automationLastPathComponent
-                    )
-                }
-            }
+            let workspaceBinding = Binding<String>(
+                get: { draft.effectiveWorkspacePath(workspacePaths: workspacePaths) },
+                set: { draft.workspacePath = $0 }
+            )
+            GaryxWorkspacePathSelectionRow(
+                title: "Workspace",
+                path: workspaceBinding,
+                workspacePaths: workspacePaths,
+                placeholder: "Choose workspace",
+                allowsEmpty: false
+            )
         }
     }
 

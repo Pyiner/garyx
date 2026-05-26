@@ -4,6 +4,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import type {
   DesktopAutomationSchedule,
   DesktopThreadSummary,
+  DesktopWorkspace,
 } from '@shared/contracts';
 import type { AutomationAgentOption } from '@renderer/app-shell/types';
 
@@ -72,6 +73,7 @@ export interface AutomationDialogProps {
   state: AutomationDialogState;
   agentOptions: AutomationAgentOption[];
   threadOptions: DesktopThreadSummary[];
+  workspaces?: DesktopWorkspace[];
   saving: boolean;
   onDraftChange: (mutator: (draft: AutomationDraft) => AutomationDraft) => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
@@ -322,6 +324,7 @@ export function AutomationDialog({
   state,
   agentOptions,
   threadOptions,
+  workspaces = [],
   saving,
   onDraftChange,
   onSubmit,
@@ -473,6 +476,7 @@ export function AutomationDialog({
                 }
                 placeholder={t('/path/to/project')}
                 value={draft.workspacePath}
+                workspaces={workspaces}
               />
             </Field>
           )}

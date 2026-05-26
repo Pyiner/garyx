@@ -11,6 +11,7 @@ import { Check, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import type {
   ChannelPluginCatalogEntry,
   ChannelPluginConfigMethod,
+  DesktopWorkspace,
   DesktopWorkspaceMode,
 } from "@shared/contracts";
 
@@ -65,6 +66,7 @@ type EditBotDialogProps = {
   open: boolean;
   context: EditBotDialogContext | null;
   agentTargets: AgentTargetOption[];
+  workspaces?: DesktopWorkspace[];
   saving?: boolean;
   onClose: () => void;
   onSave: (input: {
@@ -161,7 +163,7 @@ function channelInitials(entry: ChannelPluginCatalogEntry | null): string {
 
 export function EditBotDialog(props: EditBotDialogProps) {
   const { t } = useI18n();
-  const { open, context, agentTargets, saving, onClose, onSave } =
+  const { open, context, agentTargets, workspaces = [], saving, onClose, onSave } =
     props;
   const { entries, loading: catalogLoading } = useChannelPluginCatalog();
 
@@ -399,6 +401,7 @@ export function EditBotDialog(props: EditBotDialogProps) {
                     value={workspaceDir}
                     onChange={setWorkspaceDir}
                     placeholder={t("Use the main workspace by default")}
+                    workspaces={workspaces}
                   />
                 </div>
 

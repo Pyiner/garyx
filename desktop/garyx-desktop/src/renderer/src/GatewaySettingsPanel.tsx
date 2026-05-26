@@ -13,6 +13,7 @@ import {
   type DesktopFollowUpBehavior,
   type DesktopProviderModelOption,
   type DesktopProviderModels,
+  type DesktopWorkspace,
   type DesktopTeam,
   type DesktopSettings,
   type DesktopMcpServer,
@@ -110,6 +111,7 @@ type GatewaySettingsPanelProps = {
   agents?: DesktopCustomAgent[];
   teams?: DesktopTeam[];
   skills?: DesktopSkillInfo[];
+  workspaces?: DesktopWorkspace[];
   onCreateSlashCommand?: (input: UpsertSlashCommandInput) => Promise<void>;
   onUpdateSlashCommand?: (input: UpdateSlashCommandInput) => Promise<void>;
   onDeleteSlashCommand?: (name: string) => Promise<void>;
@@ -1319,6 +1321,7 @@ export function GatewaySettingsPanel({
   agents = [],
   teams = [],
   skills = [],
+  workspaces = [],
   onCreateSlashCommand = noopAsync,
   onUpdateSlashCommand = noopAsync,
   onDeleteSlashCommand = noopAsync,
@@ -2672,6 +2675,7 @@ export function GatewaySettingsPanel({
         }}
         open={Boolean(editingBot)}
         saving={gatewaySaving}
+        workspaces={workspaces}
       />
       <AddBotDialog
         agentTargets={agentTargets}
@@ -2684,6 +2688,7 @@ export function GatewaySettingsPanel({
         onPollFeishuAuth={onPollFeishuChannelAuth}
         onStartFeishuAuth={onStartFeishuChannelAuth}
         open={isAddingChannel}
+        workspaces={workspaces}
       />
     </>
   );

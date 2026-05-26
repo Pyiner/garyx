@@ -219,10 +219,13 @@ struct GaryxBotAccountForm: View {
                     Divider().padding(.leading, 16)
                     agentPicker
                     Divider().padding(.leading, 16)
-                    TextField("Working directory", text: $workspaceDir)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxWorkspacePathSelectionRow(
+                        title: "Working directory",
+                        path: $workspaceDir,
+                        workspacePaths: model.userWorkspacePaths,
+                        placeholder: "Optional",
+                        allowsEmpty: true
+                    )
                     Divider().padding(.leading, 16)
                     Picker("Workspace mode", selection: $workspaceMode) {
                         Text("Local").tag("local")

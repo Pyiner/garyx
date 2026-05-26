@@ -120,10 +120,13 @@ struct GaryxCreateAgentCard: View {
                 }
 
                 GaryxFormGroupedSection(title: "Defaults") {
-                    TextField("Default workspace directory", text: $model.draftAgentWorkspace)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxWorkspacePathSelectionRow(
+                        title: "Default workspace",
+                        path: $model.draftAgentWorkspace,
+                        workspacePaths: model.userWorkspacePaths,
+                        placeholder: "Optional",
+                        allowsEmpty: true
+                    )
                     Divider().padding(.leading, 16)
                     TextField("System Prompt", text: $model.draftAgentPrompt, axis: .vertical)
                         .lineLimit(2...6)
@@ -316,10 +319,13 @@ struct GaryxAgentCard: View {
             }
 
             GaryxFormGroupedSection(title: "Defaults") {
-                TextField("Default workspace directory", text: $workspace)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxWorkspacePathSelectionRow(
+                    title: "Default workspace",
+                    path: $workspace,
+                    workspacePaths: model.userWorkspacePaths,
+                    placeholder: "Optional",
+                    allowsEmpty: true
+                )
                 Divider().padding(.leading, 16)
                 TextField("System Prompt", text: $systemPrompt, axis: .vertical)
                     .lineLimit(2...6)
