@@ -1,6 +1,6 @@
 import Foundation
 
-struct GaryxMobileBotGroup: Identifiable, Equatable {
+internal struct GaryxMobileBotGroup: Identifiable, Equatable {
     let id: String
     let channel: String
     let accountId: String
@@ -19,8 +19,8 @@ struct GaryxMobileBotGroup: Identifiable, Equatable {
     let iconDataUrl: String?
 }
 
-enum GaryxMobileBotGroupBuilder {
-    static func groups(
+internal enum GaryxMobileBotGroupBuilder {
+    internal static func groups(
         channelEndpoints: [GaryxChannelEndpoint],
         configuredBots: [GaryxConfiguredBot],
         botConsoles: [GaryxBotConsoleSummary],
@@ -100,7 +100,7 @@ enum GaryxMobileBotGroupBuilder {
                     channel: bot.channel,
                     accountId: bot.accountId,
                     title: bot.displayName,
-                    subtitle: "\(channelDisplayName(bot.channel)) Bot · \(bot.accountId)",
+                    subtitle: "\(GaryxMobileBotChannelDisplayName.name(bot.channel)) Bot · \(bot.accountId)",
                     agentId: nonEmpty(bot.agentId),
                     rootBehavior: bot.rootBehavior,
                     status: bot.enabled ? "idle" : "disabled",
@@ -124,8 +124,8 @@ enum GaryxMobileBotGroupBuilder {
                         id: key,
                         channel: first.channel,
                         accountId: first.accountId,
-                        title: "\(channelDisplayName(first.channel)) / \(first.accountId)",
-                        subtitle: "\(channelDisplayName(first.channel)) Bot · \(first.accountId)",
+                        title: "\(GaryxMobileBotChannelDisplayName.name(first.channel)) / \(first.accountId)",
+                        subtitle: "\(GaryxMobileBotChannelDisplayName.name(first.channel)) Bot · \(first.accountId)",
                         agentId: nil,
                         rootBehavior: "open_default",
                         status: "idle",
@@ -145,7 +145,7 @@ enum GaryxMobileBotGroupBuilder {
         return order.compactMap { groups[$0] }
     }
 
-    static func selectedGroup(threadId: String?, groups: [GaryxMobileBotGroup]) -> GaryxMobileBotGroup? {
+    internal static func selectedGroup(threadId: String?, groups: [GaryxMobileBotGroup]) -> GaryxMobileBotGroup? {
         guard let threadId = threadId?.trimmingCharacters(in: .whitespacesAndNewlines),
               !threadId.isEmpty else {
             return nil
@@ -167,31 +167,13 @@ enum GaryxMobileBotGroupBuilder {
         "\(channel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())::\(accountId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
     }
 
-    private static func channelDisplayName(_ channel: String) -> String {
-        let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch normalized.lowercased() {
-        case "telegram":
-            return "Telegram"
-        case "feishu":
-            return "Feishu"
-        case "weixin":
-            return "Weixin"
-        case "discord":
-            return "Discord"
-        case "api":
-            return "API"
-        default:
-            return normalized.isEmpty ? "Channel" : normalized
-        }
-    }
-
     private static func nonEmpty(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }
 }
 
-struct GaryxBotSidebarConversationEntry: Identifiable, Equatable {
+internal struct GaryxBotSidebarConversationEntry: Identifiable, Equatable {
     let id: String
     let title: String
     let subtitle: String?
@@ -202,7 +184,7 @@ struct GaryxBotSidebarConversationEntry: Identifiable, Equatable {
 }
 
 extension GaryxBotSidebarConversationEntry {
-    func fallbackThreadSummary(workspacePath: String?) -> GaryxThreadSummary? {
+    internal func fallbackThreadSummary(workspacePath: String?) -> GaryxThreadSummary? {
         guard let threadId = threadId?.trimmingCharacters(in: .whitespacesAndNewlines),
               !threadId.isEmpty else {
             return nil
@@ -228,14 +210,14 @@ extension GaryxBotSidebarConversationEntry {
 }
 
 extension GaryxMobileBotGroup {
-    var rootCanOpen: Bool {
+    internal var rootCanOpen: Bool {
         let mainThreadId = self.mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let defaultOpenThreadId = self.defaultOpenThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return rootBehavior != "expand_only" || !mainThreadId.isEmpty || !defaultOpenThreadId.isEmpty
     }
 
-    var compactDetailLine: String {
-        let channelName = garyxBotChannelDisplayName(channel)
+    internal var compactDetailLine: String {
+        let channelName = GaryxMobileBotChannelDisplayName.name(channel)
         let account = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
         let botId = account.isEmpty ? channelName : "\(channelName) · \(account)"
         let agent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -249,7 +231,7 @@ extension GaryxMobileBotGroup {
         .joined(separator: " / ")
     }
 
-    func sidebarChildConversationEntries() -> [GaryxBotSidebarConversationEntry] {
+    internal func sidebarChildConversationEntries() -> [GaryxBotSidebarConversationEntry] {
         var entries: [GaryxBotSidebarConversationEntry] = []
         var seenThreadIds = Set<String>()
         let rootThreadId = mainThreadId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -311,7 +293,7 @@ extension GaryxMobileBotGroup {
     }
 }
 
-func garyxBotConversationEntrySort(
+private func garyxBotConversationEntrySort(
     _ lhs: GaryxBotSidebarConversationEntry,
     _ rhs: GaryxBotSidebarConversationEntry
 ) -> Bool {
@@ -322,16 +304,22 @@ func garyxBotConversationEntrySort(
     return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
 }
 
-func garyxBotChannelDisplayName(_ channel: String) -> String {
-    let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    switch normalized {
-    case "telegram":
-        return "Telegram"
-    case "discord":
-        return "Discord"
-    case "api":
-        return "API"
-    default:
-        return normalized.isEmpty ? "Channel" : normalized.replacingOccurrences(of: "_", with: " ").capitalized
+private enum GaryxMobileBotChannelDisplayName {
+    static func name(_ channel: String) -> String {
+        let normalized = channel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalized {
+        case "telegram":
+            return "Telegram"
+        case "feishu":
+            return "Feishu"
+        case "weixin":
+            return "Weixin"
+        case "discord":
+            return "Discord"
+        case "api":
+            return "API"
+        default:
+            return normalized.isEmpty ? "Channel" : normalized.replacingOccurrences(of: "_", with: " ").capitalized
+        }
     }
 }

@@ -105,6 +105,22 @@ final class GaryxMobileBotGroupTests: XCTestCase {
         XCTAssertTrue(expandWithDefaultThread.rootCanOpen)
     }
 
+    func testCompactDetailLineHandlesMissingOptionalPartsAndKnownChannels() {
+        XCTAssertEqual(
+            makeGroup(channel: "feishu", accountId: "", agentId: nil, workspaceDir: nil).compactDetailLine,
+            "Feishu"
+        )
+        XCTAssertEqual(
+            makeGroup(channel: "weixin", accountId: "bot-1", agentId: nil, workspaceDir: nil).compactDetailLine,
+            "Weixin · bot-1"
+        )
+        XCTAssertEqual(
+            makeGroup(channel: "custom_channel", accountId: "bot-1", agentId: nil, workspaceDir: "/workspace/project-alpha")
+                .compactDetailLine,
+            "Custom Channel · bot-1 / project-alpha"
+        )
+    }
+
     func testFallbackThreadSummaryUsesEntryDisplayData() throws {
         let endpoint = try makeEndpoint(key: "telegram:test-bot:alpha", label: "Alpha", threadId: "thread-alpha")
         let entry = GaryxBotSidebarConversationEntry(
@@ -181,6 +197,77 @@ final class GaryxMobileBotGroupTests: XCTestCase {
         )
     }
 
+    func testBuilderUsesConfiguredBotWhenNoConsoleExists() throws {
+        let endpoint = try makeEndpoint(
+            key: "telegram:test-bot:alpha",
+            label: "Alpha",
+            threadId: "thread-alpha"
+        )
+        let configured = try makeConfiguredBot(
+            channel: "telegram",
+            accountId: "test-bot",
+            displayName: "Configured Bot",
+            enabled: false,
+            agentId: "agent-config",
+            workspaceDir: "/workspace/config",
+            mainThreadId: "thread-main",
+            defaultOpenThreadId: "thread-default"
+        )
+
+        let groups = GaryxMobileBotGroupBuilder.groups(
+            channelEndpoints: [endpoint],
+            configuredBots: [configured],
+            botConsoles: [],
+            channelPlugins: []
+        )
+
+        let group = try XCTUnwrap(groups.first)
+        XCTAssertEqual(group.id, "telegram::test-bot")
+        XCTAssertEqual(group.title, "Configured Bot")
+        XCTAssertEqual(group.subtitle, "Telegram Bot · test-bot")
+        XCTAssertEqual(group.agentId, "agent-config")
+        XCTAssertEqual(group.status, "disabled")
+        XCTAssertEqual(group.defaultOpenThreadId, "thread-default")
+    }
+
+    func testBuilderPrefersConsoleValuesOverConfiguredFallbacks() throws {
+        let configured = try makeConfiguredBot(
+            channel: "telegram",
+            accountId: "test-bot",
+            displayName: "Configured Bot",
+            agentId: "agent-config",
+            workspaceDir: "/workspace/config",
+            mainThreadId: "thread-main-config",
+            defaultOpenThreadId: "thread-default-config"
+        )
+        let console = try makeConsole(
+            id: "console-test-bot",
+            channel: "telegram",
+            accountId: "test-bot",
+            title: "Console Bot",
+            subtitle: "Console subtitle",
+            agentId: "agent-console",
+            workspaceDir: "/workspace/console",
+            mainThreadId: "thread-main-console",
+            defaultOpenThreadId: "thread-default-console"
+        )
+
+        let group = try XCTUnwrap(
+            GaryxMobileBotGroupBuilder.groups(
+                channelEndpoints: [],
+                configuredBots: [configured],
+                botConsoles: [console],
+                channelPlugins: []
+            )
+            .first
+        )
+
+        XCTAssertEqual(group.agentId, "agent-console")
+        XCTAssertEqual(group.workspaceDir, "/workspace/console")
+        XCTAssertEqual(group.mainThreadId, "thread-main-console")
+        XCTAssertEqual(group.defaultOpenThreadId, "thread-default-console")
+    }
+
     func testBuilderFallsBackToEndpointOnlyGroupsWhenNoConfiguredBotsExist() throws {
         let endpoint = try makeEndpoint(
             key: "custom_channel:test-bot:alpha",
@@ -199,9 +286,24 @@ final class GaryxMobileBotGroupTests: XCTestCase {
 
         let group = try XCTUnwrap(groups.first)
         XCTAssertEqual(group.id, "custom_channel::test-bot")
-        XCTAssertEqual(group.title, "custom_channel / test-bot")
-        XCTAssertEqual(group.subtitle, "custom_channel Bot · test-bot")
+        XCTAssertEqual(group.title, "Custom Channel / test-bot")
+        XCTAssertEqual(group.subtitle, "Custom Channel Bot · test-bot")
         XCTAssertEqual(group.defaultOpenThreadId, "thread-alpha")
+    }
+
+    func testSelectedGroupRejectsEmptyThreadIdsAndMatchesDefaultThread() {
+        let group = makeGroup(
+            rootBehavior: "expand_only",
+            defaultOpenThreadId: "thread-default"
+        )
+        let groups = [group]
+
+        XCTAssertNil(GaryxMobileBotGroupBuilder.selectedGroup(threadId: nil, groups: groups))
+        XCTAssertNil(GaryxMobileBotGroupBuilder.selectedGroup(threadId: "   ", groups: groups))
+        XCTAssertEqual(
+            GaryxMobileBotGroupBuilder.selectedGroup(threadId: " thread-default ", groups: groups)?.id,
+            group.id
+        )
     }
 
     private func makeGroup(

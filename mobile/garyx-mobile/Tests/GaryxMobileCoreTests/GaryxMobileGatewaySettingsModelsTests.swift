@@ -54,6 +54,23 @@ final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
         XCTAssertEqual(profiles.first?.label, "gateway.example.test")
     }
 
+    func testGatewayProfileStorageKeepsOnlyEightRecentProfiles() {
+        let profiles = (0..<10).map { index in
+            makeProfile(
+                id: "profile-\(index)",
+                label: "Gateway \(index)",
+                gatewayUrl: "https://gateway-\(index).example.test",
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(index))
+            )
+        }
+
+        let normalized = GaryxGatewayProfileStorage.normalizedProfiles(profiles)
+
+        XCTAssertEqual(normalized.count, 8)
+        XCTAssertEqual(normalized.first?.gatewayUrl, "https://gateway-9.example.test")
+        XCTAssertEqual(normalized.last?.gatewayUrl, "https://gateway-2.example.test")
+    }
+
     func testConfiguredBotAccountsDecodeAndSortGatewaySettingsDocument() {
         let settings: [String: GaryxJSONValue] = [
             "channels": .object([
@@ -91,6 +108,7 @@ final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
         let accounts = GaryxConfiguredBotAccountsDocument.accounts(from: settings)
 
         XCTAssertEqual(accounts.map(\.id), ["discord:bot-alpha", "telegram:bot-beta"])
+        XCTAssertFalse(accounts.contains { $0.channel == "api" })
         XCTAssertEqual(accounts[0].displayName, "Alpha Bot")
         XCTAssertTrue(accounts[0].enabled)
         XCTAssertEqual(accounts[0].agentId, "agent-alpha")
@@ -165,6 +183,13 @@ final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
             GaryxConfiguredBotAccountsDocument.removeAccount(
                 from: &settings,
                 channel: "discord",
+                accountId: "bot-alpha"
+            )
+        )
+        XCTAssertFalse(
+            GaryxConfiguredBotAccountsDocument.removeAccount(
+                from: &settings,
+                channel: "telegram",
                 accountId: "bot-alpha"
             )
         )

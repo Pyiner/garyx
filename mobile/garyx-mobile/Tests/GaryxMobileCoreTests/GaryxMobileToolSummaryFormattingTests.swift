@@ -3,26 +3,27 @@ import XCTest
 
 final class GaryxMobileToolSummaryFormattingTests: XCTestCase {
     func testSafeToolSummaryUsesFirstNonEmptyLineAndSuppressesJsonObjects() {
-        XCTAssertEqual("\n  first line\nsecond line".garyxSafeToolSummary, "first line")
-        XCTAssertNil("".garyxSafeToolSummary)
-        XCTAssertNil("{".garyxSafeToolSummary)
-        XCTAssertNil("{\"key\":\"value\"}".garyxSafeToolSummary)
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.safeSummary("\n  first line\nsecond line"), "first line")
+        XCTAssertNil(GaryxMobileToolSummaryFormatter.safeSummary(""))
+        XCTAssertNil(GaryxMobileToolSummaryFormatter.safeSummary("{"))
+        XCTAssertNil(GaryxMobileToolSummaryFormatter.safeSummary("{\"key\":\"value\"}"))
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.safeSummary("[1,2]"), "[1,2]")
     }
 
     func testPathTailKeepsLastTwoPathSegments() {
-        XCTAssertEqual("/workspace/project-alpha/Sources/File.swift".garyxPathTail, "Sources/File.swift")
-        XCTAssertEqual("C:\\workspace\\project-alpha\\File.swift".garyxPathTail, "project-alpha/File.swift")
-        XCTAssertEqual("relative-file.swift".garyxPathTail, "relative-file.swift")
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.pathTail("/workspace/project-alpha/Sources/File.swift"), "Sources/File.swift")
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.pathTail("C:\\workspace\\project-alpha\\File.swift"), "project-alpha/File.swift")
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.pathTail("relative-file.swift"), "relative-file.swift")
     }
 
     func testShellSummaryStripsLaunchersQuotesNoiseAndWhitespace() {
-        XCTAssertEqual("bash -lc 'git   status --short 2>&1'".garyxShellSummary, "git status --short")
-        XCTAssertEqual("/bin/zsh -lc \"swift    test\"".garyxShellSummary, "swift test")
-        XCTAssertEqual("  npm   run   build  ".garyxShellSummary, "npm run build")
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.shellSummary("bash -lc 'git   status --short 2>&1'"), "git status --short")
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.shellSummary("/bin/zsh -lc \"swift    test\""), "swift test")
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.shellSummary("  npm   run   build  "), "npm run build")
     }
 
     func testSingleLineTruncationRespectsLimit() {
-        XCTAssertEqual("abcdef".garyxSingleLineTruncated(limit: 4), "abc…")
-        XCTAssertEqual("abc".garyxSingleLineTruncated(limit: 4), "abc")
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.singleLineTruncated("abcdef", limit: 4), "abc…")
+        XCTAssertEqual(GaryxMobileToolSummaryFormatter.singleLineTruncated("abc", limit: 4), "abc")
     }
 }

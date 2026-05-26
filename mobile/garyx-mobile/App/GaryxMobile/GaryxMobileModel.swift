@@ -6824,7 +6824,7 @@ private struct GaryxMobileToolTracePayload {
                 parentToolUseId: nil,
                 toolName: fallbackToolName?.garyxTrimmedNilIfEmpty,
                 contentText: fallbackText?.garyxTrimmedNilIfEmpty,
-                summaryText: fallbackText?.garyxSafeToolSummary,
+                summaryText: fallbackText.flatMap(GaryxMobileToolSummaryFormatter.safeSummary),
                 timestamp: fallbackTimestamp,
                 primaryPathBadge: nil,
                 source: nil,
@@ -6870,7 +6870,7 @@ private struct GaryxMobileToolTracePayload {
             payload: payloadObject,
             payloadValue: payloadValue,
             eventKind: eventKind
-        ) ?? fallbackText?.garyxSafeToolSummary
+        ) ?? fallbackText.flatMap(GaryxMobileToolSummaryFormatter.safeSummary)
         let timestamp = object.stringValue(forKeys: ["timestamp", "createdAt", "created_at"]) ?? fallbackTimestamp
         let primaryPathBadge = Self.primaryPathBadge(
             payload: payloadObject,
@@ -6904,7 +6904,7 @@ private struct GaryxMobileToolTracePayload {
             ?? payload
             ?? nestedContent
         return input?.stringValue(forKeys: ["file_path", "filePath", "path", "file"])
-            .map { $0.garyxPathTail }
+            .map { GaryxMobileToolSummaryFormatter.pathTail($0) }
     }
 
     private static func summaryText(
@@ -6920,36 +6920,36 @@ private struct GaryxMobileToolTracePayload {
         if eventKind == .toolResult {
             let text = result?.stringValue(forKeys: ["summary", "message", "text", "stdout", "stderr"])
                 ?? payload?.stringValue(forKeys: ["summary", "message", "text", "stdout", "stderr"])
-            return text?.garyxSafeToolSummary
+            return text.flatMap(GaryxMobileToolSummaryFormatter.safeSummary)
         }
 
         switch normalizedTool {
         case "bash", "shell", "exec_command", "command", "commandexecution":
             return input?.stringValue(forKeys: ["description"])
                 ?? input?.stringValue(forKeys: ["command", "cmd"])
-                    .map { $0.garyxShellSummary }
+                    .map { GaryxMobileToolSummaryFormatter.shellSummary($0) }
         case "read", "view", "open", "cat":
             return input?.stringValue(forKeys: ["file_path", "filePath", "path", "file"])
-                .map { "read \($0.garyxPathTail)" }
+                .map { "read \(GaryxMobileToolSummaryFormatter.pathTail($0))" }
         case "write", "create":
             return input?.stringValue(forKeys: ["file_path", "filePath", "path", "file"])
-                .map { "write \($0.garyxPathTail)" }
+                .map { "write \(GaryxMobileToolSummaryFormatter.pathTail($0))" }
         case "edit", "multiedit", "apply_patch":
             return input?.stringValue(forKeys: ["file_path", "filePath", "path", "file"])
-                .map { "edit \($0.garyxPathTail)" }
+                .map { "edit \(GaryxMobileToolSummaryFormatter.pathTail($0))" }
         case "grep", "search", "rg":
             let pattern = input?.stringValue(forKeys: ["pattern", "query"])
             let path = input?.stringValue(forKeys: ["path", "include", "glob"])
             if let pattern, let path {
-                return "search \(pattern) in \(path.garyxPathTail)"
+                return "search \(pattern) in \(GaryxMobileToolSummaryFormatter.pathTail(path))"
             }
             return pattern.map { "search \($0)" }
         case "glob", "find":
             return input?.stringValue(forKeys: ["pattern", "path"])
-                .map { "find \($0.garyxPathTail)" }
+                .map { "find \(GaryxMobileToolSummaryFormatter.pathTail($0))" }
         case "ls", "list":
             return input?.stringValue(forKeys: ["path", "directory"])
-                .map { "list \($0.garyxPathTail)" } ?? "list files"
+                .map { "list \(GaryxMobileToolSummaryFormatter.pathTail($0))" } ?? "list files"
         case "todowrite", "todo_write":
             if let todos = input?["todos"]?.arrayValue, !todos.isEmpty {
                 return "\(todos.count) todo items"
@@ -6963,13 +6963,13 @@ private struct GaryxMobileToolTracePayload {
             return input?.stringValue(forKeys: ["query"]).map { "search web for \($0)" }
         default:
             if let path = input?.stringValue(forKeys: ["file_path", "filePath", "path", "file"]) {
-                return path.garyxPathTail
+                return GaryxMobileToolSummaryFormatter.pathTail(path)
             }
             if let command = input?.stringValue(forKeys: ["command", "cmd"]) {
-                return command.garyxShellSummary
+                return GaryxMobileToolSummaryFormatter.shellSummary(command)
             }
             if case .string(let text) = payloadValue {
-                return text.garyxSafeToolSummary
+                return GaryxMobileToolSummaryFormatter.safeSummary(text)
             }
             return nil
         }
