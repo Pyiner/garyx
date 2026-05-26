@@ -223,13 +223,21 @@ struct GaryxComposer: View {
                     Button {
                         model.setNewThreadWorkspaceMode("local")
                     } label: {
-                        Label("Local workspace", systemImage: model.newThreadUsesWorktree ? "laptopcomputer" : "checkmark")
+                        GaryxMenuSelectionLabel(
+                            title: "Local workspace",
+                            selected: !model.newThreadUsesWorktree,
+                            fallbackSystemImage: "laptopcomputer"
+                        )
                     }
 
                     Button {
                         model.setNewThreadWorkspaceMode("worktree")
                     } label: {
-                        Label("Worktree", systemImage: model.newThreadUsesWorktree ? "checkmark" : "arrow.triangle.branch")
+                        GaryxMenuSelectionLabel(
+                            title: "Worktree",
+                            selected: model.newThreadUsesWorktree,
+                            fallbackSystemImage: "arrow.triangle.branch"
+                        )
                     }
                     .disabled(!model.newThreadWorkspaceCanUseWorktree)
                 }

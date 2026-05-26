@@ -117,7 +117,11 @@ struct GaryxCreateTaskCard: View {
                         Button {
                             notificationTargetId = "none"
                         } label: {
-                            Label("Do not notify", systemImage: notificationTargetId == "none" ? "checkmark" : "bell.slash")
+                            GaryxMenuSelectionLabel(
+                                title: "Do not notify",
+                                selected: notificationTargetId == "none",
+                                fallbackSystemImage: "bell.slash"
+                            )
                         }
                         if !model.mobileBotGroups.isEmpty {
                             Divider()
@@ -125,7 +129,11 @@ struct GaryxCreateTaskCard: View {
                                 Button {
                                     notificationTargetId = group.id
                                 } label: {
-                                    Label(group.title, systemImage: notificationTargetId == group.id ? "checkmark" : "bell")
+                                    GaryxMenuSelectionLabel(
+                                        title: group.title,
+                                        selected: notificationTargetId == group.id,
+                                        fallbackSystemImage: "bell"
+                                    )
                                 }
                             }
                         }

@@ -188,9 +188,7 @@ private struct GaryxRecentThreadWidgetRow: View {
                         .truncationMode(.middle)
 
                     if isRunning {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: metrics.runningDotSize, height: metrics.runningDotSize)
+                        GaryxWidgetRunningIndicator(size: metrics.runningDotSize)
                     }
                 }
 
@@ -206,6 +204,26 @@ private struct GaryxRecentThreadWidgetRow: View {
         }
         .frame(maxWidth: .infinity, minHeight: metrics.rowHeight, maxHeight: metrics.rowHeight, alignment: .leading)
         .contentShape(Rectangle())
+    }
+}
+
+private struct GaryxWidgetRunningIndicator: View {
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+            Circle()
+                .trim(from: 0.12, to: 0.78)
+                .stroke(
+                    Color.primary.opacity(0.58),
+                    style: StrokeStyle(lineWidth: 1.35, lineCap: .round)
+                )
+                .rotationEffect(.degrees(34))
+        }
+        .frame(width: max(size + 4, 8), height: max(size + 4, 8))
+        .accessibilityLabel("Running")
     }
 }
 

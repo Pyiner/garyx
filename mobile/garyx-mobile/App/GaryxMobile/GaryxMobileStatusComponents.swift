@@ -283,20 +283,26 @@ struct GaryxStateView: View {
     }
 
     private var titleFont: Font {
+        if isLoading {
+            return GaryxFont.callout(weight: .medium)
+        }
         switch style {
         case .panel:
-            GaryxFont.body(weight: .semibold)
+            return GaryxFont.body(weight: .semibold)
         case .inline:
-            GaryxFont.callout(weight: .semibold)
+            return GaryxFont.callout(weight: .semibold)
         }
     }
 
     private var titleColor: Color {
+        if isLoading {
+            return .secondary
+        }
         switch style {
         case .panel:
-            .primary
+            return .primary
         case .inline:
-            .secondary
+            return .secondary
         }
     }
 
@@ -316,6 +322,13 @@ struct GaryxStateView: View {
         case .inline:
             42
         }
+    }
+
+    private var isLoading: Bool {
+        if case .loading = state {
+            return true
+        }
+        return false
     }
 }
 

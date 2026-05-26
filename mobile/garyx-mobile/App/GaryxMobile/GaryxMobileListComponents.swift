@@ -149,6 +149,26 @@ struct GaryxSelectionCheckmark: View {
     }
 }
 
+struct GaryxMenuSelectionLabel: View {
+    let title: String
+    let selected: Bool
+    let fallbackSystemImage: String
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            if selected {
+                GaryxSelectionCheckmark(size: 13)
+            } else {
+                Image(systemName: fallbackSystemImage)
+                    .font(GaryxFont.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 /// Row-level secondary actions rendered as a trailing ellipsis menu.
 /// Horizontal row swipes are reserved for navigation/sidebar gestures.
 struct GaryxRowAction {
