@@ -191,6 +191,7 @@ private struct GaryxAgentDetailInfoRow: View {
 struct GaryxCreateAgentCard: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var avatarGenerating = false
 
     var body: some View {
         GaryxFormSheet(
@@ -199,6 +200,17 @@ struct GaryxCreateAgentCard: View {
             onSave: { Task { await createAgent() } }
         ) {
             VStack(alignment: .leading, spacing: 22) {
+                GaryxAvatarGenerationSection(
+                    kind: .agent,
+                    identifier: model.draftAgentId,
+                    displayName: model.draftAgentName,
+                    providerType: model.draftAgentProvider,
+                    avatarDataUrl: $model.draftAgentAvatarDataUrl,
+                    isGenerating: avatarGenerating
+                ) { style in
+                    Task { await generateAvatar(style) }
+                }
+
                 GaryxFormGroupedSection(title: "Identity") {
                     GaryxFormTextFieldRow(
                         title: "Agent ID",
@@ -258,11 +270,26 @@ struct GaryxCreateAgentCard: View {
             dismiss()
         }
     }
+
+    private func generateAvatar(_ style: GaryxAvatarStyleOption) async {
+        guard !avatarGenerating else { return }
+        avatarGenerating = true
+        defer { avatarGenerating = false }
+        if let avatarDataUrl = await model.generateAvatar(
+            kind: .agent,
+            identifier: model.draftAgentId,
+            displayName: model.draftAgentName,
+            style: style
+        ) {
+            model.draftAgentAvatarDataUrl = avatarDataUrl
+        }
+    }
 }
 
 struct GaryxCreateTeamCard: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var avatarGenerating = false
 
     var body: some View {
         GaryxFormSheet(
@@ -271,6 +298,17 @@ struct GaryxCreateTeamCard: View {
             onSave: { Task { await createTeam() } }
         ) {
             VStack(alignment: .leading, spacing: 22) {
+                GaryxAvatarGenerationSection(
+                    kind: .team,
+                    identifier: model.draftTeamId,
+                    displayName: model.draftTeamName,
+                    providerType: "",
+                    avatarDataUrl: $model.draftTeamAvatarDataUrl,
+                    isGenerating: avatarGenerating
+                ) { style in
+                    Task { await generateAvatar(style) }
+                }
+
                 GaryxFormGroupedSection(title: "Identity") {
                     GaryxFormTextFieldRow(
                         title: "Team ID",
@@ -324,6 +362,109 @@ struct GaryxCreateTeamCard: View {
             dismiss()
         }
     }
+
+    private func generateAvatar(_ style: GaryxAvatarStyleOption) async {
+        guard !avatarGenerating else { return }
+        avatarGenerating = true
+        defer { avatarGenerating = false }
+        if let avatarDataUrl = await model.generateAvatar(
+            kind: .team,
+            identifier: model.draftTeamId,
+            displayName: model.draftTeamName,
+            style: style
+        ) {
+            model.draftTeamAvatarDataUrl = avatarDataUrl
+        }
+    }
+}
+
+private struct GaryxAvatarGenerationSection: View {
+    let kind: GaryxAgentAvatarKind
+    let identifier: String
+    let displayName: String
+    let providerType: String
+    @Binding var avatarDataUrl: String
+    let isGenerating: Bool
+    let onGenerate: (GaryxAvatarStyleOption) -> Void
+
+    var body: some View {
+        GaryxFormGroupedSection(title: "Avatar") {
+            GaryxFormRow(title: "Preview") {
+                HStack(spacing: 12) {
+                    GaryxAgentAvatarView(
+                        agentId: trimmedIdentifier,
+                        avatarDataUrl: avatarDataUrl,
+                        kind: targetKind,
+                        label: avatarLabel,
+                        providerType: providerType,
+                        diameter: 46
+                    )
+
+                    Menu {
+                        ForEach(GaryxAvatarStyleOption.builtIn) { style in
+                            Button {
+                                onGenerate(style)
+                            } label: {
+                                Label(style.label, systemImage: "sparkles")
+                            }
+                            .disabled(isGenerating || !canGenerate)
+                        }
+
+                        if hasAvatar {
+                            Divider()
+                            Button(role: .destructive) {
+                                avatarDataUrl = ""
+                            } label: {
+                                Label("Clear", systemImage: "xmark.circle")
+                            }
+                            .disabled(isGenerating)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isGenerating {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "sparkles")
+                                    .font(GaryxFont.system(size: 13, weight: .semibold))
+                            }
+                            Text(isGenerating ? "Generating" : "Generate")
+                                .font(GaryxFont.body(weight: .medium))
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(GaryxFont.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .foregroundStyle(canGenerate || hasAvatar ? .primary : .secondary)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var targetKind: GaryxMobileAgentTarget.Kind {
+        kind == .team ? .team : .agent
+    }
+
+    private var trimmedIdentifier: String {
+        identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var avatarLabel: String {
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty {
+            return name
+        }
+        return trimmedIdentifier.isEmpty ? (kind == .team ? "Team" : "Agent") : trimmedIdentifier
+    }
+
+    private var canGenerate: Bool {
+        !trimmedIdentifier.isEmpty || !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasAvatar: Bool {
+        !avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }
 
 struct GaryxAgentCard: View {
@@ -336,7 +477,9 @@ struct GaryxAgentCard: View {
     @State private var providerType = ""
     @State private var modelName = ""
     @State private var workspace = ""
+    @State private var avatarDataUrl = ""
     @State private var systemPrompt = ""
+    @State private var avatarGenerating = false
 
     var body: some View {
         GaryxRowActionMenu(actions: agentSwipeActions) {
@@ -408,11 +551,23 @@ struct GaryxAgentCard: View {
         providerType = agent.providerType
         modelName = agent.model
         workspace = agent.defaultWorkspaceDir
+        avatarDataUrl = agent.avatarDataUrl
         systemPrompt = agent.systemPrompt
     }
 
     private var agentFormFields: some View {
         VStack(alignment: .leading, spacing: 22) {
+            GaryxAvatarGenerationSection(
+                kind: .agent,
+                identifier: agentId,
+                displayName: displayName,
+                providerType: providerType,
+                avatarDataUrl: $avatarDataUrl,
+                isGenerating: avatarGenerating
+            ) { style in
+                Task { await generateAvatar(style) }
+            }
+
             GaryxFormGroupedSection(title: "Identity") {
                 GaryxFormTextFieldRow(
                     title: "Agent ID",
@@ -474,9 +629,24 @@ struct GaryxAgentCard: View {
             providerType: providerType,
             modelName: modelName,
             workspace: workspace,
+            avatarDataUrl: avatarDataUrl,
             systemPrompt: systemPrompt
         )
         showsEditForm = false
+    }
+
+    private func generateAvatar(_ style: GaryxAvatarStyleOption) async {
+        guard !avatarGenerating else { return }
+        avatarGenerating = true
+        defer { avatarGenerating = false }
+        if let generatedAvatarDataUrl = await model.generateAvatar(
+            kind: .agent,
+            identifier: agentId,
+            displayName: displayName,
+            style: style
+        ) {
+            avatarDataUrl = generatedAvatarDataUrl
+        }
     }
 }
 
@@ -487,9 +657,11 @@ struct GaryxTeamCard: View {
     @State private var showsDeleteConfirmation = false
     @State private var teamId = ""
     @State private var displayName = ""
+    @State private var avatarDataUrl = ""
     @State private var leaderAgentId = ""
     @State private var memberAgentIds = ""
     @State private var workflowText = ""
+    @State private var avatarGenerating = false
 
     var body: some View {
         GaryxRowActionMenu(actions: teamSwipeActions) {
@@ -550,6 +722,7 @@ struct GaryxTeamCard: View {
     private func fillDraft() {
         teamId = team.id
         displayName = team.displayName
+        avatarDataUrl = team.avatarDataUrl
         leaderAgentId = team.leaderAgentId
         memberAgentIds = team.memberAgentIds.joined(separator: ", ")
         workflowText = team.workflowText
@@ -557,6 +730,17 @@ struct GaryxTeamCard: View {
 
     private var teamFormFields: some View {
         VStack(alignment: .leading, spacing: 22) {
+            GaryxAvatarGenerationSection(
+                kind: .team,
+                identifier: teamId,
+                displayName: displayName,
+                providerType: "",
+                avatarDataUrl: $avatarDataUrl,
+                isGenerating: avatarGenerating
+            ) { style in
+                Task { await generateAvatar(style) }
+            }
+
             GaryxFormGroupedSection(title: "Identity") {
                 GaryxFormTextFieldRow(
                     title: "Team ID",
@@ -611,9 +795,24 @@ struct GaryxTeamCard: View {
             displayName: displayName,
             leaderAgentId: leaderAgentId,
             memberAgentIds: memberAgentIds,
-            workflowText: workflowText
+            workflowText: workflowText,
+            avatarDataUrl: avatarDataUrl
         )
         showsEditForm = false
+    }
+
+    private func generateAvatar(_ style: GaryxAvatarStyleOption) async {
+        guard !avatarGenerating else { return }
+        avatarGenerating = true
+        defer { avatarGenerating = false }
+        if let generatedAvatarDataUrl = await model.generateAvatar(
+            kind: .team,
+            identifier: teamId,
+            displayName: displayName,
+            style: style
+        ) {
+            avatarDataUrl = generatedAvatarDataUrl
+        }
     }
 }
 

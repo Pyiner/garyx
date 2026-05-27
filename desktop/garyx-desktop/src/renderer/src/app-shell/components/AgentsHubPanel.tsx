@@ -62,7 +62,7 @@ type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli' | 'gpt' | 
 type HubTab = 'agents' | 'teams';
 type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 type TeamDialogMode = 'create' | 'edit' | 'view' | null;
-type AvatarStyleId = 'clean_glyph' | 'soft_3d' | 'glass_icon' | 'pixel_badge' | 'ink_line' | 'custom';
+type AvatarStyleId = 'clean_glyph' | 'soft_3d' | 'glass_icon' | 'pixel_badge' | 'ink_line' | 'paper_cut' | 'blueprint' | 'enamel_sticker' | 'custom';
 
 type AgentDraft = {
   agentId: string;
@@ -126,6 +126,21 @@ const AVATAR_STYLE_OPTIONS: Array<{
     id: 'ink_line',
     label: 'Ink line',
     prompt: 'monoline ink icon, expressive black linework, small accent fill, simple abstract agent signal, high legibility',
+  },
+  {
+    id: 'paper_cut',
+    label: 'Paper cut',
+    prompt: 'layered paper-cut icon, crisp stacked shapes, soft shadow, warm neutral base with a bright teal accent, high contrast silhouette',
+  },
+  {
+    id: 'blueprint',
+    label: 'Blueprint',
+    prompt: 'technical blueprint emblem, precise line grid, subtle cyan ink on deep charcoal, schematic but simple, readable at small sizes',
+  },
+  {
+    id: 'enamel_sticker',
+    label: 'Enamel sticker',
+    prompt: 'polished enamel sticker badge, bold flat shapes, thick clean outline, optimistic coral and mint accents, crisp app-icon finish',
   },
 ];
 

@@ -375,6 +375,109 @@ public struct GaryxGenerateAvatarRequest: Encodable, Equatable, Sendable {
     }
 }
 
+public enum GaryxAgentAvatarKind: String, Equatable, Sendable {
+    case agent
+    case team
+}
+
+public struct GaryxAvatarStyleOption: Identifiable, Equatable, Sendable {
+    public var id: String
+    public var label: String
+    public var prompt: String
+
+    public init(id: String, label: String, prompt: String) {
+        self.id = id
+        self.label = label
+        self.prompt = prompt
+    }
+
+    public static let defaultId = "clean_glyph"
+
+    public static let builtIn: [GaryxAvatarStyleOption] = [
+        GaryxAvatarStyleOption(
+            id: "clean_glyph",
+            label: "Clean glyph",
+            prompt: "minimal vector glyph, simple geometric mark, balanced negative space, charcoal base with one sharp accent color"
+        ),
+        GaryxAvatarStyleOption(
+            id: "soft_3d",
+            label: "Soft 3D",
+            prompt: "soft 3D clay icon, rounded abstract forms, gentle studio lighting, compact and friendly without looking childish"
+        ),
+        GaryxAvatarStyleOption(
+            id: "glass_icon",
+            label: "Glass icon",
+            prompt: "translucent glassmorphism icon, crisp inner symbol, subtle refraction, clean depth, restrained blue green accent"
+        ),
+        GaryxAvatarStyleOption(
+            id: "pixel_badge",
+            label: "Pixel badge",
+            prompt: "premium pixel-art badge, 32-bit style, readable blocky silhouette, limited palette, modern developer-tool feel"
+        ),
+        GaryxAvatarStyleOption(
+            id: "ink_line",
+            label: "Ink line",
+            prompt: "monoline ink icon, expressive black linework, small accent fill, simple abstract agent signal, high legibility"
+        ),
+        GaryxAvatarStyleOption(
+            id: "paper_cut",
+            label: "Paper cut",
+            prompt: "layered paper-cut icon, crisp stacked shapes, soft shadow, warm neutral base with a bright teal accent, high contrast silhouette"
+        ),
+        GaryxAvatarStyleOption(
+            id: "blueprint",
+            label: "Blueprint",
+            prompt: "technical blueprint emblem, precise line grid, subtle cyan ink on deep charcoal, schematic but simple, readable at small sizes"
+        ),
+        GaryxAvatarStyleOption(
+            id: "enamel_sticker",
+            label: "Enamel sticker",
+            prompt: "polished enamel sticker badge, bold flat shapes, thick clean outline, optimistic coral and mint accents, crisp app-icon finish"
+        ),
+    ]
+}
+
+public enum GaryxAvatarPromptBuilder {
+    public static func prompt(
+        displayName: String,
+        identifier: String? = nil,
+        kind: GaryxAgentAvatarKind,
+        stylePrompt: String? = nil
+    ) -> String {
+        let name = avatarName(displayName: displayName, identifier: identifier)
+        let quotedName = jsonQuoted(name)
+        let isTeam = kind == .team
+        let style = stylePrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? "minimal vector glyph, simple geometry, balanced negative space, one confident accent color"
+        return [
+            "Create a square app avatar for an AI \(isTeam ? "agent team" : "agent") named \(quotedName).",
+            "Visual style: \(style).",
+            "Composition: one centered abstract \(isTeam ? "team" : "agent") mark, clean silhouette, readable at 32px, restrained palette, polished macOS developer-tool finish.",
+            "Do not include text, letters, watermarks, screenshots, people, or UI chrome.",
+        ].joined(separator: "\n")
+    }
+
+    private static func avatarName(displayName: String, identifier: String?) -> String {
+        let display = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !display.isEmpty {
+            return display
+        }
+        let id = identifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return id.isEmpty ? "Agent" : id
+    }
+
+    private static func jsonQuoted(_ value: String) -> String {
+        if let data = try? JSONEncoder().encode(value),
+           let encoded = String(data: data, encoding: .utf8) {
+            return encoded
+        }
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
+    }
+}
+
 
 public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
     public var agentId: String

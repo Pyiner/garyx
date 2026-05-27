@@ -34,6 +34,28 @@ final class GaryxGatewayClientTests: XCTestCase {
         )
     }
 
+    func testBuiltInAvatarStyleCatalogHasEightOptions() {
+        let styles = GaryxAvatarStyleOption.builtIn
+        XCTAssertEqual(styles.count, 8)
+        XCTAssertEqual(Set(styles.map(\.id)).count, 8)
+        XCTAssertEqual(GaryxAvatarStyleOption.defaultId, "clean_glyph")
+        XCTAssertTrue(styles.allSatisfy { !$0.label.isEmpty && !$0.prompt.isEmpty })
+    }
+
+    func testAvatarPromptBuilderMatchesAgentTeamShape() {
+        let prompt = GaryxAvatarPromptBuilder.prompt(
+            displayName: "Planning Team",
+            identifier: "planning-team",
+            kind: .team,
+            stylePrompt: "layered paper-cut icon"
+        )
+
+        XCTAssertTrue(prompt.contains(#"AI agent team named "Planning Team""#))
+        XCTAssertTrue(prompt.contains("Visual style: layered paper-cut icon."))
+        XCTAssertTrue(prompt.contains("one centered abstract team mark"))
+        XCTAssertTrue(prompt.contains("Do not include text"))
+    }
+
     func testMobileConnectLinkRoundTripsGatewaySettings() throws {
         let url = try XCTUnwrap(
             GaryxMobileConnectLink.make(
