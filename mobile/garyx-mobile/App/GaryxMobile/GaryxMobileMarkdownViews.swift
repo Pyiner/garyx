@@ -382,6 +382,14 @@ private struct GaryxMarkdownImageView: View {
     @State private var loadFailed = false
     @State private var showsPreview = false
 
+    private var maxDisplayWidth: CGFloat {
+        min(UIScreen.main.bounds.width * 0.76, 320)
+    }
+
+    private var maxDisplayHeight: CGFloat {
+        260
+    }
+
     private var resolvedURL: URL? {
         let trimmed = source.trimmingCharacters(in: .whitespaces)
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
@@ -406,40 +414,36 @@ private struct GaryxMarkdownImageView: View {
         Button {
             showsPreview = true
         } label: {
-            Group {
-                if let image = localImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                } else if let url = resolvedURL {
-                    AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.18))) { phase in
-                        switch phase {
-                        case .empty:
-                            loadingPlaceholder
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFit()
-                        case .failure:
-                            failurePlaceholder
-                        @unknown default:
-                            failurePlaceholder
-                        }
+            if let image = localImage {
+                let size = displaySize(for: image.size)
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: size.width, height: size.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                     }
-                } else if loadFailed {
-                    failurePlaceholder
-                } else {
-                    loadingPlaceholder
+            } else {
+                Group {
+                    if loadFailed {
+                        failurePlaceholder
+                    } else {
+                        loadingPlaceholder
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                }
             }
         }
         .buttonStyle(.plain)
+        .fixedSize()
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .disabled(localImage == nil && loadFailed)
         .fullScreenCover(isPresented: $showsPreview) {
             GaryxFullscreenImagePreview(
                 source: GaryxImagePreviewSource(
@@ -455,8 +459,15 @@ private struct GaryxMarkdownImageView: View {
         .accessibilityLabel(alt.isEmpty ? "Image" : alt)
         .accessibilityHint("Opens full screen preview")
         .task(id: source) {
-            await loadLocalImageIfPossible()
+            await loadImageIfPossible()
         }
+    }
+
+    private func displaySize(for rawSize: CGSize) -> CGSize {
+        let rawWidth = max(rawSize.width, 1)
+        let rawHeight = max(rawSize.height, 1)
+        let scale = min(maxDisplayWidth / rawWidth, maxDisplayHeight / rawHeight, 1)
+        return CGSize(width: rawWidth * scale, height: rawHeight * scale)
     }
 
     @ViewBuilder
@@ -466,8 +477,7 @@ private struct GaryxMarkdownImageView: View {
             ProgressView()
                 .scaleEffect(0.78)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 160)
+        .frame(width: maxDisplayWidth, height: 160)
     }
 
     @ViewBuilder
@@ -490,12 +500,14 @@ private struct GaryxMarkdownImageView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(width: maxDisplayWidth, alignment: .leading)
         .background(Color(.secondarySystemFill))
     }
 
     @MainActor
-    private func loadLocalImageIfPossible() async {
+    private func loadImageIfPossible() async {
+        localImage = nil
+        loadFailed = false
         if let sourceDataUrl {
             let image = await Task.detached(priority: .utility) {
                 GaryxImageDecoder.image(fromDataUrl: sourceDataUrl, maxPixelSize: 720)
@@ -508,14 +520,35 @@ private struct GaryxMarkdownImageView: View {
             }
             return
         }
-        guard let path = localFilePath else { return }
-        let image = await Task.detached(priority: .utility) {
-            GaryxImageDecoder.image(fromFile: path, maxPixelSize: 720)
-        }.value
-        guard !Task.isCancelled else { return }
-        if let image {
-            localImage = image
-        } else {
+        if let path = localFilePath {
+            let image = await Task.detached(priority: .utility) {
+                GaryxImageDecoder.image(fromFile: path, maxPixelSize: 720)
+            }.value
+            guard !Task.isCancelled else { return }
+            if let image {
+                localImage = image
+            } else {
+                loadFailed = true
+            }
+            return
+        }
+        guard let url = resolvedURL else {
+            loadFailed = true
+            return
+        }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let image = await Task.detached(priority: .utility) {
+                GaryxImageDecoder.image(from: data, maxPixelSize: 720)
+            }.value
+            guard !Task.isCancelled else { return }
+            if let image {
+                localImage = image
+            } else {
+                loadFailed = true
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
             loadFailed = true
         }
     }
