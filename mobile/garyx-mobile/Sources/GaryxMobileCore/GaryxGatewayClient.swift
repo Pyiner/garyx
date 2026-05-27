@@ -325,7 +325,11 @@ public final class GaryxGatewayClient {
     }
 
     public func generateAvatar(prompt: String, timeoutSecs: Int = 600) async throws -> GaryxGeneratedAvatar {
-        try await post("/api/tools/image", body: GaryxGenerateAvatarRequest(prompt: prompt, timeoutSecs: timeoutSecs))
+        try await post(
+            "/api/tools/image",
+            body: GaryxGenerateAvatarRequest(prompt: prompt, timeoutSecs: timeoutSecs),
+            timeoutInterval: TimeInterval(timeoutSecs + 30)
+        )
     }
 
     public func createAgent(_ request: GaryxCustomAgentRequest) async throws -> GaryxAgentSummary {
@@ -880,9 +884,10 @@ public final class GaryxGatewayClient {
     private func post<Response: Decodable, Body: Encodable>(
         _ path: String,
         body: Body,
-        idempotent: Bool = false
+        idempotent: Bool = false,
+        timeoutInterval: TimeInterval? = nil
     ) async throws -> Response {
-        var request = try makeRequest(path: path, method: "POST")
+        var request = try makeRequest(path: path, method: "POST", timeoutInterval: timeoutInterval)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
@@ -921,10 +926,14 @@ public final class GaryxGatewayClient {
     private func makeRequest(
         path: String,
         method: String,
-        queryItems: [URLQueryItem] = []
+        queryItems: [URLQueryItem] = [],
+        timeoutInterval: TimeInterval? = nil
     ) throws -> URLRequest {
         var request = URLRequest(url: try url(for: path, queryItems: queryItems))
         request.httpMethod = method
+        if let timeoutInterval, timeoutInterval > 0 {
+            request.timeoutInterval = timeoutInterval
+        }
         if let token = configuration.authToken, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }

@@ -478,6 +478,68 @@ public enum GaryxAvatarPromptBuilder {
     }
 }
 
+public enum GaryxMobileAvatarEditorActivity: Equatable, Sendable {
+    case generate
+    case upload
+}
+
+public struct GaryxMobileAvatarEditorState: Equatable, Sendable {
+    public private(set) var requestId: UUID?
+    public private(set) var activity: GaryxMobileAvatarEditorActivity?
+    public private(set) var fingerprint: String
+
+    public init(
+        requestId: UUID? = nil,
+        activity: GaryxMobileAvatarEditorActivity? = nil,
+        fingerprint: String = ""
+    ) {
+        self.requestId = requestId
+        self.activity = activity
+        self.fingerprint = fingerprint
+    }
+
+    public var isGenerating: Bool {
+        activity == .generate
+    }
+
+    public var isUploading: Bool {
+        activity == .upload
+    }
+
+    public var isBusy: Bool {
+        activity != nil
+    }
+
+    @discardableResult
+    public mutating func begin(
+        _ activity: GaryxMobileAvatarEditorActivity,
+        fingerprint: String,
+        requestId: UUID = UUID()
+    ) -> UUID {
+        self.requestId = requestId
+        self.activity = activity
+        self.fingerprint = fingerprint
+        return requestId
+    }
+
+    public func canApply(requestId: UUID, fingerprint: String) -> Bool {
+        self.requestId == requestId && self.fingerprint == fingerprint
+    }
+
+    public mutating func finish(requestId: UUID) {
+        guard self.requestId == requestId else { return }
+        self.requestId = nil
+        activity = nil
+        fingerprint = ""
+    }
+
+    public mutating func reset() {
+        requestId = nil
+        activity = nil
+        fingerprint = ""
+    }
+}
+
 
 public struct GaryxCustomAgentRequest: Encodable, Equatable, Sendable {
     public var agentId: String

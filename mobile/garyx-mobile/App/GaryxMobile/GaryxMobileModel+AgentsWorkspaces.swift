@@ -4,10 +4,89 @@ import UIKit
 import UniformTypeIdentifiers
 import WidgetKit
 
+enum GaryxMobileAvatarImageNormalizer {
+    enum NormalizationError: LocalizedError {
+        case unreadable
+        case tooLarge
+
+        var errorDescription: String? {
+            switch self {
+            case .unreadable:
+                "Failed to read avatar image."
+            case .tooLarge:
+                "Avatar image is too large."
+            }
+        }
+    }
+
+    static func normalizedDataUrl(fromRawValue rawValue: String) throws -> String {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw NormalizationError.unreadable }
+        let parts = trimmed.split(separator: ",", maxSplits: 1).map(String.init)
+        let encoded = parts.count == 2 ? parts[1] : parts[0]
+        guard let sourceData = Data(base64Encoded: encoded) else {
+            throw NormalizationError.unreadable
+        }
+        return try normalizedDataUrl(fromImageData: sourceData)
+    }
+
+    static func normalizedDataUrl(fromImageData data: Data) throws -> String {
+        guard let sourceImage = UIImage(data: data) else {
+            throw NormalizationError.unreadable
+        }
+        let sourceSize = sourceImage.size
+        guard sourceSize.width > 0, sourceSize.height > 0 else {
+            throw NormalizationError.unreadable
+        }
+
+        let side = CGFloat(avatarImageSize)
+        let targetRect = CGRect(x: 0, y: 0, width: side, height: side)
+        let scale = max(side / sourceSize.width, side / sourceSize.height)
+        let drawSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
+        let drawRect = CGRect(
+            x: (side - drawSize.width) / 2,
+            y: (side - drawSize.height) / 2,
+            width: drawSize.width,
+            height: drawSize.height
+        )
+
+        let transparentFormat = UIGraphicsImageRendererFormat()
+        transparentFormat.scale = 1
+        transparentFormat.opaque = false
+        let transparentImage = UIGraphicsImageRenderer(size: targetRect.size, format: transparentFormat).image { context in
+            UIColor.clear.setFill()
+            context.cgContext.fill(targetRect)
+            sourceImage.draw(in: drawRect)
+        }
+        if let pngData = transparentImage.pngData(), pngData.count <= avatarMaxBytes {
+            return dataUrl(mediaType: "image/png", data: pngData)
+        }
+
+        let opaqueFormat = UIGraphicsImageRendererFormat()
+        opaqueFormat.scale = 1
+        opaqueFormat.opaque = true
+        let flattenedImage = UIGraphicsImageRenderer(size: targetRect.size, format: opaqueFormat).image { context in
+            UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1).setFill()
+            context.cgContext.fill(targetRect)
+            transparentImage.draw(in: targetRect)
+        }
+        guard let jpegData = flattenedImage.jpegData(compressionQuality: avatarJPEGQuality),
+              jpegData.count <= avatarMaxBytes else {
+            throw NormalizationError.tooLarge
+        }
+        return dataUrl(mediaType: "image/jpeg", data: jpegData)
+    }
+
+    private static func dataUrl(mediaType: String, data: Data) -> String {
+        "data:\(mediaType);base64,\(data.base64EncodedString())"
+    }
+
+    private static var avatarImageSize: Int { 256 }
+    private static var avatarMaxBytes: Int { 450 * 1024 }
+    private static var avatarJPEGQuality: CGFloat { 0.88 }
+}
+
 extension GaryxMobileModel {
-    private static let generatedAvatarSize = 256
-    private static let generatedAvatarMaxBytes = 450 * 1024
-    private static let generatedAvatarJPEGQuality = 0.88
 
     func openThread(_ thread: GaryxThreadSummary) async {
         await openResolvedThread(thread, invalidatesPendingThreadOpen: true)
@@ -298,7 +377,7 @@ extension GaryxMobileModel {
         kind: GaryxAgentAvatarKind,
         identifier: String,
         displayName: String,
-        style: GaryxAvatarStyleOption
+        stylePrompt: String
     ) async -> String? {
         let trimmedId = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -310,7 +389,7 @@ extension GaryxMobileModel {
             displayName: trimmedName,
             identifier: trimmedId,
             kind: kind,
-            stylePrompt: style.prompt
+            stylePrompt: stylePrompt
         )
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
@@ -321,66 +400,17 @@ extension GaryxMobileModel {
                 lastError = "Image generation did not return an avatar."
                 return nil
             }
-            return Self.normalizedGeneratedAvatarDataUrl(avatarDataUrl) ?? avatarDataUrl
+            do {
+                return try GaryxMobileAvatarImageNormalizer.normalizedDataUrl(fromRawValue: avatarDataUrl)
+            } catch {
+                lastError = error.localizedDescription
+                return nil
+            }
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
             lastError = displayMessage(for: error)
             return nil
         }
-    }
-
-    private static func normalizedGeneratedAvatarDataUrl(_ rawValue: String) -> String? {
-        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let parts = trimmed.split(separator: ",", maxSplits: 1).map(String.init)
-        let encoded = parts.count == 2 ? parts[1] : parts[0]
-        guard let sourceData = Data(base64Encoded: encoded),
-              let sourceImage = UIImage(data: sourceData) else {
-            return nil
-        }
-
-        let side = CGFloat(generatedAvatarSize)
-        let targetRect = CGRect(x: 0, y: 0, width: side, height: side)
-        let sourceSize = sourceImage.size
-        guard sourceSize.width > 0, sourceSize.height > 0 else { return nil }
-        let scale = max(side / sourceSize.width, side / sourceSize.height)
-        let drawSize = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
-        let drawRect = CGRect(
-            x: (side - drawSize.width) / 2,
-            y: (side - drawSize.height) / 2,
-            width: drawSize.width,
-            height: drawSize.height
-        )
-
-        let transparentFormat = UIGraphicsImageRendererFormat()
-        transparentFormat.scale = 1
-        transparentFormat.opaque = false
-        let transparentImage = UIGraphicsImageRenderer(size: targetRect.size, format: transparentFormat).image { context in
-            UIColor.clear.setFill()
-            context.cgContext.fill(targetRect)
-            sourceImage.draw(in: drawRect)
-        }
-
-        if let pngData = transparentImage.pngData(), pngData.count <= generatedAvatarMaxBytes {
-            return dataUrl(mediaType: "image/png", data: pngData)
-        }
-
-        let opaqueFormat = UIGraphicsImageRendererFormat()
-        opaqueFormat.scale = 1
-        opaqueFormat.opaque = true
-        let flattenedImage = UIGraphicsImageRenderer(size: targetRect.size, format: opaqueFormat).image { context in
-            UIColor(red: 0.969, green: 0.973, blue: 0.980, alpha: 1).setFill()
-            context.cgContext.fill(targetRect)
-            transparentImage.draw(in: targetRect)
-        }
-        guard let jpegData = flattenedImage.jpegData(compressionQuality: generatedAvatarJPEGQuality) else {
-            return nil
-        }
-        return dataUrl(mediaType: "image/jpeg", data: jpegData)
-    }
-
-    private static func dataUrl(mediaType: String, data: Data) -> String {
-        "data:\(mediaType);base64,\(data.base64EncodedString())"
     }
 
     func createAgentFromDraft() async -> Bool {

@@ -1,4 +1,5 @@
 import Foundation
+import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -191,7 +192,6 @@ private struct GaryxAgentDetailInfoRow: View {
 struct GaryxCreateAgentCard: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
-    @State private var avatarGenerating = false
 
     var body: some View {
         GaryxFormSheet(
@@ -200,15 +200,21 @@ struct GaryxCreateAgentCard: View {
             onSave: { Task { await createAgent() } }
         ) {
             VStack(alignment: .leading, spacing: 22) {
-                GaryxAvatarGenerationSection(
+                GaryxAvatarEditorSection(
                     kind: .agent,
                     identifier: model.draftAgentId,
                     displayName: model.draftAgentName,
                     providerType: model.draftAgentProvider,
-                    avatarDataUrl: $model.draftAgentAvatarDataUrl,
-                    isGenerating: avatarGenerating
-                ) { style in
-                    Task { await generateAvatar(style) }
+                    avatarDataUrl: $model.draftAgentAvatarDataUrl
+                ) { stylePrompt in
+                    await model.generateAvatar(
+                        kind: .agent,
+                        identifier: model.draftAgentId,
+                        displayName: model.draftAgentName,
+                        stylePrompt: stylePrompt
+                    )
+                } onError: { message in
+                    model.lastError = message
                 }
 
                 GaryxFormGroupedSection(title: "Identity") {
@@ -270,26 +276,11 @@ struct GaryxCreateAgentCard: View {
             dismiss()
         }
     }
-
-    private func generateAvatar(_ style: GaryxAvatarStyleOption) async {
-        guard !avatarGenerating else { return }
-        avatarGenerating = true
-        defer { avatarGenerating = false }
-        if let avatarDataUrl = await model.generateAvatar(
-            kind: .agent,
-            identifier: model.draftAgentId,
-            displayName: model.draftAgentName,
-            style: style
-        ) {
-            model.draftAgentAvatarDataUrl = avatarDataUrl
-        }
-    }
 }
 
 struct GaryxCreateTeamCard: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
-    @State private var avatarGenerating = false
 
     var body: some View {
         GaryxFormSheet(
@@ -298,15 +289,21 @@ struct GaryxCreateTeamCard: View {
             onSave: { Task { await createTeam() } }
         ) {
             VStack(alignment: .leading, spacing: 22) {
-                GaryxAvatarGenerationSection(
+                GaryxAvatarEditorSection(
                     kind: .team,
                     identifier: model.draftTeamId,
                     displayName: model.draftTeamName,
                     providerType: "",
-                    avatarDataUrl: $model.draftTeamAvatarDataUrl,
-                    isGenerating: avatarGenerating
-                ) { style in
-                    Task { await generateAvatar(style) }
+                    avatarDataUrl: $model.draftTeamAvatarDataUrl
+                ) { stylePrompt in
+                    await model.generateAvatar(
+                        kind: .team,
+                        identifier: model.draftTeamId,
+                        displayName: model.draftTeamName,
+                        stylePrompt: stylePrompt
+                    )
+                } onError: { message in
+                    model.lastError = message
                 }
 
                 GaryxFormGroupedSection(title: "Identity") {
@@ -362,84 +359,124 @@ struct GaryxCreateTeamCard: View {
             dismiss()
         }
     }
-
-    private func generateAvatar(_ style: GaryxAvatarStyleOption) async {
-        guard !avatarGenerating else { return }
-        avatarGenerating = true
-        defer { avatarGenerating = false }
-        if let avatarDataUrl = await model.generateAvatar(
-            kind: .team,
-            identifier: model.draftTeamId,
-            displayName: model.draftTeamName,
-            style: style
-        ) {
-            model.draftTeamAvatarDataUrl = avatarDataUrl
-        }
-    }
 }
 
-private struct GaryxAvatarGenerationSection: View {
+private struct GaryxAvatarEditorSection: View {
     let kind: GaryxAgentAvatarKind
     let identifier: String
     let displayName: String
     let providerType: String
     @Binding var avatarDataUrl: String
-    let isGenerating: Bool
-    let onGenerate: (GaryxAvatarStyleOption) -> Void
+    let onGenerate: (String) async -> String?
+    let onError: (String) -> Void
+
+    @State private var editorState = GaryxMobileAvatarEditorState()
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var showsStyleSheet = false
+    @State private var workTask: Task<Void, Never>?
 
     var body: some View {
         GaryxFormGroupedSection(title: "Avatar") {
-            GaryxFormRow(title: "Preview") {
-                HStack(spacing: 12) {
-                    GaryxAgentAvatarView(
-                        agentId: trimmedIdentifier,
-                        avatarDataUrl: avatarDataUrl,
-                        kind: targetKind,
-                        label: avatarLabel,
-                        providerType: providerType,
-                        diameter: 46
-                    )
+            VStack(alignment: .center, spacing: 16) {
+                GaryxAgentAvatarView(
+                    agentId: trimmedIdentifier,
+                    avatarDataUrl: avatarDataUrl,
+                    kind: targetKind,
+                    label: avatarLabel,
+                    providerType: providerType,
+                    diameter: 96
+                )
+                .accessibilityLabel("\(kind == .team ? "Team" : "Agent") avatar preview")
 
-                    Menu {
-                        ForEach(GaryxAvatarStyleOption.builtIn) { style in
-                            Button {
-                                onGenerate(style)
-                            } label: {
-                                Label(style.label, systemImage: "sparkles")
-                            }
-                            .disabled(isGenerating || !canGenerate)
-                        }
-
-                        if hasAvatar {
-                            Divider()
-                            Button(role: .destructive) {
-                                avatarDataUrl = ""
-                            } label: {
-                                Label("Clear", systemImage: "xmark.circle")
-                            }
-                            .disabled(isGenerating)
-                        }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if isGenerating {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Image(systemName: "sparkles")
-                                    .font(GaryxFont.system(size: 13, weight: .semibold))
-                            }
-                            Text(isGenerating ? "Generating" : "Generate")
-                                .font(GaryxFont.body(weight: .medium))
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(GaryxFont.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .foregroundStyle(canGenerate || hasAvatar ? .primary : .secondary)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        avatarActions
+                    }
+                    VStack(spacing: 10) {
+                        avatarActions
                     }
                 }
-                .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .sheet(isPresented: $showsStyleSheet) {
+            GaryxAvatarStyleSheet(
+                isGenerating: editorState.isGenerating,
+                canGenerate: canGenerate
+            ) { stylePrompt in
+                startGeneration(stylePrompt: stylePrompt)
             }
         }
+        .onChange(of: selectedPhotoItem) { _, item in
+            guard let item else { return }
+            startUpload(item)
+        }
+        .onDisappear {
+            cancelWork()
+        }
+    }
+
+    @ViewBuilder
+    private var avatarActions: some View {
+        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+            GaryxAvatarEditorActionLabel(
+                title: editorState.isUploading ? "Uploading" : "Upload",
+                systemName: "photo",
+                isLoading: editorState.isUploading
+            )
+        }
+        .disabled(editorState.isBusy)
+        .accessibilityLabel("Upload avatar")
+
+        Button {
+            showsStyleSheet = true
+        } label: {
+            GaryxAvatarEditorActionLabel(
+                title: editorState.isGenerating ? "Generating" : "Generate",
+                systemName: "sparkles",
+                isLoading: editorState.isGenerating
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(editorState.isBusy || !canGenerate)
+        .accessibilityLabel("Generate avatar")
+
+        if hasAvatar {
+            Button {
+                avatarDataUrl = ""
+                editorState.reset()
+            } label: {
+                GaryxAvatarEditorActionLabel(title: "Clear", systemName: "xmark.circle")
+            }
+            .buttonStyle(.plain)
+            .disabled(editorState.isBusy)
+            .accessibilityLabel("Clear avatar")
+        }
+    }
+
+    private func startGeneration(stylePrompt: String) {
+        guard workTask == nil else { return }
+        workTask = Task {
+            await generateAvatar(stylePrompt: stylePrompt)
+        }
+    }
+
+    private func startUpload(_ item: PhotosPickerItem) {
+        guard workTask == nil else {
+            selectedPhotoItem = nil
+            return
+        }
+        workTask = Task {
+            await uploadAvatar(from: item)
+        }
+    }
+
+    private func cancelWork() {
+        workTask?.cancel()
+        workTask = nil
+        selectedPhotoItem = nil
+        editorState.reset()
     }
 
     private var targetKind: GaryxMobileAgentTarget.Kind {
@@ -465,6 +502,304 @@ private struct GaryxAvatarGenerationSection: View {
     private var hasAvatar: Bool {
         !avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
+    private var generationFingerprint: String {
+        [
+            kind.rawValue,
+            trimmedIdentifier,
+            displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+            providerType.trimmingCharacters(in: .whitespacesAndNewlines),
+            String(avatarDataUrl.count),
+            String(avatarDataUrl.prefix(80)),
+            String(avatarDataUrl.suffix(80)),
+        ].joined(separator: "\u{1F}")
+    }
+
+    private var uploadFingerprint: String {
+        [
+            kind.rawValue,
+            String(avatarDataUrl.count),
+            String(avatarDataUrl.prefix(80)),
+            String(avatarDataUrl.suffix(80)),
+        ].joined(separator: "\u{1F}")
+    }
+
+    @MainActor
+    private func generateAvatar(stylePrompt: String) async {
+        guard canGenerate, !editorState.isBusy else { return }
+        let fingerprint = generationFingerprint
+        let requestId = editorState.begin(.generate, fingerprint: fingerprint)
+        defer { finishWork(requestId: requestId) }
+
+        guard let generated = await onGenerate(stylePrompt) else { return }
+        guard canApplyCurrentResult(requestId: requestId, fingerprint: generationFingerprint) else { return }
+        avatarDataUrl = generated
+        showsStyleSheet = false
+    }
+
+    @MainActor
+    private func uploadAvatar(from item: PhotosPickerItem) async {
+        guard !editorState.isBusy else {
+            selectedPhotoItem = nil
+            return
+        }
+        let fingerprint = uploadFingerprint
+        let requestId = editorState.begin(.upload, fingerprint: fingerprint)
+        defer {
+            selectedPhotoItem = nil
+            finishWork(requestId: requestId)
+        }
+
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                if canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) {
+                    onError("Failed to read avatar image.")
+                }
+                return
+            }
+            let prepared = try await Task.detached(priority: .utility) {
+                try GaryxMobileAvatarImageNormalizer.normalizedDataUrl(fromImageData: data)
+            }.value
+            guard canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) else { return }
+            avatarDataUrl = prepared
+        } catch is CancellationError {
+            return
+        } catch let error as GaryxMobileAvatarImageNormalizer.NormalizationError {
+            if canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) {
+                onError(error.localizedDescription)
+            }
+        } catch {
+            if canApplyCurrentResult(requestId: requestId, fingerprint: uploadFingerprint) {
+                onError(error.localizedDescription)
+            }
+        }
+    }
+
+    private func canApplyCurrentResult(requestId: UUID, fingerprint: String) -> Bool {
+        !Task.isCancelled && editorState.canApply(requestId: requestId, fingerprint: fingerprint)
+    }
+
+    private func finishWork(requestId: UUID) {
+        let isCurrentRequest = editorState.requestId == requestId
+        editorState.finish(requestId: requestId)
+        if isCurrentRequest {
+            workTask = nil
+        }
+    }
+}
+
+private struct GaryxAvatarEditorActionLabel: View {
+    let title: String
+    let systemName: String
+    var isLoading = false
+
+    var body: some View {
+        HStack(spacing: 7) {
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: systemName)
+                    .font(GaryxFont.system(size: 14, weight: .semibold))
+            }
+            Text(title)
+                .font(GaryxFont.footnote(weight: .semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(.primary)
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: 44)
+        .padding(.horizontal, 12)
+        .background(Color.primary.opacity(0.055), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+    }
+}
+
+private struct GaryxAvatarStyleSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let isGenerating: Bool
+    let canGenerate: Bool
+    let onGenerate: (String) -> Void
+    @State private var selectedStyleId = GaryxAvatarStyleOption.defaultId
+    @State private var customStyle = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 14) {
+                Text("Avatar style")
+                    .font(GaryxFont.callout(weight: .medium))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+                Button {
+                    dismiss()
+                } label: {
+                    GaryxCompactGlassIcon(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 22)
+            .padding(.bottom, 12)
+
+            ScrollView {
+                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                    VStack(spacing: 0) {
+                        ForEach(Array(GaryxAvatarStyleOption.builtIn.enumerated()), id: \.element.id) { index, style in
+                            GaryxAvatarStyleRow(
+                                title: style.label,
+                                isSelected: selectedStyleId == style.id
+                            ) {
+                                selectedStyleId = style.id
+                            }
+                            if index < GaryxAvatarStyleOption.builtIn.count - 1 {
+                                Divider().padding(.leading, 18)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 4)
+
+                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Button {
+                            selectedStyleId = customStyleId
+                        } label: {
+                            HStack(spacing: 12) {
+                                Text("Custom style")
+                                    .font(GaryxFont.body(weight: .medium))
+                                    .foregroundStyle(.primary)
+                                Spacer(minLength: 0)
+                                if selectedStyleId == customStyleId {
+                                    GaryxSelectionCheckmark(size: 14)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        TextEditor(text: $customStyle)
+                            .font(GaryxFont.callout())
+                            .foregroundStyle(.primary)
+                            .frame(minHeight: 104)
+                            .padding(10)
+                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(alignment: .topLeading) {
+                                if customStyle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    Text("e.g. polished paper-cut icon with emerald accents")
+                                        .font(GaryxFont.callout())
+                                        .foregroundStyle(.tertiary)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 18)
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                            .onTapGesture {
+                                selectedStyleId = customStyleId
+                            }
+                    }
+                    .padding(18)
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 14)
+                .padding(.bottom, 110)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .safeAreaInset(edge: .bottom) {
+            HStack(spacing: 12) {
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Cancel")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(GaryxSecondaryButtonStyle())
+                .disabled(isGenerating)
+
+                Button {
+                    onGenerate(activeStylePrompt)
+                } label: {
+                    HStack(spacing: 8) {
+                        if isGenerating {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(isGenerating ? "Generating" : "Generate")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(GaryxPrimaryWideButtonStyle())
+                .disabled(!canSubmit || isGenerating)
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
+            .background(.regularMaterial)
+        }
+        .background {
+            Rectangle()
+                .fill(Color(.systemBackground).opacity(0.98))
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.28),
+                            Color.white.opacity(0.10)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
+                .ignoresSafeArea()
+        }
+        .presentationBackground(.clear)
+        .presentationBackgroundInteraction(.enabled)
+        .presentationDetents([.fraction(0.93), .large])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(38)
+    }
+
+    private var activeStylePrompt: String {
+        if selectedStyleId == customStyleId {
+            return customStyle.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return GaryxAvatarStyleOption.builtIn.first(where: { $0.id == selectedStyleId })?.prompt
+            ?? GaryxAvatarStyleOption.builtIn.first?.prompt
+            ?? ""
+    }
+
+    private var canSubmit: Bool {
+        canGenerate && !activeStylePrompt.isEmpty
+    }
+
+    private var customStyleId: String { "custom" }
+}
+
+private struct GaryxAvatarStyleRow: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Text(title)
+                    .font(GaryxFont.body())
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
+                if isSelected {
+                    GaryxSelectionCheckmark(size: 14)
+                }
+            }
+            .padding(.horizontal, 18)
+            .frame(minHeight: 54)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 struct GaryxAgentCard: View {
@@ -479,7 +814,6 @@ struct GaryxAgentCard: View {
     @State private var workspace = ""
     @State private var avatarDataUrl = ""
     @State private var systemPrompt = ""
-    @State private var avatarGenerating = false
 
     var body: some View {
         GaryxRowActionMenu(actions: agentSwipeActions) {
@@ -557,15 +891,21 @@ struct GaryxAgentCard: View {
 
     private var agentFormFields: some View {
         VStack(alignment: .leading, spacing: 22) {
-            GaryxAvatarGenerationSection(
+            GaryxAvatarEditorSection(
                 kind: .agent,
                 identifier: agentId,
                 displayName: displayName,
                 providerType: providerType,
-                avatarDataUrl: $avatarDataUrl,
-                isGenerating: avatarGenerating
-            ) { style in
-                Task { await generateAvatar(style) }
+                avatarDataUrl: $avatarDataUrl
+            ) { stylePrompt in
+                await model.generateAvatar(
+                    kind: .agent,
+                    identifier: agentId,
+                    displayName: displayName,
+                    stylePrompt: stylePrompt
+                )
+            } onError: { message in
+                model.lastError = message
             }
 
             GaryxFormGroupedSection(title: "Identity") {
@@ -634,20 +974,6 @@ struct GaryxAgentCard: View {
         )
         showsEditForm = false
     }
-
-    private func generateAvatar(_ style: GaryxAvatarStyleOption) async {
-        guard !avatarGenerating else { return }
-        avatarGenerating = true
-        defer { avatarGenerating = false }
-        if let generatedAvatarDataUrl = await model.generateAvatar(
-            kind: .agent,
-            identifier: agentId,
-            displayName: displayName,
-            style: style
-        ) {
-            avatarDataUrl = generatedAvatarDataUrl
-        }
-    }
 }
 
 struct GaryxTeamCard: View {
@@ -661,7 +987,6 @@ struct GaryxTeamCard: View {
     @State private var leaderAgentId = ""
     @State private var memberAgentIds = ""
     @State private var workflowText = ""
-    @State private var avatarGenerating = false
 
     var body: some View {
         GaryxRowActionMenu(actions: teamSwipeActions) {
@@ -730,15 +1055,21 @@ struct GaryxTeamCard: View {
 
     private var teamFormFields: some View {
         VStack(alignment: .leading, spacing: 22) {
-            GaryxAvatarGenerationSection(
+            GaryxAvatarEditorSection(
                 kind: .team,
                 identifier: teamId,
                 displayName: displayName,
                 providerType: "",
-                avatarDataUrl: $avatarDataUrl,
-                isGenerating: avatarGenerating
-            ) { style in
-                Task { await generateAvatar(style) }
+                avatarDataUrl: $avatarDataUrl
+            ) { stylePrompt in
+                await model.generateAvatar(
+                    kind: .team,
+                    identifier: teamId,
+                    displayName: displayName,
+                    stylePrompt: stylePrompt
+                )
+            } onError: { message in
+                model.lastError = message
             }
 
             GaryxFormGroupedSection(title: "Identity") {
@@ -799,20 +1130,6 @@ struct GaryxTeamCard: View {
             avatarDataUrl: avatarDataUrl
         )
         showsEditForm = false
-    }
-
-    private func generateAvatar(_ style: GaryxAvatarStyleOption) async {
-        guard !avatarGenerating else { return }
-        avatarGenerating = true
-        defer { avatarGenerating = false }
-        if let generatedAvatarDataUrl = await model.generateAvatar(
-            kind: .team,
-            identifier: teamId,
-            displayName: displayName,
-            style: style
-        ) {
-            avatarDataUrl = generatedAvatarDataUrl
-        }
     }
 }
 
