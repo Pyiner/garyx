@@ -81,7 +81,7 @@ extension GaryxMobileModel {
         }
     }
 
-    func openSkillEditor(_ skill: GaryxSkillSummary) async {
+    func openSkillEditor(_ skill: GaryxSkillSummary, selecting requestedPath: String? = nil) async {
         let runtimeGeneration = gatewayRuntimeGeneration
         let editorRequestId = UUID()
         skillEditorLoadRequestId = editorRequestId
@@ -93,7 +93,11 @@ extension GaryxMobileModel {
                   skillEditorLoadRequestId == editorRequestId else { return }
             selectedSkillEditor = editor
             selectedSkillDocument = nil
-            guard let preferredPath = Self.preferredSkillFilePath(in: editor.entries) else {
+            let normalizedRequestedPath = requestedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let documentPath = normalizedRequestedPath.isEmpty
+                ? Self.preferredSkillFilePath(in: editor.entries)
+                : normalizedRequestedPath
+            guard let preferredPath = documentPath, !preferredPath.isEmpty else {
                 return
             }
             let fileRequestId = UUID()

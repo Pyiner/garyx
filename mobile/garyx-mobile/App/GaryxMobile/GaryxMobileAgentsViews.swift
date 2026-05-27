@@ -83,6 +83,108 @@ struct GaryxAgentsView: View {
                 GaryxCreateTeamCard()
             }
         }
+        .fullScreenCover(item: $model.selectedAgentDetail) { agent in
+            GaryxFormSheet(title: "Agent Detail") {
+                GaryxAgentDetailCard(agent: agent)
+            }
+        }
+        .fullScreenCover(item: $model.selectedTeamDetail) { team in
+            GaryxFormSheet(title: "Team Detail") {
+                GaryxTeamDetailCard(team: team)
+            }
+        }
+    }
+}
+
+struct GaryxAgentDetailCard: View {
+    let agent: GaryxAgentSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            GaryxFormGroupedSection(title: "Agent") {
+                VStack(spacing: 0) {
+                    GaryxAgentDetailInfoRow(title: "Name", value: agent.displayName)
+                    Divider().padding(.leading, 16)
+                    GaryxAgentDetailInfoRow(title: "ID", value: agent.id)
+                    Divider().padding(.leading, 16)
+                    GaryxAgentDetailInfoRow(title: "Type", value: agent.builtIn ? "Built-in" : "Custom")
+                    Divider().padding(.leading, 16)
+                    GaryxAgentDetailInfoRow(title: "Provider", value: agent.providerType)
+                    Divider().padding(.leading, 16)
+                    GaryxAgentDetailInfoRow(title: "Model", value: agent.model.isEmpty ? "Default" : agent.model)
+                    if !agent.defaultWorkspaceDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Divider().padding(.leading, 16)
+                        GaryxAgentDetailInfoRow(title: "Workspace", value: agent.defaultWorkspaceDir)
+                    }
+                }
+            }
+
+            if !agent.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                GaryxFormGroupedSection(title: "System Prompt") {
+                    Text(agent.systemPrompt)
+                        .font(GaryxFont.callout())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(16)
+                }
+            }
+        }
+    }
+}
+
+struct GaryxTeamDetailCard: View {
+    let team: GaryxTeamSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            GaryxFormGroupedSection(title: "Team") {
+                VStack(spacing: 0) {
+                    GaryxAgentDetailInfoRow(title: "Name", value: team.displayName)
+                    Divider().padding(.leading, 16)
+                    GaryxAgentDetailInfoRow(title: "ID", value: team.id)
+                    Divider().padding(.leading, 16)
+                    GaryxAgentDetailInfoRow(title: "Leader", value: team.leaderAgentId)
+                    Divider().padding(.leading, 16)
+                    GaryxAgentDetailInfoRow(
+                        title: "Members",
+                        value: team.memberAgentIds.isEmpty ? "No members" : team.memberAgentIds.joined(separator: ", ")
+                    )
+                }
+            }
+
+            if !team.workflowText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                GaryxFormGroupedSection(title: "Workflow") {
+                    Text(team.workflowText)
+                        .font(GaryxFont.callout())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(16)
+                }
+            }
+        }
+    }
+}
+
+private struct GaryxAgentDetailInfoRow: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(title)
+                .font(GaryxFont.body())
+                .foregroundStyle(.primary)
+                .frame(width: 92, alignment: .leading)
+            Text(value.isEmpty ? "None" : value)
+                .font(GaryxFont.body())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(16)
     }
 }
 
@@ -239,12 +341,7 @@ struct GaryxAgentCard: View {
     var body: some View {
         GaryxRowActionMenu(actions: agentSwipeActions) {
             Button {
-                if agent.builtIn {
-                    model.setSelectedAgentTarget(agent.id)
-                } else {
-                    fillDraft()
-                    showsEditForm = true
-                }
+                model.selectedAgentDetail = agent
             } label: {
                 GaryxAgentIdentityRow(
                     id: agent.id,
@@ -397,8 +494,7 @@ struct GaryxTeamCard: View {
     var body: some View {
         GaryxRowActionMenu(actions: teamSwipeActions) {
             Button {
-                fillDraft()
-                showsEditForm = true
+                model.selectedTeamDetail = team
             } label: {
                 GaryxAgentIdentityRow(
                     id: team.id,

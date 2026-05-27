@@ -44,6 +44,9 @@ struct GaryxAutomationsView: View {
         .fullScreenCover(isPresented: $showsCreateAutomation) {
             GaryxCreateAutomationSheet()
         }
+        .fullScreenCover(item: $model.selectedAutomationEditor) { automation in
+            GaryxEditAutomationSheet(automation: automation)
+        }
     }
 }
 
@@ -78,7 +81,6 @@ struct GaryxAutomationScaffold<Content: View, TrailingAction: View>: View {
 struct GaryxAutomationCard: View {
     @EnvironmentObject private var model: GaryxMobileModel
     let automation: GaryxAutomationSummary
-    @State private var showsEditForm = false
     @State private var showsDeleteConfirmation = false
     @State private var showsActionPanel = false
     @State private var optimisticEnabled: Bool?
@@ -174,14 +176,10 @@ struct GaryxAutomationCard: View {
                 optimisticEnabled = nil
             }
         }
-        .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxEditAutomationSheet(automation: automation)
-        }
         .confirmationDialog("Delete automation?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task {
                     await model.deleteAutomation(automation)
-                    showsEditForm = false
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -204,7 +202,7 @@ struct GaryxAutomationCard: View {
     }
 
     private func openEditForm() {
-        showsEditForm = true
+        model.selectedAutomationEditor = automation
     }
 }
 

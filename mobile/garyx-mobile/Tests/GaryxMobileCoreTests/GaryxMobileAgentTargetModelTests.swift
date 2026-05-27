@@ -224,4 +224,16 @@ final class GaryxMobileNavigationStateTests: XCTestCase {
         XCTAssertEqual(state.activePanel, .workspaceBots)
         XCTAssertEqual(state.workspaceBotsDrilldown, .workspace("/workspace"))
     }
+
+    func testExplicitWorkspaceFilesRouteKeepsWorkspacesPanel() {
+        var state = GaryxMobileNavigationState()
+
+        state.openRoute(
+            GaryxMobilePanelRoute(panel: .workspaces, settingsTab: .manage),
+            source: .replace
+        )
+
+        XCTAssertEqual(state.activePanel, .workspaces)
+        XCTAssertNil(state.workspaceBotsDrilldown)
+    }
 }

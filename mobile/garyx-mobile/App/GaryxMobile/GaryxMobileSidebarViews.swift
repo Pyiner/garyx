@@ -46,6 +46,23 @@ struct GaryxMainPanelView: View {
                 }
             }
         }
+        .fullScreenCover(item: $model.selectedRouteNotFound) { state in
+            GaryxFormSheet(title: state.title) {
+                GaryxRouteNotFoundCard(state: state)
+            }
+        }
+    }
+}
+
+private struct GaryxRouteNotFoundCard: View {
+    let state: GaryxMobileRouteNotFound
+
+    var body: some View {
+        GaryxEmptyPanelView(
+            icon: "magnifyingglass",
+            title: state.title,
+            text: state.message
+        )
     }
 }
 
@@ -449,10 +466,17 @@ private struct GaryxSidebarBotsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let selectedGroup {
-                GaryxBotThreadDetailSection(
-                    group: selectedGroup
-                )
+            if case let .bot(id) = activeDrilldown {
+                if let selectedGroup {
+                    GaryxBotThreadDetailSection(
+                        group: selectedGroup
+                    )
+                } else {
+                    GaryxWorkspaceBotsMissingDrilldownState(
+                        title: "Bot Not Found",
+                        message: "Garyx could not find bot \(id)."
+                    )
+                }
             } else {
                 if !groups.isEmpty {
                     GaryxSidebarSectionHeader(title: "Bots", systemImage: "bubble.left.and.bubble.right")
@@ -612,12 +636,19 @@ private struct GaryxWorkspaceThreadGroupsSection: View {
 
     var body: some View {
         let groups = model.sidebarWorkspaceThreadGroups
-        if !groups.isEmpty {
+        if !groups.isEmpty || isWorkspaceDrilldownActive {
             VStack(alignment: .leading, spacing: 0) {
-                if let selectedGroup {
-                    GaryxWorkspaceThreadDetailSection(
-                        group: selectedGroup
-                    )
+                if case let .workspace(path) = activeDrilldown {
+                    if let selectedGroup {
+                        GaryxWorkspaceThreadDetailSection(
+                            group: selectedGroup
+                        )
+                    } else {
+                        GaryxWorkspaceBotsMissingDrilldownState(
+                            title: "Workspace Not Found",
+                            message: "Garyx could not find workspace \(path)."
+                        )
+                    }
                 } else {
                     GaryxSidebarSectionHeader(title: "Workspaces", systemImage: "folder.fill")
                         .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
@@ -643,6 +674,28 @@ private struct GaryxWorkspaceThreadGroupsSection: View {
     private var selectedGroup: GaryxSidebarWorkspaceThreadGroup? {
         guard case let .workspace(path) = activeDrilldown else { return nil }
         return model.sidebarWorkspaceThreadGroups.first { $0.path == path }
+    }
+
+    private var isWorkspaceDrilldownActive: Bool {
+        if case .workspace = activeDrilldown {
+            return true
+        }
+        return false
+    }
+}
+
+private struct GaryxWorkspaceBotsMissingDrilldownState: View {
+    let title: String
+    let message: String
+
+    var body: some View {
+        GaryxEmptyPanelView(
+            icon: "magnifyingglass",
+            title: title,
+            text: message
+        )
+        .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+        .padding(.vertical, 12)
     }
 }
 

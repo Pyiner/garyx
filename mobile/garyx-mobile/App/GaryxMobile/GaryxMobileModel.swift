@@ -21,6 +21,12 @@ struct GaryxEnsuredThread {
     var adoptedSelection: Bool
 }
 
+struct GaryxMobileRouteNotFound: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
 @MainActor
 final class GaryxMobileModel: ObservableObject {
     static let threadListPageLimit = 30
@@ -86,6 +92,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var activeRunThreadId: String?
     @Published var remoteBusyThreadIds: Set<String> = []
     @Published var navigationState = GaryxMobileNavigationState()
+    @Published var pendingMobileRoute: GaryxMobileRoute?
     @Published var storedLastError: String?
     var lastError: String? {
         get {
@@ -139,6 +146,11 @@ final class GaryxMobileModel: ObservableObject {
     @Published var providerModelsByType: [String: GaryxProviderModels] = [:]
     @Published var selectedSkillEditor: GaryxSkillEditorState?
     @Published var selectedSkillDocument: GaryxSkillFileDocument?
+    @Published var selectedTaskDetail: GaryxTaskSummary?
+    @Published var selectedAutomationEditor: GaryxAutomationSummary?
+    @Published var selectedAgentDetail: GaryxAgentSummary?
+    @Published var selectedTeamDetail: GaryxTeamSummary?
+    @Published var selectedRouteNotFound: GaryxMobileRouteNotFound?
     var skillEditorLoadRequestId: UUID?
     var skillFileLoadRequestId: UUID?
     @Published var researchCandidatesByRunId: [String: GaryxAutoResearchCandidatesPage] = [:]

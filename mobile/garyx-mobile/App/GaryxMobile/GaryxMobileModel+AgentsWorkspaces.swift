@@ -114,6 +114,7 @@ extension GaryxMobileModel {
     func invalidatePendingThreadOpen() {
         pendingThreadOpenRequestId = UUID()
         pendingThreadLinkId = nil
+        pendingMobileRoute = nil
     }
 
     func isCurrentPendingThreadOpen(_ requestId: UUID) -> Bool {
@@ -662,7 +663,10 @@ extension GaryxMobileModel {
         return await workspaceFilePreview(resolved)
     }
 
-    func openWorkspaceFilePreview(_ target: GaryxMobileWorkspaceFileTarget) async {
+    func openWorkspaceFilePreview(
+        _ target: GaryxMobileWorkspaceFileTarget,
+        source: GaryxMobilePanelOpenSource = .current
+    ) async {
         let workspace = target.workspaceDir.trimmingCharacters(in: .whitespacesAndNewlines)
         let filePath = target.path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !workspace.isEmpty, !filePath.isEmpty else { return }
@@ -675,7 +679,7 @@ extension GaryxMobileModel {
         workspacePreview = nil
         workspaceUploadStatus = nil
         workspaceBotsDrilldown = nil
-        openPanel(.workspaces)
+        openWorkspaceFilesPanel(source: source)
 
         let runtimeGeneration = gatewayRuntimeGeneration
         do {

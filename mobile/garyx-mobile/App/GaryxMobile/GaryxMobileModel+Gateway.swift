@@ -143,6 +143,11 @@ extension GaryxMobileModel {
         skillFileLoadRequestId = nil
         selectedSkillEditor = nil
         selectedSkillDocument = nil
+        selectedTaskDetail = nil
+        selectedAutomationEditor = nil
+        selectedAgentDetail = nil
+        selectedTeamDetail = nil
+        selectedRouteNotFound = nil
         researchCandidatesByRunId = [:]
         autoResearchDetailsByRunId = [:]
         autoResearchIterationsByRunId = [:]
@@ -322,6 +327,7 @@ extension GaryxMobileModel {
         guard let payload = GaryxMobileConnectLink.parse(url) else {
             return
         }
+        pendingMobileRoute = nil
         saveGatewayScopedUserState()
         resetGatewayRuntimeState()
         gatewayURL = payload.gatewayUrl
@@ -331,15 +337,8 @@ extension GaryxMobileModel {
     }
 
     func handleOpenURL(_ url: URL) async {
-        if let threadId = GaryxMobileThreadLink.parse(url) {
-            queuePendingThreadLink(threadId)
-            if case .ready = connectionState {
-                await openPendingThreadLinkIfNeeded()
-            } else if canConnectGateway, case .checking = connectionState {
-                return
-            } else if canConnectGateway {
-                await connectAndRefresh()
-            }
+        if let route = GaryxMobileRouteLink.parse(url) {
+            await openMobileRouteFromLink(route)
             return
         }
         await applyMobileConnectLink(url)
@@ -379,7 +378,7 @@ extension GaryxMobileModel {
                 return
             }
             connectRefreshRequestId = nil
-            await openPendingThreadLinkIfNeeded()
+            await openPendingMobileRouteIfNeeded()
             startSelectedThreadReconcileLoop()
         } catch {
             guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {

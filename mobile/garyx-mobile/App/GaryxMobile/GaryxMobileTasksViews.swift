@@ -38,6 +38,11 @@ struct GaryxTasksView: View {
         .fullScreenCover(isPresented: $showsCreateTask) {
             GaryxCreateTaskCard()
         }
+        .fullScreenCover(item: $model.selectedTaskDetail) { task in
+            GaryxFormSheet(title: "Task Details") {
+                GaryxTaskDetailCard(task: task)
+            }
+        }
     }
 }
 
@@ -202,7 +207,6 @@ struct GaryxTaskListRow: View {
     @State private var showsMoreActions = false
     @State private var showsRenamePrompt = false
     @State private var showsStatusActions = false
-    @State private var showsTaskDetails = false
     @State private var renameDraftTitle = ""
 
     var body: some View {
@@ -210,11 +214,7 @@ struct GaryxTaskListRow: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 8) {
                     Button {
-                        if task.threadId.isEmpty {
-                            showsTaskDetails = true
-                        } else {
-                            Task { await model.openThread(id: task.threadId) }
-                        }
+                        model.selectedTaskDetail = task
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(task.title)
@@ -257,11 +257,6 @@ struct GaryxTaskListRow: View {
                 GaryxTaskAssignCard(task: task)
             }
         }
-        .fullScreenCover(isPresented: $showsTaskDetails) {
-            GaryxFormSheet(title: "Task Details") {
-                GaryxTaskDetailCard(task: task)
-            }
-        }
         .alert("Rename Task", isPresented: $showsRenamePrompt) {
             TextField("Task title", text: $renameDraftTitle)
             Button("Cancel", role: .cancel) {}
@@ -278,7 +273,7 @@ struct GaryxTaskListRow: View {
                 showsAssignSheet = true
             }
             Button("Details") {
-                showsTaskDetails = true
+                model.selectedTaskDetail = task
             }
             if task.assignee != nil || !task.assigneeLabel.isEmpty {
                 Button("Unassign") {
@@ -322,7 +317,7 @@ struct GaryxTaskListRow: View {
         if task.threadId.isEmpty {
             actions.append(
                 GaryxRowAction(title: "Details", systemImage: "info.circle", tone: .accent) {
-                    showsTaskDetails = true
+                    model.selectedTaskDetail = task
                 }
             )
         }

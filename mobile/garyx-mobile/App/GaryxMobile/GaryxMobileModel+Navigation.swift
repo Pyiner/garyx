@@ -77,6 +77,220 @@ extension GaryxMobileModel {
         setSidebarVisible(false)
     }
 
+    func openWorkspaceBotsDrilldown(
+        _ drilldown: GaryxWorkspaceBotsDrilldown,
+        source: GaryxMobilePanelOpenSource = .current
+    ) {
+        invalidatePendingThreadOpen()
+        var nextState = navigationState
+        nextState.openRoute(
+            GaryxMobilePanelRoute(
+                panel: .workspaceBots,
+                settingsTab: .manage,
+                workspaceBotsDrilldown: drilldown
+            ),
+            source: source
+        )
+        navigationState = nextState
+        setSidebarVisible(false)
+    }
+
+    func openWorkspaceFilesPanel(source: GaryxMobilePanelOpenSource = .current) {
+        invalidatePendingThreadOpen()
+        var nextState = navigationState
+        nextState.openRoute(
+            GaryxMobilePanelRoute(panel: .workspaces, settingsTab: .manage),
+            source: source
+        )
+        navigationState = nextState
+        setSidebarVisible(false)
+    }
+
+    func queuePendingMobileRoute(_ route: GaryxMobileRoute) {
+        pendingMobileRoute = route
+        if case let .thread(threadId) = route {
+            queuePendingThreadLink(threadId)
+        }
+    }
+
+    func openPendingMobileRouteIfNeeded() async {
+        guard let route = pendingMobileRoute else {
+            await openPendingThreadLinkIfNeeded()
+            return
+        }
+        guard case .ready = connectionState else { return }
+        pendingMobileRoute = nil
+        await openMobileRoute(route, source: .replace)
+    }
+
+    func openMobileRouteFromLink(_ route: GaryxMobileRoute) async {
+        queuePendingMobileRoute(route)
+        if case .ready = connectionState {
+            await openPendingMobileRouteIfNeeded()
+        } else if canConnectGateway, case .checking = connectionState {
+            return
+        } else if canConnectGateway {
+            await connectAndRefresh()
+        }
+    }
+
+    func openMobileRoute(
+        _ route: GaryxMobileRoute,
+        source: GaryxMobilePanelOpenSource = .replace
+    ) async {
+        clearRouteDrivenDetailState()
+        switch route {
+        case .chat:
+            openNewThreadDraft()
+        case let .thread(threadId):
+            await openThread(id: threadId)
+        case let .settings(tab):
+            openSettings(tab: tab, source: source)
+        case let .panel(panel):
+            openPanel(panel, source: source)
+        case let .task(id):
+            await openTaskRoute(id, source: source)
+        case let .automation(id):
+            await openAutomationRoute(id, source: source)
+        case let .agent(id):
+            await openAgentRoute(id, source: source)
+        case let .team(id):
+            await openTeamRoute(id, source: source)
+        case let .skill(id):
+            await openSkillRoute(id, source: source)
+        case let .skillFile(skillId, path):
+            await openSkillFileRoute(skillId: skillId, path: path, source: source)
+        case let .workspace(path):
+            await openWorkspaceRoute(path, source: source)
+        case let .bot(channel, accountId):
+            await openBotRoute(channel: channel, accountId: accountId, source: source)
+        case let .workspaceFile(workspaceDir, path):
+            await openWorkspaceFilePreview(
+                GaryxMobileWorkspaceFileTarget(workspaceDir: workspaceDir, path: path),
+                source: source
+            )
+        }
+    }
+
+    private func openTaskRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
+        let taskId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !taskId.isEmpty else { return }
+        openPanel(.tasks, source: source)
+        await refreshRemoteState()
+        guard let task = tasks.first(where: { $0.id == taskId }) else {
+            showRouteNotFound(kind: "Task", id: taskId)
+            return
+        }
+        selectedTaskDetail = task
+    }
+
+    private func openAutomationRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
+        let automationId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !automationId.isEmpty else { return }
+        openPanel(.automations, source: source)
+        await refreshRemoteState()
+        guard let automation = automations.first(where: { $0.id == automationId }) else {
+            showRouteNotFound(kind: "Automation", id: automationId)
+            return
+        }
+        selectedAutomationEditor = automation
+    }
+
+    private func openAgentRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
+        let agentId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !agentId.isEmpty else { return }
+        openPanel(.agents, source: source)
+        await refreshRemoteState()
+        guard let agent = agents.first(where: { $0.id == agentId }) else {
+            showRouteNotFound(kind: "Agent", id: agentId)
+            return
+        }
+        selectedAgentDetail = agent
+    }
+
+    private func openTeamRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
+        let teamId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !teamId.isEmpty else { return }
+        openPanel(.agents, source: source)
+        await refreshRemoteState()
+        guard let team = teams.first(where: { $0.id == teamId }) else {
+            showRouteNotFound(kind: "Team", id: teamId)
+            return
+        }
+        selectedTeamDetail = team
+    }
+
+    private func openSkillRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
+        let skillId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !skillId.isEmpty else { return }
+        openPanel(.skills, source: source)
+        await refreshRemoteState()
+        guard let skill = skills.first(where: { $0.id == skillId }) else {
+            showRouteNotFound(kind: "Skill", id: skillId)
+            return
+        }
+        await openSkillEditor(skill)
+    }
+
+    private func openSkillFileRoute(
+        skillId: String,
+        path: String,
+        source: GaryxMobilePanelOpenSource
+    ) async {
+        let normalizedSkillId = skillId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedSkillId.isEmpty, !normalizedPath.isEmpty else { return }
+        openPanel(.skills, source: source)
+        await refreshRemoteState()
+        guard let skill = skills.first(where: { $0.id == normalizedSkillId }) else {
+            showRouteNotFound(kind: "Skill", id: normalizedSkillId)
+            return
+        }
+        await openSkillEditor(skill, selecting: normalizedPath)
+    }
+
+    private func openWorkspaceRoute(_ path: String, source: GaryxMobilePanelOpenSource) async {
+        let workspacePath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workspacePath.isEmpty else { return }
+        await selectWorkspace(workspacePath)
+        openWorkspaceBotsDrilldown(.workspace(workspacePath), source: source)
+    }
+
+    private func openBotRoute(
+        channel: String,
+        accountId: String,
+        source: GaryxMobilePanelOpenSource
+    ) async {
+        let normalizedChannel = channel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAccountId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedChannel.isEmpty, !normalizedAccountId.isEmpty else { return }
+        await refreshRemoteState()
+        let groupId = mobileBotGroups.first { group in
+            group.channel.caseInsensitiveCompare(normalizedChannel) == .orderedSame
+                && group.accountId.caseInsensitiveCompare(normalizedAccountId) == .orderedSame
+        }?.id ?? "\(normalizedChannel)::\(normalizedAccountId)"
+        openWorkspaceBotsDrilldown(.bot(groupId), source: source)
+    }
+
+    private func clearRouteDrivenDetailState() {
+        selectedTaskDetail = nil
+        selectedAutomationEditor = nil
+        selectedAgentDetail = nil
+        selectedTeamDetail = nil
+        selectedRouteNotFound = nil
+        closeSkillDetail()
+    }
+
+    private func showRouteNotFound(kind: String, id: String) {
+        let target = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        selectedRouteNotFound = GaryxMobileRouteNotFound(
+            title: "\(kind) Not Found",
+            message: target.isEmpty
+                ? "Garyx could not find the requested \(kind.lowercased())."
+                : "Garyx could not find \(kind.lowercased()) \(target)."
+        )
+    }
+
     var mainPanelLeadingEdgeAction: GaryxMobileLeadingEdgeAction {
         navigationState.leadingEdgeAction
     }
