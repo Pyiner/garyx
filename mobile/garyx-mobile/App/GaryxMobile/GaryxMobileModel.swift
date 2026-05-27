@@ -28,6 +28,7 @@ final class GaryxMobileModel: ObservableObject {
     static let threadHistoryUserQueryLimit = 10
     static let selectedThreadReconcileIntervalNanos: UInt64 = 1_500_000_000
     static let assistantDeltaFlushDelayNanos: UInt64 = 50_000_000
+    static let selectedThreadHistoryRetryLimit = 8
 
     struct MessageListSignature: Equatable {
         let count: Int
@@ -200,6 +201,10 @@ final class GaryxMobileModel: ObservableObject {
     var selectedThreadRecoveryTask: Task<Void, Never>?
     var selectedThreadRecoveryThreadId: String?
     var selectedThreadHistoryRequestId: UUID?
+    var threadHistoryLoadedIds: Set<String> = []
+    var selectedThreadHistoryRetryTask: Task<Void, Never>?
+    var selectedThreadHistoryRetryThreadId: String?
+    var selectedThreadHistoryRetryCount = 0
     var completedThreadHistoryHydrationTasks: [String: Task<Void, Never>] = [:]
     var activeGatewayScopeId = ""
     var catalogSnapshotRestored = false

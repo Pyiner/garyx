@@ -183,7 +183,8 @@ struct GaryxConversationView: View {
                         }
                     }
 
-                if model.messages.isEmpty, model.isLoadingSelectedThreadHistory {
+                if model.messages.isEmpty,
+                   model.isLoadingSelectedThreadHistory || model.isSelectedThreadAwaitingInitialHistory {
                     GaryxThreadHistoryLoadingView()
                         .padding(.top, 96)
                 } else if model.messages.isEmpty {
@@ -613,27 +614,9 @@ private struct GaryxSelectedThreadEmptyConversationView: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
 
-            Text("No messages loaded")
+            Text("No messages yet")
                 .font(GaryxFont.callout())
                 .foregroundStyle(.secondary)
-
-            Button {
-                Task { await model.loadSelectedThreadHistory() }
-            } label: {
-                Label("Reload", systemImage: "arrow.clockwise")
-                    .font(GaryxFont.callout(weight: .semibold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .frame(height: 38)
-            .garyxAdaptiveGlass(
-                .regular,
-                isInteractive: true,
-                fallbackMaterial: .ultraThinMaterial,
-                in: Capsule()
-            )
-            .disabled(model.isLoadingSelectedThreadHistory)
         }
         .frame(maxWidth: 300)
         .frame(maxWidth: .infinity)

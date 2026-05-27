@@ -31,8 +31,8 @@ extension GaryxMobileModel {
         guard case .ready = connectionState else { return }
         let requestId = pendingThreadOpenRequestId
         await openThread(id: threadId, requestId: requestId)
-        if isCurrentPendingThreadOpen(requestId), selectedThread?.id == threadId {
-            pendingThreadLinkId = nil
+        if isCurrentPendingThreadOpen(requestId), threadHistoryLoadedIds.contains(threadId) {
+            completePendingThreadLink(threadId)
         }
     }
 
@@ -98,6 +98,11 @@ extension GaryxMobileModel {
         setActivePanel(.chat, invalidatesPendingThreadOpen: false)
         setSidebarVisible(false)
         lastError = nil
+    }
+
+    func completePendingThreadLink(_ threadId: String) {
+        guard pendingThreadLinkId == threadId else { return }
+        pendingThreadLinkId = nil
     }
 
     func beginPendingThreadOpen() -> UUID {

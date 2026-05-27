@@ -461,6 +461,10 @@ extension GaryxMobileModel {
             selectedThreadRecoveryTask?.cancel()
             selectedThreadRecoveryTask = nil
             selectedThreadRecoveryThreadId = nil
+            selectedThreadHistoryRetryTask?.cancel()
+            selectedThreadHistoryRetryTask = nil
+            selectedThreadHistoryRetryThreadId = nil
+            selectedThreadHistoryRetryCount = 0
             cancelSelectedThreadReconcileLoop()
             resetSelectedThreadHistoryPagination()
         }
@@ -483,6 +487,10 @@ extension GaryxMobileModel {
         selectedThreadRecoveryTask?.cancel()
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
+        selectedThreadHistoryRetryTask?.cancel()
+        selectedThreadHistoryRetryTask = nil
+        selectedThreadHistoryRetryThreadId = nil
+        selectedThreadHistoryRetryCount = 0
         cancelSelectedThreadReconcileLoop()
         selectedThreadHistoryRequestId = nil
         isLoadingSelectedThreadHistory = false
@@ -541,6 +549,7 @@ extension GaryxMobileModel {
                 )
             )
             threads.insert(thread, at: 0)
+            threadHistoryLoadedIds.insert(thread.id)
             selectedThread = thread
             clearPendingNewThreadAgentTarget()
             clearPendingBotDraft()
@@ -656,6 +665,10 @@ extension GaryxMobileModel {
 
     func loadSelectedThreadHistory() async {
         guard let selectedThread else {
+            selectedThreadHistoryRetryTask?.cancel()
+            selectedThreadHistoryRetryTask = nil
+            selectedThreadHistoryRetryThreadId = nil
+            selectedThreadHistoryRetryCount = 0
             messages = []
             selectedThreadHasMoreHistoryBefore = false
             selectedThreadNextHistoryBeforeIndex = nil
@@ -666,6 +679,10 @@ extension GaryxMobileModel {
         let requestId = UUID()
         selectedThreadHistoryRequestId = requestId
         isLoadingSelectedThreadHistory = true
+        if selectedThreadHistoryRetryThreadId != threadId {
+            selectedThreadHistoryRetryCount = 0
+            selectedThreadHistoryRetryThreadId = threadId
+        }
         defer {
             if selectedThreadHistoryRequestId == requestId {
                 isLoadingSelectedThreadHistory = false
@@ -714,7 +731,7 @@ extension GaryxMobileModel {
             if cachedMessages(for: threadId).isEmpty {
                 messages = []
             }
-            lastError = displayMessage(for: error)
+            handleSelectedThreadHistoryLoadFailure(threadId: threadId, error: error)
         }
     }
 
@@ -734,6 +751,7 @@ extension GaryxMobileModel {
         preservingLoadedOlderPages: Bool,
         scheduleRecoveryIfSelected: Bool
     ) {
+        markThreadHistoryLoaded(threadId)
         selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
         updateThreadRuntimeState(threadId: threadId, transcript: transcript)
         if selectedThread?.id == threadId {
@@ -756,6 +774,65 @@ extension GaryxMobileModel {
         if scheduleRecoveryIfSelected {
             scheduleSelectedThreadRecoveryIfNeeded(threadId: threadId)
         }
+    }
+
+    func markThreadHistoryLoaded(_ threadId: String) {
+        threadHistoryLoadedIds.insert(threadId)
+        if selectedThreadHistoryRetryThreadId == threadId {
+            selectedThreadHistoryRetryTask?.cancel()
+            selectedThreadHistoryRetryTask = nil
+            selectedThreadHistoryRetryThreadId = nil
+            selectedThreadHistoryRetryCount = 0
+        }
+        completePendingThreadLink(threadId)
+    }
+
+    func handleSelectedThreadHistoryLoadFailure(threadId: String, error: Error) {
+        let message = displayMessage(for: error)
+        guard cachedMessages(for: threadId).isEmpty,
+              !threadHistoryLoadedIds.contains(threadId) else {
+            lastError = message
+            return
+        }
+        if selectedThreadHistoryRetryCount < Self.selectedThreadHistoryRetryLimit {
+            scheduleSelectedThreadHistoryRetry(threadId: threadId)
+            if Self.isTransientGatewayErrorMessage(message) {
+                gatewaySettingsStatus = "Loading thread messages"
+                return
+            }
+        } else {
+            threadHistoryLoadedIds.insert(threadId)
+        }
+        lastError = message
+    }
+
+    func scheduleSelectedThreadHistoryRetry(threadId: String) {
+        guard selectedThread?.id == threadId,
+              selectedThreadHistoryRetryTask == nil,
+              case .ready = connectionState else {
+            return
+        }
+        selectedThreadHistoryRetryThreadId = threadId
+        selectedThreadHistoryRetryCount += 1
+        let retryIndex = selectedThreadHistoryRetryCount
+        let delay = min(
+            700_000_000 * UInt64(1 << min(retryIndex - 1, 3)),
+            5_000_000_000
+        )
+        selectedThreadHistoryRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            await self?.runSelectedThreadHistoryRetry(threadId: threadId)
+        }
+    }
+
+    func runSelectedThreadHistoryRetry(threadId: String) async {
+        guard selectedThread?.id == threadId else {
+            selectedThreadHistoryRetryTask = nil
+            return
+        }
+        selectedThreadHistoryRetryTask = nil
+        await loadSelectedThreadHistory()
     }
 
     func loadOlderSelectedThreadHistory() async {
@@ -926,6 +1003,7 @@ extension GaryxMobileModel {
             )
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
+            markThreadHistoryLoaded(threadId)
             selectedThreadActivitySignatures[threadId] = GaryxThreadActivitySignature.make(from: transcript)
             updateThreadRuntimeState(threadId: threadId, transcript: transcript)
             updateSelectedThreadHistoryPagination(
@@ -1006,6 +1084,7 @@ extension GaryxMobileModel {
             )
             guard selectedThread?.id == threadId,
                   selectedThreadHistoryRequestId == observedHistoryRequestId else { return }
+            markThreadHistoryLoaded(threadId)
             let signature = GaryxThreadActivitySignature.make(from: transcript)
             if selectedThreadActivitySignatures[threadId] == signature {
                 updateThreadRuntimeState(threadId: threadId, transcript: transcript)

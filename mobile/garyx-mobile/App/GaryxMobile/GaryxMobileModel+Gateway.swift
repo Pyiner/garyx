@@ -71,6 +71,11 @@ extension GaryxMobileModel {
         selectedThreadRecoveryTask = nil
         selectedThreadRecoveryThreadId = nil
         selectedThreadHistoryRequestId = nil
+        selectedThreadHistoryRetryTask?.cancel()
+        selectedThreadHistoryRetryTask = nil
+        selectedThreadHistoryRetryThreadId = nil
+        selectedThreadHistoryRetryCount = 0
+        threadHistoryLoadedIds = []
         pendingThreadLinkId = nil
         completedThreadHistoryHydrationTasks.values.forEach { $0.cancel() }
         completedThreadHistoryHydrationTasks = [:]

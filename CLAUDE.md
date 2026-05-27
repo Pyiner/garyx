@@ -162,6 +162,9 @@ needs installed-app validation.
 - Mobile entry points that open an existing thread by row tap, widget link,
   task, automation, bot conversation, or deep link should route through the
   shared `GaryxMobileModel.openThread` path; sidebar behavior is the baseline.
+- Mobile existing-thread opens should keep transcript loading automatic,
+  including cold-start retry after transient gateway failures. Do not surface a
+  manual Reload button for the initial empty-message state.
 - Mobile Agent/Team management `Chat` actions should open a new-thread draft
   with a one-off target override, matching the Mac app. Do not mutate the saved
   default selected agent or eagerly create an empty thread; `Use` owns default

@@ -40,6 +40,15 @@ extension GaryxMobileModel {
         canSendComposerPayload(text: draft, attachments: composerAttachments)
     }
 
+    var isSelectedThreadAwaitingInitialHistory: Bool {
+        guard let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadId.isEmpty,
+              cachedMessages(for: threadId).isEmpty else {
+            return false
+        }
+        return !threadHistoryLoadedIds.contains(threadId)
+    }
+
     var hasComposerPayload: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !composerAttachments.isEmpty
     }

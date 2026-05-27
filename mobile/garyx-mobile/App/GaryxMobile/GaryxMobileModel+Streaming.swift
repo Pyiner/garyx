@@ -1357,6 +1357,9 @@ extension GaryxMobileModel {
             || normalized.contains("socket")
             || normalized.contains("gateway unavailable")
             || normalized.contains("bad gateway")
+            || normalized.contains("http 502")
+            || normalized.contains("http 503")
+            || normalized.contains("http 504")
             || normalized.contains("service unavailable")
     }
 
