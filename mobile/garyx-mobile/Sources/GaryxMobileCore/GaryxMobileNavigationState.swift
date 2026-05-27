@@ -248,6 +248,84 @@ public struct GaryxMobileResourceState<Value: Equatable & Sendable>: Equatable, 
     }
 }
 
+public enum GaryxMobileThreadOpenSource: Equatable, Sendable {
+    case url
+    case direct
+}
+
+public struct GaryxMobileThreadOpenState: Equatable, Sendable {
+    public private(set) var requestId: UUID
+    public private(set) var pendingThreadId: String?
+    public private(set) var pendingSource: GaryxMobileThreadOpenSource?
+    public private(set) var shownThreadId: String?
+
+    public init(requestId: UUID = UUID()) {
+        self.requestId = requestId
+    }
+
+    public var hasPendingIntent: Bool {
+        pendingThreadId != nil
+    }
+
+    public mutating func queue(
+        threadId: String,
+        source: GaryxMobileThreadOpenSource,
+        requestId: UUID = UUID()
+    ) -> UUID? {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedThreadId.isEmpty else { return nil }
+        self.requestId = requestId
+        pendingThreadId = normalizedThreadId
+        pendingSource = source
+        shownThreadId = nil
+        return requestId
+    }
+
+    public mutating func beginDirectOpen(requestId: UUID = UUID()) -> UUID {
+        self.requestId = requestId
+        pendingThreadId = nil
+        pendingSource = .direct
+        shownThreadId = nil
+        return requestId
+    }
+
+    public mutating func invalidate(requestId: UUID = UUID()) {
+        self.requestId = requestId
+        pendingThreadId = nil
+        pendingSource = nil
+        shownThreadId = nil
+    }
+
+    public func isCurrent(_ requestId: UUID) -> Bool {
+        self.requestId == requestId
+    }
+
+    @discardableResult
+    public mutating func markShown(threadId: String, requestId: UUID) -> Bool {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isCurrent(requestId), pendingThreadId == normalizedThreadId else {
+            return false
+        }
+        shownThreadId = normalizedThreadId
+        return true
+    }
+
+    @discardableResult
+    public mutating func complete(threadId: String, requestId: UUID? = nil) -> Bool {
+        let normalizedThreadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let requestId, !isCurrent(requestId) {
+            return false
+        }
+        guard pendingThreadId == normalizedThreadId else {
+            return false
+        }
+        pendingThreadId = nil
+        pendingSource = nil
+        shownThreadId = nil
+        return true
+    }
+}
+
 public enum GaryxMobileLeadingEdgeAction: Equatable, Sendable {
     case openSidebar
     case mainPanelBack

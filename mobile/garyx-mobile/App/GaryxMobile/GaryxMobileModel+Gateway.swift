@@ -76,7 +76,7 @@ extension GaryxMobileModel {
         selectedThreadHistoryRetryThreadId = nil
         selectedThreadHistoryRetryCount = 0
         threadHistoryLoadedIds = []
-        pendingThreadLinkId = nil
+        threadOpenState.invalidate()
         completedThreadHistoryHydrationTasks.values.forEach { $0.cancel() }
         completedThreadHistoryHydrationTasks = [:]
         resetSelectedThreadHistoryPagination()
@@ -370,6 +370,12 @@ extension GaryxMobileModel {
             gatewaySettingsStatus = "Saved and connected"
             connectionState = .ready(version: status.version)
             startGlobalEventStream()
+            if threadOpenState.hasPendingIntent {
+                await openPendingThreadLinkIfNeeded()
+                guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
+                    return
+                }
+            }
             async let agentTargetsRefresh: Void = refreshAgentTargets()
             await refreshThreads()
             await agentTargetsRefresh

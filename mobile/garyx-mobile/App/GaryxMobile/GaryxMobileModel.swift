@@ -236,8 +236,7 @@ final class GaryxMobileModel: ObservableObject {
     var pendingNewThreadAgentTargetId: String?
     var pendingNewThreadAgentTargetGeneration: UUID?
     var selectedThreadDraftGeneration = UUID()
-    var pendingThreadOpenRequestId = UUID()
-    var pendingThreadLinkId: String?
+    var threadOpenState = GaryxMobileThreadOpenState()
     #if DEBUG
     var debugSnapshotActive = false
     #endif

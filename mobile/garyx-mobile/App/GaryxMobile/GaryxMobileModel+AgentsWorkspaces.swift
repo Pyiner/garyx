@@ -14,30 +14,27 @@ extension GaryxMobileModel {
     }
 
     func openThread(id: String) async {
-        pendingThreadLinkId = nil
-        let requestId = beginPendingThreadOpen()
+        let requestId = beginDirectThreadOpen()
         await openThread(id: id, requestId: requestId)
     }
 
     func queuePendingThreadLink(_ id: String) {
-        let threadId = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !threadId.isEmpty else { return }
-        pendingThreadLinkId = threadId
-        let requestId = beginPendingThreadOpen()
+        guard let requestId = threadOpenState.queue(threadId: id, source: .url),
+              let threadId = threadOpenState.pendingThreadId else {
+            return
+        }
         showPendingThreadLink(threadId, requestId: requestId)
     }
 
     func openPendingThreadLinkIfNeeded() async {
-        guard let threadId = pendingThreadLinkId?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !threadId.isEmpty else {
-            pendingThreadLinkId = nil
+        guard let threadId = threadOpenState.pendingThreadId else {
             return
         }
         guard case .ready = connectionState else { return }
-        let requestId = pendingThreadOpenRequestId
+        let requestId = threadOpenState.requestId
         await openThread(id: threadId, requestId: requestId)
         if isCurrentPendingThreadOpen(requestId), threadHistoryLoadedIds.contains(threadId) {
-            completePendingThreadLink(threadId)
+            completePendingThreadLink(threadId, requestId: requestId)
         }
     }
 
@@ -82,7 +79,7 @@ extension GaryxMobileModel {
     }
 
     private func showPendingThreadLink(_ threadId: String, requestId: UUID) {
-        guard isCurrentPendingThreadOpen(requestId) else { return }
+        guard threadOpenState.markShown(threadId: threadId, requestId: requestId) else { return }
         let thread = threads.first(where: { $0.id == threadId })
             ?? (selectedThread?.id == threadId ? selectedThread : nil)
             ?? Self.placeholderThreadSummary(id: threadId)
@@ -105,25 +102,21 @@ extension GaryxMobileModel {
         lastError = nil
     }
 
-    func completePendingThreadLink(_ threadId: String) {
-        guard pendingThreadLinkId == threadId else { return }
-        pendingThreadLinkId = nil
+    func completePendingThreadLink(_ threadId: String, requestId: UUID? = nil) {
+        threadOpenState.complete(threadId: threadId, requestId: requestId)
     }
 
-    func beginPendingThreadOpen() -> UUID {
-        let requestId = UUID()
-        pendingThreadOpenRequestId = requestId
-        return requestId
+    func beginDirectThreadOpen() -> UUID {
+        threadOpenState.beginDirectOpen()
     }
 
     func invalidatePendingThreadOpen() {
-        pendingThreadOpenRequestId = UUID()
-        pendingThreadLinkId = nil
+        threadOpenState.invalidate()
         pendingMobileRoute = nil
     }
 
     func isCurrentPendingThreadOpen(_ requestId: UUID) -> Bool {
-        pendingThreadOpenRequestId == requestId
+        threadOpenState.isCurrent(requestId)
     }
 
     static func placeholderThreadSummary(id: String) -> GaryxThreadSummary {
