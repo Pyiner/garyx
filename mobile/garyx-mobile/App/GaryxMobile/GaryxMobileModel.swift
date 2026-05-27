@@ -214,6 +214,8 @@ final class GaryxMobileModel: ObservableObject {
     var pendingBotWorkspace: String?
     var pendingBotAgentId: String?
     var pendingBotDraftGeneration: UUID?
+    var pendingNewThreadAgentTargetId: String?
+    var pendingNewThreadAgentTargetGeneration: UUID?
     var selectedThreadDraftGeneration = UUID()
     var pendingThreadOpenRequestId = UUID()
     var pendingThreadLinkId: String?

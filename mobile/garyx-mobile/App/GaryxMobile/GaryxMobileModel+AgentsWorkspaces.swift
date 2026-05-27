@@ -140,6 +140,56 @@ extension GaryxMobileModel {
         defaults.set(id, forKey: scopedSettingsKey(GaryxMobileSettingsKeys.selectedAgentTargetId))
     }
 
+    func openAgentChatDraft(_ id: String) {
+        let targetId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !targetId.isEmpty else { return }
+        openNewThreadDraft(agentTargetOverride: targetId)
+    }
+
+    func newThreadAgentTargetId(agentOverride: String? = nil) -> String {
+        if let agentOverride {
+            let targetId = agentOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !targetId.isEmpty {
+                return targetId
+            }
+        }
+        let pendingTargetId = currentPendingNewThreadAgentTargetId()
+        if !pendingTargetId.isEmpty {
+            return pendingTargetId
+        }
+        return selectedAgentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func setNewThreadAgentTarget(_ id: String) {
+        if pendingNewThreadAgentTargetGeneration == selectedThreadDraftGeneration {
+            setPendingNewThreadAgentTarget(id)
+        } else {
+            setSelectedAgentTarget(id)
+        }
+    }
+
+    func setPendingNewThreadAgentTarget(_ id: String?) {
+        let targetId = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !targetId.isEmpty else {
+            clearPendingNewThreadAgentTarget()
+            return
+        }
+        pendingNewThreadAgentTargetId = targetId
+        pendingNewThreadAgentTargetGeneration = selectedThreadDraftGeneration
+    }
+
+    func clearPendingNewThreadAgentTarget() {
+        pendingNewThreadAgentTargetId = nil
+        pendingNewThreadAgentTargetGeneration = nil
+    }
+
+    func currentPendingNewThreadAgentTargetId() -> String {
+        guard pendingNewThreadAgentTargetGeneration == selectedThreadDraftGeneration else {
+            return ""
+        }
+        return pendingNewThreadAgentTargetId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
     func setNewThreadWorkspace(_ path: String) {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         newThreadWorkspace = trimmed

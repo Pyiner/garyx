@@ -262,8 +262,7 @@ struct GaryxAgentCard: View {
     private var agentSwipeActions: [GaryxRowAction] {
         var actions = [
             GaryxRowAction(title: "Chat", systemImage: "message", tone: .accent) {
-                model.setSelectedAgentTarget(agent.id)
-                Task { await model.createThread() }
+                model.openAgentChatDraft(agent.id)
             },
             GaryxRowAction(title: "Use", systemImage: "checkmark.circle") {
                 model.setSelectedAgentTarget(agent.id)
@@ -407,8 +406,7 @@ struct GaryxTeamCard: View {
     private var teamSwipeActions: [GaryxRowAction] {
         [
             GaryxRowAction(title: "Chat", systemImage: "message", tone: .accent) {
-                model.setSelectedAgentTarget(team.id)
-                Task { await model.createThread() }
+                model.openAgentChatDraft(team.id)
             },
             GaryxRowAction(title: "Use", systemImage: "checkmark.circle") {
                 model.setSelectedAgentTarget(team.id)

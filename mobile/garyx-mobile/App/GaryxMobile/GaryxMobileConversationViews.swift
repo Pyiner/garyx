@@ -541,9 +541,9 @@ private struct GaryxHeaderAgentControl: View {
 
     private var selectedAgentTargetBinding: Binding<String> {
         Binding {
-            model.selectedAgentTargetId
+            model.newThreadAgentTargetId()
         } set: { value in
-            model.setSelectedAgentTarget(value)
+            model.setNewThreadAgentTarget(value)
         }
     }
 }

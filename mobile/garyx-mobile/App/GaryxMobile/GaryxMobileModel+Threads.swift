@@ -465,6 +465,7 @@ extension GaryxMobileModel {
             resetSelectedThreadHistoryPagination()
         }
         selectedThread = thread
+        clearPendingNewThreadAgentTarget()
         clearPendingBotDraft()
         draftThreadTitle = thread.title
         setActivePanel(.chat, invalidatesPendingThreadOpen: invalidatesPendingThreadOpen)
@@ -476,7 +477,7 @@ extension GaryxMobileModel {
         startSelectedThreadReconcileLoop()
     }
 
-    func openNewThreadDraft() {
+    func openNewThreadDraft(agentTargetOverride: String? = nil) {
         invalidatePendingThreadOpen()
         advanceSelectedThreadDraftGeneration()
         selectedThreadRecoveryTask?.cancel()
@@ -489,6 +490,7 @@ extension GaryxMobileModel {
         clearPendingBotDraft()
         selectedThread = nil
         draftThreadTitle = ""
+        setPendingNewThreadAgentTarget(agentTargetOverride)
         resetComposerDraft()
         messages = []
         activePanel = .chat
@@ -528,7 +530,7 @@ extension GaryxMobileModel {
         do {
             saveGatewaySettings()
             let workspace = (workspaceOverride ?? newThreadWorkspace).trimmingCharacters(in: .whitespacesAndNewlines)
-            let agentId = (agentOverride ?? selectedAgentTargetId).trimmingCharacters(in: .whitespacesAndNewlines)
+            let agentId = newThreadAgentTargetId(agentOverride: agentOverride)
             let workspaceMode = workspaceModeForNewThread(workspace: workspace)
             let thread = try await client().createThread(
                 GaryxCreateThreadRequest(
@@ -540,6 +542,7 @@ extension GaryxMobileModel {
             )
             threads.insert(thread, at: 0)
             selectedThread = thread
+            clearPendingNewThreadAgentTarget()
             clearPendingBotDraft()
             resetComposerDraft()
             draftThreadTitle = thread.title
@@ -583,6 +586,7 @@ extension GaryxMobileModel {
         pendingBotWorkspace = workspace.isEmpty ? nil : workspace
         pendingBotAgentId = agentId.isEmpty ? nil : agentId
         pendingBotDraftGeneration = selectedThreadDraftGeneration
+        clearPendingNewThreadAgentTarget()
         cancelSelectedThreadReconcileLoop()
         selectedThread = nil
         resetSelectedThreadHistoryPagination()

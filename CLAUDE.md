@@ -162,6 +162,10 @@ needs installed-app validation.
 - Mobile entry points that open an existing thread by row tap, widget link,
   task, automation, bot conversation, or deep link should route through the
   shared `GaryxMobileModel.openThread` path; sidebar behavior is the baseline.
+- Mobile Agent/Team management `Chat` actions should open a new-thread draft
+  with a one-off target override, matching the Mac app. Do not mutate the saved
+  default selected agent or eagerly create an empty thread; `Use` owns default
+  agent selection.
 - Mobile sidebar root navigation shows Automation and Workspace & Bots; Tasks,
   Auto Research, Agents, and Skills live under Settings. Keep workspace and bot
   conversations inside drilldown layers rather than dumping raw sessions inline.

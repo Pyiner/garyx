@@ -127,6 +127,7 @@ extension GaryxMobileModel {
         selectedWorkspaceDirectory = ""
         draftWorkspacePath = ""
         clearPendingBotDraft()
+        clearPendingNewThreadAgentTarget()
         workspaceListing = nil
         workspacePreview = nil
         workspaceGitStatuses = [:]

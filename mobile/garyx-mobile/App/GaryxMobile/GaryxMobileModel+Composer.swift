@@ -581,7 +581,7 @@ extension GaryxMobileModel {
             ? newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
             : pendingWorkspace
         let agentId = pendingAgentId.isEmpty
-            ? selectedAgentTargetId.trimmingCharacters(in: .whitespacesAndNewlines)
+            ? newThreadAgentTargetId()
             : pendingAgentId
         let workspaceMode = pendingWorkspace.isEmpty ? workspaceModeForNewThread(workspace: workspace) : "local"
         let thread = try await client().createThread(
@@ -598,6 +598,7 @@ extension GaryxMobileModel {
         if canAdoptSelection {
             selectedThread = thread
             draftThreadTitle = thread.title
+            clearPendingNewThreadAgentTarget()
         }
         if !pendingBotIdForThread.isEmpty {
             _ = try await client().bindBot(botId: pendingBotIdForThread, threadId: thread.id)
