@@ -47,7 +47,7 @@ extension GaryxMobileModel {
             defaults.string(forKey: workspaceModeKey)
                 ?? (fallbackToLegacy ? defaults.string(forKey: GaryxMobileSettingsKeys.newThreadWorkspaceMode) : nil)
         )
-        userWorkspacePaths = []
+        resetWorkspaceCatalogState()
         restoreCachedCatalogState()
     }
 
@@ -87,6 +87,7 @@ extension GaryxMobileModel {
         remoteStateRefreshRequestId = nil
         agentTargetsRefreshRequestId = nil
         agentTargetsStateRequestId = nil
+        workspaceRefreshRequestId = nil
         remoteBusyThreadIds = []
         agentTargetsLoadPhase = .idle
         connectionState = .disconnected
@@ -116,7 +117,7 @@ extension GaryxMobileModel {
         channelEndpoints = []
         configuredBots = []
         botConsoles = []
-        userWorkspacePaths = []
+        resetWorkspaceCatalogState()
         botStatusesById = [:]
         channelPlugins = []
         catalogSnapshotRestored = false
@@ -445,6 +446,7 @@ extension GaryxMobileModel {
         let runtimeGeneration = gatewayRuntimeGeneration
         let requestId = UUID()
         remoteStateRefreshRequestId = requestId
+        workspaceRefreshRequestId = requestId
         let supersededAgentTargetsRefresh = agentTargetsRefreshRequestId != nil
         agentTargetsRefreshRequestId = nil
         agentTargetsStateRequestId = requestId
@@ -453,6 +455,7 @@ extension GaryxMobileModel {
             || supersededAgentTargetsRefresh
             || agentTargetsLoadPhase.isLoading
         remoteStateLoadPhase = .loading
+        beginWorkspaceCatalogRefresh()
         if ownsAgentTargetsLoadPhase {
             agentTargetsLoadPhase = .loading
         }
@@ -474,6 +477,19 @@ extension GaryxMobileModel {
             async let botConsolesResult = garyxCaptureCatalog { try await gateway.listBotConsoles() }
             async let channelPluginsResult = garyxCaptureCatalog { try await gateway.listChannelPlugins() }
 
+            let nextWorkspaces = await workspacesResult
+            guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
+            if workspaceRefreshRequestId == requestId {
+                workspaceRefreshRequestId = nil
+                switch nextWorkspaces {
+                case .success(let workspaces):
+                    applyWorkspaceSummaries(workspaces, persist: true)
+                    ensureSelectedWorkspace()
+                case .failure(let error):
+                    failWorkspaceCatalogRefresh(displayMessage(for: error))
+                }
+            }
+
             let nextAgents = await agentsResult
             let nextTeams = await teamsResult
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
@@ -491,7 +507,6 @@ extension GaryxMobileModel {
             let nextMcpServers = await mcpServersResult
             let nextAutoResearchRuns = await autoResearchRunsResult
             let nextChannelEndpoints = await channelEndpointsResult
-            let nextWorkspaces = await workspacesResult
             let nextConfiguredBots = await configuredBotsResult
             let nextBotConsoles = await botConsolesResult
             let nextChannelPlugins = await channelPluginsResult
@@ -539,11 +554,6 @@ extension GaryxMobileModel {
             autoResearchRuns = nextAutoResearchRuns ?? autoResearchRuns
             if case let .success(value) = nextChannelEndpoints {
                 channelEndpoints = value
-            }
-            if case let .success(nextWorkspaces) = nextWorkspaces {
-                userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
-                    savedWorkspacePaths: nextWorkspaces.map(\.path)
-                )
             }
             if case let .success(value) = nextConfiguredBots {
                 configuredBots = value
@@ -599,6 +609,10 @@ extension GaryxMobileModel {
             guard isCurrentRemoteStateRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
             let message = displayMessage(for: error)
             remoteStateLoadPhase = .failed(message)
+            if workspaceRefreshRequestId == requestId {
+                workspaceRefreshRequestId = nil
+                failWorkspaceCatalogRefresh(message)
+            }
             if agentTargetsStateRequestId == requestId {
                 agentTargetsLoadPhase = hadAgentTargetsBeforeRefresh ? .loaded : .failed(message)
             }

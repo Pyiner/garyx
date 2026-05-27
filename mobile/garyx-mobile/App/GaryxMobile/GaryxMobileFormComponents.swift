@@ -460,6 +460,9 @@ struct GaryxWorkspaceSelectSheet: View {
             guard !selected.isEmpty else { return }
             Task { await addWorkspace(selected) }
         }
+        .task {
+            await model.refreshWorkspaces()
+        }
     }
 
     private func workspaceOptionRow(

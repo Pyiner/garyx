@@ -159,6 +159,18 @@ extension GaryxMobileModel {
         hasGatewaySettings && !remoteStateLoadPhase.hasResolved
     }
 
+    var userWorkspacePaths: [String] {
+        workspaceCatalogState.value
+    }
+
+    var isLoadingWorkspaces: Bool {
+        workspaceCatalogState.phase.isLoading
+    }
+
+    var workspaceRefreshFailureMessage: String? {
+        workspaceCatalogState.lastFailureMessage
+    }
+
     var isLoadingAgentTargets: Bool {
         agentTargetsLoadPhase.isLoading
     }

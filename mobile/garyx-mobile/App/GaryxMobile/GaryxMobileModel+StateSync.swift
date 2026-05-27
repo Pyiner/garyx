@@ -40,8 +40,10 @@ extension GaryxMobileModel {
 
     func ensureSelectedWorkspace() {
         let paths = userWorkspacePaths
-        if !selectedWorkspacePath.isEmpty, paths.contains(selectedWorkspacePath) {
-            draftWorkspacePath = selectedWorkspacePath
+        let selected = selectedWorkspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty {
+            selectedWorkspacePath = selected
+            draftWorkspacePath = selected
             return
         }
         selectedWorkspacePath = paths.first ?? ""

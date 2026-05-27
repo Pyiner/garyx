@@ -280,7 +280,7 @@ extension GaryxMobileModel {
         selectedAgentTargetId = "codex"
         newThreadWorkspace = "/workspace/garyx"
         newThreadWorkspaceMode = "local"
-        userWorkspacePaths = ["/workspace/garyx"]
+        replaceWorkspaceCatalogPaths(["/workspace/garyx"])
         selectedWorkspacePath = "/workspace/garyx"
         selectedWorkspaceDirectory = ""
         draftWorkspacePath = ""

@@ -202,6 +202,31 @@ extension GaryxMobileModel {
         }
     }
 
+    func refreshWorkspaces() async {
+        guard hasGatewaySettings else { return }
+        guard workspaceRefreshRequestId == nil else { return }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        let requestId = UUID()
+        workspaceRefreshRequestId = requestId
+        beginWorkspaceCatalogRefresh()
+        do {
+            let workspaces = try await client().listWorkspaces()
+            guard isCurrentWorkspaceRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
+            workspaceRefreshRequestId = nil
+            applyWorkspaceSummaries(workspaces, persist: true)
+            ensureSelectedWorkspace()
+        } catch {
+            guard isCurrentWorkspaceRefresh(requestId, runtimeGeneration: runtimeGeneration) else { return }
+            workspaceRefreshRequestId = nil
+            let message = displayMessage(for: error)
+            failWorkspaceCatalogRefresh(message)
+        }
+    }
+
+    func isCurrentWorkspaceRefresh(_ requestId: UUID, runtimeGeneration: UUID) -> Bool {
+        runtimeGeneration == gatewayRuntimeGeneration && workspaceRefreshRequestId == requestId
+    }
+
     @discardableResult
     func addUserWorkspacePath(_ path: String) async -> String? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -210,10 +235,7 @@ extension GaryxMobileModel {
         do {
             let workspaces = try await client().addWorkspace(path: trimmed, name: trimmed.garyxLastPathComponent)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
-                savedWorkspacePaths: workspaces.map(\.path)
-            )
-            persistCatalogCacheSnapshot()
+            applyWorkspaceSummaries(workspaces, persist: true)
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
             lastError = error.localizedDescription

@@ -175,6 +175,79 @@ public enum GaryxMobileLoadPhase: Equatable, Sendable {
     }
 }
 
+public struct GaryxMobileResourceState<Value: Equatable & Sendable>: Equatable, Sendable {
+    public private(set) var value: Value
+    public private(set) var phase: GaryxMobileLoadPhase
+    public private(set) var lastUpdatedAt: Date?
+    public private(set) var lastFailureMessage: String?
+    public private(set) var isRefreshing: Bool
+
+    public init(
+        value: Value,
+        phase: GaryxMobileLoadPhase = .idle,
+        lastUpdatedAt: Date? = nil,
+        lastFailureMessage: String? = nil,
+        isRefreshing: Bool = false
+    ) {
+        self.value = value
+        self.phase = phase
+        self.lastUpdatedAt = lastUpdatedAt
+        self.lastFailureMessage = lastFailureMessage
+        self.isRefreshing = isRefreshing
+    }
+
+    public mutating func reset(to value: Value) {
+        self.value = value
+        phase = .idle
+        lastUpdatedAt = nil
+        lastFailureMessage = nil
+        isRefreshing = false
+    }
+
+    /// Hydrates display state from a local cache without implying a fresh network result.
+    public mutating func restore(_ value: Value, at date: Date? = nil) {
+        self.value = value
+        phase = .loaded
+        lastUpdatedAt = date
+        lastFailureMessage = nil
+        isRefreshing = false
+    }
+
+    public mutating func beginRefresh() {
+        isRefreshing = true
+        switch phase {
+        case .idle, .failed:
+            phase = .loading
+        case .loading, .loaded:
+            break
+        }
+    }
+
+    /// Applies a successful async refresh result and records it as freshly updated.
+    public mutating func completeRefresh(_ value: Value, at date: Date = Date()) {
+        self.value = value
+        phase = .loaded
+        lastUpdatedAt = date
+        lastFailureMessage = nil
+        isRefreshing = false
+    }
+
+    public mutating func failRefresh(_ message: String, keepingStaleValue: Bool) {
+        lastFailureMessage = message
+        isRefreshing = false
+        phase = keepingStaleValue ? .loaded : .failed(message)
+    }
+
+    /// Applies a direct local mutation, such as an add/delete response already accepted by the backend.
+    public mutating func replace(_ value: Value, at date: Date = Date()) {
+        self.value = value
+        phase = .loaded
+        lastUpdatedAt = date
+        lastFailureMessage = nil
+        isRefreshing = false
+    }
+}
+
 public enum GaryxMobileLeadingEdgeAction: Equatable, Sendable {
     case openSidebar
     case mainPanelBack

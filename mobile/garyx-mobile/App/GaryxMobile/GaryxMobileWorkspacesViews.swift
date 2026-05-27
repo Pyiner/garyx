@@ -13,7 +13,10 @@ struct GaryxWorkspacesView: View {
         GaryxPanelScaffold(
             title: "Workspaces",
             subtitle: subtitle,
-            onRefresh: { await model.refreshSelectedWorkspace() }
+            onRefresh: {
+                await model.refreshWorkspaces()
+                await model.refreshSelectedWorkspace()
+            }
         ) {
             GaryxWorkspacesContent()
         } actions: {
@@ -38,6 +41,7 @@ struct GaryxWorkspacesView: View {
             }
         }
         .task {
+            await model.refreshWorkspaces()
             await model.prepareWorkspaceBrowser()
         }
         .onChange(of: model.userWorkspacePaths) { _, _ in
@@ -89,11 +93,15 @@ struct GaryxWorkspacesContent: View {
         let paths = model.userWorkspacePaths
         VStack(alignment: .leading, spacing: 12) {
             if paths.isEmpty {
-                GaryxEmptyPanelView(
-                    icon: "folder",
-                    title: "No workspaces",
-                    text: ""
-                )
+                if model.isLoadingWorkspaces {
+                    GaryxLoadingPanelView(title: "Loading workspaces...")
+                } else {
+                    GaryxEmptyPanelView(
+                        icon: "folder",
+                        title: model.workspaceRefreshFailureMessage == nil ? "No workspaces" : "Workspaces unavailable",
+                        text: model.workspaceRefreshFailureMessage ?? ""
+                    )
+                }
             } else {
                 GaryxSectionBlock(title: "Workspace") {
                     GaryxCompactListGroup {

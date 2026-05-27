@@ -113,7 +113,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var selectedAgentTargetId: String
     @Published var newThreadWorkspace: String
     @Published var newThreadWorkspaceMode: String
-    @Published var userWorkspacePaths: [String] = []
+    @Published var workspaceCatalogState = GaryxMobileResourceState(value: [String]())
     @Published var draftTaskTitle = ""
     @Published var draftTaskBody = ""
     @Published var lastAutomationRun: GaryxAutomationActivityEntry?
@@ -207,6 +207,7 @@ final class GaryxMobileModel: ObservableObject {
     var remoteStateRefreshRequestId: UUID?
     var agentTargetsRefreshRequestId: UUID?
     var agentTargetsStateRequestId: UUID?
+    var workspaceRefreshRequestId: UUID?
     var nextThreadListOffset = 0
     var selectedThreadNextHistoryBeforeIndex: Int?
     var sceneRefreshTask: Task<Void, Never>?
