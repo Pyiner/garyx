@@ -208,14 +208,19 @@ struct GaryxBotAccountForm: View {
                 VStack(alignment: .leading, spacing: 0) {
                     channelPicker
                     Divider().padding(.leading, 16)
-                    TextField("Account ID", text: $accountId)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .disabled(isEditing)
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Account ID",
+                        text: $accountId,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true,
+                        isReadOnly: isEditing
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Display name", text: $displayName)
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Display name",
+                        text: $displayName,
+                        placeholder: "Optional"
+                    )
                     Divider().padding(.leading, 16)
                     agentPicker
                     Divider().padding(.leading, 16)
@@ -499,26 +504,38 @@ private struct GaryxBotConfigFieldEditor: View {
     }
 
     private var textEntry: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) {
-                Text(field.label)
-                    .font(GaryxFont.caption(weight: .medium))
-                    .foregroundStyle(.secondary)
-                if field.required {
-                    Text("*")
-                        .font(GaryxFont.caption(weight: .semibold))
-                        .foregroundStyle(.red)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                HStack(spacing: 4) {
+                    Text(field.label)
+                        .font(GaryxFont.body())
+                        .foregroundStyle(.primary)
+                    if field.required {
+                        Text("*")
+                            .font(GaryxFont.body(weight: .semibold))
+                            .foregroundStyle(.red)
+                    }
                 }
+                .lineLimit(1)
+                Spacer(minLength: 8)
+                editor
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .layoutPriority(1)
             }
-            editor
+            .padding(.horizontal, 16)
+            .frame(minHeight: 52)
+
             if let description = field.description, !description.isEmpty {
                 Text(description)
                     .font(GaryxFont.caption())
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
             }
         }
-        .padding(16)
     }
 
     @ViewBuilder
@@ -531,6 +548,7 @@ private struct GaryxBotConfigFieldEditor: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .font(GaryxFont.body())
+            .lineLimit(1)
         } else {
             TextField(field.placeholder, text: Binding(
                 get: { garyxBotStringValue(value) },
@@ -540,6 +558,7 @@ private struct GaryxBotConfigFieldEditor: View {
             .autocorrectionDisabled()
             .keyboardType(field.kind == .number ? .decimalPad : .default)
             .font(GaryxFont.body())
+            .lineLimit(1)
         }
     }
 }

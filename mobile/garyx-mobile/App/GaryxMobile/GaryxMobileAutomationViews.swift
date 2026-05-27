@@ -573,10 +573,7 @@ struct GaryxAutomationFormFields: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             GaryxFormGroupedSection(title: "Title") {
-                TextField("Automation name", text: $draft.label)
-                    .font(GaryxFont.body())
-                    .padding(.horizontal, 16)
-                    .frame(minHeight: 52, alignment: .leading)
+                GaryxFormTextFieldRow(title: "Automation name", text: $draft.label)
             }
 
             GaryxFormGroupedSection(title: "Target") {
@@ -596,11 +593,13 @@ struct GaryxAutomationFormFields: View {
             }
 
             GaryxFormGroupedSection(title: "Prompt") {
-                TextField("What should Garyx do?", text: $draft.prompt, axis: .vertical)
-                    .font(GaryxFont.body())
-                    .lineLimit(5...12)
-                    .padding(16)
-                    .frame(minHeight: 142, alignment: .topLeading)
+                GaryxFormTextAreaRow(
+                    title: "Prompt",
+                    text: $draft.prompt,
+                    placeholder: "What should Garyx do?",
+                    minHeight: 142,
+                    lineLimits: 5...12
+                )
             }
         }
     }

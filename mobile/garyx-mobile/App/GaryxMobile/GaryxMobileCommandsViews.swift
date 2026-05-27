@@ -66,17 +66,25 @@ struct GaryxCreateSlashCommandCard: View {
         ) {
             VStack(alignment: .leading, spacing: 22) {
                 GaryxFormGroupedSection(title: "Command") {
-                    TextField("Command name", text: $model.draftSlashName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Command name",
+                        text: $model.draftSlashName,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Description", text: $model.draftSlashDescription)
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Description",
+                        text: $model.draftSlashDescription,
+                        placeholder: "Optional"
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Content", text: $model.draftSlashPrompt, axis: .vertical)
-                        .lineLimit(2...5)
-                        .garyxFormTextArea()
+                    GaryxFormTextAreaRow(
+                        title: "Content",
+                        text: $model.draftSlashPrompt,
+                        minHeight: 132,
+                        lineLimits: 2...5
+                    )
                 }
             }
         }
@@ -143,17 +151,25 @@ struct GaryxSlashCommandCard: View {
             ) {
                 VStack(alignment: .leading, spacing: 22) {
                     GaryxFormGroupedSection(title: "Command") {
-                        TextField("Name", text: $name)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .garyxFormTextField()
+                        GaryxFormTextFieldRow(
+                            title: "Name",
+                            text: $name,
+                            autocapitalization: .never,
+                            autocorrectionDisabled: true
+                        )
                         Divider().padding(.leading, 16)
-                        TextField("Description", text: $description)
-                            .garyxFormTextField()
+                        GaryxFormTextFieldRow(
+                            title: "Description",
+                            text: $description,
+                            placeholder: "Optional"
+                        )
                         Divider().padding(.leading, 16)
-                        TextField("Prompt", text: $prompt, axis: .vertical)
-                            .lineLimit(2...6)
-                            .garyxFormTextArea()
+                        GaryxFormTextAreaRow(
+                            title: "Prompt",
+                            text: $prompt,
+                            minHeight: 132,
+                            lineLimits: 2...6
+                        )
                     }
                 }
             }

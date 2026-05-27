@@ -120,17 +120,21 @@ struct GaryxGatewaySetupView: View {
                 }
 
                 GaryxFormGroupedSection(title: "Connection") {
-                    TextField("Gateway URL", text: $draftGatewayURL)
-                        .textContentType(.URL)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Gateway URL",
+                        text: $draftGatewayURL,
+                        keyboardType: .URL,
+                        textContentType: .URL,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                     Divider().padding(.leading, 16)
-                    SecureField("Gateway Token", text: $draftGatewayAuthToken)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormSecureFieldRow(
+                        title: "Gateway Token",
+                        text: $draftGatewayAuthToken,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                 }
             }
         }

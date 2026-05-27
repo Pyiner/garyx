@@ -83,12 +83,14 @@ struct GaryxCreateTaskCard: View {
     private var formContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             GaryxFormGroupedSection(title: "Task") {
-                TextField("Title", text: $model.draftTaskTitle)
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(title: "Title", text: $model.draftTaskTitle)
                 Divider().padding(.leading, 16)
-                TextField("Details", text: $model.draftTaskBody, axis: .vertical)
-                    .lineLimit(3...8)
-                    .garyxFormTextArea(minHeight: 128)
+                GaryxFormTextAreaRow(
+                    title: "Details",
+                    text: $model.draftTaskBody,
+                    minHeight: 128,
+                    lineLimits: 3...8
+                )
             }
 
             GaryxFormGroupedSection(title: "Assignee") {

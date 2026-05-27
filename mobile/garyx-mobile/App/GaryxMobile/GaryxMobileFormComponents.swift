@@ -119,23 +119,32 @@ struct GaryxFormGroupedSection<Content: View>: View {
 
 struct GaryxFormRow<Content: View>: View {
     let title: String
+    let verticalAlignment: VerticalAlignment
     let content: Content
 
-    init(title: String, @ViewBuilder content: () -> Content) {
+    init(
+        title: String,
+        verticalAlignment: VerticalAlignment = .center,
+        @ViewBuilder content: () -> Content
+    ) {
         self.title = title
+        self.verticalAlignment = verticalAlignment
         self.content = content()
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: verticalAlignment, spacing: 12) {
             Text(title)
                 .font(GaryxFont.body())
                 .foregroundStyle(.primary)
+                .lineLimit(1)
             Spacer(minLength: 8)
             content
                 .font(GaryxFont.body())
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .layoutPriority(1)
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 52)
@@ -153,6 +162,93 @@ struct GaryxFormReadOnlyRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+    }
+}
+
+struct GaryxFormTextFieldRow: View {
+    let title: String
+    @Binding var text: String
+    var placeholder: String = ""
+    var keyboardType: UIKeyboardType = .default
+    var textContentType: UITextContentType?
+    var autocapitalization: TextInputAutocapitalization?
+    var autocorrectionDisabled = false
+    var isReadOnly = false
+
+    var body: some View {
+        GaryxFormRow(title: title) {
+            if isReadOnly {
+                Text(displayValue)
+                    .foregroundStyle(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                TextField(placeholder, text: $text)
+                    .textContentType(textContentType)
+                    .textInputAutocapitalization(autocapitalization)
+                    .autocorrectionDisabled(autocorrectionDisabled)
+                    .keyboardType(keyboardType)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    private var displayValue: String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? placeholder : text
+    }
+}
+
+struct GaryxFormSecureFieldRow: View {
+    let title: String
+    @Binding var text: String
+    var placeholder: String = ""
+    var textContentType: UITextContentType?
+    var autocapitalization: TextInputAutocapitalization?
+    var autocorrectionDisabled = false
+
+    var body: some View {
+        GaryxFormRow(title: title) {
+            SecureField(placeholder, text: $text)
+                .textContentType(textContentType)
+                .textInputAutocapitalization(autocapitalization)
+                .autocorrectionDisabled(autocorrectionDisabled)
+                .lineLimit(1)
+        }
+    }
+}
+
+struct GaryxFormTextAreaRow: View {
+    let title: String
+    @Binding var text: String
+    var placeholder: String = ""
+    var minHeight: CGFloat = 112
+    var lineLimits: ClosedRange<Int> = 2...6
+    var autocapitalization: TextInputAutocapitalization?
+    var autocorrectionDisabled = false
+    var isDisabled = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(title)
+                .font(GaryxFont.body())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .padding(.top, 16)
+            Spacer(minLength: 8)
+            TextField(placeholder, text: $text, axis: .vertical)
+                .textInputAutocapitalization(autocapitalization)
+                .autocorrectionDisabled(autocorrectionDisabled)
+                .font(GaryxFont.body())
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(lineLimits)
+                .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
+                .layoutPriority(1)
+                .disabled(isDisabled)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: minHeight + 32)
     }
 }
 

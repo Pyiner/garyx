@@ -102,10 +102,12 @@ private struct GaryxMcpServerFormFields: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             GaryxFormGroupedSection(title: "Server") {
-                TextField("Name", text: $name)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Name",
+                    text: $name,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
                 Divider().padding(.leading, 16)
                 GaryxWorkspacePathSelectionRow(
                     title: "Working directory",
@@ -117,34 +119,51 @@ private struct GaryxMcpServerFormFields: View {
             }
 
             GaryxFormGroupedSection(title: "Command") {
-                TextField("Start command", text: $command)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Start command",
+                    text: $command,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
                 Divider().padding(.leading, 16)
-                TextField("Arguments", text: $args)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Arguments",
+                    text: $args,
+                    placeholder: "Optional",
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
                 Divider().padding(.leading, 16)
-                TextField("Environment variables", text: $env, axis: .vertical)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .lineLimit(2...4)
-                    .garyxFormTextArea(minHeight: 112)
+                GaryxFormTextAreaRow(
+                    title: "Environment variables",
+                    text: $env,
+                    placeholder: "Optional",
+                    minHeight: 112,
+                    lineLimits: 2...4,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
             }
 
             GaryxFormGroupedSection(title: "HTTP") {
-                TextField("URL", text: $url)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "URL",
+                    text: $url,
+                    keyboardType: .URL,
+                    textContentType: .URL,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
                 Divider().padding(.leading, 16)
-                TextField("Headers", text: $headers, axis: .vertical)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .lineLimit(2...4)
-                    .garyxFormTextArea(minHeight: 112)
+                GaryxFormTextAreaRow(
+                    title: "Headers",
+                    text: $headers,
+                    placeholder: "Optional",
+                    minHeight: 112,
+                    lineLimits: 2...4,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
             }
         }
     }

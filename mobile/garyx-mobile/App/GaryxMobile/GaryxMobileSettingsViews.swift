@@ -493,19 +493,23 @@ struct GaryxSavedGatewayProfileRow: View {
             ) {
                 VStack(alignment: .leading, spacing: 22) {
                     GaryxFormGroupedSection(title: "Gateway") {
-                        TextField("Name", text: $label)
-                            .garyxFormTextField()
+                        GaryxFormTextFieldRow(title: "Name", text: $label)
                         Divider().padding(.leading, 16)
-                        TextField("Gateway URL", text: $gatewayUrl)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .garyxFormTextField()
+                        GaryxFormTextFieldRow(
+                            title: "Gateway URL",
+                            text: $gatewayUrl,
+                            keyboardType: .URL,
+                            textContentType: .URL,
+                            autocapitalization: .never,
+                            autocorrectionDisabled: true
+                        )
                         Divider().padding(.leading, 16)
-                        SecureField("Gateway Token", text: $token)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .garyxFormTextField()
+                        GaryxFormSecureFieldRow(
+                            title: "Gateway Token",
+                            text: $token,
+                            autocapitalization: .never,
+                            autocorrectionDisabled: true
+                        )
                     }
                 }
             }

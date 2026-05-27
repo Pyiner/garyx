@@ -153,6 +153,9 @@ needs installed-app validation.
   top navigation actions, segmented controls for peer categories, and row-level
   ellipsis menus for secondary actions. Do not port desktop card/action-bar
   layouts directly into mobile.
+- Mobile compact form rows must keep field names visible on the left and the
+  value or control on the right. Do not rely on `TextField` or `SecureField`
+  placeholders as the only field label inside grouped forms.
 - Use Garyx's existing adaptive glass/material helpers for mobile chrome. Keep
   content readable, near-white, and integrated; reserve glass for navigation and
   transient controls rather than repeated content rows.

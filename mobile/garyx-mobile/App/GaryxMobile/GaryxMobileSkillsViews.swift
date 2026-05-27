@@ -107,23 +107,34 @@ struct GaryxCreateSkillCard: View {
         ) {
             VStack(alignment: .leading, spacing: 22) {
                 GaryxFormGroupedSection(title: "Identity") {
-                    TextField("ID", text: $model.draftSkillId)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "ID",
+                        text: $model.draftSkillId,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Name", text: $model.draftSkillName)
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Name",
+                        text: $model.draftSkillName,
+                        placeholder: "Optional"
+                    )
                 }
 
                 GaryxFormGroupedSection(title: "Content") {
-                    TextField("Description", text: $model.draftSkillDescription, axis: .vertical)
-                        .lineLimit(2...4)
-                        .garyxFormTextArea(minHeight: 104)
+                    GaryxFormTextAreaRow(
+                        title: "Description",
+                        text: $model.draftSkillDescription,
+                        minHeight: 104,
+                        lineLimits: 2...4
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Body", text: $model.draftSkillBody, axis: .vertical)
-                        .lineLimit(2...5)
-                        .garyxFormTextArea()
+                    GaryxFormTextAreaRow(
+                        title: "Body",
+                        text: $model.draftSkillBody,
+                        minHeight: 132,
+                        lineLimits: 2...5
+                    )
                 }
             }
         }
@@ -184,12 +195,14 @@ struct GaryxSkillCard: View {
             ) {
                 VStack(alignment: .leading, spacing: 22) {
                     GaryxFormGroupedSection(title: "Skill") {
-                        TextField("Name", text: $name)
-                            .garyxFormTextField()
+                        GaryxFormTextFieldRow(title: "Name", text: $name)
                         Divider().padding(.leading, 16)
-                        TextField("Description", text: $description, axis: .vertical)
-                            .lineLimit(2...4)
-                            .garyxFormTextArea(minHeight: 112)
+                        GaryxFormTextAreaRow(
+                            title: "Description",
+                            text: $description,
+                            minHeight: 112,
+                            lineLimits: 2...4
+                        )
                     }
                 }
             }
@@ -260,10 +273,13 @@ struct GaryxSkillEditorCard: View {
 
                 GaryxFormGroupedSection(title: "New Entry") {
                     VStack(alignment: .leading, spacing: 12) {
-                        TextField("path/to/file.md", text: $model.draftSkillEntryPath)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .garyxFormTextField()
+                        GaryxFormTextFieldRow(
+                            title: "Path",
+                            text: $model.draftSkillEntryPath,
+                            placeholder: "path/to/file.md",
+                            autocapitalization: .never,
+                            autocorrectionDisabled: true
+                        )
                         Divider().padding(.leading, 16)
                         Picker("Type", selection: $model.draftSkillEntryType) {
                             Text("New File").tag("file")
@@ -286,10 +302,13 @@ struct GaryxSkillEditorCard: View {
                 if let document = model.selectedSkillDocument {
                     GaryxFormGroupedSection(title: document.path) {
                         VStack(alignment: .leading, spacing: 12) {
-                            TextField("Content", text: $model.selectedSkillFileContent, axis: .vertical)
-                                .lineLimit(6...16)
-                                .garyxFormTextArea(minHeight: 220)
-                                .disabled(!document.editable)
+                            GaryxFormTextAreaRow(
+                                title: "Content",
+                                text: $model.selectedSkillFileContent,
+                                minHeight: 220,
+                                lineLimits: 6...16,
+                                isDisabled: !document.editable
+                            )
                             Button {
                                 Task { await model.saveSelectedSkillFile() }
                             } label: {

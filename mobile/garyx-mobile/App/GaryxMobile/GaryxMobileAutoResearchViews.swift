@@ -65,9 +65,12 @@ struct GaryxCreateAutoResearchCard: View {
         ) {
             VStack(alignment: .leading, spacing: 22) {
                 GaryxFormGroupedSection(title: "Goal") {
-                    TextField("Goal", text: $model.draftAutoResearchGoal, axis: .vertical)
-                        .lineLimit(2...5)
-                        .garyxFormTextArea()
+                    GaryxFormTextAreaRow(
+                        title: "Goal",
+                        text: $model.draftAutoResearchGoal,
+                        minHeight: 132,
+                        lineLimits: 2...5
+                    )
                 }
 
                 GaryxFormGroupedSection(title: "Workspace") {
@@ -81,13 +84,17 @@ struct GaryxCreateAutoResearchCard: View {
                 }
 
                 GaryxFormGroupedSection(title: "Limits") {
-                    TextField("Iterations", text: $model.draftAutoResearchIterations)
-                        .keyboardType(.numberPad)
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Iterations",
+                        text: $model.draftAutoResearchIterations,
+                        keyboardType: .numberPad
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Budget min", text: $model.draftAutoResearchTimeBudgetMinutes)
-                        .keyboardType(.numberPad)
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Budget min",
+                        text: $model.draftAutoResearchTimeBudgetMinutes,
+                        keyboardType: .numberPad
+                    )
                 }
             }
         }

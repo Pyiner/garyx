@@ -98,25 +98,34 @@ struct GaryxCreateAgentCard: View {
         ) {
             VStack(alignment: .leading, spacing: 22) {
                 GaryxFormGroupedSection(title: "Identity") {
-                    TextField("Agent ID", text: $model.draftAgentId)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Agent ID",
+                        text: $model.draftAgentId,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Display name", text: $model.draftAgentName)
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Display name",
+                        text: $model.draftAgentName,
+                        placeholder: "Optional"
+                    )
                 }
 
                 GaryxFormGroupedSection(title: "Model") {
-                    TextField("Provider", text: $model.draftAgentProvider)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Provider",
+                        text: $model.draftAgentProvider,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Model", text: $model.draftAgentModel)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Model",
+                        text: $model.draftAgentModel,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                 }
 
                 GaryxFormGroupedSection(title: "Defaults") {
@@ -128,9 +137,12 @@ struct GaryxCreateAgentCard: View {
                         allowsEmpty: true
                     )
                     Divider().padding(.leading, 16)
-                    TextField("System Prompt", text: $model.draftAgentPrompt, axis: .vertical)
-                        .lineLimit(2...6)
-                        .garyxFormTextArea()
+                    GaryxFormTextAreaRow(
+                        title: "System Prompt",
+                        text: $model.draftAgentPrompt,
+                        minHeight: 132,
+                        lineLimits: 2...6
+                    )
                 }
             }
         }
@@ -161,31 +173,44 @@ struct GaryxCreateTeamCard: View {
         ) {
             VStack(alignment: .leading, spacing: 22) {
                 GaryxFormGroupedSection(title: "Identity") {
-                    TextField("Team ID", text: $model.draftTeamId)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Team ID",
+                        text: $model.draftTeamId,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Display name", text: $model.draftTeamName)
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Display name",
+                        text: $model.draftTeamName,
+                        placeholder: "Optional"
+                    )
                 }
 
                 GaryxFormGroupedSection(title: "Members") {
-                    TextField("Leader Agent", text: $model.draftTeamLeaderId)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Leader Agent",
+                        text: $model.draftTeamLeaderId,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                     Divider().padding(.leading, 16)
-                    TextField("Members", text: $model.draftTeamMemberIds)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .garyxFormTextField()
+                    GaryxFormTextFieldRow(
+                        title: "Members",
+                        text: $model.draftTeamMemberIds,
+                        placeholder: "Optional",
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
                 }
 
                 GaryxFormGroupedSection(title: "Workflow") {
-                    TextField("Workflow", text: $model.draftTeamWorkflow, axis: .vertical)
-                        .lineLimit(2...6)
-                        .garyxFormTextArea()
+                    GaryxFormTextAreaRow(
+                        title: "Workflow",
+                        text: $model.draftTeamWorkflow,
+                        minHeight: 132,
+                        lineLimits: 2...6
+                    )
                 }
             }
         }
@@ -296,25 +321,34 @@ struct GaryxAgentCard: View {
     private var agentFormFields: some View {
         VStack(alignment: .leading, spacing: 22) {
             GaryxFormGroupedSection(title: "Identity") {
-                TextField("Agent ID", text: $agentId)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Agent ID",
+                    text: $agentId,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
                 Divider().padding(.leading, 16)
-                TextField("Display name", text: $displayName)
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Display name",
+                    text: $displayName,
+                    placeholder: "Optional"
+                )
             }
 
             GaryxFormGroupedSection(title: "Model") {
-                TextField("Provider", text: $providerType)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Provider",
+                    text: $providerType,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
                 Divider().padding(.leading, 16)
-                TextField("Model", text: $modelName)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Model",
+                    text: $modelName,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
             }
 
             GaryxFormGroupedSection(title: "Defaults") {
@@ -326,9 +360,12 @@ struct GaryxAgentCard: View {
                     allowsEmpty: true
                 )
                 Divider().padding(.leading, 16)
-                TextField("System Prompt", text: $systemPrompt, axis: .vertical)
-                    .lineLimit(2...6)
-                    .garyxFormTextArea()
+                GaryxFormTextAreaRow(
+                    title: "System Prompt",
+                    text: $systemPrompt,
+                    minHeight: 132,
+                    lineLimits: 2...6
+                )
             }
         }
     }
@@ -432,31 +469,44 @@ struct GaryxTeamCard: View {
     private var teamFormFields: some View {
         VStack(alignment: .leading, spacing: 22) {
             GaryxFormGroupedSection(title: "Identity") {
-                TextField("Team ID", text: $teamId)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Team ID",
+                    text: $teamId,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
                 Divider().padding(.leading, 16)
-                TextField("Display name", text: $displayName)
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Display name",
+                    text: $displayName,
+                    placeholder: "Optional"
+                )
             }
 
             GaryxFormGroupedSection(title: "Members") {
-                TextField("Leader Agent", text: $leaderAgentId)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Leader Agent",
+                    text: $leaderAgentId,
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
                 Divider().padding(.leading, 16)
-                TextField("Members", text: $memberAgentIds)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .garyxFormTextField()
+                GaryxFormTextFieldRow(
+                    title: "Members",
+                    text: $memberAgentIds,
+                    placeholder: "Optional",
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
             }
 
             GaryxFormGroupedSection(title: "Workflow") {
-                TextField("Workflow", text: $workflowText, axis: .vertical)
-                    .lineLimit(2...6)
-                    .garyxFormTextArea()
+                GaryxFormTextAreaRow(
+                    title: "Workflow",
+                    text: $workflowText,
+                    minHeight: 132,
+                    lineLimits: 2...6
+                )
             }
         }
     }
