@@ -139,7 +139,8 @@ final class GaryxMobileModel: ObservableObject {
     @Published var providerModelsByType: [String: GaryxProviderModels] = [:]
     @Published var selectedSkillEditor: GaryxSkillEditorState?
     @Published var selectedSkillDocument: GaryxSkillFileDocument?
-    @Published var selectedSkillFileContent = ""
+    var skillEditorLoadRequestId: UUID?
+    var skillFileLoadRequestId: UUID?
     @Published var researchCandidatesByRunId: [String: GaryxAutoResearchCandidatesPage] = [:]
     @Published var autoResearchDetailsByRunId: [String: GaryxAutoResearchDetail] = [:]
     @Published var autoResearchIterationsByRunId: [String: [GaryxAutoResearchIteration]] = [:]
@@ -159,8 +160,6 @@ final class GaryxMobileModel: ObservableObject {
     @Published var draftSkillName = ""
     @Published var draftSkillDescription = ""
     @Published var draftSkillBody = ""
-    @Published var draftSkillEntryPath = ""
-    @Published var draftSkillEntryType = "file"
     @Published var draftSlashName = ""
     @Published var draftSlashDescription = ""
     @Published var draftSlashPrompt = ""

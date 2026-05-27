@@ -54,9 +54,7 @@ extension GaryxMobileModel {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             skills.removeAll { $0.id == skill.id }
             if selectedSkillEditor?.skill.id == skill.id {
-                selectedSkillEditor = nil
-                selectedSkillDocument = nil
-                selectedSkillFileContent = ""
+                closeSkillDetail()
             }
             persistCatalogCacheSnapshot()
         } catch {
@@ -81,63 +79,83 @@ extension GaryxMobileModel {
     }
 
     func openSkillEditor(_ skill: GaryxSkillSummary) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
+        let editorRequestId = UUID()
+        skillEditorLoadRequestId = editorRequestId
+        skillFileLoadRequestId = nil
         do {
-            selectedSkillEditor = try await client().skillEditor(skillId: skill.id)
+            let gateway = try client()
+            let editor = try await gateway.skillEditor(skillId: skill.id)
+            guard runtimeGeneration == gatewayRuntimeGeneration,
+                  skillEditorLoadRequestId == editorRequestId else { return }
+            selectedSkillEditor = editor
             selectedSkillDocument = nil
-            selectedSkillFileContent = ""
+            guard let preferredPath = Self.preferredSkillFilePath(in: editor.entries) else {
+                return
+            }
+            let fileRequestId = UUID()
+            skillFileLoadRequestId = fileRequestId
+            do {
+                let document = try await gateway.readSkillFile(skillId: skill.id, path: preferredPath)
+                guard runtimeGeneration == gatewayRuntimeGeneration,
+                      skillEditorLoadRequestId == editorRequestId,
+                      skillFileLoadRequestId == fileRequestId,
+                      selectedSkillEditor?.skill.id == skill.id else { return }
+                selectedSkillDocument = document
+            } catch {
+                guard runtimeGeneration == gatewayRuntimeGeneration,
+                      skillEditorLoadRequestId == editorRequestId,
+                      skillFileLoadRequestId == fileRequestId,
+                      selectedSkillEditor?.skill.id == skill.id else { return }
+                lastError = displayMessage(for: error)
+            }
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration,
+                  skillEditorLoadRequestId == editorRequestId else { return }
             lastError = displayMessage(for: error)
         }
     }
 
     func openSkillFile(skillId: String, path: String) async {
+        let runtimeGeneration = gatewayRuntimeGeneration
+        let fileRequestId = UUID()
+        skillFileLoadRequestId = fileRequestId
         do {
             let document = try await client().readSkillFile(skillId: skillId, path: path)
+            guard runtimeGeneration == gatewayRuntimeGeneration,
+                  skillFileLoadRequestId == fileRequestId,
+                  selectedSkillEditor?.skill.id == skillId else { return }
             selectedSkillDocument = document
-            selectedSkillFileContent = document.content
         } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration,
+                  skillFileLoadRequestId == fileRequestId,
+                  selectedSkillEditor?.skill.id == skillId else { return }
             lastError = displayMessage(for: error)
         }
     }
 
-    func saveSelectedSkillFile() async {
-        guard let document = selectedSkillDocument else { return }
-        do {
-            let saved = try await client().saveSkillFile(
-                skillId: document.skill.id,
-                request: GaryxSkillFileWriteRequest(path: document.path, content: selectedSkillFileContent)
-            )
-            selectedSkillDocument = saved
-            selectedSkillFileContent = saved.content
-        } catch {
-            lastError = displayMessage(for: error)
-        }
+    func closeSkillDetail() {
+        skillEditorLoadRequestId = nil
+        skillFileLoadRequestId = nil
+        selectedSkillEditor = nil
+        selectedSkillDocument = nil
     }
 
-    func createSkillEntry() async {
-        guard let editor = selectedSkillEditor else { return }
-        let path = draftSkillEntryPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty else { return }
-        do {
-            selectedSkillEditor = try await client().createSkillEntry(
-                skillId: editor.skill.id,
-                request: GaryxSkillEntryCreateRequest(path: path, entryType: draftSkillEntryType)
-            )
-            draftSkillEntryPath = ""
-        } catch {
-            lastError = displayMessage(for: error)
-        }
+    private static func preferredSkillFilePath(in entries: [GaryxSkillEntryNode]) -> String? {
+        let filePaths = skillFilePaths(in: entries)
+        return filePaths.first { $0 == "SKILL.md" }
+            ?? filePaths.first { $0.localizedCaseInsensitiveCompare("SKILL.md") == .orderedSame }
+            ?? filePaths.first
     }
 
-    func deleteSkillEntry(skillId: String, path: String) async {
-        do {
-            selectedSkillEditor = try await client().deleteSkillEntry(skillId: skillId, path: path)
-            if selectedSkillDocument?.path == path {
-                selectedSkillDocument = nil
-                selectedSkillFileContent = ""
+    private static func skillFilePaths(in entries: [GaryxSkillEntryNode]) -> [String] {
+        entries.flatMap { entry -> [String] in
+            var paths: [String] = []
+            if entry.entryType == "file" {
+                paths.append(entry.path)
             }
-        } catch {
-            lastError = displayMessage(for: error)
+            paths.append(contentsOf: skillFilePaths(in: entry.children))
+            return paths
         }
     }
 

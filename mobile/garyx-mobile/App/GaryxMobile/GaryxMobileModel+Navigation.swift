@@ -584,9 +584,10 @@ extension GaryxMobileModel {
         channelPlugins = []
         botStatusesById = [:]
         providerModelsByType = [:]
+        skillEditorLoadRequestId = nil
+        skillFileLoadRequestId = nil
         selectedSkillEditor = nil
         selectedSkillDocument = nil
-        selectedSkillFileContent = ""
         researchCandidatesByRunId = [:]
     }
 

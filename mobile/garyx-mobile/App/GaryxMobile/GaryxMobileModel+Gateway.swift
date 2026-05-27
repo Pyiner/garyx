@@ -139,9 +139,10 @@ extension GaryxMobileModel {
         workspaceGitStatuses = [:]
         isUploadingWorkspaceFiles = false
         workspaceUploadStatus = nil
+        skillEditorLoadRequestId = nil
+        skillFileLoadRequestId = nil
         selectedSkillEditor = nil
         selectedSkillDocument = nil
-        selectedSkillFileContent = ""
         researchCandidatesByRunId = [:]
         autoResearchDetailsByRunId = [:]
         autoResearchIterationsByRunId = [:]
