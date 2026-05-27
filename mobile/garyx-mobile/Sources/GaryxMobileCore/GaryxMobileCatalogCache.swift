@@ -1,7 +1,7 @@
 import Foundation
 
 struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     var version: Int
     var savedAt: Date
@@ -15,6 +15,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
     var mcpServers: [GaryxCachedMcpServer]
     var channelEndpoints: [GaryxCachedChannelEndpoint]
     var configuredBots: [GaryxCachedConfiguredBot]
+    var configuredBotAccounts: [GaryxCachedConfiguredBotAccount]
     var botConsoles: [GaryxCachedBotConsole]
     var channelPlugins: [GaryxCachedChannelPlugin]
 
@@ -31,6 +32,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         mcpServers: [GaryxCachedMcpServer],
         channelEndpoints: [GaryxCachedChannelEndpoint],
         configuredBots: [GaryxCachedConfiguredBot],
+        configuredBotAccounts: [GaryxCachedConfiguredBotAccount],
         botConsoles: [GaryxCachedBotConsole],
         channelPlugins: [GaryxCachedChannelPlugin]
     ) {
@@ -46,6 +48,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         self.mcpServers = mcpServers
         self.channelEndpoints = channelEndpoints
         self.configuredBots = configuredBots
+        self.configuredBotAccounts = configuredBotAccounts
         self.botConsoles = botConsoles
         self.channelPlugins = channelPlugins
     }
@@ -61,6 +64,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
         mcpServers: [GaryxMcpServer],
         channelEndpoints: [GaryxChannelEndpoint],
         configuredBots: [GaryxConfiguredBot],
+        configuredBotAccounts: [GaryxConfiguredBotAccountSettings],
         botConsoles: [GaryxBotConsoleSummary],
         channelPlugins: [GaryxChannelPluginCatalogEntry],
         savedAt: Date = Date()
@@ -77,6 +81,7 @@ struct GaryxMobileCatalogCacheSnapshot: Codable, Equatable {
             mcpServers: mcpServers.map(GaryxCachedMcpServer.init),
             channelEndpoints: channelEndpoints.map(GaryxCachedChannelEndpoint.init),
             configuredBots: configuredBots.map(GaryxCachedConfiguredBot.init),
+            configuredBotAccounts: configuredBotAccounts.map(GaryxCachedConfiguredBotAccount.init),
             botConsoles: botConsoles.map(GaryxCachedBotConsole.init),
             channelPlugins: channelPlugins.map(GaryxCachedChannelPlugin.init)
         )
@@ -464,6 +469,41 @@ struct GaryxCachedConfiguredBot: Codable, Equatable {
             mainEndpointStatus: mainEndpointStatus,
             mainThreadId: mainThreadId,
             defaultOpenThreadId: defaultOpenThreadId
+        )
+    }
+}
+
+struct GaryxCachedConfiguredBotAccount: Codable, Equatable {
+    var channel: String
+    var accountId: String
+    var displayName: String
+    var enabled: Bool
+    var agentId: String?
+    var workspaceDir: String?
+    var workspaceMode: String?
+    var config: [String: GaryxJSONValue]
+
+    init(_ account: GaryxConfiguredBotAccountSettings) {
+        channel = account.channel
+        accountId = account.accountId
+        displayName = account.displayName
+        enabled = account.enabled
+        agentId = account.agentId
+        workspaceDir = account.workspaceDir
+        workspaceMode = account.workspaceMode
+        config = account.config
+    }
+
+    var model: GaryxConfiguredBotAccountSettings {
+        GaryxConfiguredBotAccountSettings(
+            channel: channel,
+            accountId: accountId,
+            displayName: displayName,
+            enabled: enabled,
+            agentId: agentId,
+            workspaceDir: workspaceDir,
+            workspaceMode: workspaceMode,
+            config: config
         )
     }
 }

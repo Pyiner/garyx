@@ -193,8 +193,8 @@ final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
         XCTAssertEqual(accounts.first?.config, ["token": .string("${TOKEN}")])
     }
 
-    func testCachedBotConfigMergePreservesFetchedValuesWhenFieldsWereNotEdited() {
-        let input = GaryxConfiguredBotAccountInput(
+    func testSettingsDocumentRoundTripsConfiguredBotAccounts() {
+        let account = GaryxConfiguredBotAccountSettings(
             channel: "telegram",
             accountId: "bot-alpha",
             displayName: "Alpha",
@@ -202,67 +202,13 @@ final class GaryxMobileGatewaySettingsModelsTests: XCTestCase {
             agentId: "agent-alpha",
             workspaceDir: "/workspace/alpha",
             workspaceMode: "local",
-            config: [
-                "token": .string(""),
-                "optionalLabel": .string(""),
-            ],
-            configEditedKeys: []
+            config: ["token": .string("${TOKEN}")]
         )
 
-        let merged = input.mergingFetchedConfigForCachedProjection([
-            "token": .string("${TOKEN}"),
-            "optionalLabel": .string("Production"),
-        ])
+        let settings = GaryxConfiguredBotAccountsDocument.settingsDocument(from: [account])
+        let accounts = GaryxConfiguredBotAccountsDocument.accounts(from: settings)
 
-        XCTAssertEqual(merged.config["token"], .string("${TOKEN}"))
-        XCTAssertEqual(merged.config["optionalLabel"], .string("Production"))
-    }
-
-    func testCachedBotConfigMergeAppliesOnlyEditedPatchKeys() {
-        let input = GaryxConfiguredBotAccountInput(
-            channel: "telegram",
-            accountId: "bot-alpha",
-            displayName: "Alpha",
-            enabled: true,
-            agentId: "agent-alpha",
-            workspaceDir: "/workspace/alpha",
-            workspaceMode: "local",
-            config: [
-                "token": .string("${NEW_TOKEN}"),
-                "optionalLabel": .string("Ignored Default"),
-            ],
-            configEditedKeys: ["token"]
-        )
-
-        let merged = input.mergingFetchedConfigForCachedProjection([
-            "token": .string("${OLD_TOKEN}"),
-            "optionalLabel": .string("Production"),
-        ])
-
-        XCTAssertEqual(merged.config["token"], .string("${NEW_TOKEN}"))
-        XCTAssertEqual(merged.config["optionalLabel"], .string("Production"))
-    }
-
-    func testCachedBotConfigMergeRemovesEditedOptionalKeysMissingFromPatch() {
-        let input = GaryxConfiguredBotAccountInput(
-            channel: "telegram",
-            accountId: "bot-alpha",
-            displayName: "Alpha",
-            enabled: true,
-            agentId: "agent-alpha",
-            workspaceDir: "/workspace/alpha",
-            workspaceMode: "local",
-            config: [:],
-            configEditedKeys: ["optionalLabel"]
-        )
-
-        let merged = input.mergingFetchedConfigForCachedProjection([
-            "token": .string("${TOKEN}"),
-            "optionalLabel": .string("Production"),
-        ])
-
-        XCTAssertEqual(merged.config["token"], .string("${TOKEN}"))
-        XCTAssertNil(merged.config["optionalLabel"])
+        XCTAssertEqual(accounts, [account])
     }
 
     func testRemoveAccountMatchesChannelCaseInsensitively() {

@@ -76,37 +76,12 @@ extension GaryxMobileModel {
         do {
             var settings = try await client().gatewaySettings()
             guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
-            let settingsAccounts = GaryxConfiguredBotAccountsDocument.accounts(from: settings)
-            let existingInputAccount = settingsAccounts.first {
-                $0.channel.caseInsensitiveCompare(channel) == .orderedSame && $0.accountId == accountId
-            }
-            let existingOriginalAccount = original.flatMap { original in
-                settingsAccounts.first {
-                    $0.channel.caseInsensitiveCompare(original.channel) == .orderedSame
-                        && $0.accountId == original.accountId
-                }
-            }
-            let existingAccount = existingOriginalAccount ?? existingInputAccount
-            var inputToSave = input
-            if original != nil,
-               original?.config.isEmpty ?? true,
-               original?.channel.caseInsensitiveCompare(channel) == .orderedSame,
-               let existingAccount {
-                inputToSave = inputToSave.mergingFetchedConfigForCachedProjection(existingAccount.config)
-            }
-            if original != nil,
-               original?.workspaceMode?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
-               input.workspaceMode?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
-               let existingWorkspaceMode = existingAccount?.workspaceMode?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !existingWorkspaceMode.isEmpty {
-                inputToSave.workspaceMode = existingWorkspaceMode
-            }
             let validation = try await client().validateChannelAccount(
                 pluginId: channel,
                 request: GaryxChannelAccountValidationRequest(
                     accountId: accountId,
                     enabled: input.enabled,
-                    config: inputToSave.config
+                    config: input.config
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
@@ -119,7 +94,7 @@ extension GaryxMobileModel {
                 in: &settings,
                 originalChannel: original?.channel,
                 originalAccountId: original?.accountId,
-                input: inputToSave
+                input: input
             ) else {
                 lastError = "Bot account could not be saved"
                 return false

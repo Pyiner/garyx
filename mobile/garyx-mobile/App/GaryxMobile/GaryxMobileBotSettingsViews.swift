@@ -175,7 +175,6 @@ struct GaryxBotAccountForm: View {
     @State private var workspaceDir = ""
     @State private var workspaceMode = "local"
     @State private var configValues: [String: GaryxJSONValue] = [:]
-    @State private var editedConfigKeys: Set<String> = []
     @State private var errorText: String?
 
     private var isEditing: Bool { account != nil }
@@ -401,7 +400,6 @@ struct GaryxBotAccountForm: View {
             },
             set: { next in
                 configValues[field.key] = next
-                editedConfigKeys.insert(field.key)
             }
         )
     }
@@ -420,9 +418,6 @@ struct GaryxBotAccountForm: View {
         }
         let fields = selectedPlugin.map { schemaFields(for: $0) } ?? []
         let normalizedConfig = normalizedConfigValues(fields: fields)
-        let configEditedKeys = (account != nil && (account?.config.isEmpty ?? false))
-            ? editedConfigKeys
-            : nil
         let input = GaryxConfiguredBotAccountInput(
             channel: trimmedChannel,
             accountId: trimmedAccountId,
@@ -431,8 +426,7 @@ struct GaryxBotAccountForm: View {
             agentId: agentId.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             workspaceDir: workspaceDir.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             workspaceMode: workspaceMode,
-            config: normalizedConfig,
-            configEditedKeys: configEditedKeys
+            config: normalizedConfig
         )
         if await model.saveConfiguredBotAccount(input, original: account) {
             dismiss()

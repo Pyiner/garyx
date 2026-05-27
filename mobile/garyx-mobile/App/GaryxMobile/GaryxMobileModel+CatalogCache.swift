@@ -20,6 +20,10 @@ extension GaryxMobileModel {
         mcpServers = snapshot.mcpServers.map(\.model)
         channelEndpoints = snapshot.channelEndpoints.map(\.model)
         configuredBots = snapshot.configuredBots.map(\.model)
+        let configuredBotAccounts = snapshot.configuredBotAccounts.map(\.model)
+        if !configuredBotAccounts.isEmpty {
+            gatewaySettingsDocument = GaryxConfiguredBotAccountsDocument.settingsDocument(from: configuredBotAccounts)
+        }
         botConsoles = snapshot.botConsoles.map(\.model)
         channelPlugins = snapshot.channelPlugins.map(\.model)
         userWorkspacePaths = GaryxMobileWorkspacePresentation.userWorkspacePaths(
@@ -47,6 +51,7 @@ extension GaryxMobileModel {
             mcpServers: mcpServers,
             channelEndpoints: channelEndpoints,
             configuredBots: configuredBots,
+            configuredBotAccounts: GaryxConfiguredBotAccountsDocument.accounts(from: gatewaySettingsDocument),
             botConsoles: botConsoles,
             channelPlugins: channelPlugins
         )

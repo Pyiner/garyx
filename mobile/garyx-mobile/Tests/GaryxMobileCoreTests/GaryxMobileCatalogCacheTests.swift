@@ -25,6 +25,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
             mcpServers: [],
             channelEndpoints: [],
             configuredBots: [],
+            configuredBotAccounts: [],
             botConsoles: [],
             channelPlugins: [],
             savedAt: Date(timeIntervalSince1970: 1)
@@ -90,6 +91,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
             mcpServers: [mcpServer],
             channelEndpoints: [endpoint],
             configuredBots: [],
+            configuredBotAccounts: [],
             botConsoles: [console],
             channelPlugins: [],
             savedAt: Date(timeIntervalSince1970: 1)
@@ -113,7 +115,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         XCTAssertEqual(restoredConsole.conversationNodes, [])
     }
 
-    func testSnapshotPreservesConfiguredBotWorkspaceMode() throws {
+    func testSnapshotPreservesConfiguredBotWorkspaceModeAndAccountConfig() throws {
         let bot = GaryxConfiguredBot(
             channel: "telegram",
             accountId: "bot-main",
@@ -121,6 +123,16 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
             agentId: "agent-alpha",
             workspaceDir: "/Users/test/project-alpha",
             workspaceMode: "worktree"
+        )
+        let account = GaryxConfiguredBotAccountSettings(
+            channel: "telegram",
+            accountId: "bot-main",
+            displayName: "Telegram Main",
+            enabled: true,
+            agentId: "agent-alpha",
+            workspaceDir: "/Users/test/project-alpha",
+            workspaceMode: "worktree",
+            config: ["token": .string("${TOKEN}")]
         )
         let snapshot = GaryxMobileCatalogCacheSnapshot(
             agents: [],
@@ -133,6 +145,7 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
             mcpServers: [],
             channelEndpoints: [],
             configuredBots: [bot],
+            configuredBotAccounts: [account],
             botConsoles: [],
             channelPlugins: [],
             savedAt: Date(timeIntervalSince1970: 1)
@@ -143,5 +156,8 @@ final class GaryxMobileCatalogCacheTests: XCTestCase {
         let restoredBot = try XCTUnwrap(decoded.configuredBots.first?.model)
         XCTAssertEqual(restoredBot.workspaceMode, "worktree")
         XCTAssertEqual(restoredBot.workspaceDir, "/Users/test/project-alpha")
+        let restoredAccount = try XCTUnwrap(decoded.configuredBotAccounts.first?.model)
+        XCTAssertEqual(restoredAccount.config, ["token": .string("${TOKEN}")])
+        XCTAssertEqual(restoredAccount.workspaceMode, "worktree")
     }
 }

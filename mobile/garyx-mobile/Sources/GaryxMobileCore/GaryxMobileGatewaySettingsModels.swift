@@ -121,26 +121,6 @@ struct GaryxConfiguredBotAccountInput: Equatable {
     var workspaceDir: String?
     var workspaceMode: String?
     var config: [String: GaryxJSONValue]
-    var configEditedKeys: Set<String>? = nil
-
-    func mergingFetchedConfigForCachedProjection(_ fetchedConfig: [String: GaryxJSONValue]) -> Self {
-        var next = self
-        var mergedConfig = fetchedConfig
-        let configPatch: [String: GaryxJSONValue]
-        if let configEditedKeys {
-            for key in configEditedKeys {
-                mergedConfig.removeValue(forKey: key)
-            }
-            configPatch = config.filter { configEditedKeys.contains($0.key) }
-        } else {
-            configPatch = config
-        }
-        for (key, value) in configPatch {
-            mergedConfig[key] = value
-        }
-        next.config = mergedConfig
-        return next
-    }
 }
 
 enum GaryxConfiguredBotAccountsDocument {
@@ -247,6 +227,29 @@ enum GaryxConfiguredBotAccountsDocument {
         channels[channel] = .object(channelConfig)
         settings["channels"] = .object(channels)
         return true
+    }
+
+    static func settingsDocument(from accounts: [GaryxConfiguredBotAccountSettings]) -> [String: GaryxJSONValue] {
+        var settings: [String: GaryxJSONValue] = [:]
+        for account in accounts {
+            let input = GaryxConfiguredBotAccountInput(
+                channel: account.channel,
+                accountId: account.accountId,
+                displayName: account.displayName,
+                enabled: account.enabled,
+                agentId: account.agentId,
+                workspaceDir: account.workspaceDir,
+                workspaceMode: account.workspaceMode,
+                config: account.config
+            )
+            _ = setAccount(
+                in: &settings,
+                originalChannel: nil,
+                originalAccountId: nil,
+                input: input
+            )
+        }
+        return settings
     }
 }
 
