@@ -765,13 +765,10 @@ private struct GaryxSidebarThreadButton: View {
             guard archiveAvailable else { return }
             showsArchiveConfirmation = true
         }
-        .confirmationDialog("Archive thread?", isPresented: $showsArchiveConfirmation, titleVisibility: .visible) {
+        .confirmationDialog("Archive thread", isPresented: $showsArchiveConfirmation, titleVisibility: .visible) {
             Button("Archive", role: .destructive) {
                 archive()
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This removes the thread from the list.")
         }
         .padding(.leading, indent)
     }

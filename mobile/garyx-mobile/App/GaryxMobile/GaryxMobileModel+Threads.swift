@@ -600,14 +600,7 @@ extension GaryxMobileModel {
 
     func deleteSelectedThread() async {
         guard let selectedThread else { return }
-        let threadId = selectedThread.id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canArchiveThreadId(threadId) else {
-            lastError = "This thread is active or managed by an automation."
-            return
-        }
-
-        openNewThreadDraft()
-        await archiveThreadRecord(threadId: threadId)
+        await archiveThread(selectedThread)
     }
 
     func archiveThread(_ thread: GaryxThreadSummary) async {

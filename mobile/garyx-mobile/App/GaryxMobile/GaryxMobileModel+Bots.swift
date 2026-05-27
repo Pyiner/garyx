@@ -255,6 +255,9 @@ extension GaryxMobileModel {
         }
 
         let runtimeGeneration = gatewayRuntimeGeneration
+        if selectedThread?.id == normalizedThreadId {
+            openNewThreadDraft()
+        }
         do {
             for endpointKey in endpointKeys {
                 _ = try await client().detachChannelEndpoint(endpointKey: endpointKey)
