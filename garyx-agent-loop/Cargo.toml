@@ -15,6 +15,3 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
