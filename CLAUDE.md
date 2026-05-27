@@ -31,6 +31,9 @@ names or emails.
 
 - Config: `~/.garyx/garyx.json`.
 - Channel accounts: `channels.<channel_id>.accounts[...]` (`channels.api.accounts[...]` for API).
+- Configured bot account `config` is ordinary application state. Mobile and
+  desktop should not add token-specific merge, redaction, or preservation paths
+  beyond keeping real secrets out of committed fixtures.
 - Thread records and known endpoint state: `garyx-router`.
 - Mobile recent-thread lists read the gateway SQLite `recent_threads` projection
   only. Keep that projection current by writing it from the thread-store write
