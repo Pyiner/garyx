@@ -30,6 +30,67 @@ fn test_matches_turn_no_ids_matches() {
 }
 
 #[test]
+fn test_codex_run_result_timed_out_detects_provider_timeout() {
+    let result = Ok(ProviderRunResult {
+        run_id: "run-1".to_owned(),
+        thread_id: "thread-1".to_owned(),
+        response: String::new(),
+        session_messages: Vec::new(),
+        sdk_session_id: Some("codex-thread-1".to_owned()),
+        actual_model: None,
+        thread_title: None,
+        success: false,
+        error: Some("timeout".to_owned()),
+        input_tokens: 0,
+        output_tokens: 0,
+        cost: 0.0,
+        duration_ms: 300_000,
+    });
+
+    assert!(codex_run_result_timed_out(&result));
+    assert!(codex_run_result_timed_out(&Err(BridgeError::Timeout)));
+}
+
+#[test]
+fn test_codex_timeout_auto_continue_options_replaces_message_only() {
+    let options = ProviderRunOptions {
+        thread_id: "thread-1".to_owned(),
+        message: "original".to_owned(),
+        workspace_dir: Some("/tmp/work".to_owned()),
+        images: Some(vec![ImagePayload {
+            name: "image.png".to_owned(),
+            data: "base64".to_owned(),
+            media_type: "image/png".to_owned(),
+        }]),
+        metadata: std::collections::HashMap::from([(
+            "bridge_run_id".to_owned(),
+            Value::String("run-1".to_owned()),
+        )]),
+    };
+
+    let continued = codex_timeout_auto_continue_options(&options);
+
+    assert_eq!(continued.thread_id, "thread-1");
+    assert_eq!(continued.message, "continue");
+    assert_eq!(continued.workspace_dir.as_deref(), Some("/tmp/work"));
+    assert!(continued.images.is_none());
+    assert_eq!(
+        continued
+            .metadata
+            .get("bridge_run_id")
+            .and_then(Value::as_str),
+        Some("run-1")
+    );
+    assert_eq!(
+        continued
+            .metadata
+            .get(CODEX_TIMEOUT_AUTO_CONTINUE_METADATA_KEY)
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+#[test]
 fn test_extract_codex_thread_title_from_name_update() {
     let params = json!({
         "threadId": "thread-1",

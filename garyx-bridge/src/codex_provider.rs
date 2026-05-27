@@ -32,6 +32,8 @@ use crate::native_slash::build_native_skill_prompt;
 use crate::provider_trait::{AgentLoopProvider, BridgeError, StreamCallback};
 
 const CODEX_CLIENT_IDLE_TTL: Duration = Duration::from_secs(180);
+const CODEX_TIMEOUT_AUTO_CONTINUE_MESSAGE: &str = "continue";
+const CODEX_TIMEOUT_AUTO_CONTINUE_METADATA_KEY: &str = "codex_timeout_auto_continue";
 
 // ---------------------------------------------------------------------------
 // Helper functions (provider-level domain mapping)
@@ -867,6 +869,32 @@ fn decide_codex_client_reuse(
     }
 }
 
+fn codex_run_result_timed_out(result: &Result<ProviderRunResult, BridgeError>) -> bool {
+    match result {
+        Ok(result) => {
+            !result.success
+                && result
+                    .error
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|value| value.eq_ignore_ascii_case("timeout"))
+        }
+        Err(BridgeError::Timeout) => true,
+        Err(_) => false,
+    }
+}
+
+fn codex_timeout_auto_continue_options(options: &ProviderRunOptions) -> ProviderRunOptions {
+    let mut options = options.clone();
+    options.message = CODEX_TIMEOUT_AUTO_CONTINUE_MESSAGE.to_owned();
+    options.images = None;
+    options.metadata.insert(
+        CODEX_TIMEOUT_AUTO_CONTINUE_METADATA_KEY.to_owned(),
+        Value::Bool(true),
+    );
+    options
+}
+
 impl CodexClientSlot {
     fn new(client: CodexClient, env: HashMap<String, String>) -> Self {
         Self {
@@ -1071,6 +1099,71 @@ impl CodexAgentProvider {
         }
     }
 
+    async fn reset_timed_out_run(&self, run_id: &str) {
+        let active = self.active_runs.lock().await.get(run_id).cloned();
+        let Some(active) = active else {
+            return;
+        };
+
+        if let Some(client_slot) = self.client_for_thread(&active.garyx_thread_id).await {
+            let client_guard = client_slot.client.lock().await;
+            let interrupt_result = tokio::time::timeout(
+                Duration::from_secs(10),
+                client_guard.interrupt_turn(&active.codex_thread_id, &active.turn_id),
+            )
+            .await;
+            drop(client_guard);
+
+            match interrupt_result {
+                Ok(Ok(())) => {
+                    tracing::warn!(
+                        run_id,
+                        garyx_thread_id = %active.garyx_thread_id,
+                        codex_thread_id = %active.codex_thread_id,
+                        turn_id = %active.turn_id,
+                        "interrupted timed-out codex turn; restarting app-server client"
+                    );
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(
+                        run_id,
+                        garyx_thread_id = %active.garyx_thread_id,
+                        codex_thread_id = %active.codex_thread_id,
+                        turn_id = %active.turn_id,
+                        error = %error,
+                        "failed to interrupt timed-out codex turn; restarting app-server client"
+                    );
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        run_id,
+                        garyx_thread_id = %active.garyx_thread_id,
+                        codex_thread_id = %active.codex_thread_id,
+                        turn_id = %active.turn_id,
+                        "interrupting timed-out codex turn timed out; restarting app-server client"
+                    );
+                }
+            }
+        }
+
+        self.shutdown_thread_client(&active.garyx_thread_id).await;
+    }
+
+    async fn run_streaming_once(
+        &self,
+        options: &ProviderRunOptions,
+        live_callback: Arc<dyn Fn(StreamEvent) + Send + Sync>,
+    ) -> Result<ProviderRunResult, BridgeError> {
+        let client_slot = self.client_for_options(options).await?;
+        client_slot.begin_run();
+        let result = self
+            .run_streaming_impl(options, live_callback, client_slot.clone())
+            .await;
+        self.finish_client_run(&options.thread_id, client_slot)
+            .await;
+        result
+    }
+
     async fn cleanup_active_run_state(&self, run_id: &str) {
         self.active_runs.lock().await.remove(run_id);
 
@@ -1229,12 +1322,11 @@ impl CodexAgentProvider {
     async fn run_streaming_impl(
         &self,
         options: &ProviderRunOptions,
-        on_chunk: StreamCallback,
+        live_callback: Arc<dyn Fn(StreamEvent) + Send + Sync>,
         client_slot: Arc<CodexClientSlot>,
     ) -> Result<ProviderRunResult, BridgeError> {
         let client_guard = client_slot.client.lock().await;
         let client = &*client_guard;
-        let live_callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = Arc::new(on_chunk);
 
         let run_id = options
             .metadata
@@ -1467,6 +1559,10 @@ impl CodexAgentProvider {
         }
         .await;
 
+        if matches!(&loop_result, Err(BridgeError::Timeout)) {
+            self.reset_timed_out_run(&run_id).await;
+        }
+
         // Cleanup tracking
         self.cleanup_active_run_state(&run_id).await;
 
@@ -1599,13 +1695,28 @@ impl AgentLoopProvider for CodexAgentProvider {
         if !*self.ready.lock().await {
             return Err(BridgeError::ProviderNotReady);
         }
-        let client_slot = self.client_for_options(options).await?;
-        client_slot.begin_run();
+        let live_callback: Arc<dyn Fn(StreamEvent) + Send + Sync> = on_chunk.into();
         let result = self
-            .run_streaming_impl(options, on_chunk, client_slot.clone())
+            .run_streaming_once(options, live_callback.clone())
             .await;
-        self.finish_client_run(&options.thread_id, client_slot)
-            .await;
+
+        if codex_run_result_timed_out(&result)
+            && !options
+                .metadata
+                .get(CODEX_TIMEOUT_AUTO_CONTINUE_METADATA_KEY)
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            tracing::warn!(
+                thread_id = %options.thread_id,
+                "codex provider timed out; restarting app-server and retrying once with continue"
+            );
+            let continue_options = codex_timeout_auto_continue_options(options);
+            return self
+                .run_streaming_once(&continue_options, live_callback)
+                .await;
+        }
+
         result
     }
 
