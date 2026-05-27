@@ -113,18 +113,14 @@ struct GaryxCreateAgentCard: View {
                 }
 
                 GaryxFormGroupedSection(title: "Model") {
-                    GaryxFormTextFieldRow(
-                        title: "Provider",
-                        text: $model.draftAgentProvider,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
+                    GaryxAgentProviderSelectionRow(
+                        providerType: $model.draftAgentProvider,
+                        modelName: $model.draftAgentModel
                     )
                     Divider().padding(.leading, 16)
-                    GaryxFormTextFieldRow(
-                        title: "Model",
-                        text: $model.draftAgentModel,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
+                    GaryxAgentModelSelectionRow(
+                        providerType: $model.draftAgentProvider,
+                        modelName: $model.draftAgentModel
                     )
                 }
 
@@ -150,6 +146,7 @@ struct GaryxCreateAgentCard: View {
 
     private var canCreate: Bool {
         !model.draftAgentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.draftAgentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !model.draftAgentProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -188,19 +185,16 @@ struct GaryxCreateTeamCard: View {
                 }
 
                 GaryxFormGroupedSection(title: "Members") {
-                    GaryxFormTextFieldRow(
-                        title: "Leader Agent",
-                        text: $model.draftTeamLeaderId,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
+                    GaryxTeamLeaderSelectionRow(
+                        leaderAgentId: $model.draftTeamLeaderId,
+                        memberAgentIds: $model.draftTeamMemberIds,
+                        agents: model.agents
                     )
                     Divider().padding(.leading, 16)
-                    GaryxFormTextFieldRow(
-                        title: "Members",
-                        text: $model.draftTeamMemberIds,
-                        placeholder: "Optional",
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
+                    GaryxTeamMembersSelectionRow(
+                        leaderAgentId: $model.draftTeamLeaderId,
+                        memberAgentIds: $model.draftTeamMemberIds,
+                        agents: model.agents
                     )
                 }
 
@@ -218,6 +212,8 @@ struct GaryxCreateTeamCard: View {
 
     private var canCreate: Bool {
         !model.draftTeamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.draftTeamName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !model.draftTeamLeaderId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func createTeam() async {
@@ -336,18 +332,14 @@ struct GaryxAgentCard: View {
             }
 
             GaryxFormGroupedSection(title: "Model") {
-                GaryxFormTextFieldRow(
-                    title: "Provider",
-                    text: $providerType,
-                    autocapitalization: .never,
-                    autocorrectionDisabled: true
+                GaryxAgentProviderSelectionRow(
+                    providerType: $providerType,
+                    modelName: $modelName
                 )
                 Divider().padding(.leading, 16)
-                GaryxFormTextFieldRow(
-                    title: "Model",
-                    text: $modelName,
-                    autocapitalization: .never,
-                    autocorrectionDisabled: true
+                GaryxAgentModelSelectionRow(
+                    providerType: $providerType,
+                    modelName: $modelName
                 )
             }
 
@@ -372,6 +364,7 @@ struct GaryxAgentCard: View {
 
     private var canSaveAgent: Bool {
         !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -484,19 +477,16 @@ struct GaryxTeamCard: View {
             }
 
             GaryxFormGroupedSection(title: "Members") {
-                GaryxFormTextFieldRow(
-                    title: "Leader Agent",
-                    text: $leaderAgentId,
-                    autocapitalization: .never,
-                    autocorrectionDisabled: true
+                GaryxTeamLeaderSelectionRow(
+                    leaderAgentId: $leaderAgentId,
+                    memberAgentIds: $memberAgentIds,
+                    agents: model.agents
                 )
                 Divider().padding(.leading, 16)
-                GaryxFormTextFieldRow(
-                    title: "Members",
-                    text: $memberAgentIds,
-                    placeholder: "Optional",
-                    autocapitalization: .never,
-                    autocorrectionDisabled: true
+                GaryxTeamMembersSelectionRow(
+                    leaderAgentId: $leaderAgentId,
+                    memberAgentIds: $memberAgentIds,
+                    agents: model.agents
                 )
             }
 
@@ -513,6 +503,8 @@ struct GaryxTeamCard: View {
 
     private var canSaveTeam: Bool {
         !teamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func saveTeam() async {
@@ -527,4 +519,500 @@ struct GaryxTeamCard: View {
         )
         showsEditForm = false
     }
+}
+
+private struct GaryxAgentProviderOption: Identifiable, Equatable {
+    let id: String
+    let label: String
+}
+
+private let garyxAgentProviderOptions: [GaryxAgentProviderOption] = [
+    GaryxAgentProviderOption(id: "claude_code", label: "Claude Code"),
+    GaryxAgentProviderOption(id: "codex_app_server", label: "Codex"),
+    GaryxAgentProviderOption(id: "gemini_cli", label: "Gemini CLI"),
+    GaryxAgentProviderOption(id: "gpt", label: "OpenAI"),
+    GaryxAgentProviderOption(id: "anthropic", label: "Anthropic"),
+    GaryxAgentProviderOption(id: "google", label: "Google")
+]
+
+private struct GaryxAgentProviderSelectionRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Binding var providerType: String
+    @Binding var modelName: String
+
+    var body: some View {
+        GaryxFormRow(title: "Provider") {
+            Menu {
+                ForEach(providerOptionsIncludingCurrent) { option in
+                    Button {
+                        selectProvider(option.id)
+                    } label: {
+                        GaryxMenuSelectionLabel(
+                            title: option.label,
+                            selected: normalizedProvider == option.id,
+                            fallbackSystemImage: "server.rack"
+                        )
+                    }
+                }
+            } label: {
+                GaryxFormMenuValueLabel(value: providerLabel)
+            }
+        }
+        .task(id: normalizedProvider) {
+            await model.loadProviderModels(providerType: normalizedProvider)
+        }
+    }
+
+    private var normalizedProvider: String {
+        providerType.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var providerLabel: String {
+        garyxAgentProviderLabel(for: normalizedProvider)
+    }
+
+    private var providerOptionsIncludingCurrent: [GaryxAgentProviderOption] {
+        guard !normalizedProvider.isEmpty,
+              !garyxAgentProviderOptions.contains(where: { $0.id == normalizedProvider }) else {
+            return garyxAgentProviderOptions
+        }
+        return [
+            GaryxAgentProviderOption(id: normalizedProvider, label: garyxAgentProviderLabel(for: normalizedProvider))
+        ] + garyxAgentProviderOptions
+    }
+
+    private func selectProvider(_ nextProvider: String) {
+        let previousProvider = normalizedProvider
+        providerType = nextProvider
+        if previousProvider != nextProvider {
+            modelName = ""
+        }
+        Task { await model.loadProviderModels(providerType: nextProvider) }
+    }
+}
+
+private struct GaryxAgentModelChoice: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let description: String?
+    let recommended: Bool
+}
+
+private struct GaryxAgentModelSelectionRow: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Binding var providerType: String
+    @Binding var modelName: String
+
+    var body: some View {
+        Group {
+            if supportsModelMenu {
+                GaryxFormRow(title: "Model") {
+                    Menu {
+                        Button {
+                            modelName = ""
+                        } label: {
+                            GaryxMenuSelectionLabel(
+                                title: "Provider default",
+                                selected: normalizedModel.isEmpty,
+                                fallbackSystemImage: "wand.and.stars"
+                            )
+                        }
+
+                        ForEach(modelChoices) { choice in
+                            Button {
+                                modelName = choice.id
+                            } label: {
+                                GaryxMenuSelectionLabel(
+                                    title: modelChoiceTitle(choice),
+                                    selected: normalizedModel == choice.id,
+                                    fallbackSystemImage: "cube"
+                                )
+                            }
+                        }
+                    } label: {
+                        GaryxFormMenuValueLabel(value: selectedModelLabel)
+                    }
+                }
+            } else {
+                GaryxFormTextFieldRow(
+                    title: "Model",
+                    text: $modelName,
+                    placeholder: "Provider default",
+                    autocapitalization: .never,
+                    autocorrectionDisabled: true
+                )
+            }
+        }
+        .task(id: normalizedProvider) {
+            await model.loadProviderModels(providerType: normalizedProvider)
+        }
+    }
+
+    private var normalizedProvider: String {
+        providerType.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var normalizedModel: String {
+        modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var providerModels: GaryxProviderModels? {
+        model.providerModelsByType[normalizedProvider]
+    }
+
+    private var supportsModelMenu: Bool {
+        providerModels?.supportsModelSelection == true && !modelChoices.isEmpty
+    }
+
+    private var modelChoices: [GaryxAgentModelChoice] {
+        var choices = providerModels?.models.map {
+            GaryxAgentModelChoice(
+                id: $0.id,
+                label: $0.label,
+                description: $0.description,
+                recommended: $0.recommended
+            )
+        } ?? []
+        if !normalizedModel.isEmpty, !choices.contains(where: { $0.id == normalizedModel }) {
+            choices.insert(
+                GaryxAgentModelChoice(
+                    id: normalizedModel,
+                    label: normalizedModel,
+                    description: nil,
+                    recommended: false
+                ),
+                at: 0
+            )
+        }
+        return choices.filter { !$0.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private var selectedModelLabel: String {
+        guard !normalizedModel.isEmpty else {
+            if let defaultModel = providerModels?.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !defaultModel.isEmpty {
+                return "Default: \(defaultModel)"
+            }
+            return "Provider default"
+        }
+        return modelChoices.first(where: { $0.id == normalizedModel })?.label ?? normalizedModel
+    }
+
+    private func modelChoiceTitle(_ choice: GaryxAgentModelChoice) -> String {
+        choice.recommended ? "\(choice.label) · Recommended" : choice.label
+    }
+}
+
+private struct GaryxTeamLeaderSelectionRow: View {
+    @Binding var leaderAgentId: String
+    @Binding var memberAgentIds: String
+    let agents: [GaryxAgentSummary]
+
+    var body: some View {
+        GaryxFormRow(title: "Leader") {
+            if agentOptionsIncludingCurrent.isEmpty {
+                Text("No agents")
+                    .foregroundStyle(.secondary)
+            } else {
+                Menu {
+                    ForEach(agentOptionsIncludingCurrent) { agent in
+                        Button {
+                            selectLeader(agent.id)
+                        } label: {
+                            GaryxMenuSelectionLabel(
+                                title: agent.displayName,
+                                selected: normalizedLeader == agent.id,
+                                fallbackSystemImage: "person"
+                            )
+                        }
+                    }
+                } label: {
+                    GaryxFormMenuValueLabel(value: leaderLabel)
+                }
+            }
+        }
+    }
+
+    private var normalizedLeader: String {
+        leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var agentOptionsIncludingCurrent: [GaryxAgentSummary] {
+        garyxTeamAgentOptions(agents, preserving: [normalizedLeader])
+    }
+
+    private var leaderLabel: String {
+        guard !normalizedLeader.isEmpty else { return "Choose leader" }
+        return agentOptionsIncludingCurrent.first(where: { $0.id == normalizedLeader })?.displayName ?? normalizedLeader
+    }
+
+    private func selectLeader(_ agentId: String) {
+        leaderAgentId = agentId
+        var members = garyxTeamMemberIds(from: memberAgentIds)
+        if !members.contains(agentId) {
+            members.insert(agentId, at: 0)
+        }
+        memberAgentIds = garyxTeamMemberIdsString(members)
+    }
+}
+
+private struct GaryxTeamMembersSelectionRow: View {
+    @Binding var leaderAgentId: String
+    @Binding var memberAgentIds: String
+    let agents: [GaryxAgentSummary]
+    @State private var showsMembersSheet = false
+
+    var body: some View {
+        GaryxFormSelectionRow(
+            title: "Members",
+            value: membersLabel,
+            placeholder: "Choose members"
+        ) {
+            showsMembersSheet = true
+        }
+        .sheet(isPresented: $showsMembersSheet) {
+            GaryxTeamMembersSelectionSheet(
+                leaderAgentId: $leaderAgentId,
+                memberAgentIds: $memberAgentIds,
+                agents: agents
+            )
+        }
+    }
+
+    private var membersLabel: String {
+        garyxTeamMembersLabel(memberIds: garyxTeamMemberIds(from: memberAgentIds), agents: agents)
+    }
+}
+
+private struct GaryxTeamMembersSelectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Binding var leaderAgentId: String
+    @Binding var memberAgentIds: String
+    let agents: [GaryxAgentSummary]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Team Members")
+                        .font(GaryxFont.callout(weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text("\(selectedIds.count) selected")
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    dismiss()
+                } label: {
+                    GaryxCompactGlassIcon(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 22)
+            .padding(.bottom, 14)
+
+            ScrollView {
+                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                    VStack(spacing: 0) {
+                        if agentOptionsIncludingCurrent.isEmpty {
+                            Text("No agents available.")
+                                .font(GaryxFont.subheadline())
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 28)
+                        } else {
+                            ForEach(Array(agentOptionsIncludingCurrent.enumerated()), id: \.element.id) { index, agent in
+                                teamMemberRow(agent)
+                                if index < agentOptionsIncludingCurrent.count - 1 {
+                                    Divider().padding(.leading, 62)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .background(Color(.systemBackground).opacity(0.98).ignoresSafeArea())
+        .presentationDetents([.fraction(0.86), .large])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(34)
+    }
+
+    private var normalizedLeader: String {
+        leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var selectedIds: [String] {
+        garyxTeamMemberIds(from: memberAgentIds)
+    }
+
+    private var agentOptionsIncludingCurrent: [GaryxAgentSummary] {
+        garyxTeamAgentOptions(agents, preserving: selectedIds + [normalizedLeader])
+    }
+
+    private func teamMemberRow(_ agent: GaryxAgentSummary) -> some View {
+        let selected = selectedIds.contains(agent.id)
+        let isLeader = normalizedLeader == agent.id
+        return HStack(spacing: 12) {
+            Button {
+                toggleMember(agent.id)
+            } label: {
+                HStack(spacing: 12) {
+                    GaryxAgentAvatarView(
+                        agentId: agent.id,
+                        avatarDataUrl: agent.avatarDataUrl,
+                        kind: .agent,
+                        label: agent.displayName,
+                        providerType: agent.providerType,
+                        builtIn: agent.builtIn,
+                        diameter: 32
+                    )
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(agent.displayName)
+                                .font(GaryxFont.subheadline(weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            if isLeader {
+                                Text("TL")
+                                    .font(GaryxFont.caption(weight: .bold))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Text(agent.id)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if selected {
+                Button {
+                    leaderAgentId = agent.id
+                    if !selectedIds.contains(agent.id) {
+                        memberAgentIds = garyxTeamMemberIdsString([agent.id] + selectedIds)
+                    }
+                } label: {
+                    Text(isLeader ? "Lead" : "Set TL")
+                        .font(GaryxFont.caption(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 28)
+                        .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button {
+                toggleMember(agent.id)
+            } label: {
+                if selected {
+                    GaryxSelectionCheckmark(size: 13)
+                        .frame(width: 22, height: 28)
+                } else {
+                    Image(systemName: "plus")
+                        .font(GaryxFont.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 28)
+                }
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+    }
+
+    private func toggleMember(_ agentId: String) {
+        var nextIds = selectedIds
+        if nextIds.contains(agentId) {
+            nextIds.removeAll { $0 == agentId }
+            if normalizedLeader == agentId {
+                leaderAgentId = nextIds.first ?? ""
+            }
+        } else {
+            nextIds.append(agentId)
+            if normalizedLeader.isEmpty {
+                leaderAgentId = agentId
+            }
+        }
+        memberAgentIds = garyxTeamMemberIdsString(nextIds)
+    }
+}
+
+private func garyxAgentProviderLabel(for providerType: String) -> String {
+    let normalized = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { return "Choose provider" }
+    return garyxAgentProviderOptions.first(where: { $0.id == normalized })?.label
+        ?? GaryxProviderPresentation.displayName(for: normalized)
+}
+
+private func garyxTeamAgentOptions(
+    _ agents: [GaryxAgentSummary],
+    preserving ids: [String]
+) -> [GaryxAgentSummary] {
+    var seen = Set<String>()
+    var result = agents
+        .filter(\.standalone)
+        .sorted { left, right in
+            if left.builtIn != right.builtIn {
+                return left.builtIn && !right.builtIn
+            }
+            return left.displayName.localizedCaseInsensitiveCompare(right.displayName) == .orderedAscending
+        }
+        .filter { seen.insert($0.id).inserted }
+    for id in ids {
+        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+        result.insert(
+            GaryxAgentSummary(
+                id: trimmed,
+                displayName: trimmed,
+                providerType: "",
+                model: "",
+                builtIn: false,
+                standalone: true
+            ),
+            at: 0
+        )
+        seen.insert(trimmed)
+    }
+    return result
+}
+
+private func garyxTeamMemberIds(from value: String) -> [String] {
+    var seen = Set<String>()
+    return value
+        .split { $0 == "," || $0 == "\n" || $0 == " " }
+        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty && seen.insert($0).inserted }
+}
+
+private func garyxTeamMemberIdsString(_ ids: [String]) -> String {
+    ids
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+        .joined(separator: ", ")
+}
+
+private func garyxTeamMembersLabel(memberIds: [String], agents: [GaryxAgentSummary]) -> String {
+    guard !memberIds.isEmpty else { return "" }
+    let namesById = Dictionary(uniqueKeysWithValues: agents.map { ($0.id, $0.displayName) })
+    let names = memberIds.map { namesById[$0] ?? $0 }
+    if names.count <= 2 {
+        return names.joined(separator: ", ")
+    }
+    return "\(names[0]), \(names[1]) +\(names.count - 2)"
 }
