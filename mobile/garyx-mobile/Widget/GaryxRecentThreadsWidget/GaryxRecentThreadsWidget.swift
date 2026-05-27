@@ -125,41 +125,41 @@ private struct GaryxRecentThreadsWidgetMetrics {
     init(family: WidgetFamily) {
         switch family {
         case .systemMedium:
-            contentPadding = 14
-            rowContentSpacing = 11
-            rowSpacing = 4
-            rowHeight = 38
-            avatarSize = 28
-            avatarIconSize = 12
-            runningDotSize = 6
-            rowTitleFontSize = 13
-            rowWorkspaceFontSize = 10.5
-            rowWorkspaceSpacing = 1
-            visibleRowCount = 3
-        case .systemExtraLarge:
-            contentPadding = 18
-            rowContentSpacing = 13
-            rowSpacing = 6
-            rowHeight = 46
+            contentPadding = 10
+            rowContentSpacing = 10
+            rowSpacing = 3
+            rowHeight = 44
             avatarSize = 34
             avatarIconSize = 14
             runningDotSize = 7
-            rowTitleFontSize = 14.5
-            rowWorkspaceFontSize = 11.5
+            rowTitleFontSize = 15.5
+            rowWorkspaceFontSize = 12
+            rowWorkspaceSpacing = 1
+            visibleRowCount = 3
+        case .systemExtraLarge:
+            contentPadding = 14
+            rowContentSpacing = 13
+            rowSpacing = 6
+            rowHeight = 62
+            avatarSize = 44
+            avatarIconSize = 18
+            runningDotSize = 8
+            rowTitleFontSize = 17.5
+            rowWorkspaceFontSize = 13.5
             rowWorkspaceSpacing = 2
-            visibleRowCount = 6
+            visibleRowCount = GaryxMobileWidgetStore.visibleThreadLimit
         default:
-            contentPadding = 16
+            contentPadding = 12
             rowContentSpacing = 12
             rowSpacing = 6
-            rowHeight = 44
-            avatarSize = 32
-            avatarIconSize = 13
-            runningDotSize = 7
-            rowTitleFontSize = 14
-            rowWorkspaceFontSize = 11
+            rowHeight = 60
+            avatarSize = 42
+            avatarIconSize = 17
+            runningDotSize = 8
+            rowTitleFontSize = 17
+            rowWorkspaceFontSize = 13
             rowWorkspaceSpacing = 2
-            visibleRowCount = 6
+            visibleRowCount = GaryxMobileWidgetStore.visibleThreadLimit
         }
     }
 }
@@ -304,6 +304,7 @@ struct GaryxRecentThreadsWidget: Widget {
         .configurationDisplayName("Gary X Recent")
         .description("Open recent Gary X threads.")
         .supportedFamilies([.systemMedium, .systemLarge, .systemExtraLarge])
+        .contentMarginsDisabled()
     }
 }
 

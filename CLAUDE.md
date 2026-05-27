@@ -172,6 +172,9 @@ needs installed-app validation.
 - Mobile widgets are static snapshots: do not use `ScrollView`; start directly
   with thread rows, render pinned rows like other rows, and use agent/team
   avatars where available.
+- Mobile recent-thread widgets should opt out of WidgetKit's default content
+  margins and use compact manual padding; large widgets prioritize five
+  readable rows over fitting extra rows with smaller typography.
 - Recent-thread widget row taps must use per-row `Link` destinations only. Do
   not attach a container `.widgetURL` to the first thread because it can steal
   row taps and open the wrong conversation.
