@@ -513,15 +513,18 @@ private struct GaryxBotConfigFieldEditor: View {
                     if field.required {
                         Text("*")
                             .font(GaryxFont.body(weight: .semibold))
-                            .foregroundStyle(.red)
+                            .foregroundStyle(GaryxTheme.danger)
                     }
                 }
                 .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
+                .layoutPriority(2)
                 Spacer(minLength: 8)
                 editor
                     .multilineTextAlignment(.trailing)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .layoutPriority(1)
+                    .layoutPriority(0)
             }
             .padding(.horizontal, 16)
             .frame(minHeight: 52)
@@ -613,7 +616,8 @@ private struct GaryxBotSchemaField: Identifiable, Equatable {
                     enumValues: enumValues,
                     defaultValue: object["default"],
                     description: garyxBotStringValueIfPresent(object["description"]),
-                    placeholder: garyxBotStringValueIfPresent(object["description"]) ?? key
+                    placeholder: garyxBotStringValueIfPresent(object["placeholder"])
+                        ?? (required.contains(key) ? "Required" : "Optional")
                 )
             }
             .sorted { lhs, rhs in

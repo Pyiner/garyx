@@ -138,13 +138,16 @@ struct GaryxFormRow<Content: View>: View {
                 .font(GaryxFont.body())
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
+                .layoutPriority(2)
             Spacer(minLength: 8)
             content
                 .font(GaryxFont.body())
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .layoutPriority(1)
+                .layoutPriority(0)
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 52)
@@ -162,6 +165,50 @@ struct GaryxFormReadOnlyRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+    }
+}
+
+struct GaryxFormReadOnlyMultilineRow: View {
+    let title: String
+    let value: String
+    var placeholder: String = ""
+    var minHeight: CGFloat = 72
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(title)
+                .font(GaryxFont.body())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
+                .layoutPriority(2)
+                .padding(.top, 16)
+            Spacer(minLength: 8)
+            Text(displayValue)
+                .font(GaryxFont.body())
+                .foregroundStyle(isEmpty ? .secondary : .primary)
+                .multilineTextAlignment(.leading)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
+                .layoutPriority(1)
+                .padding(.top, 16)
+                .padding(.bottom, 16)
+        }
+        .padding(.horizontal, 16)
+        .frame(minHeight: minHeight + 32)
+    }
+
+    private var isEmpty: Bool {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var displayValue: String {
+        if isEmpty {
+            return placeholder
+        }
+        return value
     }
 }
 
@@ -234,6 +281,9 @@ struct GaryxFormTextAreaRow: View {
                 .font(GaryxFont.body())
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
+                .layoutPriority(2)
                 .padding(.top, 16)
             Spacer(minLength: 8)
             TextField(placeholder, text: $text, axis: .vertical)
@@ -282,6 +332,10 @@ struct GaryxFormSelectionRow: View {
                 Text(title)
                     .font(GaryxFont.body())
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                    .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
+                    .layoutPriority(2)
                 Spacer(minLength: 8)
                 Text(displayValue)
                     .font(GaryxFont.body())
@@ -349,12 +403,18 @@ struct GaryxWorkspacePathSelectionRow: View {
                 Text(title)
                     .font(GaryxFont.body())
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                    .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
+                    .layoutPriority(2)
                 Spacer(minLength: 8)
                 Text(displayValue)
                     .font(GaryxFont.body(weight: path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .regular : .medium))
                     .foregroundStyle(path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.trailing)
+                    .fixedSize(horizontal: false, vertical: true)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(GaryxFont.system(size: 14, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -378,7 +438,7 @@ struct GaryxWorkspacePathSelectionRow: View {
     private var displayValue: String {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return placeholder }
-        return trimmed.garyxLastPathComponent.isEmpty ? trimmed : trimmed.garyxLastPathComponent
+        return trimmed
     }
 }
 

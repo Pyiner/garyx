@@ -168,16 +168,12 @@ struct GaryxSkillCard: View {
                 onSave: { Task { await saveSkill() } }
             ) {
                 VStack(alignment: .leading, spacing: 22) {
-                    GaryxFormGroupedSection(title: "Skill") {
-                        GaryxFormTextFieldRow(title: "Name", text: $name)
-                        Divider().padding(.leading, 16)
-                        GaryxFormTextAreaRow(
-                            title: "Description",
-                            text: $description,
-                            minHeight: 112,
-                            lineLimits: 2...4
-                        )
-                    }
+                    GaryxSkillMetadataFields(
+                        skill: skill,
+                        name: $name,
+                        description: $description,
+                        mode: .editable
+                    )
                 }
             }
         }
@@ -228,22 +224,12 @@ struct GaryxSkillDetailCard: View {
     var body: some View {
         if let editor = model.selectedSkillEditor {
             VStack(alignment: .leading, spacing: 22) {
-                GaryxFormGroupedSection(title: "Overview") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        GaryxSkillInfoRow(title: "Name", value: editor.skill.name)
-                        Divider().padding(.leading, 16)
-                        GaryxSkillInfoRow(title: "Status", value: editor.skill.enabled ? "Enabled" : "Paused")
-                        if !editor.skill.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Divider().padding(.leading, 16)
-                            GaryxSkillInfoRow(title: "Description", value: editor.skill.description)
-                        }
-                        if !editor.skill.sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Divider().padding(.leading, 16)
-                            GaryxSkillInfoRow(title: "Source", value: editor.skill.sourcePath)
-                        }
-                    }
-                    .padding(16)
-                }
+                GaryxSkillMetadataFields(
+                    skill: editor.skill,
+                    name: .constant(editor.skill.name),
+                    description: .constant(editor.skill.description),
+                    mode: .readOnly
+                )
 
                 GaryxFormGroupedSection(title: "Files") {
                     if editor.entries.isEmpty {
@@ -283,24 +269,59 @@ struct GaryxSkillDetailCard: View {
     }
 }
 
-private struct GaryxSkillInfoRow: View {
-    let title: String
-    let value: String
+private struct GaryxSkillMetadataFields: View {
+    enum Mode {
+        case readOnly
+        case editable
+    }
+
+    let skill: GaryxSkillSummary
+    @Binding var name: String
+    @Binding var description: String
+    let mode: Mode
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(title)
-                .font(GaryxFont.body())
-                .foregroundStyle(.primary)
-                .frame(width: 92, alignment: .leading)
-            Text(value)
-                .font(GaryxFont.body())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        GaryxFormGroupedSection(title: "Skill") {
+            VStack(alignment: .leading, spacing: 0) {
+                switch mode {
+                case .readOnly:
+                    GaryxFormReadOnlyRow(title: "Name", value: skill.name)
+                case .editable:
+                    GaryxFormTextFieldRow(title: "Name", text: $name)
+                }
+
+                Divider().padding(.leading, 16)
+                GaryxFormReadOnlyRow(title: "Status", value: skill.enabled ? "Enabled" : "Paused")
+
+                Divider().padding(.leading, 16)
+                switch mode {
+                case .readOnly:
+                    GaryxFormReadOnlyMultilineRow(
+                        title: "Description",
+                        value: skill.description,
+                        placeholder: "No description provided.",
+                        minHeight: 86
+                    )
+                case .editable:
+                    GaryxFormTextAreaRow(
+                        title: "Description",
+                        text: $description,
+                        placeholder: "No description provided.",
+                        minHeight: 86,
+                        lineLimits: 2...5
+                    )
+                }
+
+                if !skill.sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Divider().padding(.leading, 16)
+                    GaryxFormReadOnlyMultilineRow(
+                        title: "Source",
+                        value: skill.sourcePath,
+                        minHeight: 56
+                    )
+                }
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
