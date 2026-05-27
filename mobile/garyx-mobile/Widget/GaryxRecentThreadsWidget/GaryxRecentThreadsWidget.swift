@@ -106,7 +106,6 @@ struct GaryxRecentThreadsWidgetView: View {
             ContainerRelativeShape()
                 .fill(.thinMaterial)
         }
-        .widgetURL(threads.first.flatMap { GaryxMobileThreadLink.make(threadId: $0.id) })
     }
 }
 

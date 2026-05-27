@@ -4,6 +4,10 @@ import UniformTypeIdentifiers
 import WidgetKit
 
 extension GaryxMobileModel {
+    func openThread(_ thread: GaryxThreadSummary) async {
+        await openResolvedThread(thread, invalidatesPendingThreadOpen: true)
+    }
+
     func openThread(id: String) async {
         pendingThreadLinkId = nil
         let requestId = beginPendingThreadOpen()
@@ -38,7 +42,7 @@ extension GaryxMobileModel {
 
         if let thread = threads.first(where: { $0.id == threadId }) {
             guard isCurrentPendingThreadOpen(requestId) else { return }
-            await selectThread(thread, invalidatesPendingThreadOpen: false)
+            await openResolvedThread(thread, invalidatesPendingThreadOpen: false)
             return
         }
 
@@ -51,18 +55,25 @@ extension GaryxMobileModel {
         await refreshThreads()
         guard isCurrentPendingThreadOpen(requestId) else { return }
         if let thread = threads.first(where: { $0.id == threadId }) {
-            applyOpenedThreadSummary(thread)
+            await openResolvedThread(thread, invalidatesPendingThreadOpen: false)
             return
         }
         do {
             let thread = try await client().getThread(threadId: threadId)
             guard isCurrentPendingThreadOpen(requestId) else { return }
-            threads = Self.mergedThreadSummaries(threads + [thread])
-            applyOpenedThreadSummary(thread)
+            await openResolvedThread(thread, invalidatesPendingThreadOpen: false)
         } catch {
             guard isCurrentPendingThreadOpen(requestId) else { return }
             lastError = displayMessage(for: error)
         }
+    }
+
+    private func openResolvedThread(
+        _ thread: GaryxThreadSummary,
+        invalidatesPendingThreadOpen: Bool
+    ) async {
+        threads = Self.mergedThreadSummaries(threads + [thread])
+        await selectThread(thread, invalidatesPendingThreadOpen: invalidatesPendingThreadOpen)
     }
 
     private func showPendingThreadLink(_ threadId: String, requestId: UUID) {
@@ -102,13 +113,6 @@ extension GaryxMobileModel {
 
     func isCurrentPendingThreadOpen(_ requestId: UUID) -> Bool {
         pendingThreadOpenRequestId == requestId
-    }
-
-    func applyOpenedThreadSummary(_ thread: GaryxThreadSummary) {
-        threads = Self.mergedThreadSummaries(threads + [thread])
-        guard selectedThread?.id == thread.id else { return }
-        selectedThread = thread
-        draftThreadTitle = thread.title
     }
 
     static func placeholderThreadSummary(id: String) -> GaryxThreadSummary {

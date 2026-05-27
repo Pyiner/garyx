@@ -371,8 +371,8 @@ extension GaryxMobileModel {
                 return
             }
             connectRefreshRequestId = nil
-            startSelectedThreadReconcileLoop()
             await openPendingThreadLinkIfNeeded()
+            startSelectedThreadReconcileLoop()
         } catch {
             guard isCurrentConnectRefresh(requestId, runtimeGeneration: runtimeGeneration, scopeId: gatewayScopeId) else {
                 return

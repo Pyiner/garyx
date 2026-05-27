@@ -159,12 +159,18 @@ needs installed-app validation.
 - Mobile top-left controls and leading-edge gestures must share the same route
   action. Direct sidebar children may open the sidebar; deeper pages go back to
   their immediate parent.
+- Mobile entry points that open an existing thread by row tap, widget link,
+  task, automation, bot conversation, or deep link should route through the
+  shared `GaryxMobileModel.openThread` path; sidebar behavior is the baseline.
 - Mobile sidebar root navigation shows Automation and Workspace & Bots; Tasks,
   Auto Research, Agents, and Skills live under Settings. Keep workspace and bot
   conversations inside drilldown layers rather than dumping raw sessions inline.
 - Mobile widgets are static snapshots: do not use `ScrollView`; start directly
   with thread rows, render pinned rows like other rows, and use agent/team
   avatars where available.
+- Recent-thread widget row taps must use per-row `Link` destinations only. Do
+  not attach a container `.widgetURL` to the first thread because it can steal
+  row taps and open the wrong conversation.
 - Provider, agent, team, bot, and channel identity presentation must resolve
   through shared Core presentation helpers; do not add local switch tables in
   views, widgets, or settings.

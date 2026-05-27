@@ -575,7 +575,7 @@ private struct GaryxBotThreadDetailSection: View {
                             canArchive: canArchive(entry),
                             onSelect: {
                                 guard entry.openable else { return }
-                                Task { await model.selectThread(thread) }
+                                Task { await model.openThread(thread) }
                             },
                             onArchive: {
                                 Task { await model.archiveBotConversationEndpoint(entry.endpoint) }
@@ -754,7 +754,7 @@ private struct GaryxSidebarThreadButton: View {
                 if let onSelect {
                     onSelect()
                 } else {
-                    Task { await model.selectThread(thread) }
+                    Task { await model.openThread(thread) }
                 }
             },
             onUnpin: {
