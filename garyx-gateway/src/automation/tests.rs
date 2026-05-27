@@ -229,6 +229,7 @@ fn thread_only_prompt_jobs_are_automation_jobs() {
         run_count: 0,
         created_at: Utc::now(),
         last_run_at: None,
+        system: false,
     };
 
     assert!(is_automation_job(&job));
@@ -257,6 +258,7 @@ fn automation_summary_defaults_agent_to_claude_for_legacy_jobs() {
         run_count: 0,
         created_at: Utc::now(),
         last_run_at: None,
+        system: false,
     };
 
     assert_eq!(automation_agent_id(&job), "claude");
@@ -287,6 +289,7 @@ fn automation_summary_exposes_bound_target_thread() {
         run_count: 0,
         created_at: Utc::now(),
         last_run_at: None,
+        system: false,
     };
 
     let summary = to_summary(&job, None).expect("summary");
@@ -316,6 +319,7 @@ async fn update_automation_null_target_thread_clears_binding() {
             thread_id: Some("thread::target".to_owned()),
             delete_after_run: false,
             enabled: true,
+            system: false,
         })
         .await
         .unwrap();
@@ -366,6 +370,7 @@ async fn update_automation_switches_target_thread_without_workspace_snapshot() {
             thread_id: Some("thread::target-one".to_owned()),
             delete_after_run: false,
             enabled: true,
+            system: false,
         })
         .await
         .unwrap();

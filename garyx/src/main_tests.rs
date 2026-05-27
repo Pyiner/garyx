@@ -2550,6 +2550,7 @@ async fn startup_runtime_wiring_enables_operational_handlers() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     });
 
     // Test sets process env before runtime assembly and clears it immediately after.

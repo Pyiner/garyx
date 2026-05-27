@@ -1555,6 +1555,7 @@ async fn test_cron_jobs_with_service() {
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     })
     .await
     .unwrap();

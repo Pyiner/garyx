@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use serde::de::Error as DeError;
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -952,12 +953,50 @@ pub enum CronAction {
     AgentTurn,
 }
 
+/// Payload for a system-scheduled internal dispatch (e.g. `schedule_followup`).
+///
+/// Persisted alongside the cron job so the scheduler can rebuild the
+/// synthetic user turn at fire time without consulting any external store.
+/// All fields are `Eq` to keep the parent [`CronJobKind`] derive intact.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct InternalDispatchJobPayload {
+    /// Verbatim prompt text the user originally passed to `schedule_followup`.
+    pub prompt: String,
+    /// Optional free-text reason recorded for telemetry / surface in the
+    /// synthetic followup metadata block. Not interpreted by the scheduler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The agent run id that called `schedule_followup`. Used in the
+    /// metadata block so the resumed turn can correlate with the originating
+    /// session in telemetry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub originating_run_id: Option<String>,
+    /// Wall-clock time when `schedule_followup` was invoked.
+    pub scheduled_at: DateTime<Utc>,
+    /// Caller-requested delay in seconds (already validated to the
+    /// `60..=86400` window by the MCP tool). Surfaced in the metadata block
+    /// so the resumed agent can see what it asked for, independent of any
+    /// later replacement.
+    pub delay_seconds_requested: u64,
+}
+
 /// Product-level subtype carried by persisted cron jobs.
+///
+/// `AutomationPrompt` is a unit variant kept first with `#[default]` so
+/// existing persisted state (which serializes as the bare string
+/// `"automation_prompt"`) continues to round-trip. New variants are added as
+/// struct variants and serialize externally-tagged
+/// (`{"internal_dispatch": {...}}`), which mixes cleanly with the unit form
+/// under serde's default external tagging.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CronJobKind {
     #[default]
     AutomationPrompt,
+    /// System-scheduled one-shot followup that, when fired, injects a
+    /// synthetic user turn into the target thread via
+    /// `dispatch_internal_message_to_thread`.
+    InternalDispatch { payload: InternalDispatchJobPayload },
 }
 
 /// UI-friendly schedule form preserved for automation jobs.
@@ -1038,6 +1077,16 @@ pub struct CronJobConfig {
     pub delete_after_run: bool,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Marks the job as system-managed (e.g. `schedule_followup`-generated).
+    /// System jobs are hidden from the default user-facing `CronService::list`
+    /// so they don't pollute the user's automation list. They remain visible
+    /// via the explicit `list_all` API.
+    ///
+    /// Defaults to `false` so existing persisted state and user-authored
+    /// config (which never set this field) continues to round-trip as
+    /// non-system jobs.
+    #[serde(default)]
+    pub system: bool,
 }
 
 /// Top-level cron section.
