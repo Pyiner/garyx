@@ -505,29 +505,13 @@ private struct GaryxBotConfigFieldEditor: View {
 
     private var textEntry: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 12) {
-                HStack(spacing: 4) {
-                    Text(field.label)
-                        .font(GaryxFont.body())
-                        .foregroundStyle(.primary)
-                    if field.required {
-                        Text("*")
-                            .font(GaryxFont.body(weight: .semibold))
-                            .foregroundStyle(GaryxTheme.danger)
-                    }
-                }
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
-                .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
-                .layoutPriority(2)
-                Spacer(minLength: 8)
+            GaryxFormRow(
+                title: field.label,
+                required: field.required,
+                valuePlacement: .below
+            ) {
                 editor
-                    .multilineTextAlignment(.trailing)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .layoutPriority(0)
             }
-            .padding(.horizontal, 16)
-            .frame(minHeight: 52)
 
             if let description = field.description, !description.isEmpty {
                 Text(description)

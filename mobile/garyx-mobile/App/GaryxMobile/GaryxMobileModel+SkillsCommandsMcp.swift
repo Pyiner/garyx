@@ -35,15 +35,18 @@ extension GaryxMobileModel {
         }
     }
 
-    func toggleSkill(_ skill: GaryxSkillSummary) async {
+    @discardableResult
+    func toggleSkill(_ skill: GaryxSkillSummary) async -> Bool {
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
             let updated = try await client().toggleSkill(skillId: skill.id)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
             replaceSkill(updated)
+            return true
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
             lastError = displayMessage(for: error)
+            return false
         }
     }
 

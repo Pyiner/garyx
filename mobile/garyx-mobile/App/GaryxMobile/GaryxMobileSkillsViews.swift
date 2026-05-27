@@ -128,38 +128,50 @@ struct GaryxSkillCard: View {
     let skill: GaryxSkillSummary
     @State private var showsEditForm = false
     @State private var showsDeleteConfirmation = false
+    @State private var optimisticEnabled: Bool?
     @State private var name = ""
     @State private var description = ""
 
     var body: some View {
         GaryxRowActionMenu(actions: skillSwipeActions) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .center, spacing: 10) {
-                    Image(systemName: "wand.and.stars")
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 24, height: 24)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(skill.name)
-                            .font(GaryxFont.body(weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Text(skill.description.isEmpty ? skill.sourcePath.garyxLastPathComponent : skill.description)
-                            .font(GaryxFont.caption(weight: .medium))
+            HStack(alignment: .center, spacing: 10) {
+                Button {
+                    Task { await model.openSkillEditor(skill) }
+                } label: {
+                    HStack(alignment: .center, spacing: 10) {
+                        Image(systemName: "wand.and.stars")
+                            .font(GaryxFont.system(size: 15, weight: .semibold))
                             .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .frame(width: 24, height: 24)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(skill.name)
+                                .font(GaryxFont.body(weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                            Text(skill.description.isEmpty ? skill.id : skill.description)
+                                .font(GaryxFont.caption(weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    Spacer()
-                    GaryxStatusPill(text: skill.enabled ? "Enabled" : "Paused", tone: skill.enabled ? .good : .muted)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+
+                Toggle("", isOn: skillEnabledBinding)
+                    .labelsHidden()
+                    .tint(Color(.systemBlue))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
             .contentShape(Rectangle())
         }
         .onAppear(perform: fillDraft)
-        .onTapGesture {
-            Task { await model.openSkillEditor(skill) }
+        .onChange(of: skill.enabled) { _, newValue in
+            if optimisticEnabled == newValue {
+                optimisticEnabled = nil
+            }
         }
         .fullScreenCover(isPresented: $showsEditForm) {
             GaryxFormSheet(
@@ -187,11 +199,23 @@ struct GaryxSkillCard: View {
         }
     }
 
+    private var skillEnabledBinding: Binding<Bool> {
+        Binding {
+            optimisticEnabled ?? skill.enabled
+        } set: { nextValue in
+            let currentValue = optimisticEnabled ?? skill.enabled
+            guard nextValue != currentValue else { return }
+            optimisticEnabled = nextValue
+            Task {
+                if await model.toggleSkill(skill) == false {
+                    optimisticEnabled = nil
+                }
+            }
+        }
+    }
+
     private var skillSwipeActions: [GaryxRowAction] {
         [
-            GaryxRowAction(title: skill.enabled ? "Disable" : "Enable", systemImage: skill.enabled ? "pause.fill" : "play.fill") {
-                Task { await model.toggleSkill(skill) }
-            },
             GaryxRowAction(title: "Edit Info", systemImage: "pencil") {
                 fillDraft()
                 showsEditForm = true
@@ -291,33 +315,23 @@ private struct GaryxSkillMetadataFields: View {
                 }
 
                 Divider().padding(.leading, 16)
-                GaryxFormReadOnlyRow(title: "Status", value: skill.enabled ? "Enabled" : "Paused")
-
-                Divider().padding(.leading, 16)
                 switch mode {
                 case .readOnly:
                     GaryxFormReadOnlyMultilineRow(
                         title: "Description",
                         value: skill.description,
                         placeholder: "No description provided.",
-                        minHeight: 86
+                        minHeight: 86,
+                        valuePlacement: .below
                     )
                 case .editable:
                     GaryxFormTextAreaRow(
                         title: "Description",
                         text: $description,
                         placeholder: "No description provided.",
+                        valuePlacement: .below,
                         minHeight: 86,
                         lineLimits: 2...5
-                    )
-                }
-
-                if !skill.sourcePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Divider().padding(.leading, 16)
-                    GaryxFormReadOnlyMultilineRow(
-                        title: "Source",
-                        value: skill.sourcePath,
-                        minHeight: 56
                     )
                 }
             }

@@ -117,28 +117,64 @@ struct GaryxFormGroupedSection<Content: View>: View {
     }
 }
 
+enum GaryxFormValuePlacement {
+    case trailing
+    case below
+}
+
+private struct GaryxFormFieldTitle: View {
+    let title: String
+    var required = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(title)
+                .font(GaryxFont.body())
+                .foregroundStyle(.primary)
+            if required {
+                Text("*")
+                    .font(GaryxFont.body(weight: .semibold))
+                    .foregroundStyle(GaryxTheme.danger)
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.82)
+    }
+}
+
 struct GaryxFormRow<Content: View>: View {
     let title: String
+    let required: Bool
+    let valuePlacement: GaryxFormValuePlacement
     let verticalAlignment: VerticalAlignment
     let content: Content
 
     init(
         title: String,
+        required: Bool = false,
+        valuePlacement: GaryxFormValuePlacement = .trailing,
         verticalAlignment: VerticalAlignment = .center,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
+        self.required = required
+        self.valuePlacement = valuePlacement
         self.verticalAlignment = verticalAlignment
         self.content = content()
     }
 
     var body: some View {
+        switch valuePlacement {
+        case .trailing:
+            trailingRow
+        case .below:
+            stackedRow
+        }
+    }
+
+    private var trailingRow: some View {
         HStack(alignment: verticalAlignment, spacing: 12) {
-            Text(title)
-                .font(GaryxFont.body())
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
+            GaryxFormFieldTitle(title: title, required: required)
                 .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
                 .layoutPriority(2)
             Spacer(minLength: 8)
@@ -151,6 +187,21 @@ struct GaryxFormRow<Content: View>: View {
         }
         .padding(.horizontal, 16)
         .frame(minHeight: 52)
+    }
+
+    private var stackedRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            GaryxFormFieldTitle(title: title, required: required)
+            content
+                .font(GaryxFont.body())
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 16)
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
     }
 }
 
@@ -173,24 +224,28 @@ struct GaryxFormReadOnlyMultilineRow: View {
     let value: String
     var placeholder: String = ""
     var minHeight: CGFloat = 72
+    var valuePlacement: GaryxFormValuePlacement = .trailing
 
     var body: some View {
+        switch valuePlacement {
+        case .trailing:
+            trailingBody
+        case .below:
+            GaryxFormRow(title: title, valuePlacement: .below) {
+                valueText
+                    .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
+            }
+        }
+    }
+
+    private var trailingBody: some View {
         HStack(alignment: .top, spacing: 12) {
-            Text(title)
-                .font(GaryxFont.body())
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
+            GaryxFormFieldTitle(title: title)
                 .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
                 .layoutPriority(2)
                 .padding(.top, 16)
             Spacer(minLength: 8)
-            Text(displayValue)
-                .font(GaryxFont.body())
-                .foregroundStyle(isEmpty ? .secondary : .primary)
-                .multilineTextAlignment(.leading)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            valueText
                 .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
                 .layoutPriority(1)
                 .padding(.top, 16)
@@ -198,6 +253,15 @@ struct GaryxFormReadOnlyMultilineRow: View {
         }
         .padding(.horizontal, 16)
         .frame(minHeight: minHeight + 32)
+    }
+
+    private var valueText: some View {
+        Text(displayValue)
+            .font(GaryxFont.body())
+            .foregroundStyle(isEmpty ? .secondary : .primary)
+            .multilineTextAlignment(.leading)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var isEmpty: Bool {
@@ -216,6 +280,7 @@ struct GaryxFormTextFieldRow: View {
     let title: String
     @Binding var text: String
     var placeholder: String = ""
+    var valuePlacement: GaryxFormValuePlacement = .trailing
     var keyboardType: UIKeyboardType = .default
     var textContentType: UITextContentType?
     var autocapitalization: TextInputAutocapitalization?
@@ -223,7 +288,7 @@ struct GaryxFormTextFieldRow: View {
     var isReadOnly = false
 
     var body: some View {
-        GaryxFormRow(title: title) {
+        GaryxFormRow(title: title, valuePlacement: valuePlacement) {
             if isReadOnly {
                 Text(displayValue)
                     .foregroundStyle(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
@@ -250,12 +315,13 @@ struct GaryxFormSecureFieldRow: View {
     let title: String
     @Binding var text: String
     var placeholder: String = ""
+    var valuePlacement: GaryxFormValuePlacement = .trailing
     var textContentType: UITextContentType?
     var autocapitalization: TextInputAutocapitalization?
     var autocorrectionDisabled = false
 
     var body: some View {
-        GaryxFormRow(title: title) {
+        GaryxFormRow(title: title, valuePlacement: valuePlacement) {
             SecureField(placeholder, text: $text)
                 .textContentType(textContentType)
                 .textInputAutocapitalization(autocapitalization)
@@ -269,6 +335,7 @@ struct GaryxFormTextAreaRow: View {
     let title: String
     @Binding var text: String
     var placeholder: String = ""
+    var valuePlacement: GaryxFormValuePlacement = .below
     var minHeight: CGFloat = 112
     var lineLimits: ClosedRange<Int> = 2...6
     var autocapitalization: TextInputAutocapitalization?
@@ -276,29 +343,41 @@ struct GaryxFormTextAreaRow: View {
     var isDisabled = false
 
     var body: some View {
+        switch valuePlacement {
+        case .trailing:
+            trailingBody
+        case .below:
+            GaryxFormRow(title: title, valuePlacement: .below) {
+                editor
+                    .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
+            }
+        }
+    }
+
+    private var trailingBody: some View {
         HStack(alignment: .top, spacing: 12) {
-            Text(title)
-                .font(GaryxFont.body())
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.82)
+            GaryxFormFieldTitle(title: title)
                 .frame(minWidth: 116, maxWidth: 166, alignment: .leading)
                 .layoutPriority(2)
                 .padding(.top, 16)
             Spacer(minLength: 8)
-            TextField(placeholder, text: $text, axis: .vertical)
-                .textInputAutocapitalization(autocapitalization)
-                .autocorrectionDisabled(autocorrectionDisabled)
-                .font(GaryxFont.body())
-                .foregroundStyle(.primary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(lineLimits)
+            editor
                 .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
                 .layoutPriority(1)
-                .disabled(isDisabled)
         }
         .padding(.horizontal, 16)
         .frame(minHeight: minHeight + 32)
+    }
+
+    private var editor: some View {
+        TextField(placeholder, text: $text, axis: .vertical)
+            .textInputAutocapitalization(autocapitalization)
+            .autocorrectionDisabled(autocorrectionDisabled)
+            .font(GaryxFont.body())
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.leading)
+            .lineLimit(lineLimits)
+            .disabled(isDisabled)
     }
 }
 
@@ -411,7 +490,7 @@ struct GaryxWorkspacePathSelectionRow: View {
                 Text(displayValue)
                     .font(GaryxFont.body(weight: path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .regular : .medium))
                     .foregroundStyle(path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .truncationMode(.tail)
                     .multilineTextAlignment(.trailing)
                     .fixedSize(horizontal: false, vertical: true)
@@ -438,7 +517,7 @@ struct GaryxWorkspacePathSelectionRow: View {
     private var displayValue: String {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return placeholder }
-        return trimmed
+        return trimmed.garyxLastPathComponent.isEmpty ? trimmed : trimmed.garyxLastPathComponent
     }
 }
 
