@@ -333,6 +333,7 @@ public struct GaryxTaskListFilter: Equatable, Sendable {
     public var status: GaryxTaskStatus?
     public var assignee: String?
     public var sourceBotId: String?
+    public var sourceThreadId: String?
     public var includeDone: Bool
     public var limit: Int
     public var offset: Int
@@ -341,6 +342,7 @@ public struct GaryxTaskListFilter: Equatable, Sendable {
         status: GaryxTaskStatus? = nil,
         assignee: String? = nil,
         sourceBotId: String? = nil,
+        sourceThreadId: String? = nil,
         includeDone: Bool = true,
         limit: Int = 100,
         offset: Int = 0
@@ -348,36 +350,10 @@ public struct GaryxTaskListFilter: Equatable, Sendable {
         self.status = status
         self.assignee = assignee
         self.sourceBotId = sourceBotId
+        self.sourceThreadId = sourceThreadId
         self.includeDone = includeDone
         self.limit = limit
         self.offset = offset
-    }
-}
-
-
-public struct GaryxTaskPromoteRequest: Encodable, Equatable, Sendable {
-    public var threadId: String
-    public var title: String?
-    public var assignee: GaryxTaskPrincipalRequest?
-    public var notificationTarget: GaryxTaskNotificationTargetRequest
-
-    public init(
-        threadId: String,
-        title: String? = nil,
-        assignee: GaryxTaskPrincipalRequest? = nil,
-        notificationTarget: GaryxTaskNotificationTargetRequest = .none
-    ) {
-        self.threadId = threadId
-        self.title = title
-        self.assignee = assignee
-        self.notificationTarget = notificationTarget
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case threadId = "thread_id"
-        case title
-        case assignee
-        case notificationTarget = "notification_target"
     }
 }
 

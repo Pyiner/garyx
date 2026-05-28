@@ -59,6 +59,9 @@ extension GaryxMobileModel {
         var nextState = navigationState
         nextState.setActivePanel(panel)
         navigationState = nextState
+        if panel == .tasks {
+            clearTaskSourceThreadFilter()
+        }
     }
 
     func openPanel(_ panel: GaryxMobilePanel, source: GaryxMobilePanelOpenSource = .current) {
@@ -66,6 +69,9 @@ extension GaryxMobileModel {
         var nextState = navigationState
         nextState.openPanel(panel, dreamsAutoScanEnabled: dreamsAutoScanEnabled, source: source)
         navigationState = nextState
+        if panel == .tasks {
+            clearTaskSourceThreadFilter()
+        }
         setSidebarVisible(false)
     }
 

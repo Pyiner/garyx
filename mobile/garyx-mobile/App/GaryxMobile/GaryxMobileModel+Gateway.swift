@@ -115,6 +115,7 @@ extension GaryxMobileModel {
         teams = []
         skills = []
         tasks = []
+        tasksPanelState.clearSourceFilter()
         automations = []
         slashCommands = []
         mcpServers = []

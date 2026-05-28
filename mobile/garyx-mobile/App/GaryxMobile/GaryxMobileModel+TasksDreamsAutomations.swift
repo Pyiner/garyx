@@ -42,31 +42,74 @@ extension GaryxMobileModel {
         }
     }
 
-    func promoteSelectedThreadToTask() async {
-        guard let thread = selectedThread else { return }
-        let title = thread.title.trimmingCharacters(in: .whitespacesAndNewlines)
+    func openSelectedThreadTasks() async {
+        guard let threadId = selectedThread?.id.trimmingCharacters(in: .whitespacesAndNewlines),
+              !threadId.isEmpty else {
+            return
+        }
+        openPanel(.tasks)
+        tasksPanelState.setSourceFilter(threadId: threadId)
+        await refreshTasksForSourceThread(threadId)
+    }
+
+    func clearTaskSourceThreadFilter() {
+        tasksPanelState.clearSourceFilter()
+    }
+
+    func refreshVisibleTasks() async {
+        if let sourceThreadId = tasksPanelState.sourceThreadFilterId {
+            await refreshAllTasks()
+            await refreshTasksForSourceThread(sourceThreadId)
+        } else {
+            await refreshAllTasks()
+        }
+    }
+
+    func refreshAllTasks() async {
+        guard hasGatewaySettings else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
-            var task = try await client().promoteTask(
-                GaryxTaskPromoteRequest(
-                    threadId: thread.id,
-                    title: title.isEmpty ? nil : title
-                )
-            )
-            if task.threadId.isEmpty {
-                task.threadId = thread.id
-            }
+            let page = try await client().listTasks(includeDone: true, limit: 120)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            upsertTask(task)
-            openPanel(.tasks)
+            tasks = page.tasks
+            persistCatalogCacheSnapshot()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            if Self.isAlreadyTaskError(error),
-               await reconcileTaskForThread(thread.id) != nil {
-                openPanel(.tasks)
-                return
-            }
             lastError = displayMessage(for: error)
+        }
+    }
+
+    func refreshTasksForSourceThread(_ sourceThreadId: String) async {
+        let normalized = sourceThreadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+        guard tasksPanelState.beginSourceFilterRefresh(threadId: normalized) else { return }
+        guard hasGatewaySettings else {
+            let message = "Gateway settings are unavailable."
+            if tasksPanelState.applySourceFilterFailure(threadId: normalized, message: message) {
+                lastError = message
+            }
+            return
+        }
+        let runtimeGeneration = gatewayRuntimeGeneration
+        do {
+            let page = try await client().listTasks(
+                filter: GaryxTaskListFilter(
+                    sourceThreadId: normalized,
+                    includeDone: true,
+                    limit: 200
+                )
+            )
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            if tasksPanelState.applySourceFilterResult(threadId: normalized, tasks: page.tasks) {
+                tasks = GaryxMobileTasksPanelState.mergedTasks(existing: tasks, incoming: page.tasks)
+                persistCatalogCacheSnapshot()
+            }
+        } catch {
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            let message = displayMessage(for: error)
+            if tasksPanelState.applySourceFilterFailure(threadId: normalized, message: message) {
+                lastError = message
+            }
         }
     }
 
@@ -78,7 +121,7 @@ extension GaryxMobileModel {
                 request: GaryxTaskUpdateStatusRequest(to: status)
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            await refreshRemoteState()
+            await refreshVisibleTasks()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
@@ -92,7 +135,7 @@ extension GaryxMobileModel {
         do {
             _ = try await client().updateTaskTitle(taskId: task.id, title: nextTitle)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            await refreshRemoteState()
+            await refreshVisibleTasks()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
@@ -106,7 +149,7 @@ extension GaryxMobileModel {
         do {
             _ = try await client().assignTask(taskId: task.id, request: GaryxTaskAssignRequest(to: .agent(target)))
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            await refreshRemoteState()
+            await refreshVisibleTasks()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
@@ -118,7 +161,7 @@ extension GaryxMobileModel {
         do {
             _ = try await client().unassignTask(taskId: task.id)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            await refreshRemoteState()
+            await refreshVisibleTasks()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
@@ -130,7 +173,7 @@ extension GaryxMobileModel {
         do {
             _ = try await client().stopTask(taskId: task.id)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
-            await refreshRemoteState()
+            await refreshVisibleTasks()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             lastError = displayMessage(for: error)
@@ -143,6 +186,7 @@ extension GaryxMobileModel {
             _ = try await client().deleteTask(taskId: task.id)
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
             tasks.removeAll { $0.id == task.id }
+            tasksPanelState.applyDeletion(taskId: task.id)
             persistCatalogCacheSnapshot()
         } catch {
             guard runtimeGeneration == gatewayRuntimeGeneration else { return }
@@ -157,39 +201,6 @@ extension GaryxMobileModel {
             tasks.insert(task, at: 0)
         }
         persistCatalogCacheSnapshot()
-    }
-
-    func taskSummary(forThreadId threadId: String) -> GaryxTaskSummary? {
-        let threadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !threadId.isEmpty else { return nil }
-        return tasks.first { $0.threadId == threadId }
-    }
-
-    func reconcileTaskForThread(_ threadId: String) async -> GaryxTaskSummary? {
-        if let task = taskSummary(forThreadId: threadId) {
-            return task
-        }
-        let runtimeGeneration = gatewayRuntimeGeneration
-        do {
-            let page = try await client().listTasks(includeDone: true, limit: 200)
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            tasks = page.tasks
-            persistCatalogCacheSnapshot()
-            return taskSummary(forThreadId: threadId)
-        } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
-            lastError = displayMessage(for: error)
-            return nil
-        }
-    }
-
-    static func isAlreadyTaskError(_ error: Error) -> Bool {
-        if case let GaryxGatewayError.httpStatus(_, body) = error {
-            return body.contains("\"code\":\"AlreadyATask\"")
-                || body.contains("\"code\": \"AlreadyATask\"")
-                || body.contains("AlreadyATask")
-        }
-        return false
     }
 
     func refreshDreams() async {

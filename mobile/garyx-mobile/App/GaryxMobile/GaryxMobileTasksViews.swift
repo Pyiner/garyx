@@ -10,25 +10,19 @@ struct GaryxTasksView: View {
     var body: some View {
         GaryxPanelScaffold(
             title: "Tasks",
-            subtitle: "\(model.activeTaskCount) active / \(model.tasks.count) total",
-            onRefresh: { await model.refreshRemoteState() }
+            subtitle: model.tasksPanelSubtitle,
+            onRefresh: { await model.refreshVisibleTasks() }
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                if model.tasks.isEmpty, model.isRemoteStatePending {
-                    GaryxLoadingPanelView(title: "Loading tasks...")
-                } else if model.tasks.isEmpty {
-                    GaryxEmptyPanelView(
-                        icon: "checklist",
-                        title: "No tasks yet.",
-                        text: ""
-                    )
-                } else {
-                    GaryxSectionBlock(title: "Tasks") {
-                        GaryxCompactListGroup {
-                            GaryxTaskList(tasks: model.tasks)
-                        }
+                if model.tasksPanelState.isSourceThreadFilterActive {
+                    GaryxTaskSourceThreadFilterRow(
+                        threadId: model.tasksPanelState.sourceThreadFilterId ?? "",
+                        count: model.visibleTaskCount
+                    ) {
+                        model.clearTaskSourceThreadFilter()
                     }
                 }
+                taskContent
             }
         } actions: {
             GaryxAddToolbarButton(label: "New Task") {
@@ -44,8 +38,98 @@ struct GaryxTasksView: View {
             }
         }
     }
+
+    @ViewBuilder
+    private var taskContent: some View {
+        if model.tasksPanelState.isSourceThreadFilterActive {
+            switch model.tasksPanelState.sourceThreadFilterLoadPhase {
+            case .idle, .loading:
+                GaryxLoadingPanelView(title: "Loading source tasks...")
+            case .loaded:
+                if model.visibleTasks.isEmpty {
+                    GaryxEmptyPanelView(
+                        icon: "checklist",
+                        title: "No tasks dispatched from this thread.",
+                        text: ""
+                    )
+                } else {
+                    taskListSection(tasks: model.visibleTasks)
+                }
+            case .failed(let message):
+                GaryxEmptyPanelView(
+                    icon: "exclamationmark.triangle",
+                    title: "Unable to load source tasks.",
+                    text: message
+                )
+            }
+        } else if model.tasks.isEmpty, model.isRemoteStatePending {
+            GaryxLoadingPanelView(title: "Loading tasks...")
+        } else if model.tasks.isEmpty {
+            GaryxEmptyPanelView(
+                icon: "checklist",
+                title: "No tasks yet.",
+                text: ""
+            )
+        } else {
+            taskListSection(tasks: model.visibleTasks)
+        }
+    }
+
+    private func taskListSection(tasks: [GaryxTaskSummary]) -> some View {
+        GaryxSectionBlock(title: "Tasks") {
+            GaryxCompactListGroup {
+                GaryxTaskList(tasks: tasks)
+            }
+        }
+    }
 }
 
+
+private struct GaryxTaskSourceThreadFilterRow: View {
+    let threadId: String
+    let count: Int
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal.decrease.circle")
+                .font(GaryxFont.callout(weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 26, height: 26)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Source thread")
+                    .font(GaryxFont.caption(weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(threadId)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 8)
+
+            Text("\(count)")
+                .font(GaryxFont.caption(weight: .semibold))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            Button(action: onClear) {
+                GaryxToolbarIcon(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Clear source thread filter")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(GaryxTheme.surface)
+        )
+    }
+}
 
 struct GaryxTaskList: View {
     let tasks: [GaryxTaskSummary]

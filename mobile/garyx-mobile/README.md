@@ -34,7 +34,7 @@ The package currently covers:
   delete helpers.
 - `GET /api/skills` plus create, update, toggle, delete, tree, file read/save,
   and entry create/delete helpers.
-- `GET /api/tasks`, `POST /api/tasks`, promote, assign/unassign, title/status
+- `GET /api/tasks`, `POST /api/tasks`, assign/unassign, title/status
   updates, stop, and delete.
 - `GET /api/automations`, create, update, delete, activity, run-now, and
   pause/enable.

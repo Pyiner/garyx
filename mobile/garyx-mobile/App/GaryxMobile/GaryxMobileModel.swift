@@ -115,6 +115,7 @@ final class GaryxMobileModel: ObservableObject {
     @Published var teams: [GaryxTeamSummary] = []
     @Published var skills: [GaryxSkillSummary] = []
     @Published var tasks: [GaryxTaskSummary] = []
+    @Published var tasksPanelState = GaryxMobileTasksPanelState()
     @Published var automations: [GaryxAutomationSummary] = []
     @Published var remoteStateLoadPhase: GaryxMobileLoadPhase = .idle
     @Published var agentTargetsLoadPhase: GaryxMobileLoadPhase = .idle

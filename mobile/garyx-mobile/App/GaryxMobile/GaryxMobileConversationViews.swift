@@ -498,14 +498,8 @@ struct GaryxConversationHeader: View {
                         ) {
                             model.togglePinnedThread(selectedThread.id)
                         }
-                        if model.selectedThreadTask == nil {
-                            Button("Promote to Task", systemImage: "checklist") {
-                                Task { await model.promoteSelectedThreadToTask() }
-                            }
-                        } else {
-                            Button("View Task", systemImage: "checklist") {
-                                model.openPanel(.tasks)
-                            }
+                        Button(model.selectedThreadTasksMenuTitle, systemImage: "checklist") {
+                            Task { await model.openSelectedThreadTasks() }
                         }
                         Button("Rename", systemImage: "pencil") {
                             openRenamePrompt()

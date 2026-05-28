@@ -16,7 +16,7 @@ implementation:
   WebSocket streaming, HTTP interrupt fallback, gateway token connect links, and
   uploaded prompt attachments.
 - Tasks: list, create, status update, title edit, assign/unassign, stop,
-  delete, and promote helper support.
+  delete, and source-thread task filtering.
 - Automations: list, create, edit, pause/enable, delete, activity, and run now.
 - Workspaces: path discovery from threads/automations/defaults, manual Mac path
   entry, gateway git-status check, directory browsing, and file preview.

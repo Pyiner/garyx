@@ -16,6 +16,8 @@ operating principles here; detailed rules live in the referenced files under
   the current task.
 - When committing from an agent, use the repository's configured Git author and
   committer metadata. Do not override local Git identity.
+- When you create review tasks for your own work, notify `current-thread` so
+  review results return to the task thread instead of a personal bot channel.
 
 ## Public Repository Hygiene
 

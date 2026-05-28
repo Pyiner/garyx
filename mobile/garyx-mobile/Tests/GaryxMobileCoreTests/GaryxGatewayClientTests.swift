@@ -403,6 +403,67 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertFalse(page.hasMore)
     }
 
+    func testListTasksEncodesSourceThreadFilter() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GaryxURLProtocolStub.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            GaryxURLProtocolStub.requestHandler = nil
+            session.invalidateAndCancel()
+        }
+
+        GaryxURLProtocolStub.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(
+                URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.percentEncodedPath,
+                "/garyx/api/tasks"
+            )
+            let queryItems = URLComponents(
+                url: try XCTUnwrap(request.url),
+                resolvingAgainstBaseURL: false
+            )?.queryItems ?? []
+            XCTAssertEqual(queryItems.first(where: { $0.name == "include_done" })?.value, "false")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "limit" })?.value, "42")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "offset" })?.value, "3")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "status" })?.value, "in_progress")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "assignee" })?.value, "codex")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "source_bot_id" })?.value, "bot-test")
+            XCTAssertEqual(queryItems.first(where: { $0.name == "source_thread_id" })?.value, "thread::source/a")
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: try XCTUnwrap(request.url),
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (
+                response,
+                Data(#"{"tasks":[],"total":0,"has_more":false}"#.utf8)
+            )
+        }
+
+        let client = GaryxGatewayClient(
+            configuration: GaryxGatewayConfiguration(
+                baseURL: try XCTUnwrap(URL(string: "http://gateway.example.test/garyx/"))
+            ),
+            session: session,
+            retryPolicy: .disabled
+        )
+
+        _ = try await client.listTasks(
+            filter: GaryxTaskListFilter(
+                status: .inProgress,
+                assignee: " codex ",
+                sourceBotId: " bot-test ",
+                sourceThreadId: " thread::source/a ",
+                includeDone: false,
+                limit: 42,
+                offset: 3
+            )
+        )
+    }
+
     func testRecentThreadsPageDecodesLegacyPreviewAndPaginationDefaults() throws {
         let page = try JSONDecoder().decode(
             GaryxRecentThreadsPage.self,

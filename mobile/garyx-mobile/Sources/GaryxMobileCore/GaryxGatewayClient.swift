@@ -439,15 +439,14 @@ public final class GaryxGatewayClient {
         if let sourceBotId = filter.sourceBotId?.trimmingCharacters(in: .whitespacesAndNewlines), !sourceBotId.isEmpty {
             queryItems.append(URLQueryItem(name: "source_bot_id", value: sourceBotId))
         }
+        if let sourceThreadId = filter.sourceThreadId?.trimmingCharacters(in: .whitespacesAndNewlines), !sourceThreadId.isEmpty {
+            queryItems.append(URLQueryItem(name: "source_thread_id", value: sourceThreadId))
+        }
         return try await get("/api/tasks", queryItems: queryItems)
     }
 
     public func createTask(_ request: GaryxTaskCreateRequest) async throws -> GaryxTaskSummary {
         try await post("/api/tasks", body: request)
-    }
-
-    public func promoteTask(_ request: GaryxTaskPromoteRequest) async throws -> GaryxTaskSummary {
-        try await post("/api/tasks/promote", body: request)
     }
 
     public func updateTaskStatus(

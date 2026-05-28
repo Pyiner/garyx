@@ -138,7 +138,10 @@ would require a follow-up load-more design for the tasks panel.
 If the user opens `View Tasks` on a thread whose local badge says `(0)`, then a
 filtered fetch returns rows, the panel shows those rows but the menu badge still
 comes from the all-tasks cache. The filtered results are merged into the global
-task cache so the badge can update while that source thread remains selected.
+task cache model-side immediately after an accepted source-thread fetch result.
+The merge is by `task.id`; fetched server rows replace existing rows with the
+same id, newly discovered rows are inserted without purging unrelated global
+rows, and deletions still rely on delete responses or the next full task refresh.
 
 ## Testing Strategy
 
@@ -154,6 +157,8 @@ SwiftPM tests in `mobile/garyx-mobile/Tests/GaryxMobileCoreTests`:
   - fetch failure setting phase to `failed` without accepting stale rows;
   - stale fetch responses being dropped after switching filters;
   - deletion removing a task from the filtered list;
+  - task merges replacing same-id rows, preserving unrelated rows, and adding
+    newly discovered source-thread rows;
   - visible task selection returning all tasks without a filter and filtered
     rows with a filter.
 - A small navigation-state helper covers the intended ordering: generic tasks
