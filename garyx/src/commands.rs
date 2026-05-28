@@ -3389,28 +3389,55 @@ pub(crate) async fn cmd_automation_data_trigger_delete(
 
 pub(crate) async fn cmd_agent_list(
     config_path: &str,
-    include_builtin: bool,
     json: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let gateway = gateway_endpoint(config_path)?;
     let payload = fetch_gateway_json(&gateway, "/api/custom-agents").await?;
     if json {
-        return print_pretty_json(&payload);
+        return print_pretty_json(&decorate_agent_list_json(payload));
     }
-    let agents = payload["agents"].as_array().cloned().unwrap_or_default();
-    let visible: Vec<&Value> = agents
-        .iter()
-        .filter(|a| include_builtin || a["built_in"].as_bool() != Some(true))
-        .collect();
-    if visible.is_empty() {
+    let mut agents = payload["agents"].as_array().cloned().unwrap_or_default();
+    sort_agents_builtin_first(&mut agents);
+    if agents.is_empty() {
         println!("Agents: (none)");
         return Ok(());
     }
-    for a in visible {
+    for a in &agents {
         print_agent_summary(a);
         println!();
     }
     Ok(())
+}
+
+fn sort_agents_builtin_first(agents: &mut [Value]) {
+    agents.sort_by(|a, b| {
+        let a_builtin = a["built_in"].as_bool().unwrap_or(false);
+        let b_builtin = b["built_in"].as_bool().unwrap_or(false);
+        b_builtin.cmp(&a_builtin).then_with(|| {
+            let a_id = a["agent_id"].as_str().unwrap_or("");
+            let b_id = b["agent_id"].as_str().unwrap_or("");
+            a_id.cmp(b_id)
+        })
+    });
+}
+
+fn decorate_agent_list_json(mut payload: Value) -> Value {
+    if let Some(agents) = payload
+        .get_mut("agents")
+        .and_then(|value| value.as_array_mut())
+    {
+        sort_agents_builtin_first(agents);
+        for agent in agents {
+            let is_builtin = agent["built_in"].as_bool().unwrap_or(false);
+            if let Some(obj) = agent.as_object_mut() {
+                obj.insert(
+                    "kind".to_string(),
+                    Value::String(if is_builtin { "builtin" } else { "custom" }.to_string()),
+                );
+            }
+        }
+    }
+    payload
 }
 
 pub(crate) async fn cmd_agent_get(

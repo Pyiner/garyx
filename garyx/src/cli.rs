@@ -1139,11 +1139,8 @@ pub(crate) enum AutomationDataTriggerAction {
 
 #[derive(Subcommand)]
 pub(crate) enum AgentAction {
-    /// List custom agents
+    /// List all agents (built-in and custom)
     List {
-        /// Include built-in agents
-        #[arg(long)]
-        include_builtin: bool,
         /// Output as JSON
         #[arg(long)]
         json: bool,

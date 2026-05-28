@@ -786,10 +786,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } => cmd_db_events(config_path, table, event_type, limit, offset, json).await,
         },
         Some(Commands::Agent { action }) => match action {
-            AgentAction::List {
-                include_builtin,
-                json,
-            } => cmd_agent_list(config_path, include_builtin, json).await,
+            AgentAction::List { json } => cmd_agent_list(config_path, json).await,
             AgentAction::Get { agent_id, json } => {
                 cmd_agent_get(config_path, &agent_id, json).await
             }

@@ -2096,3 +2096,101 @@ fn task_progress_turns_keeps_last_consecutive_assistant_group() {
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].assistant_text.as_deref(), Some("a1\n\na2"));
 }
+
+fn agent_value(agent_id: &str, built_in: bool) -> Value {
+    json!({
+        "agent_id": agent_id,
+        "display_name": agent_id,
+        "provider_type": "claude_code",
+        "built_in": built_in,
+    })
+}
+
+#[test]
+fn sort_agents_builtin_first_groups_builtins_then_alphabetical() {
+    let mut agents = vec![
+        agent_value("novelist", false),
+        agent_value("codex", true),
+        agent_value("gary", false),
+        agent_value("claude", true),
+        agent_value("gemini", true),
+    ];
+
+    sort_agents_builtin_first(&mut agents);
+
+    let order: Vec<&str> = agents
+        .iter()
+        .map(|a| a["agent_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, vec!["claude", "codex", "gemini", "gary", "novelist"]);
+}
+
+#[test]
+fn sort_agents_builtin_first_treats_missing_flag_as_custom() {
+    let mut agents = vec![
+        json!({ "agent_id": "zeta" }),
+        agent_value("alpha", true),
+        json!({ "agent_id": "alpha-custom" }),
+    ];
+
+    sort_agents_builtin_first(&mut agents);
+
+    let order: Vec<&str> = agents
+        .iter()
+        .map(|a| a["agent_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, vec!["alpha", "alpha-custom", "zeta"]);
+}
+
+#[test]
+fn sort_agents_builtin_first_handles_empty_slice() {
+    let mut agents: Vec<Value> = Vec::new();
+    sort_agents_builtin_first(&mut agents);
+    assert!(agents.is_empty());
+}
+
+#[test]
+fn decorate_agent_list_json_adds_kind_and_sorts_in_place() {
+    let payload = json!({
+        "agents": [
+            { "agent_id": "novelist", "display_name": "Novelist", "built_in": false, "model": "gpt-5" },
+            { "agent_id": "codex", "display_name": "Codex", "built_in": true },
+            { "agent_id": "gary", "display_name": "Gary", "built_in": false },
+            { "agent_id": "claude", "display_name": "Claude", "built_in": true },
+        ],
+    });
+
+    let decorated = decorate_agent_list_json(payload);
+
+    let agents = decorated["agents"].as_array().expect("agents array");
+    let order: Vec<&str> = agents
+        .iter()
+        .map(|a| a["agent_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, vec!["claude", "codex", "gary", "novelist"]);
+
+    assert_eq!(agents[0]["kind"], "builtin");
+    assert_eq!(agents[1]["kind"], "builtin");
+    assert_eq!(agents[2]["kind"], "custom");
+    assert_eq!(agents[3]["kind"], "custom");
+
+    // Original fields survive untouched.
+    assert_eq!(agents[0]["display_name"], "Claude");
+    assert_eq!(agents[0]["built_in"], true);
+    assert_eq!(agents[3]["model"], "gpt-5");
+    assert_eq!(agents[3]["built_in"], false);
+}
+
+#[test]
+fn decorate_agent_list_json_preserves_top_level_shape_when_agents_missing() {
+    let payload = json!({ "other": "value" });
+    let decorated = decorate_agent_list_json(payload);
+    assert_eq!(decorated, json!({ "other": "value" }));
+}
+
+#[test]
+fn decorate_agent_list_json_handles_empty_array() {
+    let payload = json!({ "agents": [] });
+    let decorated = decorate_agent_list_json(payload);
+    assert_eq!(decorated, json!({ "agents": [] }));
+}
