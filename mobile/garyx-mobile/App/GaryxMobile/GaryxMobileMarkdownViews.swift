@@ -575,7 +575,7 @@ private struct GaryxMarkdownBlock: Identifiable {
         var markdownLines: [String] = []
         var codeLines: [String] = []
         var codeLanguage: String?
-        var insideFence = false
+        var activeFence: Fence?
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
 
         func appendMarkdown() {
@@ -597,28 +597,28 @@ private struct GaryxMarkdownBlock: Identifiable {
         while index < lines.count {
             let line = lines[index]
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !insideFence, let image = parseStandaloneImage(trimmed) {
-                appendMarkdown()
-                blocks.append(GaryxMarkdownBlock(id: blocks.count, kind: .image(alt: image.alt, source: image.source)))
-                index += 1
-                continue
-            }
-            if trimmed.hasPrefix("```") {
-                if insideFence {
+            if let fence = activeFence {
+                if isClosingFence(trimmed, for: fence) {
                     appendCode()
-                    insideFence = false
+                    activeFence = nil
                 } else {
-                    appendMarkdown()
-                    insideFence = true
-                    let language = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
-                    codeLanguage = language.isEmpty ? nil : language
+                    codeLines.append(line)
                 }
                 index += 1
                 continue
             }
 
-            if insideFence {
-                codeLines.append(line)
+            if let image = parseStandaloneImage(trimmed) {
+                appendMarkdown()
+                blocks.append(GaryxMarkdownBlock(id: blocks.count, kind: .image(alt: image.alt, source: image.source)))
+                index += 1
+                continue
+            }
+
+            if let fence = openingFence(from: trimmed) {
+                appendMarkdown()
+                activeFence = fence
+                codeLanguage = fence.info.isEmpty ? nil : fence.info
                 index += 1
                 continue
             }
@@ -633,7 +633,7 @@ private struct GaryxMarkdownBlock: Identifiable {
             }
         }
 
-        if insideFence {
+        if activeFence != nil {
             appendCode()
         }
         appendMarkdown()
@@ -642,6 +642,38 @@ private struct GaryxMarkdownBlock: Identifiable {
             blocks.append(GaryxMarkdownBlock(id: 0, kind: .markdown(text)))
         }
         return blocks
+    }
+
+    private struct Fence {
+        let marker: Character
+        let length: Int
+        let info: String
+    }
+
+    private static func openingFence(from trimmed: String) -> Fence? {
+        guard let marker = trimmed.first, marker == "`" || marker == "~" else { return nil }
+        let length = fenceMarkerLength(in: trimmed, marker: marker)
+        guard length >= 3 else { return nil }
+        let infoStart = trimmed.index(trimmed.startIndex, offsetBy: length)
+        let info = String(trimmed[infoStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return Fence(marker: marker, length: length, info: info)
+    }
+
+    private static func isClosingFence(_ trimmed: String, for fence: Fence) -> Bool {
+        guard trimmed.first == fence.marker else { return false }
+        let length = fenceMarkerLength(in: trimmed, marker: fence.marker)
+        guard length >= fence.length else { return false }
+        let restStart = trimmed.index(trimmed.startIndex, offsetBy: length)
+        return trimmed[restStart...].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private static func fenceMarkerLength(in value: String, marker: Character) -> Int {
+        var count = 0
+        for character in value {
+            guard character == marker else { break }
+            count += 1
+        }
+        return count
     }
 
     private static func parseTable(
@@ -663,7 +695,7 @@ private struct GaryxMarkdownBlock: Identifiable {
         while nextIndex < lines.count {
             let line = lines[nextIndex]
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, !trimmed.hasPrefix("```"),
+            guard !trimmed.isEmpty, openingFence(from: trimmed) == nil,
                   let rowCells = splitTableRow(line),
                   rowCells.count >= 2 else {
                 break
