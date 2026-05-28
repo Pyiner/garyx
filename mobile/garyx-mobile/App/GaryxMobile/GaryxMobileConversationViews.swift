@@ -99,35 +99,37 @@ struct GaryxConversationView: View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 messageScroll(proxy: proxy)
-
-                if showsScrollToBottomButton {
-                    Button {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            scrollToConversationTail(proxy)
-                        }
-                        showsScrollToBottomButton = false
-                    } label: {
-                        Image(systemName: "arrow.down")
-                            .font(GaryxFont.system(size: 15, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .frame(width: 42, height: 42)
-                            .garyxAdaptiveGlass(
-                                .regular,
-                                isInteractive: true,
-                                fallbackMaterial: .ultraThinMaterial,
-                                in: Circle()
-                            )
-                            .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 18)
-                    .padding(.bottom, 14)
-                    .transition(.scale(scale: 0.88).combined(with: .opacity))
-                    .accessibilityLabel("Scroll to latest message")
-                }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                GaryxComposer(isFocused: $isComposerFocused)
+                VStack(alignment: .trailing, spacing: 8) {
+                    if showsScrollToBottomButton {
+                        Button {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                scrollToConversationTail(proxy)
+                            }
+                            showsScrollToBottomButton = false
+                        } label: {
+                            Image(systemName: "arrow.down")
+                                .font(GaryxFont.system(size: 15, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 42, height: 42)
+                                .garyxAdaptiveGlass(
+                                    .regular,
+                                    isInteractive: true,
+                                    fallbackMaterial: .ultraThinMaterial,
+                                    in: Circle()
+                                )
+                                .shadow(color: Color.black.opacity(0.12), radius: 14, x: 0, y: 8)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 18)
+                        .transition(.scale(scale: 0.88).combined(with: .opacity))
+                        .accessibilityLabel("Scroll to latest message")
+                    }
+
+                    GaryxComposer(isFocused: $isComposerFocused)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
