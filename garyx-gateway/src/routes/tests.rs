@@ -524,7 +524,7 @@ async fn thread_logs_route_returns_full_and_delta_chunks() {
         .uri(format!("/api/threads/{thread_id}/logs?cursor={cursor}"))
         .body(Body::empty())
         .unwrap();
-    let response = router.oneshot(request).await.unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
         .await
@@ -566,7 +566,7 @@ async fn thread_logs_route_alias_returns_full_chunk() {
         .uri(format!("/api/threads/{thread_id}/logs"))
         .body(Body::empty())
         .unwrap();
-    let response = router.oneshot(request).await.unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
         .await
@@ -3420,6 +3420,197 @@ async fn task_routes_resolve_percent_encoded_ids() {
     let payload: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["task_id"], task_id);
     assert_eq!(payload["task"]["title"], "Check task routing");
+}
+
+#[tokio::test]
+async fn task_title_routes_update_backing_thread_label_and_projection() {
+    let dir = tempdir().unwrap();
+    let mut config = test_config();
+    config.tasks.enabled = true;
+    config.sessions.data_dir = Some(dir.path().to_string_lossy().to_string());
+    let state = AppStateBuilder::new(config).build();
+    let router = build_router(state.clone());
+
+    let request = authed_request()
+        .method("GET")
+        .uri("/api/threads")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["count"], 0);
+
+    let request = authed_request()
+        .method("POST")
+        .uri("/api/tasks")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "title": "Gateway task title",
+                "notification_target": {"kind": "none"}
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let task_id = payload["task_id"].as_str().unwrap().to_owned();
+    let thread_id = payload["thread_id"].as_str().unwrap().to_owned();
+    let created_title = format!("{task_id} Gateway task title");
+    assert_eq!(payload["task"]["title"], "Gateway task title");
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .expect("task backing thread");
+    assert_eq!(stored["label"], created_title);
+    assert_eq!(stored["thread_title_source"], "task");
+    let recent = state
+        .ops
+        .garyx_db
+        .list_recent_threads(10, 0)
+        .expect("recent threads");
+    let projected = recent
+        .iter()
+        .find(|record| record.thread_id == thread_id)
+        .expect("projected task thread");
+    assert_eq!(projected.title, created_title);
+    let request = authed_request()
+        .method("GET")
+        .uri("/api/threads")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["threads"][0]["label"], created_title);
+
+    let request = authed_request()
+        .method("PATCH")
+        .uri(format!(
+            "/api/tasks/{}/title",
+            urlencoding::encode(&task_id)
+        ))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({ "title": "Gateway retitled" })).unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let updated_title = format!("{task_id} Gateway retitled");
+    assert_eq!(payload["task"]["title"], "Gateway retitled");
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .expect("task backing thread");
+    assert_eq!(stored["label"], updated_title);
+    let recent = state
+        .ops
+        .garyx_db
+        .list_recent_threads(10, 0)
+        .expect("recent threads");
+    let projected = recent
+        .iter()
+        .find(|record| record.thread_id == thread_id)
+        .expect("projected task thread");
+    assert_eq!(projected.title, updated_title);
+    let request = authed_request()
+        .method("GET")
+        .uri("/api/threads")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["threads"][0]["label"], updated_title);
+
+    let request = authed_request()
+        .method("PATCH")
+        .uri(format!("/api/threads/{}", urlencoding::encode(&thread_id)))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({ "label": "Manual thread title" })).unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let request = authed_request()
+        .method("PATCH")
+        .uri(format!(
+            "/api/tasks/{}/title",
+            urlencoding::encode(&task_id)
+        ))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({ "title": "Task-only title" })).unwrap(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["task"]["title"], "Task-only title");
+
+    let stored = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .expect("task backing thread");
+    assert_eq!(stored["label"], "Manual thread title");
+    assert_eq!(stored["thread_title_source"], "explicit");
+    let recent = state
+        .ops
+        .garyx_db
+        .list_recent_threads(10, 0)
+        .expect("recent threads");
+    let projected = recent
+        .iter()
+        .find(|record| record.thread_id == thread_id)
+        .expect("projected task thread");
+    assert_eq!(projected.title, "Manual thread title");
+    let request = authed_request()
+        .method("GET")
+        .uri("/api/threads")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["threads"][0]["label"], "Manual thread title");
 }
 
 #[tokio::test]

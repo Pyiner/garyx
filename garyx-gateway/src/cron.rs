@@ -828,6 +828,7 @@ impl CronService {
             id,
             &run_id,
             &self.dispatch_runtime,
+            &self.app_state_weak,
             garyx_db.clone(),
         )
         .await
@@ -1021,6 +1022,7 @@ impl CronService {
         id: &str,
         run_id: &str,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
+        app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
         garyx_db: Option<Arc<GaryxDbService>>,
     ) -> Result<CronJob, String> {
         let current = {
@@ -1080,6 +1082,9 @@ impl CronService {
 
         let mut updated = current;
         updated.thread_id = Some(thread_id.clone());
+        if let Some(app_state) = app_state_weak.get().and_then(Weak::upgrade) {
+            app_state.invalidate_gateway_sync_caches().await;
+        }
 
         Ok(updated)
     }
@@ -1189,6 +1194,7 @@ impl CronService {
                 &id,
                 &run_id,
                 dispatch_runtime,
+                app_state_weak,
                 garyx_db_handle.clone(),
             )
             .await

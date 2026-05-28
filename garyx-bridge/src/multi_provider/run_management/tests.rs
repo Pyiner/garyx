@@ -88,6 +88,37 @@ async fn provider_thread_title_does_not_replace_task_label() {
     assert!(updated.get("provider_thread_title").is_none());
 }
 
+#[tokio::test]
+async fn provider_thread_title_does_not_replace_task_managed_label() {
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    store
+        .set(
+            "thread::task-managed",
+            json!({
+                "thread_id": "thread::task-managed",
+                "label": "#TASK-33 Ship thread title",
+                "thread_title_source": "task"
+            }),
+        )
+        .await;
+
+    let applied = persist_provider_thread_title_if_missing(
+        &store,
+        "thread::task-managed",
+        Some("Provider Generated Title"),
+    )
+    .await;
+
+    assert!(applied.is_none());
+    let updated = store
+        .get("thread::task-managed")
+        .await
+        .expect("thread exists");
+    assert_eq!(updated["label"], "#TASK-33 Ship thread title");
+    assert_eq!(updated["thread_title_source"], "task");
+    assert!(updated.get("provider_thread_title").is_none());
+}
+
 #[test]
 fn native_session_messages_are_attached_from_committed_thread_messages() {
     let session_data = json!({

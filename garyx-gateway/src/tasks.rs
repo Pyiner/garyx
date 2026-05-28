@@ -239,6 +239,7 @@ pub async fn create_task(
             {
                 return task_error_response(error);
             }
+            state.invalidate_gateway_sync_caches().await;
             let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
             let mut payload = json!({
                 "thread_id": thread_id,
@@ -370,6 +371,7 @@ pub async fn create_tasks_batch(
             Err(error) => return task_error_response(error),
         }
     }
+    state.invalidate_gateway_sync_caches().await;
     (StatusCode::CREATED, Json(json!({ "tasks": created })))
 }
 
@@ -415,6 +417,7 @@ pub async fn promote_task(
             {
                 return task_error_response(error);
             }
+            state.invalidate_gateway_sync_caches().await;
             let runtime_agent_id = runtime_agent_id_for_thread(&state, &thread_id).await;
             let mut payload = json!({
                 "task_id": garyx_router::tasks::canonical_task_id(&task),
@@ -710,7 +713,10 @@ pub async fn set_task_title(
         Err(error) => return task_error_response(error),
     };
     match service.set_title(&task_id, body.title, actor).await {
-        Ok(task) => (StatusCode::OK, Json(json!({ "task": task }))),
+        Ok(task) => {
+            state.invalidate_gateway_sync_caches().await;
+            (StatusCode::OK, Json(json!({ "task": task })))
+        }
         Err(error) => task_error_response(error),
     }
 }

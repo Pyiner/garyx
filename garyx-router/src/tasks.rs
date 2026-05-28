@@ -13,12 +13,14 @@ use uuid::Uuid;
 use crate::{TaskCounterError, TaskCounterStore};
 use crate::{
     ThreadEnsureOptions, ThreadStore, WorkspaceMode, agent_id_from_value, create_thread_record,
-    history_message_count, is_thread_key,
+    history_message_count, is_thread_key, label_from_value,
 };
 
 const DEFAULT_TASK_LIST_LIMIT: usize = 50;
 const MAX_TASK_LIST_LIMIT: usize = 200;
 const DEFAULT_TASK_AGENT_ID: &str = "claude";
+const TASK_THREAD_TITLE_SOURCE: &str = "task";
+const EXPLICIT_THREAD_TITLE_SOURCE: &str = "explicit";
 type TaskThreadLock = Arc<tokio::sync::Mutex<()>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -323,6 +325,7 @@ impl TaskService {
         if let TaskEventKind::Created { assignee, .. } = &mut task.events[0].kind {
             *assignee = task.assignee.clone();
         }
+        set_task_thread_title(&mut record, &task)?;
         set_task_on_record(&mut record, &task)?;
         self.thread_store.set(&thread_id, record).await;
         task_index_upsert(self.index_store_id(), &thread_id, &task);
@@ -346,7 +349,7 @@ impl TaskService {
         if task_from_record(&record)?.is_some() {
             return Err(TaskServiceError::AlreadyATask(input.thread_id));
         }
-        let title = derive_title(input.title.as_deref(), &record);
+        let title = derive_promoted_title(input.title.as_deref(), &record);
         let auto_start = input.assignee.is_some();
         let task = self
             .build_task(
@@ -374,6 +377,7 @@ impl TaskService {
         if let TaskEventKind::Promoted { assignee, .. } = &mut task.events[0].kind {
             *assignee = task.assignee.clone();
         }
+        set_task_thread_title(&mut record, &task)?;
         set_task_on_record(&mut record, &task)?;
         self.thread_store.set(&input.thread_id, record).await;
         task_index_upsert(self.index_store_id(), &input.thread_id, &task);
@@ -672,24 +676,38 @@ impl TaskService {
         validate_principal(&actor)?;
         let next_title = normalized_limited(Some(title), 200)?
             .ok_or_else(|| TaskServiceError::BadRequest("title cannot be empty".to_owned()))?;
-        self.mutate_task(task_id, move |task| {
-            let previous = task.title.clone();
-            if previous == next_title {
-                return Ok(());
-            }
-            task.title = next_title.clone();
-            push_event(
-                task,
-                actor,
-                TaskEventKind::TitleChanged {
-                    from: previous,
-                    to: next_title,
-                },
-                None,
-            );
-            Ok(())
-        })
-        .await
+        let (thread_id, _) = self.resolve_task_record(task_id).await?;
+        let lock = task_thread_lock(&thread_id);
+        let _guard = lock.lock().await;
+        let mut record = self
+            .thread_store
+            .get(&thread_id)
+            .await
+            .ok_or_else(|| TaskServiceError::NotFound(thread_id.clone()))?;
+        let mut task = task_from_record(&record)?
+            .ok_or_else(|| TaskServiceError::NotATask(thread_id.clone()))?;
+        let should_update_thread_title = is_task_thread_title_managed(&record, &task);
+        let previous = task.title.clone();
+        if previous == next_title {
+            return Ok(task);
+        }
+        task.title = next_title.clone();
+        push_event(
+            &mut task,
+            actor,
+            TaskEventKind::TitleChanged {
+                from: previous,
+                to: next_title,
+            },
+            None,
+        );
+        if should_update_thread_title {
+            set_task_thread_title(&mut record, &task)?;
+        }
+        set_task_on_record(&mut record, &task)?;
+        self.thread_store.set(&thread_id, record).await;
+        task_index_upsert(self.index_store_id(), &thread_id, &task);
+        Ok(task)
     }
 
     async fn mutate_task<F>(&self, task_id: &str, f: F) -> Result<ThreadTask, TaskServiceError>
@@ -903,6 +921,38 @@ fn set_task_on_record(record: &mut Value, task: &ThreadTask) -> Result<(), TaskS
     Ok(())
 }
 
+fn task_thread_title(task: &ThreadTask) -> String {
+    format!("{} {}", canonical_task_id(task), task.title)
+}
+
+fn set_task_thread_title(record: &mut Value, task: &ThreadTask) -> Result<(), TaskServiceError> {
+    let obj = record
+        .as_object_mut()
+        .ok_or_else(|| TaskServiceError::Store("thread record is not an object".to_owned()))?;
+    obj.insert("label".to_owned(), Value::String(task_thread_title(task)));
+    obj.insert(
+        "thread_title_source".to_owned(),
+        Value::String(TASK_THREAD_TITLE_SOURCE.to_owned()),
+    );
+    obj.remove("provider_thread_title");
+    Ok(())
+}
+
+fn is_task_thread_title_managed(record: &Value, task: &ThreadTask) -> bool {
+    if record
+        .get("thread_title_source")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        != Some(TASK_THREAD_TITLE_SOURCE)
+    {
+        return false;
+    }
+    record
+        .get("label")
+        .and_then(Value::as_str)
+        .is_some_and(|label| label == task_thread_title(task))
+}
+
 fn remove_task_from_record(record: &mut Value) -> Result<(), TaskServiceError> {
     let obj = record
         .as_object_mut()
@@ -1067,6 +1117,22 @@ fn derive_title(input: Option<&str>, record: &Value) -> String {
         }
     }
     "Untitled task".to_owned()
+}
+
+fn derive_promoted_title(input: Option<&str>, record: &Value) -> String {
+    if input.map(str::trim).is_some_and(|value| !value.is_empty()) {
+        return derive_title(input, record);
+    }
+    if record
+        .get("thread_title_source")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        == Some(EXPLICIT_THREAD_TITLE_SOURCE)
+        && let Some(label) = label_from_value(record)
+    {
+        return truncate_title(&label);
+    }
+    derive_title(None, record)
 }
 
 fn message_text(message: &Value) -> Option<String> {
@@ -1255,7 +1321,7 @@ fn is_allowed_transition(from: TaskStatus, to: TaskStatus) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{InMemoryTaskCounterStore, InMemoryThreadStore};
+    use crate::{InMemoryTaskCounterStore, InMemoryThreadStore, update_thread_record};
 
     fn service() -> TaskService {
         TaskService::new(
@@ -1290,6 +1356,193 @@ mod tests {
         let messages = record.get("messages").and_then(Value::as_array).unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0]["role"], Value::String("user".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn task_create_stores_prefixed_thread_title() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Audit daemons".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+
+        let record = service.thread_store.get(&thread_id).await.unwrap();
+        assert_eq!(task.title, "Audit daemons");
+        assert_eq!(
+            record["label"],
+            Value::String(format!("{} Audit daemons", canonical_task_id(&task)))
+        );
+        assert_eq!(record["thread_title_source"], "task");
+    }
+
+    #[tokio::test]
+    async fn task_promote_prefixes_explicit_thread_title() {
+        let service = service();
+        service
+            .thread_store
+            .set(
+                "thread::promote-title",
+                json!({
+                    "thread_id": "thread::promote-title",
+                    "label": "Customer interview followup",
+                    "thread_title_source": "explicit",
+                    "messages": [{
+                        "role": "user",
+                        "content": "First message text should not win."
+                    }]
+                }),
+            )
+            .await;
+
+        let task = service
+            .promote_task(PromoteTaskInput {
+                thread_id: "thread::promote-title".to_owned(),
+                title: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                actor: None,
+            })
+            .await
+            .unwrap();
+
+        let record = service
+            .thread_store
+            .get("thread::promote-title")
+            .await
+            .unwrap();
+        assert_eq!(task.title, "Customer interview followup");
+        assert_eq!(
+            record["label"],
+            Value::String(format!(
+                "{} Customer interview followup",
+                canonical_task_id(&task)
+            ))
+        );
+        assert_eq!(record["thread_title_source"], "task");
+    }
+
+    #[tokio::test]
+    async fn set_title_updates_managed_thread_title() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Original title".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let task_id = canonical_task_id(&task);
+
+        let updated = service
+            .set_title(&task_id, "Updated title".to_owned(), None)
+            .await
+            .unwrap();
+
+        let record = service.thread_store.get(&thread_id).await.unwrap();
+        assert_eq!(updated.title, "Updated title");
+        assert_eq!(
+            record["label"],
+            Value::String(format!("{task_id} Updated title"))
+        );
+        assert_eq!(record["thread_title_source"], "task");
+    }
+
+    #[tokio::test]
+    async fn set_title_does_not_overwrite_manually_renamed_thread() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Task title".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let task_id = canonical_task_id(&task);
+        update_thread_record(
+            &service.thread_store,
+            &thread_id,
+            Some("Manual thread title".to_owned()),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let updated = service
+            .set_title(&task_id, "New task title".to_owned(), None)
+            .await
+            .unwrap();
+
+        let record = service.thread_store.get(&thread_id).await.unwrap();
+        assert_eq!(updated.title, "New task title");
+        assert_eq!(record["label"], "Manual thread title");
+        assert_eq!(record["thread_title_source"], "explicit");
+    }
+
+    #[tokio::test]
+    async fn set_title_leaves_legacy_unmanaged_thread_title_unchanged() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Legacy task title".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let task_id = canonical_task_id(&task);
+        let mut record = service.thread_store.get(&thread_id).await.unwrap();
+        let obj = record.as_object_mut().unwrap();
+        obj.insert(
+            "label".to_owned(),
+            Value::String("Legacy thread title".to_owned()),
+        );
+        obj.remove("thread_title_source");
+        service.thread_store.set(&thread_id, record).await;
+
+        let updated = service
+            .set_title(&task_id, "Retitled legacy task".to_owned(), None)
+            .await
+            .unwrap();
+
+        let record = service.thread_store.get(&thread_id).await.unwrap();
+        assert_eq!(updated.title, "Retitled legacy task");
+        assert_eq!(record["label"], "Legacy thread title");
+        assert!(record.get("thread_title_source").is_none());
     }
 
     #[tokio::test]

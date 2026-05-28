@@ -116,6 +116,10 @@ fn should_autoname_thread_accepts_missing_or_legacy_label() {
         "from_id": "api-user"
     })));
     assert!(!should_autoname_thread(&json!({ "label": "Real Title" })));
+    assert!(!should_autoname_thread(&json!({
+        "label": "#TASK-33 Ship thread title",
+        "thread_title_source": "task"
+    })));
 }
 
 #[tokio::test]

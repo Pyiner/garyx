@@ -53,6 +53,7 @@ struct ResolvedChatTarget {
     account_id: String,
     from_id: String,
     metadata: HashMap<String, Value>,
+    thread_cache_maybe_stale: bool,
 }
 
 fn thread_bound_agent_id(thread_data: &Value) -> Option<&str> {
@@ -74,15 +75,15 @@ async fn persist_thread_provider_type_if_missing(
     state: &Arc<AppState>,
     thread_id: &str,
     provider_type: &ProviderType,
-) {
+) -> bool {
     let Some(mut thread_data) = state.threads.thread_store.get(thread_id).await else {
-        return;
+        return false;
     };
     if thread_bound_provider_type(&thread_data).is_some() {
-        return;
+        return false;
     }
     let Some(obj) = thread_data.as_object_mut() else {
-        return;
+        return false;
     };
     obj.insert(
         "provider_type".to_owned(),
@@ -93,6 +94,7 @@ async fn persist_thread_provider_type_if_missing(
         Value::String(chrono::Utc::now().to_rfc3339()),
     );
     state.threads.thread_store.set(thread_id, thread_data).await;
+    true
 }
 
 pub(crate) async fn prepare_chat_request(
@@ -107,7 +109,9 @@ pub(crate) async fn prepare_chat_request(
         account_id,
         from_id,
         metadata,
+        thread_cache_maybe_stale,
     } = resolve_chat_target(state, &req).await?;
+    let mut thread_cache_maybe_stale = thread_cache_maybe_stale;
     req.account_id = account_id;
     req.from_id = from_id;
     for (key, value) in metadata {
@@ -160,7 +164,8 @@ pub(crate) async fn prepare_chat_request(
             .map(|reference| reference.provider_type())
     });
     if let Some(provider_type) = req.provider_type.as_ref() {
-        persist_thread_provider_type_if_missing(state, &thread_id, provider_type).await;
+        thread_cache_maybe_stale |=
+            persist_thread_provider_type_if_missing(state, &thread_id, provider_type).await;
     }
 
     let mut staged_attachments = req.attachments.clone();
@@ -179,7 +184,7 @@ pub(crate) async fn prepare_chat_request(
     let thread_title_update =
         persist_thread_label_if_missing(state, &thread_id, &resolved_message).await?;
     if thread_title_update.is_some() {
-        state.invalidate_gateway_sync_caches().await;
+        thread_cache_maybe_stale = true;
     }
 
     record_api_thread_log(
@@ -190,7 +195,12 @@ pub(crate) async fn prepare_chat_request(
     )
     .await;
 
-    persist_thread_workspace_if_missing(state, &thread_id, req.workspace_path.as_deref()).await?;
+    thread_cache_maybe_stale |=
+        persist_thread_workspace_if_missing(state, &thread_id, req.workspace_path.as_deref())
+            .await?;
+    if thread_cache_maybe_stale {
+        state.invalidate_gateway_sync_caches().await;
+    }
     let runtime_thread_data = state.threads.thread_store.get(&thread_id).await;
     let runtime_workspace_dir = req
         .workspace_path
@@ -344,22 +354,22 @@ async fn persist_thread_workspace_if_missing(
     state: &Arc<AppState>,
     thread_id: &str,
     workspace_path: Option<&str>,
-) -> Result<(), ChatPreparationError> {
+) -> Result<bool, ChatPreparationError> {
     let Some(workspace_path) = workspace_path
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Ok(());
+        return Ok(false);
     };
     if !is_thread_key(thread_id) {
-        return Ok(());
+        return Ok(false);
     }
 
     let Some(existing) = state.threads.thread_store.get(thread_id).await else {
-        return Ok(());
+        return Ok(false);
     };
     if workspace_dir_from_value(&existing).is_some() {
-        return Ok(());
+        return Ok(false);
     }
 
     let updated = update_thread_record(
@@ -378,7 +388,7 @@ async fn persist_thread_workspace_if_missing(
         .bridge
         .set_thread_workspace_binding(thread_id, workspace_dir_from_value(&updated))
         .await;
-    Ok(())
+    Ok(true)
 }
 
 async fn resolve_chat_target(
@@ -420,6 +430,7 @@ async fn resolve_chat_target(
             account_id: req.account_id.clone(),
             from_id: req.from_id.clone(),
             metadata: HashMap::new(),
+            thread_cache_maybe_stale: false,
         });
     }
 
@@ -466,40 +477,47 @@ async fn resolve_chat_target(
                 account_id: endpoint.account_id,
                 from_id: endpoint.binding_key,
                 metadata,
+                thread_cache_maybe_stale: false,
             });
         }
 
         let mut metadata = req.metadata.clone();
         let endpoint_metadata = endpoint_chat_metadata(&endpoint);
         metadata.extend(endpoint_metadata.clone());
-        let mut router = state.threads.router.lock().await;
-        let thread_id = router
-            .resolve_or_create_inbound_thread(
-                &endpoint.channel,
-                &endpoint.account_id,
-                &endpoint.binding_key,
-                &metadata,
-            )
-            .await;
+        let thread_id = {
+            let mut router = state.threads.router.lock().await;
+            router
+                .resolve_or_create_inbound_thread(
+                    &endpoint.channel,
+                    &endpoint.account_id,
+                    &endpoint.binding_key,
+                    &metadata,
+                )
+                .await
+        };
         return Ok(ResolvedChatTarget {
             thread_id,
             channel: endpoint.channel,
             account_id: endpoint.account_id,
             from_id: endpoint.binding_key,
             metadata: endpoint_metadata,
+            thread_cache_maybe_stale: true,
         });
     }
 
-    let mut router = state.threads.router.lock().await;
-    let thread_id = router
-        .resolve_or_create_inbound_thread("api", &req.account_id, &req.from_id, &req.metadata)
-        .await;
+    let thread_id = {
+        let mut router = state.threads.router.lock().await;
+        router
+            .resolve_or_create_inbound_thread("api", &req.account_id, &req.from_id, &req.metadata)
+            .await
+    };
     Ok(ResolvedChatTarget {
         thread_id,
         channel: "api".to_owned(),
         account_id: req.account_id.clone(),
         from_id: req.from_id.clone(),
         metadata: HashMap::new(),
+        thread_cache_maybe_stale: true,
     })
 }
 
