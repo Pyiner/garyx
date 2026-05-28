@@ -413,14 +413,22 @@ extension GaryxMobileModel {
         }
     }
 
-    func createAgentFromDraft() async -> Bool {
-        let agentId = draftAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayName = draftAgentName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let provider = draftAgentProvider.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = draftAgentModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let workspace = draftAgentWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
-        let avatarDataUrl = draftAgentAvatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        let prompt = draftAgentPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    func createAgent(
+        agentId: String,
+        displayName: String,
+        providerType: String,
+        modelName: String,
+        workspace: String,
+        avatarDataUrl: String,
+        systemPrompt: String
+    ) async -> Bool {
+        let agentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let workspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
+        let avatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !agentId.isEmpty, !displayName.isEmpty, !provider.isEmpty else { return false }
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
@@ -436,12 +444,6 @@ extension GaryxMobileModel {
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
-            draftAgentId = ""
-            draftAgentName = ""
-            draftAgentModel = ""
-            draftAgentWorkspace = ""
-            draftAgentAvatarDataUrl = ""
-            draftAgentPrompt = ""
             replaceAgent(agent)
             setSelectedAgentTarget(agent.id)
             return true
@@ -461,23 +463,23 @@ extension GaryxMobileModel {
         workspace: String,
         avatarDataUrl: String,
         systemPrompt: String
-    ) async {
+    ) async -> GaryxAgentSummary? {
         let nextAgentId = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextProviderType = providerType.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextModelName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextWorkspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextAvatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !nextAgentId.isEmpty, !nextDisplayName.isEmpty, !nextProviderType.isEmpty else { return }
+        guard !nextAgentId.isEmpty, !nextDisplayName.isEmpty, !nextProviderType.isEmpty else { return nil }
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
             var baseAgent = agent
             if catalogSnapshotRestored {
                 let latestAgents = try await client().listAgents()
-                guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+                guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
                 guard let latestAgent = latestAgents.first(where: { $0.id == agent.id }) else {
                     lastError = "Agent details are still loading. Try again after refresh."
-                    return
+                    return nil
                 }
                 baseAgent = latestAgent
             }
@@ -505,12 +507,14 @@ extension GaryxMobileModel {
                     systemPrompt: preservedSystemPrompt ? baseAgent.systemPrompt : systemPrompt
                 )
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
             replaceAgent(updated)
             setSelectedAgentTarget(updated.id)
+            return updated
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
             lastError = displayMessage(for: error)
+            return nil
         }
     }
 
@@ -522,14 +526,14 @@ extension GaryxMobileModel {
         memberAgentIds: String,
         workflowText: String,
         avatarDataUrl: String
-    ) async {
+    ) async -> GaryxTeamSummary? {
         let nextTeamId = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextLeader = leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextMembers = Self.normalizedTeamMemberIds(memberAgentIds, leaderAgentId: nextLeader)
         let nextWorkflow = workflowText.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextAvatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !nextTeamId.isEmpty, !nextDisplayName.isEmpty, !nextLeader.isEmpty else { return }
+        guard !nextTeamId.isEmpty, !nextDisplayName.isEmpty, !nextLeader.isEmpty else { return nil }
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
             let updated = try await client().updateTeam(
@@ -543,12 +547,14 @@ extension GaryxMobileModel {
                     avatarDataUrl: nextAvatarDataUrl.isEmpty ? nil : nextAvatarDataUrl
                 )
             )
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
             replaceTeam(updated)
             setSelectedAgentTarget(updated.id)
+            return updated
         } catch {
-            guard runtimeGeneration == gatewayRuntimeGeneration else { return }
+            guard runtimeGeneration == gatewayRuntimeGeneration else { return nil }
             lastError = displayMessage(for: error)
+            return nil
         }
     }
 
@@ -591,13 +597,20 @@ extension GaryxMobileModel {
         }
     }
 
-    func createTeamFromDraft() async -> Bool {
-        let teamId = draftTeamId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = draftTeamName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let leader = draftTeamLeaderId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let members = Self.normalizedTeamMemberIds(draftTeamMemberIds, leaderAgentId: leader)
-        let workflow = draftTeamWorkflow.trimmingCharacters(in: .whitespacesAndNewlines)
-        let avatarDataUrl = draftTeamAvatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+    func createTeam(
+        teamId: String,
+        displayName: String,
+        leaderAgentId: String,
+        memberAgentIds: String,
+        workflowText: String,
+        avatarDataUrl: String
+    ) async -> Bool {
+        let teamId = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let leader = leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let members = Self.normalizedTeamMemberIds(memberAgentIds, leaderAgentId: leader)
+        let workflow = workflowText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let avatarDataUrl = avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !teamId.isEmpty, !name.isEmpty, !leader.isEmpty else { return false }
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
@@ -612,12 +625,6 @@ extension GaryxMobileModel {
                 )
             )
             guard runtimeGeneration == gatewayRuntimeGeneration else { return false }
-            draftTeamId = ""
-            draftTeamName = ""
-            draftTeamAvatarDataUrl = ""
-            draftTeamLeaderId = ""
-            draftTeamMemberIds = ""
-            draftTeamWorkflow = ""
             replaceTeam(team)
             setSelectedAgentTarget(team.id)
             return true

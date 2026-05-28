@@ -98,100 +98,398 @@ struct GaryxAgentsView: View {
 }
 
 struct GaryxAgentDetailCard: View {
+    @EnvironmentObject private var model: GaryxMobileModel
     let agent: GaryxAgentSummary
+    @State private var showsEditForm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            GaryxFormGroupedSection(title: "Agent") {
-                VStack(spacing: 0) {
-                    GaryxAgentDetailInfoRow(title: "Name", value: agent.displayName)
-                    Divider().padding(.leading, 16)
-                    GaryxAgentDetailInfoRow(title: "ID", value: agent.id)
-                    Divider().padding(.leading, 16)
-                    GaryxAgentDetailInfoRow(title: "Type", value: agent.builtIn ? "Built-in" : "Custom")
-                    Divider().padding(.leading, 16)
-                    GaryxAgentDetailInfoRow(title: "Provider", value: agent.providerType)
-                    Divider().padding(.leading, 16)
-                    GaryxAgentDetailInfoRow(title: "Model", value: agent.model.isEmpty ? "Default" : agent.model)
-                    if !agent.defaultWorkspaceDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Divider().padding(.leading, 16)
-                        GaryxAgentDetailInfoRow(title: "Workspace", value: agent.defaultWorkspaceDir)
-                    }
-                }
-            }
+            GaryxAgentFormContent(
+                mode: .readOnly,
+                agentId: .constant(displayAgent.id),
+                displayName: .constant(displayAgent.displayName),
+                providerType: .constant(displayAgent.providerType),
+                modelName: .constant(displayAgent.model),
+                workspace: .constant(displayAgent.defaultWorkspaceDir),
+                avatarDataUrl: .constant(displayAgent.avatarDataUrl),
+                systemPrompt: .constant(displayAgent.systemPrompt),
+                builtIn: displayAgent.builtIn,
+                workspacePaths: model.userWorkspacePaths
+            )
 
-            if !agent.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                GaryxFormGroupedSection(title: "System Prompt") {
-                    Text(agent.systemPrompt)
-                        .font(GaryxFont.callout())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(16)
+            if !displayAgent.builtIn {
+                Button {
+                    showsEditForm = true
+                } label: {
+                    Label("Edit Agent", systemImage: "pencil")
+                        .font(GaryxFont.callout(weight: .semibold))
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(GaryxPrimaryWideButtonStyle())
             }
         }
+        .fullScreenCover(isPresented: $showsEditForm) {
+            GaryxAgentEditSheet(agent: displayAgent) { updatedAgent in
+                model.selectedAgentDetail = updatedAgent
+            }
+        }
+    }
+
+    private var displayAgent: GaryxAgentSummary {
+        model.agents.first(where: { $0.id == agent.id }) ?? agent
     }
 }
 
 struct GaryxTeamDetailCard: View {
+    @EnvironmentObject private var model: GaryxMobileModel
     let team: GaryxTeamSummary
+    @State private var showsEditForm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            GaryxFormGroupedSection(title: "Team") {
-                VStack(spacing: 0) {
-                    GaryxAgentDetailInfoRow(title: "Name", value: team.displayName)
-                    Divider().padding(.leading, 16)
-                    GaryxAgentDetailInfoRow(title: "ID", value: team.id)
-                    Divider().padding(.leading, 16)
-                    GaryxAgentDetailInfoRow(title: "Leader", value: team.leaderAgentId)
-                    Divider().padding(.leading, 16)
-                    GaryxAgentDetailInfoRow(
-                        title: "Members",
-                        value: team.memberAgentIds.isEmpty ? "No members" : team.memberAgentIds.joined(separator: ", ")
+            GaryxTeamFormContent(
+                mode: .readOnly,
+                teamId: .constant(displayTeam.id),
+                displayName: .constant(displayTeam.displayName),
+                avatarDataUrl: .constant(displayTeam.avatarDataUrl),
+                leaderAgentId: .constant(displayTeam.leaderAgentId),
+                memberAgentIds: .constant(displayTeam.memberAgentIds.joined(separator: ", ")),
+                workflowText: .constant(displayTeam.workflowText),
+                agents: model.agents
+            )
+
+            Button {
+                showsEditForm = true
+            } label: {
+                Label("Edit Team", systemImage: "pencil")
+                    .font(GaryxFont.callout(weight: .semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(GaryxPrimaryWideButtonStyle())
+        }
+        .fullScreenCover(isPresented: $showsEditForm) {
+            GaryxTeamEditSheet(team: displayTeam) { updatedTeam in
+                model.selectedTeamDetail = updatedTeam
+            }
+        }
+    }
+
+    private var displayTeam: GaryxTeamSummary {
+        model.teams.first(where: { $0.id == team.id }) ?? team
+    }
+}
+
+private enum GaryxAgentFormMode {
+    case editable
+    case readOnly
+
+    var isEditable: Bool {
+        self == .editable
+    }
+}
+
+private struct GaryxAgentReadOnlyTextRow: View {
+    let title: String
+    let value: String
+    var placeholder = "None"
+
+    var body: some View {
+        GaryxFormReadOnlyMultilineRow(
+            title: title,
+            value: value,
+            placeholder: placeholder,
+            minHeight: 34,
+            valuePlacement: .below
+        )
+    }
+}
+
+private struct GaryxAgentAvatarPreviewSection: View {
+    let kind: GaryxAgentAvatarKind
+    let identifier: String
+    let displayName: String
+    let providerType: String
+    let avatarDataUrl: String
+    var builtIn = false
+
+    var body: some View {
+        GaryxFormGroupedSection(title: "Avatar") {
+            GaryxAgentAvatarView(
+                agentId: trimmedIdentifier,
+                avatarDataUrl: avatarDataUrl,
+                kind: kind == .team ? .team : .agent,
+                label: avatarLabel,
+                providerType: providerType,
+                builtIn: builtIn,
+                diameter: 96
+            )
+            .accessibilityLabel("\(kind == .team ? "Team" : "Agent") avatar preview")
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
+    private var trimmedIdentifier: String {
+        identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var avatarLabel: String {
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty {
+            return name
+        }
+        return trimmedIdentifier.isEmpty ? (kind == .team ? "Team" : "Agent") : trimmedIdentifier
+    }
+}
+
+private struct GaryxAgentFormContent: View {
+    let mode: GaryxAgentFormMode
+    @Binding var agentId: String
+    @Binding var displayName: String
+    @Binding var providerType: String
+    @Binding var modelName: String
+    @Binding var workspace: String
+    @Binding var avatarDataUrl: String
+    @Binding var systemPrompt: String
+    var builtIn = false
+    let workspacePaths: [String]
+    var onGenerate: ((String) async -> String?)?
+    var onError: ((String) -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            if mode.isEditable, let onGenerate, let onError {
+                GaryxAvatarEditorSection(
+                    kind: .agent,
+                    identifier: agentId,
+                    displayName: displayName,
+                    providerType: providerType,
+                    builtIn: builtIn,
+                    avatarDataUrl: $avatarDataUrl,
+                    onGenerate: onGenerate,
+                    onError: onError
+                )
+            } else {
+                GaryxAgentAvatarPreviewSection(
+                    kind: .agent,
+                    identifier: agentId,
+                    displayName: displayName,
+                    providerType: providerType,
+                    avatarDataUrl: avatarDataUrl,
+                    builtIn: builtIn
+                )
+            }
+
+            GaryxFormGroupedSection(title: "Identity") {
+                if mode.isEditable {
+                    GaryxFormTextFieldRow(
+                        title: "Agent ID",
+                        text: $agentId,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
                     )
+                    Divider().padding(.leading, 16)
+                    GaryxFormTextFieldRow(
+                        title: "Display name",
+                        text: $displayName,
+                        placeholder: "Optional"
+                    )
+                } else {
+                    GaryxAgentReadOnlyTextRow(title: "Agent ID", value: agentId)
+                    Divider().padding(.leading, 16)
+                    GaryxAgentReadOnlyTextRow(title: "Display name", value: displayName)
+                    Divider().padding(.leading, 16)
+                    GaryxAgentReadOnlyTextRow(title: "Type", value: builtIn ? "Built-in" : "Custom")
                 }
             }
 
-            if !team.workflowText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                GaryxFormGroupedSection(title: "Workflow") {
-                    Text(team.workflowText)
-                        .font(GaryxFont.callout())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(16)
+            GaryxFormGroupedSection(title: "Model") {
+                if mode.isEditable {
+                    GaryxAgentProviderSelectionRow(
+                        providerType: $providerType,
+                        modelName: $modelName
+                    )
+                    Divider().padding(.leading, 16)
+                    GaryxAgentModelSelectionRow(
+                        providerType: $providerType,
+                        modelName: $modelName
+                    )
+                } else {
+                    GaryxFormReadOnlyRow(title: "Provider", value: garyxAgentProviderLabel(for: providerType))
+                    Divider().padding(.leading, 16)
+                    GaryxFormReadOnlyRow(title: "Model", value: modelDisplayValue)
+                }
+            }
+
+            GaryxFormGroupedSection(title: "Defaults") {
+                if mode.isEditable {
+                    GaryxWorkspacePathSelectionRow(
+                        title: "Default workspace",
+                        path: $workspace,
+                        workspacePaths: workspacePaths,
+                        placeholder: "Optional",
+                        allowsEmpty: true
+                    )
+                    Divider().padding(.leading, 16)
+                    GaryxFormTextAreaRow(
+                        title: "System Prompt",
+                        text: $systemPrompt,
+                        minHeight: 132,
+                        lineLimits: 2...6
+                    )
+                } else {
+                    GaryxFormReadOnlyMultilineRow(
+                        title: "Default workspace",
+                        value: workspace,
+                        placeholder: "None",
+                        minHeight: 44,
+                        valuePlacement: .below
+                    )
+                    Divider().padding(.leading, 16)
+                    GaryxFormReadOnlyMultilineRow(
+                        title: "System Prompt",
+                        value: systemPrompt,
+                        placeholder: "None",
+                        minHeight: 132,
+                        valuePlacement: .below
+                    )
                 }
             }
         }
     }
+
+    private var modelDisplayValue: String {
+        let trimmed = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Provider default" : modelName
+    }
 }
 
-private struct GaryxAgentDetailInfoRow: View {
-    let title: String
-    let value: String
+private struct GaryxTeamFormContent: View {
+    let mode: GaryxAgentFormMode
+    @Binding var teamId: String
+    @Binding var displayName: String
+    @Binding var avatarDataUrl: String
+    @Binding var leaderAgentId: String
+    @Binding var memberAgentIds: String
+    @Binding var workflowText: String
+    let agents: [GaryxAgentSummary]
+    var onGenerate: ((String) async -> String?)?
+    var onError: ((String) -> Void)?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(title)
-                .font(GaryxFont.body())
-                .foregroundStyle(.primary)
-                .frame(width: 92, alignment: .leading)
-            Text(value.isEmpty ? "None" : value)
-                .font(GaryxFont.body())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: 22) {
+            if mode.isEditable, let onGenerate, let onError {
+                GaryxAvatarEditorSection(
+                    kind: .team,
+                    identifier: teamId,
+                    displayName: displayName,
+                    providerType: "",
+                    avatarDataUrl: $avatarDataUrl,
+                    onGenerate: onGenerate,
+                    onError: onError
+                )
+            } else {
+                GaryxAgentAvatarPreviewSection(
+                    kind: .team,
+                    identifier: teamId,
+                    displayName: displayName,
+                    providerType: "",
+                    avatarDataUrl: avatarDataUrl
+                )
+            }
+
+            GaryxFormGroupedSection(title: "Identity") {
+                if mode.isEditable {
+                    GaryxFormTextFieldRow(
+                        title: "Team ID",
+                        text: $teamId,
+                        autocapitalization: .never,
+                        autocorrectionDisabled: true
+                    )
+                    Divider().padding(.leading, 16)
+                    GaryxFormTextFieldRow(
+                        title: "Display name",
+                        text: $displayName,
+                        placeholder: "Optional"
+                    )
+                } else {
+                    GaryxAgentReadOnlyTextRow(title: "Team ID", value: teamId)
+                    Divider().padding(.leading, 16)
+                    GaryxAgentReadOnlyTextRow(title: "Display name", value: displayName)
+                }
+            }
+
+            GaryxFormGroupedSection(title: "Members") {
+                if mode.isEditable {
+                    GaryxTeamLeaderSelectionRow(
+                        leaderAgentId: $leaderAgentId,
+                        memberAgentIds: $memberAgentIds,
+                        agents: agents
+                    )
+                    Divider().padding(.leading, 16)
+                    GaryxTeamMembersSelectionRow(
+                        leaderAgentId: $leaderAgentId,
+                        memberAgentIds: $memberAgentIds,
+                        agents: agents
+                    )
+                } else {
+                    GaryxFormReadOnlyRow(title: "Leader", value: agentLabel(for: leaderAgentId))
+                    Divider().padding(.leading, 16)
+                    GaryxFormReadOnlyMultilineRow(
+                        title: "Members",
+                        value: memberLabels,
+                        placeholder: "No members",
+                        minHeight: 52,
+                        valuePlacement: .below
+                    )
+                }
+            }
+
+            GaryxFormGroupedSection(title: "Workflow") {
+                if mode.isEditable {
+                    GaryxFormTextAreaRow(
+                        title: "Workflow",
+                        text: $workflowText,
+                        minHeight: 132,
+                        lineLimits: 2...6
+                    )
+                } else {
+                    GaryxFormReadOnlyMultilineRow(
+                        title: "Workflow",
+                        value: workflowText,
+                        placeholder: "None",
+                        minHeight: 132,
+                        valuePlacement: .below
+                    )
+                }
+            }
         }
-        .padding(16)
+    }
+
+    private var memberLabels: String {
+        let ids = garyxTeamMemberIds(from: memberAgentIds)
+        guard !ids.isEmpty else { return "" }
+        return ids.map { agentLabel(for: $0) }.joined(separator: "\n")
+    }
+
+    private func agentLabel(for agentId: String) -> String {
+        let trimmed = agentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        guard let agent = agents.first(where: { $0.id == trimmed }) else { return trimmed }
+        return agent.displayName.isEmpty ? agent.id : "\(agent.displayName) (\(agent.id))"
     }
 }
 
 struct GaryxCreateAgentCard: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var agentId = ""
+    @State private var displayName = ""
+    @State private var providerType = "codex_app_server"
+    @State private var modelName = ""
+    @State private var workspace = ""
+    @State private var avatarDataUrl = ""
+    @State private var systemPrompt = ""
 
     var body: some View {
         GaryxFormSheet(
@@ -199,80 +497,46 @@ struct GaryxCreateAgentCard: View {
             canSave: canCreate,
             onSave: { Task { await createAgent() } }
         ) {
-            VStack(alignment: .leading, spacing: 22) {
-                GaryxAvatarEditorSection(
+            GaryxAgentFormContent(
+                mode: .editable,
+                agentId: $agentId,
+                displayName: $displayName,
+                providerType: $providerType,
+                modelName: $modelName,
+                workspace: $workspace,
+                avatarDataUrl: $avatarDataUrl,
+                systemPrompt: $systemPrompt,
+                workspacePaths: model.userWorkspacePaths
+            ) { stylePrompt in
+                await model.generateAvatar(
                     kind: .agent,
-                    identifier: model.draftAgentId,
-                    displayName: model.draftAgentName,
-                    providerType: model.draftAgentProvider,
-                    avatarDataUrl: $model.draftAgentAvatarDataUrl
-                ) { stylePrompt in
-                    await model.generateAvatar(
-                        kind: .agent,
-                        identifier: model.draftAgentId,
-                        displayName: model.draftAgentName,
-                        stylePrompt: stylePrompt
-                    )
-                } onError: { message in
-                    model.lastError = message
-                }
-
-                GaryxFormGroupedSection(title: "Identity") {
-                    GaryxFormTextFieldRow(
-                        title: "Agent ID",
-                        text: $model.draftAgentId,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxFormTextFieldRow(
-                        title: "Display name",
-                        text: $model.draftAgentName,
-                        placeholder: "Optional"
-                    )
-                }
-
-                GaryxFormGroupedSection(title: "Model") {
-                    GaryxAgentProviderSelectionRow(
-                        providerType: $model.draftAgentProvider,
-                        modelName: $model.draftAgentModel
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxAgentModelSelectionRow(
-                        providerType: $model.draftAgentProvider,
-                        modelName: $model.draftAgentModel
-                    )
-                }
-
-                GaryxFormGroupedSection(title: "Defaults") {
-                    GaryxWorkspacePathSelectionRow(
-                        title: "Default workspace",
-                        path: $model.draftAgentWorkspace,
-                        workspacePaths: model.userWorkspacePaths,
-                        placeholder: "Optional",
-                        allowsEmpty: true
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxFormTextAreaRow(
-                        title: "System Prompt",
-                        text: $model.draftAgentPrompt,
-                        minHeight: 132,
-                        lineLimits: 2...6
-                    )
-                }
+                    identifier: agentId,
+                    displayName: displayName,
+                    stylePrompt: stylePrompt
+                )
+            } onError: { message in
+                model.lastError = message
             }
         }
     }
 
     private var canCreate: Bool {
-        !model.draftAgentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !model.draftAgentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !model.draftAgentProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func createAgent() async {
         guard canCreate else { return }
-        if await model.createAgentFromDraft() {
+        if await model.createAgent(
+            agentId: agentId,
+            displayName: displayName,
+            providerType: providerType,
+            modelName: modelName,
+            workspace: workspace,
+            avatarDataUrl: avatarDataUrl,
+            systemPrompt: systemPrompt
+        ) {
             dismiss()
         }
     }
@@ -281,6 +545,12 @@ struct GaryxCreateAgentCard: View {
 struct GaryxCreateTeamCard: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
+    @State private var teamId = ""
+    @State private var displayName = ""
+    @State private var avatarDataUrl = ""
+    @State private var leaderAgentId = ""
+    @State private var memberAgentIds = ""
+    @State private var workflowText = ""
 
     var body: some View {
         GaryxFormSheet(
@@ -288,76 +558,195 @@ struct GaryxCreateTeamCard: View {
             canSave: canCreate,
             onSave: { Task { await createTeam() } }
         ) {
-            VStack(alignment: .leading, spacing: 22) {
-                GaryxAvatarEditorSection(
+            GaryxTeamFormContent(
+                mode: .editable,
+                teamId: $teamId,
+                displayName: $displayName,
+                avatarDataUrl: $avatarDataUrl,
+                leaderAgentId: $leaderAgentId,
+                memberAgentIds: $memberAgentIds,
+                workflowText: $workflowText,
+                agents: model.agents
+            ) { stylePrompt in
+                await model.generateAvatar(
                     kind: .team,
-                    identifier: model.draftTeamId,
-                    displayName: model.draftTeamName,
-                    providerType: "",
-                    avatarDataUrl: $model.draftTeamAvatarDataUrl
-                ) { stylePrompt in
-                    await model.generateAvatar(
-                        kind: .team,
-                        identifier: model.draftTeamId,
-                        displayName: model.draftTeamName,
-                        stylePrompt: stylePrompt
-                    )
-                } onError: { message in
-                    model.lastError = message
-                }
-
-                GaryxFormGroupedSection(title: "Identity") {
-                    GaryxFormTextFieldRow(
-                        title: "Team ID",
-                        text: $model.draftTeamId,
-                        autocapitalization: .never,
-                        autocorrectionDisabled: true
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxFormTextFieldRow(
-                        title: "Display name",
-                        text: $model.draftTeamName,
-                        placeholder: "Optional"
-                    )
-                }
-
-                GaryxFormGroupedSection(title: "Members") {
-                    GaryxTeamLeaderSelectionRow(
-                        leaderAgentId: $model.draftTeamLeaderId,
-                        memberAgentIds: $model.draftTeamMemberIds,
-                        agents: model.agents
-                    )
-                    Divider().padding(.leading, 16)
-                    GaryxTeamMembersSelectionRow(
-                        leaderAgentId: $model.draftTeamLeaderId,
-                        memberAgentIds: $model.draftTeamMemberIds,
-                        agents: model.agents
-                    )
-                }
-
-                GaryxFormGroupedSection(title: "Workflow") {
-                    GaryxFormTextAreaRow(
-                        title: "Workflow",
-                        text: $model.draftTeamWorkflow,
-                        minHeight: 132,
-                        lineLimits: 2...6
-                    )
-                }
+                    identifier: teamId,
+                    displayName: displayName,
+                    stylePrompt: stylePrompt
+                )
+            } onError: { message in
+                model.lastError = message
             }
         }
     }
 
     private var canCreate: Bool {
-        !model.draftTeamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !model.draftTeamName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !model.draftTeamLeaderId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !teamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func createTeam() async {
         guard canCreate else { return }
-        if await model.createTeamFromDraft() {
+        if await model.createTeam(
+            teamId: teamId,
+            displayName: displayName,
+            leaderAgentId: leaderAgentId,
+            memberAgentIds: memberAgentIds,
+            workflowText: workflowText,
+            avatarDataUrl: avatarDataUrl
+        ) {
             dismiss()
         }
+    }
+}
+
+private struct GaryxAgentEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let agent: GaryxAgentSummary
+    var onSaved: ((GaryxAgentSummary) -> Void)?
+    @State private var agentId = ""
+    @State private var displayName = ""
+    @State private var providerType = ""
+    @State private var modelName = ""
+    @State private var workspace = ""
+    @State private var avatarDataUrl = ""
+    @State private var systemPrompt = ""
+
+    var body: some View {
+        GaryxFormSheet(
+            title: "Edit Agent",
+            canSave: canSaveAgent,
+            onSave: { Task { await saveAgent() } }
+        ) {
+            GaryxAgentFormContent(
+                mode: .editable,
+                agentId: $agentId,
+                displayName: $displayName,
+                providerType: $providerType,
+                modelName: $modelName,
+                workspace: $workspace,
+                avatarDataUrl: $avatarDataUrl,
+                systemPrompt: $systemPrompt,
+                builtIn: agent.builtIn,
+                workspacePaths: model.userWorkspacePaths
+            ) { stylePrompt in
+                await model.generateAvatar(
+                    kind: .agent,
+                    identifier: agentId,
+                    displayName: displayName,
+                    stylePrompt: stylePrompt
+                )
+            } onError: { message in
+                model.lastError = message
+            }
+        }
+        .onAppear(perform: fillDraft)
+    }
+
+    private var canSaveAgent: Bool {
+        !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func fillDraft() {
+        agentId = agent.id
+        displayName = agent.displayName
+        providerType = agent.providerType
+        modelName = agent.model
+        workspace = agent.defaultWorkspaceDir
+        avatarDataUrl = agent.avatarDataUrl
+        systemPrompt = agent.systemPrompt
+    }
+
+    private func saveAgent() async {
+        guard canSaveAgent else { return }
+        guard let updated = await model.updateAgent(
+            agent,
+            agentId: agentId,
+            displayName: displayName,
+            providerType: providerType,
+            modelName: modelName,
+            workspace: workspace,
+            avatarDataUrl: avatarDataUrl,
+            systemPrompt: systemPrompt
+        ) else { return }
+        dismiss()
+        onSaved?(updated)
+    }
+}
+
+private struct GaryxTeamEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    let team: GaryxTeamSummary
+    var onSaved: ((GaryxTeamSummary) -> Void)?
+    @State private var teamId = ""
+    @State private var displayName = ""
+    @State private var avatarDataUrl = ""
+    @State private var leaderAgentId = ""
+    @State private var memberAgentIds = ""
+    @State private var workflowText = ""
+
+    var body: some View {
+        GaryxFormSheet(
+            title: "Edit Team",
+            canSave: canSaveTeam,
+            onSave: { Task { await saveTeam() } }
+        ) {
+            GaryxTeamFormContent(
+                mode: .editable,
+                teamId: $teamId,
+                displayName: $displayName,
+                avatarDataUrl: $avatarDataUrl,
+                leaderAgentId: $leaderAgentId,
+                memberAgentIds: $memberAgentIds,
+                workflowText: $workflowText,
+                agents: model.agents
+            ) { stylePrompt in
+                await model.generateAvatar(
+                    kind: .team,
+                    identifier: teamId,
+                    displayName: displayName,
+                    stylePrompt: stylePrompt
+                )
+            } onError: { message in
+                model.lastError = message
+            }
+        }
+        .onAppear(perform: fillDraft)
+    }
+
+    private var canSaveTeam: Bool {
+        !teamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func fillDraft() {
+        teamId = team.id
+        displayName = team.displayName
+        avatarDataUrl = team.avatarDataUrl
+        leaderAgentId = team.leaderAgentId
+        memberAgentIds = team.memberAgentIds.joined(separator: ", ")
+        workflowText = team.workflowText
+    }
+
+    private func saveTeam() async {
+        guard canSaveTeam else { return }
+        guard let updated = await model.updateTeam(
+            team,
+            teamId: teamId,
+            displayName: displayName,
+            leaderAgentId: leaderAgentId,
+            memberAgentIds: memberAgentIds,
+            workflowText: workflowText,
+            avatarDataUrl: avatarDataUrl
+        ) else { return }
+        dismiss()
+        onSaved?(updated)
     }
 }
 
@@ -366,6 +755,7 @@ private struct GaryxAvatarEditorSection: View {
     let identifier: String
     let displayName: String
     let providerType: String
+    var builtIn = false
     @Binding var avatarDataUrl: String
     let onGenerate: (String) async -> String?
     let onError: (String) -> Void
@@ -384,6 +774,7 @@ private struct GaryxAvatarEditorSection: View {
                     kind: targetKind,
                     label: avatarLabel,
                     providerType: providerType,
+                    builtIn: builtIn,
                     diameter: 96
                 )
                 .accessibilityLabel("\(kind == .team ? "Team" : "Agent") avatar preview")
@@ -442,17 +833,6 @@ private struct GaryxAvatarEditorSection: View {
         .disabled(editorState.isBusy || !canGenerate)
         .accessibilityLabel("Generate avatar")
 
-        if hasAvatar {
-            Button {
-                avatarDataUrl = ""
-                editorState.reset()
-            } label: {
-                GaryxAvatarEditorActionLabel(title: "Clear", systemName: "xmark.circle")
-            }
-            .buttonStyle(.plain)
-            .disabled(editorState.isBusy)
-            .accessibilityLabel("Clear avatar")
-        }
     }
 
     private func startGeneration(stylePrompt: String) {
@@ -499,10 +879,6 @@ private struct GaryxAvatarEditorSection: View {
         !trimmedIdentifier.isEmpty || !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var hasAvatar: Bool {
-        !avatarDataUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     private var generationFingerprint: String {
         [
             kind.rawValue,
@@ -534,7 +910,6 @@ private struct GaryxAvatarEditorSection: View {
         guard let generated = await onGenerate(stylePrompt) else { return }
         guard canApplyCurrentResult(requestId: requestId, fingerprint: generationFingerprint) else { return }
         avatarDataUrl = generated
-        showsStyleSheet = false
     }
 
     @MainActor
@@ -721,7 +1096,9 @@ private struct GaryxAvatarStyleSheet: View {
                 .disabled(isGenerating)
 
                 Button {
-                    onGenerate(activeStylePrompt)
+                    let prompt = activeStylePrompt
+                    dismiss()
+                    onGenerate(prompt)
                 } label: {
                     HStack(spacing: 8) {
                         if isGenerating {
@@ -807,13 +1184,6 @@ struct GaryxAgentCard: View {
     let agent: GaryxAgentSummary
     @State private var showsEditForm = false
     @State private var showsDeleteConfirmation = false
-    @State private var agentId = ""
-    @State private var displayName = ""
-    @State private var providerType = ""
-    @State private var modelName = ""
-    @State private var workspace = ""
-    @State private var avatarDataUrl = ""
-    @State private var systemPrompt = ""
 
     var body: some View {
         GaryxRowActionMenu(actions: agentSwipeActions) {
@@ -834,15 +1204,8 @@ struct GaryxAgentCard: View {
             .buttonStyle(.plain)
             .contentShape(Rectangle())
         }
-        .onAppear(perform: fillDraft)
         .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxFormSheet(
-                title: "Edit Agent",
-                canSave: canSaveAgent,
-                onSave: { Task { await saveAgent() } }
-            ) {
-                agentFormFields
-            }
+            GaryxAgentEditSheet(agent: agent)
         }
         .confirmationDialog("Delete agent?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -866,7 +1229,6 @@ struct GaryxAgentCard: View {
         if !agent.builtIn {
             actions.append(
                 GaryxRowAction(title: "Edit", systemImage: "pencil") {
-                    fillDraft()
                     showsEditForm = true
                 }
             )
@@ -878,102 +1240,6 @@ struct GaryxAgentCard: View {
         }
         return actions
     }
-
-    private func fillDraft() {
-        agentId = agent.id
-        displayName = agent.displayName
-        providerType = agent.providerType
-        modelName = agent.model
-        workspace = agent.defaultWorkspaceDir
-        avatarDataUrl = agent.avatarDataUrl
-        systemPrompt = agent.systemPrompt
-    }
-
-    private var agentFormFields: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            GaryxAvatarEditorSection(
-                kind: .agent,
-                identifier: agentId,
-                displayName: displayName,
-                providerType: providerType,
-                avatarDataUrl: $avatarDataUrl
-            ) { stylePrompt in
-                await model.generateAvatar(
-                    kind: .agent,
-                    identifier: agentId,
-                    displayName: displayName,
-                    stylePrompt: stylePrompt
-                )
-            } onError: { message in
-                model.lastError = message
-            }
-
-            GaryxFormGroupedSection(title: "Identity") {
-                GaryxFormTextFieldRow(
-                    title: "Agent ID",
-                    text: $agentId,
-                    autocapitalization: .never,
-                    autocorrectionDisabled: true
-                )
-                Divider().padding(.leading, 16)
-                GaryxFormTextFieldRow(
-                    title: "Display name",
-                    text: $displayName,
-                    placeholder: "Optional"
-                )
-            }
-
-            GaryxFormGroupedSection(title: "Model") {
-                GaryxAgentProviderSelectionRow(
-                    providerType: $providerType,
-                    modelName: $modelName
-                )
-                Divider().padding(.leading, 16)
-                GaryxAgentModelSelectionRow(
-                    providerType: $providerType,
-                    modelName: $modelName
-                )
-            }
-
-            GaryxFormGroupedSection(title: "Defaults") {
-                GaryxWorkspacePathSelectionRow(
-                    title: "Default workspace",
-                    path: $workspace,
-                    workspacePaths: model.userWorkspacePaths,
-                    placeholder: "Optional",
-                    allowsEmpty: true
-                )
-                Divider().padding(.leading, 16)
-                GaryxFormTextAreaRow(
-                    title: "System Prompt",
-                    text: $systemPrompt,
-                    minHeight: 132,
-                    lineLimits: 2...6
-                )
-            }
-        }
-    }
-
-    private var canSaveAgent: Bool {
-        !agentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !providerType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func saveAgent() async {
-        guard canSaveAgent else { return }
-        await model.updateAgent(
-            agent,
-            agentId: agentId,
-            displayName: displayName,
-            providerType: providerType,
-            modelName: modelName,
-            workspace: workspace,
-            avatarDataUrl: avatarDataUrl,
-            systemPrompt: systemPrompt
-        )
-        showsEditForm = false
-    }
 }
 
 struct GaryxTeamCard: View {
@@ -981,12 +1247,6 @@ struct GaryxTeamCard: View {
     let team: GaryxTeamSummary
     @State private var showsEditForm = false
     @State private var showsDeleteConfirmation = false
-    @State private var teamId = ""
-    @State private var displayName = ""
-    @State private var avatarDataUrl = ""
-    @State private var leaderAgentId = ""
-    @State private var memberAgentIds = ""
-    @State private var workflowText = ""
 
     var body: some View {
         GaryxRowActionMenu(actions: teamSwipeActions) {
@@ -1006,15 +1266,8 @@ struct GaryxTeamCard: View {
             .buttonStyle(.plain)
             .contentShape(Rectangle())
         }
-        .onAppear(perform: fillDraft)
         .fullScreenCover(isPresented: $showsEditForm) {
-            GaryxFormSheet(
-                title: "Edit Team",
-                canSave: canSaveTeam,
-                onSave: { Task { await saveTeam() } }
-            ) {
-                teamFormFields
-            }
+            GaryxTeamEditSheet(team: team)
         }
         .confirmationDialog("Delete team?", isPresented: $showsDeleteConfirmation, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -1035,101 +1288,12 @@ struct GaryxTeamCard: View {
                 model.setSelectedAgentTarget(team.id)
             },
             GaryxRowAction(title: "Edit", systemImage: "pencil") {
-                fillDraft()
                 showsEditForm = true
             },
             GaryxRowAction(title: "Delete", systemImage: "trash", tone: .destructive) {
                 showsDeleteConfirmation = true
             }
         ]
-    }
-
-    private func fillDraft() {
-        teamId = team.id
-        displayName = team.displayName
-        avatarDataUrl = team.avatarDataUrl
-        leaderAgentId = team.leaderAgentId
-        memberAgentIds = team.memberAgentIds.joined(separator: ", ")
-        workflowText = team.workflowText
-    }
-
-    private var teamFormFields: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            GaryxAvatarEditorSection(
-                kind: .team,
-                identifier: teamId,
-                displayName: displayName,
-                providerType: "",
-                avatarDataUrl: $avatarDataUrl
-            ) { stylePrompt in
-                await model.generateAvatar(
-                    kind: .team,
-                    identifier: teamId,
-                    displayName: displayName,
-                    stylePrompt: stylePrompt
-                )
-            } onError: { message in
-                model.lastError = message
-            }
-
-            GaryxFormGroupedSection(title: "Identity") {
-                GaryxFormTextFieldRow(
-                    title: "Team ID",
-                    text: $teamId,
-                    autocapitalization: .never,
-                    autocorrectionDisabled: true
-                )
-                Divider().padding(.leading, 16)
-                GaryxFormTextFieldRow(
-                    title: "Display name",
-                    text: $displayName,
-                    placeholder: "Optional"
-                )
-            }
-
-            GaryxFormGroupedSection(title: "Members") {
-                GaryxTeamLeaderSelectionRow(
-                    leaderAgentId: $leaderAgentId,
-                    memberAgentIds: $memberAgentIds,
-                    agents: model.agents
-                )
-                Divider().padding(.leading, 16)
-                GaryxTeamMembersSelectionRow(
-                    leaderAgentId: $leaderAgentId,
-                    memberAgentIds: $memberAgentIds,
-                    agents: model.agents
-                )
-            }
-
-            GaryxFormGroupedSection(title: "Workflow") {
-                GaryxFormTextAreaRow(
-                    title: "Workflow",
-                    text: $workflowText,
-                    minHeight: 132,
-                    lineLimits: 2...6
-                )
-            }
-        }
-    }
-
-    private var canSaveTeam: Bool {
-        !teamId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !leaderAgentId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func saveTeam() async {
-        guard canSaveTeam else { return }
-        await model.updateTeam(
-            team,
-            teamId: teamId,
-            displayName: displayName,
-            leaderAgentId: leaderAgentId,
-            memberAgentIds: memberAgentIds,
-            workflowText: workflowText,
-            avatarDataUrl: avatarDataUrl
-        )
-        showsEditForm = false
     }
 }
 
