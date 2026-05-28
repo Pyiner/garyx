@@ -6,6 +6,17 @@ const ASC_BASE_URL = "https://api.appstoreconnect.apple.com";
 const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_POLL_MS = 30 * 1000;
 
+class AscRequestError extends Error {
+  constructor({ method, path, status, body }) {
+    super(
+      `${method} ${path} failed with ${status}: ${sanitizeForLog(body)}`,
+    );
+    this.name = "AscRequestError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 function requiredEnv(name, aliases = []) {
   for (const key of [name, ...aliases]) {
     const value = process.env[key];
@@ -121,11 +132,12 @@ async function ascRequest(method, path, body, options = {}) {
   }
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(
-      `${method} ${path} failed with ${response.status}: ${sanitizeForLog(
-        text,
-      )}`,
-    );
+    throw new AscRequestError({
+      method,
+      path,
+      status: response.status,
+      body: text,
+    });
   }
   if (response.status === 204) {
     return null;
@@ -199,6 +211,14 @@ async function listBuilds({ app, buildNumber }) {
   return response.data ?? [];
 }
 
+async function findUploadedBuild({ app, buildNumber, buildId }) {
+  const builds = await listBuilds({ app, buildNumber });
+  if (buildId) {
+    return builds.find((candidate) => candidate.id === buildId) ?? null;
+  }
+  return builds[0] ?? null;
+}
+
 async function waitForValidBuild({ app, buildNumber, timeoutMs, pollMs }) {
   const startedAt = Date.now();
   let latest = null;
@@ -217,6 +237,16 @@ async function waitForValidBuild({ app, buildNumber, timeoutMs, pollMs }) {
   );
 }
 
+function isManagedInternalGroupAssignmentError(error) {
+  return (
+    error instanceof AscRequestError &&
+    error.status === 422 &&
+    /Builds cannot be assigned to this internal group|Cannot add internal group to a build/i.test(
+      error.body,
+    )
+  );
+}
+
 async function addBuildToGroup({ build, group }) {
   const existing = await ascRequest(
     "GET",
@@ -227,15 +257,73 @@ async function addBuildToGroup({ build, group }) {
     return;
   }
 
-  await ascRequest("POST", `/v1/betaGroups/${group.id}/relationships/builds`, {
-    data: [
+  try {
+    await ascRequest(
+      "POST",
+      `/v1/betaGroups/${group.id}/relationships/builds`,
       {
-        id: build.id,
-        type: "builds",
+        data: [
+          {
+            id: build.id,
+            type: "builds",
+          },
+        ],
       },
-    ],
-  });
+    );
+  } catch (error) {
+    if (isManagedInternalGroupAssignmentError(error)) {
+      console.log(
+        "App Store Connect manages internal TestFlight group assignment; waiting for internal build availability.",
+      );
+      return;
+    }
+    throw error;
+  }
   console.log("Assigned build to internal TestFlight group.");
+}
+
+async function buildBetaDetail(build) {
+  return build.relationships?.buildBetaDetail?.data?.id
+    ? await findOne(
+        `/v1/buildBetaDetails/${build.relationships.buildBetaDetail.data.id}`,
+      )
+    : null;
+}
+
+async function waitForInternalBuildReady({
+  app,
+  build,
+  buildNumber,
+  timeoutMs,
+  pollMs,
+}) {
+  const startedAt = Date.now();
+  let latest = build;
+  while (Date.now() - startedAt < timeoutMs) {
+    latest =
+      (await findUploadedBuild({
+        app,
+        buildNumber,
+        buildId: build.id,
+      })) ?? latest;
+    const betaDetail = await buildBetaDetail(latest);
+    const state = betaDetail?.attributes?.internalBuildState ?? "unknown";
+    if (state === "IN_BETA_TESTING") {
+      return { build: latest, betaDetail };
+    }
+    if (
+      ["EXPIRED", "MISSING_EXPORT_COMPLIANCE", "PROCESSING_EXCEPTION"].includes(
+        state,
+      )
+    ) {
+      throw new Error(`Internal TestFlight build is not available: ${state}`);
+    }
+    console.log(`Waiting for internal TestFlight build ${buildNumber}: ${state}`);
+    await sleep(pollMs);
+  }
+  throw new Error(
+    `Timed out waiting for TestFlight build ${buildNumber} to become available to internal testers.`,
+  );
 }
 
 async function main() {
@@ -261,17 +349,19 @@ async function main() {
   });
   await addBuildToGroup({ build, group });
 
-  const betaDetail = build.relationships?.buildBetaDetail?.data?.id
-    ? await findOne(
-        `/v1/buildBetaDetails/${build.relationships.buildBetaDetail.data.id}`,
-      )
-    : null;
+  const ready = await waitForInternalBuildReady({
+    app,
+    build,
+    buildNumber,
+    timeoutMs,
+    pollMs,
+  });
   console.log(
     [
       "Internal TestFlight build ready:",
-      `version=${build.attributes?.version}`,
-      `processing=${build.attributes?.processingState}`,
-      `internal=${betaDetail?.attributes?.internalBuildState ?? "unknown"}`,
+      `version=${ready.build.attributes?.version}`,
+      `processing=${ready.build.attributes?.processingState}`,
+      `internal=${ready.betaDetail?.attributes?.internalBuildState ?? "unknown"}`,
     ].join(" "),
   );
 }
