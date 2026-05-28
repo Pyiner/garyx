@@ -1315,24 +1315,22 @@ private struct GaryxAgentProviderSelectionRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Binding var providerType: String
     @Binding var modelName: String
+    @State private var showsProviderSheet = false
 
     var body: some View {
-        GaryxFormRow(title: "Provider") {
-            Menu {
-                ForEach(providerOptionsIncludingCurrent) { option in
-                    Button {
-                        selectProvider(option.id)
-                    } label: {
-                        GaryxMenuSelectionLabel(
-                            title: option.label,
-                            selected: normalizedProvider == option.id,
-                            fallbackSystemImage: "server.rack"
-                        )
-                    }
-                }
-            } label: {
-                GaryxFormMenuValueLabel(value: providerLabel)
-            }
+        GaryxFormSelectionRow(
+            title: "Provider",
+            value: providerLabel,
+            placeholder: "Choose provider"
+        ) {
+            showsProviderSheet = true
+        }
+        .sheet(isPresented: $showsProviderSheet) {
+            GaryxAgentProviderSelectionSheet(
+                selectedProvider: normalizedProvider,
+                options: providerOptionsIncludingCurrent,
+                onSelect: selectProvider
+            )
         }
         .task(id: normalizedProvider) {
             await model.loadProviderModels(providerType: normalizedProvider)
@@ -1378,35 +1376,25 @@ private struct GaryxAgentModelSelectionRow: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @Binding var providerType: String
     @Binding var modelName: String
+    @State private var showsModelSheet = false
 
     var body: some View {
         Group {
             if supportsModelMenu {
-                GaryxFormRow(title: "Model") {
-                    Menu {
-                        Button {
-                            modelName = ""
-                        } label: {
-                            GaryxMenuSelectionLabel(
-                                title: "Provider default",
-                                selected: normalizedModel.isEmpty,
-                                fallbackSystemImage: "wand.and.stars"
-                            )
-                        }
-
-                        ForEach(modelChoices) { choice in
-                            Button {
-                                modelName = choice.id
-                            } label: {
-                                GaryxMenuSelectionLabel(
-                                    title: modelChoiceTitle(choice),
-                                    selected: normalizedModel == choice.id,
-                                    fallbackSystemImage: "cube"
-                                )
-                            }
-                        }
-                    } label: {
-                        GaryxFormMenuValueLabel(value: selectedModelLabel)
+                GaryxFormSelectionRow(
+                    title: "Model",
+                    value: selectedModelLabel,
+                    placeholder: "Provider default"
+                ) {
+                    showsModelSheet = true
+                }
+                .sheet(isPresented: $showsModelSheet) {
+                    GaryxAgentModelSelectionSheet(
+                        selectedModel: normalizedModel,
+                        defaultModel: providerModels?.defaultModel,
+                        choices: modelChoices
+                    ) { nextModel in
+                        modelName = nextModel
                     }
                 }
             } else {
@@ -1479,33 +1467,295 @@ private struct GaryxAgentModelSelectionRow: View {
     }
 }
 
+private struct GaryxAgentProviderSelectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let selectedProvider: String
+    let options: [GaryxAgentProviderOption]
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        GaryxAgentOptionSelectionSheet(title: "Provider", subtitle: "Choose provider") {
+            if options.isEmpty {
+                GaryxAgentOptionEmptyState(text: "No providers available.")
+            } else {
+                ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                    GaryxAgentPlainOptionRow(
+                        title: option.label,
+                        subtitle: option.id,
+                        systemName: "server.rack",
+                        selected: selectedProvider == option.id
+                    ) {
+                        onSelect(option.id)
+                        dismiss()
+                    }
+                    if index < options.count - 1 {
+                        Divider().padding(.leading, 58)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct GaryxAgentModelSelectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let selectedModel: String
+    let defaultModel: String?
+    let choices: [GaryxAgentModelChoice]
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        GaryxAgentOptionSelectionSheet(title: "Model", subtitle: "Choose model") {
+            GaryxAgentPlainOptionRow(
+                title: "Provider default",
+                subtitle: defaultModelSubtitle,
+                systemName: "wand.and.stars",
+                selected: selectedModel.isEmpty
+            ) {
+                onSelect("")
+                dismiss()
+            }
+
+            if !choices.isEmpty {
+                Divider().padding(.leading, 58)
+            }
+
+            ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
+                GaryxAgentPlainOptionRow(
+                    title: modelChoiceTitle(choice),
+                    subtitle: choice.description ?? choice.id,
+                    systemName: "cube",
+                    selected: selectedModel == choice.id
+                ) {
+                    onSelect(choice.id)
+                    dismiss()
+                }
+                if index < choices.count - 1 {
+                    Divider().padding(.leading, 58)
+                }
+            }
+        }
+    }
+
+    private var defaultModelSubtitle: String {
+        let trimmed = defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "Use provider default model" : "Default: \(trimmed)"
+    }
+
+    private func modelChoiceTitle(_ choice: GaryxAgentModelChoice) -> String {
+        choice.recommended ? "\(choice.label) · Recommended" : choice.label
+    }
+}
+
+private struct GaryxTeamLeaderSelectionSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let selectedAgentId: String
+    let agents: [GaryxAgentSummary]
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        GaryxAgentOptionSelectionSheet(title: "Leader", subtitle: "Choose team leader") {
+            if agents.isEmpty {
+                GaryxAgentOptionEmptyState(text: "No agents available.")
+            } else {
+                ForEach(Array(agents.enumerated()), id: \.element.id) { index, agent in
+                    GaryxAgentSummaryOptionRow(
+                        agent: agent,
+                        selected: selectedAgentId == agent.id
+                    ) {
+                        onSelect(agent.id)
+                        dismiss()
+                    }
+                    if index < agents.count - 1 {
+                        Divider().padding(.leading, 62)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct GaryxAgentOptionSelectionSheet<Content: View>: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    let subtitle: String
+    let content: Content
+
+    init(title: String, subtitle: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.subtitle = subtitle
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(GaryxFont.callout(weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Button {
+                    dismiss()
+                } label: {
+                    GaryxCompactGlassIcon(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close")
+            }
+            .padding(.horizontal, 22)
+            .padding(.top, 22)
+            .padding(.bottom, 14)
+
+            ScrollView {
+                GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                    VStack(spacing: 0) {
+                        content
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .background(Color(.systemBackground).opacity(0.98).ignoresSafeArea())
+        .presentationDetents([.fraction(0.93), .large])
+        .presentationDragIndicator(.hidden)
+        .presentationCornerRadius(34)
+    }
+}
+
+private struct GaryxAgentOptionEmptyState: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(GaryxFont.subheadline())
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 28)
+    }
+}
+
+private struct GaryxAgentPlainOptionRow: View {
+    let title: String
+    let subtitle: String
+    let systemName: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: systemName)
+                    .font(GaryxFont.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, height: 34)
+                    .background(Color(.tertiarySystemFill).opacity(0.72), in: Circle())
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    if !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(GaryxFont.caption())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer(minLength: 0)
+
+                if selected {
+                    GaryxSelectionCheckmark(size: 13)
+                        .frame(width: 22, height: 28)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct GaryxAgentSummaryOptionRow: View {
+    let agent: GaryxAgentSummary
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                GaryxAgentAvatarView(
+                    agentId: agent.id,
+                    avatarDataUrl: agent.avatarDataUrl,
+                    kind: .agent,
+                    label: agent.displayName,
+                    providerType: agent.providerType,
+                    builtIn: agent.builtIn,
+                    diameter: 32
+                )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(agent.displayName)
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(agent.id)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 0)
+
+                if selected {
+                    GaryxSelectionCheckmark(size: 13)
+                        .frame(width: 22, height: 28)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 private struct GaryxTeamLeaderSelectionRow: View {
     @Binding var leaderAgentId: String
     @Binding var memberAgentIds: String
     let agents: [GaryxAgentSummary]
+    @State private var showsLeaderSheet = false
 
     var body: some View {
-        GaryxFormRow(title: "Leader") {
-            if agentOptionsIncludingCurrent.isEmpty {
-                Text("No agents")
-                    .foregroundStyle(.secondary)
-            } else {
-                Menu {
-                    ForEach(agentOptionsIncludingCurrent) { agent in
-                        Button {
-                            selectLeader(agent.id)
-                        } label: {
-                            GaryxMenuSelectionLabel(
-                                title: agent.displayName,
-                                selected: normalizedLeader == agent.id,
-                                fallbackSystemImage: "person"
-                            )
-                        }
-                    }
-                } label: {
-                    GaryxFormMenuValueLabel(value: leaderLabel)
-                }
+        GaryxFormSelectionRow(
+            title: "Leader",
+            value: agentOptionsIncludingCurrent.isEmpty ? "" : leaderLabel,
+            placeholder: agentOptionsIncludingCurrent.isEmpty ? "No agents" : "Choose leader"
+        ) {
+            if !agentOptionsIncludingCurrent.isEmpty {
+                showsLeaderSheet = true
             }
+        }
+        .disabled(agentOptionsIncludingCurrent.isEmpty)
+        .sheet(isPresented: $showsLeaderSheet) {
+            GaryxTeamLeaderSelectionSheet(
+                selectedAgentId: normalizedLeader,
+                agents: agentOptionsIncludingCurrent,
+                onSelect: selectLeader
+            )
         }
     }
 

@@ -408,34 +408,40 @@ struct GaryxAgentTargetPickerPopover: View {
                     .padding(.horizontal, 18)
                     .padding(.vertical, 16)
             } else {
-                Text("Latest")
-                    .font(GaryxFont.footnote(weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 16)
-                    .padding(.bottom, 8)
-
-                if model.agentTargets.count <= 5 {
-                    ForEach(model.agentTargets) { target in
-                        agentRow(for: target)
-                    }
-                } else {
-                    if !agentTargets.isEmpty {
-                        ForEach(agentTargets) { target in
-                            agentRow(for: target)
-                        }
-                    }
-
-                    if !teamTargets.isEmpty {
-                        Divider()
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Latest")
+                            .font(GaryxFont.footnote(weight: .semibold))
+                            .foregroundStyle(.secondary)
                             .padding(.horizontal, 20)
-                            .padding(.vertical, 8)
+                            .padding(.top, 16)
+                            .padding(.bottom, 8)
 
-                        ForEach(teamTargets) { target in
-                            agentRow(for: target)
+                        if model.agentTargets.count <= 5 {
+                            ForEach(model.agentTargets) { target in
+                                agentRow(for: target)
+                            }
+                        } else {
+                            if !agentTargets.isEmpty {
+                                ForEach(agentTargets) { target in
+                                    agentRow(for: target)
+                                }
+                            }
+
+                            if !teamTargets.isEmpty {
+                                Divider()
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 8)
+
+                                ForEach(teamTargets) { target in
+                                    agentRow(for: target)
+                                }
+                            }
                         }
                     }
                 }
+                .frame(maxHeight: 480)
+                .scrollIndicators(.hidden)
             }
 
             if showsConfigure {
