@@ -56,6 +56,54 @@ struct GaryxChannelLogoView: View {
     }
 }
 
+struct GaryxBotGroupMenuSelectionLabel: View {
+    let group: GaryxMobileBotGroup
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 9) {
+            GaryxChannelLogoView(
+                channel: group.channel,
+                label: group.title,
+                iconDataUrl: group.iconDataUrl,
+                diameter: 20
+            )
+            Text(group.title)
+            if selected {
+                Spacer(minLength: 0)
+                GaryxSelectionCheckmark(size: 13)
+            }
+        }
+    }
+}
+
+struct GaryxBotGroupMenuValueLabel: View {
+    let group: GaryxMobileBotGroup?
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            if let group {
+                GaryxChannelLogoView(
+                    channel: group.channel,
+                    label: group.title,
+                    iconDataUrl: group.iconDataUrl,
+                    diameter: 20
+                )
+            }
+            Text(value)
+                .font(GaryxFont.body(weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(GaryxFont.system(size: 11, weight: .semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 struct GaryxAgentAvatarView: View {
     let agentId: String
     let avatarDataUrl: String

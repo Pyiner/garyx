@@ -700,19 +700,19 @@ private struct GaryxThreadBotBindingSheet: View {
     ) -> some View {
         Button(role: role, action: action) {
             HStack(spacing: 12) {
-                if iconDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                if isDestructive {
+                    Image(systemName: systemName)
+                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.red)
+                        .frame(width: 34, height: 34)
+                        .background(Color(.secondarySystemFill).opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                } else {
                     GaryxChannelLogoView(
                         channel: channel,
                         label: title,
                         iconDataUrl: iconDataUrl,
                         diameter: 34
                     )
-                } else {
-                    Image(systemName: systemName)
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
-                        .foregroundStyle(isDestructive ? .red : .secondary)
-                        .frame(width: 34, height: 34)
-                        .background(Color(.secondarySystemFill).opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
 
                 VStack(alignment: .leading, spacing: 3) {

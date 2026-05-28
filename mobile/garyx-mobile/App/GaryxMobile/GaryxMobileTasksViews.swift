@@ -139,16 +139,18 @@ struct GaryxCreateTaskCard: View {
                                 Button {
                                     notificationTargetId = group.id
                                 } label: {
-                                    GaryxMenuSelectionLabel(
-                                        title: group.title,
-                                        selected: notificationTargetId == group.id,
-                                        fallbackSystemImage: "bell"
+                                    GaryxBotGroupMenuSelectionLabel(
+                                        group: group,
+                                        selected: notificationTargetId == group.id
                                     )
                                 }
                             }
                         }
                     } label: {
-                        GaryxFormMenuValueLabel(value: notificationTargetLabel)
+                        GaryxBotGroupMenuValueLabel(
+                            group: selectedNotificationGroup,
+                            value: notificationTargetLabel
+                        )
                     }
                 }
                 Divider().padding(.leading, 16)
