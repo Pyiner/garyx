@@ -463,20 +463,7 @@ struct GaryxTaskMetaLine: View {
     let value: String
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(label)
-                .font(GaryxFont.caption(weight: .semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.lowercase)
-                .frame(width: 76, alignment: .leading)
-            Text(value.isEmpty ? "Unknown" : value)
-                .font(GaryxFont.caption(weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 46, alignment: .leading)
+        GaryxFormReadOnlyRow(title: label, value: value.isEmpty ? "Unknown" : value)
     }
 }
 
