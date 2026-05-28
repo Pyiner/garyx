@@ -16,7 +16,10 @@ use garyx_models::{Principal, TaskNotificationTarget};
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, TaskRuntimeInput, TaskService, WorkspaceMode,
 };
-use garyx_router::{is_thread_key, workspace_dir_from_value};
+use garyx_router::{
+    active_run_snapshot_run_id, history_message_count, is_thread_key, thread_kind_from_value,
+    workspace_dir_from_value,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -27,12 +30,15 @@ use crate::app_db::{
     ListDataTriggersQuery, PatchDataTriggerBody,
 };
 use crate::cron::{CronJob, JobRunStatus, RunRecord};
+use crate::garyx_db::AutomationThreadRunRecord;
 use crate::server::AppState;
 
 const AUTOMATION_KEY_PREFIX: &str = "automation::";
 pub(crate) const DEFAULT_AUTOMATION_AGENT_ID: &str = "claude";
 const DEFAULT_ACTIVITY_LIMIT: usize = 20;
 const MAX_ACTIVITY_LIMIT: usize = 100;
+const DEFAULT_AUTOMATION_THREADS_LIMIT: usize = 50;
+const MAX_AUTOMATION_THREADS_LIMIT: usize = 100;
 const MAX_INTERVAL_HOURS: u64 = (i64::MAX as u64) / 3600;
 const WEEKDAY_CODES: [(&str, &str); 7] = [
     ("MON", "mo"),
@@ -87,6 +93,16 @@ pub struct ActivityParams {
     pub offset: usize,
 }
 
+#[derive(Deserialize)]
+pub struct AutomationThreadsParams {
+    #[serde(default = "default_automation_threads_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default)]
+    pub mode: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AutomationSummary {
@@ -100,6 +116,7 @@ pub struct AutomationSummary {
     pub target_thread_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
+    pub thread_mode: String,
     pub next_run: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_run_at: Option<String>,
@@ -126,6 +143,10 @@ pub struct AutomationActivityEntry {
 
 fn default_activity_limit() -> usize {
     DEFAULT_ACTIVITY_LIMIT
+}
+
+fn default_automation_threads_limit() -> usize {
+    DEFAULT_AUTOMATION_THREADS_LIMIT
 }
 
 fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
@@ -457,6 +478,26 @@ fn summarize_text(value: Option<&str>, limit: usize) -> Option<String> {
     )
 }
 
+fn last_thread_message_preview(data: &Value, role: &str) -> Option<String> {
+    let messages = data.get("messages").and_then(Value::as_array)?;
+    for message in messages.iter().rev() {
+        let Some(obj) = message.as_object() else {
+            continue;
+        };
+        if obj.get("role").and_then(Value::as_str) != Some(role) {
+            continue;
+        }
+        let text = match obj.get("content") {
+            Some(Value::String(value)) => Some(value.as_str()),
+            _ => obj.get("text").and_then(Value::as_str),
+        };
+        if let Some(summary) = summarize_text(text, 160) {
+            return Some(summary);
+        }
+    }
+    None
+}
+
 fn automation_prompt(job: &CronJob) -> String {
     job.message
         .as_deref()
@@ -521,6 +562,14 @@ fn latest_automation_thread(latest_run: Option<&RunRecord>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn automation_thread_mode(job: &CronJob) -> String {
+    if automation_target_thread(job).is_some() {
+        "target".to_owned()
+    } else {
+        "generated".to_owned()
+    }
+}
+
 fn automation_label(job: &CronJob) -> String {
     job.label
         .as_deref()
@@ -565,6 +614,7 @@ fn to_summary(job: &CronJob, latest_run: Option<&RunRecord>) -> Result<Automatio
         workspace_dir: automation_workspace(job)?,
         target_thread_id: target_thread_id.clone(),
         thread_id: target_thread_id.or_else(|| latest_automation_thread(latest_run)),
+        thread_mode: automation_thread_mode(job),
         next_run: automation_next_run(job),
         last_run_at: job.last_run_at.map(|value| value.to_rfc3339()),
         last_status: job.last_status.clone(),
@@ -1027,6 +1077,148 @@ pub async fn run_automation_now(
         Json(json!(
             to_activity_entry(&state, thread_id.as_deref(), &run).await
         )),
+    )
+}
+
+fn normalize_automation_thread_mode_param(value: Option<&str>) -> Result<&'static str, String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None | Some("generated") | Some("generated_thread") => Ok("generated_thread"),
+        Some("target") | Some("target_thread") => Ok("target_thread"),
+        Some(_) => Err("mode must be generated or target".to_owned()),
+    }
+}
+
+fn automation_thread_summary(thread_id: &str, data: &Value) -> Value {
+    let title = data
+        .get("label")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("New Thread");
+    let recent_run_id = data
+        .get("history")
+        .and_then(|history| history.get("recent_committed_run_ids"))
+        .and_then(Value::as_array)
+        .and_then(|entries| entries.last())
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    json!({
+        "id": thread_id,
+        "threadId": thread_id,
+        "threadType": thread_kind_from_value(data).unwrap_or_else(|| "chat".to_owned()),
+        "title": title,
+        "label": title,
+        "workspaceDir": workspace_dir_from_value(data),
+        "agentId": data.get("agent_id").and_then(Value::as_str),
+        "providerType": data.get("provider_type").and_then(Value::as_str),
+        "messageCount": history_message_count(data),
+        "lastUserMessage": last_thread_message_preview(data, "user"),
+        "lastAssistantMessage": last_thread_message_preview(data, "assistant"),
+        "recentRunId": recent_run_id,
+        "activeRunId": active_run_snapshot_run_id(data),
+        "createdAt": data.get("created_at").and_then(Value::as_str),
+        "updatedAt": data.get("updated_at").and_then(Value::as_str),
+        "automationId": data.get("automation_id").and_then(Value::as_str),
+        "automationThreadMode": data.get("automation_thread_mode").and_then(Value::as_str),
+        "excludeFromRecent": data.get("exclude_from_recent").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+async fn automation_thread_entry(
+    state: &Arc<AppState>,
+    record: &AutomationThreadRunRecord,
+    automation_label: Option<&str>,
+    automation_deleted: bool,
+) -> Value {
+    let thread = state
+        .threads
+        .thread_store
+        .get(&record.thread_id)
+        .await
+        .map(|data| automation_thread_summary(&record.thread_id, &data));
+    json!({
+        "automationId": record.automation_id.as_str(),
+        "runId": record.run_id.as_str(),
+        "threadId": record.thread_id.as_str(),
+        "workspaceDir": record.workspace_dir.as_deref(),
+        "agentId": record.agent_id.as_deref(),
+        "automationLabel": automation_label
+            .map(ToOwned::to_owned)
+            .or_else(|| record.automation_label_snapshot.clone())
+            .unwrap_or_else(|| record.automation_id.clone()),
+        "automationDeleted": automation_deleted,
+        "mode": record.mode.as_str(),
+        "status": record.status.as_str(),
+        "startedAt": record.started_at.as_str(),
+        "finishedAt": record.finished_at.as_deref(),
+        "thread": thread,
+    })
+}
+
+pub async fn automation_threads(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(params): Query<AutomationThreadsParams>,
+) -> impl IntoResponse {
+    let mode = match normalize_automation_thread_mode_param(params.mode.as_deref()) {
+        Ok(mode) => mode,
+        Err(message) => return invalid(message),
+    };
+    let limit = params.limit.clamp(1, MAX_AUTOMATION_THREADS_LIMIT);
+    let offset = params.offset;
+    let service = state.ops.cron_service.as_ref().cloned();
+    let job = if let Some(service) = service {
+        service.get(&id).await.filter(is_automation_job)
+    } else {
+        None
+    };
+    let label = job.as_ref().map(automation_label);
+    let automation_deleted = job.is_none();
+    let total = match state
+        .ops
+        .garyx_db
+        .count_automation_thread_runs(&id, Some(mode))
+    {
+        Ok(total) => total,
+        Err(error) => return internal(format!("failed to count automation threads: {error}")),
+    };
+    if job.is_none() && total == 0 {
+        return not_found("automation not found");
+    }
+    let records =
+        match state
+            .ops
+            .garyx_db
+            .list_automation_thread_runs(&id, Some(mode), limit, offset)
+        {
+            Ok(records) => records,
+            Err(error) => return internal(format!("failed to list automation threads: {error}")),
+        };
+    let mut items = Vec::with_capacity(records.len());
+    for record in &records {
+        items.push(
+            automation_thread_entry(&state, record, label.as_deref(), automation_deleted).await,
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "automationId": id,
+            "automationLabel": label.unwrap_or_else(|| {
+                records
+                    .first()
+                    .and_then(|record| record.automation_label_snapshot.clone())
+                    .unwrap_or_else(|| id.clone())
+            }),
+            "automationDeleted": automation_deleted,
+            "items": items,
+            "count": items.len(),
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "hasMore": offset + items.len() < total,
+        })),
     )
 }
 

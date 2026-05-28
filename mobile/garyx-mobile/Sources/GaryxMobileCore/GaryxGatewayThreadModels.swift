@@ -100,6 +100,9 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
     public var activeRunId: String?
     public var runState: String?
     public var worktreePath: String?
+    public var automationId: String?
+    public var automationThreadMode: String?
+    public var excludeFromRecent: Bool
 
     public init(
         id: String,
@@ -116,7 +119,10 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         recentRunId: String?,
         activeRunId: String?,
         runState: String?,
-        worktreePath: String?
+        worktreePath: String?,
+        automationId: String? = nil,
+        automationThreadMode: String? = nil,
+        excludeFromRecent: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -133,60 +139,90 @@ public struct GaryxThreadSummary: Decodable, Identifiable, Equatable, Sendable {
         self.activeRunId = activeRunId
         self.runState = runState
         self.worktreePath = worktreePath
+        self.automationId = automationId
+        self.automationThreadMode = automationThreadMode
+        self.excludeFromRecent = excludeFromRecent
     }
 
     enum CodingKeys: String, CodingKey {
         case id
         case threadId = "thread_id"
+        case threadIdCamel = "threadId"
         case threadKey = "thread_key"
         case title
         case label
         case createdAt = "created_at"
+        case createdAtCamel = "createdAt"
         case updatedAt = "updated_at"
+        case updatedAtCamel = "updatedAt"
         case lastActiveAt = "last_active_at"
+        case lastActiveAtCamel = "lastActiveAt"
         case lastMessagePreview
         case lastMessagePreviewSnake = "last_message_preview"
         case lastUserMessage = "last_user_message"
+        case lastUserMessageCamel = "lastUserMessage"
         case lastAssistantMessage = "last_assistant_message"
+        case lastAssistantMessageCamel = "lastAssistantMessage"
         case workspacePath
         case workspaceDir = "workspace_dir"
+        case workspaceDirCamel = "workspaceDir"
         case messageCount = "message_count"
+        case messageCountCamel = "messageCount"
         case agentId = "agent_id"
+        case agentIdCamel = "agentId"
         case teamId = "team_id"
         case teamDisplayName = "team_display_name"
         case teamDisplayNameCamel = "teamDisplayName"
         case providerType = "provider_type"
+        case providerTypeCamel = "providerType"
         case recentRunId = "recent_run_id"
+        case recentRunIdCamel = "recentRunId"
         case activeRunId = "active_run_id"
+        case activeRunIdCamel = "activeRunId"
         case runState = "run_state"
+        case runStateCamel = "runState"
         case worktree
+        case automationId = "automation_id"
+        case automationIdCamel = "automationId"
+        case automationThreadMode = "automation_thread_mode"
+        case automationThreadModeCamel = "automationThreadMode"
+        case excludeFromRecent = "exclude_from_recent"
+        case excludeFromRecentCamel = "excludeFromRecent"
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let resolvedId = try container.garyxDecodeFirstString(.id, .threadId, .threadKey)
+        let resolvedId = try container.garyxDecodeFirstString(.id, .threadId, .threadIdCamel, .threadKey)
         id = resolvedId ?? ""
         title = try container.garyxDecodeFirstString(.title, .label) ?? "New Thread"
-        createdAt = try container.garyxDecodeFirstString(.createdAt)
-        updatedAt = try container.garyxDecodeFirstString(.updatedAt, .lastActiveAt)
+        createdAt = try container.garyxDecodeFirstString(.createdAt, .createdAtCamel)
+        updatedAt = try container.garyxDecodeFirstString(.updatedAt, .updatedAtCamel, .lastActiveAt, .lastActiveAtCamel)
         lastMessagePreview = try container.garyxDecodeFirstString(
             .lastMessagePreview,
             .lastMessagePreviewSnake,
             .lastUserMessage,
-            .lastAssistantMessage
+            .lastUserMessageCamel,
+            .lastAssistantMessage,
+            .lastAssistantMessageCamel
         ) ?? ""
-        workspacePath = try container.garyxDecodeFirstString(.workspacePath, .workspaceDir)
+        workspacePath = try container.garyxDecodeFirstString(.workspacePath, .workspaceDir, .workspaceDirCamel)
         messageCount = try container.decodeIfPresent(Int.self, forKey: .messageCount)
-        agentId = try container.garyxDecodeFirstString(.agentId)
+            ?? container.decodeIfPresent(Int.self, forKey: .messageCountCamel)
+        agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
         teamId = try container.garyxDecodeFirstString(.teamId)
         teamName = try container.garyxDecodeFirstString(.teamDisplayName, .teamDisplayNameCamel)
-        providerType = try container.garyxDecodeFirstString(.providerType)
-        recentRunId = try container.garyxDecodeFirstString(.recentRunId)
-        activeRunId = try container.garyxDecodeFirstString(.activeRunId)
-        runState = try container.garyxDecodeFirstString(.runState)
+        providerType = try container.garyxDecodeFirstString(.providerType, .providerTypeCamel)
+        recentRunId = try container.garyxDecodeFirstString(.recentRunId, .recentRunIdCamel)
+        activeRunId = try container.garyxDecodeFirstString(.activeRunId, .activeRunIdCamel)
+        runState = try container.garyxDecodeFirstString(.runState, .runStateCamel)
         worktreePath = try container
             .decodeIfPresent(GaryxThreadWorktreeSummary.self, forKey: .worktree)?
             .visiblePath
+        automationId = try container.garyxDecodeFirstString(.automationId, .automationIdCamel)
+        automationThreadMode = try container.garyxDecodeFirstString(.automationThreadMode, .automationThreadModeCamel)
+        excludeFromRecent = try container.decodeIfPresent(Bool.self, forKey: .excludeFromRecentCamel)
+            ?? container.decodeIfPresent(Bool.self, forKey: .excludeFromRecent)
+            ?? false
     }
 }
 

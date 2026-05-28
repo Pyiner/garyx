@@ -29,7 +29,8 @@ use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::recent_thread_projection::{
-    backfill_recent_thread_projection_if_empty, reconcile_active_recent_thread_projection,
+    backfill_recent_thread_projection_if_empty, prune_excluded_recent_thread_projection,
+    reconcile_active_recent_thread_projection,
 };
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
@@ -260,6 +261,11 @@ impl AppState {
                 &state.ops.garyx_db,
             )
             .await;
+            let pruned_recent_threads = prune_excluded_recent_thread_projection(
+                &state.threads.thread_store,
+                &state.ops.garyx_db,
+            )
+            .await;
             let reconciled_recent_threads = reconcile_active_recent_thread_projection(
                 &state.threads.thread_store,
                 &state.ops.garyx_db,
@@ -272,6 +278,7 @@ impl AppState {
                 thread_count = threads,
                 endpoint_count = endpoints,
                 recent_thread_backfill_count = recent_threads,
+                recent_thread_prune_count = pruned_recent_threads,
                 recent_thread_active_reconcile_count = reconciled_recent_threads,
                 "gateway sync snapshots warmed"
             );

@@ -357,6 +357,7 @@ pub fn upsert_thread_fields(value: &mut Value, thread_id: &str, options: &Thread
         if !obj.get("metadata").is_some_and(Value::is_object) {
             obj.insert("metadata".to_owned(), Value::Object(Map::new()));
         }
+        let mut mirrored_top_level_fields = Vec::new();
         if let Some(metadata_obj) = obj.get_mut("metadata").and_then(Value::as_object_mut) {
             for (key, entry_value) in &options.metadata {
                 let trimmed_key = key.trim();
@@ -364,7 +365,16 @@ pub fn upsert_thread_fields(value: &mut Value, thread_id: &str, options: &Thread
                     continue;
                 }
                 metadata_obj.insert(trimmed_key.to_owned(), entry_value.clone());
+                if matches!(
+                    trimmed_key,
+                    "source" | "automation_id" | "automation_thread_mode" | "exclude_from_recent"
+                ) {
+                    mirrored_top_level_fields.push((trimmed_key.to_owned(), entry_value.clone()));
+                }
             }
+        }
+        for (key, value) in mirrored_top_level_fields {
+            obj.insert(key, value);
         }
     }
 

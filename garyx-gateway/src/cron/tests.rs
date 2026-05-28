@@ -645,6 +645,7 @@ async fn test_tick_failure_does_not_advance_schedule() {
         None,
         &svc.dispatch_runtime,
         &svc.app_state_weak,
+        &svc.garyx_db,
     )
     .await;
 
@@ -1612,6 +1613,7 @@ async fn test_tick_and_run_now_do_not_execute_same_job_twice() {
         None,
         &svc.dispatch_runtime,
         &svc.app_state_weak,
+        &svc.garyx_db,
     )
     .await;
     let _ = run_now_task.await.unwrap();
@@ -2017,6 +2019,7 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
         None,
         &cron.dispatch_runtime,
         &cron.app_state_weak,
+        &cron.garyx_db,
     )
     .await;
 

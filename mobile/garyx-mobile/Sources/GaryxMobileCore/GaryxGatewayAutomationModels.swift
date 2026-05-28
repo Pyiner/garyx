@@ -14,6 +14,7 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
     public var workspacePath: String
     public var targetThreadId: String?
     public var threadId: String?
+    public var threadMode: String
     public var nextRun: String
     public var lastRunAt: String?
     public var lastStatus: String
@@ -28,6 +29,7 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         workspacePath: String,
         targetThreadId: String? = nil,
         threadId: String? = nil,
+        threadMode: String = "target",
         nextRun: String = "",
         lastRunAt: String? = nil,
         lastStatus: String = "success",
@@ -41,6 +43,7 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         self.workspacePath = workspacePath
         self.targetThreadId = targetThreadId
         self.threadId = threadId
+        self.threadMode = threadMode
         self.nextRun = nextRun
         self.lastRunAt = lastRunAt
         self.lastStatus = lastStatus
@@ -60,6 +63,8 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         case targetThreadIdCamel = "targetThreadId"
         case threadId = "thread_id"
         case threadIdCamel = "threadId"
+        case threadMode = "thread_mode"
+        case threadModeCamel = "threadMode"
         case nextRun = "next_run"
         case nextRunCamel = "nextRun"
         case lastRunAt = "last_run_at"
@@ -79,10 +84,16 @@ public struct GaryxAutomationSummary: Decodable, Identifiable, Equatable, Sendab
         workspacePath = try container.garyxDecodeFirstString(.workspaceDir, .workspaceDirCamel) ?? ""
         targetThreadId = try container.garyxDecodeFirstString(.targetThreadId, .targetThreadIdCamel)
         threadId = try container.garyxDecodeFirstString(.threadId, .threadIdCamel)
+        threadMode = try container.garyxDecodeFirstString(.threadMode, .threadModeCamel)
+            ?? (targetThreadId == nil ? "generated" : "target")
         nextRun = try container.garyxDecodeFirstString(.nextRun, .nextRunCamel) ?? ""
         lastRunAt = try container.garyxDecodeFirstString(.lastRunAt, .lastRunAtCamel)
         lastStatus = try container.garyxDecodeFirstString(.lastStatus, .lastStatusCamel) ?? "success"
         schedule = try container.decodeIfPresent(GaryxAutomationSchedule.self, forKey: .schedule) ?? .interval(hours: 24)
+    }
+
+    public var isGeneratedThreadMode: Bool {
+        threadMode.trimmingCharacters(in: .whitespacesAndNewlines) == "generated"
     }
 }
 
@@ -319,6 +330,109 @@ public struct GaryxAutomationActivityFeed: Decodable, Equatable, Sendable {
         items = try container.decodeIfPresent([GaryxAutomationActivityEntry].self, forKey: .items) ?? []
         threadId = try container.garyxDecodeFirstString(.threadId, .threadIdSnake) ?? ""
         count = try container.decodeIfPresent(Int.self, forKey: .count) ?? items.count
+    }
+}
+
+public struct GaryxAutomationThreadEntry: Decodable, Identifiable, Equatable, Sendable {
+    public var automationId: String
+    public var runId: String
+    public var threadId: String
+    public var workspacePath: String?
+    public var agentId: String?
+    public var automationLabel: String
+    public var automationDeleted: Bool
+    public var status: String
+    public var startedAt: String
+    public var finishedAt: String?
+    public var thread: GaryxThreadSummary?
+
+    public var id: String {
+        runId.isEmpty ? threadId : runId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case automationId = "automation_id"
+        case automationIdCamel = "automationId"
+        case runId = "run_id"
+        case runIdCamel = "runId"
+        case threadId = "thread_id"
+        case threadIdCamel = "threadId"
+        case workspaceDir = "workspace_dir"
+        case workspaceDirCamel = "workspaceDir"
+        case agentId = "agent_id"
+        case agentIdCamel = "agentId"
+        case automationLabel = "automation_label"
+        case automationLabelCamel = "automationLabel"
+        case automationDeleted = "automation_deleted"
+        case automationDeletedCamel = "automationDeleted"
+        case status
+        case startedAt = "started_at"
+        case startedAtCamel = "startedAt"
+        case finishedAt = "finished_at"
+        case finishedAtCamel = "finishedAt"
+        case thread
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        automationId = try container.garyxDecodeFirstString(.automationId, .automationIdCamel) ?? ""
+        runId = try container.garyxDecodeFirstString(.runId, .runIdCamel) ?? ""
+        threadId = try container.garyxDecodeFirstString(.threadId, .threadIdCamel) ?? ""
+        workspacePath = try container.garyxDecodeFirstString(.workspaceDir, .workspaceDirCamel)
+        agentId = try container.garyxDecodeFirstString(.agentId, .agentIdCamel)
+        automationLabel = try container.garyxDecodeFirstString(.automationLabel, .automationLabelCamel) ?? automationId
+        automationDeleted = try container.decodeIfPresent(Bool.self, forKey: .automationDeletedCamel)
+            ?? container.decodeIfPresent(Bool.self, forKey: .automationDeleted)
+            ?? false
+        status = try container.garyxDecodeFirstString(.status) ?? "success"
+        startedAt = try container.garyxDecodeFirstString(.startedAt, .startedAtCamel) ?? ""
+        finishedAt = try container.garyxDecodeFirstString(.finishedAt, .finishedAtCamel)
+        thread = try container.decodeIfPresent(GaryxThreadSummary.self, forKey: .thread)
+    }
+}
+
+public struct GaryxAutomationThreadsPage: Decodable, Equatable, Sendable {
+    public var automationId: String
+    public var automationLabel: String
+    public var automationDeleted: Bool
+    public var items: [GaryxAutomationThreadEntry]
+    public var count: Int
+    public var total: Int
+    public var limit: Int
+    public var offset: Int
+    public var hasMore: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case automationId = "automation_id"
+        case automationIdCamel = "automationId"
+        case automationLabel = "automation_label"
+        case automationLabelCamel = "automationLabel"
+        case automationDeleted = "automation_deleted"
+        case automationDeletedCamel = "automationDeleted"
+        case items
+        case count
+        case total
+        case limit
+        case offset
+        case hasMore = "has_more"
+        case hasMoreCamel = "hasMore"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        automationId = try container.garyxDecodeFirstString(.automationId, .automationIdCamel) ?? ""
+        automationLabel = try container.garyxDecodeFirstString(.automationLabel, .automationLabelCamel) ?? automationId
+        automationDeleted = try container.decodeIfPresent(Bool.self, forKey: .automationDeletedCamel)
+            ?? container.decodeIfPresent(Bool.self, forKey: .automationDeleted)
+            ?? false
+        items = try container.decodeIfPresent([GaryxAutomationThreadEntry].self, forKey: .items) ?? []
+        count = try container.decodeIfPresent(Int.self, forKey: .count) ?? items.count
+        total = try container.decodeIfPresent(Int.self, forKey: .total) ?? count
+        limit = try container.decodeIfPresent(Int.self, forKey: .limit) ?? count
+        offset = try container.decodeIfPresent(Int.self, forKey: .offset) ?? 0
+        hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMoreCamel)
+            ?? container.decodeIfPresent(Bool.self, forKey: .hasMore)
+            ?? (offset + count < total)
     }
 }
 

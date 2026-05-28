@@ -165,6 +165,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::post(automation::run_automation_now),
         )
         .route(
+            "/api/automations/{id}/threads",
+            axum::routing::get(automation::automation_threads),
+        )
+        .route(
             "/api/automations/{id}/activity",
             axum::routing::get(automation::automation_activity),
         )

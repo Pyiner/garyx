@@ -507,6 +507,20 @@ public final class GaryxGatewayClient {
         )
     }
 
+    public func automationThreads(
+        id: String,
+        limit: Int = 50,
+        offset: Int = 0
+    ) async throws -> GaryxAutomationThreadsPage {
+        try await get(
+            "/api/automations/\(id.urlPathEncoded)/threads",
+            queryItems: [
+                URLQueryItem(name: "limit", value: String(limit)),
+                URLQueryItem(name: "offset", value: String(offset)),
+            ]
+        )
+    }
+
     public func runAutomationNow(id: String) async throws -> GaryxAutomationActivityEntry {
         try await post("/api/automations/\(id.urlPathEncoded)/run-now", body: GaryxEmptyBody())
     }

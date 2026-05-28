@@ -28,6 +28,7 @@ use crate::agent_identity::create_thread_for_agent_reference;
 use crate::agent_teams::AgentTeamStore;
 use crate::custom_agents::CustomAgentStore;
 use crate::delivery_target::resolve_delivery_target_with_recovery;
+use crate::garyx_db::{AutomationThreadRunDraft, GaryxDbService};
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::managed_mcp_metadata::inject_managed_mcp_servers;
 use crate::server::AppState;
@@ -466,6 +467,8 @@ pub struct CronService {
     /// Uses [`OnceLock`] because the weak ref is established exactly once at
     /// startup and never replaced.
     app_state_weak: Arc<OnceLock<Weak<AppState>>>,
+    /// Gateway SQLite store used for user-facing automation thread associations.
+    garyx_db: Arc<OnceLock<Arc<GaryxDbService>>>,
 }
 
 impl CronService {
@@ -483,6 +486,7 @@ impl CronService {
             event_tx: None,
             dispatch_runtime: Arc::new(RwLock::new(None)),
             app_state_weak: Arc::new(OnceLock::new()),
+            garyx_db: Arc::new(OnceLock::new()),
         }
     }
 
@@ -495,6 +499,10 @@ impl CronService {
     /// for the gateway's lifetime.
     pub fn set_app_state(&self, weak: Weak<AppState>) {
         let _ = self.app_state_weak.set(weak);
+    }
+
+    pub fn set_garyx_db(&self, garyx_db: Arc<GaryxDbService>) {
+        let _ = self.garyx_db.set(garyx_db);
     }
 
     /// Attach a broadcast channel for publishing lifecycle events.
@@ -616,6 +624,7 @@ impl CronService {
         let event_tx = self.event_tx.clone();
         let dispatch_runtime = self.dispatch_runtime.clone();
         let app_state_weak = self.app_state_weak.clone();
+        let garyx_db = self.garyx_db.clone();
 
         let task = tokio::spawn(async move {
             tracing::info!("cron scheduler started");
@@ -635,6 +644,7 @@ impl CronService {
                             event_tx.as_ref(),
                             &dispatch_runtime,
                             &app_state_weak,
+                            &garyx_db,
                         ).await;
                     }
                 }
@@ -810,32 +820,42 @@ impl CronService {
         if !job.enabled {
             return None;
         }
+        let run_id = Uuid::new_v4().to_string();
         let should_cleanup_prepared_thread = uses_generated_automation_thread_job(&job);
-        let (record, prepared_thread_id) =
-            match Self::prepare_job_for_execution(&self.jobs, id, &self.dispatch_runtime).await {
-                Ok(prepared_job) => {
-                    let prepared_thread_id = if should_cleanup_prepared_thread {
-                        prepared_job.thread_id.clone()
-                    } else {
-                        None
-                    };
-                    (
-                        Self::execute_job(
-                            &prepared_job,
-                            &self.active_agent_runs,
-                            self.event_tx.as_ref(),
-                            &self.dispatch_runtime,
-                            &self.app_state_weak,
-                        )
-                        .await,
-                        prepared_thread_id,
+        let garyx_db = self.garyx_db.get().cloned();
+        let (record, prepared_thread_id) = match Self::prepare_job_for_execution(
+            &self.jobs,
+            id,
+            &run_id,
+            &self.dispatch_runtime,
+            garyx_db.clone(),
+        )
+        .await
+        {
+            Ok(prepared_job) => {
+                let prepared_thread_id = if should_cleanup_prepared_thread {
+                    prepared_job.thread_id.clone()
+                } else {
+                    None
+                };
+                (
+                    Self::execute_job(
+                        &prepared_job,
+                        &self.active_agent_runs,
+                        self.event_tx.as_ref(),
+                        &self.dispatch_runtime,
+                        &self.app_state_weak,
+                        &run_id,
                     )
-                }
-                Err(error) => {
-                    tracing::warn!(job_id = %id, error = %error, "cron job preparation failed");
-                    (Self::failed_run_record(&job, error), None)
-                }
-            };
+                    .await,
+                    prepared_thread_id,
+                )
+            }
+            Err(error) => {
+                tracing::warn!(job_id = %id, error = %error, "cron job preparation failed");
+                (Self::failed_run_record(&job, &run_id, error), None)
+            }
+        };
 
         // Update runtime job state.
         let mut should_delete = false;
@@ -865,6 +885,7 @@ impl CronService {
             )
             .await;
         }
+        Self::finish_recorded_automation_thread_run(garyx_db.as_deref(), &record);
         if should_delete {
             let _ = delete_job_file(&self.data_dir, id).await;
         }
@@ -944,11 +965,38 @@ impl CronService {
         Self::trimmed_non_empty(job.label.as_deref()).unwrap_or_else(|| job.id.clone())
     }
 
+    fn automation_thread_run_status(status: &JobRunStatus) -> &'static str {
+        match status {
+            JobRunStatus::Success => "success",
+            JobRunStatus::Failed => "failed",
+            JobRunStatus::Running => "running",
+            JobRunStatus::NeverRun => "unknown",
+        }
+    }
+
     fn automation_thread_options(
+        automation_id: &str,
         label: &str,
         workspace_dir: &str,
         agent_id: Option<&str>,
     ) -> ThreadEnsureOptions {
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "source".to_owned(),
+            serde_json::Value::String("automation".to_owned()),
+        );
+        metadata.insert(
+            "automation_id".to_owned(),
+            serde_json::Value::String(automation_id.to_owned()),
+        );
+        metadata.insert(
+            "automation_thread_mode".to_owned(),
+            serde_json::Value::String("generated_thread".to_owned()),
+        );
+        metadata.insert(
+            "exclude_from_recent".to_owned(),
+            serde_json::Value::Bool(true),
+        );
         ThreadEnsureOptions {
             label: Some(label.to_owned()),
             workspace_dir: Some(workspace_dir.to_owned()),
@@ -957,7 +1005,7 @@ impl CronService {
             agent_id: Some(
                 Self::trimmed_non_empty(agent_id).unwrap_or_else(|| "claude".to_owned()),
             ),
-            metadata: HashMap::new(),
+            metadata,
             provider_type: None,
             sdk_session_id: None,
             thread_kind: None,
@@ -971,7 +1019,9 @@ impl CronService {
     async fn prepare_job_for_execution(
         jobs: &Arc<RwLock<HashMap<String, CronJob>>>,
         id: &str,
+        run_id: &str,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
+        garyx_db: Option<Arc<GaryxDbService>>,
     ) -> Result<CronJob, String> {
         let current = {
             let map = jobs.read().await;
@@ -998,10 +1048,35 @@ impl CronService {
             runtime.bridge.clone(),
             runtime.custom_agents.clone(),
             runtime.agent_teams.clone(),
-            Self::automation_thread_options(&label, &workspace_dir, agent_id.as_deref()),
+            Self::automation_thread_options(
+                &current.id,
+                &label,
+                &workspace_dir,
+                agent_id.as_deref(),
+            ),
         )
         .await
         .map_err(|error| format!("failed to create automation thread: {error}"))?;
+
+        if let Some(garyx_db) = garyx_db {
+            if let Err(error) = garyx_db.upsert_automation_thread_run(AutomationThreadRunDraft {
+                automation_id: current.id.clone(),
+                run_id: run_id.to_owned(),
+                thread_id: thread_id.clone(),
+                workspace_dir: Some(workspace_dir.clone()),
+                agent_id: agent_id.clone(),
+                automation_label_snapshot: Some(label.clone()),
+                mode: "generated_thread".to_owned(),
+                status: "running".to_owned(),
+                started_at: Utc::now().to_rfc3339(),
+                finished_at: None,
+            }) {
+                let _ = delete_thread_record(&runtime.thread_store, &thread_id).await;
+                return Err(format!(
+                    "failed to record automation thread association: {error}"
+                ));
+            }
+        }
 
         let mut updated = current;
         updated.thread_id = Some(thread_id.clone());
@@ -1009,10 +1084,10 @@ impl CronService {
         Ok(updated)
     }
 
-    fn failed_run_record(job: &CronJob, error: String) -> RunRecord {
+    fn failed_run_record(job: &CronJob, run_id: &str, error: String) -> RunRecord {
         let started_at = Utc::now();
         RunRecord {
-            run_id: Uuid::new_v4().to_string(),
+            run_id: run_id.to_owned(),
             job_id: job.id.clone(),
             started_at,
             finished_at: Some(started_at),
@@ -1020,6 +1095,32 @@ impl CronService {
             status: JobRunStatus::Failed,
             thread_id: Self::trimmed_non_empty(job.thread_id.as_deref()),
             error: Some(error),
+        }
+    }
+
+    fn finish_recorded_automation_thread_run(
+        garyx_db: Option<&GaryxDbService>,
+        record: &RunRecord,
+    ) {
+        let Some(garyx_db) = garyx_db else {
+            return;
+        };
+        let Some(finished_at) = record.finished_at else {
+            return;
+        };
+        let status = Self::automation_thread_run_status(&record.status);
+        if let Err(error) = garyx_db.finish_automation_thread_run(
+            &record.job_id,
+            &record.run_id,
+            status,
+            &finished_at.to_rfc3339(),
+        ) {
+            tracing::warn!(
+                job_id = %record.job_id,
+                run_id = %record.run_id,
+                error = %error,
+                "failed to finish recorded automation thread association"
+            );
         }
     }
 
@@ -1057,6 +1158,7 @@ impl CronService {
         event_tx: Option<&broadcast::Sender<String>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
         app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        garyx_db: &Arc<OnceLock<Arc<GaryxDbService>>>,
     ) {
         // Collect due job IDs under a read lock.
         let due_ids: Vec<String> = {
@@ -1079,32 +1181,42 @@ impl CronService {
             else {
                 continue;
             };
+            let run_id = Uuid::new_v4().to_string();
             let should_cleanup_prepared_thread = uses_generated_automation_thread_job(&job);
-            let (record, prepared_thread_id) =
-                match Self::prepare_job_for_execution(jobs, &id, dispatch_runtime).await {
-                    Ok(prepared_job) => {
-                        let prepared_thread_id = if should_cleanup_prepared_thread {
-                            prepared_job.thread_id.clone()
-                        } else {
-                            None
-                        };
-                        (
-                            Self::execute_job(
-                                &prepared_job,
-                                active_agent_runs,
-                                event_tx,
-                                dispatch_runtime,
-                                app_state_weak,
-                            )
-                            .await,
-                            prepared_thread_id,
+            let garyx_db_handle = garyx_db.get().cloned();
+            let (record, prepared_thread_id) = match Self::prepare_job_for_execution(
+                jobs,
+                &id,
+                &run_id,
+                dispatch_runtime,
+                garyx_db_handle.clone(),
+            )
+            .await
+            {
+                Ok(prepared_job) => {
+                    let prepared_thread_id = if should_cleanup_prepared_thread {
+                        prepared_job.thread_id.clone()
+                    } else {
+                        None
+                    };
+                    (
+                        Self::execute_job(
+                            &prepared_job,
+                            active_agent_runs,
+                            event_tx,
+                            dispatch_runtime,
+                            app_state_weak,
+                            &run_id,
                         )
-                    }
-                    Err(error) => {
-                        tracing::warn!(job_id = %id, error = %error, "cron job preparation failed");
-                        (Self::failed_run_record(&job, error), None)
-                    }
-                };
+                        .await,
+                        prepared_thread_id,
+                    )
+                }
+                Err(error) => {
+                    tracing::warn!(job_id = %id, error = %error, "cron job preparation failed");
+                    (Self::failed_run_record(&job, &run_id, error), None)
+                }
+            };
 
             // Update state under write lock.
             let mut should_delete = false;
@@ -1134,6 +1246,7 @@ impl CronService {
                 )
                 .await;
             }
+            Self::finish_recorded_automation_thread_run(garyx_db_handle.as_deref(), &record);
             if should_delete {
                 let _ = delete_job_file(data_dir, &id).await;
             }
@@ -1149,8 +1262,9 @@ impl CronService {
         event_tx: Option<&broadcast::Sender<String>>,
         dispatch_runtime: &Arc<RwLock<Option<CronDispatchRuntime>>>,
         app_state_weak: &Arc<OnceLock<Weak<AppState>>>,
+        run_id: &str,
     ) -> RunRecord {
-        let run_id = Uuid::new_v4().to_string();
+        let run_id = run_id.to_owned();
         let started_at = Utc::now();
 
         tracing::info!(job_id = %job.id, run_id = %run_id, action = ?job.action, "cron job executing");

@@ -510,6 +510,166 @@ private struct GaryxSidebarBotsSection: View {
     }
 }
 
+private struct GaryxSidebarAutomationsSection: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    @Binding var activeDrilldown: GaryxWorkspaceBotsDrilldown?
+
+    private var generatedAutomations: [GaryxAutomationSummary] {
+        model.automations
+            .filter(\.isGeneratedThreadMode)
+            .sorted { lhs, rhs in
+                lhs.label.localizedCaseInsensitiveCompare(rhs.label) == .orderedAscending
+            }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if case let .automationThreads(id) = activeDrilldown {
+                GaryxAutomationThreadsDetailSection(
+                    automationId: id,
+                    automation: generatedAutomations.first { $0.id == id }
+                )
+            } else if !generatedAutomations.isEmpty {
+                GaryxSidebarSectionHeader(title: "Scheduled automations", systemImage: "clock.arrow.circlepath")
+                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                    .padding(.bottom, 4)
+
+                ForEach(generatedAutomations) { automation in
+                    GaryxDisclosureListRow(
+                        title: automation.label,
+                        subtitle: automation.workspacePath.isEmpty
+                            ? nil
+                            : URL(fileURLWithPath: automation.workspacePath).lastPathComponent,
+                        systemImage: "clock.arrow.circlepath",
+                        iconFrame: GaryxSidebarMetrics.iconFrame,
+                        horizontalPadding: GaryxSidebarMetrics.rowInnerHorizontalPadding,
+                        verticalPadding: 0,
+                        minHeight: GaryxSidebarMetrics.rowHeight,
+                        titleWeight: .medium,
+                        action: {
+                            withAnimation(GaryxMobileMotion.sidebarDrilldown) {
+                                activeDrilldown = .automationThreads(automation.id)
+                            }
+                        }
+                    )
+                    .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
+                }
+            }
+        }
+        .padding(.bottom, 10)
+    }
+}
+
+private struct GaryxAutomationThreadsDetailSection: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+    let automationId: String
+    let automation: GaryxAutomationSummary?
+
+    @State private var page: GaryxAutomationThreadsPage?
+    @State private var isLoading = false
+    @State private var failureMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            GaryxSidebarSectionHeader(title: "Threads", systemImage: "bubble.left.and.text.bubble.right.fill")
+                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                .padding(.bottom, 4)
+
+            if isLoading && page == nil {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.72)
+                    Text("Loading threads")
+                        .font(GaryxFont.caption(weight: .medium))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                .padding(.vertical, 10)
+            } else if let failureMessage {
+                Text(failureMessage)
+                    .font(GaryxFont.footnote())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                    .padding(.vertical, 8)
+            } else if entries.isEmpty {
+                Text("No triggered threads yet")
+                    .font(GaryxFont.footnote())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, GaryxSidebarMetrics.sectionHorizontalPadding)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(entries) { entry in
+                    if let thread = threadSummary(for: entry) {
+                        GaryxSidebarThreadButton(
+                            thread: thread,
+                            trailingTimestamp: garyxFormattedTaskTimestamp(entry.finishedAt ?? entry.startedAt)
+                        )
+                    } else {
+                        GaryxAutomationThreadUnavailableRow(entry: entry)
+                    }
+                }
+            }
+        }
+        .transition(.opacity)
+        .task(id: automationId) {
+            await load()
+        }
+    }
+
+    private var entries: [GaryxAutomationThreadEntry] {
+        page?.items ?? []
+    }
+
+    private func threadSummary(for entry: GaryxAutomationThreadEntry) -> GaryxThreadSummary? {
+        entry.thread ?? model.sidebarThreadSummary(for: entry.threadId)
+    }
+
+    @MainActor
+    private func load() async {
+        guard !isLoading else { return }
+        isLoading = true
+        failureMessage = nil
+        do {
+            let client = try model.client()
+            page = try await client.automationThreads(id: automationId)
+        } catch {
+            failureMessage = "Could not load triggered threads."
+        }
+        isLoading = false
+    }
+}
+
+private struct GaryxAutomationThreadUnavailableRow: View {
+    let entry: GaryxAutomationThreadEntry
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(GaryxFont.system(size: 15, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: GaryxSidebarMetrics.iconFrame, height: GaryxSidebarMetrics.iconFrame)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Thread unavailable")
+                    .font(GaryxFont.subheadline(weight: .medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(entry.threadId)
+                    .font(GaryxFont.caption())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, GaryxSidebarMetrics.rowInnerHorizontalPadding)
+        .frame(minHeight: GaryxSidebarMetrics.rowHeight)
+        .padding(.horizontal, GaryxSidebarMetrics.rowOuterPadding)
+    }
+}
+
 private struct GaryxSidebarBotRow: View {
     let group: GaryxMobileBotGroup
     let canDrillDown: Bool
@@ -1188,22 +1348,27 @@ struct GaryxWorkspaceBotsView: View {
             title: title,
             subtitle: "",
             onRefresh: { await refresh() },
-            leadingActionLabel: activeDrilldown == nil ? nil : "Workspace & Bots",
+            leadingActionLabel: activeDrilldown == nil ? nil : "Threads",
             leadingAction: activeDrilldown == nil ? nil : { goBack() }
         ) {
             VStack(alignment: .leading, spacing: 16) {
                 switch activeDrilldown {
+                case .automationThreads:
+                    GaryxSidebarAutomationsSection(activeDrilldown: activeDrilldownBinding)
                 case .bot:
                     GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
                 case .workspace:
                     GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
                 case nil:
+                    GaryxSidebarAutomationsSection(activeDrilldown: activeDrilldownBinding)
                     GaryxSidebarBotsSection(activeDrilldown: activeDrilldownBinding)
                     GaryxWorkspaceThreadGroupsSection(activeDrilldown: activeDrilldownBinding)
-                    if model.mobileBotGroups.isEmpty && model.sidebarWorkspaceThreadGroups.isEmpty {
+                    if generatedAutomations.isEmpty
+                        && model.mobileBotGroups.isEmpty
+                        && model.sidebarWorkspaceThreadGroups.isEmpty {
                         GaryxEmptyPanelView(
-                            icon: "folder",
-                            title: "No workspaces or bots yet",
+                            icon: "bubble.left.and.bubble.right",
+                            title: "No threads yet",
                             text: ""
                         )
                     }
@@ -1257,9 +1422,15 @@ struct GaryxWorkspaceBotsView: View {
             model.mobileBotGroups.first { $0.id == id }?.title ?? "Bot"
         case let .workspace(path):
             model.sidebarWorkspaceThreadGroups.first { $0.path == path }?.name ?? "Workspace"
+        case let .automationThreads(id):
+            generatedAutomations.first { $0.id == id }?.label ?? "Automation Threads"
         case nil:
-            "Workspace & Bots"
+            "Threads"
         }
+    }
+
+    private var generatedAutomations: [GaryxAutomationSummary] {
+        model.automations.filter(\.isGeneratedThreadMode)
     }
 
     private func refresh() async {

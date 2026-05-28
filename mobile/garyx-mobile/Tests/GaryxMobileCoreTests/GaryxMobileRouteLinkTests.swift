@@ -16,6 +16,7 @@ final class GaryxMobileRouteLinkTests: XCTestCase {
             .task("task-1"),
             .panel(.automations),
             .automation("automation-1"),
+            .automationThreads("automation-1"),
             .panel(.agents),
             .agent("agent-1"),
             .team("team-1"),
@@ -57,6 +58,10 @@ final class GaryxMobileRouteLinkTests: XCTestCase {
         XCTAssertEqual(
             GaryxMobileRouteLink.parse(try XCTUnwrap(URL(string: "garyx://mobile/skill-file?skill_id=skill-1&file_path=docs%2Ffile.md"))),
             .skillFile(skillId: "skill-1", path: "docs/file.md")
+        )
+        XCTAssertEqual(
+            GaryxMobileRouteLink.parse(try XCTUnwrap(URL(string: "garyx://mobile/workspace-bots?automation_id=automation-1"))),
+            .automationThreads("automation-1")
         )
     }
 

@@ -64,6 +64,35 @@ pub struct RecentThreadDraft {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AutomationThreadRunRecord {
+    pub automation_id: String,
+    pub run_id: String,
+    pub thread_id: String,
+    pub workspace_dir: Option<String>,
+    pub agent_id: Option<String>,
+    pub automation_label_snapshot: Option<String>,
+    pub mode: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub recorded_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutomationThreadRunDraft {
+    pub automation_id: String,
+    pub run_id: String,
+    pub thread_id: String,
+    pub workspace_dir: Option<String>,
+    pub agent_id: Option<String>,
+    pub automation_label_snapshot: Option<String>,
+    pub mode: String,
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WorkspaceRecord {
     pub name: Option<String>,
     pub path: String,
@@ -611,6 +640,154 @@ impl GaryxDbService {
             params![thread_id],
         )?;
         Ok(removed > 0)
+    }
+
+    pub fn upsert_automation_thread_run(
+        &self,
+        draft: AutomationThreadRunDraft,
+    ) -> GaryxDbResult<AutomationThreadRunRecord> {
+        let automation_id = normalize_required("automation_id", &draft.automation_id)?;
+        let run_id = normalize_required("run_id", &draft.run_id)?;
+        let thread_id = normalize_thread_id(&draft.thread_id)?;
+        let mode = normalize_automation_thread_run_mode(&draft.mode)?;
+        let status = normalize_required("status", &draft.status)?;
+        let started_at = normalize_required("started_at", &draft.started_at)?;
+        let workspace_dir = normalize_optional(draft.workspace_dir.as_deref());
+        let agent_id = normalize_optional(draft.agent_id.as_deref());
+        let automation_label_snapshot =
+            normalize_optional(draft.automation_label_snapshot.as_deref());
+        let finished_at = normalize_optional(draft.finished_at.as_deref());
+        let recorded_at = now_string();
+
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO automation_thread_runs (
+                automation_id, run_id, thread_id, workspace_dir, agent_id,
+                automation_label_snapshot, mode, status, started_at, finished_at, recorded_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(automation_id, run_id) DO UPDATE SET
+                thread_id = excluded.thread_id,
+                workspace_dir = excluded.workspace_dir,
+                agent_id = excluded.agent_id,
+                automation_label_snapshot = excluded.automation_label_snapshot,
+                mode = excluded.mode,
+                status = excluded.status,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                recorded_at = excluded.recorded_at",
+            params![
+                automation_id,
+                run_id,
+                thread_id,
+                workspace_dir,
+                agent_id,
+                automation_label_snapshot,
+                mode,
+                status,
+                started_at,
+                finished_at,
+                recorded_at,
+            ],
+        )?;
+
+        automation_thread_run_by_key(&conn, &automation_id, &run_id)?.ok_or_else(|| {
+            GaryxDbError::BadRequest("automation thread run was not saved".to_owned())
+        })
+    }
+
+    pub fn finish_automation_thread_run(
+        &self,
+        automation_id: &str,
+        run_id: &str,
+        status: &str,
+        finished_at: &str,
+    ) -> GaryxDbResult<bool> {
+        let automation_id = normalize_required("automation_id", automation_id)?;
+        let run_id = normalize_required("run_id", run_id)?;
+        let status = normalize_required("status", status)?;
+        let finished_at = normalize_required("finished_at", finished_at)?;
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE automation_thread_runs
+             SET status = ?3, finished_at = ?4, recorded_at = ?5
+             WHERE automation_id = ?1 AND run_id = ?2",
+            params![automation_id, run_id, status, finished_at, now_string()],
+        )?;
+        Ok(updated > 0)
+    }
+
+    pub fn list_automation_thread_runs(
+        &self,
+        automation_id: &str,
+        mode: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GaryxDbResult<Vec<AutomationThreadRunRecord>> {
+        let automation_id = normalize_required("automation_id", automation_id)?;
+        let mode = mode.map(normalize_automation_thread_run_mode).transpose()?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let conn = self.conn()?;
+        let sql = if mode.is_some() {
+            "SELECT automation_id, run_id, thread_id, workspace_dir, agent_id,
+                    automation_label_snapshot, mode, status, started_at, finished_at, recorded_at
+             FROM automation_thread_runs
+             WHERE automation_id = ?1 AND mode = ?2
+             ORDER BY started_at DESC, recorded_at DESC, run_id ASC
+             LIMIT ?3 OFFSET ?4"
+        } else {
+            "SELECT automation_id, run_id, thread_id, workspace_dir, agent_id,
+                    automation_label_snapshot, mode, status, started_at, finished_at, recorded_at
+             FROM automation_thread_runs
+             WHERE automation_id = ?1
+             ORDER BY started_at DESC, recorded_at DESC, run_id ASC
+             LIMIT ?2 OFFSET ?3"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let mut records = Vec::new();
+        if let Some(mode) = mode {
+            let rows = stmt.query_map(
+                params![automation_id, mode, limit, offset],
+                automation_thread_run_from_row,
+            )?;
+            for row in rows {
+                records.push(row?);
+            }
+        } else {
+            let rows = stmt.query_map(
+                params![automation_id, limit, offset],
+                automation_thread_run_from_row,
+            )?;
+            for row in rows {
+                records.push(row?);
+            }
+        }
+        Ok(records)
+    }
+
+    pub fn count_automation_thread_runs(
+        &self,
+        automation_id: &str,
+        mode: Option<&str>,
+    ) -> GaryxDbResult<usize> {
+        let automation_id = normalize_required("automation_id", automation_id)?;
+        let mode = mode.map(normalize_automation_thread_run_mode).transpose()?;
+        let conn = self.conn()?;
+        let count: i64 = if let Some(mode) = mode {
+            conn.query_row(
+                "SELECT COUNT(*) FROM automation_thread_runs WHERE automation_id = ?1 AND mode = ?2",
+                params![automation_id, mode],
+                |row| row.get(0),
+            )?
+        } else {
+            conn.query_row(
+                "SELECT COUNT(*) FROM automation_thread_runs WHERE automation_id = ?1",
+                params![automation_id],
+                |row| row.get(0),
+            )?
+        };
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
     }
 
     pub fn replace_dreams_in_window(
@@ -1420,6 +1597,31 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         CREATE INDEX IF NOT EXISTS idx_recent_threads_last_active
             ON recent_threads(last_active_at DESC);
 
+        CREATE TABLE IF NOT EXISTS automation_thread_runs (
+            automation_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            workspace_dir TEXT,
+            agent_id TEXT,
+            automation_label_snapshot TEXT,
+            mode TEXT NOT NULL CHECK (mode IN ('generated_thread', 'target_thread')),
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            recorded_at TEXT NOT NULL,
+            PRIMARY KEY (automation_id, run_id)
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_automation_thread_runs_automation
+            ON automation_thread_runs(automation_id, recorded_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_automation_thread_runs_thread
+            ON automation_thread_runs(thread_id);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_thread_runs_generated_thread
+            ON automation_thread_runs(thread_id)
+            WHERE mode = 'generated_thread';
+
         CREATE TABLE IF NOT EXISTS workspaces (
             path TEXT PRIMARY KEY,
             name TEXT,
@@ -1515,6 +1717,16 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn normalize_automation_thread_run_mode(value: &str) -> GaryxDbResult<String> {
+    let mode = normalize_required("mode", value)?;
+    match mode.as_str() {
+        "generated_thread" | "target_thread" => Ok(mode),
+        _ => Err(GaryxDbError::BadRequest(
+            "mode must be generated_thread or target_thread".to_owned(),
+        )),
+    }
+}
+
 fn normalize_workspace_path(path: &str) -> GaryxDbResult<String> {
     let normalized = normalize_required("workspace path", path)?.replace('\\', "/");
     if !is_absolute_workspace_path(&normalized) {
@@ -1530,10 +1742,7 @@ fn is_absolute_workspace_path(path: &str) -> bool {
         return true;
     }
     let bytes = path.as_bytes();
-    bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && bytes[2] == b'/'
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
 }
 
 fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
@@ -1563,6 +1772,41 @@ fn workspace_by_path(conn: &Connection, path: &str) -> GaryxDbResult<Option<Work
             "SELECT name, path, created_at, updated_at FROM workspaces WHERE path = ?1",
             params![path],
             workspace_from_row,
+        )
+        .optional()?)
+}
+
+fn automation_thread_run_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<AutomationThreadRunRecord> {
+    Ok(AutomationThreadRunRecord {
+        automation_id: row.get(0)?,
+        run_id: row.get(1)?,
+        thread_id: row.get(2)?,
+        workspace_dir: row.get(3)?,
+        agent_id: row.get(4)?,
+        automation_label_snapshot: row.get(5)?,
+        mode: row.get(6)?,
+        status: row.get(7)?,
+        started_at: row.get(8)?,
+        finished_at: row.get(9)?,
+        recorded_at: row.get(10)?,
+    })
+}
+
+fn automation_thread_run_by_key(
+    conn: &Connection,
+    automation_id: &str,
+    run_id: &str,
+) -> GaryxDbResult<Option<AutomationThreadRunRecord>> {
+    Ok(conn
+        .query_row(
+            "SELECT automation_id, run_id, thread_id, workspace_dir, agent_id,
+                    automation_label_snapshot, mode, status, started_at, finished_at, recorded_at
+             FROM automation_thread_runs
+             WHERE automation_id = ?1 AND run_id = ?2",
+            params![automation_id, run_id],
+            automation_thread_run_from_row,
         )
         .optional()?)
 }
@@ -1860,6 +2104,53 @@ mod tests {
                 .map(|record| record.thread_id)
                 .collect::<Vec<_>>(),
             vec!["thread::newer"],
+        );
+    }
+
+    #[test]
+    fn automation_thread_runs_round_trip_and_finish() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let record = db
+            .upsert_automation_thread_run(AutomationThreadRunDraft {
+                automation_id: "automation::daily".to_owned(),
+                run_id: "run-1".to_owned(),
+                thread_id: "thread::generated".to_owned(),
+                workspace_dir: Some("/Users/test/project".to_owned()),
+                agent_id: Some("claude".to_owned()),
+                automation_label_snapshot: Some("Daily".to_owned()),
+                mode: "generated_thread".to_owned(),
+                status: "running".to_owned(),
+                started_at: "2026-05-28T00:00:00Z".to_owned(),
+                finished_at: None,
+            })
+            .expect("insert automation run");
+
+        assert_eq!(record.status, "running");
+        assert_eq!(
+            db.count_automation_thread_runs("automation::daily", Some("generated_thread"))
+                .expect("count"),
+            1
+        );
+
+        assert!(
+            db.finish_automation_thread_run(
+                "automation::daily",
+                "run-1",
+                "success",
+                "2026-05-28T00:00:05Z",
+            )
+            .expect("finish")
+        );
+
+        let records = db
+            .list_automation_thread_runs("automation::daily", Some("generated_thread"), 10, 0)
+            .expect("list runs");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].thread_id, "thread::generated");
+        assert_eq!(records[0].status, "success");
+        assert_eq!(
+            records[0].automation_label_snapshot.as_deref(),
+            Some("Daily")
         );
     }
 

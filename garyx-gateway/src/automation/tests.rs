@@ -1,16 +1,18 @@
 use super::{
-    UpdateAutomationBody, automation_agent_id, build_automation_job, compile_schedule,
-    infer_schedule_view, is_automation_job, parse_time_hm, render_data_trigger_template,
-    resolve_automation_agent_id, run_data_triggers_for_db_event, to_summary, update_automation,
+    AutomationThreadsParams, UpdateAutomationBody, automation_agent_id, automation_threads,
+    build_automation_job, compile_schedule, infer_schedule_view, is_automation_job, parse_time_hm,
+    render_data_trigger_template, resolve_automation_agent_id, run_data_triggers_for_db_event,
+    to_summary, update_automation,
 };
 use crate::app_db::{
     AppDbEvent, AppDbFieldSpec, AppDbService, CreateDataTriggerBody, CreateTableBody,
 };
 use crate::cron::{CronJob, CronService, JobRunStatus};
+use crate::garyx_db::AutomationThreadRunDraft;
 use crate::server::{AppStateBuilder, create_app_state};
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -409,6 +411,92 @@ async fn update_automation_switches_target_thread_without_workspace_snapshot() {
         .expect("automation still exists");
     assert_eq!(updated.thread_id.as_deref(), Some("thread::target-two"));
     assert!(updated.workspace_dir.is_none());
+}
+
+#[tokio::test]
+async fn automation_threads_endpoint_returns_generated_run_associations() {
+    let temp = tempfile::tempdir().unwrap();
+    let service = Arc::new(CronService::new(temp.path().to_path_buf()));
+    service
+        .add(CronJobConfig {
+            id: "automation::daily".to_owned(),
+            kind: CronJobKind::AutomationPrompt,
+            label: Some("Daily Review".to_owned()),
+            schedule: CronSchedule::Interval {
+                interval_secs: 3600,
+            },
+            ui_schedule: Some(AutomationScheduleView::Interval { hours: 1 }),
+            action: CronAction::AgentTurn,
+            target: None,
+            message: Some("Summarize.".to_owned()),
+            workspace_dir: Some("/Users/test/project".to_owned()),
+            agent_id: Some("codex".to_owned()),
+            thread_id: None,
+            delete_after_run: false,
+            enabled: true,
+            system: false,
+        })
+        .await
+        .unwrap();
+    let state = AppStateBuilder::new(GaryxConfig::default())
+        .with_cron_service(service)
+        .build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::generated",
+            serde_json::json!({
+                "label": "Daily Review",
+                "workspace_dir": "/Users/test/project",
+                "agent_id": "codex",
+                "automation_id": "automation::daily",
+                "automation_thread_mode": "generated_thread",
+                "exclude_from_recent": true,
+                "messages": [{"role": "user", "content": "Summarize."}]
+            }),
+        )
+        .await;
+    state
+        .ops
+        .garyx_db
+        .upsert_automation_thread_run(AutomationThreadRunDraft {
+            automation_id: "automation::daily".to_owned(),
+            run_id: "run-1".to_owned(),
+            thread_id: "thread::generated".to_owned(),
+            workspace_dir: Some("/Users/test/project".to_owned()),
+            agent_id: Some("codex".to_owned()),
+            automation_label_snapshot: Some("Daily Review".to_owned()),
+            mode: "generated_thread".to_owned(),
+            status: "running".to_owned(),
+            started_at: "2026-05-28T00:00:00Z".to_owned(),
+            finished_at: None,
+        })
+        .unwrap();
+
+    let response = automation_threads(
+        State(state),
+        Path("automation::daily".to_owned()),
+        Query(AutomationThreadsParams {
+            limit: 50,
+            offset: 0,
+            mode: None,
+        }),
+    )
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["items"][0]["threadId"], "thread::generated");
+    assert_eq!(
+        payload["items"][0]["thread"]["automationThreadMode"],
+        "generated_thread"
+    );
+    assert_eq!(payload["items"][0]["thread"]["excludeFromRecent"], true);
 }
 
 #[tokio::test]

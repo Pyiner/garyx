@@ -103,7 +103,7 @@ extension GaryxMobileModel {
 
     func canDeleteThread(_ thread: GaryxThreadSummary) -> Bool {
         guard !isThreadBusy(thread.id) else { return false }
-        if automations.contains(where: { $0.threadId == thread.id }) {
+        if automations.contains(where: { $0.targetThreadId == thread.id }) {
             return false
         }
         let liveBotKeys = Set(
@@ -127,7 +127,7 @@ extension GaryxMobileModel {
         let normalizedId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedId.isEmpty, !isThreadBusy(normalizedId) else { return false }
         if automations.contains(
-            where: { ($0.threadId ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == normalizedId }
+            where: { ($0.targetThreadId ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == normalizedId }
         ) {
             return false
         }

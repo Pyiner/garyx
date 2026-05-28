@@ -1566,6 +1566,54 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertEqual(onceObject?["at"] as? String, "2026-03-01T09:00")
     }
 
+    func testAutomationThreadsPageDecodesGatewayShape() throws {
+        let page = try JSONDecoder().decode(
+            GaryxAutomationThreadsPage.self,
+            from: Data(
+                """
+                {
+                  "automationId": "automation::daily",
+                  "automationLabel": "Daily Review",
+                  "automationDeleted": false,
+                  "items": [
+                    {
+                      "automationId": "automation::daily",
+                      "runId": "run-1",
+                      "threadId": "thread::generated",
+                      "workspaceDir": "/Users/test/project",
+                      "agentId": "codex",
+                      "automationLabel": "Daily Review",
+                      "automationDeleted": false,
+                      "status": "running",
+                      "startedAt": "2026-05-28T00:00:00Z",
+                      "thread": {
+                        "threadId": "thread::generated",
+                        "title": "Daily Review",
+                        "workspaceDir": "/Users/test/project",
+                        "agentId": "codex",
+                        "automationId": "automation::daily",
+                        "automationThreadMode": "generated_thread",
+                        "excludeFromRecent": true,
+                        "messageCount": 2
+                      }
+                    }
+                  ],
+                  "count": 1,
+                  "total": 1,
+                  "limit": 50,
+                  "offset": 0,
+                  "hasMore": false
+                }
+                """.utf8
+            )
+        )
+
+        XCTAssertEqual(page.automationId, "automation::daily")
+        XCTAssertEqual(page.items.first?.thread?.id, "thread::generated")
+        XCTAssertEqual(page.items.first?.thread?.automationThreadMode, "generated_thread")
+        XCTAssertEqual(page.items.first?.thread?.excludeFromRecent, true)
+    }
+
     func testMacParityAgentTeamAndChannelPayloadsDecodeGatewayShapes() throws {
         let agents = try JSONDecoder().decode(
             GaryxAgentsPage.self,

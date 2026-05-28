@@ -511,6 +511,7 @@ impl AppStateBuilder {
         // build() is ever called more than once for the same cron service.
         if let Some(cron_service) = state.ops.cron_service.as_ref() {
             cron_service.set_app_state(Arc::downgrade(&state));
+            cron_service.set_garyx_db(state.ops.garyx_db.clone());
         }
 
         state

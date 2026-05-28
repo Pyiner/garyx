@@ -152,6 +152,8 @@ extension GaryxMobileModel {
             await openTaskRoute(id, source: source)
         case let .automation(id):
             await openAutomationRoute(id, source: source)
+        case let .automationThreads(id):
+            await openAutomationThreadsRoute(id, source: source)
         case let .agent(id):
             await openAgentRoute(id, source: source)
         case let .team(id):
@@ -194,6 +196,15 @@ extension GaryxMobileModel {
             return
         }
         selectedAutomationEditor = automation
+    }
+
+    private func openAutomationThreadsRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
+        let automationId = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !automationId.isEmpty else { return }
+        openWorkspaceBotsDrilldown(.automationThreads(automationId), source: source)
+        if automations.isEmpty {
+            await refreshRemoteState()
+        }
     }
 
     private func openAgentRoute(_ id: String, source: GaryxMobilePanelOpenSource) async {
@@ -304,7 +315,7 @@ extension GaryxMobileModel {
         case .settingsOverview:
             "All Settings"
         case .workspaceBotsOverview:
-            "Workspace & Bots"
+            "Threads"
         }
     }
 

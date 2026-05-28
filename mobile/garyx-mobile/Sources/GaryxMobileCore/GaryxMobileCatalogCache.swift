@@ -296,10 +296,27 @@ struct GaryxCachedAutomation: Codable, Equatable {
     var workspacePath: String
     var targetThreadId: String?
     var threadId: String?
+    var threadMode: String
     var nextRun: String
     var lastRunAt: String?
     var lastStatus: String
     var schedule: GaryxAutomationSchedule
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case prompt
+        case agentId
+        case enabled
+        case workspacePath
+        case targetThreadId
+        case threadId
+        case threadMode
+        case nextRun
+        case lastRunAt
+        case lastStatus
+        case schedule
+    }
 
     init(_ automation: GaryxAutomationSummary) {
         id = automation.id
@@ -310,10 +327,29 @@ struct GaryxCachedAutomation: Codable, Equatable {
         workspacePath = automation.workspacePath
         targetThreadId = automation.targetThreadId
         threadId = automation.threadId
+        threadMode = automation.threadMode
         nextRun = automation.nextRun
         lastRunAt = automation.lastRunAt
         lastStatus = automation.lastStatus
         schedule = automation.schedule
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        prompt = try container.decode(String.self, forKey: .prompt)
+        agentId = try container.decode(String.self, forKey: .agentId)
+        enabled = try container.decode(Bool.self, forKey: .enabled)
+        workspacePath = try container.decode(String.self, forKey: .workspacePath)
+        targetThreadId = try container.decodeIfPresent(String.self, forKey: .targetThreadId)
+        threadId = try container.decodeIfPresent(String.self, forKey: .threadId)
+        threadMode = try container.decodeIfPresent(String.self, forKey: .threadMode)
+            ?? (targetThreadId == nil ? "generated" : "target")
+        nextRun = try container.decode(String.self, forKey: .nextRun)
+        lastRunAt = try container.decodeIfPresent(String.self, forKey: .lastRunAt)
+        lastStatus = try container.decode(String.self, forKey: .lastStatus)
+        schedule = try container.decode(GaryxAutomationSchedule.self, forKey: .schedule)
     }
 
     var model: GaryxAutomationSummary {
@@ -326,6 +362,7 @@ struct GaryxCachedAutomation: Codable, Equatable {
             workspacePath: workspacePath,
             targetThreadId: targetThreadId,
             threadId: threadId,
+            threadMode: threadMode,
             nextRun: nextRun,
             lastRunAt: lastRunAt,
             lastStatus: lastStatus,

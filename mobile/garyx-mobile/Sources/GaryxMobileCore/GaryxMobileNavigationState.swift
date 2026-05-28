@@ -60,7 +60,7 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
         case .autoResearch:
             "Auto Research"
         case .workspaceBots:
-            "Workspace & Bots"
+            "Threads"
         case .bots:
             "Bots"
         case .settings:
@@ -91,7 +91,7 @@ public enum GaryxMobilePanel: String, CaseIterable, Identifiable, Sendable {
         case .autoResearch:
             "atom"
         case .workspaceBots:
-            "folder"
+            "bubble.left.and.bubble.right.fill"
         case .bots:
             "bubble.left.and.bubble.right"
         case .settings:
@@ -342,6 +342,7 @@ public enum GaryxMobilePanelOpenSource: Equatable, Sendable {
 public enum GaryxWorkspaceBotsDrilldown: Equatable, Sendable {
     case bot(String)
     case workspace(String)
+    case automationThreads(String)
 }
 
 public struct GaryxMobilePanelRoute: Equatable, Sendable {

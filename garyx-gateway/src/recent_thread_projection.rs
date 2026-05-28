@@ -32,7 +32,16 @@ impl RecentThreadProjectingStore {
             }
             return;
         }
+        if is_recent_thread_excluded(data) {
+            if let Err(error) = self.garyx_db.remove_recent_thread(thread_id) {
+                warn!(thread_id, error = %error, "failed to remove excluded thread from recent thread projection");
+            }
+            return;
+        }
         let Some(draft) = recent_thread_draft_from_thread_data(thread_id, data) else {
+            if let Err(error) = self.garyx_db.remove_recent_thread(thread_id) {
+                warn!(thread_id, error = %error, "failed to remove non-projectable thread from recent thread projection");
+            }
             return;
         };
         if let Err(error) = self.garyx_db.upsert_recent_thread(draft) {
@@ -98,9 +107,9 @@ pub(crate) async fn reconcile_active_recent_thread_projection(
         let Some(data) = thread_store.get(&record.thread_id).await else {
             continue;
         };
-        if is_hidden_thread_value(&data) {
+        if is_hidden_thread_value(&data) || is_recent_thread_excluded(&data) {
             if let Err(error) = garyx_db.remove_recent_thread(&record.thread_id) {
-                warn!(thread_id = %record.thread_id, error = %error, "failed to remove hidden active recent thread projection during reconcile");
+                warn!(thread_id = %record.thread_id, error = %error, "failed to remove hidden or excluded active recent thread projection during reconcile");
             } else {
                 reconciled += 1;
             }
@@ -120,6 +129,38 @@ pub(crate) async fn reconcile_active_recent_thread_projection(
         reconciled += 1;
     }
     reconciled
+}
+
+pub(crate) async fn prune_excluded_recent_thread_projection(
+    thread_store: &Arc<dyn ThreadStore>,
+    garyx_db: &GaryxDbService,
+) -> usize {
+    let records = match garyx_db.list_recent_threads(usize::MAX, 0) {
+        Ok(records) => records,
+        Err(error) => {
+            warn!(error = %error, "failed to list recent thread projection before exclusion prune");
+            return 0;
+        }
+    };
+
+    let mut pruned = 0;
+    for record in records {
+        let should_remove = match thread_store.get(&record.thread_id).await {
+            Some(data) => is_hidden_thread_value(&data) || is_recent_thread_excluded(&data),
+            None => true,
+        };
+        if !should_remove {
+            continue;
+        }
+        match garyx_db.remove_recent_thread(&record.thread_id) {
+            Ok(true) => pruned += 1,
+            Ok(false) => {}
+            Err(error) => {
+                warn!(thread_id = %record.thread_id, error = %error, "failed to prune excluded recent thread projection");
+            }
+        }
+    }
+    pruned
 }
 
 #[async_trait]
@@ -166,7 +207,8 @@ pub(crate) fn recent_thread_draft_from_thread_data(
     data: &Value,
 ) -> Option<RecentThreadDraft> {
     let thread_id = thread_id.trim();
-    if !is_thread_key(thread_id) || is_hidden_thread_value(data) {
+    if !is_thread_key(thread_id) || is_hidden_thread_value(data) || is_recent_thread_excluded(data)
+    {
         return None;
     }
     let title = data
@@ -234,6 +276,41 @@ pub(crate) fn recent_thread_draft_from_thread_data(
         updated_at,
         last_active_at,
     })
+}
+
+pub(crate) fn is_recent_thread_excluded(data: &Value) -> bool {
+    if bool_field(data, "exclude_from_recent") {
+        return true;
+    }
+    if string_field(data, "automation_thread_mode").is_some_and(|value| value == "generated_thread")
+    {
+        return true;
+    }
+    let Some(metadata) = data.get("metadata") else {
+        return false;
+    };
+    bool_field(metadata, "exclude_from_recent")
+        || string_field(metadata, "automation_thread_mode")
+            .is_some_and(|value| value == "generated_thread")
+}
+
+fn bool_field(data: &Value, key: &str) -> bool {
+    match data.get(key) {
+        Some(Value::Bool(true)) => true,
+        Some(Value::String(value)) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "true" | "yes" | "1"
+        ),
+        _ => false,
+    }
+}
+
+fn string_field(data: &Value, key: &str) -> Option<String> {
+    data.get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
 }
 
 fn recent_thread_run_state(active_run_id: Option<&str>, recent_run_id: Option<&str>) -> String {
@@ -367,5 +444,97 @@ mod tests {
         assert_eq!(records[0].thread_id, thread_id);
         assert_eq!(records[0].active_run_id, None);
         assert_eq!(records[0].run_state, "completed");
+    }
+
+    #[test]
+    fn generated_automation_threads_are_not_projectable_recent_threads() {
+        let data = json!({
+            "label": "Daily automation",
+            "automation_thread_mode": "generated_thread",
+            "exclude_from_recent": true,
+            "updated_at": "2026-01-01T00:00:01Z",
+            "messages": [
+                {"role": "user", "content": "run"}
+            ]
+        });
+
+        assert!(is_recent_thread_excluded(&data));
+        assert!(recent_thread_draft_from_thread_data("thread::automation", &data).is_none());
+    }
+
+    #[tokio::test]
+    async fn projection_removes_existing_recent_row_when_thread_becomes_excluded() {
+        let thread_id = "thread::automation-projection";
+        let inner: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let store = RecentThreadProjectingStore::new(inner, garyx_db.clone());
+
+        store
+            .set(
+                thread_id,
+                json!({
+                    "label": "Visible",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "messages": [{"role": "user", "content": "hello"}]
+                }),
+            )
+            .await;
+        assert_eq!(
+            garyx_db
+                .list_recent_threads(10, 0)
+                .expect("list visible")
+                .len(),
+            1
+        );
+
+        store
+            .update(
+                thread_id,
+                json!({
+                    "automation_thread_mode": "generated_thread",
+                    "exclude_from_recent": true,
+                    "updated_at": "2026-01-01T00:00:01Z"
+                }),
+            )
+            .await
+            .expect("update thread");
+
+        assert!(
+            garyx_db
+                .list_recent_threads(10, 0)
+                .expect("list after exclusion")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn prune_excluded_recent_thread_projection_removes_seeded_rows() {
+        let thread_id = "thread::automation-prune";
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        thread_store
+            .set(
+                thread_id,
+                json!({
+                    "label": "Generated",
+                    "automation_thread_mode": "generated_thread",
+                    "exclude_from_recent": true,
+                    "updated_at": "2026-01-01T00:00:01Z"
+                }),
+            )
+            .await;
+        let garyx_db = GaryxDbService::memory().expect("memory db");
+        garyx_db
+            .upsert_recent_thread(stale_active_draft(thread_id))
+            .expect("seed recent row");
+
+        let count = prune_excluded_recent_thread_projection(&thread_store, &garyx_db).await;
+
+        assert_eq!(count, 1);
+        assert!(
+            garyx_db
+                .list_recent_threads(10, 0)
+                .expect("list after prune")
+                .is_empty()
+        );
     }
 }

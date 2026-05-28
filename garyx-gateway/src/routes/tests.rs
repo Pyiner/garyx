@@ -1508,6 +1508,7 @@ async fn workspaces_route_seeds_from_config_only_when_workspace_table_is_empty()
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     });
     config.cron.jobs.push(CronJobConfig {
         id: "cron::relative".to_owned(),
@@ -1523,6 +1524,7 @@ async fn workspaces_route_seeds_from_config_only_when_workspace_table_is_empty()
         thread_id: None,
         delete_after_run: false,
         enabled: true,
+        system: false,
     });
     let state = AppStateBuilder::new(config).build();
     create_thread_record(
