@@ -490,12 +490,6 @@ struct GaryxConversationHeader: View {
                             }
                             .disabled(model.mobileBotGroups.isEmpty)
 
-                            if let boundGroup = model.selectedThreadBotGroup,
-                               let configuredBot = garyxConfiguredBot(for: boundGroup, in: model.configuredBots) {
-                                Button("Unbind \(boundGroup.title)", systemImage: "link.badge.minus", role: .destructive) {
-                                    Task { await model.unbindBot(configuredBot) }
-                                }
-                            }
                         }
 
                         Button(
@@ -591,19 +585,22 @@ private struct GaryxThreadBotBindingSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
                         VStack(spacing: 0) {
-                            if let boundBot {
+                            if !selectableGroups.isEmpty || boundBot != nil {
                                 botOptionRow(
                                     title: "No bot",
-                                    subtitle: "Unbind this thread from \(boundGroup?.title ?? "the current bot")",
-                                    channel: boundBot.channel,
+                                    subtitle: "Do not bind this thread to any bot",
+                                    channel: boundBot?.channel ?? "",
                                     iconDataUrl: nil,
-                                    systemName: "link.badge.minus",
-                                    isSelected: false,
-                                    role: .destructive,
-                                    isDestructive: true
+                                    systemName: "link.slash",
+                                    isSelected: boundGroup == nil,
+                                    usesBotLogo: false
                                 ) {
-                                    apply {
-                                        await model.unbindBot(boundBot)
+                                    if let boundBot {
+                                        apply {
+                                            await model.unbindBot(boundBot)
+                                        }
+                                    } else {
+                                        dismiss()
                                     }
                                 }
 
@@ -694,25 +691,26 @@ private struct GaryxThreadBotBindingSheet: View {
         iconDataUrl: String?,
         systemName: String,
         isSelected: Bool,
+        usesBotLogo: Bool = true,
         role: ButtonRole? = nil,
         isDestructive: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
         Button(role: role, action: action) {
             HStack(spacing: 12) {
-                if isDestructive {
-                    Image(systemName: systemName)
-                        .font(GaryxFont.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.red)
-                        .frame(width: 34, height: 34)
-                        .background(Color(.secondarySystemFill).opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                } else {
+                if usesBotLogo {
                     GaryxChannelLogoView(
                         channel: channel,
                         label: title,
                         iconDataUrl: iconDataUrl,
                         diameter: 34
                     )
+                } else {
+                    Image(systemName: systemName)
+                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .foregroundStyle(isDestructive ? .red : .secondary)
+                        .frame(width: 34, height: 34)
+                        .background(Color(.secondarySystemFill).opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
