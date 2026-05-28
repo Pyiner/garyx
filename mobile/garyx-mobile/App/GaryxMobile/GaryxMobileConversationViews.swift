@@ -432,6 +432,7 @@ struct GaryxConversationHeader: View {
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var showsRenamePrompt = false
     @State private var renameDraftTitle = ""
+    @State private var showsBotBindingSheet = false
 
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
@@ -478,6 +479,23 @@ struct GaryxConversationHeader: View {
 
                 Menu {
                     if let selectedThread = model.selectedThread {
+                        Section("Bot") {
+                            Button(
+                                model.selectedThreadBotGroup == nil ? "Bind Bot" : "Change Bot",
+                                systemImage: model.selectedThreadBotGroup == nil ? "link.badge.plus" : "arrow.triangle.2.circlepath"
+                            ) {
+                                showsBotBindingSheet = true
+                            }
+                            .disabled(model.mobileBotGroups.isEmpty)
+
+                            if let boundGroup = model.selectedThreadBotGroup,
+                               let configuredBot = garyxConfiguredBot(for: boundGroup, in: model.configuredBots) {
+                                Button("Unbind \(boundGroup.title)", systemImage: "link.badge.minus", role: .destructive) {
+                                    Task { await model.unbindBot(configuredBot) }
+                                }
+                            }
+                        }
+
                         Button(
                             model.isThreadPinned(selectedThread.id) ? "Unpin thread" : "Pin thread",
                             systemImage: model.isThreadPinned(selectedThread.id) ? "pin.slash" : "pin"
@@ -518,6 +536,9 @@ struct GaryxConversationHeader: View {
                 }
             }
         }
+        .sheet(isPresented: $showsBotBindingSheet) {
+            GaryxThreadBotBindingSheet()
+        }
     }
 
     private func openRenamePrompt() {
@@ -528,6 +549,233 @@ struct GaryxConversationHeader: View {
     private func openSidebar() {
         garyxDismissKeyboard()
         model.setSidebarVisible(true)
+    }
+}
+
+private struct GaryxThreadBotBindingSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: GaryxMobileModel
+    @State private var isApplying = false
+
+    private var boundGroup: GaryxMobileBotGroup? {
+        model.selectedThreadBotGroup
+    }
+
+    private var boundBot: GaryxConfiguredBot? {
+        guard let boundGroup else { return nil }
+        return garyxConfiguredBot(for: boundGroup, in: model.configuredBots)
+    }
+
+    private var selectableGroups: [GaryxMobileBotGroup] {
+        model.mobileBotGroups.filter {
+            garyxConfiguredBot(for: $0, in: model.configuredBots) != nil
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            botBindingSheetHeader
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    GaryxGlassPanel(cornerRadius: 28, fallbackMaterial: .ultraThinMaterial, shadowOpacity: 0.045) {
+                        VStack(spacing: 0) {
+                            if let boundBot {
+                                botOptionRow(
+                                    title: "No bot",
+                                    subtitle: "Unbind this thread from \(boundGroup?.title ?? "the current bot")",
+                                    channel: boundBot.channel,
+                                    iconDataUrl: nil,
+                                    systemName: "link.badge.minus",
+                                    isSelected: false,
+                                    role: .destructive,
+                                    isDestructive: true
+                                ) {
+                                    apply {
+                                        await model.unbindBot(boundBot)
+                                    }
+                                }
+
+                                if !selectableGroups.isEmpty {
+                                    Divider().padding(.leading, 56)
+                                }
+                            }
+
+                            if selectableGroups.isEmpty {
+                                emptyState
+                            } else {
+                                ForEach(Array(selectableGroups.enumerated()), id: \.element.id) { index, group in
+                                    if let bot = garyxConfiguredBot(for: group, in: model.configuredBots) {
+                                        botOptionRow(
+                                            title: group.title,
+                                            subtitle: group.subtitle,
+                                            channel: group.channel,
+                                            iconDataUrl: group.iconDataUrl,
+                                            systemName: "bubble.left.and.bubble.right",
+                                            isSelected: group.id == boundGroup?.id
+                                        ) {
+                                            guard group.id != boundGroup?.id else {
+                                                dismiss()
+                                                return
+                                            }
+                                            apply {
+                                                await model.bindBotToSelectedThread(bot)
+                                            }
+                                        }
+                                        if index < selectableGroups.count - 1 {
+                                            Divider().padding(.leading, 56)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 28)
+            }
+            .scrollIndicators(.hidden)
+        }
+        .garyxBotBindingSheetStyle()
+    }
+
+    private var botBindingSheetHeader: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text("Thread Bot")
+                .font(GaryxFont.callout(weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Button {
+                dismiss()
+            } label: {
+                GaryxCompactGlassIcon(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close")
+        }
+        .padding(.horizontal, 22)
+        .padding(.top, 22)
+        .padding(.bottom, 14)
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("No bots configured")
+                .font(GaryxFont.subheadline(weight: .semibold))
+                .foregroundStyle(.primary)
+            Text("Add a bot in Settings before binding one to this thread.")
+                .font(GaryxFont.caption())
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 14)
+    }
+
+    private func botOptionRow(
+        title: String,
+        subtitle: String,
+        channel: String,
+        iconDataUrl: String?,
+        systemName: String,
+        isSelected: Bool,
+        role: ButtonRole? = nil,
+        isDestructive: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            HStack(spacing: 12) {
+                if iconDataUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                    GaryxChannelLogoView(
+                        channel: channel,
+                        label: title,
+                        iconDataUrl: iconDataUrl,
+                        diameter: 34
+                    )
+                } else {
+                    Image(systemName: systemName)
+                        .font(GaryxFont.system(size: 15, weight: .semibold))
+                        .foregroundStyle(isDestructive ? .red : .secondary)
+                        .frame(width: 34, height: 34)
+                        .background(Color(.secondarySystemFill).opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(GaryxFont.subheadline(weight: .semibold))
+                        .foregroundStyle(isDestructive ? .red : .primary)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(GaryxFont.caption())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
+                if isSelected {
+                    GaryxSelectionCheckmark(size: 12)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isApplying)
+        .opacity(isApplying ? 0.62 : 1)
+    }
+
+    private func apply(_ operation: @escaping () async -> Void) {
+        guard !isApplying else { return }
+        isApplying = true
+        dismiss()
+        Task {
+            await operation()
+            await MainActor.run {
+                isApplying = false
+            }
+        }
+    }
+}
+
+private func garyxConfiguredBot(
+    for group: GaryxMobileBotGroup,
+    in configuredBots: [GaryxConfiguredBot]
+) -> GaryxConfiguredBot? {
+    configuredBots.first {
+        $0.channel.caseInsensitiveCompare(group.channel) == .orderedSame
+            && $0.accountId == group.accountId
+    }
+}
+
+private extension View {
+    func garyxBotBindingSheetStyle() -> some View {
+        self
+            .background {
+                Rectangle()
+                    .fill(Color(.systemBackground).opacity(0.98))
+                    .overlay {
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.28),
+                                Color.white.opacity(0.10)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
+                    .ignoresSafeArea()
+            }
+            .presentationBackground(.clear)
+            .presentationBackgroundInteraction(.enabled)
+            .presentationDetents([.fraction(0.72), .large])
+            .presentationDragIndicator(.hidden)
+            .presentationCornerRadius(38)
     }
 }
 

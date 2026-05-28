@@ -261,28 +261,6 @@ struct GaryxComposer: View {
                 }
             }
 
-            if model.selectedThread != nil, !model.mobileBotGroups.isEmpty {
-                Section("Bots") {
-                    if let boundGroup = model.selectedThreadBotGroup,
-                       let configuredBot = configuredBot(for: boundGroup) {
-                        Button(role: .destructive) {
-                            Task { await model.unbindBot(configuredBot) }
-                        } label: {
-                            Label("Unbind \(boundGroup.title)", systemImage: "link.badge.minus")
-                        }
-                    }
-
-                    ForEach(model.mobileBotGroups) { group in
-                        if let configuredBot = configuredBot(for: group) {
-                            Button {
-                                Task { await model.bindBotToSelectedThread(configuredBot) }
-                            } label: {
-                                botMenuLabel(for: group)
-                            }
-                        }
-                    }
-                }
-            }
         } label: {
             Image(systemName: "plus")
                 .font(GaryxFont.system(size: 22, weight: .regular))
@@ -313,33 +291,6 @@ struct GaryxComposer: View {
         if !sent {
             draftText = text
         }
-    }
-
-    private func configuredBot(for group: GaryxMobileBotGroup) -> GaryxConfiguredBot? {
-        model.configuredBots.first {
-            $0.channel.caseInsensitiveCompare(group.channel) == .orderedSame
-                && $0.accountId == group.accountId
-        }
-    }
-
-    @ViewBuilder
-    private func botMenuLabel(for group: GaryxMobileBotGroup) -> some View {
-        if let image = Self.decodedMenuIcon(from: group.iconDataUrl) {
-            Label {
-                Text(group.title)
-            } icon: {
-                Image(uiImage: image)
-                    .renderingMode(.original)
-                    .resizable()
-                    .scaledToFit()
-            }
-        } else {
-            Label(group.title, systemImage: "bubble.left.and.bubble.right")
-        }
-    }
-
-    private static func decodedMenuIcon(from raw: String?) -> UIImage? {
-        GaryxDataURLImageCache.image(from: raw)
     }
 
     private func attachPhotos(_ items: [PhotosPickerItem]) async {
