@@ -2,6 +2,18 @@ import Foundation
 import SwiftUI
 import UIKit
 
+enum GaryxClipboard {
+    static func copyString(_ value: String) {
+        UIPasteboard.general.string = value
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+
+    static func copyImage(_ image: UIImage) {
+        UIPasteboard.general.image = image
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
+}
+
 struct GaryxMarkdownText: View {
     let text: String
     var foreground: Color = .primary
@@ -47,6 +59,7 @@ struct GaryxMarkdownText: View {
             }
         }
         .frame(maxWidth: fillsAvailableWidth ? .infinity : nil, alignment: .leading)
+        .textSelection(.enabled)
     }
 
     fileprivate static func attributedString(from markdown: String) -> AttributedString {
@@ -211,6 +224,18 @@ private struct GaryxCodeBlockView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(border, lineWidth: 1)
+        }
+        .contextMenu {
+            Button {
+                GaryxClipboard.copyString(code)
+            } label: {
+                Label("Copy Code", systemImage: "doc.on.doc")
+            }
+            .disabled(code.isEmpty)
+        }
+        .accessibilityAction(named: Text("Copy Code")) {
+            guard !code.isEmpty else { return }
+            GaryxClipboard.copyString(code)
         }
     }
 }
@@ -412,6 +437,7 @@ private struct GaryxMarkdownImageView: View {
 
     var body: some View {
         Button {
+            guard localImage != nil || !loadFailed else { return }
             showsPreview = true
         } label: {
             if let image = localImage {
@@ -443,7 +469,26 @@ private struct GaryxMarkdownImageView: View {
         .buttonStyle(.plain)
         .fixedSize()
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .disabled(localImage == nil && loadFailed)
+        .contextMenu {
+            if let localImage {
+                Button {
+                    GaryxClipboard.copyImage(localImage)
+                } label: {
+                    Label("Copy Image", systemImage: "photo.on.rectangle")
+                }
+            }
+            Button {
+                GaryxClipboard.copyString(source)
+            } label: {
+                Label("Copy Image Source", systemImage: "link")
+            }
+            .disabled(source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .accessibilityAction(named: Text("Copy Image Source")) {
+            let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            GaryxClipboard.copyString(trimmed)
+        }
         .fullScreenCover(isPresented: $showsPreview) {
             GaryxFullscreenImagePreview(
                 source: GaryxImagePreviewSource(

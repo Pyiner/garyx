@@ -922,6 +922,7 @@ struct GaryxMessageBubble: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     if !message.attachments.isEmpty {
                         GaryxMessageAttachmentStack(attachments: message.attachments, isUser: true)
+                            .garyxMessageCopyContext(text: messageCopyText)
                     }
 
                     if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -949,6 +950,7 @@ struct GaryxMessageBubble: View {
             VStack(alignment: .leading, spacing: 8) {
                 if !message.attachments.isEmpty {
                     GaryxMessageAttachmentStack(attachments: message.attachments, isUser: false)
+                        .garyxMessageCopyContext(text: messageCopyText)
                 }
                 if message.isStreaming && message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     if message.attachments.isEmpty {
@@ -995,6 +997,38 @@ struct GaryxMessageBubble: View {
             return ""
         }
         return message.text
+    }
+
+    private var messageCopyText: String {
+        var parts: [String] = []
+        if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            parts.append(displayText)
+        }
+        let attachmentText = message.attachments
+            .compactMap(Self.copyTextLine(for:))
+            .joined(separator: "\n")
+        if !attachmentText.isEmpty {
+            parts.append(attachmentText)
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
+    private static func copyTextLine(for attachment: GaryxMobileMessageAttachment) -> String? {
+        let title = attachment.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = attachment.isImage ? "Image" : "Attachment"
+        let label = title.isEmpty ? fallback : title
+        if let path = attachment.path?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            return "\(label): \(path)"
+        }
+        if let remoteUrl = attachment.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !remoteUrl.isEmpty {
+            return "\(label): \(remoteUrl)"
+        }
+        if attachment.dataUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return "\(label): inline \(attachment.isImage ? "image" : "attachment")"
+        }
+        return title.isEmpty ? nil : label
     }
 
     private var userBubbleBackground: Color {
@@ -1057,6 +1091,38 @@ struct GaryxMessageBubble: View {
 private struct GaryxMessageFilePreviewSheet: Identifiable {
     let id = UUID()
     let preview: GaryxWorkspaceFilePreview
+}
+
+private struct GaryxMessageCopyContextModifier: ViewModifier {
+    let text: String
+    var title = "Copy Message"
+
+    private var copyableText: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .contextMenu {
+                if !copyableText.isEmpty {
+                    Button {
+                        GaryxClipboard.copyString(text)
+                    } label: {
+                        Label(title, systemImage: "doc.on.doc")
+                    }
+                }
+            }
+            .accessibilityAction(named: Text(title)) {
+                guard !copyableText.isEmpty else { return }
+                GaryxClipboard.copyString(text)
+            }
+    }
+}
+
+private extension View {
+    func garyxMessageCopyContext(text: String, title: String = "Copy Message") -> some View {
+        modifier(GaryxMessageCopyContextModifier(text: text, title: title))
+    }
 }
 
 struct GaryxMessageAttachmentStack: View {
@@ -1137,6 +1203,33 @@ struct GaryxMessageImageAttachmentView: View {
                 showsPreview = false
             }
         }
+        .contextMenu {
+            if let decodedImage {
+                Button {
+                    GaryxClipboard.copyImage(decodedImage)
+                } label: {
+                    Label("Copy Image", systemImage: "photo.on.rectangle")
+                }
+            }
+            if let sourceText = imageSourceText {
+                Button {
+                    GaryxClipboard.copyString(sourceText)
+                } label: {
+                    Label("Copy Image Source", systemImage: "link")
+                }
+            }
+            if !attachment.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Button {
+                    GaryxClipboard.copyString(attachment.name)
+                } label: {
+                    Label("Copy Name", systemImage: "text.cursor")
+                }
+            }
+        }
+        .accessibilityAction(named: Text("Copy Image Source")) {
+            guard let imageSourceText else { return }
+            GaryxClipboard.copyString(imageSourceText)
+        }
         .accessibilityLabel(attachment.name.isEmpty ? "Image attachment" : attachment.name)
         .accessibilityHint("Opens full screen preview")
         .task(id: dataUrlDecodeKey) {
@@ -1187,6 +1280,18 @@ struct GaryxMessageImageAttachmentView: View {
         return URL(string: raw)
     }
 
+    private var imageSourceText: String? {
+        if let remoteUrl = attachment.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !remoteUrl.isEmpty {
+            return remoteUrl
+        }
+        if let path = attachment.path?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            return path
+        }
+        return nil
+    }
+
     private static func localFilePath(from value: String?) -> String? {
         guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else { return nil }
@@ -1221,7 +1326,39 @@ struct GaryxMessageFileAttachmentView: View {
             isUser ? Color.black.opacity(0.06) : Color(.secondarySystemFill),
             in: Capsule()
         )
+        .contextMenu {
+            if let sourceText {
+                Button {
+                    GaryxClipboard.copyString(sourceText)
+                } label: {
+                    Label("Copy File Path", systemImage: "doc.on.doc")
+                }
+            }
+            if !attachment.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Button {
+                    GaryxClipboard.copyString(attachment.name)
+                } label: {
+                    Label("Copy Name", systemImage: "text.cursor")
+                }
+            }
+        }
+        .accessibilityAction(named: Text("Copy File Path")) {
+            guard let sourceText else { return }
+            GaryxClipboard.copyString(sourceText)
+        }
         .accessibilityLabel(attachment.name.isEmpty ? "File attachment" : attachment.name)
+    }
+
+    private var sourceText: String? {
+        if let path = attachment.path?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            return path
+        }
+        if let remoteUrl = attachment.remoteUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !remoteUrl.isEmpty {
+            return remoteUrl
+        }
+        return nil
     }
 }
 
