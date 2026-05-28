@@ -19,6 +19,12 @@ extension GaryxMobileModel {
 
     func bindBotToSelectedThread(_ bot: GaryxConfiguredBot) async {
         guard let threadId = selectedThread?.id else { return }
+        await bindBot(bot, toThreadId: threadId)
+    }
+
+    func bindBot(_ bot: GaryxConfiguredBot, toThreadId threadId: String) async {
+        let threadId = threadId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !threadId.isEmpty else { return }
         let runtimeGeneration = gatewayRuntimeGeneration
         do {
             let status = try await client().bindBot(botId: bot.id, threadId: threadId)

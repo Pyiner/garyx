@@ -433,6 +433,7 @@ struct GaryxConversationHeader: View {
     @State private var showsRenamePrompt = false
     @State private var renameDraftTitle = ""
     @State private var showsBotBindingSheet = false
+    @State private var botBindingThreadId: String?
 
     var body: some View {
         GaryxAdaptiveGlassContainer(spacing: 10) {
@@ -484,6 +485,7 @@ struct GaryxConversationHeader: View {
                                 model.selectedThreadBotGroup == nil ? "Bind Bot" : "Change Bot",
                                 systemImage: model.selectedThreadBotGroup == nil ? "link.badge.plus" : "arrow.triangle.2.circlepath"
                             ) {
+                                botBindingThreadId = selectedThread.id
                                 showsBotBindingSheet = true
                             }
                             .disabled(model.mobileBotGroups.isEmpty)
@@ -536,8 +538,12 @@ struct GaryxConversationHeader: View {
                 }
             }
         }
-        .sheet(isPresented: $showsBotBindingSheet) {
-            GaryxThreadBotBindingSheet()
+        .sheet(isPresented: $showsBotBindingSheet, onDismiss: {
+            botBindingThreadId = nil
+        }) {
+            if let botBindingThreadId {
+                GaryxThreadBotBindingSheet(threadId: botBindingThreadId)
+            }
         }
     }
 
@@ -553,12 +559,17 @@ struct GaryxConversationHeader: View {
 }
 
 private struct GaryxThreadBotBindingSheet: View {
+    let threadId: String
+
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: GaryxMobileModel
     @State private var isApplying = false
 
     private var boundGroup: GaryxMobileBotGroup? {
-        model.selectedThreadBotGroup
+        GaryxMobileBotGroupBuilder.selectedGroup(
+            threadId: threadId,
+            groups: model.mobileBotGroups
+        )
     }
 
     private var boundBot: GaryxConfiguredBot? {
@@ -619,7 +630,7 @@ private struct GaryxThreadBotBindingSheet: View {
                                                 return
                                             }
                                             apply {
-                                                await model.bindBotToSelectedThread(bot)
+                                                await model.bindBot(bot, toThreadId: threadId)
                                             }
                                         }
                                         if index < selectableGroups.count - 1 {
@@ -773,7 +784,7 @@ private extension View {
             }
             .presentationBackground(.clear)
             .presentationBackgroundInteraction(.enabled)
-            .presentationDetents([.fraction(0.72), .large])
+            .presentationDetents([.fraction(0.93), .large])
             .presentationDragIndicator(.hidden)
             .presentationCornerRadius(38)
     }
