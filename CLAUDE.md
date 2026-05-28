@@ -18,9 +18,6 @@ operating principles here; detailed rules live in the referenced files under
   committer metadata. Do not override local Git identity.
 - When you create review tasks for your own work, notify `current-thread` so
   review results return to the task thread instead of a personal bot channel.
-- After code review passes and the worktree branch is merged to `main`, move
-  the original task to `in_review` and stop. Do not mark the original task
-  `done`; final acceptance is Gary's responsibility.
 
 ## Public Repository Hygiene
 
