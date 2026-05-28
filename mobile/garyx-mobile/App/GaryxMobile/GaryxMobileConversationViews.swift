@@ -91,6 +91,7 @@ struct GaryxConversationView: View {
     @State private var conversationBottomOffset: CGFloat = 0
     @State private var conversationViewportHeight: CGFloat = 0
     @State private var isNearConversationBottom = true
+    @State private var hasMovedTowardOlderHistory = false
     @State private var showsScrollToBottomButton = false
     @State private var tailScrollRequestGeneration = 0
 
@@ -131,6 +132,7 @@ struct GaryxConversationView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onAppear {
                     isNearConversationBottom = true
+                    hasMovedTowardOlderHistory = false
                     showsScrollToBottomButton = false
                     scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true)
                 }
@@ -140,6 +142,7 @@ struct GaryxConversationView: View {
                     conversationTopOffset = nil
                     conversationBottomOffset = 0
                     isNearConversationBottom = true
+                    hasMovedTowardOlderHistory = false
                     showsScrollToBottomButton = false
                     scheduleScrollToConversationTail(proxy, animated: false, retryLayout: true)
                 }
@@ -205,6 +208,9 @@ struct GaryxConversationView: View {
                                 await model.loadOlderSelectedThreadHistory()
                             }
                         }
+                        .onAppear {
+                            prefetchOlderHistoryIfNeeded(ignoreDistance: true)
+                        }
                     }
                     GaryxMobileTurnRowsView(
                         rows: model.selectedThreadTurnRows(),
@@ -252,6 +258,9 @@ struct GaryxConversationView: View {
         }
         .onPreferenceChange(GaryxConversationTopOffsetKey.self) { value in
             conversationTopOffset = value
+            if let value, value < -96 {
+                hasMovedTowardOlderHistory = true
+            }
             prefetchOlderHistoryIfNeeded()
             repairVisibleTailGapIfNeeded(proxy)
         }
@@ -354,6 +363,9 @@ struct GaryxConversationView: View {
         guard conversationViewportHeight > 0 else { return }
         let distanceFromBottom = conversationBottomOffset - conversationViewportHeight
         let isNearBottom = distanceFromBottom <= 96
+        if !isNearBottom {
+            hasMovedTowardOlderHistory = true
+        }
         isNearConversationBottom = isNearBottom
         showsScrollToBottomButton = !isNearBottom && !model.messages.isEmpty
         prefetchOlderHistoryIfNeeded()
@@ -364,7 +376,7 @@ struct GaryxConversationView: View {
               model.selectedThreadHasMoreHistoryBefore,
               !model.isLoadingOlderThreadHistory,
               pendingHistoryPrefetchThreadId != threadId,
-              !isNearConversationBottom,
+              hasMovedTowardOlderHistory,
               ignoreDistance || isNearLoadedHistoryStart else {
             return
         }
