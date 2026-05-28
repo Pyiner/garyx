@@ -2200,6 +2200,49 @@ final class GaryxGatewayClientTests: XCTestCase {
         XCTAssertNil(GaryxMobileFileLink.localFilePath(from: "docs/page.html"))
     }
 
+    func testMobileFileLinkStripsTrailingLineAndColumnSuffix() {
+        XCTAssertEqual(
+            GaryxMobileFileLink.localFilePath(from: "/workspace/project/docs/plan.md:1"),
+            "/workspace/project/docs/plan.md"
+        )
+        XCTAssertEqual(
+            GaryxMobileFileLink.localFilePath(from: "/workspace/project/docs/plan.md:42:7"),
+            "/workspace/project/docs/plan.md"
+        )
+        XCTAssertEqual(
+            GaryxMobileFileLink.localFilePath(from: "file:///workspace/project/docs/plan.md:12"),
+            "/workspace/project/docs/plan.md"
+        )
+
+        let absoluteTarget = GaryxMobileFileLink.previewTarget(
+            fromLink: "/workspace/project/docs/plan.md:1",
+            workspacePaths: ["/workspace/project"],
+            currentWorkspaceDir: "/workspace/project",
+            currentFilePath: nil
+        )
+        XCTAssertEqual(
+            absoluteTarget,
+            GaryxMobileWorkspaceFileTarget(
+                workspaceDir: "/workspace/project",
+                path: "docs/plan.md"
+            )
+        )
+
+        let relativeTarget = GaryxMobileFileLink.previewTarget(
+            fromLink: "docs/plan.md:1",
+            workspacePaths: ["/workspace/project"],
+            currentWorkspaceDir: "/workspace/project",
+            currentFilePath: nil
+        )
+        XCTAssertEqual(
+            relativeTarget,
+            GaryxMobileWorkspaceFileTarget(
+                workspaceDir: "/workspace/project",
+                path: "docs/plan.md"
+            )
+        )
+    }
+
     func testMobileFileLinkResolvesWorkspacePreviewTarget() {
         let target = GaryxMobileFileLink.previewTarget(
             forLocalFilePath: "/workspace/project/docs/page.html",

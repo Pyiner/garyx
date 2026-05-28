@@ -100,7 +100,15 @@ public enum GaryxMobileFileLink {
         let withoutQuery = trimmed.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
         let withoutFragment = withoutQuery.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
         let decoded = withoutFragment.removingPercentEncoding ?? withoutFragment
-        return decoded.hasPrefix("/") ? decoded : nil
+        let withoutLineSuffix = stripTrailingLineColumnSuffix(decoded)
+        return withoutLineSuffix.hasPrefix("/") ? withoutLineSuffix : nil
+    }
+
+    private static func stripTrailingLineColumnSuffix(_ path: String) -> String {
+        guard let range = path.range(of: #":\d+(?::\d+)?$"#, options: .regularExpression) else {
+            return path
+        }
+        return String(path[..<range.lowerBound])
     }
 
     private static func normalizeWorkspaceRootPath(_ path: String) -> String {
@@ -141,7 +149,9 @@ public enum GaryxMobileFileLink {
         from target: String,
         currentFilePath: String?
     ) -> String? {
-        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = stripTrailingLineColumnSuffix(
+            target.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         guard !trimmed.isEmpty,
               !trimmed.hasPrefix("#"),
               !trimmed.hasPrefix("?") else {

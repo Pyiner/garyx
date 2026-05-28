@@ -33,7 +33,8 @@ function normalizeLocalFilePath(target: string): string | null {
   }
   const withoutQuery = trimmed.split('?')[0] || '';
   const withoutFragment = withoutQuery.split('#')[0] || '';
-  return withoutFragment.startsWith('/') ? withoutFragment : null;
+  const withoutLineSuffix = withoutFragment.replace(/:\d+(?::\d+)?$/, '');
+  return withoutLineSuffix.startsWith('/') ? withoutLineSuffix : null;
 }
 
 export function localFilePathFromMessageLinkHref(target: string): string | null {
