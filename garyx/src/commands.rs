@@ -3413,6 +3413,7 @@ fn sort_agents_builtin_first(agents: &mut [Value]) {
     agents.sort_by(|a, b| {
         let a_builtin = a["built_in"].as_bool().unwrap_or(false);
         let b_builtin = b["built_in"].as_bool().unwrap_or(false);
+        // Reversed: builtin (true) should sort before custom (false).
         b_builtin.cmp(&a_builtin).then_with(|| {
             let a_id = a["agent_id"].as_str().unwrap_or("");
             let b_id = b["agent_id"].as_str().unwrap_or("");
