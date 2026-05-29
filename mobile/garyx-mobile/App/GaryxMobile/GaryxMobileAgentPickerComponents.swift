@@ -424,6 +424,19 @@ struct GaryxAgentTargetPickerControl: View {
             .environmentObject(model)
             .presentationCompactAdaptation(.popover)
         }
+        .onChange(of: model.sidebarVisible) { _, visible in
+            if visible {
+                showsPicker = false
+            }
+        }
+        .onChange(of: model.activePanel) { _, _ in
+            showsPicker = false
+        }
+        .onChange(of: model.showsSettings) { _, visible in
+            if visible {
+                showsPicker = false
+            }
+        }
     }
 
     private var selectedTarget: GaryxMobileAgentTarget? {

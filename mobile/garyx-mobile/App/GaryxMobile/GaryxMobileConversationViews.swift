@@ -481,15 +481,13 @@ struct GaryxConversationHeader: View {
                 if let selectedThread = model.selectedThread {
                     Menu {
                         Section("Bot") {
-                            Button(
-                                model.selectedThreadBotGroup == nil ? "Bind Bot" : "Change Bot",
-                                systemImage: model.selectedThreadBotGroup == nil ? "link.badge.plus" : "arrow.triangle.2.circlepath"
-                            ) {
+                            Button {
                                 botBindingThreadId = selectedThread.id
                                 showsBotBindingSheet = true
+                            } label: {
+                                threadBotMenuLabel
                             }
                             .disabled(model.mobileBotGroups.isEmpty)
-
                         }
 
                         Button(
@@ -534,6 +532,34 @@ struct GaryxConversationHeader: View {
                 GaryxThreadBotBindingSheet(threadId: botBindingThreadId)
             }
         }
+        .onChange(of: model.selectedThread?.id) { _, nextThreadId in
+            guard botBindingThreadId != nextThreadId else { return }
+            dismissThreadPresentations()
+        }
+        .onChange(of: model.sidebarVisible) { _, visible in
+            if visible {
+                dismissThreadPresentations()
+            }
+        }
+        .onChange(of: model.activePanel) { _, panel in
+            if panel != .chat {
+                dismissThreadPresentations()
+            }
+        }
+        .onChange(of: model.showsSettings) { _, visible in
+            if visible {
+                dismissThreadPresentations()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var threadBotMenuLabel: some View {
+        if let group = model.selectedThreadBotGroup {
+            GaryxBotGroupMenuSelectionLabel(group: group, selected: false)
+        } else {
+            Label("Bind Bot", systemImage: "link.badge.plus")
+        }
     }
 
     private func openRenamePrompt() {
@@ -543,7 +569,14 @@ struct GaryxConversationHeader: View {
 
     private func openSidebar() {
         garyxDismissKeyboard()
+        dismissThreadPresentations()
         model.setSidebarVisible(true)
+    }
+
+    private func dismissThreadPresentations() {
+        showsRenamePrompt = false
+        showsBotBindingSheet = false
+        botBindingThreadId = nil
     }
 }
 
@@ -642,6 +675,21 @@ private struct GaryxThreadBotBindingSheet: View {
             .scrollIndicators(.hidden)
         }
         .garyxBotBindingSheetStyle()
+        .onChange(of: model.selectedThread?.id) { _, nextThreadId in
+            if nextThreadId != threadId {
+                dismiss()
+            }
+        }
+        .onChange(of: model.sidebarVisible) { _, visible in
+            if visible {
+                dismiss()
+            }
+        }
+        .onChange(of: model.activePanel) { _, panel in
+            if panel != .chat {
+                dismiss()
+            }
+        }
     }
 
     private var botBindingSheetHeader: some View {
@@ -838,6 +886,21 @@ struct GaryxEmptyConversationView: View {
                 placeholder: "No workspace",
                 allowsEmpty: true
             )
+        }
+        .onChange(of: model.sidebarVisible) { _, visible in
+            if visible {
+                showsWorkspacePicker = false
+            }
+        }
+        .onChange(of: model.selectedThread?.id) { _, threadId in
+            if threadId != nil {
+                showsWorkspacePicker = false
+            }
+        }
+        .onChange(of: model.activePanel) { _, panel in
+            if panel != .chat {
+                showsWorkspacePicker = false
+            }
         }
     }
 
