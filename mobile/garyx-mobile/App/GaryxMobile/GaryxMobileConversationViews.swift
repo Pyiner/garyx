@@ -478,8 +478,8 @@ struct GaryxConversationHeader: View {
 
                 Spacer(minLength: 0)
 
-                Menu {
-                    if let selectedThread = model.selectedThread {
+                if let selectedThread = model.selectedThread {
+                    Menu {
                         Section("Bot") {
                             Button(
                                 model.selectedThreadBotGroup == nil ? "Bind Bot" : "Change Bot",
@@ -507,11 +507,12 @@ struct GaryxConversationHeader: View {
                         Button("Archive", systemImage: "archivebox", role: .destructive) {
                             Task { await model.deleteSelectedThread() }
                         }
+                    } label: {
+                        GaryxToolbarIcon(systemName: "ellipsis")
                     }
-                } label: {
-                    GaryxToolbarIcon(systemName: "ellipsis")
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Thread actions")
                 }
-                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 16)
