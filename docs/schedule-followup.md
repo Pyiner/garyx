@@ -126,6 +126,14 @@ followup-driven runs distinctly from organic user input:
   the `AppState` reference is held weakly, no circular `Arc` is
   formed between `AppState` and `CronService`.
 
+## Observability
+
+`schedule_followup` jobs are `system: true`, so they do not show up in the
+user-facing automation list. To inspect them during an incident — list the
+pending followups, see each job's `RunRecord` history, or manually fire one —
+use the debug endpoint documented in
+[schedule-followup-observability.md](./schedule-followup-observability.md).
+
 ## Backwards compatibility
 
 The `CronJobConfig.system` field and the `CronJobKind::InternalDispatch`

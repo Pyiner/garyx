@@ -390,6 +390,17 @@ fn operations_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/cron/jobs", axum::routing::get(api::cron_jobs))
         .route("/api/cron/runs", axum::routing::get(api::cron_runs))
+        // Debug observability for system-managed cron jobs (AXON-692). Lives in
+        // the protected router so `enforce_gateway_auth` gates it: loopback
+        // passes, everything else needs a valid gateway token.
+        .route(
+            "/api/debug/system-cron-jobs",
+            axum::routing::get(api::debug_system_cron_jobs),
+        )
+        .route(
+            "/api/debug/system-cron-jobs/{id}/run",
+            axum::routing::post(api::debug_run_system_cron_job),
+        )
         .route(
             "/api/channels/plugins",
             axum::routing::get(api::list_channel_plugins),
