@@ -678,19 +678,7 @@ struct GaryxAutomationScheduleEditor: View {
             if draft.repeatOption == .interval {
                 Divider().padding(.leading, 16)
                 GaryxFormRow(title: "Hours") {
-                    Stepper(
-                        "\(draft.intervalHours)",
-                        value: $draft.intervalHours,
-                        in: 1...720
-                    )
-                    .labelsHidden()
-                    Text("\(draft.intervalHours)")
-                        .font(GaryxFont.body(weight: .medium))
-                        .foregroundStyle(.primary)
-                        .frame(minWidth: 32, alignment: .trailing)
-                    Text("hours")
-                        .font(GaryxFont.body())
-                        .foregroundStyle(.secondary)
+                    GaryxAutomationIntervalStepper(hours: $draft.intervalHours)
                 }
             }
 
@@ -805,6 +793,62 @@ private enum GaryxAutomationWeekdayOption: Int, CaseIterable, Identifiable {
         case .saturday:
             "Saturday"
         }
+    }
+}
+
+private struct GaryxAutomationIntervalStepper: View {
+    @Binding var hours: Int
+    private let range = 1...720
+
+    var body: some View {
+        HStack(spacing: 0) {
+            stepButton(systemName: "minus") {
+                hours = max(range.lowerBound, hours - 1)
+            }
+            .disabled(hours <= range.lowerBound)
+
+            Divider()
+                .frame(height: 22)
+
+            Text("\(hours)")
+                .font(GaryxFont.body(weight: .semibold))
+                .foregroundStyle(.primary)
+                .monospacedDigit()
+                .frame(width: 44, height: 36)
+
+            Divider()
+                .frame(height: 22)
+
+            stepButton(systemName: "plus") {
+                hours = min(range.upperBound, hours + 1)
+            }
+            .disabled(hours >= range.upperBound)
+        }
+        .background(Color(.tertiarySystemFill).opacity(0.72), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Repeat interval")
+        .accessibilityValue("\(hours) hours")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment:
+                hours = min(range.upperBound, hours + 1)
+            case .decrement:
+                hours = max(range.lowerBound, hours - 1)
+            @unknown default:
+                break
+            }
+        }
+    }
+
+    private func stepButton(systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(GaryxFont.system(size: 14, weight: .bold))
+                .foregroundStyle(.primary)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
