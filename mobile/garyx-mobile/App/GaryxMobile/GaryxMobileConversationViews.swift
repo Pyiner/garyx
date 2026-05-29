@@ -532,8 +532,7 @@ struct GaryxConversationHeader: View {
                 GaryxThreadBotBindingSheet(threadId: botBindingThreadId)
             }
         }
-        .onChange(of: model.selectedThread?.id) { _, nextThreadId in
-            guard botBindingThreadId != nextThreadId else { return }
+        .onChange(of: model.selectedThread?.id) { _, _ in
             dismissThreadPresentations()
         }
         .onChange(of: model.sidebarVisible) { _, visible in
