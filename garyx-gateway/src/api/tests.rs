@@ -113,6 +113,14 @@ fn api_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/cron/jobs", axum::routing::get(cron_jobs))
         .route("/api/cron/runs", axum::routing::get(cron_runs))
+        .route(
+            "/api/debug/system-cron-jobs",
+            axum::routing::get(debug_system_cron_jobs),
+        )
+        .route(
+            "/api/debug/system-cron-jobs/{id}/run",
+            axum::routing::post(debug_run_system_cron_job),
+        )
         .route("/api/settings", axum::routing::put(settings_update))
         .route("/api/settings/reload", axum::routing::post(settings_reload))
         .route("/api/restart", axum::routing::post(restart))
@@ -1603,6 +1611,237 @@ async fn test_cron_runs_no_service() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert!(json["runs"].as_array().unwrap().is_empty());
     assert_eq!(json["count"], 0);
+}
+
+// ---------------------------------------------------------------------------
+// GET/POST /api/debug/system-cron-jobs (AXON-692)
+// ---------------------------------------------------------------------------
+
+/// Build a CronService seeded with a mix of system + non-system jobs so the
+/// debug-endpoint tests can assert filtering behavior. Returns the service
+/// (caller wraps it into AppState.ops.cron_service).
+async fn seed_cron_service_for_debug() -> crate::cron::CronService {
+    use garyx_models::config::{
+        CronAction, CronJobConfig, CronJobKind, CronSchedule, InternalDispatchJobPayload,
+    };
+    let tmp = tempfile::TempDir::new().unwrap();
+    let svc = crate::cron::CronService::new(tmp.path().to_path_buf());
+    let _ = tokio::fs::create_dir_all(tmp.path().join("cron").join("jobs")).await;
+
+    let far_future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+
+    // Two system followup jobs on different threads.
+    for (id, thread) in [("followup_aaa", "thread::alpha"), ("followup_bbb", "thread::beta")] {
+        svc.add(CronJobConfig {
+            id: id.to_owned(),
+            kind: CronJobKind::InternalDispatch {
+                payload: InternalDispatchJobPayload {
+                    prompt: "resume the build poll".to_owned(),
+                    reason: Some("background build finished".to_owned()),
+                    originating_run_id: Some("run-test-1".to_owned()),
+                    scheduled_at: chrono::Utc::now(),
+                    delay_seconds_requested: 300,
+                },
+            },
+            label: Some(format!("schedule_followup({thread})")),
+            schedule: CronSchedule::Once {
+                at: far_future.clone(),
+            },
+            ui_schedule: None,
+            action: CronAction::Log,
+            target: None,
+            message: None,
+            workspace_dir: None,
+            agent_id: None,
+            thread_id: Some(thread.to_owned()),
+            delete_after_run: true,
+            enabled: true,
+            system: true,
+        })
+        .await
+        .unwrap();
+    }
+
+    // One ordinary (non-system) automation that must NOT appear in the debug list.
+    svc.add(CronJobConfig {
+        id: "user-automation".to_owned(),
+        kind: Default::default(),
+        label: Some("daily standup".to_owned()),
+        schedule: CronSchedule::Interval { interval_secs: 60 },
+        ui_schedule: None,
+        action: CronAction::Log,
+        target: None,
+        message: None,
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: Some("thread::alpha".to_owned()),
+        delete_after_run: false,
+        enabled: true,
+        system: false,
+    })
+    .await
+    .unwrap();
+
+    svc
+}
+
+#[tokio::test]
+async fn test_debug_system_cron_jobs_no_service() {
+    let state = test_state();
+    let router = api_router(state);
+
+    let req = Request::builder()
+        .uri("/api/debug/system-cron-jobs")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["service_available"], false);
+    assert_eq!(json["count"], 0);
+}
+
+#[tokio::test]
+async fn test_debug_system_cron_jobs_lists_only_system() {
+    let state = test_state();
+    let svc = seed_cron_service_for_debug().await;
+    let mut state_with_cron = (*state).clone_for_test();
+    state_with_cron.ops.cron_service = Some(Arc::new(svc));
+    let router = api_router(Arc::new(state_with_cron));
+
+    let req = Request::builder()
+        .uri("/api/debug/system-cron-jobs")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["service_available"], true);
+    // Two system jobs; the user-automation is filtered out.
+    assert_eq!(json["count"], 2);
+    let ids: Vec<&str> = json["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"followup_aaa"));
+    assert!(ids.contains(&"followup_bbb"));
+    assert!(!ids.contains(&"user-automation"));
+    // Each job carries its internal_dispatch kind + a recent_runs array.
+    let job = &json["jobs"][0];
+    assert_eq!(job["kind"]["type"], "internal_dispatch");
+    assert!(job["recent_runs"].is_array());
+}
+
+#[tokio::test]
+async fn test_debug_system_cron_jobs_thread_filter() {
+    let state = test_state();
+    let svc = seed_cron_service_for_debug().await;
+    let mut state_with_cron = (*state).clone_for_test();
+    state_with_cron.ops.cron_service = Some(Arc::new(svc));
+    let router = api_router(Arc::new(state_with_cron));
+
+    let req = Request::builder()
+        .uri("/api/debug/system-cron-jobs?thread_id=thread::beta")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["jobs"][0]["id"], "followup_bbb");
+    assert_eq!(json["thread_id"], "thread::beta");
+}
+
+#[tokio::test]
+async fn test_debug_system_cron_jobs_invalid_since_is_400() {
+    let state = test_state();
+    let svc = seed_cron_service_for_debug().await;
+    let mut state_with_cron = (*state).clone_for_test();
+    state_with_cron.ops.cron_service = Some(Arc::new(svc));
+    let router = api_router(Arc::new(state_with_cron));
+
+    let req = Request::builder()
+        .uri("/api/debug/system-cron-jobs?since=not-a-date")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 400);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "invalid_since");
+}
+
+#[tokio::test]
+async fn test_debug_system_cron_jobs_since_unix_filters() {
+    let state = test_state();
+    let svc = seed_cron_service_for_debug().await;
+    let mut state_with_cron = (*state).clone_for_test();
+    state_with_cron.ops.cron_service = Some(Arc::new(svc));
+    let router = api_router(Arc::new(state_with_cron));
+
+    // A `since` far in the future filters every job out (all created just now).
+    let future_ts = (chrono::Utc::now() + chrono::Duration::hours(24)).timestamp();
+    let req = Request::builder()
+        .uri(format!("/api/debug/system-cron-jobs?since={future_ts}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["count"], 0);
+}
+
+#[tokio::test]
+async fn test_debug_run_system_cron_job_missing_is_404() {
+    let state = test_state();
+    let svc = seed_cron_service_for_debug().await;
+    let mut state_with_cron = (*state).clone_for_test();
+    state_with_cron.ops.cron_service = Some(Arc::new(svc));
+    let router = api_router(Arc::new(state_with_cron));
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/debug/system-cron-jobs/does-not-exist/run")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_debug_run_system_cron_job_rejects_non_system() {
+    let state = test_state();
+    let svc = seed_cron_service_for_debug().await;
+    let mut state_with_cron = (*state).clone_for_test();
+    state_with_cron.ops.cron_service = Some(Arc::new(svc));
+    let router = api_router(Arc::new(state_with_cron));
+
+    // user-automation exists but is non-system → debug channel must 404 it,
+    // never fire a user-visible automation.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/debug/system-cron-jobs/user-automation/run")
+        .body(Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]
