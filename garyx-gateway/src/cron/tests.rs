@@ -2052,3 +2052,191 @@ async fn test_internal_dispatch_followup_fires_and_injects_synthetic_user_turn()
         "verbatim prompt must follow the metadata block"
     );
 }
+
+// ---------------------------------------------------------------------------
+// schedule_followup boundary fallback — drop classification + retry
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_followup_retry_drops_immediately_without_retry() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let calls = AtomicU32::new(0);
+    let result = CronService::run_followup_with_retry(
+        FOLLOWUP_MAX_RETRIES,
+        std::time::Duration::ZERO,
+        "job-drop",
+        "run-drop",
+        |_attempt| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Err(FollowupAttemptError::Dropped("thread not found: t1".to_owned())) }
+        },
+    )
+    .await;
+
+    assert_eq!(
+        result.unwrap_err(),
+        "thread not found: t1",
+        "non-retryable drop returns its reason verbatim"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "a Dropped outcome must not be retried"
+    );
+}
+
+#[tokio::test]
+async fn test_followup_retry_succeeds_after_transient_failures() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let calls = AtomicU32::new(0);
+    let result = CronService::run_followup_with_retry(
+        FOLLOWUP_MAX_RETRIES,
+        std::time::Duration::ZERO,
+        "job-ok",
+        "run-ok",
+        |_attempt| {
+            let c = calls.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if c < 2 {
+                    Err(FollowupAttemptError::Transient(format!("boom {c}")))
+                } else {
+                    Ok(())
+                }
+            }
+        },
+    )
+    .await;
+
+    assert!(
+        result.is_ok(),
+        "transient failures within budget then success must succeed: {result:?}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "two transient failures then a successful third attempt"
+    );
+}
+
+#[tokio::test]
+async fn test_followup_retry_exhausts_budget_and_drops() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    let calls = AtomicU32::new(0);
+    let result = CronService::run_followup_with_retry(
+        FOLLOWUP_MAX_RETRIES,
+        std::time::Duration::ZERO,
+        "job-exhaust",
+        "run-exhaust",
+        |_attempt| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            async { Err(FollowupAttemptError::Transient("network down".to_owned())) }
+        },
+    )
+    .await;
+
+    let err = result.unwrap_err();
+    assert!(
+        err.contains(&format!("after {FOLLOWUP_MAX_RETRIES} retries")),
+        "exhausted error names the retry count, got: {err}"
+    );
+    assert!(
+        err.contains("network down"),
+        "exhausted error carries the concrete underlying failure, got: {err}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        FOLLOWUP_MAX_RETRIES + 1,
+        "one initial attempt plus FOLLOWUP_MAX_RETRIES retries"
+    );
+}
+
+#[tokio::test]
+async fn test_internal_dispatch_drops_when_thread_missing() {
+    use garyx_models::config::GaryxConfig;
+
+    let tmp = TempDir::new().unwrap();
+    let cron = Arc::new(CronService::new(tmp.path().to_path_buf()));
+    let _ = ensure_dirs(tmp.path()).await;
+
+    let bridge = Arc::new(garyx_bridge::MultiProviderBridge::new());
+    // No thread is seeded: the originating thread was deleted before the
+    // followup fired. The pre-check short-circuits before any provider call.
+    let state = crate::server::AppStateBuilder::new(GaryxConfig::default())
+        .with_bridge(bridge.clone())
+        .with_cron_service(cron.clone())
+        .with_auto_research_store(Arc::new(crate::auto_research::AutoResearchStore::new()))
+        .with_agent_team_store(Arc::new(crate::agent_teams::AgentTeamStore::new()))
+        .with_custom_agent_store(Arc::new(crate::custom_agents::CustomAgentStore::new()))
+        .build();
+    // Keep the builder result alive for the duration of the tick so the cron
+    // service's weak app_state back-reference can upgrade.
+    let _state = state;
+
+    let thread_id = "thread::followup-deleted-target";
+    let run_id = "run-from-test";
+    let job_id = crate::mcp::tools::schedule_followup::followup_job_id(thread_id, run_id);
+    let scheduled_at = Utc::now();
+    let scheduled_for = scheduled_at + chrono::Duration::milliseconds(200);
+    let payload = garyx_models::config::InternalDispatchJobPayload {
+        prompt: "resume verification".to_owned(),
+        reason: Some("test reason".to_owned()),
+        originating_run_id: Some(run_id.to_owned()),
+        scheduled_at,
+        delay_seconds_requested: 60,
+    };
+    cron.upsert(CronJobConfig {
+        id: job_id.clone(),
+        kind: CronJobKind::InternalDispatch {
+            payload: payload.clone(),
+        },
+        label: None,
+        schedule: CronSchedule::Once {
+            at: scheduled_for.to_rfc3339(),
+        },
+        ui_schedule: None,
+        action: CronAction::Log,
+        target: None,
+        message: None,
+        workspace_dir: None,
+        agent_id: None,
+        thread_id: Some(thread_id.to_owned()),
+        delete_after_run: true,
+        enabled: true,
+        system: true,
+    })
+    .await
+    .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    CronService::tick(
+        &cron.jobs,
+        &cron.runs,
+        &cron.active_agent_runs,
+        tmp.path(),
+        None,
+        &cron.dispatch_runtime,
+        &cron.app_state_weak,
+        &cron.garyx_db,
+    )
+    .await;
+
+    let runs = cron.list_runs(10, 0).await;
+    assert_eq!(runs.len(), 1, "exactly one run should be recorded");
+    assert_eq!(
+        runs[0].status,
+        JobRunStatus::FailedDropped,
+        "a deleted thread must produce a dropped run, got: {:?}",
+        runs[0].status
+    );
+    let reason = runs[0].error.as_deref().unwrap_or_default();
+    assert!(
+        reason.contains("thread not found"),
+        "drop reason must explain the missing thread, got: {reason:?}"
+    );
+    // The persisted (serde) form must be exactly "failed_dropped" per AC.
+    let serialized = serde_json::to_string(&runs[0].status).unwrap();
+    assert_eq!(serialized, "\"failed_dropped\"");
+}
