@@ -126,6 +126,37 @@ followup-driven runs distinctly from organic user input:
   the `AppState` reference is held weakly, no circular `Arc` is
   formed between `AppState` and `CronService`.
 
+## Boundary handling & retries
+
+When a followup fires, the originating thread or the dispatch itself may be in a
+state that prevents delivery. These cases are handled explicitly rather than
+dropped silently:
+
+- **Thread deleted.** If the originating thread is no longer in the thread store
+  by the time the followup fires, the run is recorded as `failed_dropped` with a
+  `thread not found: <id>` reason. This is non-retryable — retrying cannot bring
+  the thread back.
+- **Transient dispatch failure.** A network/internal error during dispatch is
+  retried up to `FOLLOWUP_MAX_RETRIES` (3) times with exponential backoff
+  (≈200ms / 400ms / 800ms). If a retry succeeds, the run is `success` and the
+  intermediate failures are logged at `warn`. If the budget is exhausted, the
+  run is recorded as `failed_dropped` with the concrete underlying error.
+- **Terminal drops are final.** A `failed_dropped` outcome disables the one-shot
+  job (and honors `delete_after_run`) so a dropped followup never re-fires on a
+  later tick.
+- **Thread stopped / cancelled.** There is no dedicated dispatch-time signal for
+  a stopped-but-still-present thread today, so such a thread still receives the
+  injected turn (which starts a fresh turn). The drop classifier is structured
+  to accommodate such a signal if one is added later.
+
+Every drop path emits a `tracing::warn`, and the existing `cron_job_completed`
+broadcast event carries the run `status` and reason, so drops are observable and
+never silent.
+
+The `RunRecord.status` enum gains a `failed_dropped` value
+(`JobRunStatus::FailedDropped`) distinct from `failed`. It is additive: older
+persisted run records without it still deserialize.
+
 ## Observability
 
 `schedule_followup` jobs are `system: true`, so they do not show up in the
