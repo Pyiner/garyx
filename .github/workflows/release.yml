@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+env:
+  GARYX_RELEASE_BINARY_MAX_BYTES: "55000000"
+  GARYX_WORKFLOW_BUN_VERSION: "1.3.14"
+  BUN_VERSION: "1.3.14"
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -62,6 +67,13 @@ jobs:
         with:
           tool: cargo-zigbuild
 
+      - name: Prepare embedded workflow runtime
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/garyx-runtime"
+          bash scripts/prepare-embedded-bun-runtime.sh "${{ matrix.target }}" "$RUNNER_TEMP/garyx-runtime/garyx-bun.xz"
+          echo "GARYX_EMBED_WORKFLOW_BUN_XZ=$RUNNER_TEMP/garyx-runtime/garyx-bun.xz" >> "$GITHUB_ENV"
+
       - name: Build (macOS — native)
         if: contains(matrix.target, 'apple-darwin')
         run: cargo build --release --target ${{ matrix.target }}
@@ -74,6 +86,16 @@ jobs:
         if: contains(matrix.target, 'linux')
         run: cargo zigbuild --release --target ${{ matrix.target }}.2.17
 
+      - name: Check CLI binary size
+        shell: bash
+        run: |
+          size="$(wc -c < "target/${{ matrix.target }}/release/garyx" | tr -d ' ')"
+          echo "garyx binary size: ${size} bytes"
+          if (( size >= GARYX_RELEASE_BINARY_MAX_BYTES )); then
+            echo "ERROR: garyx binary must stay below ${GARYX_RELEASE_BINARY_MAX_BYTES} bytes"
+            exit 1
+          fi
+
       - name: Package
         shell: bash
         run: |
@@ -81,10 +103,6 @@ jobs:
           ARCHIVE="garyx-${VERSION}-${{ matrix.target }}"
           mkdir -p "$ARCHIVE"
           cp target/${{ matrix.target }}/release/garyx "$ARCHIVE/"
-          bash scripts/download-bun-runtime.sh "${{ matrix.target }}" "$ARCHIVE/garyx-bun"
-          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
-            CODESIGN_IDENTIFIER=com.garyx.workflow-bun bash scripts/codesign-macos-cli.sh "$ARCHIVE/garyx-bun"
-          fi
           cp README.md LICENSE "$ARCHIVE/"
           tar czf "${ARCHIVE}.tar.gz" "$ARCHIVE"
           shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"

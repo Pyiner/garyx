@@ -9,9 +9,10 @@ DESTINATION="${INSTALL_DIR}/garyx"
 
 cd "$REPO_ROOT"
 
-cargo build --release -p garyx
+runtime_xz="${REPO_ROOT}/target/embedded-runtimes/host/garyx-bun.xz"
+bash scripts/prepare-embedded-bun-runtime.sh host "$runtime_xz"
+GARYX_EMBED_WORKFLOW_BUN_XZ="$runtime_xz" cargo build --release -p garyx
 mkdir -p "$INSTALL_DIR"
 install -m 755 target/release/garyx "$DESTINATION"
-bash scripts/download-bun-runtime.sh host "${INSTALL_DIR}/garyx-bun"
 bash scripts/codesign-macos-cli.sh "$DESTINATION"
 "$DESTINATION" --version

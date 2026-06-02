@@ -107,7 +107,6 @@ pub(crate) const GITHUB_RELEASE_REPO_DEFAULT: &str = GITHUB_RELEASE_REPO;
 #[cfg(any(target_os = "macos", test))]
 const MACOS_CLI_CODESIGN_IDENTIFIER: &str = "com.garyx.gateway";
 const MACOS_CCTTY_CODESIGN_IDENTIFIER: &str = "com.garyx.cctty";
-const MACOS_WORKFLOW_BUN_CODESIGN_IDENTIFIER: &str = "com.garyx.workflow-bun";
 const DEFAULT_CHANNEL_AGENT_ID: &str = "claude";
 
 #[derive(Debug, Deserialize)]
@@ -1216,10 +1215,6 @@ pub(crate) async fn try_swap_garyx_binary(
         .path()
         .join(format!("garyx-{requested_version}-{target}"))
         .join("cctty");
-    let extracted_workflow_bun = tempdir
-        .path()
-        .join(format!("garyx-{requested_version}-{target}"))
-        .join("garyx-bun");
     if !extracted_binary.is_file() {
         return Err(format!(
             "release archive did not contain expected binary at {}",
@@ -1255,31 +1250,9 @@ pub(crate) async fn try_swap_garyx_binary(
     } else {
         None
     };
-    let workflow_bun_destination = parent.join("garyx-bun");
-    let workflow_bun_staged_path = if extracted_workflow_bun.is_file() {
-        let staged = parent.join(format!(".garyx-bun-update-{}.tmp", Uuid::new_v4().simple()));
-        fs::copy(&extracted_workflow_bun, &staged)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&staged)?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&staged, perms)?;
-        }
-        ad_hoc_codesign_macos_binary_with_identifier(
-            &staged,
-            MACOS_WORKFLOW_BUN_CODESIGN_IDENTIFIER,
-        )?;
-        Some(staged)
-    } else {
-        None
-    };
     fs::rename(&staged_path, destination_path)?;
     if let Some(staged) = cctty_staged_path {
         fs::rename(staged, cctty_destination)?;
-    }
-    if let Some(staged) = workflow_bun_staged_path {
-        fs::rename(staged, workflow_bun_destination)?;
     }
 
     Ok(SwapOutcome {

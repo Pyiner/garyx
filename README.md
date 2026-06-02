@@ -26,9 +26,11 @@ control plane.
 ## Install Garyx
 
 The shell installer downloads the latest release archive, verifies its
-checksum, and installs `garyx` plus the bundled workflow runtime to
-`/usr/local/bin` by default, using `sudo` if that directory is not writable. It
-does not initialize config, start the gateway, or re-sign the release binary.
+checksum, and installs `garyx` to `/usr/local/bin` by default, using `sudo` if
+that directory is not writable. The Workflow runtime is embedded in the Garyx
+binary and is expanded into Garyx-managed storage only when a Workflow task is
+first executed. The installer does not initialize config, start the gateway, or
+re-sign the release binary.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Pyiner/garyx/main/install.sh | bash

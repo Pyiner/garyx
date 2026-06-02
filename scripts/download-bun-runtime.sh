@@ -84,4 +84,4 @@ fi
 
 mkdir -p "$(dirname "$DESTINATION")"
 install -m 755 "$BUN_BIN" "$DESTINATION"
-echo "Installed bundled workflow runtime: $DESTINATION"
+echo "Installed workflow runtime binary: $DESTINATION"

@@ -95,8 +95,9 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 - Garyx-managed workflow packages use `garyx.workflow.json` for metadata and a
   fixed root `workflow.ts` source file. Do not add per-package entrypoint
   configuration.
-- Gateway-managed workflow execution uses the bundled `garyx-bun` binary
-  installed beside `garyx`. Do not make users install Bun globally.
+- Gateway-managed workflow execution uses the Bun runtime embedded in the
+  `garyx` binary and expands it on first Workflow execution. Do not make users
+  install Bun globally or manage a visible sidecar binary.
 - Structured results are a thread-run capability: store the required result
   schema in thread metadata, expose `submit_result` dynamically from the current
   MCP thread context, and do not introduce workflow-specific result tokens.

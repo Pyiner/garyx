@@ -44,6 +44,8 @@ cd "$REPO_ROOT"
 
 ARCHS="${ARCHS:-x86_64 aarch64}"
 GLIBC="${GLIBC:-2.17}"
+BINARY_MAX_BYTES="${GARYX_RELEASE_BINARY_MAX_BYTES:-55000000}"
+WORKFLOW_BUN_VERSION="${GARYX_WORKFLOW_BUN_VERSION:-1.3.14}"
 
 # Pull version from the workspace Cargo.toml (single source of truth).
 # The line we want is `version = "X.Y.Z"` inside [workspace.package]; skip
@@ -73,16 +75,27 @@ for arch in $ARCHS; do
     *) echo "Unsupported arch: $arch" >&2; exit 1 ;;
   esac
 
+  runtime_xz="${REPO_ROOT}/target/embedded-runtimes/${target}/garyx-bun.xz"
+  BUN_VERSION="$WORKFLOW_BUN_VERSION" \
+    bash scripts/prepare-embedded-bun-runtime.sh "$target" "$runtime_xz"
+
   echo ""
   echo "==> building ${target}.${GLIBC}"
-  cargo zigbuild --release -p garyx --target "${target}.${GLIBC}"
+  GARYX_EMBED_WORKFLOW_BUN_XZ="$runtime_xz" \
+    GARYX_WORKFLOW_BUN_VERSION="$WORKFLOW_BUN_VERSION" \
+    cargo zigbuild --release -p garyx --target "${target}.${GLIBC}"
 
   staging="dist/garyx-${VERSION}-${target}"
   rm -rf "$staging"
   mkdir -p "$staging"
   cp "target/${target}/release/garyx" "$staging/"
-  bash scripts/download-bun-runtime.sh "$target" "$staging/garyx-bun"
   cp README.md LICENSE "$staging/" 2>/dev/null || true
+
+  bytes="$(wc -c < "$staging/garyx" | tr -d ' ')"
+  if (( bytes >= BINARY_MAX_BYTES )); then
+    echo "Error: garyx binary is ${bytes} bytes; limit is ${BINARY_MAX_BYTES} bytes" >&2
+    exit 1
+  fi
 
   archive="${staging}.tar.gz"
   tar -czf "$archive" -C dist "garyx-${VERSION}-${target}"
