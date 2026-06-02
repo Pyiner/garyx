@@ -6,11 +6,12 @@ export type DesktopRoute =
   | { kind: 'thread-home' }
   | { kind: 'thread'; threadId: string }
   | { kind: 'new-thread'; workspacePath?: string | null; agentId?: string | null }
+  | { kind: 'workflow-task'; taskId: string }
   | { kind: 'automation'; automationId?: string | null }
   | { kind: 'settings'; tabId?: SettingsTabId | null }
-  | { kind: 'view'; view: Exclude<ContentView, 'thread' | 'automation' | 'settings'> };
+  | { kind: 'view'; view: Exclude<ContentView, 'thread' | 'workflow' | 'automation' | 'settings'> };
 
-const SIMPLE_VIEW_SEGMENTS: Record<string, Exclude<ContentView, 'thread' | 'automation' | 'settings'>> = {
+const SIMPLE_VIEW_SEGMENTS: Record<string, Exclude<ContentView, 'thread' | 'workflow' | 'automation' | 'settings'>> = {
   browser: 'browser',
   bots: 'bots',
   'auto-research': 'auto_research',
@@ -140,6 +141,14 @@ export function parseDesktopRoute(href?: string): DesktopRoute {
     };
   }
 
+  if (first === 'workflow' || first === 'workflows') {
+    const taskId =
+      second ||
+      decodeLoose(routeUrl.searchParams.get('task')) ||
+      decodeLoose(routeUrl.searchParams.get('taskId'));
+    return taskId ? { kind: 'workflow-task', taskId } : { kind: 'view', view: 'tasks' };
+  }
+
   if (first === 'settings') {
     return {
       kind: 'settings',
@@ -163,6 +172,8 @@ export function contentViewForDesktopRoute(route: DesktopRoute): ContentView | n
       return 'thread';
     case 'automation':
       return 'automation';
+    case 'workflow-task':
+      return 'workflow';
     case 'settings':
       return 'settings';
     case 'view':
@@ -183,6 +194,8 @@ export function buildDesktopRouteHash(route: DesktopRoute): string {
       const query = params.toString();
       return query ? `#/new?${query}` : '#/new';
     }
+    case 'workflow-task':
+      return `#/workflow/${encodeSegment(route.taskId)}`;
     case 'automation':
       return route.automationId
         ? `#/automation/${encodeSegment(route.automationId)}`

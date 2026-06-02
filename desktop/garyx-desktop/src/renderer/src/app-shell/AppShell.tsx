@@ -36,6 +36,7 @@ import {
   type DesktopSettings,
   type DesktopSessionProviderHint,
   type DesktopState,
+  type DesktopTaskSummary,
   type DesktopThreadSummary,
   type DesktopWorkspace,
   type DesktopWorkspaceFileEntry,
@@ -292,6 +293,11 @@ const AutoResearchPanel = lazy(() =>
 const TasksPanel = lazy(() =>
   import("./components/TasksPanel").then((module) => ({
     default: module.TasksPanel,
+  })),
+);
+const WorkflowRunsPanel = lazy(() =>
+  import("./components/WorkflowRunsPanel").then((module) => ({
+    default: module.WorkflowRunsPanel,
   })),
 );
 const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
@@ -1336,6 +1342,7 @@ function isKnownThreadId(
   }
   return (
     state.threads.some((thread) => thread.id === threadId) ||
+    state.sessions.some((thread) => thread.id === threadId) ||
     state.automations.some((automation) => automation.threadId === threadId)
   );
 }
@@ -1360,6 +1367,7 @@ function savedContentView(): ContentView {
     "teams",
     "skills",
     "tasks",
+    "workflow",
     "dreams",
     "settings",
   ];
@@ -1378,6 +1386,7 @@ function currentDesktopRoute(input: {
   pendingAgentId: string | null;
   pendingWorkspacePath: string | null;
   selectedAutomationId: string | null;
+  selectedWorkflowTaskId: string | null;
   selectedThreadId: string | null;
   settingsActiveTab: SettingsTabId;
 }): DesktopRoute {
@@ -1399,6 +1408,11 @@ function currentDesktopRoute(input: {
   }
   if (input.contentView === "settings") {
     return { kind: "settings", tabId: input.settingsActiveTab };
+  }
+  if (input.contentView === "workflow") {
+    return input.selectedWorkflowTaskId
+      ? { kind: "workflow-task", taskId: input.selectedWorkflowTaskId }
+      : { kind: "view", view: "tasks" };
   }
   return { kind: "view", view: input.contentView };
 }
@@ -1560,6 +1574,13 @@ export function AppShell() {
   const [gatewaySetupCanCancel, setGatewaySetupCanCancel] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(() =>
     initialRouteValue.kind === "thread" ? initialRouteValue.threadId : null,
+  );
+  const [selectedWorkflowTask, setSelectedWorkflowTask] =
+    useState<DesktopTaskSummary | null>(null);
+  const [selectedWorkflowTaskId, setSelectedWorkflowTaskId] = useState<
+    string | null
+  >(() =>
+    initialRouteValue.kind === "workflow-task" ? initialRouteValue.taskId : null,
   );
   const [threadEntrySelectionSource, setThreadEntrySelectionSource] =
     useState<ThreadEntrySelectionSource | null>(null);
@@ -2839,6 +2860,7 @@ export function AppShell() {
   const isTeamsView = contentView === "teams";
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
+  const isWorkflowView = contentView === "workflow";
   const isDreamsView = contentView === "dreams" && showDreamsFeature;
   const shouldShowConversationRail = contentView === "thread";
   const visibleSelectedThreadId = shouldShowConversationRail ? selectedThreadId : null;
@@ -3016,6 +3038,7 @@ export function AppShell() {
     "conversation",
     isSettingsView ? "settings-view" : null,
     isTasksView ? "tasks-view" : null,
+    isWorkflowView ? "workflow-view" : null,
     isDreamsView ? "dreams-view" : null,
   ]
     .filter(Boolean)
@@ -3033,6 +3056,7 @@ export function AppShell() {
     !isAutomationView &&
     !isSkillsView &&
     !isTasksView &&
+    !isWorkflowView &&
     !isDreamsView &&
     !isBotsView &&
     !isAgentsView &&
@@ -3074,6 +3098,8 @@ export function AppShell() {
       ? "Local and project skill registry"
     : isTasksView
         ? "Global task board"
+      : isWorkflowView
+        ? "Workflow run detail"
       : isAgentsView || isTeamsView
         ? "Agents and reusable teams"
         : isBotsView
@@ -3364,9 +3390,32 @@ export function AppShell() {
     throw new Error(lastError);
   }
 
-  async function openThreadFromDeepLink(threadId: string): Promise<void> {
+  async function ensureThreadOpenable(threadId: string): Promise<boolean> {
+    if (isKnownThreadId(desktopState, threadId)) {
+      return true;
+    }
+
     const refreshedState = await refreshDesktopState();
-    if (!isKnownThreadId(refreshedState, threadId)) {
+    if (isKnownThreadId(refreshedState, threadId)) {
+      return true;
+    }
+
+    const transcript = await window.garyxDesktop.getThreadHistory(threadId);
+    if (
+      !transcript.remoteFound &&
+      transcript.messages.length === 0 &&
+      transcript.pendingInputs.length === 0 &&
+      !transcript.threadInfo
+    ) {
+      return false;
+    }
+
+    applyRemoteTranscript(threadId, transcript);
+    return true;
+  }
+
+  async function openThreadFromDeepLink(threadId: string): Promise<void> {
+    if (!(await ensureThreadOpenable(threadId))) {
       throw new Error(`Thread not found for garyx:// link: ${threadId}`);
     }
     await openExistingThread(threadId);
@@ -3396,26 +3445,31 @@ export function AppShell() {
     setContentView("thread");
     setNewThreadDraftActive(false);
 
-    if (!isKnownThreadId(desktopState, threadId)) {
-      try {
-        const refreshedState = await refreshDesktopState();
-        if (!isKnownThreadId(refreshedState, threadId)) {
-          setError(`Thread not found: ${threadId}`);
-          return false;
-        }
-      } catch (error) {
-        setError(
-          error instanceof Error
-            ? error.message
-            : `Failed to open thread: ${threadId}`,
-        );
+    try {
+      if (!(await ensureThreadOpenable(threadId))) {
+        setError(`Thread not found: ${threadId}`);
         return false;
       }
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : `Failed to open thread: ${threadId}`,
+      );
+      return false;
     }
 
     setSelectedThreadId(threadId);
     setThreadEntrySelectionSource(entrySource);
     return true;
+  }
+
+  function openWorkflowTask(task: DesktopTaskSummary) {
+    const taskId = task.taskId || `#TASK-${task.number}`;
+    setError(null);
+    setSelectedWorkflowTask(task);
+    setSelectedWorkflowTaskId(taskId);
+    setContentView("workflow");
   }
 
   const applyDesktopRoute = useCallback(
@@ -3448,6 +3502,12 @@ export function AppShell() {
           if (route.tabId) {
             await handleSelectSettingsTab(route.tabId);
           }
+          return;
+        case "workflow-task":
+          setError(null);
+          setSelectedWorkflowTask(null);
+          setSelectedWorkflowTaskId(route.taskId);
+          setContentView("workflow");
           return;
         case "view":
           setContentView(route.view);
@@ -3497,6 +3557,7 @@ export function AppShell() {
         pendingAgentId,
         pendingWorkspacePath,
         selectedAutomationId,
+        selectedWorkflowTaskId,
         selectedThreadId,
         settingsActiveTab,
       }),
@@ -3508,6 +3569,7 @@ export function AppShell() {
     pendingAgentId,
     pendingWorkspacePath,
     selectedAutomationId,
+    selectedWorkflowTaskId,
     selectedThreadId,
     settingsActiveTab,
   ]);
@@ -5978,10 +6040,65 @@ export function AppShell() {
     };
   }
 
+  function threadSummaryFromTranscript(
+    threadId: string,
+    transcript: ThreadTranscript,
+  ): DesktopThreadSummary {
+    if (transcript.thread) {
+      return {
+        ...transcript.thread,
+        agentId: transcript.thread.agentId ?? transcript.threadInfo?.agentId ?? null,
+        workspacePath:
+          transcript.thread.workspacePath ?? transcript.threadInfo?.workspacePath ?? null,
+        worktree: transcript.thread.worktree ?? transcript.threadInfo?.worktree ?? null,
+        team: transcript.thread.team ?? transcript.team ?? null,
+      };
+    }
+
+    const timestamps = transcript.messages
+      .map((message) => message.timestamp || '')
+      .filter(Boolean);
+    const fallbackTimestamp =
+      timestamps[timestamps.length - 1] || new Date().toISOString();
+    const preview =
+      transcript.messages.find((message) => message.text.trim())?.text.trim() || '';
+
+    return {
+      id: threadId,
+      title: transcript.threadInfo?.agentId || threadId,
+      createdAt: timestamps[0] || fallbackTimestamp,
+      updatedAt: fallbackTimestamp,
+      lastMessagePreview: preview,
+      workspacePath: transcript.threadInfo?.workspacePath ?? null,
+      messageCount: transcript.pageInfo?.totalMessages ?? transcript.messages.length,
+      agentId: transcript.threadInfo?.agentId ?? null,
+      recentRunId: transcript.threadInfo?.activeRun?.runId ?? null,
+      worktree: transcript.threadInfo?.worktree ?? null,
+      team: transcript.team ?? null,
+    };
+  }
+
+  function cacheOpenableTranscriptThread(
+    threadId: string,
+    transcript: ThreadTranscript,
+  ) {
+    const summary = threadSummaryFromTranscript(threadId, transcript);
+    setDesktopState((current) => {
+      if (!current || current.threads.some((thread) => thread.id === threadId)) {
+        return current;
+      }
+      return {
+        ...current,
+        sessions: mergeThread(current.sessions, summary),
+      };
+    });
+  }
+
   function applyRemoteTranscript(
     threadId: string,
     transcript: ThreadTranscript,
   ) {
+    cacheOpenableTranscriptThread(threadId, transcript);
     updateThreadHistoryPagination(threadId, (current) => {
       const incoming = paginationStateFromTranscript(transcript);
       if (!current) {
@@ -7997,7 +8114,7 @@ export function AppShell() {
         isTeamsView={isTeamsView}
         isSettingsView={isSettingsView}
         isSkillsView={isSkillsView}
-        isTasksView={isTasksView}
+        isTasksView={isTasksView || isWorkflowView}
         isDreamsView={isDreamsView}
         onBackToThreads={() => {
           setContentView("thread");
@@ -8184,7 +8301,7 @@ export function AppShell() {
         </main>
       ) : (
         <main className={conversationClassName}>
-          {isTasksView || isDreamsView ? null : showStaticWindowToolbar ? (
+          {isTasksView || isWorkflowView || isDreamsView ? null : showStaticWindowToolbar ? (
             <div aria-hidden="true" className="settings-window-toolbar" />
           ) : (
             <header className="conversation-header">
@@ -8444,9 +8561,23 @@ export function AppShell() {
                 onOpenThread={(threadId) => {
                   void openExistingThread(threadId);
                 }}
+                onOpenWorkflowTask={openWorkflowTask}
                 onToast={pushToast}
                 workspaces={workspacePickerWorkspaces}
                 workspaceMutation={workspaceMutation}
+              />
+            ) : isWorkflowView && selectedWorkflowTaskId ? (
+              <WorkflowRunsPanel
+                onOpenTasks={() => {
+                  setContentView("tasks");
+                }}
+                onOpenThread={(threadId) => {
+                  void openExistingThread(threadId);
+                }}
+                onToast={pushToast}
+                t={t}
+                task={selectedWorkflowTask}
+                taskId={selectedWorkflowTaskId}
               />
             ) : isDreamsView ? (
               <DreamsPanel
@@ -8528,7 +8659,9 @@ export function AppShell() {
                 newThreadSelectedAgentId={pendingAgentId}
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
                 newThreadWorkspaceMode={pendingWorkspaceMode}
-                onAddWorkspace={addWorkspacePathFromPicker}
+                onAddWorkspace={() => {
+                  void handleAddWorkspace();
+                }}
                 onAppendComposerAttachments={(files) => {
                   void appendComposerAttachments(files);
                 }}

@@ -1,3 +1,4 @@
+use chrono::{SecondsFormat, Utc};
 use garyx_bridge::MultiProviderBridge;
 use garyx_bridge::provider_trait::BridgeError;
 use garyx_channels::{
@@ -35,6 +36,7 @@ use crate::recent_thread_projection::{
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::wikis::WikiStore;
+use crate::workflows::WorkflowScheduler;
 
 pub struct RuntimeState {
     pub start_time: Instant,
@@ -70,6 +72,7 @@ pub struct OpsState {
     pub wikis: Arc<WikiStore>,
     pub app_db: Arc<AppDbService>,
     pub garyx_db: Arc<GaryxDbService>,
+    pub workflow_scheduler: Arc<WorkflowScheduler>,
     pub channel_endpoint_snapshot: Mutex<Option<ChannelEndpointSnapshotCache>>,
     pub thread_list_snapshot: Mutex<Option<ThreadListSnapshotCache>>,
 }
@@ -254,6 +257,7 @@ impl AppState {
 
     pub fn spawn_gateway_sync_cache_warmup(self: &Arc<Self>) {
         let state = Arc::clone(self);
+        let workflow_reconcile_cutoff = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         tokio::spawn(async move {
             let started = Instant::now();
             let recent_threads = backfill_recent_thread_projection_if_empty(
@@ -271,6 +275,11 @@ impl AppState {
                 &state.ops.garyx_db,
             )
             .await;
+            let reconciled_workflows = crate::workflows::reconcile_interrupted_workflows(
+                &state,
+                &workflow_reconcile_cutoff,
+            )
+            .await;
             let threads = state.cached_thread_list_entries().await.len();
             let endpoints = state.cached_channel_endpoints().await.len();
             debug!(
@@ -280,6 +289,7 @@ impl AppState {
                 recent_thread_backfill_count = recent_threads,
                 recent_thread_prune_count = pruned_recent_threads,
                 recent_thread_active_reconcile_count = reconciled_recent_threads,
+                workflow_reconcile_count = reconciled_workflows,
                 "gateway sync snapshots warmed"
             );
         });
@@ -414,6 +424,7 @@ impl AppState {
                 wikis: self.ops.wikis.clone(),
                 app_db: self.ops.app_db.clone(),
                 garyx_db: self.ops.garyx_db.clone(),
+                workflow_scheduler: self.ops.workflow_scheduler.clone(),
                 channel_endpoint_snapshot: Mutex::new(None),
                 thread_list_snapshot: Mutex::new(None),
             },

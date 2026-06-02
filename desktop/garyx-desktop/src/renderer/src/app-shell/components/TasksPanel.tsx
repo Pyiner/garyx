@@ -23,6 +23,7 @@ import {
   StopCircle,
   Trash,
   UserPlus,
+  Workflow,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -33,6 +34,8 @@ import type {
   DesktopTaskPrincipal,
   DesktopTaskStatus,
   DesktopTaskSummary,
+  DesktopTeam,
+  DesktopWorkflowDefinition,
   DesktopWorkspace,
   DesktopWorkspaceMode,
 } from '@shared/contracts';
@@ -72,9 +75,15 @@ import {
   SelectValue,
 } from '../../components/ui/select';
 import { Textarea } from '../../components/ui/textarea';
-import { buildAgentPickerOptions } from '../agent-options';
+import {
+  buildAgentPickerOptions,
+  buildTeamOptions,
+} from '../agent-options';
 import { AgentOptionRow } from './AgentOptionAvatar';
 import { AgentsIcon, MoreDotsIcon } from '../icons';
+import { WorkflowTaskFields } from './WorkflowTaskFields';
+
+type TaskExecutorMode = 'agent' | 'team' | 'workflow';
 
 type TasksPanelProps = {
   agents: DesktopCustomAgent[];
@@ -83,6 +92,7 @@ type TasksPanelProps = {
   workspaceMutation: string | null;
   onAddWorkspace: (path: string) => Promise<DesktopWorkspace | null>;
   onOpenThread: (threadId: string) => void;
+  onOpenWorkflowTask: (task: DesktopTaskSummary) => void;
   onToast: (message: string, tone?: ToastTone) => void;
 };
 
@@ -109,7 +119,7 @@ const STATUS_LABELS: Record<DesktopTaskStatus, string> = {
 const TASK_DRAG_MIME = 'application/x-garyx-task-id';
 const ALL_BOTS_FILTER_VALUE = '__all_bots__';
 const UNASSIGNED_ASSIGNEE_VALUE = '__unassigned__';
-const CHOOSE_NOTIFICATION_VALUE = '__choose_notification__';
+const CHOOSE_TEAM_VALUE = '__choose_team__';
 
 function formatPrincipal(principal: DesktopTaskPrincipal | null | undefined, t: Translate): string {
   if (!principal) {
@@ -235,6 +245,10 @@ function taskNotificationTargetFromSelection(
   };
 }
 
+function isWorkflowTask(task: DesktopTaskSummary): boolean {
+  return task.executor?.type === 'workflow';
+}
+
 export function TasksPanel({
   agents,
   botGroups,
@@ -242,6 +256,7 @@ export function TasksPanel({
   workspaceMutation,
   onAddWorkspace,
   onOpenThread,
+  onOpenWorkflowTask,
   onToast,
 }: TasksPanelProps) {
   const { t } = useI18n();
@@ -264,7 +279,21 @@ export function TasksPanel({
     workspacePath: string;
     isGitRepo: boolean;
   } | null>(null);
-  const [draftNotificationTarget, setDraftNotificationTarget] = useState('');
+  const [draftNotificationTarget, setDraftNotificationTarget] = useState('none');
+  const [draftExecutorMode, setDraftExecutorMode] =
+    useState<TaskExecutorMode>('agent');
+  const [draftWorkflowId, setDraftWorkflowId] = useState('');
+  const [taskTeams, setTaskTeams] = useState<DesktopTeam[]>([]);
+  const [taskTeamsLoading, setTaskTeamsLoading] = useState(false);
+  const [taskTeamsError, setTaskTeamsError] = useState<string | null>(null);
+  const [workflowDefinitions, setWorkflowDefinitions] = useState<
+    DesktopWorkflowDefinition[]
+  >([]);
+  const [workflowDefinitionsLoading, setWorkflowDefinitionsLoading] =
+    useState(false);
+  const [workflowDefinitionsError, setWorkflowDefinitionsError] = useState<
+    string | null
+  >(null);
   const [creating, setCreating] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [dropStatus, setDropStatus] = useState<DesktopTaskStatus | null>(null);
@@ -273,6 +302,19 @@ export function TasksPanel({
     () => buildAgentPickerOptions(agents, { labelStyle: 'display' }),
     [agents],
   );
+  const teamOptions = useMemo(
+    () => buildTeamOptions(taskTeams, { detail: t('Agent Team') }),
+    [taskTeams, t],
+  );
+  const workflowBodyPlaceholder = useMemo(() => {
+    const selected = workflowDefinitions.find(
+      (definition) => definition.workflowId === draftWorkflowId,
+    );
+    const placeholder = selected?.input?.placeholder;
+    return typeof placeholder === 'string' && placeholder.trim()
+      ? placeholder
+      : t('Describe what this workflow should do...');
+  }, [draftWorkflowId, workflowDefinitions, t]);
 
   const botFilterOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -385,6 +427,54 @@ export function TasksPanel({
       setBotFilter('');
     }
   }, [botFilter, botFilterOptions]);
+
+  const loadWorkflowDefinitions = useCallback(async () => {
+    setWorkflowDefinitionsLoading(true);
+    setWorkflowDefinitionsError(null);
+    try {
+      const definitions = await getDesktopApi().listWorkflowDefinitions();
+      setWorkflowDefinitions(definitions);
+    } catch (loadError) {
+      setWorkflowDefinitions([]);
+      setWorkflowDefinitionsError(
+        loadError instanceof Error
+          ? loadError.message
+          : t('Failed to load workflows.'),
+      );
+    } finally {
+      setWorkflowDefinitionsLoading(false);
+    }
+  }, [t]);
+
+  const loadTaskTeams = useCallback(async () => {
+    setTaskTeamsLoading(true);
+    setTaskTeamsError(null);
+    try {
+      const teams = await getDesktopApi().listTeams();
+      setTaskTeams(teams);
+    } catch (loadError) {
+      setTaskTeams([]);
+      setTaskTeamsError(
+        loadError instanceof Error
+          ? loadError.message
+          : t('Failed to load agent teams.'),
+      );
+    } finally {
+      setTaskTeamsLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    if (draftOpen && draftExecutorMode === 'workflow') {
+      void loadWorkflowDefinitions();
+    }
+  }, [draftOpen, draftExecutorMode, loadWorkflowDefinitions]);
+
+  useEffect(() => {
+    if (draftOpen && draftExecutorMode === 'team') {
+      void loadTaskTeams();
+    }
+  }, [draftOpen, draftExecutorMode, loadTaskTeams]);
 
   const tasksByStatus = useMemo(() => {
     const grouped: Record<DesktopTaskStatus, DesktopTaskSummary[]> = {
@@ -528,6 +618,35 @@ export function TasksPanel({
     void moveTask(task, status);
   }
 
+  function resetDraft() {
+    setDraftOpen(false);
+    setDraftTitle('');
+    setDraftBody('');
+    setDraftAssignee('');
+    setDraftWorkspaceDir('');
+    setDraftWorkspaceMode('local');
+    setDraftNotificationTarget('none');
+    setDraftExecutorMode('agent');
+    setDraftWorkflowId('');
+  }
+
+  function switchDraftExecutorMode(mode: TaskExecutorMode) {
+    if (mode !== draftExecutorMode) {
+      setDraftAssignee('');
+    }
+    setDraftExecutorMode(mode);
+  }
+
+  function openTaskPrimary(task: DesktopTaskSummary) {
+    if (isWorkflowTask(task)) {
+      onOpenWorkflowTask(task);
+      return;
+    }
+    if (task.threadId) {
+      onOpenThread(task.threadId);
+    }
+  }
+
   async function submitTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const title = draftTitle.trim();
@@ -542,25 +661,64 @@ export function TasksPanel({
       onToast(t('Choose Do not notify or a bot.'), 'error');
       return;
     }
+
+    if (draftExecutorMode === 'workflow') {
+      const workflowId = draftWorkflowId.trim();
+      if (!workflowId) {
+        onToast(t('Choose a workflow.'), 'error');
+        return;
+      }
+      setCreating(true);
+      try {
+        await getDesktopApi().createTask({
+          title,
+          body: draftBody.trim() || null,
+          workspaceDir: draftWorkspaceDir.trim() || null,
+          notificationTarget,
+          executor: { type: 'workflow', workflowId },
+        });
+        resetDraft();
+        await loadTasks({ silent: true });
+        onToast(t('Workflow task started.'), 'success');
+      } catch (createError) {
+        onToast(
+          createError instanceof Error
+            ? createError.message
+            : t('Task creation failed.'),
+          'error',
+        );
+      } finally {
+        setCreating(false);
+      }
+      return;
+    }
+
     const assignee = draftAssignee.trim();
+    if (draftExecutorMode === 'agent' && !assignee) {
+      onToast(t('Choose an agent.'), 'error');
+      return;
+    }
+    if (draftExecutorMode === 'team' && !assignee) {
+      onToast(t('Choose an agent team.'), 'error');
+      return;
+    }
+    const executor = assignee
+      ? draftExecutorMode === 'team'
+        ? { type: 'team' as const, teamId: assignee }
+        : { type: 'agent' as const, agentId: assignee }
+      : null;
     setCreating(true);
     try {
       await getDesktopApi().createTask({
         title,
         body: draftBody.trim() || null,
-        assignee: assignee || null,
-        start: Boolean(assignee),
+        executor,
+        start: Boolean(executor),
         workspaceDir: draftWorkspaceDir.trim() || null,
         workspaceMode: draftWorkspaceMode,
         notificationTarget,
       });
-      setDraftOpen(false);
-      setDraftTitle('');
-      setDraftBody('');
-      setDraftAssignee('');
-      setDraftWorkspaceDir('');
-      setDraftWorkspaceMode('local');
-      setDraftNotificationTarget('');
+      resetDraft();
       await loadTasks({ silent: true });
       onToast(t('Task created.'), 'success');
     } catch (createError) {
@@ -587,6 +745,7 @@ export function TasksPanel({
   const renderTaskOverflowMenu = (task: DesktopTaskSummary, busy: boolean) => {
     const next = nextStatus(task.status);
     const StatusIcon = taskStatusMenuIcon(task.status);
+    const workflowTask = isWorkflowTask(task);
     const taskMenuLabel = t('More actions for {name}', {
       name: task.taskId || `#TASK-${task.number}`,
     });
@@ -649,6 +808,16 @@ export function TasksPanel({
               <StatusIcon aria-hidden />
               {t(next.label)}
             </FloatingActionMenuItem>
+            {workflowTask ? (
+              <FloatingActionMenuItem
+                onSelect={() => {
+                  onOpenWorkflowTask(task);
+                }}
+              >
+                <Workflow aria-hidden />
+                {t('Workflow runs')}
+              </FloatingActionMenuItem>
+            ) : null}
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
           <DropdownMenuGroup>
@@ -671,6 +840,7 @@ export function TasksPanel({
   const renderTaskCard = (task: DesktopTaskSummary) => {
     const busy = mutatingTaskId === task.taskId;
     const dragging = draggingTaskId === task.taskId;
+    const workflowTask = isWorkflowTask(task);
     return (
       <article
         className={`tasks-card ${dragging ? 'is-dragging' : ''}`}
@@ -694,11 +864,9 @@ export function TasksPanel({
         </div>
         <button
           className="tasks-card-title"
-          disabled={!task.threadId}
+          disabled={!workflowTask && !task.threadId}
           onClick={() => {
-            if (task.threadId) {
-              onOpenThread(task.threadId);
-            }
+            openTaskPrimary(task);
           }}
           type="button"
         >
@@ -832,6 +1000,7 @@ export function TasksPanel({
             </button>
           </div>
           <button
+            aria-label={t('New task')}
             className="tasks-primary-button"
             onClick={() => setDraftOpen((current) => !current)}
             type="button"
@@ -863,40 +1032,132 @@ export function TasksPanel({
                   value={draftTitle}
                 />
               </Field>
-              <Field className="tasks-field">
-                <FieldLabel>{t('Assignee')}</FieldLabel>
-                <Select
-                  value={draftAssignee || UNASSIGNED_ASSIGNEE_VALUE}
-                  onValueChange={(value) => {
-                    setDraftAssignee(value === UNASSIGNED_ASSIGNEE_VALUE ? '' : value);
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent
-                    className="tasks-create-select-content"
-                    position="popper"
-                    sideOffset={4}
+              <div className="tasks-executor-section tasks-field-full">
+                <div className="tasks-executor-heading">
+                  <FieldLabel>{t('Executor')}</FieldLabel>
+                  <div
+                    aria-label={t('Executor type')}
+                    className="tasks-segmented tasks-executor-tabs"
                   >
-                    <SelectGroup>
-                      <SelectLabel>{t('Agents')}</SelectLabel>
-                      <SelectItem value={UNASSIGNED_ASSIGNEE_VALUE}>
-                        {t('Unassigned')}
-                      </SelectItem>
-                      {agentOptions.map((option) => {
-                        return (
-                          <SelectItem key={option.id} value={option.id}>
-                            <AgentOptionRow
-                              option={option}
-                            />
+                    <button
+                      className={draftExecutorMode === 'agent' ? 'active' : ''}
+                      onClick={() => switchDraftExecutorMode('agent')}
+                      type="button"
+                    >
+                      <AgentsIcon />
+                      {t('Agent')}
+                    </button>
+                    <button
+                      className={draftExecutorMode === 'team' ? 'active' : ''}
+                      onClick={() => switchDraftExecutorMode('team')}
+                      type="button"
+                    >
+                      <AgentsIcon />
+                      {t('Agent Team')}
+                    </button>
+                    <button
+                      className={draftExecutorMode === 'workflow' ? 'active' : ''}
+                      onClick={() => switchDraftExecutorMode('workflow')}
+                      type="button"
+                    >
+                      <Workflow aria-hidden size={14} strokeWidth={1.8} />
+                      {t('Workflow')}
+                    </button>
+                  </div>
+                </div>
+                <div className="tasks-executor-panel">
+                  {draftExecutorMode === 'agent' ? (
+                    <Select
+                      value={draftAssignee || UNASSIGNED_ASSIGNEE_VALUE}
+                      onValueChange={(value) => {
+                        setDraftAssignee(value === UNASSIGNED_ASSIGNEE_VALUE ? '' : value);
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent
+                        className="tasks-create-select-content"
+                        position="popper"
+                        sideOffset={4}
+                      >
+                        <SelectGroup>
+                          <SelectLabel>{t('Agents')}</SelectLabel>
+                          <SelectItem value={UNASSIGNED_ASSIGNEE_VALUE}>
+                            {t('Unassigned')}
                           </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
+                          {agentOptions.map((option) => {
+                            return (
+                              <SelectItem key={option.id} value={option.id}>
+                                <AgentOptionRow
+                                  option={option}
+                                />
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  ) : draftExecutorMode === 'team' ? (
+                    taskTeamsLoading ? (
+                      <div className="tasks-workflow-state">
+                        {t('Loading agent teams…')}
+                      </div>
+                    ) : taskTeamsError ? (
+                      <div className="tasks-workflow-state tasks-workflow-state-error">
+                        {taskTeamsError}
+                      </div>
+                    ) : teamOptions.length ? (
+                      <Select
+                        value={draftAssignee || CHOOSE_TEAM_VALUE}
+                        onValueChange={(value) => {
+                          setDraftAssignee(value === CHOOSE_TEAM_VALUE ? '' : value);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent
+                          className="tasks-create-select-content"
+                          position="popper"
+                          sideOffset={4}
+                        >
+                          <SelectGroup>
+                            <SelectLabel>{t('Agent Teams')}</SelectLabel>
+                            <SelectItem value={CHOOSE_TEAM_VALUE}>
+                              {t('Choose an agent team')}
+                            </SelectItem>
+                            {teamOptions.map((option) => (
+                              <SelectItem
+                                key={option.id}
+                                textValue={option.label}
+                                value={option.id}
+                              >
+                                <AgentOptionRow option={option} />
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <div className="tasks-workflow-empty">
+                        <p className="tasks-workflow-empty-title">
+                          {t('No agent teams available')}
+                        </p>
+                      </div>
+                    )
+                  ) : (
+                    <WorkflowTaskFields
+                      definitions={workflowDefinitions}
+                      error={workflowDefinitionsError}
+                      loading={workflowDefinitionsLoading}
+                      onSelectWorkflow={setDraftWorkflowId}
+                      selectedWorkflowId={draftWorkflowId}
+                      t={t}
+                    />
+                  )}
+                </div>
+              </div>
               <Field className="tasks-field tasks-field-full">
                 <FieldLabel>{t('Workspace')}</FieldLabel>
                 <div className="tasks-workspace-controls">
@@ -912,7 +1173,7 @@ export function TasksPanel({
                     value={draftWorkspaceDir}
                     workspaces={selectableWorkspaces}
                   />
-                  {draftWorktreeCapable ? (
+                  {draftWorktreeCapable && draftExecutorMode !== 'workflow' ? (
                     <div className="tasks-workspace-mode-row">
                       <span className="tasks-workspace-mode-label">
                         {t('Workspace mode')}
@@ -955,10 +1216,8 @@ export function TasksPanel({
               <Field className="tasks-field tasks-field-full">
                 <FieldLabel>{t('Notification')}</FieldLabel>
                 <Select
-                  value={draftNotificationTarget || CHOOSE_NOTIFICATION_VALUE}
-                  onValueChange={(value) => {
-                    setDraftNotificationTarget(value === CHOOSE_NOTIFICATION_VALUE ? '' : value);
-                  }}
+                  value={draftNotificationTarget}
+                  onValueChange={setDraftNotificationTarget}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -970,9 +1229,6 @@ export function TasksPanel({
                   >
                     <SelectGroup>
                       <SelectLabel>{t('Notification')}</SelectLabel>
-                      <SelectItem value={CHOOSE_NOTIFICATION_VALUE}>
-                        {t('Choose notification')}
-                      </SelectItem>
                       <SelectItem value="none">{t('Do not notify')}</SelectItem>
                       {botGroups.map((group) => (
                         <SelectItem key={group.id} value={`bot:${group.id}`}>
@@ -987,7 +1243,11 @@ export function TasksPanel({
                 <FieldLabel>{t('Body')}</FieldLabel>
                 <Textarea
                   onChange={(event) => setDraftBody(event.target.value)}
-                  placeholder={t('Optional task detail')}
+                  placeholder={
+                    draftExecutorMode === 'workflow'
+                      ? workflowBodyPlaceholder
+                      : t('Optional task detail')
+                  }
                   value={draftBody}
                 />
               </Field>
@@ -998,11 +1258,21 @@ export function TasksPanel({
               </button>
               <button
                 className="tasks-primary-button"
-                disabled={!draftTitle.trim() || creating}
+                disabled={
+                  !draftTitle.trim() ||
+                  creating ||
+                  (draftExecutorMode === 'agent' && !draftAssignee.trim()) ||
+                  (draftExecutorMode === 'workflow' && !draftWorkflowId.trim()) ||
+                  (draftExecutorMode === 'team' && !draftAssignee.trim())
+                }
                 type="submit"
               >
                 <Plus aria-hidden size={14} strokeWidth={1.8} />
-                {creating ? t('Creating…') : t('Create')}
+                {creating
+                  ? t('Creating…')
+                  : draftExecutorMode === 'workflow'
+                    ? t('Start workflow')
+                    : t('Create')}
               </button>
             </div>
           </form>
@@ -1060,15 +1330,14 @@ export function TasksPanel({
           </div>
           {tasks.map((task) => {
             const busy = mutatingTaskId === task.taskId;
+            const workflowTask = isWorkflowTask(task);
             return (
               <div className="tasks-list-row" key={task.taskId}>
                 <button
                   className="tasks-list-title"
-                  disabled={!task.threadId}
+                  disabled={!workflowTask && !task.threadId}
                   onClick={() => {
-                    if (task.threadId) {
-                      onOpenThread(task.threadId);
-                    }
+                    openTaskPrimary(task);
                   }}
                   type="button"
                 >
@@ -1115,6 +1384,7 @@ export function TasksPanel({
           })}
         </div>
       )}
+
     </div>
   );
 }

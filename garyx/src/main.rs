@@ -26,7 +26,7 @@ use cli::{
     AutomationDataTriggerAction, AutomationTriggerAction, BotAction, BotEndpointAction,
     ChannelsAction, Cli, CommandAction, Commands, ConfigAction, DbAction, DbFieldAction,
     DbRecordAction, DbTableAction, DreamAction, GatewayAction, LogsAction, PluginsAction,
-    TaskAction, TeamAction, ThreadAction, ToolAction,
+    TaskAction, TeamAction, ThreadAction, ToolAction, WorkflowAction, WorkflowDefinitionAction,
 };
 use commands::{
     cmd_agent_create, cmd_agent_delete, cmd_agent_get, cmd_agent_list, cmd_agent_team_create,
@@ -54,7 +54,9 @@ use commands::{
     cmd_task_release, cmd_task_reopen, cmd_task_set_title, cmd_task_stop, cmd_task_unassign,
     cmd_task_update, cmd_thread_create, cmd_thread_get, cmd_thread_history, cmd_thread_list,
     cmd_thread_send, cmd_thread_send_to_bot, cmd_thread_send_to_task, cmd_tool_image,
-    cmd_tool_search, cmd_update, run_gateway,
+    cmd_tool_search, cmd_update, cmd_workflow_cancel, cmd_workflow_definition_get,
+    cmd_workflow_definition_list, cmd_workflow_definition_upsert, cmd_workflow_events,
+    cmd_workflow_get, cmd_workflow_list, run_gateway,
 };
 
 struct ThreadSendDestination {
@@ -713,6 +715,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
             },
         },
+        Some(Commands::Workflow { action }) => match action {
+            WorkflowAction::Definition { action } => match action {
+                WorkflowDefinitionAction::List {
+                    limit,
+                    offset,
+                    json,
+                } => cmd_workflow_definition_list(config_path, limit, offset, json).await,
+                WorkflowDefinitionAction::Get { workflow_id, json } => {
+                    cmd_workflow_definition_get(config_path, &workflow_id, json).await
+                }
+                WorkflowDefinitionAction::Upsert { file, json } => {
+                    cmd_workflow_definition_upsert(config_path, &file, json).await
+                }
+            },
+            WorkflowAction::List {
+                parent_thread_id,
+                json,
+            } => cmd_workflow_list(config_path, parent_thread_id, json).await,
+            WorkflowAction::Get {
+                workflow_run_id,
+                json,
+            } => cmd_workflow_get(config_path, &workflow_run_id, json).await,
+            WorkflowAction::Events {
+                workflow_run_id,
+                after,
+                json,
+            } => cmd_workflow_events(config_path, &workflow_run_id, after, json).await,
+            WorkflowAction::Cancel {
+                workflow_run_id,
+                json,
+            } => cmd_workflow_cancel(config_path, &workflow_run_id, json).await,
+        },
         Some(Commands::Db { action }) => match action {
             DbAction::Table { action } => match action {
                 DbTableAction::List { json } => cmd_db_table_list(config_path, json).await,
@@ -1085,6 +1119,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 start,
                 workspace_dir,
                 worktree,
+                agent,
+                team,
+                workflow,
+                input,
+                input_file,
+                input_json,
                 notify,
                 json,
             } => {
@@ -1096,6 +1136,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     start,
                     workspace_dir,
                     worktree,
+                    agent,
+                    team,
+                    workflow,
+                    input,
+                    input_file,
+                    input_json,
                     notify,
                     json,
                 )

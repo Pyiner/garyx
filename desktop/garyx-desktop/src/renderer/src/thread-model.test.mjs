@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildWorkspaceThreadGroups } from './thread-model.ts';
+import { buildWorkspaceThreadGroups, selectedThread } from './thread-model.ts';
 
 function makeWorkspace(path, overrides = {}) {
   return {
@@ -102,4 +102,13 @@ test('workspace sidebar groups use only user-saved workspace rows', () => {
   );
   assert.equal(groups[0].canManageWorkspace, true);
   assert.equal(groups[1].canManageWorkspace, true);
+});
+
+test('selectedThread can resolve cached hidden session threads', () => {
+  const hiddenChild = makeThread('thread-hidden-child', '/Users/test/project');
+  const state = makeState({
+    sessions: [hiddenChild],
+  });
+
+  assert.equal(selectedThread(state, hiddenChild.id)?.id, hiddenChild.id);
 });

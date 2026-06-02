@@ -81,6 +81,10 @@ jobs:
           ARCHIVE="garyx-${VERSION}-${{ matrix.target }}"
           mkdir -p "$ARCHIVE"
           cp target/${{ matrix.target }}/release/garyx "$ARCHIVE/"
+          bash scripts/download-bun-runtime.sh "${{ matrix.target }}" "$ARCHIVE/garyx-bun"
+          if [[ "${{ matrix.target }}" == *apple-darwin ]]; then
+            CODESIGN_IDENTIFIER=com.garyx.workflow-bun bash scripts/codesign-macos-cli.sh "$ARCHIVE/garyx-bun"
+          fi
           cp README.md LICENSE "$ARCHIVE/"
           tar czf "${ARCHIVE}.tar.gz" "$ARCHIVE"
           shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"

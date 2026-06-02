@@ -733,6 +733,12 @@ async fn cmd_task_create_posts_worktree_runtime_mode() {
         false,
         Some("/tmp/garyx-repo".to_owned()),
         true,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
         vec!["none".to_owned()],
         true,
     )
@@ -751,6 +757,266 @@ async fn cmd_task_create_posts_worktree_runtime_mode() {
         "/tmp/garyx-repo"
     );
     assert_eq!(records[0].body["runtime"]["workspace_mode"], "worktree");
+}
+
+#[tokio::test]
+async fn cmd_task_create_posts_agent_executor() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_task_create(
+        config_path.to_str().expect("config path"),
+        Some("Agent task".to_owned()),
+        Some("Do the work".to_owned()),
+        None,
+        false,
+        Some("/tmp/garyx-repo".to_owned()),
+        false,
+        Some("claude".to_owned()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec!["none".to_owned()],
+        true,
+    )
+    .await
+    .expect("task create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].body["executor"]["type"], "agent");
+    assert_eq!(records[0].body["executor"]["agentId"], "claude");
+    assert_eq!(records[0].body["assignee"], Value::Null);
+    assert_eq!(records[0].body["start"], true);
+    assert_eq!(
+        records[0].body["runtime"]["workspace_dir"],
+        "/tmp/garyx-repo"
+    );
+}
+
+#[tokio::test]
+async fn cmd_task_create_posts_team_executor() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_task_create(
+        config_path.to_str().expect("config path"),
+        Some("Team task".to_owned()),
+        None,
+        None,
+        false,
+        None,
+        false,
+        None,
+        Some("product-ship".to_owned()),
+        None,
+        None,
+        None,
+        None,
+        vec!["none".to_owned()],
+        true,
+    )
+    .await
+    .expect("task create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].body["executor"]["type"], "team");
+    assert_eq!(records[0].body["executor"]["teamId"], "product-ship");
+    assert_eq!(records[0].body["assignee"], Value::Null);
+    assert_eq!(records[0].body["start"], true);
+}
+
+#[tokio::test]
+async fn cmd_task_create_rejects_executor_with_assignee() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, "http://127.0.0.1:9");
+
+    let error = cmd_task_create(
+        config_path.to_str().expect("config path"),
+        Some("Mixed task".to_owned()),
+        None,
+        Some("agent:reviewer"),
+        false,
+        None,
+        false,
+        Some("claude".to_owned()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        vec!["none".to_owned()],
+        true,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("executor cannot be combined with --assignee")
+    );
+}
+
+#[tokio::test]
+async fn cmd_task_create_posts_workflow_workspace_at_top_level() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_task_create(
+        config_path.to_str().expect("config path"),
+        Some("Workflow task".to_owned()),
+        None,
+        None,
+        false,
+        Some("/tmp/garyx-workflow".to_owned()),
+        false,
+        None,
+        None,
+        Some("smoke".to_owned()),
+        None,
+        None,
+        Some(r#"{"question":"smoke"}"#.to_owned()),
+        vec!["none".to_owned()],
+        true,
+    )
+    .await
+    .expect("task create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].method, "POST");
+    assert_eq!(records[0].path, "/api/tasks");
+    assert_eq!(records[0].body["executor"]["type"], "workflow");
+    assert_eq!(records[0].body["executor"]["workflowId"], "smoke");
+    assert_eq!(records[0].body["executor"]["input"]["question"], "smoke");
+    assert_eq!(records[0].body["workspace_dir"], "/tmp/garyx-workflow");
+    assert_eq!(
+        records[0].body["runtime"]["workspace_dir"],
+        "/tmp/garyx-workflow"
+    );
+}
+
+#[tokio::test]
+async fn cmd_task_create_posts_workflow_plain_text_input() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_task_create(
+        config_path.to_str().expect("config path"),
+        Some("Workflow text task".to_owned()),
+        None,
+        None,
+        false,
+        None,
+        false,
+        None,
+        None,
+        Some("smoke".to_owned()),
+        Some("Summarize this bug report".to_owned()),
+        None,
+        None,
+        vec!["none".to_owned()],
+        true,
+    )
+    .await
+    .expect("task create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].body["executor"]["type"], "workflow");
+    assert_eq!(records[0].body["executor"]["workflowId"], "smoke");
+    assert_eq!(
+        records[0].body["executor"]["input"],
+        "Summarize this bug report"
+    );
+}
+
+#[tokio::test]
+async fn cmd_task_create_posts_workflow_input_file_as_plain_text() {
+    let requests = StdArc::new(Mutex::new(Vec::new()));
+    let (base_url, handle) = spawn_thread_task_http_test_server(requests.clone()).await;
+    let dir = tempdir().expect("tempdir");
+    let input_path = dir.path().join("workflow-input.txt");
+    std::fs::write(&input_path, "First line\nSecond line\n").expect("input file");
+    let config_path = write_test_gateway_config(&dir, &base_url);
+
+    cmd_task_create(
+        config_path.to_str().expect("config path"),
+        Some("Workflow file task".to_owned()),
+        None,
+        None,
+        false,
+        None,
+        false,
+        None,
+        None,
+        Some("smoke".to_owned()),
+        None,
+        Some(input_path),
+        None,
+        vec!["none".to_owned()],
+        true,
+    )
+    .await
+    .expect("task create should succeed");
+
+    handle.abort();
+
+    let records = requests.lock().expect("request lock");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].body["executor"]["type"], "workflow");
+    assert_eq!(
+        records[0].body["executor"]["input"],
+        "First line\nSecond line\n"
+    );
+}
+
+#[test]
+fn workflow_package_install_copies_manifest_and_code_into_config_root() {
+    let temp = tempdir().expect("tempdir");
+    let package = temp.path().join("source").join("smoke");
+    std::fs::create_dir_all(&package).expect("source dirs");
+    std::fs::write(package.join("workflow.ts"), "export {};\n").expect("entrypoint");
+    std::fs::write(
+        package.join(WORKFLOW_MANIFEST_FILE),
+        r#"{
+          "workflowId": "smoke",
+          "version": 1,
+          "name": "Smoke",
+          "input": {"placeholder": "Smoke request"}
+        }"#,
+    )
+    .expect("manifest");
+    let (source, manifest) = workflow_package_source(&package).expect("source");
+    assert_eq!(source, package);
+    assert_eq!(manifest, package.join(WORKFLOW_MANIFEST_FILE));
+
+    let mut config = GaryxConfig::default();
+    config.sessions.data_dir = Some(temp.path().join("data").to_string_lossy().to_string());
+    let destination = workflow_definitions_root_for_config(&config).join("smoke");
+    install_workflow_package(&source, &destination).expect("install");
+    assert!(destination.join(WORKFLOW_MANIFEST_FILE).is_file());
+    assert!(destination.join("workflow.ts").is_file());
 }
 
 #[test]
@@ -2060,6 +2326,47 @@ fn format_task_progress_groups_each_user_turn_with_last_assistant_text_group() {
     assert!(rendered.contains(
         "Full thread with tool calls: garyx thread history thread::task-42 --limit 200 --json"
     ));
+}
+
+#[test]
+fn append_task_workflow_runs_renders_run_and_child_summary() {
+    let mut output = String::from("Task: #TASK-42\n");
+    let workflow_runs = json!({
+        "taskId": "#TASK-42",
+        "workflowRuns": [
+            {
+                "workflow": {
+                    "workflowRunId": "run-abc",
+                    "workflowId": "run-abc",
+                    "status": "succeeded",
+                    "workflowDefinitionId": "deep-research",
+                    "workflowDefinitionVersion": 2,
+                    "totalChildren": 2,
+                    "completedChildren": 2,
+                    "failedChildren": 0,
+                    "summary": "Done"
+                },
+                "children": [
+                    {
+                        "label": "Search",
+                        "status": "succeeded",
+                        "phaseTitle": "Search",
+                        "threadId": "thread::child"
+                    }
+                ],
+                "events": []
+            }
+        ]
+    });
+
+    append_task_workflow_runs(&mut output, Some(&workflow_runs));
+
+    assert!(output.contains("Workflow Runs:"));
+    assert!(
+        output.contains("- run-abc [succeeded] definition deep-research@2 children 2/2 failed 0")
+    );
+    assert!(output.contains("Summary: Done"));
+    assert!(output.contains("- Search [succeeded] phase Search thread thread::child"));
 }
 
 #[test]

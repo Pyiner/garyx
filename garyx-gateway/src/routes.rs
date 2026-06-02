@@ -14,9 +14,9 @@ use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_O
 use garyx_router::{
     ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode,
     active_run_snapshot_run_id, bindings_from_value, detach_endpoint_from_thread,
-    history_message_count, is_hidden_thread_value, is_thread_key, list_known_channel_endpoints,
-    thread_kind_from_value, update_thread_record, workspace_dir_from_value,
-    workspace_git_status as router_workspace_git_status,
+    history_message_count, is_default_thread_list_hidden, is_thread_key,
+    list_known_channel_endpoints, thread_kind_from_value, update_thread_record,
+    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -1220,7 +1220,7 @@ pub async fn list_threads(
             continue;
         }
         let data = entry.data;
-        if !params.include_hidden && is_hidden_thread_value(&data) {
+        if !params.include_hidden && is_default_thread_list_hidden(&data) {
             continue;
         }
         candidates.push((entry.key, data));

@@ -1,0 +1,1162 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Garyx Workflow 技术架构评审</title>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --paper: #ffffff;
+      --text: #15181d;
+      --muted: #5d6675;
+      --line: #d9dee7;
+      --strong: #0f172a;
+      --accent: #2563eb;
+      --accent-soft: #e8f0ff;
+      --green: #0f766e;
+      --green-soft: #e7f6f3;
+      --amber: #a16207;
+      --amber-soft: #fff6d6;
+      --red: #b42318;
+      --red-soft: #fff0ee;
+      --code: #0b1020;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 32px 28px 72px;
+    }
+
+    header {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 34px 38px;
+      box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+    }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, h4 {
+      color: var(--strong);
+      line-height: 1.22;
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 34px;
+      margin-top: 8px;
+    }
+
+    h2 {
+      font-size: 24px;
+      margin-top: 42px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h3 {
+      font-size: 18px;
+      margin-top: 26px;
+    }
+
+    h4 {
+      font-size: 15px;
+      margin-top: 18px;
+    }
+
+    p {
+      margin: 10px 0 0;
+    }
+
+    .subtitle {
+      max-width: 900px;
+      color: var(--muted);
+      font-size: 17px;
+      margin-top: 14px;
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 26px;
+    }
+
+    .meta div {
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+
+    .meta strong {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      margin-bottom: 3px;
+      text-transform: uppercase;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 270px minmax(0, 1fr);
+      gap: 28px;
+      margin-top: 26px;
+      align-items: start;
+    }
+
+    nav {
+      position: sticky;
+      top: 20px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px;
+    }
+
+    nav h2 {
+      border: 0;
+      margin: 0 0 12px;
+      padding: 0;
+      font-size: 15px;
+    }
+
+    nav ol {
+      margin: 0;
+      padding-left: 20px;
+      color: var(--muted);
+    }
+
+    nav li {
+      margin: 8px 0;
+    }
+
+    main {
+      min-width: 0;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 28px 34px 42px;
+    }
+
+    ul, ol {
+      margin: 10px 0 0 22px;
+      padding: 0;
+    }
+
+    li {
+      margin: 6px 0;
+    }
+
+    code {
+      background: #eef2f7;
+      color: #172033;
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      background: var(--code);
+      color: #e6edf3;
+      border-radius: 12px;
+      padding: 16px;
+      margin: 14px 0 0;
+      line-height: 1.5;
+      font-size: 13px;
+    }
+
+    pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 14px;
+    }
+
+    th, td {
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: #f8fafc;
+      color: var(--strong);
+      font-weight: 700;
+    }
+
+    .callout {
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--accent);
+      background: #fbfdff;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-top: 16px;
+    }
+
+    .callout strong {
+      color: var(--strong);
+    }
+
+    .ok {
+      border-left-color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .warn {
+      border-left-color: var(--amber);
+      background: var(--amber-soft);
+    }
+
+    .risk {
+      border-left-color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill.ok {
+      border: 1px solid #9bd6cc;
+      background: var(--green-soft);
+      color: var(--green);
+    }
+
+    .pill.warn {
+      border: 1px solid #e8c766;
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .pill.info {
+      border: 1px solid #b9cdfc;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 15px;
+      background: #ffffff;
+    }
+
+    .card h3, .card h4 {
+      margin-top: 0;
+    }
+
+    .diagram {
+      display: grid;
+      gap: 10px;
+      margin-top: 16px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f8fafc;
+    }
+
+    .diagram-row {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .box {
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      border-radius: 10px;
+      padding: 11px;
+      text-align: center;
+      min-height: 68px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .box strong {
+      color: var(--strong);
+    }
+
+    .box span {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 3px;
+    }
+
+    .arrow {
+      color: var(--muted);
+      text-align: center;
+      font-size: 13px;
+    }
+
+    .footnote {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
+    .screenshot-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    figure.screenshot {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #ffffff;
+    }
+
+    figure.screenshot img {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #f8fafc;
+    }
+
+    figure.screenshot figcaption {
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 13px;
+      padding: 10px 12px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 14px;
+      align-items: stretch;
+    }
+
+    .flow-step {
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      background: #ffffff;
+      padding: 10px;
+      min-height: 80px;
+    }
+
+    .flow-step strong {
+      display: block;
+      color: var(--strong);
+      margin-bottom: 3px;
+    }
+
+    .flow-step span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .sequence {
+      display: grid;
+      grid-template-columns: 150px repeat(5, minmax(0, 1fr));
+      gap: 1px;
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      background: var(--line);
+      overflow: auto;
+      border-radius: 12px;
+    }
+
+    .sequence div {
+      background: #ffffff;
+      padding: 9px 10px;
+      min-width: 132px;
+      font-size: 13px;
+    }
+
+    .sequence .head {
+      background: #f8fafc;
+      color: var(--strong);
+      font-weight: 700;
+    }
+
+    .sequence .label {
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    @media (max-width: 940px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      nav {
+        position: static;
+      }
+
+      .meta, .grid-2, .grid-3, .diagram-row, .screenshot-grid, .flow {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+
+      .page {
+        max-width: none;
+        padding: 0;
+      }
+
+      header, main, nav {
+        box-shadow: none;
+        border-radius: 0;
+      }
+
+      nav {
+        display: none;
+      }
+
+      .layout {
+        display: block;
+      }
+
+      a {
+        color: inherit;
+      }
+
+      h2 {
+        page-break-after: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <div class="eyebrow">Architecture Review</div>
+      <h1>Garyx Workflow 技术架构评审文档</h1>
+      <p class="subtitle">
+        本文档面向大团队评审，描述 Garyx Workflow 从定义、任务执行、SDK 运行时、子线程执行、结构化结果、可观测性到产品界面的完整技术方案。本文档以当前实现为基线，明确边界、数据所有权、故障语义和后续风险。
+      </p>
+      <div class="meta">
+        <div><strong>评审对象</strong>Workflow-backed Task Execution</div>
+        <div><strong>部署假设</strong>本地单人 Garyx</div>
+        <div><strong>源代码分支</strong>local main ahead 1</div>
+        <div><strong>核心原则</strong>SDK-first, file-backed</div>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav>
+        <h2>目录</h2>
+        <ol>
+          <li><a href="#summary">结论摘要</a></li>
+          <li><a href="#goals">目标和非目标</a></li>
+          <li><a href="#model">领域模型</a></li>
+          <li><a href="#storage">文件与数据库边界</a></li>
+          <li><a href="#flow">端到端执行链路</a></li>
+          <li><a href="#sdk">SDK 与 CLI</a></li>
+          <li><a href="#api">接口定义</a></li>
+          <li><a href="#structured">结构化结果</a></li>
+          <li><a href="#observability">可观测性和 UI</a></li>
+          <li><a href="#screenshots">真实页面截图</a></li>
+          <li><a href="#failure">故障语义</a></li>
+          <li><a href="#validation">验证矩阵</a></li>
+          <li><a href="#risks">风险和后续工作</a></li>
+        </ol>
+      </nav>
+
+      <main>
+        <section id="summary">
+          <h2>1. 结论摘要</h2>
+          <div class="callout ok">
+            <strong>核心结论：</strong>Garyx Workflow 应被建模为一种可复用执行能力，和 Agent、Agent Team 同级；一次 Workflow 执行则表现为一个普通 Task。Workflow 内部节点不是 Task，而是由 SDK 驱动的隐藏 child threads，用于保留 transcript、工具调用、结构化结果和执行证据。
+          </div>
+
+          <div class="grid-2">
+            <div class="card">
+              <h3>已经确定的架构方向</h3>
+              <ul>
+                <li><code>WorkflowDefinition</code> 是全局 file-backed package，不进数据库作为源数据。</li>
+                <li><code>Task.executor</code> 支持 <code>agent</code>、<code>team</code>、<code>workflow</code> 三类执行器。</li>
+                <li><code>WorkflowRun</code> 是一次执行实例，绑定外层 Task。</li>
+                <li>Workflow 控制流由用户 TypeScript 和 <code>@garyx/workflow</code> SDK 执行，Gateway 不解释 workflow 脚本。</li>
+                <li>子执行默认继承 Task workspace，除非调用方显式覆盖。</li>
+              </ul>
+            </div>
+            <div class="card">
+              <h3>评审重点</h3>
+              <ul>
+                <li>定义和执行分离是否清晰。</li>
+                <li>文件系统、数据库和 thread store 的职责是否合理。</li>
+                <li>Workflow 是否自然接入现有 Task 生命周期。</li>
+                <li>结构化结果是否是 thread-run 通用能力，而不是 workflow 特例。</li>
+                <li>Mac UI 是否只做管理和观测，不引入新的业务概念。</li>
+              </ul>
+            </div>
+          </div>
+        </section>
+
+        <section id="goals">
+          <h2>2. 目标和非目标</h2>
+          <h3>2.1 产品目标</h3>
+          <ul>
+            <li>让 Workflow 成为 Agent / Agent Team 之后的第三类执行能力。</li>
+            <li>用户创建 Task 时可以选择 Workflow；Task 仍然是产品上的执行入口和 review 单元。</li>
+            <li>Workflow 内部调用 agent 时保留完整观测：阶段、节点、child thread、结构化结果、事件流和最终结果。</li>
+            <li>Workflow 定义可复用、可复制、可版本化，并以文件包形式存在。</li>
+            <li>CLI、SDK 和 Mac UI 都走同一套 Gateway API，不做平行实现。</li>
+          </ul>
+
+          <h3>2.2 技术非目标</h3>
+          <ul>
+            <li>不实现 Garyx 自己的 workflow-script interpreter。</li>
+            <li>不直接执行 Claude Code 生成的 workflow DSL 文件作为 Garyx 核心模型。</li>
+            <li>不把 workflow 内部每一个节点建成 Task。</li>
+            <li>不把 WorkflowDefinition 存成数据库主数据。</li>
+            <li>不做多租户权限/RBAC 设计；Garyx 当前按本地单人部署处理。</li>
+            <li>不从 workflow definition 的 input metadata 生成复杂表单；产品输入复用 Task 正文。</li>
+          </ul>
+
+          <div class="callout warn">
+            <strong>评审口径：</strong>Garyx 可以在流程和效果上对齐 Claude Code 的 deep research 等 workflow，但实现模型是 SDK-first。用户代码负责 loop、branch、dedup、budget、failure handling；Garyx 负责可观测、线程执行、结构化返回和持久化运行记录。
+          </div>
+
+          <h3>2.3 真实用例</h3>
+          <table>
+            <thead>
+              <tr><th>用例</th><th>输入</th><th>Workflow 行为</th><th>审阅证据</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Mac UI 文本输入 smoke</td>
+                <td>一个普通文本请求</td>
+                <td>创建 Workflow-backed Task，entrypoint 收到 string input，SDK finish 成功。</td>
+                <td>真实 E2E：<code>#TASK-1</code>，<code>93698afa-4a63-4e58-b543-1e3092476e85</code>。</td>
+              </tr>
+              <tr>
+                <td>Development Loop</td>
+                <td>工程目标文本，可选高级 JSON knobs</td>
+                <td>planner、implementer、reviewer 三个 child agent 节点，保留可观测 child threads。</td>
+                <td>Package：<code>packages/garyx-workflow/examples/development-loop</code>。</td>
+              </tr>
+              <tr>
+                <td>Deep Research parity</td>
+                <td>研究问题文本</td>
+                <td>scope、search、fetch、verify、synthesize 由用户 TypeScript 编排，Garyx 记录节点和结果。</td>
+                <td>验证目标是流程和效果对齐，不是执行 Claude Code DSL。</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="model">
+          <h2>3. 领域模型</h2>
+          <h3>3.0 系统架构图</h3>
+          <div class="flow" aria-label="workflow system architecture">
+            <div class="flow-step"><strong>CLI</strong><span>Install definitions, create tasks, inspect runs.</span></div>
+            <div class="flow-step"><strong>Mac UI</strong><span>Workflow tab, task board, run drilldown.</span></div>
+            <div class="flow-step"><strong>Gateway</strong><span>HTTP API, lifecycle, package registry, scheduler.</span></div>
+            <div class="flow-step"><strong>SDK Process</strong><span>User TypeScript owns workflow control flow.</span></div>
+            <div class="flow-step"><strong>Router / Store</strong><span>Task threads, hidden child threads, workflow DB rows.</span></div>
+            <div class="flow-step"><strong>Bridge / Provider</strong><span>Claude/Codex/Gemini execution and MCP tools.</span></div>
+          </div>
+
+          <h3>3.0.1 核心对象关系图</h3>
+          <div class="diagram" aria-label="workflow domain model">
+            <div class="diagram-row">
+              <div class="box"><strong>WorkflowDefinition</strong><span>可复用文件包</span></div>
+              <div class="box"><strong>Task</strong><span>用户可见执行单元</span></div>
+              <div class="box"><strong>WorkflowRun</strong><span>一次运行实例</span></div>
+              <div class="box"><strong>WorkflowNode</strong><span>内部 agent 节点</span></div>
+              <div class="box"><strong>Child Thread</strong><span>Transcript carrier</span></div>
+            </div>
+            <div class="arrow">Definition 被 Task 选择；Task 启动 Run；Run 通过 SDK 创建 Nodes；Node 使用隐藏 child thread 执行 provider run。</div>
+          </div>
+
+          <h3>3.1 WorkflowDefinition</h3>
+          <p>
+            <code>WorkflowDefinition</code> 是可复用能力，和 Agent、Agent Team 同级。它是全局对象，不绑定 workspace。workspace 是一次 Task 执行的上下文，而不是 definition identity。
+          </p>
+          <table>
+            <thead>
+              <tr><th>属性</th><th>说明</th><th>来源</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>workflowId</code></td><td>稳定定义 ID，例如 <code>development-loop</code></td><td><code>garyx.workflow.json</code></td></tr>
+              <tr><td><code>version</code></td><td>定义版本；运行时会保存版本和快照</td><td><code>garyx.workflow.json</code></td></tr>
+              <tr><td><code>name</code> / <code>description</code></td><td>管理界面展示</td><td><code>garyx.workflow.json</code></td></tr>
+              <tr><td><code>input</code></td><td>文本输入 metadata，例如 placeholder；不是 schema</td><td><code>garyx.workflow.json</code></td></tr>
+              <tr><td><code>entrypoint</code></td><td>包内入口，当前支持 Node entrypoint 和 local command</td><td><code>garyx.workflow.json</code></td></tr>
+              <tr><td><code>defaults</code></td><td>默认 agent、workspace 等执行默认值</td><td><code>garyx.workflow.json</code></td></tr>
+            </tbody>
+          </table>
+
+          <h3>3.2 Task</h3>
+          <p>
+            Task 是用户可见的执行单元和 review 单元。Workflow-backed Task 只是把 executor 从 Agent/Team 换成 WorkflowDefinition；Task 生命周期继续使用现有 <code>in_progress</code> 到 <code>in_review</code> 的产品语义。
+          </p>
+<pre><code>{
+  "title": "Implement Mac workflow UI",
+  "body": "Implement the workflow management and observability UI",
+  "executor": {
+    "type": "workflow",
+    "workflowId": "development-loop"
+  },
+  "workspaceDir": "/Users/test/project"
+}</code></pre>
+
+          <h3>3.3 WorkflowRun</h3>
+          <p>
+            <code>WorkflowRun</code> 是一次技术执行实例，绑定一个外层 Task。一个 Task 未来可以有多次 run，用于 retry 或 rerun；历史 run 不应被新 run 覆盖。
+          </p>
+          <ul>
+            <li>保存 <code>workflowRunId</code>、<code>taskId</code>、<code>taskThreadId</code>。</li>
+            <li>保存 <code>workflowDefinitionId</code>、版本和 definition snapshot。</li>
+            <li>保存 status、input、result、error、开始/结束时间、聚合指标。</li>
+            <li>提供 <code>events</code>、<code>children</code> 和 drilldown API。</li>
+          </ul>
+
+          <h3>3.4 WorkflowNode 与 Child Thread</h3>
+          <p>
+            Workflow 内部节点是执行证据，不是产品 Task。常见节点来自 SDK <code>agent()</code> 调用。每个节点创建一个隐藏 child thread，child thread 承载 provider transcript、tool calls、structured result schema 和最终结果。
+          </p>
+
+          <h3>3.5 模型定义摘要</h3>
+          <pre><code>type TaskExecutor =
+  | { type: "agent"; agentId: string }
+  | { type: "team"; teamId: string }
+  | { type: "workflow"; workflowId: string; workflowVersion?: number };
+
+type WorkflowDefinition = {
+  workflowId: string;
+  version: number;
+  name: string;
+  description?: string;
+  input: { placeholder?: string };
+  entrypoint: { type: "node"; path: string } | { type: "local_command"; command: string; args?: string[] };
+  defaults?: { workspaceDir?: string; agentId?: string };
+  packageDir: string;
+};
+
+type WorkflowRun = {
+  workflowRunId: string;
+  taskId: string;
+  taskThreadId: string;
+  workflowDefinitionId: string;
+  workflowDefinitionVersion: number;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  input: string | unknown;
+  result?: unknown;
+  error?: string;
+};
+
+type WorkflowChildRun = {
+  workflowChildRunId: string;
+  workflowRunId: string;
+  phaseTitle?: string;
+  label?: string;
+  orderIndex: number;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped";
+  threadId?: string;
+  result?: unknown;
+  error?: string;
+};</code></pre>
+        </section>
+
+        <section id="storage">
+          <h2>4. 文件与数据库边界</h2>
+          <h3>4.1 总原则</h3>
+          <div class="callout">
+            <strong>数据边界：</strong>Garyx 整体以 file-based 为主。数据库只存运行时关系型 metadata、索引、状态和观测事件；不把可复用 workflow definition 当成数据库源数据。
+          </div>
+
+          <table>
+            <thead>
+              <tr><th>数据</th><th>系统 of record</th><th>原因</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Workflow package</td><td>文件系统 <code>~/.garyx/workflows/*</code></td><td>定义是代码和 manifest 的组合，适合复制、版本管理、人工审查。</td></tr>
+              <tr><td>WorkflowRun</td><td>Gateway DB</td><td>运行时状态、聚合指标、Task 关联需要查询和分页。</td></tr>
+              <tr><td>Workflow child runs</td><td>Gateway DB</td><td>节点状态、phase、label、order、result、error。</td></tr>
+              <tr><td>Workflow events</td><td>Gateway DB</td><td>观测事件流，使用递增 cursor 支持 follow。</td></tr>
+              <tr><td>Thread records</td><td>Router thread store</td><td>Transcript、workspace、provider run metadata 属于 thread 系统。</td></tr>
+            </tbody>
+          </table>
+
+          <h3>4.2 File-backed package 结构</h3>
+          <pre><code>~/.garyx/workflows/development-loop/
+  garyx.workflow.json
+  workflow.mjs
+  README.md
+  prompts/
+  schemas/</code></pre>
+
+          <pre><code>{
+  "workflowId": "development-loop",
+  "version": 1,
+  "name": "Development Loop",
+  "description": "Plan, implement, review and report a coding change",
+  "input": {
+    "placeholder": "Describe the engineering goal"
+  },
+  "entrypoint": {
+    "type": "node",
+    "path": "./workflow.mjs"
+  },
+  "defaults": {
+    "workspaceDir": "/Users/test/project",
+    "agentId": "claude"
+  }
+}</code></pre>
+
+          <h3>4.3 坏包隔离</h3>
+          <p>
+            Workflow definition list 必须隔离坏包：一个 manifest 损坏、entrypoint 缺失或 package 不完整，不应让整个列表不可用，也不应影响其他 workflow 的执行。当前实现中，list 会跳过坏包并记录 warning；按 ID get/execute 只在目标包本身坏时失败。
+          </p>
+        </section>
+
+        <section id="flow">
+          <h2>5. 端到端执行链路</h2>
+          <h3>5.0 流程图</h3>
+          <div class="flow" aria-label="workflow end-to-end flow">
+            <div class="flow-step"><strong>1. Install</strong><span>CLI copy file-backed package into workflow root.</span></div>
+            <div class="flow-step"><strong>2. Select</strong><span>User chooses Workflow in Task executor tabs.</span></div>
+            <div class="flow-step"><strong>3. Launch</strong><span>Gateway creates Task and starts entrypoint process.</span></div>
+            <div class="flow-step"><strong>4. Run</strong><span>SDK creates WorkflowRun and emits events.</span></div>
+            <div class="flow-step"><strong>5. Children</strong><span>agent() creates hidden child threads and structured results.</span></div>
+            <div class="flow-step"><strong>6. Review</strong><span>Terminal WorkflowRun moves Task to in_review.</span></div>
+          </div>
+
+          <h3>5.0.1 时序图</h3>
+          <div class="sequence" aria-label="workflow sequence diagram">
+            <div class="head">Step</div>
+            <div class="head">CLI / Mac UI</div>
+            <div class="head">Gateway</div>
+            <div class="head">Workflow Process</div>
+            <div class="head">Bridge / Provider</div>
+            <div class="head">Store</div>
+            <div class="label">Create task</div>
+            <div>POST task with executor.workflow</div>
+            <div>Read package, create Task thread</div>
+            <div></div>
+            <div></div>
+            <div>Task record + thread metadata</div>
+            <div class="label">Start run</div>
+            <div></div>
+            <div>Spawn entrypoint with GARYX_* env</div>
+            <div>workflow() calls SDK start</div>
+            <div></div>
+            <div>workflow_runs row</div>
+            <div class="label">Child agent</div>
+            <div></div>
+            <div>Create child run + hidden thread</div>
+            <div>agent(prompt, schema)</div>
+            <div>Run provider in child thread</div>
+            <div>workflow_child_runs + thread transcript</div>
+            <div class="label">Structured result</div>
+            <div></div>
+            <div>MCP builds submit_result from thread schema</div>
+            <div></div>
+            <div>Model calls submit_result</div>
+            <div>Validated result</div>
+            <div class="label">Finish</div>
+            <div>Task detail observes run</div>
+            <div>Map terminal run to Task in_review</div>
+            <div>finish(result)</div>
+            <div></div>
+            <div>events + run result</div>
+          </div>
+
+          <h3>5.1 创建和安装定义</h3>
+          <ol>
+            <li>开发者在本地目录编写 workflow package。</li>
+            <li>通过 CLI 执行 <code>garyx workflow definition upsert --file &lt;package&gt;</code>。</li>
+            <li>CLI 将 package copy 到 Garyx workflow root。</li>
+            <li>Gateway list/get API 从 workflow root 读取 manifest 并返回定义。</li>
+          </ol>
+
+          <h3>5.2 创建 Workflow-backed Task</h3>
+          <ol>
+            <li>用户在 CLI 或 Mac UI 创建 Task，executor 选择 Workflow。</li>
+            <li>Gateway 读取目标 file-backed definition，保存 definition id/version/snapshot 到执行上下文。</li>
+            <li>Gateway 创建外层 Task thread，并把 Task workspace 写入 thread record。</li>
+            <li>Gateway 启动 workflow entrypoint 进程，注入 <code>GARYX_*</code> 环境变量。</li>
+            <li>Workflow entrypoint 通过 SDK 调用 <code>workflow()</code> 创建 <code>WorkflowRun</code>。</li>
+          </ol>
+
+          <h3>5.3 运行内部 agent 节点</h3>
+          <ol>
+            <li>用户代码调用 <code>phase()</code>、<code>agent()</code>、<code>parallel()</code> 或 <code>pipeline()</code>。</li>
+            <li>SDK 调用 Gateway API 创建 workflow child run。</li>
+            <li>Gateway 创建隐藏 child thread，并写入 workflow classification metadata。</li>
+            <li>Gateway 通过 bridge/provider 执行该 child thread 的 agent run。</li>
+            <li>结构化结果通过当前 child thread 的 MCP context 提交。</li>
+            <li>SDK 将节点结果返回给用户 TypeScript 控制流。</li>
+          </ol>
+
+          <h3>5.4 结束和 Task Review</h3>
+          <ol>
+            <li>用户代码返回最终结果，SDK 调用 finish API。</li>
+            <li>Gateway 将 <code>WorkflowRun</code> 标记为 <code>succeeded</code>、<code>failed</code> 或 <code>cancelled</code>。</li>
+            <li>如果外层 Task 仍是 <code>in_progress</code>，Gateway 将其推进到 <code>in_review</code>。</li>
+            <li>用户在 Task detail 查看 WorkflowRun、children、events 和每个 child thread transcript。</li>
+          </ol>
+
+          <div class="callout ok">
+            <strong>Workspace 继承规则：</strong>Workflow 的整个下游默认使用 Task workspace。优先级为：Task <code>workspace_dir</code>、显式 workflow input 中的 <code>workspaceDir</code>/<code>workspace_dir</code>、definition defaults 中的 <code>workspaceDir</code>/<code>workspace_dir</code>。具体 child agent 调用只有在显式传入 workspace 时才覆盖。
+          </div>
+        </section>
+
+        <section id="sdk">
+          <h2>6. SDK 与 CLI</h2>
+          <h3>6.1 SDK 职责</h3>
+          <p>
+            <code>@garyx/workflow</code> 是对 Gateway 能力的薄封装。它不隐藏用户代码的控制流，也不把所有 CLI 能力包装成一套通用 SDK。它只服务于 Workflow 运行时需要的观测和 child agent 执行。
+          </p>
+          <table>
+            <thead>
+              <tr><th>能力</th><th>说明</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>workflow()</code></td><td>启动/绑定一次 WorkflowRun，管理 finish/cancel/error 上报。</td></tr>
+              <tr><td><code>phase()</code></td><td>写入阶段事件和默认 phase label。</td></tr>
+              <tr><td><code>agent()</code></td><td>创建一个可观测 child run 和 hidden child thread。</td></tr>
+              <tr><td><code>parallel()</code></td><td>用户代码层面的并发组合，Gateway 仍做运行时限流。</td></tr>
+              <tr><td><code>pipeline()</code></td><td>按 item 流水线执行，适合 search/fetch/verify 等流程。</td></tr>
+              <tr><td><code>schema()</code></td><td>声明结构化结果 schema，最终交给 thread-run structured result 能力。</td></tr>
+            </tbody>
+          </table>
+
+          <h3>6.2 CLI 职责</h3>
+          <p>
+            CLI 是用户和自动化创建、运行、观测 Workflow 的稳定入口。CLI 不直接写数据库，而是调用 Gateway API。
+          </p>
+          <pre><code># 安装定义
+garyx workflow definition upsert --file packages/garyx-workflow/examples/development-loop
+
+# 查看定义
+garyx workflow definition list
+garyx workflow definition get development-loop
+
+# 创建 Workflow-backed Task，文本优先
+garyx task create \
+  --title "Run development workflow" \
+  --workflow development-loop \
+  --workspace-dir /Users/test/project \
+  --input "Implement the Mac workflow UI" \
+  --notify none
+
+# 观测
+garyx task get '#TASK-123'
+garyx workflow get run-abc
+garyx workflow events run-abc</code></pre>
+
+          <h3>6.3 文本优先输入</h3>
+          <p>
+            产品层面 Workflow 复用 Task 正文作为大文本输入，不在 Workflow tab 里再放一套输入框。需要结构化数据时，Workflow 的第一步应使用 Agent 把文本结构化。<code>--input-json</code> 只保留给高级自动化参数，不作为普通产品入口。
+          </p>
+        </section>
+
+        <section id="api">
+          <h2>7. 接口定义</h2>
+          <h3>7.1 Gateway HTTP API</h3>
+          <table>
+            <thead>
+              <tr><th>接口</th><th>用途</th><th>关键字段</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>GET /api/workflow-definitions</code></td><td>列出 file-backed workflow packages。</td><td><code>workflowDefinitions[]</code>，坏包跳过并记录 warn。</td></tr>
+              <tr><td><code>GET /api/workflow-definitions/:workflowId</code></td><td>读取单个 workflow definition。</td><td><code>workflowDefinition</code>，目标包坏时返回错误。</td></tr>
+              <tr><td><code>POST /api/tasks</code></td><td>创建 Task；executor 可为 workflow。</td><td><code>executor.type="workflow"</code>、<code>workflowId</code>、<code>body</code> 作为默认 input、<code>workspaceDir</code>。</td></tr>
+              <tr><td><code>POST /api/workflows/sdk</code></td><td>SDK 创建 WorkflowRun。</td><td><code>taskId</code>、<code>taskThreadId</code>、definition snapshot、input。</td></tr>
+              <tr><td><code>POST /api/workflows/sdk/:runId/agents</code></td><td>SDK 执行一个 child agent 节点。</td><td><code>prompt</code>、<code>phase</code>、<code>label</code>、<code>schema</code>、<code>workspaceDir?</code>。</td></tr>
+              <tr><td><code>POST /api/workflows/sdk/:runId/events</code></td><td>SDK 写观测事件。</td><td><code>eventType</code>、<code>payload</code>。</td></tr>
+              <tr><td><code>POST /api/workflows/sdk/:runId/finish</code></td><td>SDK 完成 WorkflowRun。</td><td><code>status</code>、<code>result</code>、<code>error</code>。</td></tr>
+              <tr><td><code>GET /api/workflows/:runId</code></td><td>查看 run 详情。</td><td><code>workflow</code>、<code>children</code>、<code>events</code>。</td></tr>
+              <tr><td><code>GET /api/workflows/:runId/events</code></td><td>分页读取事件流。</td><td><code>after</code> cursor、<code>limit</code>。</td></tr>
+              <tr><td><code>GET /api/tasks/:taskId/workflow-runs</code></td><td>Task detail drilldown。</td><td>按 Task 查询所有关联 WorkflowRun。</td></tr>
+            </tbody>
+          </table>
+
+          <h3>7.2 CLI API 映射</h3>
+          <pre><code>garyx workflow definition upsert --file &lt;package&gt;  # copy package, then GET definition
+garyx workflow definition list                     # GET /api/workflow-definitions
+garyx workflow definition get id         # GET /api/workflow-definitions/:id
+garyx task create --workflow id --input "..." --workspace-dir /Users/test/project
+garyx workflow get run-id
+garyx workflow events run-id --after 42</code></pre>
+
+          <h3>7.3 SDK API 映射</h3>
+          <pre><code>await workflow({ name, run })         // POST /api/workflows/sdk + finish
+phase("Search")                      // local phase state + event
+await ctx.log("event", payload)       // POST /api/workflows/sdk/:runId/events
+await agent(prompt, { schema })       // POST /api/workflows/sdk/:runId/agents
+await parallel([() =&gt; agent(...)]);   // user TypeScript concurrency
+await pipeline(items, stageA, stageB) // user TypeScript pipeline</code></pre>
+        </section>
+
+        <section id="structured">
+          <h2>8. 结构化结果设计</h2>
+          <h3>8.1 设计原则</h3>
+          <div class="callout">
+            <strong>关键原则：</strong>结构化结果是 thread-run 能力，不是 Workflow 专属能力。Workflow SDK 创建 child thread 时，将需要的 result schema 写入 thread metadata。MCP server 根据当前执行 thread context 动态暴露 <code>submit_result</code> 工具。
+          </div>
+
+          <h3>8.2 为什么不使用 workflow token</h3>
+          <ul>
+            <li>thread id 已经是当前执行上下文，足以定位本次 run 和 schema。</li>
+            <li>token 会把结构化结果绑定到 workflow 特例，削弱 thread-run 通用能力。</li>
+            <li>直接根据 thread metadata 生成工具 schema，更符合 MCP 当前上下文模型。</li>
+            <li>结果工具不应是 <code>{ payload: ... }</code> 大 JSON 包装，而应暴露 schema 的直接字段，提升模型调用可靠性和可读性。</li>
+          </ul>
+
+          <h3>8.3 执行路径</h3>
+          <ol>
+            <li>SDK <code>agent(prompt, { schema })</code> 将 schema 传给 Gateway。</li>
+            <li>Gateway 创建 child thread，并把 schema 写入 thread metadata。</li>
+            <li>Provider 执行该 child thread 时访问 MCP。</li>
+            <li>MCP 从当前 thread context 读取 schema，动态返回 <code>submit_result</code> 工具定义。</li>
+            <li>模型调用 <code>submit_result</code>，参数是 schema 的 direct fields。</li>
+            <li>Gateway 校验 schema、写入 child run result，并完成节点。</li>
+          </ol>
+        </section>
+
+        <section id="observability">
+          <h2>9. 可观测性和产品 UI</h2>
+          <h3>9.1 观测对象</h3>
+          <table>
+            <thead>
+              <tr><th>对象</th><th>展示位置</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>WorkflowDefinition</td><td>Workflow 管理页 / Task 创建选择器</td><td>展示可用 workflow 能力。</td></tr>
+              <tr><td>Task</td><td>Task 列表与 Task detail</td><td>用户工作单元、review、通知。</td></tr>
+              <tr><td>WorkflowRun</td><td>Task detail drilldown / workflow run detail</td><td>一次执行的总体状态和结果。</td></tr>
+              <tr><td>Workflow child run</td><td>WorkflowRun detail</td><td>阶段、节点状态、耗时、结构化结果、错误。</td></tr>
+              <tr><td>Child thread</td><td>从节点跳转打开</td><td>完整 provider transcript 和工具调用证据。</td></tr>
+              <tr><td>Workflow events</td><td>事件流 / CLI <code>workflow events</code></td><td>按时间线追踪 start、phase、child、finish。</td></tr>
+            </tbody>
+          </table>
+
+          <h3>9.2 Mac UI 信息架构</h3>
+          <ul>
+            <li>Task 创建时的执行器选择应是三个同级 tab：Agent、Agent Team、Workflow。</li>
+            <li>Workflow tab 只展示 file-backed definition 列表；Workflow input 复用 Task 正文。</li>
+            <li>Task detail 展示 WorkflowRunsPanel：run 状态、children、events、错误和 child thread 链接。</li>
+            <li>Mac UI 只做管理和观测，不发明新执行概念。</li>
+          </ul>
+
+          <h3>9.3 Hidden child thread 规则</h3>
+          <ul>
+            <li>Child thread 默认不出现在 Recent 和默认 thread list。</li>
+            <li>Child thread 必须能从 WorkflowRun drilldown 打开。</li>
+            <li>隐藏状态依赖 top-level metadata，不只依赖嵌套 metadata，避免浅写入时重新暴露。</li>
+          </ul>
+        </section>
+
+        <section id="screenshots">
+          <h2>10. 真实页面截图</h2>
+          <p>
+            以下截图来自真实 Electron 页面和真实 Gateway run。为了满足公开仓库 hygiene，文档只嵌入局部 locator 截图：创建面板、合成任务卡、Workflow Runs 观测面板。完整页面截图保留在本地 <code>desktop/garyx-desktop/test-artifacts/</code>，不提交，因为它可能包含用户真实任务列表。
+          </p>
+          <div class="screenshot-grid">
+            <figure class="screenshot">
+              <img src="assets/workflow-review/workflow-task-create-panel.png" alt="Mac app workflow task creation panel">
+              <figcaption>Task 创建：Executor 三个同级 tab，Workflow tab 只选择定义，正文作为 Workflow 输入。</figcaption>
+            </figure>
+            <figure class="screenshot">
+              <img src="assets/workflow-review/workflow-task-card.png" alt="Mac app workflow task card">
+              <figcaption>Task 看板：Workflow-backed Task 仍然表现为普通 Task。</figcaption>
+            </figure>
+            <figure class="screenshot">
+              <img src="assets/workflow-review/workflow-runs-panel.png" alt="Mac app workflow runs panel">
+              <figcaption>Workflow Runs：从 Task drilldown 查看 run 状态和事件。</figcaption>
+            </figure>
+          </div>
+
+          <h3>10.1 截图复现命令</h3>
+          <pre><code>cargo build --release -p garyx
+cd desktop/garyx-desktop
+npm run test:workflow-text-smoke</code></pre>
+          <table>
+            <thead>
+              <tr><th>本次真实 E2E 证据</th><th>值</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Task</td><td><code>#TASK-1</code></td></tr>
+              <tr><td>WorkflowRun</td><td><code>93698afa-4a63-4e58-b543-1e3092476e85</code></td></tr>
+              <tr><td>Input type</td><td><code>string</code></td></tr>
+              <tr><td>截图脚本</td><td><code>desktop/garyx-desktop/scripts/workflow-text-smoke.mjs</code></td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section id="failure">
+          <h2>11. 故障语义和恢复</h2>
+          <h3>11.1 状态映射</h3>
+          <table>
+            <thead>
+              <tr><th>WorkflowRun 状态</th><th>Task 状态</th><th>说明</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>running</code></td><td><code>in_progress</code></td><td>执行中。</td></tr>
+              <tr><td><code>succeeded</code></td><td><code>in_review</code></td><td>等待用户 review。</td></tr>
+              <tr><td><code>failed</code></td><td><code>in_review</code></td><td>失败也进入 review，保留错误证据。</td></tr>
+              <tr><td><code>cancelled</code></td><td><code>in_review</code></td><td>取消后仍可查看执行历史。</td></tr>
+            </tbody>
+          </table>
+
+          <h3>11.2 关键故障处理</h3>
+          <ul>
+            <li>Gateway restart：非终态 WorkflowRun 变为 failed，并将关联 Task 推进到 <code>in_review</code>。</li>
+            <li>Entrypoint 退出但没有创建 run：Task 推进到 <code>in_review</code>，避免永久 <code>in_progress</code>。</li>
+            <li>坏 workflow package：list 隔离坏包；目标 package 本身坏时只影响该 workflow。</li>
+            <li>Child provider error：对应 child run failed，optional child 可由 SDK 控制为非致命。</li>
+            <li>结构化结果缺失或不合法：child failed，并写入可观测错误。</li>
+            <li>取消：run 和未完成 children 转为 cancelled，迟到结果不覆盖终态。</li>
+          </ul>
+
+          <h3>11.3 并发和容量</h3>
+          <p>
+            Workflow SDK 可发起并发 child agents；Gateway 侧用 workflow scheduler 控制每个 workflow 和全局 child 并发，同时 bridge provider run limiter 继续约束实际 provider 执行容量。这样并发表达在用户代码里，容量控制在 Gateway 和 bridge 层。
+          </p>
+        </section>
+
+        <section id="validation">
+          <h2>12. 验证矩阵</h2>
+          <h3>12.1 代码级验证</h3>
+          <table>
+            <thead>
+              <tr><th>验证命令</th><th>覆盖范围</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>cargo test -p garyx-gateway --lib workflows::tests</code></td><td>Workflow routes、SDK lifecycle、child run、structured result、restart/cancel、file-backed package。</td></tr>
+              <tr><td><code>cargo test -p garyx-gateway --lib workflow_backed_task_creation_dispatches_workflow_entrypoint</code></td><td>Task 创建 Workflow executor、entrypoint dispatch、workspace 继承。</td></tr>
+              <tr><td><code>cargo check -p garyx</code></td><td>Gateway + CLI 编译集成。</td></tr>
+              <tr><td><code>npm run typecheck</code> in <code>packages/garyx-workflow</code></td><td>SDK 类型。</td></tr>
+              <tr><td><code>npx tsc --noEmit</code> in <code>desktop/garyx-desktop</code></td><td>Mac UI contract 和 renderer/main/preload 类型。</td></tr>
+              <tr><td><code>git diff --check</code></td><td>Whitespace hygiene。</td></tr>
+            </tbody>
+          </table>
+
+          <h3>12.2 端到端验证</h3>
+          <ul>
+            <li>安装 workflow package：<code>garyx workflow definition upsert --file ...</code>。</li>
+            <li>创建 Workflow-backed Task：<code>garyx task create --workflow ... --input ...</code>。</li>
+            <li>验证 Task 推进到 <code>in_review</code>。</li>
+            <li>验证 <code>garyx task get</code> 能看到 WorkflowRun drilldown。</li>
+            <li>验证 child threads 不出现在 Recent，但可以从 run detail 打开。</li>
+            <li>验证结构化结果通过 thread metadata schema 提交，而不是 token。</li>
+            <li>验证 gateway restart 后 orphaned run 会失败并推动 Task review。</li>
+          </ul>
+        </section>
+
+        <section id="risks">
+          <h2>13. 风险和后续工作</h2>
+          <table>
+            <thead>
+              <tr><th>事项</th><th>当前状态</th><th>建议</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Workflow package 质量</td>
+                <td><span class="pill ok">已隔离</span> 坏包不会拖垮列表或其他 workflow。</td>
+                <td>后续可在管理 UI 显示 invalid packages 和错误原因。</td>
+              </tr>
+              <tr>
+                <td>Entrypoint stdout/stderr</td>
+                <td><span class="pill warn">待增强</span> 当前主要依赖 SDK events 和 run error。</td>
+                <td>建议将 entrypoint 启动前错误和 stderr 摘要写入 Task/WorkflowRun evidence。</td>
+              </tr>
+              <tr>
+                <td>Workflow retry / rerun</td>
+                <td><span class="pill warn">产品动作未完整设计</span> 数据模型支持多 run。</td>
+                <td>后续添加 Task detail 上的 rerun action，创建新 run，不覆盖历史。</td>
+              </tr>
+              <tr>
+                <td>Definition version 策略</td>
+                <td><span class="pill warn">基础版本字段已存在</span> 严格递增规则可继续收敛。</td>
+                <td>建议 install/upsert 时校验 version 递增或显式允许 overwrite。</td>
+              </tr>
+              <tr>
+                <td>结构化结果动态 MCP</td>
+                <td><span class="pill ok">架构方向明确</span> thread metadata 驱动。</td>
+                <td>继续禁止 workflow-specific token 和 payload wrapper，保持 thread-run 通用能力。</td>
+              </tr>
+              <tr>
+                <td>Mac UI 深度</td>
+                <td><span class="pill info">基础管理和观测已接入</span></td>
+                <td>后续增强 run timeline、错误解释、child transcript deep link 和 invalid package 管理。</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="callout">
+            <strong>建议评审结论：</strong>当前架构可以进入团队评审。核心抽象已经回到三层：file-backed WorkflowDefinition、Task-backed execution、SDK-driven observable runtime。后续优化应围绕产品细节和可观测质量，而不是再引入脚本解释器、数据库定义源或 workflow-specific result token。
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

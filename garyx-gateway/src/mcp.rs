@@ -13,12 +13,16 @@ use std::time::{Duration, Instant};
 use garyx_channels::OutboundMessage;
 use garyx_models::Verdict;
 use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{ServerCapabilities, ServerInfo};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams,
+    ServerCapabilities, ServerInfo, Tool,
+};
 use rmcp::service::RequestContext;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use rmcp::{RoleServer, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{RoleServer, ServerHandler, tool, tool_router};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -258,7 +262,6 @@ impl RunContext {
                     .get::<OriginalMcpUri>()
                     .and_then(|orig| crate::gateway_auth::token_from_mcp_path(orig.0.path()))
             });
-
         let ctx = Self {
             run_id: h("x-run-id").or(path_run_id),
             thread_id: h("x-thread-id").or(path_thread_id),
@@ -307,6 +310,49 @@ impl GaryMcpServer {
             app_state,
             tool_router,
         }
+    }
+
+    async fn submit_result_tool_for_context(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Option<Tool>, String> {
+        let run_ctx = RunContext::from_request_context(&context);
+        let Some(thread_id) = run_ctx
+            .thread_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
+        self.submit_result_tool_for_thread(thread_id).await
+    }
+
+    async fn submit_result_tool_for_thread(&self, thread_id: &str) -> Result<Option<Tool>, String> {
+        let Some(result_context) =
+            crate::workflows::structured_result_context_for_thread(&self.app_state, thread_id)
+                .await
+                .map_err(|error| error.to_string())?
+        else {
+            return Ok(None);
+        };
+        let Some(schema_object) = result_context.schema_json.as_object().cloned() else {
+            return Err("structured result schema must be a JSON object".to_owned());
+        };
+        Ok(Some(Tool {
+            name: "submit_result".into(),
+            title: Some("Submit Result".to_owned()),
+            description: Some(
+                "Submit the final structured result for the current thread. Pass the schema fields directly as tool arguments; do not wrap them in `payload`."
+                    .into(),
+            ),
+            input_schema: Arc::new(schema_object),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: None,
+            meta: None,
+        }))
     }
 }
 
@@ -367,13 +413,13 @@ impl GaryMcpServer {
     ) -> Result<String, String> {
         tools::schedule_followup::run(self, ctx, params).await
     }
+
 }
 
 // ---------------------------------------------------------------------------
 // ServerHandler (rmcp generates call_tool / list_tools)
 // ---------------------------------------------------------------------------
 
-#[tool_handler]
 impl ServerHandler for GaryMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -391,10 +437,49 @@ impl ServerHandler for GaryMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Garyx MCP server. Tools: status, search, conversation_history, conversation_search, schedule_followup."
+                "Garyx MCP server. Tools: status, search, conversation_history, conversation_search, schedule_followup. Threads that require a structured result also expose a dynamic submit_result tool."
                     .to_owned(),
             ),
         }
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if request.name.as_ref() == "submit_result" {
+            return tools::structured_result::run(self, context, request.arguments)
+                .await
+                .map_err(|error| rmcp::ErrorData::invalid_params(error, None));
+        }
+        let tcc = ToolCallContext::new(self, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, rmcp::ErrorData> {
+        let mut tools = self.tool_router.list_all();
+        if let Some(tool) = self
+            .submit_result_tool_for_context(context)
+            .await
+            .map_err(|error| rmcp::ErrorData::invalid_params(error, None))?
+        {
+            tools.push(tool);
+            tools.sort_by(|left, right| left.name.cmp(&right.name));
+        }
+        Ok(ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tool_router.get(name).cloned()
     }
 }
 

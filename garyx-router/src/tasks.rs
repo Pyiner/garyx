@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
 use chrono::Utc;
 use garyx_models::{
-    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskNotificationTarget,
-    TaskSource, TaskStatus, ThreadTask,
+    Principal, TASK_SCHEMA_VERSION_V1, TaskEvent, TaskEventKind, TaskExecutor,
+    TaskNotificationTarget, TaskSource, TaskStatus, ThreadTask,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -74,6 +74,8 @@ pub struct CreateTaskInput {
     pub notification_target: Option<TaskNotificationTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<TaskSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor: Option<TaskExecutor>,
     #[serde(default)]
     pub start: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,6 +156,8 @@ pub struct TaskSummary {
     pub assignee: Option<Principal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<TaskSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor: Option<TaskExecutor>,
     pub updated_at: chrono::DateTime<Utc>,
     pub updated_by: Principal,
     pub runtime_agent_id: String,
@@ -232,11 +236,16 @@ impl TaskService {
         validate_notification_target(input.notification_target.as_ref())?;
         let source = normalize_task_source(input.source);
         let runtime = input.runtime.clone();
-        let auto_start = input.start || input.assignee.is_some();
+        let auto_start = input.start || input.assignee.is_some() || input.executor.is_some();
         let thread_agent_id = runtime
             .as_ref()
             .and_then(|runtime| normalized_nonempty_string(runtime.agent_id.as_deref()))
             .or_else(|| normalized_nonempty_string(input.agent_id.as_deref()))
+            .or_else(|| match &input.executor {
+                Some(TaskExecutor::Agent { agent_id }) => Some(agent_id.clone()),
+                Some(TaskExecutor::Team { team_id }) => Some(team_id.clone()),
+                Some(TaskExecutor::Workflow { .. }) | None => None,
+            })
             .or_else(|| match &input.assignee {
                 Some(Principal::Agent { agent_id }) => Some(agent_id.clone()),
                 _ => None,
@@ -309,6 +318,7 @@ impl TaskService {
                 input.assignee,
                 input.notification_target,
                 source,
+                input.executor,
                 TaskEventKind::Created {
                     initial_status: if auto_start {
                         TaskStatus::InProgress
@@ -363,6 +373,7 @@ impl TaskService {
                 input.assignee,
                 input.notification_target,
                 source,
+                None,
                 TaskEventKind::Promoted {
                     initial_status: if auto_start {
                         TaskStatus::InProgress
@@ -763,6 +774,7 @@ impl TaskService {
         assignee: Option<Principal>,
         notification_target: Option<TaskNotificationTarget>,
         source: Option<TaskSource>,
+        executor: Option<TaskExecutor>,
         event_kind: TaskEventKind,
     ) -> Result<ThreadTask, TaskServiceError> {
         self.ensure_task_index().await?;
@@ -783,6 +795,7 @@ impl TaskService {
             assignee,
             notification_target,
             source,
+            executor,
             body: None,
             created_at: now,
             updated_at: now,
@@ -890,6 +903,7 @@ impl TaskSummary {
             creator: task.creator.clone(),
             assignee: task.assignee.clone(),
             source: task.source.clone(),
+            executor: task.executor.clone(),
             updated_at: task.updated_at,
             updated_by: task.updated_by.clone(),
             runtime_agent_id: agent_id_from_value(record).unwrap_or_default(),
@@ -1340,6 +1354,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: Some(Principal::Agent {
                     agent_id: "cindy".to_owned(),
@@ -1368,6 +1383,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1443,6 +1459,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1477,6 +1494,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1516,6 +1534,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1562,6 +1581,7 @@ mod tests {
                     channel: Some("telegram".to_owned()),
                     account_id: Some("main".to_owned()),
                 }),
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1615,6 +1635,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_create_persists_workflow_executor() {
+        let service = service();
+        let (_thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Run deep research".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                executor: Some(TaskExecutor::Workflow {
+                    workflow_id: "deep-research".to_owned(),
+                    workflow_version: Some(3),
+                }),
+                start: true,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            task.executor,
+            Some(TaskExecutor::Workflow {
+                workflow_id: "deep-research".to_owned(),
+                workflow_version: Some(3),
+            })
+        );
+        assert_eq!(task.status, TaskStatus::InProgress);
+    }
+
+    #[tokio::test]
+    async fn task_create_binds_agent_executor_to_thread() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Run agent".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                executor: Some(TaskExecutor::Agent {
+                    agent_id: "agent::reviewer".to_owned(),
+                }),
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let record = service.thread_store.get(&thread_id).await.unwrap();
+        assert_eq!(record["agent_id"], "agent::reviewer");
+        assert_eq!(
+            task.executor,
+            Some(TaskExecutor::Agent {
+                agent_id: "agent::reviewer".to_owned(),
+            })
+        );
+        assert_eq!(task.status, TaskStatus::InProgress);
+    }
+
+    #[tokio::test]
+    async fn task_create_binds_team_executor_to_thread() {
+        let service = service();
+        let (thread_id, task) = service
+            .create_task(CreateTaskInput {
+                title: Some("Run team".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: None,
+                source: None,
+                executor: Some(TaskExecutor::Team {
+                    team_id: "team::product".to_owned(),
+                }),
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            })
+            .await
+            .unwrap();
+        let record = service.thread_store.get(&thread_id).await.unwrap();
+        assert_eq!(record["agent_id"], "team::product");
+        assert_eq!(
+            task.executor,
+            Some(TaskExecutor::Team {
+                team_id: "team::product".to_owned(),
+            })
+        );
+        assert_eq!(task.status, TaskStatus::InProgress);
+    }
+
+    #[tokio::test]
     async fn status_machine_rejects_illegal_transition() {
         let service = service();
         let (_thread_id, task) = service
@@ -1624,6 +1740,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1655,6 +1772,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1691,6 +1809,7 @@ mod tests {
                 }),
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: true,
                 actor: None,
                 agent_id: None,
@@ -1737,6 +1856,7 @@ mod tests {
                 }),
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: true,
                 actor: None,
                 agent_id: None,
@@ -1785,6 +1905,7 @@ mod tests {
                 assignee: Some(assignee.clone()),
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: true,
                 actor: Some(Principal::Human {
                     user_id: "owner".to_owned(),
@@ -1835,6 +1956,7 @@ mod tests {
                 assignee: Some(assignee.clone()),
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: true,
                 actor: Some(Principal::Human {
                     user_id: "owner".to_owned(),
@@ -1884,6 +2006,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -1921,6 +2044,7 @@ mod tests {
                 }),
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: true,
                 actor: None,
                 agent_id: None,
@@ -1968,6 +2092,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -2014,6 +2139,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -2069,6 +2195,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,
@@ -2114,6 +2241,7 @@ mod tests {
                 assignee: None,
                 notification_target: None,
                 source: None,
+                executor: None,
                 start: false,
                 actor: None,
                 agent_id: None,

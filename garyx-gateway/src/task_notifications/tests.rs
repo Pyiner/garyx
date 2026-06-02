@@ -125,6 +125,7 @@ fn task_for_notification(target: TaskNotificationTarget) -> ThreadTask {
             agent_id: "codex".to_owned(),
         }),
         notification_target: Some(target),
+        executor: None,
         source: None,
         body: None,
         created_at: now,

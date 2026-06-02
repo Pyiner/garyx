@@ -1,5 +1,6 @@
 import { useMemo, type FormEvent, type RefObject } from 'react';
-import { Archive, MoreHorizontal, Pencil, Pin, X } from 'lucide-react';
+import { IconPin } from '@tabler/icons-react';
+import { Archive, MoreHorizontal, Pencil, X } from 'lucide-react';
 
 import type { DesktopBotConsoleSummary } from '@shared/contracts';
 
@@ -105,11 +106,11 @@ export function ConversationHeaderTitle({
           {canEditThreadTitle ? (
             <div className="conversation-title-group">
               {isThreadPinned ? (
-                <Pin
+                <IconPin
                   aria-hidden
                   className="conversation-title-pin"
-                  size={17}
-                  strokeWidth={2}
+                  size={16}
+                  stroke={1.55}
                 />
               ) : null}
               <span className="conversation-title-text" title={fallbackTitle}>
@@ -163,7 +164,7 @@ export function ConversationHeaderTitle({
                     className="thread-title-menu-item"
                     onSelect={onTogglePinnedThread}
                   >
-                    <Pin aria-hidden />
+                    <IconPin aria-hidden />
                     <span>
                       {isThreadPinned ? t('Unpin conversation') : t('Pin conversation')}
                     </span>

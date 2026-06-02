@@ -1535,6 +1535,78 @@ async fn run_subagent_streaming_rederives_leaf_metadata_and_persists_history() {
 }
 
 #[tokio::test]
+async fn run_subagent_streaming_uses_global_run_limiter() {
+    let bridge = Arc::new(MultiProviderBridge::new_with_max_concurrent_runs(1));
+    let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+    bridge.set_thread_store(store.clone()).await;
+
+    let provider = Arc::new(MockProvider::with_delay(ProviderType::ClaudeCode, 120));
+    bridge
+        .register_provider("claude-child", provider.clone())
+        .await;
+    bridge
+        .replace_agent_profiles(vec![custom_agent(
+            "coder",
+            "Coder",
+            ProviderType::ClaudeCode,
+            "claude-opus-child",
+            "You are the coder child.",
+        )])
+        .await;
+
+    for thread_id in ["thread::child-one", "thread::child-two"] {
+        store
+            .set(
+                thread_id,
+                json!({
+                    "thread_id": thread_id,
+                    "agent_id": "coder",
+                    "provider_type": "claude_code",
+                    "metadata": {
+                        "agent_id": "coder",
+                        "requested_provider_type": "claude_code"
+                    }
+                }),
+            )
+            .await;
+    }
+
+    let first_bridge = bridge.clone();
+    let first = tokio::spawn(async move {
+        first_bridge
+            .run_subagent_streaming(
+                "thread::child-one",
+                "first",
+                HashMap::new(),
+                None,
+                None,
+                None,
+            )
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert_eq!(bridge.available_run_slots(), 0);
+
+    let second = bridge
+        .run_subagent_streaming(
+            "thread::child-two",
+            "second",
+            HashMap::new(),
+            None,
+            None,
+            None,
+        )
+        .await;
+    assert!(matches!(second, Err(BridgeError::Overloaded(_))));
+
+    first
+        .await
+        .expect("first task joins")
+        .expect("first run succeeds");
+    assert_eq!(bridge.available_run_slots(), 1);
+}
+
+#[tokio::test]
 async fn start_agent_run_rejects_thread_bound_to_missing_team() {
     let bridge = MultiProviderBridge::new();
     let store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
@@ -2083,6 +2155,7 @@ async fn test_failed_run_clears_active_snapshot_and_preserves_partial_messages()
             agent_id: "codex".to_owned(),
         }),
         notification_target: None,
+        executor: None,
         source: None,
         body: None,
         created_at: now,
@@ -2187,6 +2260,7 @@ async fn test_empty_successful_task_run_does_not_move_to_review() {
             agent_id: "codex".to_owned(),
         }),
         notification_target: None,
+        executor: None,
         source: None,
         body: None,
         created_at: now,
@@ -2258,6 +2332,7 @@ async fn test_unsuccessful_task_run_with_partial_response_does_not_move_to_revie
             agent_id: "codex".to_owned(),
         }),
         notification_target: None,
+        executor: None,
         source: None,
         body: None,
         created_at: now,
@@ -2576,6 +2651,7 @@ async fn test_streaming_input_preserves_raw_task_follow_up_for_provider() {
             agent_id: "codex".to_owned(),
         }),
         notification_target: None,
+        executor: None,
         source: None,
         body: None,
         created_at: now,

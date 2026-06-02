@@ -115,7 +115,7 @@ requested window.
 | Command | Use it for |
 | --- | --- |
 | `garyx task list` | List tasks. |
-| `garyx task create [--title <title>] [--body <body>] [--assignee <principal>] [--workspace-dir <path>] --notify <target>` | Create a task thread. A bare assignee value is treated as an agent id, assigned tasks start automatically, and `--workspace-dir` overrides the assignee Agent's default workspace. Notification targets are `current-thread`, `thread <thread_id>`, `bot <channel:account_id>`, or `none`. |
+| `garyx task create [--title <title>] [--body <body>] [--agent <id> \| --team <id> \| --workflow <id> \| --assignee <principal>] [--workspace-dir <path>] --notify <target>` | Create a task thread backed by an Agent, Agent Team, or Workflow executor. Legacy `--assignee <principal>` still works for compatibility, and assigned tasks start automatically. Notification targets are `current-thread`, `thread <thread_id>`, `bot <channel:account_id>`, or `none`. |
 | `garyx task get <task_ref>` | Fetch one task. |
 | `garyx task promote <thread_id> --notify <target>` | Promote an existing thread into a task with an explicit review notification target. |
 | `garyx task update <task_ref> --status <status> [--note <note>]` | Move a task through its lifecycle. Garyx moves an in-progress task to review when its agent run stops; only mark `done` after explicit approval. |
@@ -130,6 +130,14 @@ requested window.
 | --- | --- |
 | `garyx agent list / get / create / update / upsert / delete` | CRUD on custom agents. `create/update/upsert` accept `--model`, `--model-reasoning-effort`, `--model-service-tier`, and `--default-workspace-dir <path>` for new bot/task threads. |
 | `garyx team list / get / create / update / delete` | CRUD on agent teams. |
+
+## Workflows
+
+| Command | Use it for |
+| --- | --- |
+| `garyx workflow definition list / get / upsert --file <package>` | Manage global file-backed workflow packages rooted by `garyx.workflow.json`. |
+| `garyx task create --workflow <workflow_id> --input-json '<json>'` | Execute a workflow definition through a Task executor. This is the user-facing execution path. |
+| `garyx workflow list / get / events / cancel` | Inspect or cancel existing workflow runs. Runs are execution records under Tasks, not standalone product entries. |
 
 ## Tools
 

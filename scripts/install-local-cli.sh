@@ -12,5 +12,6 @@ cd "$REPO_ROOT"
 cargo build --release -p garyx
 mkdir -p "$INSTALL_DIR"
 install -m 755 target/release/garyx "$DESTINATION"
+bash scripts/download-bun-runtime.sh host "${INSTALL_DIR}/garyx-bun"
 bash scripts/codesign-macos-cli.sh "$DESTINATION"
 "$DESTINATION" --version

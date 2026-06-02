@@ -189,11 +189,17 @@ export interface DesktopTaskSummary {
   creator: DesktopTaskPrincipal;
   assignee?: DesktopTaskPrincipal | null;
   source?: DesktopTaskSource | null;
+  executor?: DesktopTaskExecutor | null;
   updatedAt: string;
   updatedBy: DesktopTaskPrincipal;
   runtimeAgentId: string;
   replyCount: number;
 }
+
+export type DesktopTaskExecutor =
+  | { type: 'agent'; agentId: string }
+  | { type: 'team'; teamId: string }
+  | { type: 'workflow'; workflowId: string; workflowVersion?: number | null };
 
 export interface DesktopTaskSource {
   threadId?: string | null;
@@ -285,12 +291,19 @@ export type DesktopTaskNotificationTarget =
 export interface CreateTaskInput {
   title?: string | null;
   body?: string | null;
+  executor?: CreateTaskExecutorInput | null;
+  /** @deprecated New task creation should use `executor`. */
   assignee?: string | null;
   start?: boolean;
   workspaceDir?: string | null;
   workspaceMode?: DesktopWorkspaceMode;
   notificationTarget: DesktopTaskNotificationTarget;
 }
+
+export type CreateTaskExecutorInput =
+  | { type: 'agent'; agentId: string }
+  | { type: 'team'; teamId: string }
+  | { type: 'workflow'; workflowId: string; input?: unknown };
 
 export interface PromoteTaskInput {
   threadId: string;
@@ -326,6 +339,130 @@ export interface DeleteTaskInput {
 export interface UpdateTaskTitleInput {
   taskId: string;
   title: string;
+}
+
+/**
+ * Reusable workflow definition discovered by the gateway under
+ * `~/.garyx/workflows`. Mirrors `workflow_definition_package_json`. The list is
+ * empty until a package is installed with `garyx workflow definition upsert`.
+ */
+export interface DesktopWorkflowDefinition {
+  workflowId: string;
+  version: number;
+  name: string;
+  description: string;
+  /** Text-input metadata for product surfaces. Not a generated form schema. */
+  input?: Record<string, unknown> | null;
+  defaults?: Record<string, unknown> | null;
+  packageDir?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface DesktopWorkflowSourceDocument {
+  workflowId: string;
+  path: string;
+  content: string;
+  mediaType: string;
+  language: string;
+}
+
+export type DesktopWorkflowRunStatus =
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | string;
+
+/** Mirrors `workflow_run_json`. Token/cost counters are roll-ups across children. */
+export interface DesktopWorkflowRun {
+  workflowRunId: string;
+  /** Legacy run-id alias kept while gateway payloads migrate. */
+  workflowId: string;
+  taskId?: string | null;
+  taskThreadId?: string | null;
+  parentThreadId?: string | null;
+  name?: string | null;
+  description?: string | null;
+  status: DesktopWorkflowRunStatus;
+  currentPhaseIndex?: number | null;
+  meta?: Record<string, unknown> | null;
+  input?: unknown | null;
+  summary?: string | null;
+  error?: string | null;
+  workspaceDir?: string | null;
+  totalChildren: number;
+  completedChildren: number;
+  failedChildren: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalToolCalls: number;
+  totalCostUsd: number;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  updatedAt?: string | null;
+}
+
+/** Mirrors `workflow_child_json` — one dispatched child agent run. */
+export interface DesktopWorkflowChild {
+  workflowChildRunId: string;
+  workflowRunId?: string | null;
+  workflowId: string;
+  threadId?: string | null;
+  phaseIndex?: number | null;
+  phaseTitle?: string | null;
+  label?: string | null;
+  agentId?: string | null;
+  status: DesktopWorkflowRunStatus;
+  prompt?: string | null;
+  resultMode?: string | null;
+  schema?: unknown | null;
+  resultText?: string | null;
+  result?: unknown | null;
+  resultPreview?: string | null;
+  error?: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  toolCalls: number;
+  costUsd: number;
+  queuedAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  updatedAt?: string | null;
+}
+
+/** Mirrors `workflow_event_json` — one durable run event. */
+export interface DesktopWorkflowEvent {
+  eventSeq: number;
+  eventType: string;
+  workflowRunId?: string | null;
+  workflowChildRunId?: string | null;
+  threadId?: string | null;
+  payload?: unknown;
+  createdAt?: string | null;
+}
+
+export interface DesktopWorkflowRunDrilldown {
+  workflow: DesktopWorkflowRun;
+  children: DesktopWorkflowChild[];
+  events: DesktopWorkflowEvent[];
+}
+
+export interface DesktopWorkflowRunsPage {
+  taskId: string;
+  workflowRuns: DesktopWorkflowRunDrilldown[];
+  count: number;
+  hasMore: boolean;
+}
+
+export interface ListTaskWorkflowRunsInput {
+  taskId: string;
+  limit?: number;
+}
+
+export interface GetWorkflowDefinitionSourceInput {
+  workflowId: string;
 }
 
 export interface DesktopSkillInfo {
@@ -1227,6 +1364,7 @@ export interface ThreadTranscript {
   remoteFound: boolean;
   messages: TranscriptMessage[];
   pendingInputs: PendingThreadInput[];
+  thread?: DesktopThreadSummary | null;
   threadInfo?: ThreadRuntimeInfo | null;
   pageInfo?: ThreadTranscriptPageInfo | null;
   /**
@@ -1613,6 +1751,13 @@ export interface GaryxDesktopApi {
   deleteAutomation: (input: DeleteAutomationInput) => Promise<DesktopState>;
   listTasks: (input?: ListTasksInput) => Promise<DesktopTasksPage>;
   createTask: (input: CreateTaskInput) => Promise<DesktopTaskSummary>;
+  listWorkflowDefinitions: () => Promise<DesktopWorkflowDefinition[]>;
+  getWorkflowDefinitionSource: (
+    input: GetWorkflowDefinitionSourceInput,
+  ) => Promise<DesktopWorkflowSourceDocument>;
+  listTaskWorkflowRuns: (
+    input: ListTaskWorkflowRunsInput,
+  ) => Promise<DesktopWorkflowRunsPage>;
   getWorkspaceGitStatus: (input: {
     workspacePath: string;
   }) => Promise<DesktopWorkspaceGitStatus>;

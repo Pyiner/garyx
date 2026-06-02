@@ -1373,6 +1373,7 @@ async fn create_data_trigger_task(
             assignee,
             notification_target: Some(TaskNotificationTarget::None),
             source: None,
+            executor: None,
             start: false,
             actor: Some(Principal::Agent {
                 agent_id: "garyx-automation".to_owned(),

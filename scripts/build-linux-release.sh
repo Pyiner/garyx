@@ -81,6 +81,7 @@ for arch in $ARCHS; do
   rm -rf "$staging"
   mkdir -p "$staging"
   cp "target/${target}/release/garyx" "$staging/"
+  bash scripts/download-bun-runtime.sh "$target" "$staging/garyx-bun"
   cp README.md LICENSE "$staging/" 2>/dev/null || true
 
   archive="${staging}.tar.gz"

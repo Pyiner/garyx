@@ -10,11 +10,13 @@ use axum::{
 use chrono::Utc;
 use garyx_models::local_paths::default_session_data_dir;
 use garyx_models::{
-    Principal, TaskEventKind, TaskNotificationTarget, TaskSource, TaskStatus, ThreadTask,
+    AgentReference, Principal, TaskEventKind, TaskExecutor, TaskNotificationTarget, TaskSource,
+    TaskStatus, ThreadTask,
 };
 use garyx_router::{
     CreateTaskInput, FileTaskCounterStore, PromoteTaskInput, TaskListFilter, TaskRuntimeInput,
-    TaskService, TaskServiceError, UpdateTaskStatusInput, WorkspaceMode, workspace_dir_from_value,
+    TaskService, TaskServiceError, UpdateTaskStatusInput, WorkspaceMode,
+    mark_thread_task_in_review_if_in_progress, workspace_dir_from_value,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -23,8 +25,12 @@ use uuid::Uuid;
 use crate::agent_identity::{
     default_workspace_dir_from_agent_reference, resolve_agent_reference_from_stores,
 };
+use crate::garyx_db::GaryxDbError;
 use crate::internal_inbound::{InternalDispatchOptions, dispatch_internal_message_to_thread};
 use crate::server::AppState;
+use crate::workflows::{
+    WorkflowError, get_workflow_definition_package, spawn_workflow_task_entrypoint,
+};
 use crate::workspace_mode::worktree_base_dir_for_config;
 
 const ACTOR_HEADER: &str = "x-garyx-actor";
@@ -42,6 +48,8 @@ pub struct CreateTaskBody {
     #[serde(default)]
     pub source: Option<TaskSource>,
     #[serde(default)]
+    pub executor: Option<TaskExecutorBody>,
+    #[serde(default)]
     pub start: bool,
     #[serde(default)]
     pub actor: Option<Principal>,
@@ -51,6 +59,25 @@ pub struct CreateTaskBody {
     pub workspace_dir: Option<String>,
     #[serde(default)]
     pub runtime: Option<TaskRuntimeBody>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum TaskExecutorBody {
+    Agent {
+        #[serde(alias = "agentId")]
+        agent_id: String,
+    },
+    Team {
+        #[serde(alias = "teamId")]
+        team_id: String,
+    },
+    Workflow {
+        #[serde(alias = "workflowId")]
+        workflow_id: String,
+        #[serde(default)]
+        input: Option<Value>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,7 +222,80 @@ pub async fn create_task(
         Ok(actor) => actor,
         Err(error) => return task_error_response(error),
     };
-    let runtime = task_runtime_input(body.runtime, body.agent_id, body.workspace_dir);
+    let executor_body = body.executor;
+    if executor_body.is_some() && body.assignee.is_some() {
+        return task_error_response(TaskServiceError::BadRequest(
+            "executor-backed tasks cannot also set an assignee".to_owned(),
+        ));
+    }
+    let workspace_dir = body.workspace_dir;
+    let normalized_workspace_dir = workspace_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let mut runtime = task_runtime_input(body.runtime, body.agent_id, workspace_dir.clone());
+    let mut workflow_request = None;
+    let mut workflow_definition = None;
+    let mut task_executor = None;
+    let mut executor_agent_id = None;
+    let workflow_workspace_dir = match executor_body {
+        Some(TaskExecutorBody::Agent { agent_id }) => {
+            let reference = match resolve_task_executor_agent(&state, &agent_id).await {
+                Ok(reference) => reference,
+                Err(error) => return task_error_response(error),
+            };
+            let bound_agent_id = reference.bound_agent_id().to_owned();
+            runtime = match task_runtime_for_executor(runtime, &bound_agent_id) {
+                Ok(runtime) => runtime,
+                Err(error) => return task_error_response(error),
+            };
+            executor_agent_id = Some(bound_agent_id.clone());
+            task_executor = Some(TaskExecutor::Agent {
+                agent_id: bound_agent_id,
+            });
+            None
+        }
+        Some(TaskExecutorBody::Team { team_id }) => {
+            let reference = match resolve_task_executor_team(&state, &team_id).await {
+                Ok(reference) => reference,
+                Err(error) => return task_error_response(error),
+            };
+            let bound_team_id = reference.bound_agent_id().to_owned();
+            runtime = match task_runtime_for_executor(runtime, &bound_team_id) {
+                Ok(runtime) => runtime,
+                Err(error) => return task_error_response(error),
+            };
+            executor_agent_id = Some(bound_team_id.clone());
+            task_executor = Some(TaskExecutor::Team {
+                team_id: bound_team_id,
+            });
+            None
+        }
+        Some(TaskExecutorBody::Workflow { workflow_id, input }) => {
+            runtime = None;
+            let definition =
+                match get_workflow_definition_package(&state.config_snapshot(), &workflow_id) {
+                    Ok(definition) => definition,
+                    Err(error) => {
+                        return task_error_response(TaskServiceError::BadRequest(
+                            error.to_string(),
+                        ));
+                    }
+                };
+            task_executor = Some(TaskExecutor::Workflow {
+                workflow_id: definition.record.workflow_id.clone(),
+                workflow_version: Some(definition.record.version),
+            });
+            workflow_request = Some((
+                definition.record.workflow_id.clone(),
+                workflow_task_input_or_body(input, body.body.as_deref()),
+            ));
+            workflow_definition = Some(definition);
+            normalized_workspace_dir.clone()
+        }
+        None => None,
+    };
     if let Err(error) = validate_runtime_agent(&state, &runtime).await {
         return task_error_response(error);
     }
@@ -206,8 +306,14 @@ pub async fn create_task(
         Ok(target) => target,
         Err(error) => return task_error_response(error),
     };
+    let default_workspace_agent = executor_agent_id
+        .as_deref()
+        .or_else(|| match &body.assignee {
+            Some(Principal::Agent { agent_id }) => Some(agent_id.as_str()),
+            _ => None,
+        });
     let mut runtime =
-        match task_runtime_with_default_workspace(&state, runtime, body.assignee.as_ref()).await {
+        match task_runtime_with_default_workspace(&state, runtime, default_workspace_agent).await {
             Ok(runtime) => runtime,
             Err(error) => return task_error_response(error),
         };
@@ -225,10 +331,11 @@ pub async fn create_task(
             assignee: body.assignee,
             notification_target,
             source: body.source,
-            start: body.start,
+            executor: task_executor,
+            start: body.start || workflow_request.is_some() || executor_agent_id.is_some(),
             actor,
             agent_id: None,
-            workspace_dir: None,
+            workspace_dir: workflow_workspace_dir.clone(),
             runtime,
         })
         .await
@@ -249,7 +356,31 @@ pub async fn create_task(
                 "runtime_agent_id": runtime_agent_id,
                 "task": task,
             });
-            if let Some(dispatch) = spawn_task_auto_dispatch(
+            if let (Some(definition), Some((_, input))) = (workflow_definition, workflow_request) {
+                let task_id = garyx_router::tasks::canonical_task_id(&task);
+                match spawn_workflow_task_entrypoint(
+                    state.clone(),
+                    task_id,
+                    thread_id.clone(),
+                    definition.record.workflow_id,
+                    input,
+                    workflow_workspace_dir,
+                ) {
+                    Ok(dispatch) => payload["dispatch"] = dispatch,
+                    Err(error) => {
+                        let _ = mark_thread_task_in_review_if_in_progress(
+                            &state.threads.thread_store,
+                            &thread_id,
+                            Principal::Agent {
+                                agent_id: "workflow".to_owned(),
+                            },
+                            Some(format!("workflow entrypoint dispatch failed: {error}")),
+                        )
+                        .await;
+                        return workflow_error_as_task_response(error);
+                    }
+                }
+            } else if let Some(dispatch) = spawn_task_auto_dispatch(
                 state.clone(),
                 payload["thread_id"].as_str().unwrap_or_default().to_owned(),
                 payload["task"].clone(),
@@ -315,16 +446,17 @@ pub async fn create_tasks_batch(
         if let Err(error) = validate_task_assignee_agent(&state, item.assignee.as_ref()).await {
             return task_error_response(error);
         }
-        let mut runtime = match task_runtime_with_default_workspace(
-            &state,
-            runtime,
-            item.assignee.as_ref(),
-        )
-        .await
-        {
-            Ok(runtime) => runtime,
-            Err(error) => return task_error_response(error),
+        let default_workspace_agent = match &item.assignee {
+            Some(Principal::Agent { agent_id }) => Some(agent_id.as_str()),
+            _ => None,
         };
+        let mut runtime =
+            match task_runtime_with_default_workspace(&state, runtime, default_workspace_agent)
+                .await
+            {
+                Ok(runtime) => runtime,
+                Err(error) => return task_error_response(error),
+            };
         if let Some(runtime) = runtime.as_mut()
             && runtime.workspace_mode.is_worktree()
         {
@@ -338,6 +470,7 @@ pub async fn create_tasks_batch(
                 assignee: item.assignee,
                 notification_target: Some(notification_target),
                 source: item.source.or_else(|| top_source.clone()),
+                executor: None,
                 start: item.start,
                 actor: actor.clone(),
                 agent_id: None,
@@ -545,7 +678,10 @@ pub async fn assign_task(
                 {
                     return task_error_response(error);
                 }
-                if !self_claim {
+                let has_executor = payload["task"]
+                    .get("executor")
+                    .is_some_and(|value| !value.is_null());
+                if !self_claim && !has_executor {
                     let body_for_dispatch = task_body_for_dispatch(&payload["task"])
                         .or_else(|| task_body_from_record(&record));
                     if let Some(dispatch) = spawn_task_auto_dispatch(
@@ -861,6 +997,16 @@ fn task_runtime_input(
     .then_some(input)
 }
 
+fn workflow_task_input_or_body(input: Option<Value>, task_body: Option<&str>) -> Value {
+    input.unwrap_or_else(|| {
+        task_body
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| Value::String(value.to_owned()))
+            .unwrap_or(Value::Null)
+    })
+}
+
 fn task_runtime_has_workspace(runtime: &Option<TaskRuntimeInput>) -> bool {
     runtime
         .as_ref()
@@ -871,17 +1017,16 @@ fn task_runtime_has_workspace(runtime: &Option<TaskRuntimeInput>) -> bool {
 
 fn task_agent_id_for_default_workspace(
     runtime: &Option<TaskRuntimeInput>,
-    assignee: Option<&Principal>,
+    executor_or_assignee_agent_id: Option<&str>,
 ) -> Option<String> {
-    match assignee {
-        Some(Principal::Agent { agent_id }) => normalized_nonempty(Some(agent_id.clone())),
-        _ => None,
-    }
-    .or_else(|| {
-        runtime
-            .as_ref()
-            .and_then(|runtime| normalized_nonempty(runtime.agent_id.clone()))
-    })
+    executor_or_assignee_agent_id
+        .map(ToOwned::to_owned)
+        .and_then(|agent_id| normalized_nonempty(Some(agent_id)))
+        .or_else(|| {
+            runtime
+                .as_ref()
+                .and_then(|runtime| normalized_nonempty(runtime.agent_id.clone()))
+        })
 }
 
 async fn default_workspace_dir_for_agent(
@@ -901,12 +1046,14 @@ async fn default_workspace_dir_for_agent(
 async fn task_runtime_with_default_workspace(
     state: &Arc<AppState>,
     runtime: Option<TaskRuntimeInput>,
-    assignee: Option<&Principal>,
+    executor_or_assignee_agent_id: Option<&str>,
 ) -> Result<Option<TaskRuntimeInput>, TaskServiceError> {
     if task_runtime_has_workspace(&runtime) {
         return Ok(runtime);
     }
-    let Some(agent_id) = task_agent_id_for_default_workspace(&runtime, assignee) else {
+    let Some(agent_id) =
+        task_agent_id_for_default_workspace(&runtime, executor_or_assignee_agent_id)
+    else {
         return Ok(runtime);
     };
     let Some(default_workspace_dir) = default_workspace_dir_for_agent(state, &agent_id).await?
@@ -921,6 +1068,65 @@ async fn task_runtime_with_default_workspace(
     });
     input.workspace_dir = Some(default_workspace_dir);
     Ok(Some(input))
+}
+
+async fn resolve_task_executor_agent(
+    state: &Arc<AppState>,
+    agent_id: &str,
+) -> Result<AgentReference, TaskServiceError> {
+    let reference = resolve_agent_reference_from_stores(
+        state.ops.custom_agents.as_ref(),
+        state.ops.agent_teams.as_ref(),
+        agent_id,
+    )
+    .await
+    .map_err(TaskServiceError::UnknownAgent)?;
+    match reference {
+        AgentReference::Standalone { .. } => Ok(reference),
+        AgentReference::Team { .. } => Err(TaskServiceError::BadRequest(format!(
+            "executor.type=agent requires a standalone agent; '{agent_id}' is an agent team"
+        ))),
+    }
+}
+
+async fn resolve_task_executor_team(
+    state: &Arc<AppState>,
+    team_id: &str,
+) -> Result<AgentReference, TaskServiceError> {
+    let reference = resolve_agent_reference_from_stores(
+        state.ops.custom_agents.as_ref(),
+        state.ops.agent_teams.as_ref(),
+        team_id,
+    )
+    .await
+    .map_err(TaskServiceError::UnknownAgent)?;
+    match reference {
+        AgentReference::Team { .. } => Ok(reference),
+        AgentReference::Standalone { .. } => Err(TaskServiceError::BadRequest(format!(
+            "executor.type=team requires an agent team; '{team_id}' is a standalone agent"
+        ))),
+    }
+}
+
+fn task_runtime_for_executor(
+    runtime: Option<TaskRuntimeInput>,
+    executor_agent_id: &str,
+) -> Result<Option<TaskRuntimeInput>, TaskServiceError> {
+    let mut runtime = runtime.unwrap_or(TaskRuntimeInput {
+        agent_id: None,
+        workspace_dir: None,
+        workspace_mode: WorkspaceMode::Local,
+        worktree_base_dir: None,
+    });
+    if let Some(existing_agent_id) = normalized_nonempty(runtime.agent_id.clone())
+        && existing_agent_id != executor_agent_id
+    {
+        return Err(TaskServiceError::BadRequest(format!(
+            "executor agent '{executor_agent_id}' does not match runtime agent '{existing_agent_id}'"
+        )));
+    }
+    runtime.agent_id = Some(executor_agent_id.to_owned());
+    Ok(Some(runtime))
 }
 
 async fn validate_thread_runtime_allows_assignee(
@@ -1092,10 +1298,7 @@ pub(crate) fn spawn_task_auto_dispatch(
     requested_body: Option<&str>,
 ) -> Option<Value> {
     let task: ThreadTask = serde_json::from_value(task_value).ok()?;
-    let Principal::Agent { agent_id } = task.assignee.as_ref()? else {
-        return None;
-    };
-    let agent_id = agent_id.clone();
+    let agent_id = task_dispatch_agent_id(&task)?;
     if task.status != TaskStatus::InProgress {
         return None;
     }
@@ -1163,6 +1366,18 @@ pub(crate) fn spawn_task_auto_dispatch(
     }))
 }
 
+fn task_dispatch_agent_id(task: &ThreadTask) -> Option<String> {
+    match task.executor.as_ref() {
+        Some(TaskExecutor::Agent { agent_id }) => Some(agent_id.clone()),
+        Some(TaskExecutor::Team { team_id }) => Some(team_id.clone()),
+        Some(TaskExecutor::Workflow { .. }) => None,
+        None => match task.assignee.as_ref() {
+            Some(Principal::Agent { agent_id }) => Some(agent_id.clone()),
+            _ => None,
+        },
+    }
+}
+
 async fn task_auto_dispatch_still_current(
     state: &Arc<AppState>,
     thread_id: &str,
@@ -1181,10 +1396,7 @@ async fn task_auto_dispatch_still_current(
     if task.status != TaskStatus::InProgress {
         return false;
     }
-    matches!(
-        task.assignee.as_ref(),
-        Some(Principal::Agent { agent_id: current }) if current == agent_id
-    )
+    task_dispatch_agent_id(&task).as_deref() == Some(agent_id)
 }
 
 fn task_auto_dispatch_message(
@@ -1331,14 +1543,39 @@ fn task_error_response(error: TaskServiceError) -> (StatusCode, Json<Value>) {
     )
 }
 
+fn workflow_error_as_task_response(error: WorkflowError) -> (StatusCode, Json<Value>) {
+    let status = match &error {
+        WorkflowError::BadRequest(_) => StatusCode::BAD_REQUEST,
+        WorkflowError::NotFound(_) => StatusCode::NOT_FOUND,
+        WorkflowError::Conflict(_) => StatusCode::CONFLICT,
+        WorkflowError::Db(GaryxDbError::BadRequest(_)) => StatusCode::BAD_REQUEST,
+        WorkflowError::Db(_) | WorkflowError::Bridge(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let code = match &error {
+        WorkflowError::BadRequest(_) | WorkflowError::Db(GaryxDbError::BadRequest(_)) => {
+            "BadRequest"
+        }
+        WorkflowError::NotFound(_) => "NotFound",
+        WorkflowError::Conflict(_) => "Conflict",
+        WorkflowError::Db(_) | WorkflowError::Bridge(_) => "Internal",
+    };
+    (
+        status,
+        Json(json!({ "error": error.to_string(), "code": code })),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent_teams::AgentTeamStore;
     use crate::custom_agents::CustomAgentStore;
+    use crate::garyx_db::GaryxDbService;
     use crate::server::AppStateBuilder;
     use garyx_models::ProviderType;
     use garyx_models::config::GaryxConfig;
+    use std::fs;
+    use tempfile::tempdir;
 
     async fn state_with_agent_default_workspace() -> Arc<AppState> {
         let custom_agents = Arc::new(CustomAgentStore::new());
@@ -1368,18 +1605,56 @@ mod tests {
             .build()
     }
 
+    async fn state_with_task_executors() -> Arc<AppState> {
+        let mut config = GaryxConfig::default();
+        config.tasks.enabled = true;
+        let custom_agents = Arc::new(CustomAgentStore::new());
+        for agent_id in ["reviewer", "planner", "coder"] {
+            custom_agents
+                .upsert_agent(crate::custom_agents::UpsertCustomAgentRequest {
+                    agent_id: agent_id.to_owned(),
+                    display_name: agent_id.to_owned(),
+                    provider_type: ProviderType::CodexAppServer,
+                    model: "gpt-5".to_owned(),
+                    model_reasoning_effort: String::new(),
+                    model_service_tier: String::new(),
+                    provider_env: None,
+                    auth_source: None,
+                    base_url: None,
+                    codex_home: None,
+                    max_tool_iterations: None,
+                    request_timeout_seconds: None,
+                    default_workspace_dir: None,
+                    avatar_data_url: None,
+                    system_prompt: "Run the task.".to_owned(),
+                })
+                .await
+                .expect("custom agent");
+        }
+        let agent_teams = Arc::new(AgentTeamStore::new());
+        agent_teams
+            .upsert_team(crate::agent_teams::UpsertAgentTeamRequest {
+                team_id: "product-ship".to_owned(),
+                display_name: "Product Ship".to_owned(),
+                leader_agent_id: "planner".to_owned(),
+                member_agent_ids: vec!["planner".to_owned(), "coder".to_owned()],
+                workflow_text: "Coordinate the task.".to_owned(),
+                avatar_data_url: None,
+            })
+            .await
+            .expect("agent team");
+        AppStateBuilder::new(config)
+            .with_custom_agent_store(custom_agents)
+            .with_agent_team_store(agent_teams)
+            .build()
+    }
+
     #[tokio::test]
     async fn task_runtime_uses_assignee_default_workspace_when_unset() {
         let state = state_with_agent_default_workspace().await;
-        let runtime = task_runtime_with_default_workspace(
-            &state,
-            None,
-            Some(&Principal::Agent {
-                agent_id: "reviewer".to_owned(),
-            }),
-        )
-        .await
-        .expect("runtime");
+        let runtime = task_runtime_with_default_workspace(&state, None, Some("reviewer"))
+            .await
+            .expect("runtime");
 
         assert_eq!(
             runtime.and_then(|runtime| runtime.workspace_dir).as_deref(),
@@ -1398,9 +1673,7 @@ mod tests {
                 workspace_mode: WorkspaceMode::Local,
                 worktree_base_dir: None,
             }),
-            Some(&Principal::Agent {
-                agent_id: "reviewer".to_owned(),
-            }),
+            Some("reviewer"),
         )
         .await
         .expect("runtime");
@@ -1417,16 +1690,283 @@ mod tests {
             .with_custom_agent_store(Arc::new(CustomAgentStore::new()))
             .with_agent_team_store(Arc::new(AgentTeamStore::new()))
             .build();
-        let runtime = task_runtime_with_default_workspace(
-            &state,
-            None,
-            Some(&Principal::Agent {
-                agent_id: "claude".to_owned(),
-            }),
-        )
-        .await
-        .expect("runtime");
+        let runtime = task_runtime_with_default_workspace(&state, None, Some("claude"))
+            .await
+            .expect("runtime");
 
         assert!(runtime.is_none());
+    }
+
+    #[tokio::test]
+    async fn agent_executor_creates_in_progress_task_and_dispatches_without_assignee() {
+        let state = state_with_task_executors().await;
+
+        let (status, Json(payload)) = create_task(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateTaskBody {
+                title: Some("Agent executor".to_owned()),
+                body: Some("Implement the slice.".to_owned()),
+                assignee: None,
+                notification_target: Some(TaskNotificationTargetBody::None),
+                source: None,
+                executor: Some(TaskExecutorBody::Agent {
+                    agent_id: "reviewer".to_owned(),
+                }),
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(payload["task"]["status"], "in_progress");
+        assert!(payload["task"]["assignee"].is_null());
+        assert_eq!(payload["task"]["executor"]["type"], "agent");
+        assert_eq!(payload["task"]["executor"]["agent_id"], "reviewer");
+        assert_eq!(payload["dispatch"]["queued"], true);
+        assert_eq!(payload["dispatch"]["agent_id"], "reviewer");
+        let thread_id = payload["thread_id"].as_str().expect("thread id");
+        let stored = state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .expect("stored thread");
+        assert_eq!(stored["agent_id"], "reviewer");
+        assert_eq!(stored["provider_type"], "codex_app_server");
+    }
+
+    #[tokio::test]
+    async fn team_executor_binds_team_and_rejects_standalone_agent() {
+        let state = state_with_task_executors().await;
+
+        let (status, Json(payload)) = create_task(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateTaskBody {
+                title: Some("Team executor".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: Some(TaskNotificationTargetBody::None),
+                source: None,
+                executor: Some(TaskExecutorBody::Team {
+                    team_id: "product-ship".to_owned(),
+                }),
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(payload["task"]["status"], "in_progress");
+        assert!(payload["task"]["assignee"].is_null());
+        assert_eq!(payload["task"]["executor"]["type"], "team");
+        assert_eq!(payload["task"]["executor"]["team_id"], "product-ship");
+        assert_eq!(payload["dispatch"]["queued"], true);
+        assert_eq!(payload["dispatch"]["agent_id"], "product-ship");
+        let thread_id = payload["thread_id"].as_str().expect("thread id");
+        let stored = state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .expect("stored thread");
+        assert_eq!(stored["agent_id"], "product-ship");
+        assert_eq!(stored["provider_type"], "agent_team");
+
+        let (status, Json(payload)) = create_task(
+            State(state),
+            HeaderMap::new(),
+            Json(CreateTaskBody {
+                title: Some("Bad team executor".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: Some(TaskNotificationTargetBody::None),
+                source: None,
+                executor: Some(TaskExecutorBody::Team {
+                    team_id: "reviewer".to_owned(),
+                }),
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires an agent team")
+        );
+    }
+
+    #[tokio::test]
+    async fn executor_rejects_assignee_and_team_as_agent() {
+        let state = state_with_task_executors().await;
+
+        let (status, Json(payload)) = create_task(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateTaskBody {
+                title: Some("Mixed executor".to_owned()),
+                body: None,
+                assignee: Some(Principal::Agent {
+                    agent_id: "reviewer".to_owned(),
+                }),
+                notification_target: Some(TaskNotificationTargetBody::None),
+                source: None,
+                executor: Some(TaskExecutorBody::Agent {
+                    agent_id: "reviewer".to_owned(),
+                }),
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("cannot also set an assignee")
+        );
+
+        let (status, Json(payload)) = create_task(
+            State(state),
+            HeaderMap::new(),
+            Json(CreateTaskBody {
+                title: Some("Bad agent executor".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: Some(TaskNotificationTargetBody::None),
+                source: None,
+                executor: Some(TaskExecutorBody::Agent {
+                    agent_id: "product-ship".to_owned(),
+                }),
+                start: false,
+                actor: None,
+                agent_id: None,
+                workspace_dir: None,
+                runtime: None,
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            payload["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires a standalone agent")
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_backed_task_creation_dispatches_workflow_entrypoint() {
+        let data_dir = tempdir().expect("data dir");
+        let mut config = GaryxConfig::default();
+        config.tasks.enabled = true;
+        config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
+        let workflow_package = data_dir.path().join("workflows").join("unit");
+        fs::create_dir_all(&workflow_package).expect("workflow package");
+        fs::write(
+            workflow_package.join("garyx.workflow.json"),
+            r#"{
+              "workflowId": "unit",
+              "version": 4,
+              "name": "Unit Workflow",
+              "input": {"placeholder": "Unit request"},
+              "defaults": {}
+            }"#,
+        )
+        .expect("workflow manifest");
+        fs::write(workflow_package.join("workflow.ts"), "export {};\n").expect("workflow source");
+        let garyx_db = Arc::new(GaryxDbService::memory().expect("memory db"));
+        let state = AppStateBuilder::new(config)
+            .with_garyx_db(garyx_db)
+            .with_custom_agent_store(Arc::new(CustomAgentStore::new()))
+            .with_agent_team_store(Arc::new(AgentTeamStore::new()))
+            .build();
+
+        let task_workspace_dir = "/Users/test/workflow-task";
+        let old_bun = std::env::var_os("GARYX_WORKFLOW_BUN_BIN");
+        unsafe {
+            std::env::set_var("GARYX_WORKFLOW_BUN_BIN", "/usr/bin/true");
+        }
+        let (status, Json(payload)) = create_task(
+            State(state.clone()),
+            HeaderMap::new(),
+            Json(CreateTaskBody {
+                title: Some("Run workflow".to_owned()),
+                body: None,
+                assignee: None,
+                notification_target: Some(TaskNotificationTargetBody::None),
+                source: None,
+                executor: Some(TaskExecutorBody::Workflow {
+                    workflow_id: "unit".to_owned(),
+                    input: Some(json!({"question": "test"})),
+                }),
+                start: false,
+                actor: None,
+                agent_id: Some("claude".to_owned()),
+                workspace_dir: Some(task_workspace_dir.to_owned()),
+                runtime: None,
+            }),
+        )
+        .await;
+        unsafe {
+            if let Some(value) = old_bun {
+                std::env::set_var("GARYX_WORKFLOW_BUN_BIN", value);
+            } else {
+                std::env::remove_var("GARYX_WORKFLOW_BUN_BIN");
+            }
+        }
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(payload["dispatch"]["kind"], "workflow_entrypoint");
+        assert_eq!(payload["dispatch"]["workflowId"], "unit");
+        assert_eq!(payload["dispatch"]["workflowVersion"], 4);
+        assert_eq!(payload["task"]["status"], "in_progress");
+        assert_eq!(payload["task"]["executor"]["type"], "workflow");
+        assert_eq!(payload["task"]["executor"]["workflow_id"], "unit");
+        assert_eq!(payload["task"]["executor"]["workflow_version"], 4);
+        let task_thread_id = payload["thread_id"].as_str().expect("thread id");
+        let thread_record = state
+            .threads
+            .thread_store
+            .get(task_thread_id)
+            .await
+            .expect("task thread");
+        assert_eq!(thread_record["workspace_dir"], task_workspace_dir);
+    }
+
+    #[test]
+    fn workflow_task_input_defaults_to_task_body() {
+        assert_eq!(
+            workflow_task_input_or_body(None, Some("  run this workflow  ")),
+            json!("run this workflow")
+        );
+        assert_eq!(
+            workflow_task_input_or_body(Some(json!({"explicit": true})), Some("ignored")),
+            json!({"explicit": true})
+        );
+        assert_eq!(workflow_task_input_or_body(None, Some("   ")), Value::Null);
+        assert_eq!(workflow_task_input_or_body(None, None), Value::Null);
     }
 }

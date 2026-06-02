@@ -57,6 +57,17 @@ async fn test_provider_type() {
     assert_eq!(provider.provider_type(), ProviderType::ClaudeCode);
 }
 
+#[test]
+fn test_result_usage_tokens_accepts_claude_sdk_snake_case_usage() {
+    let mut usage = HashMap::new();
+    usage.insert("input_tokens".to_owned(), Value::from(12));
+    usage.insert("cache_creation_input_tokens".to_owned(), Value::from(3));
+    usage.insert("cache_read_input_tokens".to_owned(), Value::from(5));
+    usage.insert("output_tokens".to_owned(), Value::from(34));
+
+    assert_eq!(result_usage_tokens(Some(&usage)), (20, 34));
+}
+
 #[tokio::test]
 async fn test_is_ready_before_init() {
     let provider = make_provider();

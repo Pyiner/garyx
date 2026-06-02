@@ -19,6 +19,8 @@ import type {
   DesktopProviderIconDescriptor,
   DesktopProviderModels,
   DesktopTeam,
+  DesktopWorkflowDefinition,
+  DesktopWorkflowSourceDocument,
   DesktopWorkspace,
   UpdateCustomAgentInput,
   UpdateTeamInput,
@@ -59,9 +61,10 @@ import { useI18n } from '../../i18n';
 import { ProviderAgentIcon, hasProviderAgentIcon } from './ProviderAgentIcon';
 
 type ProviderType = 'claude_code' | 'codex_app_server' | 'gemini_cli' | 'gpt' | 'anthropic' | 'google' | 'claude_llm' | 'gemini_llm';
-type HubTab = 'agents' | 'teams';
+type HubTab = 'agents' | 'teams' | 'workflows';
 type AgentDialogMode = 'create' | 'edit' | 'view' | null;
 type TeamDialogMode = 'create' | 'edit' | 'view' | null;
+type WorkflowDialogMode = 'view' | null;
 type AvatarStyleId = 'clean_glyph' | 'soft_3d' | 'glass_icon' | 'pixel_badge' | 'ink_line' | 'paper_cut' | 'blueprint' | 'enamel_sticker' | 'custom';
 
 type AgentDraft = {
@@ -471,6 +474,29 @@ function sortedTeams(value: DesktopTeam[]): DesktopTeam[] {
   });
 }
 
+function sortedWorkflows(value: DesktopWorkflowDefinition[]): DesktopWorkflowDefinition[] {
+  return [...value].sort((left, right) => {
+    return left.name.localeCompare(right.name) || left.workflowId.localeCompare(right.workflowId);
+  });
+}
+
+function workflowDefaultWorkspace(workflow: DesktopWorkflowDefinition): string {
+  const value = workflow.defaults?.workspaceDir || workflow.defaults?.workspace_dir;
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function workflowInputPlaceholder(workflow: DesktopWorkflowDefinition): string {
+  const value = workflow.input?.placeholder;
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function prettyJson(value: unknown): string {
+  if (!value || typeof value !== 'object') {
+    return '';
+  }
+  return JSON.stringify(value, null, 2);
+}
+
 function stopEvent(event: React.MouseEvent<HTMLElement>) {
   event.preventDefault();
   event.stopPropagation();
@@ -489,6 +515,7 @@ export function AgentsHubPanel({
   const [saving, setSaving] = useState(false);
   const [agents, setAgents] = useState<DesktopCustomAgent[]>([]);
   const [teams, setTeams] = useState<DesktopTeam[]>([]);
+  const [workflows, setWorkflows] = useState<DesktopWorkflowDefinition[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<HubTab>(initialTab);
@@ -504,6 +531,7 @@ export function AgentsHubPanel({
   const [customAvatarStyle, setCustomAvatarStyle] = useState('');
   const avatarFileInputRef = useRef<HTMLInputElement | null>(null);
   const teamAvatarFileInputRef = useRef<HTMLInputElement | null>(null);
+  const workflowSourceRequestId = useRef(0);
   const [providerModelsByType, setProviderModelsByType] = useState<
     Partial<Record<ProviderType, DesktopProviderModels>>
   >({});
@@ -515,6 +543,11 @@ export function AgentsHubPanel({
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [teamDraft, setTeamDraft] = useState<TeamDraft>(() => emptyTeamDraft());
   const [teamIdTouched, setTeamIdTouched] = useState(false);
+  const [workflowDialogMode, setWorkflowDialogMode] = useState<WorkflowDialogMode>(null);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [workflowSource, setWorkflowSource] = useState<DesktopWorkflowSourceDocument | null>(null);
+  const [workflowSourceLoading, setWorkflowSourceLoading] = useState(false);
+  const [workflowSourceError, setWorkflowSourceError] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -524,19 +557,23 @@ export function AgentsHubPanel({
     setLoading(true);
     setLoadError(null);
     try {
-      const [agentsResult, teamsResult] = await Promise.allSettled([
+      const [agentsResult, teamsResult, workflowsResult] = await Promise.allSettled([
         window.garyxDesktop.listCustomAgents(),
         window.garyxDesktop.listTeams(),
+        window.garyxDesktop.listWorkflowDefinitions(),
       ]);
 
       const nextAgents = agentsResult.status === 'fulfilled' ? sortedAgents(agentsResult.value) : [];
       const nextTeams = teamsResult.status === 'fulfilled' ? sortedTeams(teamsResult.value) : [];
+      const nextWorkflows = workflowsResult.status === 'fulfilled' ? sortedWorkflows(workflowsResult.value) : [];
       setAgents(nextAgents);
       setTeams(nextTeams);
+      setWorkflows(nextWorkflows);
 
       const failures = [
         agentsResult.status === 'rejected' ? 'agents' : null,
         teamsResult.status === 'rejected' ? 'teams' : null,
+        workflowsResult.status === 'rejected' ? 'workflows' : null,
       ].filter(Boolean);
 
       if (failures.length) {
@@ -612,6 +649,10 @@ export function AgentsHubPanel({
     () => teams.find((team) => team.teamId === selectedTeamId) || null,
     [teams, selectedTeamId],
   );
+  const selectedWorkflow = useMemo(
+    () => workflows.find((workflow) => workflow.workflowId === selectedWorkflowId) || null,
+    [selectedWorkflowId, workflows],
+  );
 
   const filteredAgents = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -647,6 +688,22 @@ export function AgentsHubPanel({
       ].some((value) => value.toLowerCase().includes(needle));
     });
   }, [agentMap, search, teams]);
+
+  const filteredWorkflows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) {
+      return workflows;
+    }
+    return workflows.filter((workflow) => {
+      return [
+        workflow.name,
+        workflow.workflowId,
+        workflow.description,
+        workflow.packageDir || '',
+        workflowDefaultWorkspace(workflow),
+      ].some((value) => value.toLowerCase().includes(needle));
+    });
+  }, [search, workflows]);
 
   const teamSelectionCount = useMemo(() => {
     return agents.filter((agent) => teamDraft.memberAgentIds.includes(agent.agentId)).length;
@@ -716,6 +773,37 @@ export function AgentsHubPanel({
     setAvatarStyleTarget('agent');
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
+  }
+
+  function closeWorkflowDialog() {
+    workflowSourceRequestId.current += 1;
+    setWorkflowDialogMode(null);
+    setSelectedWorkflowId(null);
+    setWorkflowSource(null);
+    setWorkflowSourceLoading(false);
+    setWorkflowSourceError(null);
+  }
+
+  async function loadWorkflowSource(workflowId: string) {
+    const requestId = workflowSourceRequestId.current + 1;
+    workflowSourceRequestId.current = requestId;
+    setWorkflowSource(null);
+    setWorkflowSourceError(null);
+    setWorkflowSourceLoading(true);
+    try {
+      const source = await window.garyxDesktop.getWorkflowDefinitionSource({ workflowId });
+      if (workflowSourceRequestId.current === requestId) {
+        setWorkflowSource(source);
+      }
+    } catch (error) {
+      if (workflowSourceRequestId.current === requestId) {
+        setWorkflowSourceError(error instanceof Error ? error.message : t('Failed to load workflow source'));
+      }
+    } finally {
+      if (workflowSourceRequestId.current === requestId) {
+        setWorkflowSourceLoading(false);
+      }
+    }
   }
 
   function openCreateAgentDialog() {
@@ -833,6 +921,12 @@ export function AgentsHubPanel({
     setAvatarStyleId(DEFAULT_AVATAR_STYLE_ID);
     setCustomAvatarStyle('');
     setActiveTab('teams');
+  }
+
+  function openViewWorkflowDialog(workflow: DesktopWorkflowDefinition) {
+    setWorkflowDialogMode('view');
+    setSelectedWorkflowId(workflow.workflowId);
+    void loadWorkflowSource(workflow.workflowId);
   }
 
   function toggleTeamMember(agentId: string) {
@@ -1089,8 +1183,11 @@ export function AgentsHubPanel({
               : null;
 
   const showingAgents = activeTab === 'agents';
+  const showingTeams = activeTab === 'teams';
+  const showingWorkflows = activeTab === 'workflows';
   const visibleAgents = filteredAgents;
   const visibleTeams = filteredTeams;
+  const visibleWorkflows = filteredWorkflows;
 
   return (
     <div className="agents-hub">
@@ -1104,19 +1201,30 @@ export function AgentsHubPanel({
             role="tab"
             type="button"
           >
-            <span>{t("My Agents")}</span>
+            <span>{t("Agent")}</span>
             <Badge className="agents-hub-tab-badge" variant="outline">{agents.length}</Badge>
           </button>
           <button
-            className={`agents-hub-tab ${!showingAgents ? 'active' : ''}`}
+            className={`agents-hub-tab ${showingTeams ? 'active' : ''}`}
             onClick={() => {
               setActiveTab('teams');
             }}
             role="tab"
             type="button"
           >
-            <span>{t("Teams")}</span>
+            <span>{t("Agent Team")}</span>
             <Badge className="agents-hub-tab-badge" variant="outline">{teams.length}</Badge>
+          </button>
+          <button
+            className={`agents-hub-tab ${showingWorkflows ? 'active' : ''}`}
+            onClick={() => {
+              setActiveTab('workflows');
+            }}
+            role="tab"
+            type="button"
+          >
+            <span>{t("Workflow")}</span>
+            <Badge className="agents-hub-tab-badge" variant="outline">{workflows.length}</Badge>
           </button>
         </div>
 
@@ -1133,13 +1241,15 @@ export function AgentsHubPanel({
             />
           </div>
 
-          <Button
-            onClick={showingAgents ? openCreateAgentDialog : () => openCreateTeamDialog()}
-            size="sm"
-          >
-            <IconPlus aria-hidden size={15} stroke={2} />
-            {showingAgents ? t('New Agent') : t('New Team')}
-          </Button>
+          {!showingWorkflows ? (
+            <Button
+              onClick={showingAgents ? openCreateAgentDialog : () => openCreateTeamDialog()}
+              size="sm"
+            >
+              <IconPlus aria-hidden size={15} stroke={2} />
+              {showingAgents ? t('New Agent') : t('New Team')}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -1154,9 +1264,15 @@ export function AgentsHubPanel({
           <TableHeader>
             <TableRow>
               <TableHead style={{ width: '40%' }}>{t('Name')}</TableHead>
-              <TableHead style={{ width: '20%' }}>{showingAgents ? t('Provider') : t('Leader')}</TableHead>
-              <TableHead style={{ width: '20%' }}>{showingAgents ? t('Type') : t('Members')}</TableHead>
-              <TableHead style={{ width: '20%' }} className="text-right">{t('Actions')}</TableHead>
+              <TableHead style={{ width: '20%' }}>
+                {showingAgents ? t('Provider') : showingTeams ? t('Leader') : t('Version')}
+              </TableHead>
+              <TableHead style={{ width: '20%' }}>
+                {showingAgents ? t('Type') : showingTeams ? t('Members') : t('Workspace')}
+              </TableHead>
+              <TableHead style={{ width: '20%' }} className="text-right">
+                {showingWorkflows ? t('Package') : t('Actions')}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -1237,7 +1353,7 @@ export function AgentsHubPanel({
                   </TableCell>
                 </TableRow>
               ) : null
-            ) : (
+            ) : showingTeams ? (
               visibleTeams.length ? (
                 visibleTeams.map((team) => {
                   const leaderLabel = agentMap.get(team.leaderAgentId)?.displayName || team.leaderAgentId;
@@ -1306,6 +1422,65 @@ export function AgentsHubPanel({
                   </TableCell>
                 </TableRow>
               ) : null
+            ) : (
+              visibleWorkflows.length ? (
+                visibleWorkflows.map((workflow) => {
+                  const workspace = workflowDefaultWorkspace(workflow);
+                  return (
+                    <TableRow
+                      className="cursor-pointer"
+                      key={workflow.workflowId}
+                      onClick={() => openViewWorkflowDialog(workflow)}
+                    >
+                      <TableCell>
+                        <div className="agents-hub-name-cell">
+                          <span className="agents-hub-avatar-sm workflow">WF</span>
+                          <div>
+                            <div className="agents-hub-cell-name">{workflow.name}</div>
+                            <div className="agents-hub-cell-id">{workflow.workflowId}</div>
+                            {workflow.description ? (
+                              <div className="agents-hub-cell-description">
+                                {previewText(workflow.description, '')}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">v{workflow.version}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <span className="agents-hub-cell-id">
+                          {workspace || t('Task workspace')}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <span
+                          className="agents-hub-cell-id agents-hub-package-path"
+                          title={workflow.packageDir || undefined}
+                        >
+                          {workflow.packageDir ? t('File package') : t('Installed')}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
+              ) : search.trim() ? (
+                <TableRow>
+                  <TableCell className="text-center text-muted-foreground" colSpan={4}>
+                    {t('No workflows matching "{query}"', { query: search.trim() })}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                <TableRow>
+                  <TableCell className="text-center text-muted-foreground" colSpan={4}>
+                    {t('No workflow definitions installed')}
+                    <div className="agents-hub-install-hint">
+                      <code>garyx workflow definition upsert --file &lt;path&gt;</code>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
             )}
           </TableBody>
         </Table>
@@ -2141,6 +2316,89 @@ export function AgentsHubPanel({
               </DialogFooter>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(workflowDialogMode)}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeWorkflowDialog();
+          }
+        }}
+      >
+        <DialogContent className="agents-hub-agent-dialog agents-hub-workflow-dialog" size="viewer">
+          <DialogHeader className="agents-hub-dialog-header">
+            <DialogDescription className="agents-hub-dialog-kicker">
+              {t('Workflow')}
+            </DialogDescription>
+            <DialogTitle className="agents-hub-dialog-title">
+              {selectedWorkflow?.name || t('Workflow definition')}
+            </DialogTitle>
+            <DialogDescription className="agents-hub-dialog-description">
+              {selectedWorkflow?.description || t('File-backed workflow definition installed for task execution.')}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="agents-hub-dialog-stack">
+            <div className="agents-hub-workflow-meta-strip">
+              <Badge variant="outline">v{selectedWorkflow?.version || 1}</Badge>
+              <span>{selectedWorkflow?.workflowId || ''}</span>
+            </div>
+
+            <div className="agents-hub-workflow-source">
+              <div className="agents-hub-workflow-source-header">
+                <div>
+                  <div className="agents-hub-detail-label">{t('Source')}</div>
+                  <div className="agents-hub-workflow-source-path">
+                    {workflowSource?.path || './workflow.ts'}
+                  </div>
+                </div>
+                <div className="agents-hub-card-badges">
+                  {workflowSource?.language ? <Badge variant="outline">{workflowSource.language}</Badge> : null}
+                  {workflowSource?.mediaType ? <Badge variant="outline">{workflowSource.mediaType}</Badge> : null}
+                </div>
+              </div>
+              <pre className={`agents-hub-workflow-code ${workflowSourceError ? 'error' : ''}`}>
+                <code>
+                  {workflowSourceLoading
+                    ? t('Loading source...')
+                    : workflowSourceError
+                      ? workflowSourceError
+                      : workflowSource?.content || t('(empty)')}
+                </code>
+              </pre>
+            </div>
+
+            <div className="agents-hub-workflow-footnote">
+              <span>
+                {t('Input')}: {selectedWorkflow
+                  ? workflowInputPlaceholder(selectedWorkflow) || t('Plain text input')
+                  : t('Plain text input')}
+              </span>
+              <Button
+                disabled={workflowSourceLoading}
+                onClick={() => {
+                  if (selectedWorkflow) {
+                    void loadWorkflowSource(selectedWorkflow.workflowId);
+                  }
+                }}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                {t('Refresh')}
+              </Button>
+              <Button
+                onClick={closeWorkflowDialog}
+                size="sm"
+                type="button"
+                variant="outline"
+              >
+                {t('Close')}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

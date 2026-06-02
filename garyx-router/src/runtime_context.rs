@@ -266,6 +266,7 @@ mod tests {
                 agent_id: "codex".to_owned(),
             }),
             notification_target: None,
+            executor: None,
             source: None,
             body: None,
             created_at: now,

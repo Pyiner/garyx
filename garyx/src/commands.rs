@@ -50,7 +50,7 @@ use garyx_models::config_loader::{
 };
 use garyx_models::local_paths::{
     default_agent_teams_state_path, default_custom_agents_state_path, default_log_file_path,
-    gary_home_dir,
+    default_session_data_dir, gary_home_dir,
 };
 use garyx_models::provider::{
     AgentRunRequest, ProviderMessage, StreamEvent, default_claude_cli_mode,
@@ -107,6 +107,7 @@ pub(crate) const GITHUB_RELEASE_REPO_DEFAULT: &str = GITHUB_RELEASE_REPO;
 #[cfg(any(target_os = "macos", test))]
 const MACOS_CLI_CODESIGN_IDENTIFIER: &str = "com.garyx.gateway";
 const MACOS_CCTTY_CODESIGN_IDENTIFIER: &str = "com.garyx.cctty";
+const MACOS_WORKFLOW_BUN_CODESIGN_IDENTIFIER: &str = "com.garyx.workflow-bun";
 const DEFAULT_CHANNEL_AGENT_ID: &str = "claude";
 
 #[derive(Debug, Deserialize)]
@@ -1215,6 +1216,10 @@ pub(crate) async fn try_swap_garyx_binary(
         .path()
         .join(format!("garyx-{requested_version}-{target}"))
         .join("cctty");
+    let extracted_workflow_bun = tempdir
+        .path()
+        .join(format!("garyx-{requested_version}-{target}"))
+        .join("garyx-bun");
     if !extracted_binary.is_file() {
         return Err(format!(
             "release archive did not contain expected binary at {}",
@@ -1250,9 +1255,31 @@ pub(crate) async fn try_swap_garyx_binary(
     } else {
         None
     };
+    let workflow_bun_destination = parent.join("garyx-bun");
+    let workflow_bun_staged_path = if extracted_workflow_bun.is_file() {
+        let staged = parent.join(format!(".garyx-bun-update-{}.tmp", Uuid::new_v4().simple()));
+        fs::copy(&extracted_workflow_bun, &staged)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&staged)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&staged, perms)?;
+        }
+        ad_hoc_codesign_macos_binary_with_identifier(
+            &staged,
+            MACOS_WORKFLOW_BUN_CODESIGN_IDENTIFIER,
+        )?;
+        Some(staged)
+    } else {
+        None
+    };
     fs::rename(&staged_path, destination_path)?;
     if let Some(staged) = cctty_staged_path {
         fs::rename(staged, cctty_destination)?;
+    }
+    if let Some(staged) = workflow_bun_staged_path {
+        fs::rename(staged, workflow_bun_destination)?;
     }
 
     Ok(SwapOutcome {
@@ -2813,6 +2840,358 @@ pub(crate) async fn cmd_automation_activity(
         println!("{run_id:<38}  {status:<8}  {started:<25}  {thread_id:<38}  {excerpt}");
     }
     Ok(())
+}
+
+pub(crate) async fn cmd_workflow_definition_list(
+    config_path: &str,
+    limit: usize,
+    offset: usize,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!("/api/workflow-definitions?limit={limit}&offset={offset}"),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    let definitions = payload["workflowDefinitions"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if definitions.is_empty() {
+        println!("No workflow definitions.");
+        return Ok(());
+    }
+    println!("{:<34}  {:<7}  NAME", "WORKFLOW ID", "VERSION");
+    println!("{}", "-".repeat(90));
+    for definition in definitions {
+        println!(
+            "{:<34}  {:<7}  {}",
+            definition["workflowId"].as_str().unwrap_or("-"),
+            definition["version"].as_u64().unwrap_or_default(),
+            definition["name"].as_str().unwrap_or("-")
+        );
+    }
+    Ok(())
+}
+
+pub(crate) async fn cmd_workflow_definition_get(
+    config_path: &str,
+    workflow_id: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let workflow_id = trim_required_cli(workflow_id, "workflow_id")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!(
+            "/api/workflow-definitions/{}",
+            urlencoding::encode(&workflow_id)
+        ),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    print_workflow_definition_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_workflow_definition_upsert(
+    config_path: &str,
+    file: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let manifest_path = PathBuf::from(file);
+    let (package_dir, manifest_path) = workflow_package_source(&manifest_path)?;
+    let raw = std::fs::read_to_string(&manifest_path)?;
+    let body: Value = serde_json::from_str(&raw)?;
+    let workflow_id = body
+        .get("workflowId")
+        .or_else(|| body.get("workflow_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "workflowId is required"))?
+        .to_owned();
+    let config = load_config_or_default(config_path, ConfigRuntimeOverrides::default())?.config;
+    let root = workflow_definitions_root_for_config(&config);
+    let destination = root.join(workflow_package_dir_name(&workflow_id));
+    install_workflow_package(&package_dir, &destination)?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!(
+            "/api/workflow-definitions/{}",
+            urlencoding::encode(&workflow_id)
+        ),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    print_workflow_definition_summary(&payload);
+    Ok(())
+}
+
+const WORKFLOW_MANIFEST_FILE: &str = "garyx.workflow.json";
+
+fn workflow_package_source(path: &Path) -> io::Result<(PathBuf, PathBuf)> {
+    if path.is_dir() {
+        let manifest = path.join(WORKFLOW_MANIFEST_FILE);
+        if !manifest.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("workflow package is missing {WORKFLOW_MANIFEST_FILE}"),
+            ));
+        }
+        return Ok((path.to_path_buf(), manifest));
+    }
+    let package_dir = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "workflow manifest must have a parent directory",
+        )
+    })?;
+    Ok((package_dir.to_path_buf(), path.to_path_buf()))
+}
+
+fn workflow_definitions_root_for_config(config: &GaryxConfig) -> PathBuf {
+    let data_dir = config
+        .sessions
+        .data_dir
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(default_session_data_dir);
+    if data_dir.file_name().and_then(|name| name.to_str()) == Some("data") {
+        data_dir
+            .parent()
+            .map(|parent| parent.join("workflows"))
+            .unwrap_or_else(|| data_dir.join("workflows"))
+    } else {
+        data_dir.join("workflows")
+    }
+}
+
+fn workflow_package_dir_name(workflow_id: &str) -> String {
+    let mut output = workflow_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    output = output.trim_matches('-').to_owned();
+    if output.is_empty() {
+        "workflow".to_owned()
+    } else {
+        output
+    }
+}
+
+fn install_workflow_package(source: &Path, destination: &Path) -> io::Result<()> {
+    let source = source.canonicalize()?;
+    let destination_parent = destination.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "workflow package destination must have a parent",
+        )
+    })?;
+    fs::create_dir_all(destination_parent)?;
+    let destination_canonical = destination.canonicalize().ok();
+    if destination_canonical.as_deref() == Some(source.as_path()) {
+        return Ok(());
+    }
+    if destination.exists() {
+        fs::remove_dir_all(destination)?;
+    }
+    copy_dir_all(&source, destination)
+}
+
+fn copy_dir_all(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else if ty.is_file() {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn cmd_workflow_list(
+    config_path: &str,
+    parent_thread_id: Option<String>,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let gateway = gateway_endpoint(config_path)?;
+    let path = if let Some(thread_id) = trim_optional_cli(parent_thread_id) {
+        format!(
+            "/api/workflows?parentThreadId={}",
+            urlencoding::encode(&thread_id)
+        )
+    } else {
+        "/api/workflows".to_owned()
+    };
+    let payload = fetch_gateway_json(&gateway, &path).await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    let workflows = payload["workflows"].as_array().cloned().unwrap_or_default();
+    if workflows.is_empty() {
+        println!("Workflows: (none)");
+        return Ok(());
+    }
+    println!("{:<42}  {:<10}  {:<20}  NAME", "RUN ID", "STATUS", "PARENT");
+    println!("{}", "-".repeat(100));
+    for workflow in workflows {
+        let workflow_id = workflow["workflowRunId"]
+            .as_str()
+            .or_else(|| workflow["workflowId"].as_str())
+            .unwrap_or("-");
+        let status = workflow["status"].as_str().unwrap_or("-");
+        let parent = workflow["parentThreadId"].as_str().unwrap_or("-");
+        let name = workflow["name"].as_str().unwrap_or("-");
+        println!("{workflow_id:<42}  {status:<10}  {parent:<20}  {name}");
+    }
+    Ok(())
+}
+
+pub(crate) async fn cmd_workflow_get(
+    config_path: &str,
+    workflow_run_id: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let workflow_id = trim_required_cli(workflow_run_id, "workflow_run_id")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!("/api/workflows/{}", urlencoding::encode(&workflow_id)),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    print_workflow_summary(&payload);
+    Ok(())
+}
+
+pub(crate) async fn cmd_workflow_events(
+    config_path: &str,
+    workflow_run_id: &str,
+    after: u64,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let workflow_id = trim_required_cli(workflow_run_id, "workflow_run_id")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = fetch_gateway_json(
+        &gateway,
+        &format!(
+            "/api/workflows/{}/events?after={after}",
+            urlencoding::encode(&workflow_id)
+        ),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    for event in payload["events"].as_array().cloned().unwrap_or_default() {
+        let seq = event["eventSeq"].as_u64().unwrap_or_default();
+        let typ = event["eventType"].as_str().unwrap_or("-");
+        let child = event["workflowChildRunId"].as_str().unwrap_or("-");
+        println!("{seq:<8}  {typ:<28}  {child}");
+    }
+    Ok(())
+}
+
+pub(crate) async fn cmd_workflow_cancel(
+    config_path: &str,
+    workflow_run_id: &str,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let workflow_id = trim_required_cli(workflow_run_id, "workflow_run_id")?;
+    let gateway = gateway_endpoint(config_path)?;
+    let payload = post_gateway_json(
+        &gateway,
+        &format!(
+            "/api/workflows/{}/cancel",
+            urlencoding::encode(&workflow_id)
+        ),
+        &json!({}),
+    )
+    .await?;
+    if json {
+        return print_pretty_json(&payload);
+    }
+    print_workflow_summary(&payload);
+    Ok(())
+}
+
+fn print_workflow_summary(payload: &Value) {
+    let workflow = payload.get("workflow").unwrap_or(payload);
+    println!(
+        "Workflow Run: {}",
+        workflow["workflowRunId"]
+            .as_str()
+            .or_else(|| workflow["workflowId"].as_str())
+            .unwrap_or("-")
+    );
+    println!("Name: {}", workflow["name"].as_str().unwrap_or("-"));
+    println!("Status: {}", workflow["status"].as_str().unwrap_or("-"));
+    println!(
+        "Parent: {}",
+        workflow["parentThreadId"].as_str().unwrap_or("-")
+    );
+    if let Some(summary) = workflow["summary"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+    {
+        println!("Summary: {summary}");
+    }
+    if let Some(error) = workflow["error"].as_str().filter(|value| !value.is_empty()) {
+        println!("Error: {error}");
+    }
+    let children = payload["children"].as_array().cloned().unwrap_or_default();
+    if !children.is_empty() {
+        println!("Children:");
+        for child in children {
+            println!(
+                "- {} [{}] thread {}",
+                child["label"].as_str().unwrap_or("-"),
+                child["status"].as_str().unwrap_or("-"),
+                child["threadId"].as_str().unwrap_or("-"),
+            );
+        }
+    }
+}
+
+fn print_workflow_definition_summary(payload: &Value) {
+    let definition = payload.get("workflowDefinition").unwrap_or(payload);
+    println!(
+        "Workflow Definition: {}",
+        definition["workflowId"].as_str().unwrap_or("-")
+    );
+    println!("Name: {}", definition["name"].as_str().unwrap_or("-"));
+    println!(
+        "Version: {}",
+        definition["version"].as_u64().unwrap_or_default()
+    );
+    if let Some(description) = definition["description"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+    {
+        println!("Description: {description}");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5295,6 +5674,7 @@ pub(crate) async fn cmd_task_get(
     if json_output {
         return print_pretty_json(&payload);
     }
+    let history_gateway = gateway.clone();
     let history_payload = payload
         .get("thread_id")
         .and_then(Value::as_str)
@@ -5302,7 +5682,7 @@ pub(crate) async fn cmd_task_get(
         .filter(|value| !value.is_empty())
         .map(|thread_id| async move {
             fetch_gateway_json(
-                &gateway,
+                &history_gateway,
                 &format!(
                     "/api/threads/history?thread_id={}&limit=500&include_tool_messages=true",
                     urlencoding::encode(thread_id)
@@ -5315,10 +5695,29 @@ pub(crate) async fn cmd_task_get(
         Some(fetch) => fetch.await,
         None => None,
     };
-    print!(
-        "{}",
-        format_task_progress(&payload, history_payload.as_ref())
-    );
+    let workflow_runs_payload = payload
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|task_id| async move {
+            fetch_gateway_json(
+                &gateway,
+                &format!(
+                    "/api/tasks/{}/workflow-runs?limit=10",
+                    encode_task_id(task_id).ok()?
+                ),
+            )
+            .await
+            .ok()
+        });
+    let workflow_runs_payload = match workflow_runs_payload {
+        Some(fetch) => fetch.await,
+        None => None,
+    };
+    let mut output = format_task_progress(&payload, history_payload.as_ref());
+    append_task_workflow_runs(&mut output, workflow_runs_payload.as_ref());
+    print!("{output}");
     Ok(())
 }
 
@@ -5330,23 +5729,46 @@ pub(crate) async fn cmd_task_create(
     start: bool,
     workspace_dir: Option<String>,
     worktree: bool,
+    agent: Option<String>,
+    team: Option<String>,
+    workflow: Option<String>,
+    input: Option<String>,
+    input_file: Option<PathBuf>,
+    input_json: Option<String>,
     notify: Vec<String>,
     json_output: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let assignee = task_create_assignee_payload(assignee)?;
+    let executor = task_executor_payload(agent, team, workflow, input, input_file, input_json)?;
+    let assignee = if executor.is_some() {
+        if assignee
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            return Err("task executor cannot be combined with --assignee".into());
+        }
+        None
+    } else {
+        task_create_assignee_payload(assignee)?
+    };
     let runtime_agent_id = task_runtime_agent_id_from_assignee(&assignee);
-    let start = start || assignee.is_some();
+    let start = start || assignee.is_some() || executor.is_some();
     let notification_target = task_notification_target_payload(notify)?;
     let source = task_source_payload_from_env();
     let workspace_dir = workspace_dir
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty());
     let gateway = gateway_endpoint(config_path)?;
+    let workflow_workspace_dir = executor
+        .as_ref()
+        .filter(|executor| executor.get("type").and_then(Value::as_str) == Some("workflow"))
+        .and(workspace_dir.clone());
     let request = json!({
         "title": title,
         "body": body,
         "assignee": assignee,
         "start": start,
+        "workspace_dir": workflow_workspace_dir,
+        "executor": executor,
         "runtime": {
             "agent_id": runtime_agent_id,
             "workspace_dir": workspace_dir,
@@ -5361,6 +5783,84 @@ pub(crate) async fn cmd_task_create(
     }
     print_task_summary(&payload);
     Ok(())
+}
+
+fn task_executor_payload(
+    agent: Option<String>,
+    team: Option<String>,
+    workflow: Option<String>,
+    input: Option<String>,
+    input_file: Option<PathBuf>,
+    input_json: Option<String>,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    let agent_id = agent
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let team_id = team
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let workflow_id = workflow
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let executor_count = usize::from(agent_id.is_some())
+        + usize::from(team_id.is_some())
+        + usize::from(workflow_id.is_some());
+    if executor_count > 1 {
+        return Err("choose only one task executor: --agent, --team, or --workflow".into());
+    }
+    if let Some(agent_id) = agent_id {
+        return Ok(Some(json!({
+            "type": "agent",
+            "agentId": agent_id,
+        })));
+    }
+    if let Some(team_id) = team_id {
+        return Ok(Some(json!({
+            "type": "team",
+            "teamId": team_id,
+        })));
+    }
+    let Some(workflow_id) = workflow_id else {
+        return Ok(None);
+    };
+    let input = workflow_task_input_payload(input, input_file, input_json)?;
+    Ok(Some(json!({
+        "type": "workflow",
+        "workflowId": workflow_id,
+        "input": input,
+    })))
+}
+
+fn workflow_task_input_payload(
+    input: Option<String>,
+    input_file: Option<PathBuf>,
+    input_json: Option<String>,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let text_input = trim_optional_cli(input);
+    let json_input = trim_optional_cli(input_json);
+    let provided_count = usize::from(text_input.is_some())
+        + usize::from(input_file.is_some())
+        + usize::from(json_input.is_some());
+    if provided_count > 1 {
+        return Err(
+            "choose only one workflow input: --input, --input-file, or --input-json".into(),
+        );
+    }
+    if let Some(text) = text_input {
+        return Ok(Value::String(text));
+    }
+    if let Some(path) = input_file {
+        let contents = fs::read_to_string(&path)?;
+        return Ok(if contents.trim().is_empty() {
+            Value::Null
+        } else {
+            Value::String(contents)
+        });
+    }
+    if let Some(raw) = json_input {
+        return Ok(serde_json::from_str::<Value>(&raw)?);
+    }
+    Ok(Value::Null)
 }
 
 fn task_create_assignee_payload(
@@ -6027,6 +6527,87 @@ fn format_task_progress(task_payload: &Value, history_payload: Option<&Value>) -
         );
     }
     output
+}
+
+fn append_task_workflow_runs(output: &mut String, workflow_runs_payload: Option<&Value>) {
+    let Some(workflow_runs) = workflow_runs_payload
+        .and_then(|payload| payload.get("workflowRuns"))
+        .and_then(Value::as_array)
+        .filter(|runs| !runs.is_empty())
+    else {
+        return;
+    };
+    output.push('\n');
+    output.push_str("Workflow Runs:\n");
+    for run in workflow_runs {
+        let workflow = run.get("workflow").unwrap_or(run);
+        let workflow_id = workflow
+            .get("workflowRunId")
+            .or_else(|| workflow.get("workflowId"))
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let status = workflow
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let definition_id = workflow
+            .get("workflowDefinitionId")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let definition_version = workflow
+            .get("workflowDefinitionVersion")
+            .and_then(Value::as_u64)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned());
+        let total_children = workflow
+            .get("totalChildren")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let completed_children = workflow
+            .get("completedChildren")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let failed_children = workflow
+            .get("failedChildren")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let _ = writeln!(
+            output,
+            "- {workflow_id} [{status}] definition {definition_id}@{definition_version} children {completed_children}/{total_children} failed {failed_children}"
+        );
+        if let Some(summary) = workflow
+            .get("summary")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let _ = writeln!(output, "  Summary: {summary}");
+        }
+        if let Some(error) = workflow
+            .get("error")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let _ = writeln!(output, "  Error: {error}");
+        }
+        let Some(children) = run.get("children").and_then(Value::as_array) else {
+            continue;
+        };
+        for child in children {
+            let label = child.get("label").and_then(Value::as_str).unwrap_or("-");
+            let child_status = child.get("status").and_then(Value::as_str).unwrap_or("-");
+            let thread_id = child.get("threadId").and_then(Value::as_str).unwrap_or("-");
+            let phase_title = child
+                .get("phaseTitle")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            let _ = writeln!(
+                output,
+                "  - {label} [{child_status}] phase {phase_title} thread {thread_id}"
+            );
+        }
+    }
 }
 
 fn turn_timestamp_label(turn: &TaskProgressTurn) -> String {

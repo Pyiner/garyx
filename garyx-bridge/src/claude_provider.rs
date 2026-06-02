@@ -41,6 +41,56 @@ const CLAUDE_CLI_MODE_CCTTY: &str = "cctty";
 const CLAUDE_CLI_MODE_NATIVE: &str = "native";
 const EMBEDDED_CCTTY_ARG: &str = "__cctty";
 
+fn coerce_usage_i64(value: &Value) -> Option<i64> {
+    value.as_i64().or_else(|| {
+        value
+            .as_str()
+            .and_then(|text| text.trim().parse::<f64>().ok())
+            .map(|number| number.round() as i64)
+    })
+}
+
+fn usage_value(usage: &HashMap<String, Value>, keys: &[&str]) -> i64 {
+    keys.iter()
+        .find_map(|key| usage.get(*key).filter(|value| !value.is_null()))
+        .and_then(coerce_usage_i64)
+        .unwrap_or(0)
+}
+
+fn result_usage_tokens(usage: Option<&HashMap<String, Value>>) -> (i64, i64) {
+    let Some(usage) = usage else {
+        return (0, 0);
+    };
+
+    let direct_input = usage_value(
+        usage,
+        &["inputTokens", "input", "promptTokens", "prompt_tokens"],
+    );
+    let input_tokens = if direct_input > 0 {
+        direct_input
+    } else {
+        usage_value(usage, &["input_tokens"])
+            + usage_value(
+                usage,
+                &["cacheCreationInputTokens", "cache_creation_input_tokens"],
+            )
+            + usage_value(usage, &["cacheReadInputTokens", "cache_read_input_tokens"])
+    };
+
+    let output_tokens = usage_value(
+        usage,
+        &[
+            "outputTokens",
+            "output",
+            "completionTokens",
+            "completion_tokens",
+            "output_tokens",
+        ],
+    );
+
+    (input_tokens.max(0), output_tokens.max(0))
+}
+
 // ---------------------------------------------------------------------------
 // Error classification helpers
 // ---------------------------------------------------------------------------
@@ -1347,21 +1397,13 @@ impl ClaudeCliProvider {
                         );
                     }
                     Ok(Message::Result(result_msg)) => {
+                        let (input_tokens, output_tokens) =
+                            result_usage_tokens(result_msg.usage.as_ref());
                         result_data = Some(ProcessedResult {
                             session_id: result_msg.session_id.clone(),
                             cost_usd: result_msg.total_cost_usd.unwrap_or(0.0),
-                            input_tokens: result_msg
-                                .usage
-                                .as_ref()
-                                .and_then(|u| u.get("input"))
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0),
-                            output_tokens: result_msg
-                                .usage
-                                .as_ref()
-                                .and_then(|u| u.get("output"))
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(0),
+                            input_tokens,
+                            output_tokens,
                             is_error: result_msg.is_error,
                             actual_model: actual_model.clone(),
                             thread_title: thread_title.clone(),

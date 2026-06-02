@@ -134,6 +134,7 @@ export function selectedThread(
   }
   return (
     state.threads.find((entry) => entry.id === threadId) ||
+    state.sessions.find((entry) => entry.id === threadId) ||
     latestAutomationThreadSummary(state, threadId) ||
     null
   );

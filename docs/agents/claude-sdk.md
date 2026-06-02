@@ -14,3 +14,24 @@
 - Pass `--system-prompt` only when Garyx intentionally replaces Claude Code's
   default prompt.
 - Use `--append-system-prompt` to keep default tool behavior.
+
+## Workflow SDK
+
+- Garyx workflows are SDK-first. User TypeScript owns loops, branching,
+  ordering, deduplication, budgets, and failure handling.
+- Workflow task creation in product UI is text-first: it should send one
+  plain-text input string. Do not build product forms directly from workflow
+  definition metadata; a workflow that needs structured input should structure the
+  text in its own first step.
+- CLI workflow task creation should also be text-first through `--input` or
+  `--input-file`; reserve `--input-json` for advanced automation knobs.
+- Do not add a Garyx interpreter for Claude Code workflow scripts, and do not
+  try to execute Claude Code's generated workflow files directly.
+- The gateway side of workflows should provide observability, hidden child
+  threads, provider execution, structured `submit_result`, and persisted run
+  records.
+- Treat structured results as a thread-run capability, not a workflow-only
+  primitive. The child thread metadata carries the required result schema, and
+  the MCP server exposes `submit_result` dynamically for the current thread with
+  the schema fields as direct tool arguments. Do not use workflow-specific result
+  tokens or a generic `{ payload: ... }` wrapper.

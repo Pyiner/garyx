@@ -46,3 +46,31 @@ reinterpreted in feature code.
   `~/.garyx/skills` and managed MCP from gateway-injected
   `remote_mcp_servers`; they should not read downstream Claude/Codex Skill or
   MCP config files.
+
+## Workflows
+
+- Task execution is selected by `ThreadTask.executor`, whose product-level
+  variants are Agent, Agent Team, and Workflow. New task creation paths should
+  set `executor`; `assignee` remains a compatibility/ownership field and should
+  not be used as the execution selector for new Agent/Team/Workflow UI or CLI
+  flows.
+- Workflow source code executes in the caller's process through SDKs such as
+  `@garyx/workflow`; gateway must not own a workflow language runtime or parse
+  arbitrary workflow scripts as the primary execution model.
+- Reusable workflow definitions are file-backed packages rooted by
+  `garyx.workflow.json`. Gateway list/get/install APIs should read and copy
+  those packages; do not store workflow definitions as runtime database rows.
+- Workflow task input is text-first in product surfaces. CLIs should offer
+  plain-text `--input` / `--input-file` paths by default; JSON input is an
+  advanced automation path, not the source for generated product forms.
+- Gateway workflow APIs provide observability, durable run/event storage, hidden
+  child-thread execution, and structured child results for Task-backed workflow
+  runs. SDKs connect those APIs with ordinary user code through explicit options
+  or `GARYX_*` environment variables such as `GARYX_TASK_ID`,
+  `GARYX_TASK_THREAD_ID`, `GARYX_WORKFLOW_RUN_ID`, and
+  `GARYX_PARENT_THREAD_ID`.
+- Structured child results are implemented as a generic thread-run capability:
+  the child thread metadata carries the result schema, and the MCP server exposes
+  a dynamic `submit_result` tool for the current thread with direct schema-field
+  arguments. Do not route structured results through workflow-only tokens or a
+  generic `{ payload: ... }` wrapper.

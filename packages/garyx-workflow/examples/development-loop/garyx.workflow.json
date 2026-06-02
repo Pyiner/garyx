@@ -1,0 +1,9 @@
+{
+  "workflowId": "development-loop",
+  "version": 1,
+  "name": "Development Review Loop",
+  "description": "Plan, implement, and review a coding task with observable Garyx child agents.",
+  "input": {
+    "placeholder": "Describe the change you want this workflow to plan, implement, and review."
+  }
+}

@@ -38,6 +38,7 @@ pub mod tasks;
 pub mod thread_logs;
 mod tool_image;
 mod wikis;
+pub mod workflows;
 pub mod workspace_files;
 mod workspace_mode;
 pub mod workspaces;

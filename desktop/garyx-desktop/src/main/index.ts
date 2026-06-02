@@ -55,6 +55,7 @@ import type {
   DeleteThreadInput,
   DesktopSettings,
   GenerateCustomAgentAvatarInput,
+  GetWorkflowDefinitionSourceInput,
   GetThreadHistoryInput,
   GetSkillEditorInput,
   GatewayConfigDocument,
@@ -64,6 +65,7 @@ import type {
   ListCandidatesInput,
   ListDreamsInput,
   ListTasksInput,
+  ListTaskWorkflowRunsInput,
   ListWorkspaceFilesInput,
   MarkAutomationSeenInput,
   ReadMemoryDocumentInput,
@@ -132,11 +134,14 @@ import {
   fetchThreadHistory,
   fetchThreadLogs,
   getDream,
+  getWorkflowDefinitionSource,
   getWorkspaceGitStatus,
   getAutoResearchRun,
   interruptThread,
   listDreams,
   listTasks,
+  listWorkflowDefinitions,
+  listTaskWorkflowRuns,
   listAutoResearchCandidates,
   listAutoResearchRuns,
   listAutoResearchIterations,
@@ -729,6 +734,27 @@ function registerIpcHandlers(): void {
     async (_event, input: CreateTaskInput) => {
       const settings = await resolveSettings();
       return createTask(settings, input);
+    },
+  );
+
+  ipcMain.handle("garyx:list-workflow-definitions", async () => {
+    const settings = await resolveSettings();
+    return listWorkflowDefinitions(settings);
+  });
+
+  ipcMain.handle(
+    "garyx:get-workflow-definition-source",
+    async (_event, input: GetWorkflowDefinitionSourceInput) => {
+      const settings = await resolveSettings();
+      return getWorkflowDefinitionSource(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:list-task-workflow-runs",
+    async (_event, input: ListTaskWorkflowRunsInput) => {
+      const settings = await resolveSettings();
+      return listTaskWorkflowRuns(settings, input);
     },
   );
 

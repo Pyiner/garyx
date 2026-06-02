@@ -1340,6 +1340,12 @@ fn parse_task_create_runtime_options() {
                     start,
                     workspace_dir,
                     worktree,
+                    agent,
+                    team,
+                    workflow,
+                    input,
+                    input_file,
+                    input_json,
                     notify,
                     json,
                 },
@@ -1350,11 +1356,112 @@ fn parse_task_create_runtime_options() {
             assert!(start);
             assert_eq!(workspace_dir.as_deref(), Some("/tmp/garyx-task"));
             assert!(worktree);
+            assert!(agent.is_none());
+            assert!(team.is_none());
+            assert!(workflow.is_none());
+            assert!(input.is_none());
+            assert!(input_file.is_none());
+            assert!(input_json.is_none());
             assert_eq!(notify, vec!["bot", "telegram:owner"]);
             assert!(json);
         }
         _ => panic!("expected Task::Create"),
     }
+}
+
+#[test]
+fn parse_task_create_agent_executor_options() {
+    let cli = Cli::parse_from([
+        "garyx", "task", "create", "--title", "Review", "--agent", "claude", "--notify", "none",
+    ]);
+    match cli.command {
+        Some(Commands::Task {
+            action:
+                TaskAction::Create {
+                    agent,
+                    team,
+                    workflow,
+                    assignee,
+                    ..
+                },
+        }) => {
+            assert_eq!(agent.as_deref(), Some("claude"));
+            assert!(team.is_none());
+            assert!(workflow.is_none());
+            assert!(assignee.is_none());
+        }
+        _ => panic!("expected task create"),
+    }
+}
+
+#[test]
+fn parse_task_create_input_json_requires_workflow() {
+    let error = match Cli::try_parse_from([
+        "garyx",
+        "task",
+        "create",
+        "--title",
+        "Review",
+        "--input-json",
+        "{}",
+        "--notify",
+        "none",
+    ]) {
+        Ok(_) => panic!("expected parse error"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+}
+
+#[test]
+fn parse_task_create_plain_input_requires_workflow() {
+    let error = match Cli::try_parse_from([
+        "garyx",
+        "task",
+        "create",
+        "--title",
+        "Review",
+        "--input",
+        "Summarize this",
+        "--notify",
+        "none",
+    ]) {
+        Ok(_) => panic!("expected parse error"),
+        Err(error) => error,
+    };
+
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+}
+
+#[test]
+fn parse_task_create_workflow_input_modes_conflict() {
+    let error = match Cli::try_parse_from([
+        "garyx",
+        "task",
+        "create",
+        "--title",
+        "Review",
+        "--workflow",
+        "review",
+        "--input",
+        "Summarize this",
+        "--input-json",
+        "{}",
+        "--notify",
+        "none",
+    ]) {
+        Ok(_) => panic!("expected parse error"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 #[test]

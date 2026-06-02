@@ -92,6 +92,155 @@ pub struct AutomationThreadRunDraft {
     pub finished_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct WorkflowRunRecord {
+    pub workflow_id: String,
+    pub task_id: Option<String>,
+    pub task_thread_id: Option<String>,
+    pub workflow_definition_id: Option<String>,
+    pub workflow_definition_version: Option<u64>,
+    pub workflow_definition_snapshot_json: Option<String>,
+    pub input_json: Option<String>,
+    pub parent_thread_id: String,
+    pub parent_run_id: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub current_phase_index: Option<i64>,
+    pub script_text: String,
+    pub meta_json: String,
+    pub result_json: Option<String>,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+    pub workspace_dir: Option<String>,
+    pub created_by: Option<String>,
+    pub total_children: u32,
+    pub completed_children: u32,
+    pub failed_children: u32,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_tool_calls: u64,
+    pub total_cost_usd: f64,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkflowRunDraft {
+    pub workflow_id: Option<String>,
+    pub task_id: Option<String>,
+    pub task_thread_id: Option<String>,
+    pub workflow_definition_id: Option<String>,
+    pub workflow_definition_version: Option<u64>,
+    pub workflow_definition_snapshot_json: Option<String>,
+    pub input_json: Option<String>,
+    pub parent_thread_id: String,
+    pub parent_run_id: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub current_phase_index: Option<i64>,
+    pub script_text: String,
+    pub meta_json: String,
+    pub result_json: Option<String>,
+    pub summary: Option<String>,
+    pub error: Option<String>,
+    pub workspace_dir: Option<String>,
+    pub created_by: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InterruptedWorkflowTaskReference {
+    pub workflow_id: String,
+    pub task_thread_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct WorkflowChildRunRecord {
+    pub workflow_id: String,
+    pub workflow_child_run_id: String,
+    pub thread_id: String,
+    pub phase_index: i64,
+    pub phase_title: String,
+    pub label: String,
+    pub agent_id: Option<String>,
+    pub status: String,
+    pub prompt: String,
+    pub result_mode: String,
+    pub schema_json: Option<String>,
+    pub result_text: Option<String>,
+    pub result_json: Option<String>,
+    pub result_preview: Option<String>,
+    pub error: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub tool_calls: u64,
+    pub cost_usd: f64,
+    pub queued_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkflowChildRunDraft {
+    pub workflow_id: String,
+    pub workflow_child_run_id: Option<String>,
+    pub thread_id: String,
+    pub phase_index: i64,
+    pub phase_title: String,
+    pub label: String,
+    pub agent_id: Option<String>,
+    pub status: String,
+    pub prompt: String,
+    pub result_mode: String,
+    pub schema_json: Option<String>,
+    pub result_text: Option<String>,
+    pub result_json: Option<String>,
+    pub result_preview: Option<String>,
+    pub error: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub tool_calls: u64,
+    pub cost_usd: f64,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorkflowChildRunUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub tool_calls: u64,
+    pub cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct WorkflowEventRecord {
+    pub event_seq: u64,
+    pub event_id: String,
+    pub workflow_id: String,
+    pub workflow_child_run_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub event_type: String,
+    pub payload_json: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowEventDraft {
+    pub event_id: Option<String>,
+    pub workflow_id: String,
+    pub workflow_child_run_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub event_type: String,
+    pub payload_json: String,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WorkspaceRecord {
     pub name: Option<String>,
@@ -788,6 +937,674 @@ impl GaryxDbService {
             )?
         };
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    pub fn create_workflow_run(&self, draft: WorkflowRunDraft) -> GaryxDbResult<WorkflowRunRecord> {
+        let workflow_id = draft
+            .workflow_id
+            .as_deref()
+            .map(|value| normalize_required("workflow_id", value))
+            .transpose()?
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let parent_thread_id = normalize_thread_id(&draft.parent_thread_id)?;
+        let name = normalize_required("name", &draft.name)?;
+        let status = normalize_workflow_run_status(&draft.status)?;
+        let script_text = normalize_required("script_text", &draft.script_text)?;
+        let meta_json = normalize_required("meta_json", &draft.meta_json)?;
+        let now = now_string();
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO workflow_runs (
+                workflow_id, task_id, task_thread_id, workflow_definition_id,
+                workflow_definition_version, workflow_definition_snapshot_json, input_json,
+                parent_thread_id, parent_run_id, name, description, status,
+                current_phase_index, script_text, meta_json, result_json, summary, error,
+                workspace_dir, created_by, total_children, completed_children, failed_children,
+                total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
+                created_at, started_at, finished_at, updated_at
+             )
+             VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                ?15, ?16, ?17, ?18, ?19, ?20, 0, 0, 0, 0, 0, 0, 0, ?21, ?22, ?23, ?21
+             )",
+            params![
+                workflow_id,
+                normalize_optional(draft.task_id.as_deref()),
+                normalize_optional(draft.task_thread_id.as_deref()),
+                normalize_optional(draft.workflow_definition_id.as_deref()),
+                draft
+                    .workflow_definition_version
+                    .map(|version| i64::try_from(version).unwrap_or(i64::MAX)),
+                normalize_optional(draft.workflow_definition_snapshot_json.as_deref()),
+                normalize_optional(draft.input_json.as_deref()),
+                parent_thread_id,
+                normalize_optional(draft.parent_run_id.as_deref()),
+                name,
+                normalize_optional(draft.description.as_deref()),
+                status,
+                draft.current_phase_index,
+                script_text,
+                meta_json,
+                normalize_optional(draft.result_json.as_deref()),
+                normalize_optional(draft.summary.as_deref()),
+                normalize_optional(draft.error.as_deref()),
+                normalize_optional(draft.workspace_dir.as_deref()),
+                normalize_optional(draft.created_by.as_deref()),
+                now,
+                normalize_optional(draft.started_at.as_deref()),
+                normalize_optional(draft.finished_at.as_deref()),
+            ],
+        )?;
+        workflow_run_by_id(&conn, &workflow_id)?
+            .ok_or_else(|| GaryxDbError::BadRequest("workflow run was not saved".to_owned()))
+    }
+
+    pub fn get_workflow_run(
+        &self,
+        workflow_run_id: &str,
+    ) -> GaryxDbResult<Option<WorkflowRunRecord>> {
+        let workflow_run_id = normalize_required("workflowRunId", workflow_run_id)?;
+        let conn = self.conn()?;
+        workflow_run_by_id(&conn, &workflow_run_id)
+    }
+
+    pub fn list_workflow_runs(
+        &self,
+        parent_thread_id: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> GaryxDbResult<Vec<WorkflowRunRecord>> {
+        let parent_thread_id = parent_thread_id.map(normalize_thread_id).transpose()?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let conn = self.conn()?;
+        let sql = if parent_thread_id.is_some() {
+            "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
+                    workflow_definition_version, workflow_definition_snapshot_json, input_json,
+                    parent_thread_id, parent_run_id, name, description, status,
+                    current_phase_index, script_text, meta_json, result_json, summary, error,
+                    workspace_dir, created_by, total_children, completed_children, failed_children,
+                    total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
+                    created_at, started_at, finished_at, updated_at
+             FROM workflow_runs
+             WHERE parent_thread_id = ?1
+             ORDER BY created_at DESC, workflow_id ASC
+             LIMIT ?2 OFFSET ?3"
+        } else {
+            "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
+                    workflow_definition_version, workflow_definition_snapshot_json, input_json,
+                    parent_thread_id, parent_run_id, name, description, status,
+                    current_phase_index, script_text, meta_json, result_json, summary, error,
+                    workspace_dir, created_by, total_children, completed_children, failed_children,
+                    total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
+                    created_at, started_at, finished_at, updated_at
+             FROM workflow_runs
+             ORDER BY created_at DESC, workflow_id ASC
+             LIMIT ?1 OFFSET ?2"
+        };
+        let mut stmt = conn.prepare(sql)?;
+        let mut records = Vec::new();
+        if let Some(parent_thread_id) = parent_thread_id {
+            let rows = stmt.query_map(
+                params![parent_thread_id, limit, offset],
+                workflow_run_from_row,
+            )?;
+            for row in rows {
+                records.push(row?);
+            }
+        } else {
+            let rows = stmt.query_map(params![limit, offset], workflow_run_from_row)?;
+            for row in rows {
+                records.push(row?);
+            }
+        }
+        Ok(records)
+    }
+
+    pub fn list_workflow_runs_for_task(
+        &self,
+        task_id: &str,
+        limit: usize,
+        offset: usize,
+    ) -> GaryxDbResult<Vec<WorkflowRunRecord>> {
+        let task_id = normalize_required("task_id", task_id)?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
+                    workflow_definition_version, workflow_definition_snapshot_json, input_json,
+                    parent_thread_id, parent_run_id, name, description, status,
+                    current_phase_index, script_text, meta_json, result_json, summary, error,
+                    workspace_dir, created_by, total_children, completed_children, failed_children,
+                    total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
+                    created_at, started_at, finished_at, updated_at
+             FROM workflow_runs
+             WHERE task_id = ?1
+             ORDER BY created_at DESC, workflow_id ASC
+             LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = stmt.query_map(params![task_id, limit, offset], workflow_run_from_row)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn update_workflow_run_status(
+        &self,
+        workflow_id: &str,
+        status: &str,
+        result_json: Option<&str>,
+        summary: Option<&str>,
+        error: Option<&str>,
+    ) -> GaryxDbResult<bool> {
+        let workflow_id = normalize_required("workflow_id", workflow_id)?;
+        let status = normalize_workflow_run_status(status)?;
+        let now = now_string();
+        let finished_at = if is_terminal_workflow_status(&status) {
+            Some(now.as_str())
+        } else {
+            None
+        };
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE workflow_runs
+             SET status = ?2,
+                 result_json = COALESCE(?3, result_json),
+                 summary = COALESCE(?4, summary),
+                 error = ?5,
+                 finished_at = COALESCE(?6, finished_at),
+                 updated_at = ?7
+             WHERE workflow_id = ?1
+               AND status NOT IN ('succeeded','failed','cancelled')",
+            params![
+                workflow_id,
+                status,
+                normalize_optional(result_json),
+                normalize_optional(summary),
+                normalize_optional(error),
+                finished_at,
+                now,
+            ],
+        )?;
+        Ok(updated > 0)
+    }
+
+    pub fn cancel_workflow_child_runs(
+        &self,
+        workflow_id: &str,
+        error: &str,
+    ) -> GaryxDbResult<usize> {
+        let workflow_id = normalize_required("workflow_id", workflow_id)?;
+        let error = normalize_required("error", error)?;
+        let now = now_string();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let updated = tx.execute(
+            "UPDATE workflow_child_runs
+             SET status = 'cancelled',
+                 error = ?2,
+                 finished_at = ?3,
+                 updated_at = ?3
+             WHERE workflow_id = ?1
+               AND status NOT IN ('succeeded','failed','cancelled','skipped')",
+            params![workflow_id, error, now],
+        )?;
+        if updated > 0 {
+            tx.execute(
+                "UPDATE workflow_runs
+                 SET total_children = (
+                        SELECT COUNT(*) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                     ),
+                     completed_children = (
+                        SELECT COUNT(*) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                           AND status IN ('succeeded','failed','cancelled','skipped')
+                     ),
+                     failed_children = (
+                        SELECT COUNT(*) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                           AND status IN ('failed','cancelled')
+                     ),
+                     updated_at = ?2
+                 WHERE workflow_id = ?1",
+                params![workflow_id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(updated)
+    }
+
+    pub fn upsert_workflow_child_run(
+        &self,
+        draft: WorkflowChildRunDraft,
+    ) -> GaryxDbResult<WorkflowChildRunRecord> {
+        let workflow_id = normalize_required("workflow_id", &draft.workflow_id)?;
+        let workflow_child_run_id = draft
+            .workflow_child_run_id
+            .as_deref()
+            .map(|value| normalize_required("workflow_child_run_id", value))
+            .transpose()?
+            .unwrap_or_else(|| format!("workflow-child::{}", Uuid::new_v4()));
+        let thread_id = normalize_thread_id(&draft.thread_id)?;
+        let phase_title = normalize_required("phase_title", &draft.phase_title)?;
+        let label = normalize_required("label", &draft.label)?;
+        let status = normalize_workflow_child_status(&draft.status)?;
+        let prompt = normalize_required("prompt", &draft.prompt)?;
+        let result_mode = normalize_workflow_result_mode(&draft.result_mode)?;
+        let now = now_string();
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO workflow_child_runs (
+                workflow_id, workflow_child_run_id, thread_id, phase_index, phase_title, label,
+                agent_id, status, prompt, result_mode, schema_json, result_text, result_json,
+                result_preview, error, input_tokens, output_tokens, tool_calls, cost_usd,
+                queued_at, started_at, finished_at, updated_at
+             )
+             VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?20
+             )
+             ON CONFLICT(workflow_id, workflow_child_run_id) DO UPDATE SET
+                thread_id = excluded.thread_id,
+                phase_index = excluded.phase_index,
+                phase_title = excluded.phase_title,
+                label = excluded.label,
+                agent_id = excluded.agent_id,
+                status = excluded.status,
+                prompt = excluded.prompt,
+                result_mode = excluded.result_mode,
+                schema_json = excluded.schema_json,
+                result_text = excluded.result_text,
+                result_json = excluded.result_json,
+                result_preview = excluded.result_preview,
+                error = excluded.error,
+                input_tokens = excluded.input_tokens,
+                output_tokens = excluded.output_tokens,
+                tool_calls = excluded.tool_calls,
+                cost_usd = excluded.cost_usd,
+                started_at = excluded.started_at,
+                finished_at = excluded.finished_at,
+                updated_at = excluded.updated_at",
+            params![
+                workflow_id,
+                workflow_child_run_id,
+                thread_id,
+                draft.phase_index,
+                phase_title,
+                label,
+                normalize_optional(draft.agent_id.as_deref()),
+                status,
+                prompt,
+                result_mode,
+                normalize_optional(draft.schema_json.as_deref()),
+                normalize_optional(draft.result_text.as_deref()),
+                normalize_optional(draft.result_json.as_deref()),
+                normalize_optional(draft.result_preview.as_deref()),
+                normalize_optional(draft.error.as_deref()),
+                draft.input_tokens,
+                draft.output_tokens,
+                draft.tool_calls,
+                draft.cost_usd,
+                now,
+                normalize_optional(draft.started_at.as_deref()),
+                normalize_optional(draft.finished_at.as_deref()),
+            ],
+        )?;
+        conn.execute(
+            "UPDATE workflow_runs
+             SET total_children = (
+                    SELECT COUNT(*) FROM workflow_child_runs
+                     WHERE workflow_id = ?1
+                 ),
+                 updated_at = ?2
+             WHERE workflow_id = ?1",
+            params![workflow_id, now],
+        )?;
+        workflow_child_run_by_id(&conn, &workflow_id, &workflow_child_run_id)?
+            .ok_or_else(|| GaryxDbError::BadRequest("workflow child run was not saved".to_owned()))
+    }
+
+    pub fn finish_workflow_child_run(
+        &self,
+        workflow_id: &str,
+        workflow_child_run_id: &str,
+        status: &str,
+        result_text: Option<&str>,
+        result_json: Option<&str>,
+        result_preview: Option<&str>,
+        error: Option<&str>,
+        usage: Option<WorkflowChildRunUsage>,
+    ) -> GaryxDbResult<bool> {
+        let workflow_id = normalize_required("workflow_id", workflow_id)?;
+        let workflow_child_run_id =
+            normalize_required("workflow_child_run_id", workflow_child_run_id)?;
+        let status = normalize_workflow_child_status(status)?;
+        if !is_terminal_workflow_child_status(&status) {
+            return Err(GaryxDbError::BadRequest(
+                "child run finish status must be terminal".to_owned(),
+            ));
+        }
+        let now = now_string();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let updated = tx.execute(
+            "UPDATE workflow_child_runs
+             SET status = ?3,
+                 result_text = ?4,
+                 result_json = ?5,
+                 result_preview = ?6,
+                 error = ?7,
+                 input_tokens = COALESCE(?8, input_tokens),
+                 output_tokens = COALESCE(?9, output_tokens),
+                 tool_calls = COALESCE(?10, tool_calls),
+                 cost_usd = COALESCE(?11, cost_usd),
+                 finished_at = ?12,
+                 updated_at = ?12
+             WHERE workflow_id = ?1
+               AND workflow_child_run_id = ?2
+               AND status NOT IN ('succeeded','failed','cancelled','skipped')",
+            params![
+                workflow_id,
+                workflow_child_run_id,
+                status,
+                normalize_optional(result_text),
+                normalize_optional(result_json),
+                normalize_optional(result_preview),
+                normalize_optional(error),
+                usage.map(|usage| usage.input_tokens),
+                usage.map(|usage| usage.output_tokens),
+                usage.map(|usage| usage.tool_calls),
+                usage.map(|usage| usage.cost_usd),
+                now,
+            ],
+        )?;
+        if updated > 0 {
+            tx.execute(
+                "UPDATE workflow_runs
+                 SET total_children = (
+                        SELECT COUNT(*) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                     ),
+                     completed_children = (
+                        SELECT COUNT(*) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                           AND status IN ('succeeded','failed','cancelled','skipped')
+                     ),
+                     failed_children = (
+                        SELECT COUNT(*) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                           AND status IN ('failed','cancelled')
+                     ),
+                     total_input_tokens = COALESCE((
+                        SELECT SUM(input_tokens) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                     ), 0),
+                     total_output_tokens = COALESCE((
+                        SELECT SUM(output_tokens) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                     ), 0),
+                     total_tool_calls = COALESCE((
+                        SELECT SUM(tool_calls) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                     ), 0),
+                     total_cost_usd = COALESCE((
+                        SELECT SUM(cost_usd) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                     ), 0),
+                     updated_at = ?2
+                 WHERE workflow_id = ?1",
+                params![workflow_id, now],
+            )?;
+        }
+        tx.commit()?;
+        Ok(updated > 0)
+    }
+
+    pub fn submit_workflow_child_result(
+        &self,
+        workflow_id: &str,
+        workflow_child_run_id: &str,
+        thread_id: &str,
+        result_json: &str,
+        result_preview: Option<&str>,
+    ) -> GaryxDbResult<bool> {
+        let workflow_id = normalize_required("workflow_id", workflow_id)?;
+        let workflow_child_run_id =
+            normalize_required("workflow_child_run_id", workflow_child_run_id)?;
+        let thread_id = normalize_thread_id(thread_id)?;
+        let result_json = normalize_required("result_json", result_json)?;
+        let now = now_string();
+        let conn = self.conn()?;
+        let updated = conn.execute(
+            "UPDATE workflow_child_runs
+             SET result_json = ?4,
+                 result_preview = ?5,
+                 updated_at = ?6
+             WHERE workflow_id = ?1
+               AND workflow_child_run_id = ?2
+               AND thread_id = ?3
+               AND result_json IS NULL
+               AND status NOT IN ('succeeded','failed','cancelled','skipped')",
+            params![
+                workflow_id,
+                workflow_child_run_id,
+                thread_id,
+                result_json,
+                normalize_optional(result_preview),
+                now,
+            ],
+        )?;
+        Ok(updated > 0)
+    }
+
+    pub fn get_workflow_child_run(
+        &self,
+        workflow_id: &str,
+        workflow_child_run_id: &str,
+    ) -> GaryxDbResult<Option<WorkflowChildRunRecord>> {
+        let workflow_id = normalize_required("workflow_id", workflow_id)?;
+        let workflow_child_run_id =
+            normalize_required("workflow_child_run_id", workflow_child_run_id)?;
+        let conn = self.conn()?;
+        workflow_child_run_by_id(&conn, &workflow_id, &workflow_child_run_id)
+    }
+
+    pub fn list_workflow_child_runs(
+        &self,
+        workflow_id: &str,
+    ) -> GaryxDbResult<Vec<WorkflowChildRunRecord>> {
+        let workflow_id = normalize_required("workflow_id", workflow_id)?;
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT workflow_id, workflow_child_run_id, thread_id, phase_index, phase_title,
+                    label, agent_id, status, prompt, result_mode, schema_json, result_text,
+                    result_json, result_preview, error, input_tokens, output_tokens, tool_calls,
+                    cost_usd, queued_at, started_at, finished_at, updated_at
+             FROM workflow_child_runs
+             WHERE workflow_id = ?1
+             ORDER BY phase_index ASC, queued_at ASC, workflow_child_run_id ASC",
+        )?;
+        let rows = stmt.query_map(params![workflow_id], workflow_child_run_from_row)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn append_workflow_event(
+        &self,
+        draft: WorkflowEventDraft,
+    ) -> GaryxDbResult<WorkflowEventRecord> {
+        let workflow_id = normalize_required("workflow_id", &draft.workflow_id)?;
+        let event_id = draft
+            .event_id
+            .as_deref()
+            .map(|value| normalize_required("event_id", value))
+            .transpose()?
+            .unwrap_or_else(|| format!("workflow-event::{}", Uuid::new_v4()));
+        let event_type = normalize_required("event_type", &draft.event_type)?;
+        let payload_json = normalize_required("payload_json", &draft.payload_json)?;
+        let created_at = now_string();
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO workflow_events (
+                event_id, workflow_id, workflow_child_run_id, thread_id, event_type,
+                payload_json, created_at
+             )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                event_id,
+                workflow_id,
+                normalize_optional(draft.workflow_child_run_id.as_deref()),
+                normalize_optional(draft.thread_id.as_deref()),
+                event_type,
+                payload_json,
+                created_at,
+            ],
+        )?;
+        workflow_event_by_id(&conn, &event_id)?
+            .ok_or_else(|| GaryxDbError::BadRequest("workflow event was not saved".to_owned()))
+    }
+
+    pub fn list_workflow_events_after(
+        &self,
+        workflow_id: &str,
+        after_event_seq: u64,
+        limit: usize,
+    ) -> GaryxDbResult<Vec<WorkflowEventRecord>> {
+        let workflow_id = normalize_required("workflow_id", workflow_id)?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let after_event_seq = i64::try_from(after_event_seq).unwrap_or(i64::MAX);
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT event_seq, event_id, workflow_id, workflow_child_run_id, thread_id,
+                    event_type, payload_json, created_at
+             FROM workflow_events
+             WHERE workflow_id = ?1 AND event_seq > ?2
+             ORDER BY event_seq ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![workflow_id, after_event_seq, limit],
+            workflow_event_from_row,
+        )?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn list_interrupted_workflow_task_references(
+        &self,
+        created_before_or_at: &str,
+    ) -> GaryxDbResult<Vec<InterruptedWorkflowTaskReference>> {
+        let created_before_or_at =
+            normalize_required("created_before_or_at", created_before_or_at)?;
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT workflow_id, task_thread_id
+             FROM workflow_runs
+             WHERE status IN ('planning','queued','running')
+               AND task_thread_id IS NOT NULL
+               AND created_at <= ?1
+             ORDER BY created_at ASC, workflow_id ASC",
+        )?;
+        let rows = stmt.query_map(params![created_before_or_at], |row| {
+            Ok(InterruptedWorkflowTaskReference {
+                workflow_id: row.get(0)?,
+                task_thread_id: row.get(1)?,
+            })
+        })?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn reconcile_interrupted_workflows(
+        &self,
+        error: &str,
+        created_before_or_at: &str,
+    ) -> GaryxDbResult<usize> {
+        let error = normalize_required("error", error)?;
+        let created_before_or_at =
+            normalize_required("created_before_or_at", created_before_or_at)?;
+        let now = now_string();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut stmt = tx.prepare(
+            "SELECT workflow_id
+             FROM workflow_runs
+             WHERE status IN ('planning','queued','running')
+               AND created_at <= ?1
+             ORDER BY created_at ASC, workflow_id ASC",
+        )?;
+        let rows = stmt.query_map(params![created_before_or_at], |row| row.get::<_, String>(0))?;
+        let mut workflow_ids = Vec::new();
+        for row in rows {
+            workflow_ids.push(row?);
+        }
+        drop(stmt);
+
+        for workflow_id in &workflow_ids {
+            tx.execute(
+                "UPDATE workflow_child_runs
+                 SET status = 'failed',
+                     error = ?2,
+                     finished_at = ?3,
+                     updated_at = ?3
+                 WHERE workflow_id = ?1
+                   AND status NOT IN ('succeeded','failed','cancelled','skipped')",
+                params![workflow_id, error, now],
+            )?;
+            tx.execute(
+                "UPDATE workflow_runs
+                 SET status = 'failed',
+                     error = ?2,
+                     finished_at = ?3,
+                     updated_at = ?3,
+                     total_children = (
+                        SELECT COUNT(*) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                     ),
+                     completed_children = (
+                        SELECT COUNT(*) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                           AND status IN ('succeeded','failed','cancelled','skipped')
+                     ),
+                     failed_children = (
+                        SELECT COUNT(*) FROM workflow_child_runs
+                         WHERE workflow_id = ?1
+                           AND status IN ('failed','cancelled')
+                     )
+                 WHERE workflow_id = ?1
+                   AND status IN ('planning','queued','running')",
+                params![workflow_id, error, now],
+            )?;
+            tx.execute(
+                "INSERT INTO workflow_events (
+                    event_id, workflow_id, workflow_child_run_id, thread_id, event_type,
+                    payload_json, created_at
+                 )
+                 VALUES (?1, ?2, NULL, NULL, 'workflow.failed', ?3, ?4)",
+                params![
+                    format!("workflow-event::{}", Uuid::new_v4()),
+                    workflow_id,
+                    serde_json::json!({ "error": error }).to_string(),
+                    now,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(workflow_ids.len())
     }
 
     pub fn replace_dreams_in_window(
@@ -1622,6 +2439,97 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             ON automation_thread_runs(thread_id)
             WHERE mode = 'generated_thread';
 
+        CREATE TABLE IF NOT EXISTS workflow_runs (
+            workflow_id TEXT PRIMARY KEY,
+            task_id TEXT,
+            task_thread_id TEXT,
+            workflow_definition_id TEXT,
+            workflow_definition_version INTEGER,
+            workflow_definition_snapshot_json TEXT,
+            input_json TEXT,
+            parent_thread_id TEXT NOT NULL,
+            parent_run_id TEXT,
+            name TEXT NOT NULL,
+            description TEXT,
+            status TEXT NOT NULL CHECK (
+                status IN ('planning','queued','running','succeeded','failed','cancelled')
+            ),
+            current_phase_index INTEGER,
+            script_text TEXT NOT NULL,
+            meta_json TEXT NOT NULL,
+            result_json TEXT,
+            summary TEXT,
+            error TEXT,
+            workspace_dir TEXT,
+            created_by TEXT,
+            total_children INTEGER NOT NULL DEFAULT 0,
+            completed_children INTEGER NOT NULL DEFAULT 0,
+            failed_children INTEGER NOT NULL DEFAULT 0,
+            total_input_tokens INTEGER NOT NULL DEFAULT 0,
+            total_output_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tool_calls INTEGER NOT NULL DEFAULT 0,
+            total_cost_usd REAL NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            updated_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_thread
+            ON workflow_runs(parent_thread_id, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_workflow_runs_status
+            ON workflow_runs(status, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS workflow_child_runs (
+            workflow_id TEXT NOT NULL,
+            workflow_child_run_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            phase_index INTEGER NOT NULL,
+            phase_title TEXT NOT NULL,
+            label TEXT NOT NULL,
+            agent_id TEXT,
+            status TEXT NOT NULL CHECK (
+                status IN ('queued','running','succeeded','failed','cancelled','skipped')
+            ),
+            prompt TEXT NOT NULL,
+            result_mode TEXT NOT NULL CHECK (result_mode IN ('text','structured')),
+            schema_json TEXT,
+            result_text TEXT,
+            result_json TEXT,
+            result_preview TEXT,
+            error TEXT,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            tool_calls INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0,
+            queued_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (workflow_id, workflow_child_run_id)
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_workflow_child_runs_workflow
+            ON workflow_child_runs(workflow_id, phase_index, queued_at);
+
+        CREATE INDEX IF NOT EXISTS idx_workflow_child_runs_thread
+            ON workflow_child_runs(thread_id);
+
+        CREATE TABLE IF NOT EXISTS workflow_events (
+            event_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL UNIQUE,
+            workflow_id TEXT NOT NULL,
+            workflow_child_run_id TEXT,
+            thread_id TEXT,
+            event_type TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_workflow_events_workflow_seq
+            ON workflow_events(workflow_id, event_seq);
+
         CREATE TABLE IF NOT EXISTS workspaces (
             path TEXT PRIMARY KEY,
             name TEXT,
@@ -1676,6 +2584,16 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         ) STRICT;
         "#,
     )?;
+    ensure_workflow_runs_task_columns(conn)?;
+    conn.execute_batch(
+        r#"
+        CREATE INDEX IF NOT EXISTS idx_workflow_runs_task
+            ON workflow_runs(task_id, created_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_workflow_runs_definition
+            ON workflow_runs(workflow_definition_id, created_at DESC);
+        "#,
+    )?;
     ensure_workspaces_deleted_at_column(conn)?;
     conn.execute_batch(
         r#"
@@ -1727,6 +2645,45 @@ fn normalize_automation_thread_run_mode(value: &str) -> GaryxDbResult<String> {
     }
 }
 
+fn normalize_workflow_run_status(value: &str) -> GaryxDbResult<String> {
+    let status = normalize_required("status", value)?;
+    match status.as_str() {
+        "planning" | "queued" | "running" | "succeeded" | "failed" | "cancelled" => Ok(status),
+        _ => Err(GaryxDbError::BadRequest(
+            "status must be planning, queued, running, succeeded, failed, or cancelled".to_owned(),
+        )),
+    }
+}
+
+fn is_terminal_workflow_status(status: &str) -> bool {
+    matches!(status, "succeeded" | "failed" | "cancelled")
+}
+
+fn normalize_workflow_child_status(value: &str) -> GaryxDbResult<String> {
+    let status = normalize_required("status", value)?;
+    match status.as_str() {
+        "queued" | "running" | "succeeded" | "failed" | "cancelled" | "skipped" => Ok(status),
+        _ => Err(GaryxDbError::BadRequest(
+            "child status must be queued, running, succeeded, failed, cancelled, or skipped"
+                .to_owned(),
+        )),
+    }
+}
+
+fn is_terminal_workflow_child_status(status: &str) -> bool {
+    matches!(status, "succeeded" | "failed" | "cancelled" | "skipped")
+}
+
+fn normalize_workflow_result_mode(value: &str) -> GaryxDbResult<String> {
+    let mode = normalize_required("result_mode", value)?;
+    match mode.as_str() {
+        "text" | "structured" => Ok(mode),
+        _ => Err(GaryxDbError::BadRequest(
+            "result_mode must be text or structured".to_owned(),
+        )),
+    }
+}
+
 fn normalize_workspace_path(path: &str) -> GaryxDbResult<String> {
     let normalized = normalize_required("workspace path", path)?.replace('\\', "/");
     if !is_absolute_workspace_path(&normalized) {
@@ -1757,6 +2714,31 @@ fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
     Ok(())
 }
 
+fn ensure_workflow_runs_task_columns(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(workflow_runs)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut columns = BTreeSet::new();
+    for row in rows {
+        columns.insert(row?);
+    }
+    for (name, sql_type) in [
+        ("task_id", "TEXT"),
+        ("task_thread_id", "TEXT"),
+        ("workflow_definition_id", "TEXT"),
+        ("workflow_definition_version", "INTEGER"),
+        ("workflow_definition_snapshot_json", "TEXT"),
+        ("input_json", "TEXT"),
+    ] {
+        if !columns.contains(name) {
+            conn.execute(
+                &format!("ALTER TABLE workflow_runs ADD COLUMN {name} {sql_type}"),
+                [],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn workspace_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkspaceRecord> {
     Ok(WorkspaceRecord {
         name: row.get(0)?,
@@ -1772,6 +2754,143 @@ fn workspace_by_path(conn: &Connection, path: &str) -> GaryxDbResult<Option<Work
             "SELECT name, path, created_at, updated_at FROM workspaces WHERE path = ?1",
             params![path],
             workspace_from_row,
+        )
+        .optional()?)
+}
+
+fn workflow_run_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRunRecord> {
+    Ok(WorkflowRunRecord {
+        workflow_id: row.get(0)?,
+        task_id: row.get(1)?,
+        task_thread_id: row.get(2)?,
+        workflow_definition_id: row.get(3)?,
+        workflow_definition_version: row
+            .get::<_, Option<i64>>(4)?
+            .and_then(|value| u64::try_from(value).ok()),
+        workflow_definition_snapshot_json: row.get(5)?,
+        input_json: row.get(6)?,
+        parent_thread_id: row.get(7)?,
+        parent_run_id: row.get(8)?,
+        name: row.get(9)?,
+        description: row.get(10)?,
+        status: row.get(11)?,
+        current_phase_index: row.get(12)?,
+        script_text: row.get(13)?,
+        meta_json: row.get(14)?,
+        result_json: row.get(15)?,
+        summary: row.get(16)?,
+        error: row.get(17)?,
+        workspace_dir: row.get(18)?,
+        created_by: row.get(19)?,
+        total_children: row.get(20)?,
+        completed_children: row.get(21)?,
+        failed_children: row.get(22)?,
+        total_input_tokens: row.get(23)?,
+        total_output_tokens: row.get(24)?,
+        total_tool_calls: row.get(25)?,
+        total_cost_usd: row.get(26)?,
+        created_at: row.get(27)?,
+        started_at: row.get(28)?,
+        finished_at: row.get(29)?,
+        updated_at: row.get(30)?,
+    })
+}
+
+fn workflow_run_by_id(
+    conn: &Connection,
+    workflow_run_id: &str,
+) -> GaryxDbResult<Option<WorkflowRunRecord>> {
+    Ok(conn
+        .query_row(
+            "SELECT workflow_id, task_id, task_thread_id, workflow_definition_id,
+                    workflow_definition_version, workflow_definition_snapshot_json, input_json,
+                    parent_thread_id, parent_run_id, name, description, status,
+                    current_phase_index, script_text, meta_json, result_json, summary, error,
+                    workspace_dir, created_by, total_children, completed_children, failed_children,
+                    total_input_tokens, total_output_tokens, total_tool_calls, total_cost_usd,
+                    created_at, started_at, finished_at, updated_at
+             FROM workflow_runs
+             WHERE workflow_id = ?1",
+            params![workflow_run_id],
+            workflow_run_from_row,
+        )
+        .optional()?)
+}
+
+fn workflow_child_run_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<WorkflowChildRunRecord> {
+    Ok(WorkflowChildRunRecord {
+        workflow_id: row.get(0)?,
+        workflow_child_run_id: row.get(1)?,
+        thread_id: row.get(2)?,
+        phase_index: row.get(3)?,
+        phase_title: row.get(4)?,
+        label: row.get(5)?,
+        agent_id: row.get(6)?,
+        status: row.get(7)?,
+        prompt: row.get(8)?,
+        result_mode: row.get(9)?,
+        schema_json: row.get(10)?,
+        result_text: row.get(11)?,
+        result_json: row.get(12)?,
+        result_preview: row.get(13)?,
+        error: row.get(14)?,
+        input_tokens: row.get(15)?,
+        output_tokens: row.get(16)?,
+        tool_calls: row.get(17)?,
+        cost_usd: row.get(18)?,
+        queued_at: row.get(19)?,
+        started_at: row.get(20)?,
+        finished_at: row.get(21)?,
+        updated_at: row.get(22)?,
+    })
+}
+
+fn workflow_child_run_by_id(
+    conn: &Connection,
+    workflow_id: &str,
+    workflow_child_run_id: &str,
+) -> GaryxDbResult<Option<WorkflowChildRunRecord>> {
+    Ok(conn
+        .query_row(
+            "SELECT workflow_id, workflow_child_run_id, thread_id, phase_index, phase_title,
+                    label, agent_id, status, prompt, result_mode, schema_json, result_text,
+                    result_json, result_preview, error, input_tokens, output_tokens, tool_calls,
+                    cost_usd, queued_at, started_at, finished_at, updated_at
+             FROM workflow_child_runs
+             WHERE workflow_id = ?1 AND workflow_child_run_id = ?2",
+            params![workflow_id, workflow_child_run_id],
+            workflow_child_run_from_row,
+        )
+        .optional()?)
+}
+
+fn workflow_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowEventRecord> {
+    Ok(WorkflowEventRecord {
+        event_seq: row.get(0)?,
+        event_id: row.get(1)?,
+        workflow_id: row.get(2)?,
+        workflow_child_run_id: row.get(3)?,
+        thread_id: row.get(4)?,
+        event_type: row.get(5)?,
+        payload_json: row.get(6)?,
+        created_at: row.get(7)?,
+    })
+}
+
+fn workflow_event_by_id(
+    conn: &Connection,
+    event_id: &str,
+) -> GaryxDbResult<Option<WorkflowEventRecord>> {
+    Ok(conn
+        .query_row(
+            "SELECT event_seq, event_id, workflow_id, workflow_child_run_id, thread_id,
+                    event_type, payload_json, created_at
+             FROM workflow_events
+             WHERE event_id = ?1",
+            params![event_id],
+            workflow_event_from_row,
         )
         .optional()?)
 }
@@ -1849,6 +2968,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn opening_legacy_workflow_runs_db_adds_task_columns_before_indexes() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                r#"
+                CREATE TABLE workflow_runs (
+                    workflow_id TEXT PRIMARY KEY,
+                    parent_thread_id TEXT NOT NULL,
+                    parent_run_id TEXT,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT NOT NULL CHECK (
+                        status IN ('planning','queued','running','succeeded','failed','cancelled')
+                    ),
+                    current_phase_index INTEGER,
+                    script_text TEXT NOT NULL,
+                    meta_json TEXT NOT NULL,
+                    result_json TEXT,
+                    summary TEXT,
+                    error TEXT,
+                    workspace_dir TEXT,
+                    created_by TEXT,
+                    total_children INTEGER NOT NULL DEFAULT 0,
+                    completed_children INTEGER NOT NULL DEFAULT 0,
+                    failed_children INTEGER NOT NULL DEFAULT 0,
+                    total_input_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_output_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tool_calls INTEGER NOT NULL DEFAULT 0,
+                    total_cost_usd REAL NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    updated_at TEXT NOT NULL
+                ) STRICT;
+                "#,
+            )
+            .expect("legacy workflow_runs");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open migrated db");
+        let rows = db
+            .list_workflow_runs_for_task("#TASK-legacy", 10, 0)
+            .expect("query task index");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
     fn thread_pins_round_trip_in_recency_order() {
         use std::time::Duration;
 
@@ -1887,6 +3055,408 @@ mod tests {
             db.pin_thread("   "),
             Err(GaryxDbError::BadRequest(_))
         ));
+    }
+
+    #[test]
+    fn workflow_runs_children_and_events_round_trip() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let workflow = db
+            .create_workflow_run(WorkflowRunDraft {
+                task_id: Some("#TASK-123".to_owned()),
+                task_thread_id: Some("thread::task".to_owned()),
+                workflow_definition_id: Some("definition".to_owned()),
+                workflow_definition_version: Some(2),
+                workflow_definition_snapshot_json: Some(
+                    r#"{"workflowId":"definition","version":2}"#.to_owned(),
+                ),
+                input_json: Some(r#"{"query":"test input"}"#.to_owned()),
+                workflow_id: Some("test".to_owned()),
+                parent_thread_id: "thread::parent".to_owned(),
+                parent_run_id: Some("run::parent".to_owned()),
+                name: "Test Workflow".to_owned(),
+                description: Some("Check storage".to_owned()),
+                status: "running".to_owned(),
+                current_phase_index: Some(0),
+                script_text: "export const meta = {}".to_owned(),
+                meta_json: r#"{"name":"Test Workflow"}"#.to_owned(),
+                result_json: None,
+                summary: None,
+                error: None,
+                workspace_dir: Some("/Users/test/project".to_owned()),
+                created_by: Some("test".to_owned()),
+                started_at: Some("2026-05-29T01:00:00.000Z".to_owned()),
+                finished_at: None,
+            })
+            .expect("create workflow");
+        assert_eq!(workflow.workflow_id, "test");
+        assert_eq!(workflow.status, "running");
+        assert_eq!(workflow.task_id.as_deref(), Some("#TASK-123"));
+        assert_eq!(
+            workflow.workflow_definition_id.as_deref(),
+            Some("definition")
+        );
+        assert_eq!(
+            workflow.input_json.as_deref(),
+            Some(r#"{"query":"test input"}"#)
+        );
+
+        let child = db
+            .upsert_workflow_child_run(WorkflowChildRunDraft {
+                workflow_id: workflow.workflow_id.clone(),
+                workflow_child_run_id: Some("workflow-child::one".to_owned()),
+                thread_id: "thread::child".to_owned(),
+                phase_index: 0,
+                phase_title: "Inspect".to_owned(),
+                label: "inspect:ui".to_owned(),
+                agent_id: Some("claude".to_owned()),
+                status: "running".to_owned(),
+                prompt: "Inspect UI".to_owned(),
+                result_mode: "structured".to_owned(),
+                schema_json: Some(r#"{"type":"object"}"#.to_owned()),
+                result_text: None,
+                result_json: None,
+                result_preview: None,
+                error: None,
+                input_tokens: 10,
+                output_tokens: 5,
+                tool_calls: 2,
+                cost_usd: 0.01,
+                started_at: Some("2026-05-29T01:00:01.000Z".to_owned()),
+                finished_at: None,
+            })
+            .expect("upsert child");
+        assert_eq!(child.workflow_child_run_id, "workflow-child::one");
+        assert_eq!(child.result_mode, "structured");
+
+        assert!(
+            db.finish_workflow_child_run(
+                &workflow.workflow_id,
+                "workflow-child::one",
+                "succeeded",
+                None,
+                Some(r#"{"ok":true}"#),
+                Some("ok"),
+                None,
+                Some(WorkflowChildRunUsage {
+                    input_tokens: 12,
+                    output_tokens: 6,
+                    tool_calls: 3,
+                    cost_usd: 0.02,
+                }),
+            )
+            .expect("finish child")
+        );
+        let children = db
+            .list_workflow_child_runs(&workflow.workflow_id)
+            .expect("list children");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].status, "succeeded");
+        assert_eq!(children[0].result_json.as_deref(), Some(r#"{"ok":true}"#));
+        assert_eq!(children[0].input_tokens, 12);
+        assert_eq!(children[0].output_tokens, 6);
+        assert_eq!(children[0].tool_calls, 3);
+        assert_eq!(children[0].cost_usd, 0.02);
+        let refreshed = db
+            .get_workflow_run(&workflow.workflow_id)
+            .expect("get workflow")
+            .expect("workflow exists");
+        assert_eq!(refreshed.total_input_tokens, 12);
+        assert_eq!(refreshed.total_output_tokens, 6);
+        assert_eq!(refreshed.total_tool_calls, 3);
+        assert_eq!(refreshed.total_cost_usd, 0.02);
+        db.create_workflow_run(WorkflowRunDraft {
+            task_id: Some("#TASK-other".to_owned()),
+            task_thread_id: Some("thread::other-task".to_owned()),
+            workflow_definition_id: Some("definition".to_owned()),
+            workflow_definition_version: Some(2),
+            workflow_definition_snapshot_json: None,
+            input_json: None,
+            workflow_id: Some("other-task".to_owned()),
+            parent_thread_id: "thread::other-parent".to_owned(),
+            parent_run_id: None,
+            name: "Other Task Workflow".to_owned(),
+            description: None,
+            status: "running".to_owned(),
+            current_phase_index: None,
+            script_text: "sdk".to_owned(),
+            meta_json: "{}".to_owned(),
+            result_json: None,
+            summary: None,
+            error: None,
+            workspace_dir: Some("/Users/test/project".to_owned()),
+            created_by: Some("test".to_owned()),
+            started_at: Some("2026-05-29T01:00:03.000Z".to_owned()),
+            finished_at: None,
+        })
+        .expect("create other task workflow");
+        let task_runs = db
+            .list_workflow_runs_for_task("#TASK-123", 10, 0)
+            .expect("list runs by task");
+        assert_eq!(task_runs.len(), 1);
+        assert_eq!(task_runs[0].workflow_id, workflow.workflow_id);
+        assert_eq!(task_runs[0].task_id.as_deref(), Some("#TASK-123"));
+
+        db.append_workflow_event(WorkflowEventDraft {
+            event_id: Some("workflow-event::one".to_owned()),
+            workflow_id: workflow.workflow_id.clone(),
+            workflow_child_run_id: Some("workflow-child::one".to_owned()),
+            thread_id: Some("thread::child".to_owned()),
+            event_type: "workflow.child_succeeded".to_owned(),
+            payload_json: r#"{"preview":"ok"}"#.to_owned(),
+        })
+        .expect("append event");
+        let events = db
+            .list_workflow_events_after(&workflow.workflow_id, 0, 10)
+            .expect("list events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "workflow.child_succeeded");
+    }
+
+    #[test]
+    fn workflow_events_use_monotonic_seq_cursor() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.create_workflow_run(WorkflowRunDraft {
+            task_id: None,
+            task_thread_id: None,
+            workflow_definition_id: None,
+            workflow_definition_version: None,
+            workflow_definition_snapshot_json: None,
+            input_json: None,
+            workflow_id: Some("cursor".to_owned()),
+            parent_thread_id: "thread::parent".to_owned(),
+            parent_run_id: None,
+            name: "Cursor".to_owned(),
+            description: None,
+            status: "running".to_owned(),
+            current_phase_index: None,
+            script_text: "return {}".to_owned(),
+            meta_json: "{}".to_owned(),
+            result_json: None,
+            summary: None,
+            error: None,
+            workspace_dir: None,
+            created_by: None,
+            started_at: None,
+            finished_at: None,
+        })
+        .expect("create workflow");
+
+        let first = db
+            .append_workflow_event(WorkflowEventDraft {
+                event_id: Some("workflow-event::first".to_owned()),
+                workflow_id: "cursor".to_owned(),
+                workflow_child_run_id: None,
+                thread_id: None,
+                event_type: "workflow.created".to_owned(),
+                payload_json: "{}".to_owned(),
+            })
+            .expect("first event");
+        let second = db
+            .append_workflow_event(WorkflowEventDraft {
+                event_id: Some("workflow-event::second".to_owned()),
+                workflow_id: "cursor".to_owned(),
+                workflow_child_run_id: None,
+                thread_id: None,
+                event_type: "workflow.phase_started".to_owned(),
+                payload_json: "{}".to_owned(),
+            })
+            .expect("second event");
+
+        assert!(second.event_seq > first.event_seq);
+        let after_first = db
+            .list_workflow_events_after("cursor", first.event_seq, 10)
+            .expect("events after first");
+        assert_eq!(
+            after_first
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["workflow-event::second"],
+        );
+    }
+
+    #[test]
+    fn workflow_terminal_status_is_immutable_and_cancel_marks_children() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.create_workflow_run(WorkflowRunDraft {
+            task_id: None,
+            task_thread_id: None,
+            workflow_definition_id: None,
+            workflow_definition_version: None,
+            workflow_definition_snapshot_json: None,
+            input_json: None,
+            workflow_id: Some("cancel".to_owned()),
+            parent_thread_id: "thread::parent".to_owned(),
+            parent_run_id: None,
+            name: "Cancel".to_owned(),
+            description: None,
+            status: "running".to_owned(),
+            current_phase_index: None,
+            script_text: "return {}".to_owned(),
+            meta_json: "{}".to_owned(),
+            result_json: None,
+            summary: None,
+            error: None,
+            workspace_dir: None,
+            created_by: None,
+            started_at: None,
+            finished_at: None,
+        })
+        .expect("create workflow");
+        db.upsert_workflow_child_run(WorkflowChildRunDraft {
+            workflow_id: "cancel".to_owned(),
+            workflow_child_run_id: Some("workflow-child::running".to_owned()),
+            thread_id: "thread::child".to_owned(),
+            phase_index: 0,
+            phase_title: "Run".to_owned(),
+            label: "run".to_owned(),
+            agent_id: None,
+            status: "running".to_owned(),
+            prompt: "Run".to_owned(),
+            result_mode: "text".to_owned(),
+            schema_json: None,
+            result_text: None,
+            result_json: None,
+            result_preview: None,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_calls: 0,
+            cost_usd: 0.0,
+            started_at: None,
+            finished_at: None,
+        })
+        .expect("create child");
+
+        assert!(
+            db.update_workflow_run_status(
+                "cancel",
+                "cancelled",
+                None,
+                None,
+                Some("cancelled by user"),
+            )
+            .expect("cancel workflow")
+        );
+        assert_eq!(
+            db.cancel_workflow_child_runs("cancel", "cancelled by user")
+                .expect("cancel children"),
+            1
+        );
+        assert!(
+            !db.update_workflow_run_status(
+                "cancel",
+                "succeeded",
+                Some(r#"{"late":true}"#),
+                Some("late"),
+                None,
+            )
+            .expect("late success ignored")
+        );
+        assert!(
+            !db.finish_workflow_child_run(
+                "cancel",
+                "workflow-child::running",
+                "succeeded",
+                Some("late"),
+                None,
+                Some("late"),
+                None,
+                None,
+            )
+            .expect("late child success ignored")
+        );
+
+        let workflow = db
+            .get_workflow_run("cancel")
+            .expect("get workflow")
+            .expect("workflow");
+        assert_eq!(workflow.status, "cancelled");
+        assert_eq!(workflow.error.as_deref(), Some("cancelled by user"));
+        let child = db
+            .list_workflow_child_runs("cancel")
+            .expect("list children")
+            .pop()
+            .expect("child");
+        assert_eq!(child.status, "cancelled");
+        assert_eq!(child.error.as_deref(), Some("cancelled by user"));
+    }
+
+    #[test]
+    fn workflow_restart_reconciliation_fails_non_terminal_rows() {
+        let db = GaryxDbService::memory().expect("db opens");
+        db.create_workflow_run(WorkflowRunDraft {
+            task_id: None,
+            task_thread_id: None,
+            workflow_definition_id: None,
+            workflow_definition_version: None,
+            workflow_definition_snapshot_json: None,
+            input_json: None,
+            workflow_id: Some("restart".to_owned()),
+            parent_thread_id: "thread::parent".to_owned(),
+            parent_run_id: None,
+            name: "Restart".to_owned(),
+            description: None,
+            status: "running".to_owned(),
+            current_phase_index: None,
+            script_text: "return {}".to_owned(),
+            meta_json: "{}".to_owned(),
+            result_json: None,
+            summary: None,
+            error: None,
+            workspace_dir: None,
+            created_by: None,
+            started_at: None,
+            finished_at: None,
+        })
+        .expect("create workflow");
+        db.upsert_workflow_child_run(WorkflowChildRunDraft {
+            workflow_id: "restart".to_owned(),
+            workflow_child_run_id: Some("workflow-child::running".to_owned()),
+            thread_id: "thread::child".to_owned(),
+            phase_index: 0,
+            phase_title: "Run".to_owned(),
+            label: "run".to_owned(),
+            agent_id: None,
+            status: "running".to_owned(),
+            prompt: "Run".to_owned(),
+            result_mode: "text".to_owned(),
+            schema_json: None,
+            result_text: None,
+            result_json: None,
+            result_preview: None,
+            error: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            tool_calls: 0,
+            cost_usd: 0.0,
+            started_at: None,
+            finished_at: None,
+        })
+        .expect("create child");
+
+        let reconciled = db
+            .reconcile_interrupted_workflows("gateway restarted", "9999-12-31T23:59:59.999Z")
+            .expect("reconcile");
+        assert_eq!(reconciled, 1);
+        let workflow = db
+            .get_workflow_run("restart")
+            .expect("get workflow")
+            .expect("workflow exists");
+        assert_eq!(workflow.status, "failed");
+        assert_eq!(workflow.error.as_deref(), Some("gateway restarted"));
+        let child = db
+            .list_workflow_child_runs("restart")
+            .expect("list children")
+            .pop()
+            .expect("child exists");
+        assert_eq!(child.status, "failed");
+        assert_eq!(child.error.as_deref(), Some("gateway restarted"));
+        let events = db
+            .list_workflow_events_after("restart", 0, 10)
+            .expect("list events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "workflow.failed");
     }
 
     #[test]

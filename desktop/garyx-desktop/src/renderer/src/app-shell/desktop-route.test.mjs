@@ -41,6 +41,10 @@ test('builds stable hash routes', () => {
     '#/thread/thread%3A%3Aabc123',
   );
   assert.equal(
+    buildDesktopRouteHash({ kind: 'workflow-task', taskId: '#TASK-258' }),
+    '#/workflow/%23TASK-258',
+  );
+  assert.equal(
     buildDesktopRouteHash({
       kind: 'new-thread',
       workspacePath: '/Users/gary/repo',
@@ -67,6 +71,16 @@ test('parses utility views', () => {
     kind: 'view',
     view: 'tasks',
   });
+  assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/workflow/%23TASK-258'), {
+    kind: 'workflow-task',
+    taskId: '#TASK-258',
+  });
+  assert.equal(
+    contentViewForDesktopRoute(
+      parseDesktopRoute('file:///Garyx.app/index.html#/workflows?task=%23TASK-259'),
+    ),
+    'workflow',
+  );
   assert.deepEqual(parseDesktopRoute('file:///Garyx.app/index.html#/settings/connection'), {
     kind: 'settings',
     tabId: 'gateway',

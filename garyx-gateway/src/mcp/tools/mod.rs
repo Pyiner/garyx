@@ -6,3 +6,4 @@ pub(super) mod history;
 pub(crate) mod schedule_followup;
 pub(super) mod search;
 pub(super) mod status;
+pub(super) mod structured_result;

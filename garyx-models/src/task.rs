@@ -19,12 +19,37 @@ pub struct ThreadTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<TaskSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executor: Option<TaskExecutor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Principal,
     #[serde(default)]
     pub events: Vec<TaskEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum TaskExecutor {
+    Agent {
+        #[serde(alias = "agentId")]
+        agent_id: String,
+    },
+    Team {
+        #[serde(alias = "teamId")]
+        team_id: String,
+    },
+    Workflow {
+        #[serde(alias = "workflowId")]
+        workflow_id: String,
+        #[serde(
+            default,
+            alias = "workflowVersion",
+            skip_serializing_if = "Option::is_none"
+        )]
+        workflow_version: Option<u64>,
+    },
 }
 
 fn default_task_schema_version() -> u32 {

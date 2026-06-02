@@ -62,6 +62,12 @@ const api: GaryxDesktopApi = {
   scanDreams: (input) => ipcRenderer.invoke("garyx:scan-dreams", input),
   getDream: (dreamId) => ipcRenderer.invoke("garyx:get-dream", dreamId),
   createTask: (input) => ipcRenderer.invoke("garyx:create-task", input),
+  listWorkflowDefinitions: () =>
+    ipcRenderer.invoke("garyx:list-workflow-definitions"),
+  getWorkflowDefinitionSource: (input) =>
+    ipcRenderer.invoke("garyx:get-workflow-definition-source", input),
+  listTaskWorkflowRuns: (input) =>
+    ipcRenderer.invoke("garyx:list-task-workflow-runs", input),
   promoteThreadToTask: (input) =>
     ipcRenderer.invoke("garyx:promote-thread-to-task", input),
   updateTaskStatus: (input) =>

@@ -1786,6 +1786,18 @@ impl MultiProviderBridge {
         )
         .await;
 
+        let run_permit = self
+            .inner
+            .run_limiter
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                BridgeError::Overloaded(format!(
+                    "run concurrency limit reached ({})",
+                    self.inner.max_concurrent_runs
+                ))
+            })?;
+
         let run_id = format!("subagent-run-{}", uuid::Uuid::new_v4());
         {
             let mut run_index = self.inner.run_index.write().await;
@@ -1870,6 +1882,7 @@ impl MultiProviderBridge {
         }
 
         drop(thread_dispatch_guard);
+        let _run_permit = run_permit;
 
         let external_callback = response_callback.clone();
         let final_external_callback = external_callback.clone();

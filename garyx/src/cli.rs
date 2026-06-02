@@ -154,6 +154,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         action: AutomationAction,
     },
+    /// Dynamic workflow runs
+    #[command(name = "workflow", alias = "workflows")]
+    Workflow {
+        #[command(subcommand)]
+        action: WorkflowAction,
+    },
     /// Agent-friendly application database
     #[command(name = "db", visible_alias = "database")]
     Db {
@@ -1414,6 +1420,75 @@ pub(crate) enum ThreadAction {
 }
 
 #[derive(Subcommand)]
+pub(crate) enum WorkflowAction {
+    /// Manage reusable workflow definitions
+    Definition {
+        #[command(subcommand)]
+        action: WorkflowDefinitionAction,
+    },
+    /// List workflow runs
+    List {
+        /// Restrict to a parent thread
+        #[arg(long = "thread", alias = "parent-thread-id")]
+        parent_thread_id: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get a workflow run
+    Get {
+        workflow_run_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show workflow events
+    Events {
+        workflow_run_id: String,
+        /// Event sequence cursor
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Cancel a workflow run
+    Cancel {
+        workflow_run_id: String,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum WorkflowDefinitionAction {
+    /// List workflow definitions
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Get one workflow definition
+    Get {
+        workflow_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Install or update a file-backed workflow package
+    Upsert {
+        /// Workflow package directory or garyx.workflow.json manifest path
+        #[arg(long)]
+        file: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 pub(crate) enum DreamAction {
     /// List persisted dream topics for a time window
     #[command(alias = "ls")]
@@ -1518,6 +1593,24 @@ pub(crate) enum TaskAction {
         /// Create the backing thread in a managed git worktree. Requires workspace-dir to be a git repo root.
         #[arg(long)]
         worktree: bool,
+        /// Run this task with an agent executor
+        #[arg(long, conflicts_with_all = ["team", "workflow"])]
+        agent: Option<String>,
+        /// Run this task with an Agent Team executor
+        #[arg(long, conflicts_with_all = ["agent", "workflow"])]
+        team: Option<String>,
+        /// Run this task with a reusable workflow definition instead of an agent
+        #[arg(long, conflicts_with_all = ["agent", "team"])]
+        workflow: Option<String>,
+        /// Plain-text input passed to the workflow entrypoint
+        #[arg(long, requires = "workflow", conflicts_with_all = ["input_file", "input_json"])]
+        input: Option<String>,
+        /// Read plain-text input for the workflow entrypoint from a file
+        #[arg(long, requires = "workflow", conflicts_with_all = ["input", "input_json"])]
+        input_file: Option<PathBuf>,
+        /// JSON input passed to the workflow entrypoint
+        #[arg(long, requires = "workflow", conflicts_with_all = ["input", "input_file"])]
+        input_json: Option<String>,
         /// Required notification target when the task enters review: `none`, `current-thread`, `thread <thread_id>`, or `bot <channel:account_id>`
         #[arg(long, value_name = "TARGET", num_args = 1..=2)]
         notify: Vec<String>,

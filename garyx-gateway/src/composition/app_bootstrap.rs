@@ -46,6 +46,7 @@ use crate::recent_thread_projection::RecentThreadProjectingStore;
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
 use crate::wikis::WikiStore;
+use crate::workflows::WorkflowScheduler;
 
 /// Load a persistent `Store` from the given on-disk path, falling back to an
 /// empty in-memory instance **only** if loading fails — but shout about the
@@ -492,6 +493,7 @@ impl AppStateBuilder {
                 wikis: self.wikis,
                 app_db: self.app_db,
                 garyx_db: self.garyx_db,
+                workflow_scheduler: Arc::new(WorkflowScheduler::default()),
                 channel_endpoint_snapshot: Mutex::new(None),
                 thread_list_snapshot: Mutex::new(None),
             },

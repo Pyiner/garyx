@@ -1,0 +1,10 @@
+{
+  "workflowId": "deep-research",
+  "version": 1,
+  "name": "Deep Research",
+  "description": "Fan out web searches, fetch sources, adversarially verify claims, and synthesize a cited report.",
+  "whenToUse": "Use when a user wants a deep, multi-source, fact-checked research report on a specific question. If the question is too broad, ask clarifying questions before running.",
+  "input": {
+    "placeholder": "Research question"
+  }
+}
