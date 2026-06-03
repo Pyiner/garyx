@@ -18,8 +18,7 @@ private enum GaryxComposerLayout {
     static let inputTopPadding: CGFloat = 12
     static let inputBottomPadding: CGFloat = 8
     static let workspaceBaseFill = Color.primary.opacity(0.12)
-    static let workspaceBaseOverlap: CGFloat = 18
-    static let workspaceBaseTopPadding: CGFloat = 20
+    static let workspaceBaseTopPadding: CGFloat = 8
     static let workspaceBaseBottomPadding: CGFloat = 8
     static let workspaceStripHeight: CGFloat = 34
     static let workspaceSheetHeight: CGFloat = 228
@@ -140,17 +139,47 @@ struct GaryxComposer: View {
     }
 
     private var newThreadComposerDeck: some View {
-        VStack(spacing: -GaryxComposerLayout.workspaceBaseOverlap) {
-            composerCard
-                .zIndex(1)
-                .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
-
+        VStack(spacing: 0) {
+            newThreadComposerCard
             workspaceModeStrip
-                .zIndex(0)
         }
+        .clipShape(RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
+                .stroke(GaryxTheme.hairline, lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
     }
 
     private var composerCard: some View {
+        composerCardContent
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .garyxAdaptiveGlass(
+                .regular,
+                in: RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
+                    .stroke(GaryxTheme.hairline, lineWidth: 1)
+            }
+    }
+
+    private var newThreadComposerCard: some View {
+        composerCardContent
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .garyxAdaptiveGlass(
+                .regular,
+                in: UnevenRoundedRectangle(
+                    topLeadingRadius: GaryxComposerLayout.composerCornerRadius,
+                    bottomLeadingRadius: 0,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: GaryxComposerLayout.composerCornerRadius,
+                    style: .continuous
+                )
+            )
+    }
+
+    private var composerCardContent: some View {
         VStack(spacing: 0) {
             if !model.composerAttachments.isEmpty {
                 composerAttachmentsPreview
@@ -158,15 +187,6 @@ struct GaryxComposer: View {
 
             composerInput
             composerBottomBar
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .garyxAdaptiveGlass(
-            .regular,
-            in: RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-                .stroke(GaryxTheme.hairline, lineWidth: 1)
         }
     }
 
@@ -194,10 +214,7 @@ struct GaryxComposer: View {
             .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.workspaceStripHeight, alignment: .leading)
             .padding(.top, GaryxComposerLayout.workspaceBaseTopPadding)
             .padding(.bottom, GaryxComposerLayout.workspaceBaseBottomPadding)
-            .background(
-                GaryxComposerLayout.workspaceBaseFill,
-                in: RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-            )
+            .background(GaryxComposerLayout.workspaceBaseFill)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Workspace mode")
