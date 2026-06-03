@@ -34,9 +34,8 @@ use garyx_channels::dispatcher::{ChannelDispatcher, OutboundMessage, SwappableDi
 use garyx_channels::plugin::ChannelPluginManager;
 use garyx_channels::plugin_host::{
     AccountDescriptor, AttachmentRef, BackfillOutcome, HostContext, InboundHandler,
-    ManifestDiscoverer, PluginErrorCode, PluginManifest, SpawnOptions, StreamId,
-    StreamIdGenerator, StreamRegistry, TombstoneReason, backfill_survives_respawn_in_place,
-    preflight,
+    ManifestDiscoverer, PluginErrorCode, PluginManifest, SpawnOptions, StreamId, StreamIdGenerator,
+    StreamRegistry, TombstoneReason, backfill_survives_respawn_in_place, preflight,
 };
 use garyx_models::ChannelOutboundContent;
 use garyx_models::command_catalog::{CommandCatalogOptions, CommandSurface};
@@ -184,9 +183,7 @@ impl InboundHandler for HostInboundHandler {
                 // single-flight + caller-id validation all live in
                 // `plugin_self_replace::handle`. Never returns Err
                 // — every failure is a structured decision body.
-                let master = self
-                    .plugin_auto_update_enabled
-                    .load(Ordering::Acquire);
+                let master = self.plugin_auto_update_enabled.load(Ordering::Acquire);
                 Ok(crate::plugin_self_replace::handle(
                     &self.plugin_id,
                     &self.self_replace_state,
@@ -670,7 +667,9 @@ fn build_response_callback(ctx: StreamCallbackCtx) -> Arc<dyn Fn(StreamEvent) + 
                         );
                     }
                 }
-                StreamEvent::SessionBound { sdk_session_id: ref sid } => {
+                StreamEvent::SessionBound {
+                    sdk_session_id: ref sid,
+                } => {
                     // Capture for the upcoming `stream_end` notification.
                     // Replace any prior value if the provider re-binds the
                     // session mid-stream (rare; treat as authoritative).

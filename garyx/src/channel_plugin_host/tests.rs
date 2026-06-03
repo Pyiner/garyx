@@ -20,9 +20,7 @@ fn build_handler_with_config(config: GaryxConfig) -> HostInboundHandler {
     // hit the real GitHub API.
     let plugin_manager: std::sync::Weak<Mutex<garyx_channels::plugin::ChannelPluginManager>> =
         std::sync::Weak::new();
-    let plugin_auto_update_enabled = std::sync::Arc::new(
-        std::sync::atomic::AtomicBool::new(false),
-    );
+    let plugin_auto_update_enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     HostInboundHandler::new(
         "test-plugin".into(),
         router,

@@ -1631,7 +1631,10 @@ async fn seed_cron_service_for_debug() -> crate::cron::CronService {
     let far_future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
 
     // Two system followup jobs on different threads.
-    for (id, thread) in [("followup_aaa", "thread::alpha"), ("followup_bbb", "thread::beta")] {
+    for (id, thread) in [
+        ("followup_aaa", "thread::alpha"),
+        ("followup_bbb", "thread::beta"),
+    ] {
         svc.add(CronJobConfig {
             id: id.to_owned(),
             kind: CronJobKind::InternalDispatch {

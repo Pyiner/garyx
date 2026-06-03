@@ -1561,7 +1561,13 @@ impl CronService {
         // Explicit pre-check: if the originating thread was deleted before the
         // followup fired, drop it now rather than relying on string-matching the
         // dispatch error.
-        if app_state.threads.thread_store.get(&thread_id).await.is_none() {
+        if app_state
+            .threads
+            .thread_store
+            .get(&thread_id)
+            .await
+            .is_none()
+        {
             return Err(FollowupAttemptError::Dropped(format!(
                 "thread not found: {thread_id}"
             )));

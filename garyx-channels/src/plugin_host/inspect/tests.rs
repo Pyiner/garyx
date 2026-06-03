@@ -153,8 +153,7 @@ fn backfill_writes_field_when_missing_from_capabilities() {
     let path = dir.path().join("plugin.toml");
     std::fs::write(&path, stale).unwrap();
 
-    let outcome =
-        backfill_survives_respawn_in_place(&path).expect("backfill should succeed");
+    let outcome = backfill_survives_respawn_in_place(&path).expect("backfill should succeed");
     assert_eq!(outcome, BackfillOutcome::Wrote);
 
     // Reload via the canonical loader to confirm the on-disk
@@ -252,8 +251,7 @@ fn backfill_explicit_opt_out_after_blank_line_is_detected() {
     // miss the explicit `false` below — producing a malformed
     // plugin.toml with duplicate keys. New logic only ends the
     // section on the next `[...]` header (or EOF).
-    let opt_out_after_blank =
-        "[plugin]\nid = \"x\"\nversion = \"0.1.0\"\ndisplay_name = \"X\"\n\n\
+    let opt_out_after_blank = "[plugin]\nid = \"x\"\nversion = \"0.1.0\"\ndisplay_name = \"X\"\n\n\
          [entry]\nbinary = \"./x\"\n\n\
          [capabilities]\ndelivery_model = \"pull_explicit_ack\"\n\
          outbound = true\ninbound = true\nstreaming = false\n\

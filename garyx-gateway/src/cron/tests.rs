@@ -2069,7 +2069,11 @@ async fn test_followup_retry_drops_immediately_without_retry() {
         "run-drop",
         |_attempt| {
             calls.fetch_add(1, Ordering::SeqCst);
-            async { Err(FollowupAttemptError::Dropped("thread not found: t1".to_owned())) }
+            async {
+                Err(FollowupAttemptError::Dropped(
+                    "thread not found: t1".to_owned(),
+                ))
+            }
         },
     )
     .await;

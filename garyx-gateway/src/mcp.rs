@@ -413,7 +413,6 @@ impl GaryMcpServer {
     ) -> Result<String, String> {
         tools::schedule_followup::run(self, ctx, params).await
     }
-
 }
 
 // ---------------------------------------------------------------------------

@@ -89,10 +89,7 @@ async fn run(plugin_manager: Arc<Mutex<ChannelPluginManager>>, config: GatewayAu
     }
 }
 
-async fn tick(
-    plugin_manager: &Arc<Mutex<ChannelPluginManager>>,
-    config: &GatewayAutoUpdateConfig,
-) {
+async fn tick(plugin_manager: &Arc<Mutex<ChannelPluginManager>>, config: &GatewayAutoUpdateConfig) {
     let client = match Client::builder()
         .user_agent(format!("garyx-cli/{VERSION}"))
         .build()
@@ -117,17 +114,18 @@ async fn tick(
     };
 
     let token = github_token_from_env();
-    let latest = match latest_release_version_for_repo(&client, effective_repo, token.as_deref()).await {
-        Ok(v) => v,
-        Err(err) => {
-            warn!(
-                error = %err,
-                github_repo = %effective_repo,
-                "gateway auto-update: failed to fetch latest release"
-            );
-            return;
-        }
-    };
+    let latest =
+        match latest_release_version_for_repo(&client, effective_repo, token.as_deref()).await {
+            Ok(v) => v,
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    github_repo = %effective_repo,
+                    "gateway auto-update: failed to fetch latest release"
+                );
+                return;
+            }
+        };
 
     if !should_upgrade(VERSION, &latest) {
         info!(

@@ -2080,7 +2080,9 @@ fn parse_since(raw: &str) -> Option<chrono::DateTime<Utc>> {
 /// Render a single system cron job (plus its recent runs) into the debug shape.
 fn debug_job_json(job: &crate::cron::CronJob, recent_runs: Vec<Value>) -> Value {
     let kind = match &job.kind {
-        garyx_models::config::CronJobKind::AutomationPrompt => json!({ "type": "automation_prompt" }),
+        garyx_models::config::CronJobKind::AutomationPrompt => {
+            json!({ "type": "automation_prompt" })
+        }
         garyx_models::config::CronJobKind::InternalDispatch { payload } => json!({
             "type": "internal_dispatch",
             "reason": payload.reason,

@@ -176,7 +176,11 @@ pub async fn handle(
             plugin_id = %caller_plugin_id,
             "request_self_replace: plugin_manager dropped; host is shutting down"
         );
-        return swap_failed("host_shutdown", "manager weakref expired".to_owned(), "init");
+        return swap_failed(
+            "host_shutdown",
+            "manager weakref expired".to_owned(),
+            "init",
+        );
     };
 
     // (B4) caller_plugin_id is from the transport, not params. Read
@@ -318,10 +322,7 @@ pub async fn handle(
     if !archived_binary_path.is_file() {
         return swap_failed(
             "binary_missing",
-            format!(
-                "expected new binary at {}",
-                archived_binary_path.display()
-            ),
+            format!("expected new binary at {}", archived_binary_path.display()),
             "manifest",
         );
     }
@@ -396,7 +397,9 @@ pub async fn handle(
     let plugin_id_owned = caller_plugin_id.to_owned();
     let respawn_result = {
         let mut guard = manager.lock().await;
-        guard.respawn_plugin_with_fresh_manifest(&plugin_id_owned).await
+        guard
+            .respawn_plugin_with_fresh_manifest(&plugin_id_owned)
+            .await
     };
     if let Err(err) = respawn_result {
         // Manager has already restored its in-memory manifest on
@@ -449,10 +452,7 @@ impl Drop for InFlightGuard<'_> {
 
 // ----- helpers -----------------------------------------------------
 
-async fn download_archive(
-    client: &reqwest::Client,
-    url: &str,
-) -> Result<Vec<u8>, String> {
+async fn download_archive(client: &reqwest::Client, url: &str) -> Result<Vec<u8>, String> {
     let response = client
         .get(url)
         .timeout(std::time::Duration::from_secs(300))
@@ -461,10 +461,7 @@ async fn download_archive(
         .map_err(|e| format!("send: {e}"))?
         .error_for_status()
         .map_err(|e| format!("status: {e}"))?;
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("body: {e}"))?;
+    let bytes = response.bytes().await.map_err(|e| format!("body: {e}"))?;
     Ok(bytes.to_vec())
 }
 
@@ -529,8 +526,13 @@ async fn atomic_promote(src: &Path, dest: &Path) -> Result<(), String> {
     let staged_for_blocking = staged.clone();
     let dest_for_blocking = dest.to_path_buf();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        std::fs::copy(&src, &staged_for_blocking)
-            .map_err(|e| format!("copy {} -> {}: {e}", src.display(), staged_for_blocking.display()))?;
+        std::fs::copy(&src, &staged_for_blocking).map_err(|e| {
+            format!(
+                "copy {} -> {}: {e}",
+                src.display(),
+                staged_for_blocking.display()
+            )
+        })?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -569,15 +571,13 @@ async fn backup_path(path: &Path) -> Result<PathBuf, String> {
     let src = path.to_path_buf();
     let backup_clone = backup.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
-        std::fs::copy(&src, &backup_clone)
-            .map(|_| ())
-            .map_err(|e| {
-                format!(
-                    "backup copy {} -> {}: {e}",
-                    src.display(),
-                    backup_clone.display()
-                )
-            })
+        std::fs::copy(&src, &backup_clone).map(|_| ()).map_err(|e| {
+            format!(
+                "backup copy {} -> {}: {e}",
+                src.display(),
+                backup_clone.display()
+            )
+        })
     })
     .await
     .map_err(|e| format!("backup task panicked: {e}"))??;
@@ -759,14 +759,7 @@ mod tests {
         // call with valid params can still acquire the latch.
         let state = SelfReplaceState::new();
         let weak: Weak<Mutex<ChannelPluginManager>> = Weak::new();
-        let response = handle(
-            "test-plugin",
-            &state,
-            weak,
-            true,
-            json!({ "garbage": 1 }),
-        )
-        .await;
+        let response = handle("test-plugin", &state, weak, true, json!({ "garbage": 1 })).await;
         assert_eq!(response["decision"], "refused");
         assert_eq!(response["reason"], "invalid_params");
         assert!(state.in_flight.lock().unwrap().is_none());
@@ -795,8 +788,7 @@ mod tests {
         let manager = Arc::new(Mutex::new(ChannelPluginManager::new()));
         let state = SelfReplaceState::new();
         let weak = Arc::downgrade(&manager);
-        let response =
-            handle("ghost-plugin", &state, weak, true, valid_params_body()).await;
+        let response = handle("ghost-plugin", &state, weak, true, valid_params_body()).await;
         assert_eq!(response["decision"], "refused");
         assert_eq!(response["reason"], "plugin_not_registered");
     }
