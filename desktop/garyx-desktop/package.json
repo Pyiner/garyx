@@ -13,7 +13,7 @@
     "build": "npm run build:ui",
     "build:ui": "tsc --noEmit && electron-vite build",
     "build:web": "tsc --noEmit && vite build --config vite.web.config.ts",
-    "build:rust": "cargo build --release -p garyx --manifest-path ../../Cargo.toml && bash ../../scripts/codesign-macos-cli.sh ../../target/release/garyx",
+    "build:rust": "bash ../../scripts/build-local-cli.sh",
     "build:packaged": "npm run build:ui",
     "preview": "electron-vite preview",
     "install:app": "node ./scripts/install-mac-app.mjs",

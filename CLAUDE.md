@@ -85,6 +85,11 @@ Detailed UI rules: @docs/agents/mobile-ui.md and @docs/agents/desktop-ui.md.
 
 - Gateway code changes do not affect the running gateway until the binary is
   built, installed, and the managed gateway is restarted.
+- For local macOS gateway development, use `scripts/build-local-cli.sh` to
+  produce a `target/release/garyx` signed as `com.garyx.gateway`; use
+  `scripts/install-local-cli.sh` when that binary also needs to be copied into
+  every local CLI path currently in use. Do not manually copy a raw Cargo build
+  over an installed `garyx`.
 - iOS TestFlight releases are independent from macOS/gateway release flow. Do
   not trigger TestFlight unless the user explicitly asks in the current turn.
 - Do not wire iOS uploads into version-tag release jobs unless the user
