@@ -23,14 +23,16 @@ test('parses new thread hash route with workspace path', () => {
       kind: 'new-thread',
       workspacePath: '/Users/gary/repo',
       agentId: 'codex',
+      workflowId: null,
     },
   );
   assert.deepEqual(
-    parseDesktopRoute('file:///Garyx.app/index.html#/new/%2FUsers%2Fgary%2Frepo'),
+    parseDesktopRoute('file:///Garyx.app/index.html#/new/%2FUsers%2Fgary%2Frepo?workflow=ship-flow'),
     {
       kind: 'new-thread',
       workspacePath: '/Users/gary/repo',
       agentId: null,
+      workflowId: 'ship-flow',
     },
   );
 });
@@ -51,6 +53,15 @@ test('builds stable hash routes', () => {
       agentId: 'claude',
     }),
     '#/new?workspace=%2FUsers%2Fgary%2Frepo',
+  );
+  assert.equal(
+    buildDesktopRouteHash({
+      kind: 'new-thread',
+      workspacePath: '/Users/gary/repo',
+      agentId: 'codex',
+      workflowId: 'ship-flow',
+    }),
+    '#/new?workspace=%2FUsers%2Fgary%2Frepo&workflow=ship-flow',
   );
   assert.equal(
     buildDesktopRouteHash({ kind: 'settings', tabId: 'gateway' }),

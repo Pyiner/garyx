@@ -42,6 +42,7 @@ import {
   type DesktopWorkspaceFileEntry,
   type DesktopWorkspaceFileListing,
   type DesktopWorkspaceFilePreview,
+  type DesktopWorkflowDefinition,
   type DesktopWorkspaceMode,
   type MessageFileAttachment,
   type MessageImageAttachment,
@@ -78,7 +79,7 @@ import { AddBotDialog } from "./components/AddBotDialog";
 import { DreamsPanel } from "./components/DreamsPanel";
 import { BotConversationSidebar } from "../BotConversationSidebar";
 import { WorkspaceConversationSidebar } from "../WorkspaceConversationSidebar";
-import { ComposerForm } from "../ComposerForm";
+import { buildComposerWorkflowOptions } from "../ComposerForm";
 import { ComposerQueue } from "../ComposerQueue";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
 import { ConversationHeaderTitle } from "../ConversationHeaderTitle";
@@ -137,6 +138,7 @@ import {
   bindEndpointToThread,
   deleteThread,
   detachEndpointFromThread,
+  ensureWorkspaceForNewThread,
   ensureThread,
   loadThreadHistory,
   saveThreadTitle,
@@ -1384,6 +1386,7 @@ function currentDesktopRoute(input: {
   contentView: ContentView;
   newThreadDraftActive: boolean;
   pendingAgentId: string | null;
+  pendingWorkflowId: string | null;
   pendingWorkspacePath: string | null;
   selectedAutomationId: string | null;
   selectedWorkflowTaskId: string | null;
@@ -1399,6 +1402,7 @@ function currentDesktopRoute(input: {
         kind: "new-thread",
         workspacePath: input.pendingWorkspacePath,
         agentId: input.pendingAgentId,
+        workflowId: input.pendingWorkflowId,
       };
     }
     return { kind: "thread-home" };
@@ -1565,6 +1569,11 @@ export function AppShell() {
   const [desktopState, setDesktopState] = useState<DesktopState | null>(null);
   const [desktopAgents, setDesktopAgents] = useState<DesktopCustomAgent[]>([]);
   const [desktopTeams, setDesktopTeams] = useState<DesktopTeam[]>([]);
+  const [desktopWorkflows, setDesktopWorkflows] = useState<
+    DesktopWorkflowDefinition[]
+  >([]);
+  const [workflowDefinitionsLoading, setWorkflowDefinitionsLoading] =
+    useState(false);
   const [connection, setConnection] = useState<ConnectionStatus | null>(null);
   const [gatewayStatusHint, setGatewayStatusHint] = useState<string | null>(
     "Connecting to gateway…",
@@ -1603,6 +1612,11 @@ export function AppShell() {
     initialRouteValue.kind === "new-thread" && initialRouteValue.agentId
       ? initialRouteValue.agentId
       : "claude",
+  );
+  const [pendingWorkflowId, setPendingWorkflowId] = useState<string | null>(
+    initialRouteValue.kind === "new-thread" && initialRouteValue.workflowId
+      ? initialRouteValue.workflowId
+      : null,
   );
   const [messagesByThread, setMessagesByThread] = useState<MessageMap>({});
   const [threadInfoByThread, setThreadInfoByThread] = useState<
@@ -2453,6 +2467,42 @@ export function AppShell() {
     () => buildAgentOptions(desktopAgents, desktopTeams),
     [desktopAgents, desktopTeams],
   );
+  const composerWorkflowOptions = useMemo(
+    () => buildComposerWorkflowOptions(desktopWorkflows),
+    [desktopWorkflows],
+  );
+  useEffect(() => {
+    if (!newThreadDraftActive) {
+      return undefined;
+    }
+    let cancelled = false;
+    setWorkflowDefinitionsLoading(true);
+    void window.garyxDesktop
+      .listWorkflowDefinitions()
+      .then((workflows) => {
+        if (cancelled) {
+          return;
+        }
+        startTransition(() => {
+          setDesktopWorkflows(workflows);
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          startTransition(() => {
+            setDesktopWorkflows([]);
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setWorkflowDefinitionsLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [newThreadDraftActive]);
   const addBotAgentTargets = useMemo(() => {
     const options = buildAgentTargetOptions(desktopAgents, desktopTeams);
     return options.length
@@ -2463,6 +2513,9 @@ export function AppShell() {
     pendingTeam?.displayName?.trim() ||
     pendingAgent?.displayName?.trim() ||
     pendingAgentId ||
+    null;
+  const pendingWorkflow =
+    composerWorkflowOptions.find((workflow) => workflow.id === pendingWorkflowId) ||
     null;
   const activeAgentLabel =
     activeThreadTeamView.teamDisplayName ||
@@ -2480,7 +2533,7 @@ export function AppShell() {
       : pendingAgent?.providerType || "claude_code";
   const composerAgentLabel = selectedThreadId
     ? activeAgentLabel
-    : pendingAgentLabel;
+    : pendingWorkflow?.label || pendingAgentLabel;
   const gatewayIndicator = computeGatewayIndicator({
     status: connection,
     failureCount: gatewayFailureCount,
@@ -3265,17 +3318,21 @@ export function AppShell() {
   }
 
   async function refreshDesktopState() {
-    const [nextState, nextAgents, nextTeams] = await Promise.all([
+    const [nextState, nextAgents, nextTeams, nextWorkflows] = await Promise.all([
       window.garyxDesktop.getState(),
       window.garyxDesktop
         .listCustomAgents()
         .catch(() => [] as DesktopCustomAgent[]),
       window.garyxDesktop.listTeams().catch(() => [] as DesktopTeam[]),
+      window.garyxDesktop
+        .listWorkflowDefinitions()
+        .catch(() => [] as DesktopWorkflowDefinition[]),
     ]);
     startTransition(() => {
       setDesktopState(nextState);
       setDesktopAgents(nextAgents);
       setDesktopTeams(nextTeams);
+      setDesktopWorkflows(nextWorkflows);
     });
     return nextState;
   }
@@ -3487,6 +3544,7 @@ export function AppShell() {
           setPendingWorkspaceMode("local");
           setPendingBotId(null);
           setPendingAgentId(route.agentId || "claude");
+          setPendingWorkflowId(route.workflowId || null);
           clearComposerDraft();
           requestComposerFocus();
           return;
@@ -3555,6 +3613,7 @@ export function AppShell() {
         contentView,
         newThreadDraftActive,
         pendingAgentId,
+        pendingWorkflowId,
         pendingWorkspacePath,
         selectedAutomationId,
         selectedWorkflowTaskId,
@@ -3567,6 +3626,7 @@ export function AppShell() {
     loading,
     newThreadDraftActive,
     pendingAgentId,
+    pendingWorkflowId,
     pendingWorkspacePath,
     selectedAutomationId,
     selectedWorkflowTaskId,
@@ -4026,7 +4086,7 @@ export function AppShell() {
             return;
           }
 
-          const [nextState, nextStatus, nextAgents, nextTeams] =
+          const [nextState, nextStatus, nextAgents, nextTeams, nextWorkflows] =
             await Promise.all([
               window.garyxDesktop.getState(),
               window.garyxDesktop.checkConnection(),
@@ -4034,6 +4094,9 @@ export function AppShell() {
                 .listCustomAgents()
                 .catch(() => [] as DesktopCustomAgent[]),
               window.garyxDesktop.listTeams().catch(() => [] as DesktopTeam[]),
+              window.garyxDesktop
+                .listWorkflowDefinitions()
+                .catch(() => [] as DesktopWorkflowDefinition[]),
             ]);
           if (cancelled) {
             return;
@@ -4045,6 +4108,7 @@ export function AppShell() {
             setDesktopState(nextState);
             setDesktopAgents(nextAgents);
             setDesktopTeams(nextTeams);
+            setDesktopWorkflows(nextWorkflows);
             setSettingsDraft(nextState.settings);
             setConnection(nextStatus);
           });
@@ -4094,6 +4158,7 @@ export function AppShell() {
           setPendingWorkspacePath(startupRoute.workspacePath || null);
           setPendingWorkspaceMode("local");
           setPendingAgentId(startupRoute.agentId || "claude");
+          setPendingWorkflowId(startupRoute.workflowId || null);
         } else {
           setSelectedThreadId((current) =>
             isKnownThreadId(hydratedState, current)
@@ -6532,6 +6597,7 @@ export function AppShell() {
       syncComposerPhase,
       requestComposerFocus,
     });
+    setPendingWorkflowId(null);
   }
 
   function handleStartDraftForAgent(agentId: string) {
@@ -6549,6 +6615,7 @@ export function AppShell() {
     setPendingWorkspaceMode("local");
     setPendingBotId(null);
     setPendingAgentId(agentId);
+    setPendingWorkflowId(null);
     clearComposerDraft();
     syncComposerPhase("");
     requestComposerFocus();
@@ -6621,6 +6688,7 @@ export function AppShell() {
       syncComposerPhase,
       requestComposerFocus,
     });
+    setPendingWorkflowId(null);
   }
 
   async function handleAddWorkspace() {
@@ -7575,6 +7643,70 @@ export function AppShell() {
     await steerQueuedIntent(latestIntent);
   }
 
+  async function handleStartWorkflowThreadFromComposer(input: {
+    prompt: string;
+    promptFiles: MessageFileAttachment[];
+    promptImages: MessageImageAttachment[];
+    workflowId: string;
+  }) {
+    if (input.promptFiles.length > 0 || input.promptImages.length > 0) {
+      setError("Remove attachments before starting a workflow.");
+      return;
+    }
+
+    newThreadInitialDispatchLockRef.current = true;
+    try {
+      const workspacePath =
+        pendingWorkspacePath ||
+        (await ensureWorkspaceForNewThread({
+          api: getDesktopApi(),
+          preferredWorkspacePath: preferredWorkspaceForNewThread?.available
+            ? preferredWorkspaceForNewThread.path
+            : null,
+          selectableWorkspaceCount: selectableNewThreadWorkspaces.length,
+          onAddWorkspace: handleAddWorkspaceForNewThread,
+          setWorkspaceMutation,
+          setDesktopState,
+          setError,
+        }));
+      if (!workspacePath) {
+        return;
+      }
+
+      setError(null);
+      const started = await window.garyxDesktop.startWorkflowThread({
+        workflowId: input.workflowId,
+        input: input.prompt,
+        workspacePath,
+        workspaceMode: pendingWorkspaceMode,
+      });
+      setDesktopState(started.state);
+      setSelectedThreadId(started.thread.id);
+      setThreadEntrySelectionSource(null);
+      updateMessagesByThread((current) => ({
+        ...current,
+        [started.thread.id]: current[started.thread.id] || [],
+      }));
+      setNewThreadDraftActive(false);
+      setPendingWorkspacePath(null);
+      setPendingWorkspaceMode("local");
+      setPendingBotId(null);
+      setPendingWorkflowId(null);
+      setPendingAgentId("claude");
+      clearComposerDraft();
+      setContentView("thread");
+      scheduleHistoryRefresh(started.thread.id, 4, 500);
+    } catch (workflowError) {
+      setError(
+        workflowError instanceof Error
+          ? workflowError.message
+          : "Failed to start workflow thread",
+      );
+    } finally {
+      newThreadInitialDispatchLockRef.current = false;
+    }
+  }
+
   async function handleStartDispatch() {
     const startingNewThread = !selectedThreadId;
     const prompt = composerDraftRef.current.trim();
@@ -7591,6 +7723,19 @@ export function AppShell() {
       if (composerAttachmentUploadPending) {
         setError("Attachments are still uploading to gateway.");
       }
+      return;
+    }
+
+    if (startingNewThread && pendingWorkflowId) {
+      if (!hasPromptPayload) {
+        return;
+      }
+      await handleStartWorkflowThreadFromComposer({
+        prompt,
+        promptFiles,
+        promptImages,
+        workflowId: pendingWorkflowId,
+      });
       return;
     }
 
@@ -8611,6 +8756,8 @@ export function AppShell() {
               <ThreadPage
                 agentLabel={composerAgentLabel}
                 composerAgentOptions={composerAgentOptions}
+                composerWorkflowOptions={composerWorkflowOptions}
+                composerWorkflowOptionsLoading={workflowDefinitionsLoading}
                 activeMessages={activeMessages}
                 activePendingAckIntents={visiblePendingAckIntents}
                 activePendingAutomationRun={activePendingAutomationRun}
@@ -8657,6 +8804,7 @@ export function AppShell() {
                 messagesRef={messagesRef}
                 mobileThreadLogLines={mobileThreadLogLines}
                 newThreadSelectedAgentId={pendingAgentId}
+                newThreadSelectedWorkflowId={pendingWorkflowId}
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
                 newThreadWorkspaceMode={pendingWorkspaceMode}
                 onAddWorkspace={() => {
@@ -8730,6 +8878,10 @@ export function AppShell() {
                 onReorderQueuedIntent={reorderQueuedIntent}
                 onSelectNewThreadAgent={(agentId) => {
                   setPendingAgentId(agentId);
+                  setPendingWorkflowId(null);
+                }}
+                onSelectNewThreadWorkflow={(workflowId) => {
+                  setPendingWorkflowId(workflowId);
                 }}
                 onSelectNewThreadWorkspaceMode={setPendingWorkspaceMode}
                 onResumeProviderSession={handleResumeProviderSession}

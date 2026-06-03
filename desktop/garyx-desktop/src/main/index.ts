@@ -86,6 +86,7 @@ import type {
   SelectCandidateInput,
   StopAutoResearchRunInput,
   StopTaskInput,
+  StartWorkflowThreadInput,
   ToggleSkillInput,
   ToggleMcpServerInput,
   UploadChatAttachmentsInput,
@@ -205,6 +206,7 @@ import {
   saveDesktopSettings,
   selectDesktopAutomation,
   selectDesktopWorkspace,
+  startDesktopWorkflowThread,
   updateDesktopAutomation,
   removeDesktopWorkspace,
   setDesktopBotBinding,
@@ -755,6 +757,13 @@ function registerIpcHandlers(): void {
     async (_event, input: ListTaskWorkflowRunsInput) => {
       const settings = await resolveSettings();
       return listTaskWorkflowRuns(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:start-workflow-thread",
+    async (_event, input: StartWorkflowThreadInput) => {
+      return startDesktopWorkflowThread(input);
     },
   );
 

@@ -101,6 +101,10 @@ fn thread_routes() -> Router<Arc<AppState>> {
             axum::routing::get(workflows::get_workflow_definition_source),
         )
         .route(
+            "/api/workflow-definitions/{workflow_id}/runs",
+            axum::routing::post(workflows::start_workflow_definition),
+        )
+        .route(
             "/api/workflows/sdk",
             axum::routing::post(workflows::start_sdk_workflow),
         )

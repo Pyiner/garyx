@@ -114,6 +114,8 @@ import type {
   UpsertSlashCommandInput,
   AssignTaskInput,
   UnassignTaskInput,
+  StartWorkflowThreadInput,
+  StartWorkflowThreadResult,
 } from "@shared/contracts";
 
 interface StreamInputWaiter {
@@ -574,6 +576,15 @@ interface TaskWorkflowRunsPayload {
   count?: number;
   hasMore?: boolean;
   has_more?: boolean;
+}
+
+interface WorkflowThreadStartPayload {
+  dispatch?: unknown;
+  workflowRunId?: string;
+  workflow_run_id?: string;
+  thread?: ThreadSummaryPayload;
+  workflowDefinition?: unknown;
+  workflow_definition?: unknown;
 }
 
 interface DreamSpanPayload {
@@ -4750,6 +4761,46 @@ export async function listTaskWorkflowRuns(
     workflowRuns,
     count: asFiniteNumber(payload.count) ?? workflowRuns.length,
     hasMore: payload.hasMore ?? payload.has_more ?? false,
+  };
+}
+
+export async function startWorkflowThread(
+  settings: DesktopSettings,
+  input: StartWorkflowThreadInput,
+): Promise<Omit<StartWorkflowThreadResult, "state">> {
+  const workflowId = input.workflowId?.trim() || "";
+  if (!workflowId) {
+    throw new Error("workflowId is required");
+  }
+  const payload = await requestJson<WorkflowThreadStartPayload>(
+    settings,
+    `/api/workflow-definitions/${encodeURIComponent(workflowId)}/runs`,
+    {
+      method: "POST",
+      signal: AbortSignal.timeout(8000),
+      body: JSON.stringify({
+        input: input.input ?? null,
+        workspaceDir: input.workspacePath || undefined,
+        name: input.name || undefined,
+        description: input.description || undefined,
+        createdBy: "desktop",
+      }),
+    },
+  );
+  const thread = payload.thread ? mapThreadSummary(payload.thread) : null;
+  if (!thread?.id) {
+    throw new Error("Gateway did not return a workflow thread.");
+  }
+  return {
+    thread,
+    workflowRunId:
+      asString(payload.workflowRunId) ||
+      asString(payload.workflow_run_id) ||
+      thread.id,
+    dispatch: payload.dispatch,
+    workflowDefinition: mapWorkflowDefinition(
+      payload.workflowDefinition || payload.workflow_definition,
+    ),
   };
 }
 

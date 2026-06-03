@@ -102,15 +102,15 @@ mod store;
 mod structured_result;
 
 pub use definitions::{get_workflow_definition_package, workflow_definitions_root_for_config};
-pub use entrypoint::spawn_workflow_task_entrypoint;
+pub use entrypoint::{spawn_workflow_task_entrypoint, spawn_workflow_thread_entrypoint};
 pub use lifecycle::{cancel_workflow_run, reconcile_interrupted_workflows};
 pub use routes::{
-    WorkflowDefinitionListQuery, WorkflowEventsQuery, WorkflowListQuery, WorkflowSdkAgentRequest,
-    WorkflowSdkEventRequest, WorkflowSdkFinishRequest, WorkflowSdkPhaseDefinition,
-    WorkflowSdkStartRequest, append_workflow_event, cancel_workflow, finish_sdk_workflow,
-    get_workflow, get_workflow_definition, get_workflow_definition_source, list_task_workflow_runs,
-    list_thread_workflows, list_workflow_definitions, list_workflows, run_workflow_agent,
-    start_sdk_workflow, workflow_events,
+    WorkflowDefinitionListQuery, WorkflowDefinitionStartRequest, WorkflowEventsQuery,
+    WorkflowListQuery, WorkflowSdkAgentRequest, WorkflowSdkEventRequest, WorkflowSdkFinishRequest,
+    WorkflowSdkPhaseDefinition, WorkflowSdkStartRequest, append_workflow_event, cancel_workflow,
+    finish_sdk_workflow, get_workflow, get_workflow_definition, get_workflow_definition_source,
+    list_task_workflow_runs, list_thread_workflows, list_workflow_definitions, list_workflows,
+    run_workflow_agent, start_sdk_workflow, start_workflow_definition, workflow_events,
 };
 pub use runtime::WorkflowRuntime;
 pub use scheduler::{WorkflowChildPermit, WorkflowScheduler};
@@ -124,7 +124,6 @@ use child::{workflow_child_metadata, workflow_child_prompt};
 use definitions::{
     list_workflow_definition_packages, workflow_definition_source, workflow_io_error,
 };
-#[cfg(test)]
 use entrypoint::workflow_workspace_dir_for_entrypoint;
 use lifecycle::mark_workflow_task_in_review;
 use presenter::{

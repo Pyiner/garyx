@@ -41,6 +41,7 @@ import {
 import type {
   DesktopBotConsoleSummary,
   DesktopApiProviderType,
+  DesktopWorkflowDefinition,
   MessageFileAttachment,
   MessageImageAttachment,
   SlashCommand,
@@ -66,6 +67,12 @@ import { AgentOptionAvatar, AgentOptionRow } from './app-shell/components/AgentO
 import { AgentsIcon } from './app-shell/icons';
 
 export type { ComposerAgentOption };
+
+export type ComposerWorkflowOption = {
+  id: string;
+  label: string;
+  description?: string;
+};
 
 import { ChannelLogo } from './channel-logo';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
@@ -94,6 +101,10 @@ type ComposerFormProps = {
   agentOptions?: ComposerAgentOption[];
   selectedAgentId?: string;
   onSelectAgent?: (agentId: string) => void;
+  workflowOptions?: ComposerWorkflowOption[];
+  selectedWorkflowId?: string | null;
+  workflowOptionsLoading?: boolean;
+  onSelectWorkflow?: (workflowId: string) => void;
   isActiveSendingThread: boolean;
   onAppendComposerAttachments: (files: File[]) => void;
   onComposerChange: (value: string) => void;
@@ -264,6 +275,12 @@ const AGENT_PROVIDER_GLYPH = (
   </span>
 );
 
+const WORKFLOW_PROVIDER_GLYPH = (
+  <span aria-hidden className="composer-provider-workflow-icon">
+    <IconGitBranch size={16} stroke={1.8} />
+  </span>
+);
+
 function renderComposerAgentOptionIcon(option: ComposerAgentOption) {
   return (
     <AgentOptionAvatar
@@ -286,12 +303,53 @@ function renderComposerProviderTriggerIcon(option?: ComposerAgentOption) {
   return renderComposerAgentOptionIcon(option);
 }
 
+function workflowOptionFromDefinition(
+  definition: DesktopWorkflowDefinition,
+): ComposerWorkflowOption {
+  return {
+    id: definition.workflowId,
+    label: definition.name?.trim() || definition.workflowId,
+    description: definition.description?.trim() || definition.workflowId,
+  };
+}
+
+export function buildComposerWorkflowOptions(
+  definitions: DesktopWorkflowDefinition[],
+): ComposerWorkflowOption[] {
+  return [...definitions]
+    .sort((left, right) => {
+      const leftName = (left.name || left.workflowId).trim();
+      const rightName = (right.name || right.workflowId).trim();
+      return leftName.localeCompare(rightName) ||
+        left.workflowId.localeCompare(right.workflowId);
+    })
+    .map(workflowOptionFromDefinition);
+}
+
+function ComposerWorkflowOptionRow({ option }: { option: ComposerWorkflowOption }) {
+  return (
+    <span className="composer-workflow-option-row">
+      {WORKFLOW_PROVIDER_GLYPH}
+      <span className="composer-workflow-option-copy">
+        <span className="composer-workflow-option-label">{option.label}</span>
+        {option.description ? (
+          <span className="composer-workflow-option-detail">{option.description}</span>
+        ) : null}
+      </span>
+    </span>
+  );
+}
+
 function renderComposerProviderControl({
   composerProviderType,
   agentLabel,
   agentOptions,
   selectedAgentId,
   onSelectAgent,
+  workflowOptions,
+  selectedWorkflowId,
+  workflowOptionsLoading,
+  onSelectWorkflow,
   t,
 }: {
   composerProviderType: DesktopApiProviderType;
@@ -299,16 +357,28 @@ function renderComposerProviderControl({
   agentOptions?: ComposerAgentOption[];
   selectedAgentId?: string;
   onSelectAgent?: (agentId: string) => void;
+  workflowOptions?: ComposerWorkflowOption[];
+  selectedWorkflowId?: string | null;
+  workflowOptionsLoading?: boolean;
+  onSelectWorkflow?: (workflowId: string) => void;
   t: Translate;
 }) {
   const selectedOption = agentOptions?.find((option) => option.id === selectedAgentId);
-  const providerIcon = renderComposerProviderTriggerIcon(selectedOption);
-  const providerLabel = agentLabel || providerOptionLabel(composerProviderType);
+  const selectedWorkflow = workflowOptions?.find(
+    (option) => option.id === selectedWorkflowId,
+  );
+  const providerIcon = selectedWorkflow
+    ? WORKFLOW_PROVIDER_GLYPH
+    : renderComposerProviderTriggerIcon(selectedOption);
+  const providerLabel = selectedWorkflow?.label ||
+    agentLabel ||
+    providerOptionLabel(composerProviderType);
 
-  if (onSelectAgent) {
+  if (onSelectAgent || onSelectWorkflow) {
     const grouped = groupAgentOptions(agentOptions ?? []);
     const hasAgents = grouped.agent.length > 0;
     const hasTeams = grouped.team.length > 0;
+    const workflows = workflowOptions ?? [];
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -326,9 +396,9 @@ function renderComposerProviderControl({
         >
           {grouped.builtin.map((option) => (
             <FloatingActionMenuItem
-              data-active={option.id === selectedAgentId ? '' : undefined}
+              data-active={!selectedWorkflow && option.id === selectedAgentId ? '' : undefined}
               key={option.id}
-              onSelect={() => onSelectAgent(option.id)}
+              onSelect={() => onSelectAgent?.(option.id)}
             >
               <AgentOptionRow
                 option={option}
@@ -343,10 +413,10 @@ function renderComposerProviderControl({
                 {grouped.agent.map((option) => (
                   <FloatingActionMenuItem
                     data-active={
-                      option.id === selectedAgentId ? '' : undefined
+                      !selectedWorkflow && option.id === selectedAgentId ? '' : undefined
                     }
                     key={option.id}
-                    onSelect={() => onSelectAgent(option.id)}
+                    onSelect={() => onSelectAgent?.(option.id)}
                   >
                     <AgentOptionRow
                       option={option}
@@ -363,10 +433,10 @@ function renderComposerProviderControl({
                 {grouped.team.map((option) => (
                   <FloatingActionMenuItem
                     data-active={
-                      option.id === selectedAgentId ? '' : undefined
+                      !selectedWorkflow && option.id === selectedAgentId ? '' : undefined
                     }
                     key={option.id}
-                    onSelect={() => onSelectAgent(option.id)}
+                    onSelect={() => onSelectAgent?.(option.id)}
                   >
                     <AgentOptionRow
                       option={option}
@@ -375,6 +445,39 @@ function renderComposerProviderControl({
                 ))}
               </FloatingActionMenuSubContent>
             </DropdownMenuSub>
+          ) : null}
+          {onSelectWorkflow ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuSub>
+                <FloatingActionMenuSubTrigger>{t("Workflow")}</FloatingActionMenuSubTrigger>
+                <FloatingActionMenuSubContent>
+                  {workflowOptionsLoading ? (
+                    <FloatingActionMenuItem disabled>
+                      <span className="composer-menu-label">{t("Loading workflows…")}</span>
+                    </FloatingActionMenuItem>
+                  ) : workflows.length ? (
+                    workflows.map((option) => (
+                      <FloatingActionMenuItem
+                        data-active={
+                          selectedWorkflow?.id === option.id ? '' : undefined
+                        }
+                        key={option.id}
+                        onSelect={() => onSelectWorkflow(option.id)}
+                      >
+                        <ComposerWorkflowOptionRow option={option} />
+                      </FloatingActionMenuItem>
+                    ))
+                  ) : (
+                    <FloatingActionMenuItem disabled>
+                      <span className="composer-menu-label">
+                        {t("No workflow definitions installed")}
+                      </span>
+                    </FloatingActionMenuItem>
+                  )}
+                </FloatingActionMenuSubContent>
+              </DropdownMenuSub>
+            </>
           ) : null}
         </FloatingActionMenuContent>
       </DropdownMenu>
@@ -498,6 +601,10 @@ export function ComposerForm({
   agentOptions,
   selectedAgentId,
   onSelectAgent,
+  workflowOptions,
+  selectedWorkflowId,
+  workflowOptionsLoading,
+  onSelectWorkflow,
   isActiveSendingThread,
   onAppendComposerAttachments,
   onComposerChange,
@@ -923,6 +1030,10 @@ export function ComposerForm({
             agentOptions,
             selectedAgentId,
             onSelectAgent,
+            workflowOptions,
+            selectedWorkflowId,
+            workflowOptionsLoading,
+            onSelectWorkflow,
             t,
           })}
           {isActiveSendingThread ? (

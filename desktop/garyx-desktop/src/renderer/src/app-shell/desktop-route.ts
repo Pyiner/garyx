@@ -5,7 +5,12 @@ import type { ContentView } from './types';
 export type DesktopRoute =
   | { kind: 'thread-home' }
   | { kind: 'thread'; threadId: string }
-  | { kind: 'new-thread'; workspacePath?: string | null; agentId?: string | null }
+  | {
+      kind: 'new-thread';
+      workspacePath?: string | null;
+      agentId?: string | null;
+      workflowId?: string | null;
+    }
   | { kind: 'workflow-task'; taskId: string }
   | { kind: 'automation'; automationId?: string | null }
   | { kind: 'settings'; tabId?: SettingsTabId | null }
@@ -131,6 +136,7 @@ export function parseDesktopRoute(href?: string): DesktopRoute {
         second ||
         null,
       agentId: decodeLoose(routeUrl.searchParams.get('agent')) || null,
+      workflowId: decodeLoose(routeUrl.searchParams.get('workflow')) || null,
     };
   }
 
@@ -190,7 +196,12 @@ export function buildDesktopRouteHash(route: DesktopRoute): string {
     case 'new-thread': {
       const params = new URLSearchParams();
       appendParam(params, 'workspace', route.workspacePath);
-      appendParam(params, 'agent', route.agentId && route.agentId !== 'claude' ? route.agentId : null);
+      appendParam(
+        params,
+        'agent',
+        route.workflowId ? null : route.agentId && route.agentId !== 'claude' ? route.agentId : null,
+      );
+      appendParam(params, 'workflow', route.workflowId);
       const query = params.toString();
       return query ? `#/new?${query}` : '#/new';
     }

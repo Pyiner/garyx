@@ -1041,7 +1041,7 @@ fn last_message_preview(data: &Value, role: &str) -> Option<String> {
     None
 }
 
-fn thread_summary(thread_id: &str, data: &Value) -> Value {
+pub(crate) fn thread_summary(thread_id: &str, data: &Value) -> Value {
     let message_count = history_message_count(data);
     let label = data.get("label").cloned().unwrap_or(Value::Null);
     let updated_at = data.get("updated_at").cloned().unwrap_or(Value::Null);

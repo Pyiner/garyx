@@ -1426,6 +1426,23 @@ export interface CreateThreadInput {
   sdkSessionProviderHint?: DesktopSessionProviderHint | null;
 }
 
+export interface StartWorkflowThreadInput {
+  workflowId: string;
+  input?: unknown;
+  workspacePath?: string | null;
+  workspaceMode?: DesktopWorkspaceMode;
+  name?: string | null;
+  description?: string | null;
+}
+
+export interface StartWorkflowThreadResult {
+  state: DesktopState;
+  thread: DesktopThreadSummary;
+  workflowRunId: string;
+  dispatch?: unknown;
+  workflowDefinition?: DesktopWorkflowDefinition | null;
+}
+
 export type DesktopWorkspaceMode = "local" | "worktree";
 
 export interface DesktopWorkspaceGitStatus {
@@ -1760,6 +1777,9 @@ export interface GaryxDesktopApi {
   listTaskWorkflowRuns: (
     input: ListTaskWorkflowRunsInput,
   ) => Promise<DesktopWorkflowRunsPage>;
+  startWorkflowThread: (
+    input: StartWorkflowThreadInput,
+  ) => Promise<StartWorkflowThreadResult>;
   getWorkspaceGitStatus: (input: {
     workspacePath: string;
   }) => Promise<DesktopWorkspaceGitStatus>;

@@ -57,6 +57,21 @@ pub struct WorkflowDefinitionListQuery {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WorkflowDefinitionStartRequest {
+    #[serde(default)]
+    pub input: Option<Value>,
+    #[serde(default, alias = "workspace_dir")]
+    pub workspace_dir: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default, alias = "created_by")]
+    pub created_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkflowSdkAgentRequest {
     pub prompt: String,
     #[serde(default)]
@@ -200,6 +215,20 @@ pub async fn start_sdk_workflow(
     Json(payload): Json<WorkflowSdkStartRequest>,
 ) -> impl IntoResponse {
     match WorkflowRuntime::new(state).start_sdk(payload).await {
+        Ok(value) => (StatusCode::CREATED, Json(value)).into_response(),
+        Err(error) => workflow_error_response(error),
+    }
+}
+
+pub async fn start_workflow_definition(
+    State(state): State<Arc<AppState>>,
+    Path(workflow_id): Path<String>,
+    Json(payload): Json<WorkflowDefinitionStartRequest>,
+) -> impl IntoResponse {
+    match WorkflowRuntime::new(state)
+        .start_definition(&workflow_id, payload)
+        .await
+    {
         Ok(value) => (StatusCode::CREATED, Json(value)).into_response(),
         Err(error) => workflow_error_response(error),
     }

@@ -774,6 +774,132 @@ async fn sdk_workflow_start_without_task_context_creates_workflow_thread() {
 }
 
 #[tokio::test]
+async fn sdk_workflow_start_without_task_context_reuses_requested_workflow_thread() {
+    let state = workflow_test_state().await;
+    let (thread_id, _) = create_thread_record(
+        &state.threads.thread_store,
+        ThreadEnsureOptions {
+            label: Some("Product workflow".to_owned()),
+            thread_kind: Some("workflow_run".to_owned()),
+            ..ThreadEnsureOptions::default()
+        },
+    )
+    .await
+    .expect("create workflow thread");
+
+    let payload = WorkflowRuntime::new(state.clone())
+        .start_sdk(WorkflowSdkStartRequest {
+            workflow_run_id: Some(thread_id.clone()),
+            workflow_id: None,
+            task_id: None,
+            task_thread_id: None,
+            workflow_definition_id: Some("unit".to_owned()),
+            workflow_definition_version: Some(1),
+            workflow_definition_snapshot: None,
+            input: Some(json!("direct product input")),
+            parent_thread_id: None,
+            parent_run_id: None,
+            name: Some("Product workflow".to_owned()),
+            description: None,
+            phases: Vec::new(),
+            workspace_dir: None,
+            created_by: Some("test".to_owned()),
+        })
+        .await
+        .expect("start workflow");
+
+    assert_eq!(payload["workflow"]["workflowRunId"], thread_id);
+    assert!(payload["workflow"]["taskId"].is_null());
+    let workflow_thread = state
+        .threads
+        .thread_store
+        .get(&thread_id)
+        .await
+        .expect("workflow thread");
+    assert_eq!(workflow_thread["thread_kind"], "workflow_run");
+    assert_eq!(workflow_thread["workflow_run_id"], thread_id);
+    assert_eq!(workflow_thread["workflow_status"], "running");
+}
+
+#[tokio::test]
+async fn start_workflow_definition_route_creates_workflow_thread() {
+    let data_dir = tempdir().expect("data dir");
+    let workspace_dir = tempdir().expect("workspace dir");
+    let mut config = GaryxConfig::default();
+    config.sessions.data_dir = Some(data_dir.path().join("data").to_string_lossy().to_string());
+    config.gateway.auth_token = crate::test_support::TEST_GATEWAY_TOKEN.to_owned();
+    let workflow_root = workflow_definitions_root_for_config(&config);
+    let workflow_package = workflow_root.join("unit");
+    fs::create_dir_all(&workflow_package).expect("workflow package");
+    fs::write(
+        workflow_package.join("garyx.workflow.json"),
+        r#"{
+          "workflowId": "unit",
+          "version": 1,
+          "name": "Unit Workflow",
+          "description": "Unit route workflow",
+          "defaults": {}
+        }"#,
+    )
+    .expect("workflow manifest");
+    fs::write(workflow_package.join("workflow.ts"), "export {};\n").expect("workflow source");
+    let state = crate::server::AppStateBuilder::new(config).build();
+    let router = crate::route_graph::build_router(state.clone());
+    let old_bun = std::env::var_os("GARYX_WORKFLOW_BUN_BIN");
+    unsafe {
+        std::env::set_var("GARYX_WORKFLOW_BUN_BIN", "/usr/bin/true");
+    }
+    let response = router
+        .oneshot(
+            crate::test_support::authed_request()
+                .method("POST")
+                .uri("/api/workflow-definitions/unit/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "input": "ship the product",
+                        "workspaceDir": workspace_dir.path().to_string_lossy(),
+                    })
+                    .to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    unsafe {
+        if let Some(value) = old_bun {
+            std::env::set_var("GARYX_WORKFLOW_BUN_BIN", value);
+        } else {
+            std::env::remove_var("GARYX_WORKFLOW_BUN_BIN");
+        }
+    }
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let payload: Value = serde_json::from_slice(&body).expect("json");
+    let thread_id = payload["workflowRunId"].as_str().expect("workflow run id");
+    assert_eq!(payload["thread"]["thread_id"], thread_id);
+    assert_eq!(payload["thread"]["thread_type"], "workflow_run");
+    assert_eq!(payload["dispatch"]["workflowRunId"], thread_id);
+
+    let workflow_thread = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .expect("workflow thread");
+    assert_eq!(workflow_thread["thread_kind"], "workflow_run");
+    assert_eq!(workflow_thread["workflow_run_id"], thread_id);
+    assert_eq!(workflow_thread["workflow_definition_id"], "unit");
+    assert_eq!(
+        workflow_thread["workspace_dir"],
+        workspace_dir.path().to_string_lossy().as_ref(),
+    );
+}
+
+#[tokio::test]
 async fn sdk_workflow_start_rejects_fabricated_or_mismatched_task_context() {
     let state = workflow_test_state().await;
     let (thread_id, task_id) = create_workflow_task_for_test(&state).await;

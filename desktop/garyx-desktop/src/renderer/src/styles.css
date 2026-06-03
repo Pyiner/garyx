@@ -9035,6 +9035,50 @@ button.team-agent-speaker:focus-visible {
   border-radius: 6px;
 }
 
+.composer-provider-workflow-icon,
+.composer-workflow-option-row .composer-provider-workflow-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(64, 118, 89, 0.18);
+  border-radius: 999px;
+  background: rgba(53, 139, 91, 0.12);
+  color: #1d7a46;
+}
+
+.composer-workflow-option-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.composer-workflow-option-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.composer-workflow-option-label,
+.composer-workflow-option-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-workflow-option-label {
+  color: var(--color-token-text-primary);
+}
+
+.composer-workflow-option-detail {
+  max-width: 220px;
+  color: var(--color-token-text-tertiary);
+  font-size: var(--text-xs-plus);
+}
+
 .floating-action-menu-subtrigger.selected .composer-menu-label {
   font-weight: var(--font-weight-normal);
 }

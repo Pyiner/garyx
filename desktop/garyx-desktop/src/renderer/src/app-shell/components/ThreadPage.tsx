@@ -24,7 +24,11 @@ import type {
 } from "@shared/contracts";
 
 import type { MessageIntent } from "../../message-machine";
-import { ComposerForm, type ComposerAgentOption } from "../../ComposerForm";
+import {
+  ComposerForm,
+  type ComposerAgentOption,
+  type ComposerWorkflowOption,
+} from "../../ComposerForm";
 import { ComposerQueue } from "../../ComposerQueue";
 import { NewThreadEmptyState } from "../../NewThreadEmptyState";
 import {
@@ -215,6 +219,8 @@ type ThreadPageProps = {
   activePendingAckIntents: MessageIntent[];
   agentLabel?: string | null;
   composerAgentOptions?: ComposerAgentOption[];
+  composerWorkflowOptions?: ComposerWorkflowOption[];
+  composerWorkflowOptionsLoading?: boolean;
   activePendingAutomationRun: PendingAutomationRun | null;
   activeToolTraceLoadingKey: string | null;
   activeQueue: MessageIntent[];
@@ -254,6 +260,7 @@ type ThreadPageProps = {
   messagesRef: RefObject<HTMLDivElement | null>;
   mobileThreadLogLines: ThreadLogLine[];
   newThreadSelectedAgentId: string;
+  newThreadSelectedWorkflowId?: string | null;
   newThreadWorkspaceEntry: DesktopWorkspace | null;
   newThreadWorkspaceMode: DesktopWorkspaceMode;
   queueDropTarget: QueueDropTarget;
@@ -304,6 +311,7 @@ type ThreadPageProps = {
     position: "before" | "after",
   ) => void;
   onSelectNewThreadAgent: (agentId: string) => void;
+  onSelectNewThreadWorkflow: (workflowId: string) => void;
   onSelectNewThreadWorkspaceMode: (mode: DesktopWorkspaceMode) => void;
   onResumeProviderSession: (sessionId: string) => Promise<void>;
   onSelectThreadLogsTab: (tab: ThreadLogTab) => void;
@@ -324,6 +332,8 @@ type ThreadPageProps = {
 export function ThreadPage({
   agentLabel,
   composerAgentOptions,
+  composerWorkflowOptions,
+  composerWorkflowOptionsLoading,
   activeMessages,
   activePendingAckIntents,
   activePendingAutomationRun,
@@ -368,6 +378,7 @@ export function ThreadPage({
   messagesRef,
   mobileThreadLogLines,
   newThreadSelectedAgentId,
+  newThreadSelectedWorkflowId,
   newThreadWorkspaceEntry,
   newThreadWorkspaceMode,
   onAddWorkspace,
@@ -387,6 +398,7 @@ export function ThreadPage({
   onRemoveComposerImage,
   onReorderQueuedIntent,
   onSelectNewThreadAgent,
+  onSelectNewThreadWorkflow,
   onSelectNewThreadWorkspaceMode,
   onResumeProviderSession,
   onSelectBotBinding,
@@ -881,6 +893,14 @@ export function ThreadPage({
               selectedAgentId={composerSelectedAgentId}
               onSelectAgent={
                 !selectedThreadId ? onSelectNewThreadAgent : undefined
+              }
+              workflowOptions={composerWorkflowOptions}
+              selectedWorkflowId={
+                !selectedThreadId ? newThreadSelectedWorkflowId : null
+              }
+              workflowOptionsLoading={composerWorkflowOptionsLoading}
+              onSelectWorkflow={
+                !selectedThreadId ? onSelectNewThreadWorkflow : undefined
               }
               isActiveSendingThread={isActiveSendingThread}
               onAppendComposerAttachments={onAppendComposerAttachments}

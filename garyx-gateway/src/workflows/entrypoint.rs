@@ -153,6 +153,130 @@ pub fn spawn_workflow_task_entrypoint(
     }))
 }
 
+pub fn spawn_workflow_thread_entrypoint(
+    state: Arc<AppState>,
+    workflow_thread_id: String,
+    workflow_id: String,
+    input: Value,
+    workspace_dir: Option<String>,
+) -> Result<Value, WorkflowError> {
+    let config = state.config_snapshot();
+    let definition = get_workflow_definition_package(&config, &workflow_id)?;
+    let node_path = prepare_workflow_sdk_node_path(&config)?;
+    let snapshot = workflow_definition_package_json(&definition);
+    let gateway_url = config
+        .gateway
+        .public_url
+        .trim()
+        .trim_end_matches('/')
+        .to_owned();
+    let gateway_url = if gateway_url.is_empty() {
+        format!("http://127.0.0.1:{}", config.gateway.port)
+    } else {
+        gateway_url
+    };
+    let input_json = input.to_string();
+    let workflow_args = workflow_argument_string(&input);
+    let defaults = parse_json_field(&definition.record.defaults_json);
+    let workspace_dir_for_spawn =
+        workflow_workspace_dir_for_entrypoint(workspace_dir.as_deref(), &input, &defaults);
+    let command_name = workflow_bun_command()?;
+    let command_args = vec![WORKFLOW_ENTRYPOINT_FILE.to_owned()];
+    let workflow_thread_for_spawn = workflow_thread_id.clone();
+    let workflow_id_for_spawn = definition.record.workflow_id.clone();
+    let version_for_spawn = definition.record.version.to_string();
+    let snapshot_for_spawn = snapshot.to_string();
+    let token_for_spawn = config.gateway.auth_token.trim().to_owned();
+    let package_dir_for_spawn = definition.package_dir.clone();
+    let node_path_for_spawn = node_path_env_value(node_path);
+    tokio::spawn(async move {
+        let mut command = tokio::process::Command::new(&command_name);
+        command.args(&command_args);
+        command.current_dir(&package_dir_for_spawn);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .env("GARYX_PARENT_THREAD_ID", &workflow_thread_for_spawn)
+            .env("GARYX_WORKFLOW_THREAD_ID", &workflow_thread_for_spawn)
+            .env("GARYX_WORKFLOW_RUN_ID", &workflow_thread_for_spawn)
+            .env("GARYX_WORKFLOW_DEFINITION_ID", &workflow_id_for_spawn)
+            .env("GARYX_WORKFLOW_DEFINITION_VERSION", &version_for_spawn)
+            .env("GARYX_WORKFLOW_DEFINITION_SNAPSHOT", &snapshot_for_spawn)
+            .env("GARYX_WORKFLOW_INPUT_JSON", &input_json)
+            .env("GARYX_WORKFLOW_ARGS", &workflow_args)
+            .env("GARYX_GATEWAY_URL", &gateway_url);
+        if let Some(workspace_dir) = workspace_dir_for_spawn.as_deref() {
+            command.env("GARYX_WORKSPACE_DIR", workspace_dir);
+        }
+        command.env("GARYX_WORKFLOW_DIR", &package_dir_for_spawn);
+        command.env("NODE_PATH", &node_path_for_spawn);
+        if !token_for_spawn.is_empty() {
+            command.env("GARYX_GATEWAY_TOKEN", token_for_spawn);
+        }
+        match command.spawn() {
+            Ok(mut child) => match child.wait().await {
+                Ok(status) if status.success() => {
+                    match WorkflowStore::new(state.ops.garyx_db.clone())
+                        .get_run(&workflow_thread_for_spawn)
+                    {
+                        Ok(_) => {}
+                        Err(WorkflowError::NotFound(_)) => {
+                            mark_workflow_thread_entrypoint_failed(
+                                &state,
+                                &workflow_thread_for_spawn,
+                                "workflow entrypoint exited without creating a workflow run"
+                                    .to_owned(),
+                            )
+                            .await;
+                        }
+                        Err(error) => {
+                            mark_workflow_thread_entrypoint_failed(
+                                &state,
+                                &workflow_thread_for_spawn,
+                                format!("workflow entrypoint run check failed: {error}"),
+                            )
+                            .await;
+                        }
+                    }
+                }
+                Ok(status) => {
+                    mark_workflow_thread_entrypoint_failed(
+                        &state,
+                        &workflow_thread_for_spawn,
+                        format!("workflow entrypoint exited with status {status}"),
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    mark_workflow_thread_entrypoint_failed(
+                        &state,
+                        &workflow_thread_for_spawn,
+                        format!("workflow entrypoint wait failed: {error}"),
+                    )
+                    .await;
+                }
+            },
+            Err(error) => {
+                mark_workflow_thread_entrypoint_failed(
+                    &state,
+                    &workflow_thread_for_spawn,
+                    format!("workflow entrypoint failed to start: {error}"),
+                )
+                .await;
+            }
+        }
+    });
+    Ok(json!({
+        "kind": "workflow_entrypoint",
+        "workflowDefinitionId": definition.record.workflow_id,
+        "workflowId": definition.record.workflow_id,
+        "workflowVersion": definition.record.version,
+        "workflowRunId": workflow_thread_id.clone(),
+        "threadId": workflow_thread_id,
+    }))
+}
+
 pub(super) fn workflow_bun_command() -> Result<PathBuf, WorkflowError> {
     workflow_bun_command_from_values(
         std::env::current_exe().ok(),
@@ -303,6 +427,61 @@ pub(super) async fn mark_workflow_task_entrypoint_failed(
     note: String,
 ) {
     let _ = mark_workflow_task_in_review(state, task_thread_id, note).await;
+}
+
+pub(super) async fn mark_workflow_thread_entrypoint_failed(
+    state: &Arc<AppState>,
+    workflow_thread_id: &str,
+    note: String,
+) {
+    let _ = state.ops.garyx_db.update_workflow_run_status(
+        workflow_thread_id,
+        "failed",
+        None,
+        None,
+        Some(&note),
+    );
+    let Some(mut record) = state.threads.thread_store.get(workflow_thread_id).await else {
+        return;
+    };
+    if let Some(obj) = record.as_object_mut() {
+        obj.insert(
+            "thread_kind".to_owned(),
+            Value::String("workflow_run".to_owned()),
+        );
+        obj.insert(
+            "workflow_run_id".to_owned(),
+            Value::String(workflow_thread_id.to_owned()),
+        );
+        obj.insert(
+            "workflow_status".to_owned(),
+            Value::String("failed".to_owned()),
+        );
+        let metadata_value = obj
+            .entry("metadata".to_owned())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if !metadata_value.is_object() {
+            *metadata_value = Value::Object(serde_json::Map::new());
+        }
+        if let Some(metadata) = metadata_value.as_object_mut() {
+            metadata.insert("workflow_thread".to_owned(), Value::Bool(true));
+            metadata.insert(
+                "workflow_run_id".to_owned(),
+                Value::String(workflow_thread_id.to_owned()),
+            );
+            metadata.insert(
+                "workflow_status".to_owned(),
+                Value::String("failed".to_owned()),
+            );
+        }
+        obj.insert("updated_at".to_owned(), Value::String(now_string()));
+    }
+    state
+        .threads
+        .thread_store
+        .set(workflow_thread_id, record)
+        .await;
+    state.invalidate_gateway_sync_caches().await;
 }
 
 pub(super) fn workflow_argument_string(input: &Value) -> String {

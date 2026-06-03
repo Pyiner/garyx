@@ -46,6 +46,64 @@ impl WorkflowRuntime {
         Self { state }
     }
 
+    pub async fn start_definition(
+        &self,
+        workflow_id: &str,
+        request: WorkflowDefinitionStartRequest,
+    ) -> Result<Value, WorkflowError> {
+        let workflow_id = required("workflowId", workflow_id)?;
+        let config = self.state.config_snapshot();
+        let definition = get_workflow_definition_package(&config, &workflow_id)?;
+        let input = request.input.unwrap_or(Value::Null);
+        let defaults = parse_json_field(&definition.record.defaults_json);
+        let workspace_dir = workflow_workspace_dir_for_entrypoint(
+            request.workspace_dir.as_deref(),
+            &input,
+            &defaults,
+        );
+        let name = request
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&definition.record.name)
+            .to_owned();
+        let workflow_thread_id = self
+            .create_workflow_thread(
+                &name,
+                Some(definition.record.workflow_id.as_str()),
+                Some(definition.record.version),
+                workspace_dir.as_deref(),
+                "queued",
+            )
+            .await?;
+        let thread_record = self
+            .state
+            .threads
+            .thread_store
+            .get(&workflow_thread_id)
+            .await
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!("workflow thread not found: {workflow_thread_id}"))
+            })?;
+        let dispatch = spawn_workflow_thread_entrypoint(
+            self.state.clone(),
+            workflow_thread_id.clone(),
+            definition.record.workflow_id.clone(),
+            input,
+            workspace_dir,
+        )?;
+        Ok(json!({
+            "dispatch": dispatch,
+            "workflowDefinition": workflow_definition_package_json(&definition),
+            "workflowRunId": workflow_thread_id,
+            "thread": crate::routes::thread_summary(
+                dispatch["threadId"].as_str().unwrap_or_default(),
+                &thread_record,
+            ),
+        }))
+    }
+
     pub async fn start_sdk(
         &self,
         request: WorkflowSdkStartRequest,
@@ -122,14 +180,34 @@ impl WorkflowRuntime {
                 context.workflow_definition_version,
             )
         } else {
-            let workflow_thread_id = self
-                .create_workflow_thread(
+            let requested_workflow_thread_id = request
+                .workflow_run_id
+                .as_deref()
+                .or(request.workflow_id.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let workflow_thread_id = if let Some(thread_id) = requested_workflow_thread_id {
+                self.ensure_reusable_workflow_thread(thread_id).await?;
+                self.mark_existing_workflow_thread(
+                    thread_id,
                     &name,
                     request.workflow_definition_id.as_deref(),
                     request.workflow_definition_version,
                     request.workspace_dir.as_deref(),
+                    "running",
                 )
                 .await?;
+                thread_id.to_owned()
+            } else {
+                self.create_workflow_thread(
+                    &name,
+                    request.workflow_definition_id.as_deref(),
+                    request.workflow_definition_version,
+                    request.workspace_dir.as_deref(),
+                    "running",
+                )
+                .await?
+            };
             (
                 workflow_thread_id,
                 None,
@@ -259,12 +337,13 @@ impl WorkflowRuntime {
         workflow_definition_id: Option<&str>,
         workflow_definition_version: Option<u64>,
         workspace_dir: Option<&str>,
+        status: &str,
     ) -> Result<String, WorkflowError> {
         let metadata = workflow_thread_metadata(
             None,
             workflow_definition_id,
             workflow_definition_version,
-            "running",
+            status,
         );
         let (thread_id, _) = create_thread_record(
             &self.state.threads.thread_store,
@@ -285,10 +364,41 @@ impl WorkflowRuntime {
             workflow_definition_id,
             workflow_definition_version,
             workspace_dir,
-            "running",
+            status,
         )
         .await?;
         Ok(thread_id)
+    }
+
+    async fn ensure_reusable_workflow_thread(&self, thread_id: &str) -> Result<(), WorkflowError> {
+        let record = self
+            .state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!("workflow thread not found: {thread_id}"))
+            })?;
+        let is_workflow_thread = record.get("thread_kind").and_then(Value::as_str)
+            == Some("workflow_run")
+            || record
+                .get("workflow_run_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                == Some(thread_id)
+            || record
+                .get("metadata")
+                .and_then(Value::as_object)
+                .and_then(|metadata| metadata.get("workflow_thread"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+        if !is_workflow_thread {
+            return Err(WorkflowError::BadRequest(
+                "workflowRunId must reference a workflow thread".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     async fn mark_existing_workflow_thread(
