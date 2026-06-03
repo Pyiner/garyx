@@ -27,6 +27,10 @@ function formatTimestamp(value?: string | null): string {
   return date.toLocaleString(undefined, { hour12: false });
 }
 
+function threadKindLabel(thread: DesktopThreadSummary): string {
+  return thread.threadType === 'workflow_run' ? 'Workflow' : 'Thread';
+}
+
 export function ThreadsListPage({
   threads,
   loading,
@@ -95,7 +99,9 @@ export function ThreadsListPage({
                   <strong className="thread-overview-title" title={thread.title || thread.id}>
                     {thread.title || thread.id}
                   </strong>
-                  <UIBadge className="bot-console-status status-connected">Thread</UIBadge>
+                  <UIBadge className="bot-console-status status-connected">
+                    {threadKindLabel(thread)}
+                  </UIBadge>
                 </div>
                 <UICardContent className="thread-overview-card-body">
                   <div className="small-note">

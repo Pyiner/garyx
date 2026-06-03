@@ -1182,6 +1182,18 @@ export function WorkflowRunsPanel({
             ) : null}
           </div>
           <div className="workflow-runs-header-actions">
+            {primaryWorkflow?.threadId ? (
+              <button
+                className="tasks-icon-button"
+                onClick={() => {
+                  onOpenThread(primaryWorkflow.threadId);
+                }}
+                title={t('Open thread')}
+                type="button"
+              >
+                <MessageSquare aria-hidden size={14} strokeWidth={1.8} />
+              </button>
+            ) : null}
             <button
               className="tasks-icon-button"
               disabled={loading}

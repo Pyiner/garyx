@@ -1,5 +1,5 @@
 import { IconPin } from '@tabler/icons-react';
-import { Archive } from 'lucide-react';
+import { Archive, Workflow } from 'lucide-react';
 
 import type { DesktopThreadSummary } from '@shared/contracts';
 
@@ -41,6 +41,7 @@ export function PinnedThreadsSidebar({
       <div className="pinned-thread-list">
         {rows.map(({ thread, isActive, isBusy }) => {
           const timeLabel = formatThreadTimestamp(thread.updatedAt);
+          const isWorkflowRun = thread.threadType === 'workflow_run';
           return (
             <div
               className={`pinned-thread-row-shell ${isActive ? 'active' : ''}`}
@@ -68,6 +69,15 @@ export function PinnedThreadsSidebar({
                 type="button"
               >
                 <span className="pinned-thread-title">{thread.title}</span>
+                {isWorkflowRun ? (
+                  <span
+                    aria-label={t('Workflow run')}
+                    className="workflow-thread-badge"
+                    title={t('Workflow run')}
+                  >
+                    <Workflow aria-hidden size={12} strokeWidth={1.8} />
+                  </span>
+                ) : null}
                 {isBusy ? (
                   <span aria-label={t('Loading')} className="pinned-thread-spinner" />
                 ) : (

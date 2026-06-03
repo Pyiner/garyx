@@ -19,8 +19,8 @@ pub struct WorkflowSdkStartRequest {
     pub workflow_definition_snapshot: Option<Value>,
     #[serde(default)]
     pub input: Option<Value>,
-    #[serde(alias = "parent_thread_id")]
-    pub parent_thread_id: String,
+    #[serde(default, alias = "parent_thread_id")]
+    pub parent_thread_id: Option<String>,
     #[serde(default)]
     pub parent_run_id: Option<String>,
     #[serde(default)]

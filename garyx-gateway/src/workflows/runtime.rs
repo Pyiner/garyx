@@ -34,6 +34,13 @@ pub struct WorkflowRuntime {
     state: Arc<AppState>,
 }
 
+struct WorkflowTaskContext {
+    task_id: String,
+    task_thread_id: String,
+    workflow_definition_id: Option<String>,
+    workflow_definition_version: Option<u64>,
+}
+
 impl WorkflowRuntime {
     pub fn new(state: Arc<AppState>) -> Self {
         Self { state }
@@ -43,25 +50,6 @@ impl WorkflowRuntime {
         &self,
         request: WorkflowSdkStartRequest,
     ) -> Result<Value, WorkflowError> {
-        let parent_thread_id = required("parentThreadId", &request.parent_thread_id)?;
-        let task_id = required("taskId", request.task_id.as_deref().unwrap_or(""))?;
-        let task_thread_id = required(
-            "taskThreadId",
-            request.task_thread_id.as_deref().unwrap_or(""),
-        )?;
-        if parent_thread_id != task_thread_id {
-            return Err(WorkflowError::BadRequest(
-                "parentThreadId must match taskThreadId for task-backed workflows".to_owned(),
-            ));
-        }
-        let (task_id, workflow_definition_id, workflow_definition_version) = self
-            .workflow_task_context(
-                &task_thread_id,
-                &task_id,
-                request.workflow_definition_id.as_deref(),
-            )
-            .await?;
-
         let name = request
             .name
             .as_deref()
@@ -70,6 +58,93 @@ impl WorkflowRuntime {
             .unwrap_or(DEFAULT_WORKFLOW_NAME)
             .to_owned();
         let phases = normalize_phase_plan(&request.phases)?;
+        let task_context = match (
+            request
+                .task_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            request
+                .task_thread_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+        ) {
+            (Some(task_id), Some(task_thread_id)) => Some(
+                self.workflow_task_context(
+                    task_thread_id,
+                    task_id,
+                    request.workflow_definition_id.as_deref(),
+                )
+                .await?,
+            ),
+            (None, None) => None,
+            _ => {
+                return Err(WorkflowError::BadRequest(
+                    "taskId and taskThreadId must be provided together".to_owned(),
+                ));
+            }
+        };
+        let (
+            workflow_thread_id,
+            task_id,
+            task_thread_id,
+            workflow_definition_id,
+            workflow_definition_version,
+        ) = if let Some(context) = task_context {
+            let workflow_thread_id = context.task_thread_id.clone();
+            if let Some(requested_run_id) = request
+                .workflow_run_id
+                .as_deref()
+                .or(request.workflow_id.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                && requested_run_id != workflow_thread_id
+            {
+                return Err(WorkflowError::BadRequest(format!(
+                    "workflowRunId must match the workflow thread id {workflow_thread_id}"
+                )));
+            }
+            self.mark_existing_workflow_thread(
+                &workflow_thread_id,
+                &name,
+                context.workflow_definition_id.as_deref(),
+                context.workflow_definition_version,
+                request.workspace_dir.as_deref(),
+                "running",
+            )
+            .await?;
+            (
+                workflow_thread_id,
+                Some(context.task_id),
+                Some(context.task_thread_id),
+                context.workflow_definition_id,
+                context.workflow_definition_version,
+            )
+        } else {
+            let workflow_thread_id = self
+                .create_workflow_thread(
+                    &name,
+                    request.workflow_definition_id.as_deref(),
+                    request.workflow_definition_version,
+                    request.workspace_dir.as_deref(),
+                )
+                .await?;
+            (
+                workflow_thread_id,
+                None,
+                None,
+                request.workflow_definition_id.clone(),
+                request.workflow_definition_version,
+            )
+        };
+        let parent_thread_id = request
+            .parent_thread_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&workflow_thread_id)
+            .to_owned();
         let mut meta = json!({
             "name": name,
             "description": request.description.clone(),
@@ -86,10 +161,10 @@ impl WorkflowRuntime {
         let input_json = request.input.as_ref().map(Value::to_string);
         let store = WorkflowStore::new(self.state.ops.garyx_db.clone());
         let workflow = store.create_run(WorkflowRunDraft {
-            workflow_id: request.workflow_run_id.or(request.workflow_id),
-            task_id: Some(task_id),
-            task_thread_id: Some(task_thread_id),
-            workflow_definition_id: Some(workflow_definition_id),
+            workflow_id: Some(workflow_thread_id.clone()),
+            task_id,
+            task_thread_id,
+            workflow_definition_id,
             workflow_definition_version,
             workflow_definition_snapshot_json,
             input_json,
@@ -131,7 +206,7 @@ impl WorkflowRuntime {
         task_thread_id: &str,
         task_id: &str,
         requested_workflow_id: Option<&str>,
-    ) -> Result<(String, String, Option<u64>), WorkflowError> {
+    ) -> Result<WorkflowTaskContext, WorkflowError> {
         let record = self
             .state
             .threads
@@ -170,7 +245,131 @@ impl WorkflowRuntime {
                 "workflowDefinitionId {requested} does not match Task executor {workflow_id}"
             )));
         }
-        Ok((canonical, workflow_id, workflow_version))
+        Ok(WorkflowTaskContext {
+            task_id: canonical,
+            task_thread_id: task_thread_id.to_owned(),
+            workflow_definition_id: Some(workflow_id),
+            workflow_definition_version: workflow_version,
+        })
+    }
+
+    async fn create_workflow_thread(
+        &self,
+        name: &str,
+        workflow_definition_id: Option<&str>,
+        workflow_definition_version: Option<u64>,
+        workspace_dir: Option<&str>,
+    ) -> Result<String, WorkflowError> {
+        let metadata = workflow_thread_metadata(
+            None,
+            workflow_definition_id,
+            workflow_definition_version,
+            "running",
+        );
+        let (thread_id, _) = create_thread_record(
+            &self.state.threads.thread_store,
+            ThreadEnsureOptions {
+                label: Some(name.to_owned()),
+                workspace_dir: workspace_dir.map(ToOwned::to_owned),
+                workspace_mode: WorkspaceMode::default(),
+                metadata,
+                thread_kind: Some("workflow_run".to_owned()),
+                ..ThreadEnsureOptions::default()
+            },
+        )
+        .await
+        .map_err(WorkflowError::BadRequest)?;
+        self.mark_existing_workflow_thread(
+            &thread_id,
+            name,
+            workflow_definition_id,
+            workflow_definition_version,
+            workspace_dir,
+            "running",
+        )
+        .await?;
+        Ok(thread_id)
+    }
+
+    async fn mark_existing_workflow_thread(
+        &self,
+        thread_id: &str,
+        name: &str,
+        workflow_definition_id: Option<&str>,
+        workflow_definition_version: Option<u64>,
+        workspace_dir: Option<&str>,
+        status: &str,
+    ) -> Result<(), WorkflowError> {
+        let mut record = self
+            .state
+            .threads
+            .thread_store
+            .get(thread_id)
+            .await
+            .ok_or_else(|| {
+                WorkflowError::NotFound(format!("workflow thread not found: {thread_id}"))
+            })?;
+        let metadata = workflow_thread_metadata(
+            Some(thread_id),
+            workflow_definition_id,
+            workflow_definition_version,
+            status,
+        );
+        {
+            let obj = record.as_object_mut().ok_or_else(|| {
+                WorkflowError::BadRequest("workflow thread record is not an object".to_owned())
+            })?;
+            obj.insert(
+                "thread_kind".to_owned(),
+                Value::String("workflow_run".to_owned()),
+            );
+            obj.insert(
+                "workflow_run_id".to_owned(),
+                Value::String(thread_id.to_owned()),
+            );
+            obj.insert(
+                "workflow_status".to_owned(),
+                Value::String(status.to_owned()),
+            );
+            if let Some(workflow_definition_id) = workflow_definition_id {
+                obj.insert(
+                    "workflow_definition_id".to_owned(),
+                    Value::String(workflow_definition_id.to_owned()),
+                );
+            }
+            if let Some(workflow_definition_version) = workflow_definition_version {
+                obj.insert(
+                    "workflow_definition_version".to_owned(),
+                    Value::Number(serde_json::Number::from(workflow_definition_version)),
+                );
+            }
+            if let Some(workspace_dir) = normalized_optional_string(workspace_dir) {
+                obj.insert("workspace_dir".to_owned(), Value::String(workspace_dir));
+            }
+            if obj
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_none_or(str::is_empty)
+            {
+                obj.insert("label".to_owned(), Value::String(name.to_owned()));
+            }
+            let metadata_value = obj
+                .entry("metadata".to_owned())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if !metadata_value.is_object() {
+                *metadata_value = Value::Object(serde_json::Map::new());
+            }
+            if let Some(metadata_obj) = metadata_value.as_object_mut() {
+                for (key, value) in metadata {
+                    metadata_obj.insert(key, value);
+                }
+            }
+            obj.insert("updated_at".to_owned(), Value::String(now_string()));
+        }
+        self.state.threads.thread_store.set(thread_id, record).await;
+        self.state.invalidate_gateway_sync_caches().await;
+        Ok(())
     }
 
     pub async fn run_sdk_agent(
@@ -246,6 +445,24 @@ impl WorkflowRuntime {
             return Err(WorkflowError::Conflict(
                 "workflow is already terminal".to_owned(),
             ));
+        }
+        if self
+            .state
+            .threads
+            .thread_store
+            .get(workflow_run_id)
+            .await
+            .is_some()
+        {
+            self.mark_existing_workflow_thread(
+                workflow_run_id,
+                &existing.name,
+                existing.workflow_definition_id.as_deref(),
+                existing.workflow_definition_version,
+                existing.workspace_dir.as_deref(),
+                status,
+            )
+            .await?;
         }
         let event_type = match status {
             "succeeded" => "workflow.completed",
@@ -803,4 +1020,41 @@ fn finish_failed_workflow_child(
         optional: call.optional,
         error: Some(error),
     })
+}
+
+fn workflow_thread_metadata(
+    workflow_thread_id: Option<&str>,
+    workflow_definition_id: Option<&str>,
+    workflow_definition_version: Option<u64>,
+    status: &str,
+) -> std::collections::HashMap<String, Value> {
+    let mut metadata = std::collections::HashMap::from([
+        ("workflow_thread".to_owned(), Value::Bool(true)),
+        (
+            "workflow_status".to_owned(),
+            Value::String(status.to_owned()),
+        ),
+    ]);
+    if let Some(workflow_thread_id) = workflow_thread_id {
+        metadata.insert(
+            "workflow_run_id".to_owned(),
+            Value::String(workflow_thread_id.to_owned()),
+        );
+    }
+    if let Some(workflow_definition_id) = workflow_definition_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        metadata.insert(
+            "workflow_definition_id".to_owned(),
+            Value::String(workflow_definition_id.to_owned()),
+        );
+    }
+    if let Some(workflow_definition_version) = workflow_definition_version {
+        metadata.insert(
+            "workflow_definition_version".to_owned(),
+            Value::Number(serde_json::Number::from(workflow_definition_version)),
+        );
+    }
+    metadata
 }

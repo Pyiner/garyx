@@ -55,6 +55,7 @@ pub(super) fn workflow_definition_package_json(package: &WorkflowDefinitionPacka
 pub(super) fn workflow_run_json(record: &WorkflowRunRecord) -> Value {
     json!({
         "workflowRunId": record.workflow_id,
+        "threadId": record.workflow_id,
         // Compatibility alias for callers created before WorkflowRun became the
         // public identity name.
         "workflowId": record.workflow_id,

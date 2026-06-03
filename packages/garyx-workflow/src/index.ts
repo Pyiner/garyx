@@ -43,15 +43,9 @@ export interface WorkflowRunOptions {
   readonly name?: string;
   readonly description?: string;
   readonly phases?: readonly WorkflowPhaseInput[];
-  readonly parentThreadId?: string;
   readonly parentRunId?: string;
   readonly workspaceDir?: string;
   readonly input?: JsonValue;
-  readonly workflowRunId?: string;
-  /** @deprecated Use workflowRunId for execution identity. */
-  readonly workflowId?: string;
-  readonly taskId?: string;
-  readonly taskThreadId?: string;
   readonly workflowDefinitionId?: string;
   readonly workflowDefinitionVersion?: number;
   readonly workflowDefinitionSnapshot?: JsonValue;
@@ -90,9 +84,6 @@ export interface WorkflowContext {
   readonly workflowRunId: string;
   /** @deprecated Use workflowRunId. */
   readonly workflowId: string;
-  readonly taskId: string;
-  readonly taskThreadId: string;
-  readonly parentThreadId: string;
   readonly workspaceDir?: string;
   readonly input: JsonValue;
   readonly phases: readonly WorkflowPhaseDefinition[];
@@ -178,21 +169,15 @@ export class GaryxWorkflowClient {
   }
 
   async startWorkflow(options: WorkflowRunOptions & { name?: string; description?: string }) {
-    const taskId = options.taskId ?? env("GARYX_TASK_ID");
-    const taskThreadId = options.taskThreadId ?? env("GARYX_TASK_THREAD_ID");
-    if (!taskId || !taskThreadId) {
-      throw new GaryxWorkflowError("taskId and taskThreadId are required for Garyx workflow execution");
-    }
-    const parentThreadId = options.parentThreadId ?? env("GARYX_PARENT_THREAD_ID") ?? taskThreadId;
-    if (!parentThreadId) {
-      throw new GaryxWorkflowError("parentThreadId is required for Garyx workflow observability");
-    }
+    const workflowThreadId = env("GARYX_WORKFLOW_THREAD_ID") ?? env("GARYX_WORKFLOW_RUN_ID");
+    const taskId = env("GARYX_TASK_ID");
+    const taskThreadId = env("GARYX_TASK_THREAD_ID");
     return this.request("/api/workflows/sdk", {
       method: "POST",
       signal: options.signal,
       body: {
-        workflowRunId: options.workflowRunId ?? options.workflowId,
-        workflowId: options.workflowId ?? options.workflowRunId,
+        workflowRunId: workflowThreadId,
+        workflowId: workflowThreadId,
         taskId,
         taskThreadId,
         workflowDefinitionId: options.workflowDefinitionId ?? env("GARYX_WORKFLOW_DEFINITION_ID"),
@@ -201,7 +186,7 @@ export class GaryxWorkflowClient {
         workflowDefinitionSnapshot:
           options.workflowDefinitionSnapshot ?? jsonEnv("GARYX_WORKFLOW_DEFINITION_SNAPSHOT"),
         input: options.input ?? jsonEnv("GARYX_WORKFLOW_INPUT_JSON") ?? null,
-        parentThreadId,
+        parentThreadId: env("GARYX_PARENT_THREAD_ID"),
         parentRunId: options.parentRunId ?? env("GARYX_PARENT_RUN_ID"),
         name: options.name,
         description: options.description,
@@ -381,13 +366,10 @@ export async function workflow<T>(
   });
   const workflowRunId = String(startPayload.workflow.workflowRunId ?? startPayload.workflow.workflowId);
   const workflowId = workflowRunId;
-  const parentThreadId = String(startPayload.workflow.parentThreadId);
-  const taskId = String(startPayload.workflow.taskId);
-  const taskThreadId = String(startPayload.workflow.taskThreadId);
   const envSnapshot = snapshotEnv(workflowEnvNames);
   setEnv("GARYX_WORKFLOW_ID", workflowId);
   setEnv("GARYX_WORKFLOW_RUN_ID", workflowRunId);
-  setEnv("GARYX_PARENT_THREAD_ID", parentThreadId);
+  setEnv("GARYX_WORKFLOW_THREAD_ID", workflowRunId);
   setOptionalEnv(
     "GARYX_WORKSPACE_DIR",
     startPayload.workflow.workspaceDir ? String(startPayload.workflow.workspaceDir) : undefined,
@@ -404,9 +386,6 @@ export async function workflow<T>(
   const ctx: WorkflowContext = {
     workflowId,
     workflowRunId,
-    taskId,
-    taskThreadId,
-    parentThreadId,
     workspaceDir: startPayload.workflow.workspaceDir ?? options.workspaceDir,
     input: startPayload.workflow.input ?? workflowInput,
     phases: phasePlan,
@@ -775,7 +754,7 @@ function setOptionalEnv(name: string, value: string | undefined): void {
 const workflowEnvNames = [
   "GARYX_WORKFLOW_ID",
   "GARYX_WORKFLOW_RUN_ID",
-  "GARYX_PARENT_THREAD_ID",
+  "GARYX_WORKFLOW_THREAD_ID",
   "GARYX_WORKSPACE_DIR",
 ] as const;
 

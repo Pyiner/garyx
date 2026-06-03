@@ -70,6 +70,8 @@ pub fn spawn_workflow_task_entrypoint(
             .env("GARYX_TASK_ID", &task_id_for_spawn)
             .env("GARYX_TASK_THREAD_ID", &task_thread_for_spawn)
             .env("GARYX_PARENT_THREAD_ID", &task_thread_for_spawn)
+            .env("GARYX_WORKFLOW_THREAD_ID", &task_thread_for_spawn)
+            .env("GARYX_WORKFLOW_RUN_ID", &task_thread_for_spawn)
             .env("GARYX_WORKFLOW_DEFINITION_ID", &workflow_id_for_spawn)
             .env("GARYX_WORKFLOW_DEFINITION_VERSION", &version_for_spawn)
             .env("GARYX_WORKFLOW_DEFINITION_SNAPSHOT", &snapshot_for_spawn)
@@ -144,6 +146,8 @@ pub fn spawn_workflow_task_entrypoint(
         "workflowDefinitionId": definition.record.workflow_id,
         "workflowId": definition.record.workflow_id,
         "workflowVersion": definition.record.version,
+        "workflowRunId": task_thread_id.clone(),
+        "threadId": task_thread_id.clone(),
         "taskId": task_id,
         "taskThreadId": task_thread_id,
     }))

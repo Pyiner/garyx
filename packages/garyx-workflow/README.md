@@ -3,12 +3,15 @@
 TypeScript SDK for observable Garyx workflows.
 
 Garyx-managed workflows are file packages with a fixed `workflow.ts` file.
-Garyx runs that file with Bun for Workflow-backed Tasks. The SDK connects each
-run to Garyx for observability and agent child-thread execution.
+Garyx runs that file with Bun for workflow execution threads. When a workflow is
+started from Tasks, the Task wraps that same thread for review and notification
+management. The SDK connects each run to Garyx for observability and agent
+child-thread execution.
 
 Code you run yourself is still just ordinary TypeScript or JavaScript. It can
 import this SDK and connect to Garyx without a manifest or Garyx-managed
-runtime.
+runtime. In that mode the gateway creates a workflow thread automatically when
+the SDK starts.
 
 ```ts
 import { defineWorkflow, s } from "@garyx/workflow";
@@ -38,17 +41,18 @@ Environment variables:
 
 - `GARYX_GATEWAY_URL` defaults to `http://127.0.0.1:31337`.
 - `GARYX_GATEWAY_TOKEN` is sent as a bearer token when present.
-- `GARYX_TASK_ID` and `GARYX_TASK_THREAD_ID` link the workflow run to the
-  outer Task.
-- `GARYX_PARENT_THREAD_ID` is the Task thread used as the workflow parent
-  transcript.
+- `GARYX_WORKFLOW_THREAD_ID` / `GARYX_WORKFLOW_RUN_ID` identify the workflow
+  execution thread when Garyx launches the process.
+- `GARYX_TASK_ID` and `GARYX_TASK_THREAD_ID` are internal Task wrapper context
+  when the workflow was started from Tasks.
 - `GARYX_WORKSPACE_DIR` is used as the default workspace for child agents.
 - `GARYX_WORKFLOW_RUN_ID` is set by `workflow()`. `GARYX_WORKFLOW_ID` is also
   set as a compatibility alias.
 
 Normal Task-launched workflows should rely on the gateway-provided
 environment. `gatewayUrl`, `gatewayToken`, and `workspaceDir` may be passed
-explicitly for local tests; Task identity should come from the launcher.
+explicitly for local tests; thread and Task identity are managed by the SDK and
+gateway.
 
 `defineWorkflow()` is the recommended authoring API. The older primitives
 `workflow()`, `phase()`, `agent()`, `parallel()`, `pipeline()`, and `schema()`
@@ -114,8 +118,9 @@ garyx workflow definition get smoke
 installs the package into the configured Garyx workflow root. Garyx always runs
 `workflow.ts` from that package with its built-in Bun runtime.
 
-Run it as the executor for a Task. No Agent assignee is required. The default
-CLI input and the product UI Task body model are plain text:
+Run it as the executor for a Task. No Agent assignee is required. This creates a
+workflow execution thread and wraps it in Task review metadata. The default CLI
+input and the product UI Task body model are plain text:
 
 ```sh
 garyx task create \
@@ -132,8 +137,9 @@ should describe user-facing input with an `input` text metadata object, not an
 input contract. If a user-facing workflow needs structured data, make the first
 workflow step structure the plain-text request.
 
-`workflow.ts` receives `GARYX_TASK_ID`, `GARYX_TASK_THREAD_ID`,
-`GARYX_PARENT_THREAD_ID`, `GARYX_WORKFLOW_DEFINITION_ID`,
+`workflow.ts` receives `GARYX_WORKFLOW_THREAD_ID`, `GARYX_WORKFLOW_RUN_ID`,
+`GARYX_TASK_ID`, `GARYX_TASK_THREAD_ID`, `GARYX_PARENT_THREAD_ID`,
+`GARYX_WORKFLOW_DEFINITION_ID`,
 `GARYX_WORKFLOW_DEFINITION_VERSION`, `GARYX_WORKFLOW_DEFINITION_SNAPSHOT`,
 `GARYX_WORKFLOW_INPUT_JSON`, `GARYX_WORKFLOW_ARGS`, `GARYX_GATEWAY_URL`, and
 `GARYX_GATEWAY_TOKEN` when configured. `GARYX_WORKFLOW_DIR` is the installed

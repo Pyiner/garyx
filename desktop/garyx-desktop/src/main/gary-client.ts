@@ -389,6 +389,9 @@ interface ThreadSummaryPayload {
   thread_key?: string;
   session_key?: string;
   thread_id?: string;
+  thread_type?: string | null;
+  threadType?: string | null;
+  session_type?: string | null;
   agent_id?: string | null;
   agentId?: string | null;
   label?: string | null;
@@ -1857,6 +1860,11 @@ function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
   return {
     id,
     title,
+    threadType:
+      asString(value.thread_type) ||
+      asString(value.threadType) ||
+      asString(value.session_type) ||
+      null,
     createdAt: value.created_at || new Date(0).toISOString(),
     updatedAt:
       value.updated_at || value.created_at || new Date(0).toISOString(),
@@ -4510,6 +4518,7 @@ function mapWorkflowRun(value: unknown): DesktopWorkflowRun {
     "";
   return {
     workflowRunId,
+    threadId: asString(record.threadId) || asString(record.thread_id) || workflowRunId,
     workflowId: workflowRunId,
     taskId: asString(record.taskId) || asString(record.task_id) || null,
     taskThreadId:

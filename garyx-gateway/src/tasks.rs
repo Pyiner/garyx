@@ -358,6 +358,17 @@ pub async fn create_task(
             });
             if let (Some(definition), Some((_, input))) = (workflow_definition, workflow_request) {
                 let task_id = garyx_router::tasks::canonical_task_id(&task);
+                if let Err(error) = mark_task_thread_as_workflow_run(
+                    &state,
+                    &thread_id,
+                    &definition.record.workflow_id,
+                    definition.record.version,
+                    workflow_workspace_dir.as_deref(),
+                )
+                .await
+                {
+                    return task_error_response(error);
+                }
                 match spawn_workflow_task_entrypoint(
                     state.clone(),
                     task_id,
@@ -1005,6 +1016,87 @@ fn workflow_task_input_or_body(input: Option<Value>, task_body: Option<&str>) ->
             .map(|value| Value::String(value.to_owned()))
             .unwrap_or(Value::Null)
     })
+}
+
+async fn mark_task_thread_as_workflow_run(
+    state: &Arc<AppState>,
+    thread_id: &str,
+    workflow_definition_id: &str,
+    workflow_definition_version: u64,
+    workspace_dir: Option<&str>,
+) -> Result<(), TaskServiceError> {
+    let mut record = state
+        .threads
+        .thread_store
+        .get(thread_id)
+        .await
+        .ok_or_else(|| TaskServiceError::NotFound(thread_id.to_owned()))?;
+    {
+        let obj = record
+            .as_object_mut()
+            .ok_or_else(|| TaskServiceError::Store("thread record is not an object".to_owned()))?;
+        obj.insert(
+            "thread_kind".to_owned(),
+            Value::String("workflow_run".to_owned()),
+        );
+        obj.insert(
+            "workflow_run_id".to_owned(),
+            Value::String(thread_id.to_owned()),
+        );
+        obj.insert(
+            "workflow_definition_id".to_owned(),
+            Value::String(workflow_definition_id.to_owned()),
+        );
+        obj.insert(
+            "workflow_definition_version".to_owned(),
+            Value::Number(serde_json::Number::from(workflow_definition_version)),
+        );
+        obj.insert(
+            "workflow_status".to_owned(),
+            Value::String("queued".to_owned()),
+        );
+        if let Some(workspace_dir) = workspace_dir
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            obj.insert(
+                "workspace_dir".to_owned(),
+                Value::String(workspace_dir.to_owned()),
+            );
+        }
+        let metadata_value = obj
+            .entry("metadata".to_owned())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if !metadata_value.is_object() {
+            *metadata_value = Value::Object(serde_json::Map::new());
+        }
+        if let Some(metadata) = metadata_value.as_object_mut() {
+            metadata.insert("workflow_thread".to_owned(), Value::Bool(true));
+            metadata.insert(
+                "workflow_run_id".to_owned(),
+                Value::String(thread_id.to_owned()),
+            );
+            metadata.insert(
+                "workflow_definition_id".to_owned(),
+                Value::String(workflow_definition_id.to_owned()),
+            );
+            metadata.insert(
+                "workflow_definition_version".to_owned(),
+                Value::Number(serde_json::Number::from(workflow_definition_version)),
+            );
+            metadata.insert(
+                "workflow_status".to_owned(),
+                Value::String("queued".to_owned()),
+            );
+        }
+        obj.insert(
+            "updated_at".to_owned(),
+            Value::String(Utc::now().to_rfc3339()),
+        );
+    }
+    state.threads.thread_store.set(thread_id, record).await;
+    state.invalidate_gateway_sync_caches().await;
+    Ok(())
 }
 
 fn task_runtime_has_workspace(runtime: &Option<TaskRuntimeInput>) -> bool {

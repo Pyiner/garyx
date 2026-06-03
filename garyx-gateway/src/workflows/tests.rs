@@ -234,13 +234,12 @@ fn workflow_bun_command_uses_overrides_or_bundled_sibling() {
 #[test]
 fn embedded_workflow_bun_extracts_xz_payload() {
     const FAKE_BUN_XZ: &[u8] = &[
-        0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 0x00, 0x04, 0xe6, 0xd6, 0xb4, 0x46, 0x04, 0xc0,
-        0x1c, 0x18, 0x21, 0x01, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0xd3, 0x7d, 0x3d, 0x61, 0x01, 0x00, 0x17, 0x23, 0x21, 0x2f, 0x62, 0x69, 0x6e, 0x2f,
-        0x73, 0x68, 0x0a, 0x65, 0x63, 0x68, 0x6f, 0x20, 0x66, 0x61, 0x6b, 0x65, 0x2d, 0x62,
-        0x75, 0x6e, 0x0a, 0x00, 0x9f, 0x8c, 0x05, 0x35, 0xeb, 0x48, 0x0f, 0x8f, 0x00, 0x01,
-        0x38, 0x18, 0x86, 0x91, 0x75, 0x24, 0x1f, 0xb6, 0xf3, 0x7d, 0x01, 0x00, 0x00, 0x00,
-        0x00, 0x04, 0x59, 0x5a,
+        0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 0x00, 0x04, 0xe6, 0xd6, 0xb4, 0x46, 0x04, 0xc0, 0x1c,
+        0x18, 0x21, 0x01, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xd3, 0x7d,
+        0x3d, 0x61, 0x01, 0x00, 0x17, 0x23, 0x21, 0x2f, 0x62, 0x69, 0x6e, 0x2f, 0x73, 0x68, 0x0a,
+        0x65, 0x63, 0x68, 0x6f, 0x20, 0x66, 0x61, 0x6b, 0x65, 0x2d, 0x62, 0x75, 0x6e, 0x0a, 0x00,
+        0x9f, 0x8c, 0x05, 0x35, 0xeb, 0x48, 0x0f, 0x8f, 0x00, 0x01, 0x38, 0x18, 0x86, 0x91, 0x75,
+        0x24, 0x1f, 0xb6, 0xf3, 0x7d, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x59, 0x5a,
     ];
     let temp = tempdir().expect("runtime root");
 
@@ -377,7 +376,7 @@ async fn start_sdk_workflow_for_test(state: &Arc<AppState>) -> String {
                 "version": 1
             })),
             input: Some(json!("test workflow input")),
-            parent_thread_id: task_thread_id,
+            parent_thread_id: Some(task_thread_id.clone()),
             parent_run_id: None,
             name: None,
             description: None,
@@ -387,10 +386,12 @@ async fn start_sdk_workflow_for_test(state: &Arc<AppState>) -> String {
         })
         .await
         .expect("start workflow");
-    payload["workflow"]["workflowId"]
+    let workflow_id = payload["workflow"]["workflowId"]
         .as_str()
         .expect("workflow id")
-        .to_owned()
+        .to_owned();
+    assert_eq!(workflow_id, task_thread_id);
+    workflow_id
 }
 
 #[tokio::test]
@@ -433,7 +434,7 @@ async fn sdk_start_persists_phase_plan_in_meta() {
                 "version": 1
             })),
             input: Some(json!("phase plan test")),
-            parent_thread_id: task_thread_id,
+            parent_thread_id: Some(task_thread_id.clone()),
             parent_run_id: None,
             name: Some("Phase plan workflow".to_owned()),
             description: Some("records planned phases".to_owned()),
@@ -700,7 +701,7 @@ async fn scheduler_queues_when_per_workflow_or_global_limit_is_full() {
 }
 
 #[tokio::test]
-async fn sdk_workflow_start_requires_task_context() {
+async fn sdk_workflow_start_without_task_context_creates_workflow_thread() {
     let state = workflow_test_state().await;
     let (thread_id, _) = create_thread_record(
         &state.threads.thread_store,
@@ -711,7 +712,7 @@ async fn sdk_workflow_start_requires_task_context() {
     )
     .await
     .expect("create parent thread");
-    let router = crate::route_graph::build_router(state);
+    let router = crate::route_graph::build_router(state.clone());
     let response = router
         .clone()
         .oneshot(
@@ -721,7 +722,6 @@ async fn sdk_workflow_start_requires_task_context() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     json!({
-                        "parentThreadId": thread_id,
                         "name": "Route Workflow",
                         "createdBy": "test",
                     })
@@ -731,7 +731,25 @@ async fn sdk_workflow_start_requires_task_context() {
         )
         .await
         .expect("response");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let payload: Value = serde_json::from_slice(&body).expect("json");
+    let workflow_thread_id = payload["workflow"]["workflowRunId"]
+        .as_str()
+        .expect("workflow thread id");
+    assert!(workflow_thread_id.starts_with("thread::"));
+    assert_eq!(payload["workflow"]["threadId"], workflow_thread_id);
+    assert!(payload["workflow"]["taskId"].is_null());
+    let workflow_thread = state
+        .threads
+        .thread_store
+        .get(workflow_thread_id)
+        .await
+        .expect("workflow thread");
+    assert_eq!(workflow_thread["thread_kind"], "workflow_run");
+    assert_eq!(workflow_thread["workflow_run_id"], workflow_thread_id);
 
     let response = router
         .oneshot(
@@ -841,6 +859,8 @@ async fn workflow_routes_create_list_and_page_events_for_sdk_run() {
         .as_str()
         .expect("workflow id")
         .to_owned();
+    assert_eq!(workflow_id, thread_id);
+    assert_eq!(payload["workflow"]["threadId"], thread_id);
     assert_eq!(payload["workflow"]["status"], "running");
     assert_eq!(payload["workflow"]["meta"]["source"], "sdk");
 
@@ -1173,7 +1193,7 @@ async fn start_linked_workflow_task_for_test(state: &Arc<AppState>) -> (String, 
                 "version": 1
             })),
             input: Some(json!("unit test input")),
-            parent_thread_id: task_thread_id.clone(),
+            parent_thread_id: Some(task_thread_id.clone()),
             parent_run_id: None,
             name: Some("Unit workflow".to_owned()),
             description: None,

@@ -377,6 +377,7 @@ export type DesktopWorkflowRunStatus =
 /** Mirrors `workflow_run_json`. Token/cost counters are roll-ups across children. */
 export interface DesktopWorkflowRun {
   workflowRunId: string;
+  threadId: string;
   /** Legacy run-id alias kept while gateway payloads migrate. */
   workflowId: string;
   taskId?: string | null;
@@ -825,6 +826,7 @@ export interface ThreadTeamBlock {
 export interface DesktopThreadSummary {
   id: string;
   title: string;
+  threadType?: string | null;
   createdAt: string;
   updatedAt: string;
   lastMessagePreview: string;
