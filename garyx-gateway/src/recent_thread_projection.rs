@@ -69,6 +69,15 @@ pub(crate) async fn backfill_recent_thread_projection_if_incomplete(
     thread_store: &Arc<dyn ThreadStore>,
     garyx_db: &GaryxDbService,
 ) -> usize {
+    match garyx_db.count_recent_threads() {
+        Ok(count) if count > 0 => return 0,
+        Ok(_) => {}
+        Err(error) => {
+            warn!(error = %error, "failed to count recent thread projection before backfill");
+            return 0;
+        }
+    }
+
     let thread_ids = thread_store.list_keys(Some("thread::")).await;
     match garyx_db.projection_state_matches(
         RECENT_THREAD_PROJECTION_NAME,
@@ -486,6 +495,59 @@ mod tests {
         assert_eq!(records[0].thread_id, thread_id);
         assert_eq!(records[0].active_run_id, None);
         assert_eq!(records[0].run_state, "completed");
+    }
+
+    #[tokio::test]
+    async fn backfill_recent_thread_projection_keeps_existing_rows() {
+        let thread_store: Arc<dyn ThreadStore> = Arc::new(InMemoryThreadStore::new());
+        thread_store
+            .set(
+                "thread::legacy-kept",
+                json!({
+                    "label": "Legacy Kept",
+                    "updated_at": "2026-01-01T00:00:02Z",
+                    "message_count": 2,
+                    "messages": [{"role": "user", "content": "kept"}]
+                }),
+            )
+            .await;
+        thread_store
+            .set(
+                "thread::legacy-missing",
+                json!({
+                    "label": "Legacy Missing",
+                    "updated_at": "2026-01-01T00:00:01Z",
+                    "message_count": 1,
+                    "messages": [{"role": "user", "content": "missing"}]
+                }),
+            )
+            .await;
+        let garyx_db = GaryxDbService::memory().expect("memory db");
+        garyx_db
+            .upsert_recent_thread(stale_active_draft("thread::legacy-kept"))
+            .expect("seed stale partial recent row");
+        garyx_db
+            .record_projection_state(
+                RECENT_THREAD_PROJECTION_NAME,
+                RECENT_THREAD_PROJECTION_VERSION,
+                2,
+            )
+            .expect("seed projection state");
+
+        let backfilled =
+            backfill_recent_thread_projection_if_incomplete(&thread_store, &garyx_db).await;
+
+        assert_eq!(backfilled, 0);
+        let records = garyx_db
+            .list_recent_threads(10, 0)
+            .expect("list retained recent threads");
+        assert_eq!(
+            records
+                .into_iter()
+                .map(|record| record.thread_id)
+                .collect::<Vec<_>>(),
+            vec!["thread::legacy-kept"]
+        );
     }
 
     #[test]

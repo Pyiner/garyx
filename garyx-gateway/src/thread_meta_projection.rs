@@ -4,9 +4,9 @@ use garyx_models::routing::{
     DeliveryContext, infer_delivery_target_id, infer_delivery_target_type,
 };
 use garyx_router::{
-    KnownChannelEndpoint, ThreadStore, agent_id_from_value, bindings_from_value,
-    is_default_thread_list_hidden, is_thread_key, label_from_value, thread_kind_from_value,
-    workspace_dir_from_value,
+    KnownChannelEndpoint, ThreadStore, active_run_snapshot_messages, active_run_snapshot_run_id,
+    agent_id_from_value, bindings_from_value, history_message_count, is_default_thread_list_hidden,
+    is_thread_key, label_from_value, thread_kind_from_value, workspace_dir_from_value,
 };
 use serde_json::Value;
 use tracing::warn;
@@ -28,18 +28,18 @@ pub(crate) async fn backfill_thread_meta_projection_if_incomplete(
     thread_store: &Arc<dyn ThreadStore>,
     garyx_db: &GaryxDbService,
 ) -> ThreadMetaProjectionBackfillStats {
-    let thread_ids = thread_store.list_keys(Some("thread::")).await;
-    match garyx_db.thread_meta_projection_is_current(thread_ids.len()) {
-        Ok(true) => {
+    match garyx_db.thread_meta_projection_needs_backfill() {
+        Ok(false) => {
             return ThreadMetaProjectionBackfillStats::default();
         }
-        Ok(false) => {}
+        Ok(true) => {}
         Err(error) => {
             warn!(error = %error, "failed to check thread meta projection before backfill");
             return ThreadMetaProjectionBackfillStats::default();
         }
     }
 
+    let thread_ids = thread_store.list_keys(Some("thread::")).await;
     backfill_thread_meta_projection(thread_ids, thread_store, garyx_db).await
 }
 
@@ -47,10 +47,10 @@ pub(crate) async fn list_channel_endpoints_with_projection_backfill(
     thread_store: &Arc<dyn ThreadStore>,
     garyx_db: &GaryxDbService,
 ) -> Vec<KnownChannelEndpoint> {
-    let should_backfill = match garyx_db.count_thread_channel_endpoints() {
-        Ok(count) => count == 0,
+    let should_backfill = match garyx_db.thread_meta_projection_needs_backfill() {
+        Ok(needs_backfill) => needs_backfill,
         Err(error) => {
-            warn!(error = %error, "failed to count channel endpoint projection before list");
+            warn!(error = %error, "failed to check thread meta projection before listing channel endpoints");
             false
         }
     };
@@ -111,7 +111,28 @@ pub(crate) fn thread_meta_projection_from_thread_data(
 
     let workspace_dir = workspace_dir_from_value(data);
     let thread_label = label_from_value(data);
+    let created_at = string_field(data, "created_at").or_else(|| string_field(data, "_created_at"));
     let thread_updated_at = string_field(data, "updated_at");
+    let message_count = history_message_count(data).min(u32::MAX as usize) as u32;
+    let last_user_message = last_message_preview_for_role(data, "user");
+    let last_assistant_message = last_message_preview_for_role(data, "assistant");
+    let last_message_preview = last_assistant_message
+        .clone()
+        .or_else(|| last_user_message.clone());
+    let recent_run_id = data
+        .get("history")
+        .and_then(|history| history.get("recent_committed_run_ids"))
+        .and_then(Value::as_array)
+        .and_then(|entries| entries.last())
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let active_run_id = active_run_snapshot_run_id(data);
+    let worktree_json = data
+        .get("worktree")
+        .filter(|value| !value.is_null())
+        .and_then(|value| serde_json::to_string(value).ok());
     let last_delivery = delivery_context_from_thread_data(data);
     let thread_meta = ThreadMetaDraft {
         thread_id: thread_id.to_owned(),
@@ -120,7 +141,15 @@ pub(crate) fn thread_meta_projection_from_thread_data(
         thread_label: thread_label.clone(),
         agent_id: agent_id_from_value(data),
         provider_type: string_field(data, "provider_type"),
+        created_at,
         updated_at: thread_updated_at.clone(),
+        message_count,
+        last_user_message,
+        last_assistant_message,
+        last_message_preview,
+        recent_run_id,
+        active_run_id,
+        worktree_json,
         last_delivery_context_json: last_delivery
             .as_ref()
             .map(|(context_json, _)| context_json.clone()),
@@ -250,4 +279,56 @@ fn string_field(data: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn last_message_preview_for_role(data: &Value, role: &str) -> Option<String> {
+    let active_messages = active_run_snapshot_messages(data);
+    last_message_preview_in_messages(active_messages.iter(), role).or_else(|| {
+        let messages = data.get("messages").and_then(Value::as_array)?;
+        last_message_preview_in_messages(messages.iter(), role)
+    })
+}
+
+fn last_message_preview_in_messages<'a>(
+    messages: impl DoubleEndedIterator<Item = &'a Value>,
+    role: &str,
+) -> Option<String> {
+    for message in messages.rev() {
+        let Some(obj) = message.as_object() else {
+            continue;
+        };
+        if obj.get("role").and_then(Value::as_str) != Some(role) {
+            continue;
+        }
+        if let Some(summary) = summarize_message_content(obj.get("content")) {
+            return Some(summary);
+        }
+        if let Some(summary) = summarize_message_content(obj.get("text")) {
+            return Some(summary);
+        }
+    }
+    None
+}
+
+fn summarize_message_content(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(text) => summarize_text(text, 160),
+        _ => None,
+    }
+}
+
+fn summarize_text(value: &str, limit: usize) -> Option<String> {
+    let text = value.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let mut chars = text.chars();
+    let mut summary = String::new();
+    for _ in 0..limit {
+        let Some(ch) = chars.next() else {
+            return Some(summary);
+        };
+        summary.push(ch);
+    }
+    Some(summary + "…")
 }

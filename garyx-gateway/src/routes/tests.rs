@@ -1129,7 +1129,25 @@ async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
                 "thread_id": thread_id,
                 "label": "Workspace Projection Only",
                 "workspace_dir": "/Users/test/project",
-                "updated_at": "2026-05-23T09:00:00.000Z"
+                "created_at": "2026-05-23T08:30:00.000Z",
+                "updated_at": "2026-05-23T09:00:00.000Z",
+                "message_count": 2,
+                "history": {
+                    "recent_committed_run_ids": ["run::workspace-projection"],
+                    "active_run_snapshot": {
+                        "run_id": "run::active-projection",
+                        "messages": [
+                            {"role": "assistant", "content": "active answer"}
+                        ]
+                    }
+                },
+                "messages": [
+                    {"role": "user", "content": "hello projection"},
+                    {"role": "assistant", "content": "done projection"}
+                ],
+                "worktree": {
+                    "path": "/Users/test/project/.garyx/worktree"
+                }
             }),
         )
         .await;
@@ -1155,6 +1173,35 @@ async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
     assert_eq!(
         payload["threads"][0]["workspace_dir"],
         "/Users/test/project"
+    );
+    assert_eq!(
+        payload["threads"][0]["created_at"],
+        "2026-05-23T08:30:00.000Z"
+    );
+    assert_eq!(payload["threads"][0]["message_count"], 2);
+    assert_eq!(
+        payload["threads"][0]["last_user_message"],
+        "hello projection"
+    );
+    assert_eq!(
+        payload["threads"][0]["last_assistant_message"],
+        "active answer"
+    );
+    assert_eq!(
+        payload["threads"][0]["last_message_preview"],
+        "active answer"
+    );
+    assert_eq!(
+        payload["threads"][0]["recent_run_id"],
+        "run::workspace-projection"
+    );
+    assert_eq!(
+        payload["threads"][0]["active_run_id"],
+        "run::active-projection"
+    );
+    assert_eq!(
+        payload["threads"][0]["worktree"]["path"],
+        "/Users/test/project/.garyx/worktree"
     );
 }
 
@@ -3084,6 +3131,93 @@ async fn bot_consoles_route_aggregates_configured_bots_and_endpoints() {
     assert_eq!(
         main["conversation_nodes"][0]["endpoint"]["thread_id"],
         "thread::support"
+    );
+}
+
+#[tokio::test]
+async fn bot_consoles_route_preserves_plugin_main_endpoint_resolution() {
+    let mut config = test_config();
+    config
+        .channels
+        .plugin_channel_mut("telegram")
+        .accounts
+        .insert(
+            "owner".to_owned(),
+            garyx_models::config::telegram_account_to_plugin_entry(
+                &garyx_models::config::TelegramAccount {
+                    token: "${TOKEN}".to_owned(),
+                    enabled: true,
+                    name: Some("Owner Bot".to_owned()),
+                    agent_id: "claude".to_owned(),
+                    workspace_dir: Some("/tmp/owner-workspace".to_owned()),
+                    owner_target: Some(garyx_models::config::OwnerTargetConfig {
+                        target_type: DELIVERY_TARGET_TYPE_CHAT_ID.to_owned(),
+                        target_id: "1000000001".to_owned(),
+                    }),
+                    groups: std::collections::HashMap::new(),
+                },
+            ),
+        );
+
+    let log_dir = tempdir().unwrap();
+    let logger = Arc::new(ThreadFileLogger::new(log_dir.path()));
+    let state = AppStateBuilder::new(config)
+        .with_thread_log_sink(logger)
+        .build();
+
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::owner-group",
+            serde_json::json!({
+                "thread_id": "thread::owner-group",
+                "label": "Owner Group",
+                "workspace_dir": "/tmp/owner-workspace",
+                "updated_at": "2026-03-16T03:00:00Z",
+                "channel_bindings": [{
+                    "channel": "telegram",
+                    "account_id": "owner",
+                    "binding_key": "group-1",
+                    "chat_id": "group-1",
+                    "delivery_target_type": "chat_id",
+                    "delivery_target_id": "group-1",
+                    "display_label": "Owner Group",
+                    "last_inbound_at": "2026-03-16T03:00:00Z"
+                }]
+            }),
+        )
+        .await;
+
+    let router = build_router(state);
+    let request = authed_request()
+        .uri("/api/bot-consoles")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    let owner = payload["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["id"] == "telegram::owner")
+        .unwrap();
+
+    assert_eq!(owner["main_endpoint_status"], "resolved");
+    assert_eq!(owner["main_endpoint"]["source"], "owner_target");
+    assert_eq!(owner["main_endpoint"]["delivery_target_id"], "1000000001");
+    assert_eq!(
+        owner["default_open_endpoint"]["delivery_target_id"],
+        "1000000001"
+    );
+    assert_eq!(owner["conversation_nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        owner["conversation_nodes"][0]["endpoint"]["thread_id"],
+        "thread::owner-group"
     );
 }
 

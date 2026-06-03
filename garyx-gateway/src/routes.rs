@@ -25,8 +25,10 @@ use std::sync::Arc;
 use crate::agent_identity::create_thread_for_agent_reference;
 use crate::garyx_db::{GaryxDbError, PinnedThreadRecord, RecentThreadRecord, ThreadMetaRecord};
 use crate::provider_session_locator::recover_local_provider_session;
+use crate::recent_thread_projection::backfill_recent_thread_projection_if_incomplete;
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
+use crate::thread_meta_projection::backfill_thread_meta_projection_if_incomplete;
 use crate::workspace_mode::worktree_base_dir_for_config;
 #[cfg(test)]
 use garyx_router::create_thread_record;
@@ -1122,6 +1124,11 @@ pub(crate) fn thread_summary(thread_id: &str, data: &Value) -> Value {
 }
 
 fn thread_summary_from_meta(record: &ThreadMetaRecord) -> Value {
+    let worktree = record
+        .worktree_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Value>(value).ok())
+        .unwrap_or(Value::Null);
     json!({
         "thread_id": record.thread_id.as_str(),
         "thread_key": record.thread_id.as_str(),
@@ -1130,15 +1137,16 @@ fn thread_summary_from_meta(record: &ThreadMetaRecord) -> Value {
         "workspace_dir": record.workspace_dir.as_deref(),
         "channel_bindings": [],
         "updated_at": record.updated_at.as_deref(),
-        "created_at": Value::Null,
-        "message_count": 0,
-        "last_user_message": Value::Null,
-        "last_assistant_message": Value::Null,
+        "created_at": record.created_at.as_deref(),
+        "message_count": record.message_count,
+        "last_user_message": record.last_user_message.as_deref(),
+        "last_assistant_message": record.last_assistant_message.as_deref(),
+        "last_message_preview": record.last_message_preview.as_deref(),
         "agent_id": record.agent_id.as_deref(),
         "provider_type": record.provider_type.as_deref(),
-        "worktree": Value::Null,
-        "recent_run_id": Value::Null,
-        "active_run_id": Value::Null,
+        "worktree": worktree,
+        "recent_run_id": record.recent_run_id.as_deref(),
+        "active_run_id": record.active_run_id.as_deref(),
     })
 }
 
@@ -1268,6 +1276,11 @@ pub async fn list_threads(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListThreadsParams>,
 ) -> impl IntoResponse {
+    let _ = backfill_thread_meta_projection_if_incomplete(
+        &state.threads.thread_store,
+        &state.ops.garyx_db,
+    )
+    .await;
     let limit = params.limit.min(MAX_THREAD_LIMIT);
     let total = match state
         .ops
@@ -1310,6 +1323,11 @@ pub async fn list_recent_threads(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListRecentThreadsParams>,
 ) -> impl IntoResponse {
+    let _ = backfill_recent_thread_projection_if_incomplete(
+        &state.threads.thread_store,
+        &state.ops.garyx_db,
+    )
+    .await;
     let limit = params.limit.min(MAX_RECENT_THREAD_LIMIT);
     let total = match state.ops.garyx_db.count_recent_threads() {
         Ok(total) => total,
@@ -1828,8 +1846,17 @@ pub async fn list_bot_consoles(
                 endpoint.channel == account.channel && endpoint.account_id == account.account_id
             })
             .collect::<Vec<_>>();
+        let main_endpoint = resolve_main_endpoint_with_endpoints(
+            &state,
+            &account.channel,
+            &account.account_id,
+            &endpoints,
+        )
+        .await;
         let default_open_endpoint = if root_behavior == "expand_only" {
             None
+        } else if let Some(endpoint) = main_endpoint.as_ref() {
+            Some(endpoint.to_value())
         } else {
             default_open_endpoint_from_projected_endpoints(&account_endpoints)
         };
@@ -1838,8 +1865,9 @@ pub async fn list_bot_consoles(
             .and_then(|value| value.get("thread_id"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        let main_endpoint = default_open_endpoint.clone();
-        let main_endpoint_thread_id = default_open_thread_id.clone();
+        let main_endpoint_thread_id = main_endpoint
+            .as_ref()
+            .and_then(|endpoint| endpoint.thread_id.clone());
         let display_name = bot_display_name(account.name.as_deref(), &account.account_id);
         group_indexes.insert(id.clone(), groups.len());
         groups.push(json!({
@@ -1859,7 +1887,7 @@ pub async fn list_bot_consoles(
             "latest_activity": Value::Null,
             "status": "idle",
             "main_endpoint_status": if main_endpoint.is_some() { "resolved" } else { "unresolved" },
-            "main_endpoint": main_endpoint,
+            "main_endpoint": main_endpoint.as_ref().map(ResolvedMainEndpoint::to_value),
             "main_endpoint_thread_id": main_endpoint_thread_id,
             "default_open_endpoint": default_open_endpoint,
             "default_open_thread_id": default_open_thread_id,

@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_i
 use serde::Serialize;
 use uuid::Uuid;
 
-const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 2;
+const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GaryxDbError {
@@ -95,7 +95,15 @@ pub struct ThreadMetaRecord {
     pub thread_label: Option<String>,
     pub agent_id: Option<String>,
     pub provider_type: Option<String>,
+    pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub message_count: u32,
+    pub last_user_message: Option<String>,
+    pub last_assistant_message: Option<String>,
+    pub last_message_preview: Option<String>,
+    pub recent_run_id: Option<String>,
+    pub active_run_id: Option<String>,
+    pub worktree_json: Option<String>,
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
     pub default_list_hidden: bool,
@@ -111,7 +119,15 @@ pub struct ThreadMetaDraft {
     pub thread_label: Option<String>,
     pub agent_id: Option<String>,
     pub provider_type: Option<String>,
+    pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    pub message_count: u32,
+    pub last_user_message: Option<String>,
+    pub last_assistant_message: Option<String>,
+    pub last_message_preview: Option<String>,
+    pub recent_run_id: Option<String>,
+    pub active_run_id: Option<String>,
+    pub worktree_json: Option<String>,
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
     pub default_list_hidden: bool,
@@ -931,12 +947,8 @@ impl GaryxDbService {
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
     }
 
-    pub fn thread_meta_projection_is_current(
-        &self,
-        expected_thread_count: usize,
-    ) -> GaryxDbResult<bool> {
+    pub fn thread_meta_projection_needs_backfill(&self) -> GaryxDbResult<bool> {
         let conn = self.conn()?;
-        let expected = i64::try_from(expected_thread_count).unwrap_or(i64::MAX);
         let (total, current): (i64, i64) = conn.query_row(
             "SELECT COUNT(*),
                     SUM(CASE WHEN projection_version = ?1 THEN 1 ELSE 0 END)
@@ -944,7 +956,7 @@ impl GaryxDbService {
             params![CURRENT_THREAD_META_PROJECTION_VERSION],
             |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
         )?;
-        Ok(total == expected && current == expected)
+        Ok(total == 0 || current != total)
     }
 
     pub fn count_thread_channel_endpoints(&self) -> GaryxDbResult<usize> {
@@ -1063,9 +1075,11 @@ impl GaryxDbService {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let offset = i64::try_from(offset).unwrap_or(i64::MAX);
         let sql = "SELECT thread_id, workspace_dir, thread_type, thread_label, agent_id,
-                          provider_type, updated_at, last_delivery_context_json,
-                          last_delivery_updated_at, default_list_hidden,
-                          projection_version, projected_at
+                          provider_type, created_at, updated_at, message_count,
+                          last_user_message, last_assistant_message, last_message_preview,
+                          recent_run_id, active_run_id, worktree_json,
+                          last_delivery_context_json, last_delivery_updated_at,
+                          default_list_hidden, projection_version, projected_at
                    FROM thread_meta";
         let order = " ORDER BY COALESCE(updated_at, projected_at) DESC, thread_id ASC
                       LIMIT ?1 OFFSET ?2";
@@ -1115,9 +1129,11 @@ impl GaryxDbService {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT thread_id, workspace_dir, thread_type, thread_label, agent_id,
-                    provider_type, updated_at, last_delivery_context_json,
-                    last_delivery_updated_at, default_list_hidden, projection_version,
-                    projected_at
+                    provider_type, created_at, updated_at, message_count,
+                    last_user_message, last_assistant_message, last_message_preview,
+                    recent_run_id, active_run_id, worktree_json,
+                    last_delivery_context_json, last_delivery_updated_at,
+                    default_list_hidden, projection_version, projected_at
              FROM thread_meta
              ORDER BY thread_id ASC",
         )?;
@@ -2819,11 +2835,19 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             thread_label TEXT,
             agent_id TEXT,
             provider_type TEXT,
+            created_at TEXT,
             updated_at TEXT,
+            message_count INTEGER NOT NULL DEFAULT 0,
+            last_user_message TEXT,
+            last_assistant_message TEXT,
+            last_message_preview TEXT,
+            recent_run_id TEXT,
+            active_run_id TEXT,
+            worktree_json TEXT,
             last_delivery_context_json TEXT,
             last_delivery_updated_at TEXT,
             default_list_hidden INTEGER NOT NULL DEFAULT 0,
-            projection_version INTEGER NOT NULL DEFAULT 2,
+            projection_version INTEGER NOT NULL DEFAULT 3,
             projected_at TEXT NOT NULL
         ) STRICT;
 
@@ -3112,12 +3136,20 @@ fn thread_meta_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Thre
         thread_label: row.get(3)?,
         agent_id: row.get(4)?,
         provider_type: row.get(5)?,
-        updated_at: row.get(6)?,
-        last_delivery_context_json: row.get(7)?,
-        last_delivery_updated_at: row.get(8)?,
-        default_list_hidden: row.get::<_, i64>(9)? != 0,
-        projection_version: row.get(10)?,
-        projected_at: row.get(11)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+        message_count: row.get::<_, i64>(8)?.clamp(0, i64::from(u32::MAX)) as u32,
+        last_user_message: row.get(9)?,
+        last_assistant_message: row.get(10)?,
+        last_message_preview: row.get(11)?,
+        recent_run_id: row.get(12)?,
+        active_run_id: row.get(13)?,
+        worktree_json: row.get(14)?,
+        last_delivery_context_json: row.get(15)?,
+        last_delivery_updated_at: row.get(16)?,
+        default_list_hidden: row.get::<_, i64>(17)? != 0,
+        projection_version: row.get(18)?,
+        projected_at: row.get(19)?,
     })
 }
 
@@ -3150,7 +3182,15 @@ fn upsert_thread_meta(
     let thread_label = normalize_optional(meta.thread_label.as_deref());
     let agent_id = normalize_optional(meta.agent_id.as_deref());
     let provider_type = normalize_optional(meta.provider_type.as_deref());
+    let created_at = normalize_optional(meta.created_at.as_deref());
     let updated_at = normalize_optional(meta.updated_at.as_deref());
+    let message_count = i64::from(meta.message_count);
+    let last_user_message = normalize_optional(meta.last_user_message.as_deref());
+    let last_assistant_message = normalize_optional(meta.last_assistant_message.as_deref());
+    let last_message_preview = normalize_optional(meta.last_message_preview.as_deref());
+    let recent_run_id = normalize_optional(meta.recent_run_id.as_deref());
+    let active_run_id = normalize_optional(meta.active_run_id.as_deref());
+    let worktree_json = normalize_optional(meta.worktree_json.as_deref());
     let last_delivery_context_json = normalize_optional(meta.last_delivery_context_json.as_deref());
     let last_delivery_updated_at = normalize_optional(meta.last_delivery_updated_at.as_deref());
     let default_list_hidden = if meta.default_list_hidden { 1 } else { 0 };
@@ -3158,17 +3198,27 @@ fn upsert_thread_meta(
     tx.execute(
         "INSERT INTO thread_meta (
             thread_id, workspace_dir, thread_type, thread_label, agent_id, provider_type,
-            updated_at, last_delivery_context_json, last_delivery_updated_at,
-            default_list_hidden, projection_version, projected_at
+            created_at, updated_at, message_count, last_user_message, last_assistant_message,
+            last_message_preview, recent_run_id, active_run_id, worktree_json,
+            last_delivery_context_json, last_delivery_updated_at, default_list_hidden,
+            projection_version, projected_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
          ON CONFLICT(thread_id) DO UPDATE SET
             workspace_dir = excluded.workspace_dir,
             thread_type = excluded.thread_type,
             thread_label = excluded.thread_label,
             agent_id = excluded.agent_id,
             provider_type = excluded.provider_type,
+            created_at = excluded.created_at,
             updated_at = excluded.updated_at,
+            message_count = excluded.message_count,
+            last_user_message = excluded.last_user_message,
+            last_assistant_message = excluded.last_assistant_message,
+            last_message_preview = excluded.last_message_preview,
+            recent_run_id = excluded.recent_run_id,
+            active_run_id = excluded.active_run_id,
+            worktree_json = excluded.worktree_json,
             last_delivery_context_json = excluded.last_delivery_context_json,
             last_delivery_updated_at = excluded.last_delivery_updated_at,
             default_list_hidden = excluded.default_list_hidden,
@@ -3181,7 +3231,15 @@ fn upsert_thread_meta(
             thread_label,
             agent_id,
             provider_type,
+            created_at,
             updated_at,
+            message_count,
+            last_user_message,
+            last_assistant_message,
+            last_message_preview,
+            recent_run_id,
+            active_run_id,
+            worktree_json,
             last_delivery_context_json,
             last_delivery_updated_at,
             default_list_hidden,
@@ -3386,6 +3444,29 @@ fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()>
         conn.execute(
             "ALTER TABLE thread_meta
              ADD COLUMN default_list_hidden INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    for name in [
+        "created_at",
+        "last_user_message",
+        "last_assistant_message",
+        "last_message_preview",
+        "recent_run_id",
+        "active_run_id",
+        "worktree_json",
+    ] {
+        if !columns.contains(name) {
+            conn.execute(
+                &format!("ALTER TABLE thread_meta ADD COLUMN {name} TEXT"),
+                [],
+            )?;
+        }
+    }
+    if !columns.contains("message_count") {
+        conn.execute(
+            "ALTER TABLE thread_meta
+             ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
     }
@@ -3699,6 +3780,58 @@ mod tests {
             .list_workflow_runs_for_task("#TASK-legacy", 10, 0)
             .expect("query task index");
         assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn opening_legacy_thread_meta_db_adds_projection_columns() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("garyx-db.sqlite3");
+        {
+            let conn = Connection::open(&path).expect("legacy db");
+            conn.execute_batch(
+                r#"
+                CREATE TABLE thread_meta (
+                    thread_id TEXT PRIMARY KEY,
+                    workspace_dir TEXT,
+                    thread_type TEXT NOT NULL DEFAULT 'chat',
+                    thread_label TEXT,
+                    agent_id TEXT,
+                    provider_type TEXT,
+                    updated_at TEXT,
+                    last_delivery_context_json TEXT,
+                    last_delivery_updated_at TEXT,
+                    default_list_hidden INTEGER NOT NULL DEFAULT 0,
+                    projection_version INTEGER NOT NULL DEFAULT 2,
+                    projected_at TEXT NOT NULL
+                ) STRICT;
+
+                INSERT INTO thread_meta (
+                    thread_id, workspace_dir, thread_type, thread_label, agent_id,
+                    provider_type, updated_at, default_list_hidden, projection_version,
+                    projected_at
+                ) VALUES (
+                    'thread::legacy', '/workspace/legacy', 'chat', 'Legacy Thread',
+                    'claude', 'claude_code', '2026-06-03T00:00:00.000Z',
+                    0, 2, '2026-06-03T00:00:01.000Z'
+                );
+                "#,
+            )
+            .expect("legacy thread_meta");
+        }
+
+        let db = GaryxDbService::open(&path).expect("open migrated db");
+
+        assert!(
+            db.thread_meta_projection_needs_backfill()
+                .expect("legacy projection needs backfill")
+        );
+        let rows = db.list_thread_meta().expect("list legacy meta");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].thread_id, "thread::legacy");
+        assert_eq!(rows[0].created_at, None);
+        assert_eq!(rows[0].message_count, 0);
+        assert_eq!(rows[0].last_message_preview, None);
+        assert_eq!(rows[0].projection_version, 2);
     }
 
     #[test]
@@ -4365,6 +4498,10 @@ mod tests {
     #[test]
     fn thread_meta_projection_round_trip_and_remove() {
         let db = GaryxDbService::memory().expect("db opens");
+        assert!(
+            db.thread_meta_projection_needs_backfill()
+                .expect("empty projection needs backfill")
+        );
         let delivery_json = r#"{"channel":"telegram","account_id":"main","chat_id":"42","user_id":"42","delivery_target_type":"chat_id","delivery_target_id":"42"}"#.to_owned();
         db.replace_thread_meta_projection(ThreadMetaProjectionDraft {
             thread_id: "thread::workflow".to_owned(),
@@ -4375,7 +4512,15 @@ mod tests {
                 thread_label: Some("Workflow Run".to_owned()),
                 agent_id: Some("deep-research".to_owned()),
                 provider_type: Some("workflow".to_owned()),
+                created_at: Some("2026-06-03T07:59:00.000Z".to_owned()),
                 updated_at: Some("2026-06-03T08:00:00.000Z".to_owned()),
+                message_count: 2,
+                last_user_message: Some("start workflow".to_owned()),
+                last_assistant_message: Some("done".to_owned()),
+                last_message_preview: Some("done".to_owned()),
+                recent_run_id: Some("run::workflow".to_owned()),
+                active_run_id: None,
+                worktree_json: Some(r#"{"path":"/work/project"}"#.to_owned()),
                 last_delivery_context_json: Some(delivery_json.clone()),
                 last_delivery_updated_at: Some("2026-06-03T08:00:01.000Z".to_owned()),
                 default_list_hidden: false,
@@ -4406,6 +4551,10 @@ mod tests {
             }],
         })
         .expect("project thread meta");
+        assert!(
+            !db.thread_meta_projection_needs_backfill()
+                .expect("current projection does not need backfill")
+        );
 
         let meta = db.list_thread_meta().expect("list meta");
         assert_eq!(meta.len(), 1);
@@ -4451,6 +4600,10 @@ mod tests {
             db.list_thread_message_routes()
                 .expect("list routes after remove")
                 .is_empty()
+        );
+        assert!(
+            db.thread_meta_projection_needs_backfill()
+                .expect("removed projection needs backfill")
         );
     }
 
