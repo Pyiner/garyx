@@ -45,6 +45,7 @@ import type {
   DesktopWorkflowRunDrilldown,
   DesktopWorkflowRunsPage,
   GetWorkflowDefinitionSourceInput,
+  GetWorkflowRunInput,
   ListTaskWorkflowRunsInput,
   DeleteSlashCommandInput,
   DesktopChatStreamEvent,
@@ -397,6 +398,7 @@ interface ThreadSummaryPayload {
   agent_id?: string | null;
   agentId?: string | null;
   label?: string | null;
+  title?: string | null;
   workspace_dir?: string | null;
   channel_bindings?: Array<{
     channel?: string;
@@ -413,9 +415,12 @@ interface ThreadSummaryPayload {
   }>;
   updated_at?: string | null;
   created_at?: string | null;
+  last_active_at?: string | null;
+  recorded_at?: string | null;
   message_count?: number;
   last_user_message?: string | null;
   last_assistant_message?: string | null;
+  last_message_preview?: string | null;
   team_id?: string | null;
   team_display_name?: string | null;
   teamDisplayName?: string | null;
@@ -1857,17 +1862,34 @@ function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
     typeof value.label === "string" && value.label.trim()
       ? value.label.trim()
       : "";
+  const titleTrimmed =
+    typeof value.title === "string" && value.title.trim()
+      ? value.title.trim()
+      : "";
   // Title fallback chain: explicit label wins; otherwise a team thread prefers
   // the team's display_name so the thread list/header renders the team name.
   // ThreadsListPage + ThreadPage both consume `DesktopThreadSummary.title`
   // directly, so this fallback is the single source of truth for that branding.
-  const title = labelTrimmed || teamDisplayName || id;
+  const title = labelTrimmed || titleTrimmed || teamDisplayName || id;
   const lastMessagePreview =
+    (typeof value.last_message_preview === "string" &&
+      value.last_message_preview.trim()) ||
     (typeof value.last_assistant_message === "string" &&
       value.last_assistant_message.trim()) ||
     (typeof value.last_user_message === "string" &&
       value.last_user_message.trim()) ||
     "";
+  const createdAt =
+    value.created_at ||
+    value.recorded_at ||
+    value.last_active_at ||
+    new Date(0).toISOString();
+  const updatedAt =
+    value.updated_at ||
+    value.last_active_at ||
+    value.recorded_at ||
+    value.created_at ||
+    new Date(0).toISOString();
   return {
     id,
     title,
@@ -1876,9 +1898,8 @@ function mapThreadSummary(value: ThreadSummaryPayload): DesktopThreadSummary {
       asString(value.threadType) ||
       asString(value.session_type) ||
       null,
-    createdAt: value.created_at || new Date(0).toISOString(),
-    updatedAt:
-      value.updated_at || value.created_at || new Date(0).toISOString(),
+    createdAt,
+    updatedAt,
     lastMessagePreview,
     workspacePath: value.workspace_dir ?? null,
     messageCount:
@@ -4766,6 +4787,24 @@ export async function listTaskWorkflowRuns(
     count: asFiniteNumber(payload.count) ?? workflowRuns.length,
     hasMore: payload.hasMore ?? payload.has_more ?? false,
   };
+}
+
+export async function getWorkflowRun(
+  settings: DesktopSettings,
+  input: GetWorkflowRunInput,
+): Promise<DesktopWorkflowRunDrilldown> {
+  const workflowRunId = input.workflowRunId?.trim() || "";
+  if (!workflowRunId) {
+    throw new Error("workflowRunId is required");
+  }
+  const payload = await requestJson<unknown>(
+    settings,
+    `/api/workflows/${encodeURIComponent(workflowRunId)}`,
+    {
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  return mapWorkflowRunDrilldown(payload);
 }
 
 export async function startWorkflowThread(

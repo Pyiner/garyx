@@ -1618,6 +1618,7 @@ export function AppShell() {
       ? initialRouteValue.workflowId
       : null,
   );
+  const [workflowThreadStarting, setWorkflowThreadStarting] = useState(false);
   const [messagesByThread, setMessagesByThread] = useState<MessageMap>({});
   const [threadInfoByThread, setThreadInfoByThread] = useState<
     Record<string, ThreadRuntimeInfo | null>
@@ -2805,7 +2806,10 @@ export function AppShell() {
     selectedThreadId &&
       (threadActivity.runActive || showPendingAckLoading),
   );
-  const composerLocked = composerAttachmentUploadPending || isDraftSendingThread;
+  const composerLocked =
+    composerAttachmentUploadPending ||
+    isDraftSendingThread ||
+    workflowThreadStarting;
   const botGroups = useMemo(
     () =>
       buildBotGroups(
@@ -2914,6 +2918,10 @@ export function AppShell() {
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
   const isWorkflowView = contentView === "workflow";
+  const selectedWorkflowRunThreadId =
+    contentView === "thread" && activeThread?.threadType === "workflow_run"
+      ? activeThread.id
+      : null;
   const isDreamsView = contentView === "dreams" && showDreamsFeature;
   const shouldShowConversationRail = contentView === "thread";
   const visibleSelectedThreadId = shouldShowConversationRail ? selectedThreadId : null;
@@ -7655,6 +7663,7 @@ export function AppShell() {
     }
 
     newThreadInitialDispatchLockRef.current = true;
+    setWorkflowThreadStarting(true);
     try {
       const workspacePath =
         pendingWorkspacePath ||
@@ -7703,6 +7712,7 @@ export function AppShell() {
           : "Failed to start workflow thread",
       );
     } finally {
+      setWorkflowThreadStarting(false);
       newThreadInitialDispatchLockRef.current = false;
     }
   }
@@ -8723,6 +8733,15 @@ export function AppShell() {
                 t={t}
                 task={selectedWorkflowTask}
                 taskId={selectedWorkflowTaskId}
+              />
+            ) : selectedWorkflowRunThreadId ? (
+              <WorkflowRunsPanel
+                onOpenThread={(threadId) => {
+                  void openExistingThread(threadId);
+                }}
+                onToast={pushToast}
+                t={t}
+                workflowRunId={selectedWorkflowRunThreadId}
               />
             ) : isDreamsView ? (
               <DreamsPanel

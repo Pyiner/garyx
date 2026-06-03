@@ -462,6 +462,10 @@ export interface ListTaskWorkflowRunsInput {
   limit?: number;
 }
 
+export interface GetWorkflowRunInput {
+  workflowRunId: string;
+}
+
 export interface GetWorkflowDefinitionSourceInput {
   workflowId: string;
 }
@@ -1777,6 +1781,9 @@ export interface GaryxDesktopApi {
   listTaskWorkflowRuns: (
     input: ListTaskWorkflowRunsInput,
   ) => Promise<DesktopWorkflowRunsPage>;
+  getWorkflowRun: (
+    input: GetWorkflowRunInput,
+  ) => Promise<DesktopWorkflowRunDrilldown>;
   startWorkflowThread: (
     input: StartWorkflowThreadInput,
   ) => Promise<StartWorkflowThreadResult>;

@@ -68,6 +68,8 @@ const api: GaryxDesktopApi = {
     ipcRenderer.invoke("garyx:get-workflow-definition-source", input),
   listTaskWorkflowRuns: (input) =>
     ipcRenderer.invoke("garyx:list-task-workflow-runs", input),
+  getWorkflowRun: (input) =>
+    ipcRenderer.invoke("garyx:get-workflow-run", input),
   startWorkflowThread: (input) =>
     ipcRenderer.invoke("garyx:start-workflow-thread", input),
   promoteThreadToTask: (input) =>

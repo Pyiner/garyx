@@ -1111,7 +1111,7 @@ export async function createDesktopThread(input?: {
 export async function startDesktopWorkflowThread(
   input: StartWorkflowThreadInput,
 ): Promise<StartWorkflowThreadResult> {
-  const current = await getDesktopState();
+  const current = await getLocalDesktopState();
   const explicitWorkspacePath = normalizeWorkspacePathInput(input.workspacePath);
   let workspacePath = explicitWorkspacePath || current.selectedWorkspacePath?.trim() || null;
   if (workspacePath) {
@@ -1129,7 +1129,7 @@ export async function startDesktopWorkflowThread(
     ...input,
     workspacePath,
   });
-  let state = await getDesktopState();
+  let state = current;
   const thread = started.thread;
   state = withSortedEntities({
     ...state,

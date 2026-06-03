@@ -20,7 +20,8 @@ const POLL_INTERVAL_MS = 4000;
 
 type WorkflowRunsPanelProps = {
   task?: DesktopTaskSummary | null;
-  taskId: string;
+  taskId?: string | null;
+  workflowRunId?: string | null;
   onOpenTasks?: () => void;
   onOpenThread: (threadId: string) => void;
   onToast: (message: string, tone?: ToastTone) => void;
@@ -111,6 +112,12 @@ function formatCost(value: number): string {
     return '$0.00';
   }
   return `$${value.toFixed(value < 0.1 ? 4 : 2)}`;
+}
+
+function isWorkflowRunNotFoundError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message : String(error || '');
+  return /workflow run not found|notfound|404/i.test(message);
 }
 
 function formatDetailBlock(value: unknown): string {
@@ -1059,6 +1066,7 @@ function RunCard({
 export function WorkflowRunsPanel({
   task,
   taskId,
+  workflowRunId,
   onOpenTasks,
   onOpenThread,
   onToast,
@@ -1069,13 +1077,16 @@ export function WorkflowRunsPanel({
   const [error, setError] = useState<string | null>(null);
   const hasNonTerminal = runs.some((run) => !isTerminal(run.workflow.status));
   const shouldPoll =
-    hasNonTerminal || (runs.length === 0 && task?.status === 'in_progress');
+    hasNonTerminal ||
+    (runs.length === 0 &&
+      (task?.status === 'in_progress' || Boolean(workflowRunId)));
   const mountedRef = useRef(true);
-  const taskLabel = task?.taskId || taskId;
+  const taskLabel = task?.taskId || taskId || null;
+  const sourceLabel = taskLabel || workflowRunId || null;
   const primaryWorkflow = runs[0]?.workflow || null;
   const headerTitle = primaryWorkflow?.name || t('Workflow run');
   const headerMeta = [
-    taskLabel,
+    sourceLabel,
     primaryWorkflow
       ? t('{completed}/{total} children', {
           completed: primaryWorkflow.completedChildren,
@@ -1094,6 +1105,8 @@ export function WorkflowRunsPanel({
         })
       : null,
   ].filter(Boolean);
+  const awaitingWorkflowRunRecord =
+    Boolean(workflowRunId) && !error && runs.length === 0;
 
   const load = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -1101,17 +1114,32 @@ export function WorkflowRunsPanel({
         setLoading(true);
       }
       try {
-        const page = await getDesktopApi().listTaskWorkflowRuns({
-          taskId,
-          limit: 50,
-        });
+        const workflowRunKey = workflowRunId?.trim() || '';
+        const taskKey = taskId?.trim() || '';
+        const nextRuns = workflowRunKey
+          ? [
+              await getDesktopApi().getWorkflowRun({
+                workflowRunId: workflowRunKey,
+              }),
+            ]
+          : taskKey
+            ? (await getDesktopApi().listTaskWorkflowRuns({
+                taskId: taskKey,
+                limit: 50,
+              })).workflowRuns
+            : [];
         if (!mountedRef.current) {
           return;
         }
-        setRuns(page.workflowRuns);
+        setRuns(nextRuns);
         setError(null);
       } catch (loadError) {
         if (!mountedRef.current) {
+          return;
+        }
+        if (workflowRunId?.trim() && isWorkflowRunNotFoundError(loadError)) {
+          setRuns([]);
+          setError(null);
           return;
         }
         const message =
@@ -1128,7 +1156,7 @@ export function WorkflowRunsPanel({
         }
       }
     },
-    [taskId, onToast],
+    [taskId, workflowRunId, onToast],
   );
 
   useEffect(() => {
@@ -1182,7 +1210,7 @@ export function WorkflowRunsPanel({
             ) : null}
           </div>
           <div className="workflow-runs-header-actions">
-            {primaryWorkflow?.threadId ? (
+            {primaryWorkflow?.threadId && primaryWorkflow.threadId !== workflowRunId ? (
               <button
                 className="tasks-icon-button"
                 onClick={() => {
@@ -1215,6 +1243,8 @@ export function WorkflowRunsPanel({
             <div className="workflow-runs-state workflow-runs-state-error">
               {error}
             </div>
+          ) : awaitingWorkflowRunRecord ? (
+            <div className="workflow-runs-state">{t('Loading workflow runs…')}</div>
           ) : runs.length ? (
             <div className="workflow-runs-list">
               {runs.map((run) => (
@@ -1228,7 +1258,7 @@ export function WorkflowRunsPanel({
             </div>
           ) : (
             <div className="workflow-runs-state">
-              {t('No workflow runs for this task.')}
+              {taskId ? t('No workflow runs for this task.') : t('No workflow data for this thread.')}
             </div>
           )}
         </div>

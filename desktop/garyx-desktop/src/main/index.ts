@@ -56,6 +56,7 @@ import type {
   DesktopSettings,
   GenerateCustomAgentAvatarInput,
   GetWorkflowDefinitionSourceInput,
+  GetWorkflowRunInput,
   GetThreadHistoryInput,
   GetSkillEditorInput,
   GatewayConfigDocument,
@@ -136,6 +137,7 @@ import {
   fetchThreadLogs,
   getDream,
   getWorkflowDefinitionSource,
+  getWorkflowRun,
   getWorkspaceGitStatus,
   getAutoResearchRun,
   interruptThread,
@@ -757,6 +759,14 @@ function registerIpcHandlers(): void {
     async (_event, input: ListTaskWorkflowRunsInput) => {
       const settings = await resolveSettings();
       return listTaskWorkflowRuns(settings, input);
+    },
+  );
+
+  ipcMain.handle(
+    "garyx:get-workflow-run",
+    async (_event, input: GetWorkflowRunInput) => {
+      const settings = await resolveSettings();
+      return getWorkflowRun(settings, input);
     },
   );
 
