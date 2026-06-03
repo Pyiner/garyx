@@ -9,6 +9,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_i
 use serde::Serialize;
 use uuid::Uuid;
 
+const CURRENT_THREAD_META_PROJECTION_VERSION: i64 = 2;
+
 #[derive(Debug, thiserror::Error)]
 pub enum GaryxDbError {
     #[error("BadRequest: {0}")]
@@ -96,6 +98,8 @@ pub struct ThreadMetaRecord {
     pub updated_at: Option<String>,
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
+    pub default_list_hidden: bool,
+    pub projection_version: i64,
     pub projected_at: String,
 }
 
@@ -110,6 +114,7 @@ pub struct ThreadMetaDraft {
     pub updated_at: Option<String>,
     pub last_delivery_context_json: Option<String>,
     pub last_delivery_updated_at: Option<String>,
+    pub default_list_hidden: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -621,6 +626,57 @@ impl GaryxDbService {
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
     }
 
+    pub fn projection_state_matches(
+        &self,
+        projection_name: &str,
+        projection_version: i64,
+        source_row_count: usize,
+    ) -> GaryxDbResult<bool> {
+        let projection_name = normalize_required("projection_name", projection_name)?;
+        let source_row_count = i64::try_from(source_row_count).unwrap_or(i64::MAX);
+        let conn = self.conn()?;
+        let row = conn
+            .query_row(
+                "SELECT projection_version, source_row_count
+                 FROM projection_states
+                 WHERE projection_name = ?1",
+                params![projection_name],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?;
+        Ok(row.is_some_and(|(version, count)| {
+            version == projection_version && count == source_row_count
+        }))
+    }
+
+    pub fn record_projection_state(
+        &self,
+        projection_name: &str,
+        projection_version: i64,
+        source_row_count: usize,
+    ) -> GaryxDbResult<()> {
+        let projection_name = normalize_required("projection_name", projection_name)?;
+        let source_row_count = i64::try_from(source_row_count).unwrap_or(i64::MAX);
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO projection_states (
+                projection_name, projection_version, source_row_count, projected_at
+             )
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(projection_name) DO UPDATE SET
+                projection_version = excluded.projection_version,
+                source_row_count = excluded.source_row_count,
+                projected_at = excluded.projected_at",
+            params![
+                projection_name,
+                projection_version,
+                source_row_count,
+                now_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn sync_recent_threads_snapshot(
         &self,
         drafts: Vec<RecentThreadDraft>,
@@ -875,6 +931,22 @@ impl GaryxDbService {
         Ok(usize::try_from(count).unwrap_or(usize::MAX))
     }
 
+    pub fn thread_meta_projection_is_current(
+        &self,
+        expected_thread_count: usize,
+    ) -> GaryxDbResult<bool> {
+        let conn = self.conn()?;
+        let expected = i64::try_from(expected_thread_count).unwrap_or(i64::MAX);
+        let (total, current): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*),
+                    SUM(CASE WHEN projection_version = ?1 THEN 1 ELSE 0 END)
+             FROM thread_meta",
+            params![CURRENT_THREAD_META_PROJECTION_VERSION],
+            |row| Ok((row.get(0)?, row.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+        )?;
+        Ok(total == expected && current == expected)
+    }
+
     pub fn count_thread_channel_endpoints(&self) -> GaryxDbResult<usize> {
         let conn = self.conn()?;
         let count: i64 =
@@ -946,29 +1018,110 @@ impl GaryxDbService {
         Ok(records)
     }
 
+    pub fn count_thread_meta_list(
+        &self,
+        include_hidden: bool,
+        prefix: Option<&str>,
+    ) -> GaryxDbResult<usize> {
+        let conn = self.conn()?;
+        let count: i64 = match prefix.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(prefix) if include_hidden => conn.query_row(
+                "SELECT COUNT(*)
+                 FROM thread_meta
+                 WHERE substr(thread_id, 1, length(?1)) = ?1",
+                params![prefix],
+                |row| row.get(0),
+            )?,
+            Some(prefix) => conn.query_row(
+                "SELECT COUNT(*)
+                 FROM thread_meta
+                 WHERE default_list_hidden = 0
+                   AND substr(thread_id, 1, length(?1)) = ?1",
+                params![prefix],
+                |row| row.get(0),
+            )?,
+            None if include_hidden => {
+                conn.query_row("SELECT COUNT(*) FROM thread_meta", [], |row| row.get(0))?
+            }
+            None => conn.query_row(
+                "SELECT COUNT(*) FROM thread_meta WHERE default_list_hidden = 0",
+                [],
+                |row| row.get(0),
+            )?,
+        };
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    pub fn list_thread_meta_page(
+        &self,
+        limit: usize,
+        offset: usize,
+        include_hidden: bool,
+        prefix: Option<&str>,
+    ) -> GaryxDbResult<Vec<ThreadMetaRecord>> {
+        let conn = self.conn()?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let offset = i64::try_from(offset).unwrap_or(i64::MAX);
+        let sql = "SELECT thread_id, workspace_dir, thread_type, thread_label, agent_id,
+                          provider_type, updated_at, last_delivery_context_json,
+                          last_delivery_updated_at, default_list_hidden,
+                          projection_version, projected_at
+                   FROM thread_meta";
+        let order = " ORDER BY COALESCE(updated_at, projected_at) DESC, thread_id ASC
+                      LIMIT ?1 OFFSET ?2";
+        let mut records = Vec::new();
+        match prefix.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(prefix) if include_hidden => {
+                let mut stmt = conn.prepare(&format!(
+                    "{sql} WHERE substr(thread_id, 1, length(?3)) = ?3{order}"
+                ))?;
+                let rows =
+                    stmt.query_map(params![limit, offset, prefix], thread_meta_record_from_row)?;
+                for row in rows {
+                    records.push(row?);
+                }
+            }
+            Some(prefix) => {
+                let mut stmt = conn.prepare(&format!(
+                    "{sql} WHERE default_list_hidden = 0
+                            AND substr(thread_id, 1, length(?3)) = ?3{order}"
+                ))?;
+                let rows =
+                    stmt.query_map(params![limit, offset, prefix], thread_meta_record_from_row)?;
+                for row in rows {
+                    records.push(row?);
+                }
+            }
+            None if include_hidden => {
+                let mut stmt = conn.prepare(&format!("{sql}{order}"))?;
+                let rows = stmt.query_map(params![limit, offset], thread_meta_record_from_row)?;
+                for row in rows {
+                    records.push(row?);
+                }
+            }
+            None => {
+                let mut stmt =
+                    conn.prepare(&format!("{sql} WHERE default_list_hidden = 0{order}"))?;
+                let rows = stmt.query_map(params![limit, offset], thread_meta_record_from_row)?;
+                for row in rows {
+                    records.push(row?);
+                }
+            }
+        }
+        Ok(records)
+    }
+
     pub fn list_thread_meta(&self) -> GaryxDbResult<Vec<ThreadMetaRecord>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT thread_id, workspace_dir, thread_type, thread_label, agent_id,
                     provider_type, updated_at, last_delivery_context_json,
-                    last_delivery_updated_at, projected_at
+                    last_delivery_updated_at, default_list_hidden, projection_version,
+                    projected_at
              FROM thread_meta
              ORDER BY thread_id ASC",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ThreadMetaRecord {
-                thread_id: row.get(0)?,
-                workspace_dir: row.get(1)?,
-                thread_type: row.get(2)?,
-                thread_label: row.get(3)?,
-                agent_id: row.get(4)?,
-                provider_type: row.get(5)?,
-                updated_at: row.get(6)?,
-                last_delivery_context_json: row.get(7)?,
-                last_delivery_updated_at: row.get(8)?,
-                projected_at: row.get(9)?,
-            })
-        })?;
+        let rows = stmt.query_map([], thread_meta_record_from_row)?;
         let mut records = Vec::new();
         for row in rows {
             records.push(row?);
@@ -2652,6 +2805,13 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         CREATE INDEX IF NOT EXISTS idx_recent_threads_last_active
             ON recent_threads(last_active_at DESC);
 
+        CREATE TABLE IF NOT EXISTS projection_states (
+            projection_name TEXT PRIMARY KEY,
+            projection_version INTEGER NOT NULL,
+            source_row_count INTEGER NOT NULL,
+            projected_at TEXT NOT NULL
+        ) STRICT;
+
         CREATE TABLE IF NOT EXISTS thread_meta (
             thread_id TEXT PRIMARY KEY,
             workspace_dir TEXT,
@@ -2662,6 +2822,8 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
             updated_at TEXT,
             last_delivery_context_json TEXT,
             last_delivery_updated_at TEXT,
+            default_list_hidden INTEGER NOT NULL DEFAULT 0,
+            projection_version INTEGER NOT NULL DEFAULT 2,
             projected_at TEXT NOT NULL
         ) STRICT;
 
@@ -2883,9 +3045,13 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         ) STRICT;
         "#,
     )?;
+    ensure_thread_meta_projection_columns(conn)?;
     ensure_workflow_runs_task_columns(conn)?;
     conn.execute_batch(
         r#"
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_visible_updated
+            ON thread_meta(default_list_hidden, updated_at DESC, projected_at DESC);
+
         CREATE INDEX IF NOT EXISTS idx_workflow_runs_task
             ON workflow_runs(task_id, created_at DESC);
 
@@ -2938,6 +3104,23 @@ fn optional_from_stored_string(value: &str) -> Option<String> {
     normalize_optional(Some(value))
 }
 
+fn thread_meta_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ThreadMetaRecord> {
+    Ok(ThreadMetaRecord {
+        thread_id: row.get(0)?,
+        workspace_dir: row.get(1)?,
+        thread_type: row.get(2)?,
+        thread_label: row.get(3)?,
+        agent_id: row.get(4)?,
+        provider_type: row.get(5)?,
+        updated_at: row.get(6)?,
+        last_delivery_context_json: row.get(7)?,
+        last_delivery_updated_at: row.get(8)?,
+        default_list_hidden: row.get::<_, i64>(9)? != 0,
+        projection_version: row.get(10)?,
+        projected_at: row.get(11)?,
+    })
+}
+
 fn remove_thread_meta_projection_tx(conn: &Connection, thread_id: &str) -> GaryxDbResult<usize> {
     let mut removed = 0usize;
     removed += conn.execute(
@@ -2970,13 +3153,15 @@ fn upsert_thread_meta(
     let updated_at = normalize_optional(meta.updated_at.as_deref());
     let last_delivery_context_json = normalize_optional(meta.last_delivery_context_json.as_deref());
     let last_delivery_updated_at = normalize_optional(meta.last_delivery_updated_at.as_deref());
+    let default_list_hidden = if meta.default_list_hidden { 1 } else { 0 };
 
     tx.execute(
         "INSERT INTO thread_meta (
             thread_id, workspace_dir, thread_type, thread_label, agent_id, provider_type,
-            updated_at, last_delivery_context_json, last_delivery_updated_at, projected_at
+            updated_at, last_delivery_context_json, last_delivery_updated_at,
+            default_list_hidden, projection_version, projected_at
          )
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(thread_id) DO UPDATE SET
             workspace_dir = excluded.workspace_dir,
             thread_type = excluded.thread_type,
@@ -2986,6 +3171,8 @@ fn upsert_thread_meta(
             updated_at = excluded.updated_at,
             last_delivery_context_json = excluded.last_delivery_context_json,
             last_delivery_updated_at = excluded.last_delivery_updated_at,
+            default_list_hidden = excluded.default_list_hidden,
+            projection_version = excluded.projection_version,
             projected_at = excluded.projected_at",
         params![
             thread_id,
@@ -2997,6 +3184,8 @@ fn upsert_thread_meta(
             updated_at,
             last_delivery_context_json,
             last_delivery_updated_at,
+            default_list_hidden,
+            CURRENT_THREAD_META_PROJECTION_VERSION,
             recorded_at,
         ],
     )?;
@@ -3183,6 +3372,30 @@ fn ensure_workspaces_deleted_at_column(conn: &Connection) -> GaryxDbResult<()> {
         }
     }
     conn.execute("ALTER TABLE workspaces ADD COLUMN deleted_at TEXT", [])?;
+    Ok(())
+}
+
+fn ensure_thread_meta_projection_columns(conn: &Connection) -> GaryxDbResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(thread_meta)")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    let mut columns = BTreeSet::new();
+    for row in rows {
+        columns.insert(row?);
+    }
+    if !columns.contains("default_list_hidden") {
+        conn.execute(
+            "ALTER TABLE thread_meta
+             ADD COLUMN default_list_hidden INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !columns.contains("projection_version") {
+        conn.execute(
+            "ALTER TABLE thread_meta
+             ADD COLUMN projection_version INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -4165,6 +4378,7 @@ mod tests {
                 updated_at: Some("2026-06-03T08:00:00.000Z".to_owned()),
                 last_delivery_context_json: Some(delivery_json.clone()),
                 last_delivery_updated_at: Some("2026-06-03T08:00:01.000Z".to_owned()),
+                default_list_hidden: false,
             },
             channel_endpoints: vec![KnownChannelEndpoint {
                 endpoint_key: "telegram::main::42".to_owned(),

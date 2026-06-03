@@ -1117,6 +1117,104 @@ async fn delete_thread_removes_garyx_db_recent_thread() {
 }
 
 #[tokio::test]
+async fn threads_route_reads_full_thread_meta_projection_not_recent_subset() {
+    let state = AppStateBuilder::new(test_config()).build();
+    let thread_id = "thread::workspace-projection-only";
+    state
+        .threads
+        .thread_store
+        .set(
+            thread_id,
+            json!({
+                "thread_id": thread_id,
+                "label": "Workspace Projection Only",
+                "workspace_dir": "/Users/test/project",
+                "updated_at": "2026-05-23T09:00:00.000Z"
+            }),
+        )
+        .await;
+    state
+        .ops
+        .garyx_db
+        .remove_recent_thread(thread_id)
+        .expect("remove from recent projection");
+    let router = build_router(state);
+
+    let request = authed_request()
+        .uri("/api/threads?limit=1000")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["count"], 1);
+    assert_eq!(payload["threads"][0]["thread_id"], thread_id);
+    assert_eq!(
+        payload["threads"][0]["workspace_dir"],
+        "/Users/test/project"
+    );
+}
+
+#[tokio::test]
+async fn threads_route_filters_default_hidden_threads_from_meta_projection() {
+    let state = AppStateBuilder::new(test_config()).build();
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::visible-meta",
+            json!({
+                "thread_id": "thread::visible-meta",
+                "label": "Visible",
+                "updated_at": "2026-05-23T09:00:00.000Z"
+            }),
+        )
+        .await;
+    state
+        .threads
+        .thread_store
+        .set(
+            "thread::hidden-meta",
+            json!({
+                "thread_id": "thread::hidden-meta",
+                "label": "Hidden",
+                "workflow_child_run_id": "workflow-child::1",
+                "updated_at": "2026-05-23T10:00:00.000Z"
+            }),
+        )
+        .await;
+    let router = build_router(state);
+
+    let request = authed_request()
+        .uri("/api/threads")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["total"], 1);
+    assert_eq!(payload["threads"][0]["thread_id"], "thread::visible-meta");
+
+    let request = authed_request()
+        .uri("/api/threads?include_hidden=true")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let payload: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["total"], 2);
+}
+
+#[tokio::test]
 async fn dream_scan_route_persists_thread_topic_spans() {
     let state = AppStateBuilder::new(test_config()).build();
     let thread_id = "thread::dream-route";
@@ -2956,7 +3054,7 @@ async fn bot_consoles_route_aggregates_configured_bots_and_endpoints() {
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/bot-consoles?include_endpoints=true")
+        .uri("/api/bot-consoles")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -2982,7 +3080,11 @@ async fn bot_consoles_route_aggregates_configured_bots_and_endpoints() {
     assert_eq!(main["endpoint_count"], 1);
     assert_eq!(main["bound_endpoint_count"], 1);
     assert_eq!(main["endpoints"][0]["thread_id"], "thread::support");
-    assert_eq!(main["conversation_nodes"].as_array().unwrap().len(), 0);
+    assert_eq!(main["conversation_nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        main["conversation_nodes"][0]["endpoint"]["thread_id"],
+        "thread::support"
+    );
 }
 
 #[tokio::test]

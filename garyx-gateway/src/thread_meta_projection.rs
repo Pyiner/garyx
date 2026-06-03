@@ -4,8 +4,9 @@ use garyx_models::routing::{
     DeliveryContext, infer_delivery_target_id, infer_delivery_target_type,
 };
 use garyx_router::{
-    KnownChannelEndpoint, ThreadStore, agent_id_from_value, bindings_from_value, is_thread_key,
-    label_from_value, thread_kind_from_value, workspace_dir_from_value,
+    KnownChannelEndpoint, ThreadStore, agent_id_from_value, bindings_from_value,
+    is_default_thread_list_hidden, is_thread_key, label_from_value, thread_kind_from_value,
+    workspace_dir_from_value,
 };
 use serde_json::Value;
 use tracing::warn;
@@ -28,13 +29,13 @@ pub(crate) async fn backfill_thread_meta_projection_if_incomplete(
     garyx_db: &GaryxDbService,
 ) -> ThreadMetaProjectionBackfillStats {
     let thread_ids = thread_store.list_keys(Some("thread::")).await;
-    match garyx_db.count_thread_meta_rows() {
-        Ok(count) if count == thread_ids.len() => {
+    match garyx_db.thread_meta_projection_is_current(thread_ids.len()) {
+        Ok(true) => {
             return ThreadMetaProjectionBackfillStats::default();
         }
-        Ok(_) => {}
+        Ok(false) => {}
         Err(error) => {
-            warn!(error = %error, "failed to count thread meta projection before backfill");
+            warn!(error = %error, "failed to check thread meta projection before backfill");
             return ThreadMetaProjectionBackfillStats::default();
         }
     }
@@ -124,6 +125,7 @@ pub(crate) fn thread_meta_projection_from_thread_data(
             .as_ref()
             .map(|(context_json, _)| context_json.clone()),
         last_delivery_updated_at: last_delivery.and_then(|(_, updated_at)| updated_at),
+        default_list_hidden: is_default_thread_list_hidden(data),
     };
     let channel_endpoints = bindings_from_value(data)
         .into_iter()

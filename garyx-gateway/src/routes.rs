@@ -14,9 +14,8 @@ use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_O
 use garyx_router::{
     ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode,
     active_run_snapshot_run_id, bindings_from_value, detach_endpoint_from_thread,
-    history_message_count, is_default_thread_list_hidden, is_thread_key, thread_kind_from_value,
-    update_thread_record, workspace_dir_from_value,
-    workspace_git_status as router_workspace_git_status,
+    history_message_count, is_thread_key, thread_kind_from_value, update_thread_record,
+    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -24,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::agent_identity::create_thread_for_agent_reference;
-use crate::garyx_db::{GaryxDbError, PinnedThreadRecord, RecentThreadRecord};
+use crate::garyx_db::{GaryxDbError, PinnedThreadRecord, RecentThreadRecord, ThreadMetaRecord};
 use crate::provider_session_locator::recover_local_provider_session;
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
@@ -486,31 +485,59 @@ fn resolve_default_open_endpoint_from_account_ui(
     Some(channel_endpoint_response_value(endpoint))
 }
 
-fn conversation_nodes_from_account_ui(
-    account_ui: Option<&PluginAccountUi>,
-    endpoints: &[garyx_router::KnownChannelEndpoint],
-) -> Option<Vec<Value>> {
-    let account_ui = account_ui?;
-    let endpoint_map: HashMap<&str, &garyx_router::KnownChannelEndpoint> = endpoints
+fn endpoint_activity(endpoint: &garyx_router::KnownChannelEndpoint) -> Option<&str> {
+    endpoint
+        .last_inbound_at
+        .as_deref()
+        .or(endpoint.last_delivery_at.as_deref())
+        .or(endpoint.thread_updated_at.as_deref())
+}
+
+fn default_open_endpoint_from_projected_endpoints(
+    endpoints: &[&garyx_router::KnownChannelEndpoint],
+) -> Option<Value> {
+    endpoints
         .iter()
-        .map(|endpoint| (endpoint.endpoint_key.as_str(), endpoint))
-        .collect();
-    let mut nodes = Vec::new();
-    for node in &account_ui.conversation_nodes {
-        let Some(endpoint) = endpoint_map.get(node.endpoint_key.as_str()).copied() else {
-            continue;
-        };
-        nodes.push(json!({
-            "id": node.id,
-            "endpoint": channel_endpoint_response_value(endpoint),
-            "kind": node.kind,
-            "title": node.title,
-            "badge": node.badge,
-            "latest_activity": node.latest_activity,
-            "openable": node.openable,
-        }));
-    }
-    Some(nodes)
+        .filter(|endpoint| endpoint.thread_id.is_some())
+        .max_by(|left, right| {
+            endpoint_activity(left)
+                .unwrap_or_default()
+                .cmp(endpoint_activity(right).unwrap_or_default())
+                .then_with(|| left.endpoint_key.cmp(&right.endpoint_key))
+        })
+        .map(|endpoint| channel_endpoint_response_value(endpoint))
+}
+
+fn conversation_nodes_from_projected_endpoints(
+    endpoints: &[&garyx_router::KnownChannelEndpoint],
+) -> Vec<Value> {
+    let mut sorted = endpoints
+        .iter()
+        .filter(|endpoint| endpoint.thread_id.is_some())
+        .copied()
+        .collect::<Vec<_>>();
+    sorted.sort_by(|left, right| {
+        endpoint_activity(right)
+            .unwrap_or_default()
+            .cmp(endpoint_activity(left).unwrap_or_default())
+            .then_with(|| left.endpoint_key.cmp(&right.endpoint_key))
+    });
+
+    sorted
+        .into_iter()
+        .map(|endpoint| {
+            let conversation = endpoint_conversation_details(endpoint);
+            json!({
+                "id": endpoint.endpoint_key.replace("::", ":"),
+                "endpoint": channel_endpoint_response_value(endpoint),
+                "kind": conversation.kind,
+                "title": conversation.label,
+                "badge": Value::Null,
+                "latest_activity": endpoint_activity(endpoint),
+                "openable": endpoint.thread_id.is_some(),
+            })
+        })
+        .collect()
 }
 
 pub(crate) async fn resolve_main_endpoint_by_bot(
@@ -1094,6 +1121,27 @@ pub(crate) fn thread_summary(thread_id: &str, data: &Value) -> Value {
     })
 }
 
+fn thread_summary_from_meta(record: &ThreadMetaRecord) -> Value {
+    json!({
+        "thread_id": record.thread_id.as_str(),
+        "thread_key": record.thread_id.as_str(),
+        "thread_type": record.thread_type.as_str(),
+        "label": record.thread_label.as_deref(),
+        "workspace_dir": record.workspace_dir.as_deref(),
+        "channel_bindings": [],
+        "updated_at": record.updated_at.as_deref(),
+        "created_at": Value::Null,
+        "message_count": 0,
+        "last_user_message": Value::Null,
+        "last_assistant_message": Value::Null,
+        "agent_id": record.agent_id.as_deref(),
+        "provider_type": record.provider_type.as_deref(),
+        "worktree": Value::Null,
+        "recent_run_id": Value::Null,
+        "active_run_id": Value::Null,
+    })
+}
+
 fn thread_pin_ids(records: &[PinnedThreadRecord]) -> Vec<String> {
     records
         .iter()
@@ -1220,39 +1268,41 @@ pub async fn list_threads(
     State(state): State<Arc<AppState>>,
     Query(params): Query<ListThreadsParams>,
 ) -> impl IntoResponse {
-    let entries = state.cached_thread_list_entries().await;
-    let mut candidates = Vec::new();
-    for entry in entries {
-        if let Some(prefix) = params.prefix.as_deref()
-            && !entry.key.starts_with(prefix)
-        {
-            continue;
-        }
-        let data = entry.data;
-        if !params.include_hidden && is_default_thread_list_hidden(&data) {
-            continue;
-        }
-        candidates.push((entry.key, data));
-    }
-
-    let total = candidates.len();
     let limit = params.limit.min(MAX_THREAD_LIMIT);
+    let total = match state
+        .ops
+        .garyx_db
+        .count_thread_meta_list(params.include_hidden, params.prefix.as_deref())
+    {
+        Ok(total) => total,
+        Err(error) => return garyx_db_error_response(error).into_response(),
+    };
     let offset = params.offset.min(total);
-    let page_candidates: Vec<(String, Value)> =
-        candidates.into_iter().skip(offset).take(limit).collect();
-    let mut page = Vec::with_capacity(page_candidates.len());
-    for (key, data) in page_candidates {
-        page.push(thread_summary(&key, &data));
-    }
+    let page = match state.ops.garyx_db.list_thread_meta_page(
+        limit,
+        offset,
+        params.include_hidden,
+        params.prefix.as_deref(),
+    ) {
+        Ok(records) => records
+            .iter()
+            .map(thread_summary_from_meta)
+            .collect::<Vec<_>>(),
+        Err(error) => return garyx_db_error_response(error).into_response(),
+    };
     let count = page.len();
 
-    Json(json!({
+    (
+        StatusCode::OK,
+        Json(json!({
         "threads": page,
         "count": count,
         "total": total,
         "limit": limit,
         "offset": offset,
-    }))
+        })),
+    )
+        .into_response()
 }
 
 /// GET /api/recent-threads - list recently active threads for compact clients.
@@ -1759,14 +1809,10 @@ pub async fn list_configured_bots(
 /// GET /api/bot-consoles - list aggregated bot console summaries
 pub async fn list_bot_consoles(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<BotListParams>,
+    Query(_params): Query<BotListParams>,
 ) -> impl IntoResponse {
     let config = state.config_snapshot();
-    let endpoints = if params.include_endpoints {
-        state.cached_channel_endpoints().await
-    } else {
-        Vec::new()
-    };
+    let endpoints = state.cached_channel_endpoints().await;
     let mut groups = Vec::<Value>::new();
     let mut group_indexes = HashMap::<String, usize>::new();
 
@@ -1776,69 +1822,50 @@ pub async fn list_bot_consoles(
         }
         let id = format!("{}::{}", account.channel, account.account_id);
         let root_behavior = channel_root_behavior(&state, &account.channel).await;
-        let account_ui = if params.include_endpoints {
-            resolve_account_ui_with_endpoints(
-                &state,
-                &account.channel,
-                &account.account_id,
-                &endpoints,
-            )
-            .await
-        } else {
-            None
-        };
-        let main_endpoint = if params.include_endpoints {
-            resolve_main_endpoint_with_endpoints(
-                &state,
-                &account.channel,
-                &account.account_id,
-                &endpoints,
-            )
-            .await
-        } else {
-            None
-        };
+        let account_endpoints = endpoints
+            .iter()
+            .filter(|endpoint| {
+                endpoint.channel == account.channel && endpoint.account_id == account.account_id
+            })
+            .collect::<Vec<_>>();
         let default_open_endpoint = if root_behavior == "expand_only" {
             None
-        } else if let Some(endpoint) = main_endpoint.as_ref() {
-            Some(endpoint.to_value())
         } else {
-            resolve_default_open_endpoint_from_account_ui(account_ui.as_ref(), &endpoints)
+            default_open_endpoint_from_projected_endpoints(&account_endpoints)
         };
         let default_open_thread_id = default_open_endpoint
             .as_ref()
             .and_then(|value| value.get("thread_id"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        let main_endpoint = default_open_endpoint.clone();
+        let main_endpoint_thread_id = default_open_thread_id.clone();
         let display_name = bot_display_name(account.name.as_deref(), &account.account_id);
         group_indexes.insert(id.clone(), groups.len());
         groups.push(json!({
-                "id": id,
-                "channel": account.channel,
-                "account_id": account.account_id,
-                "display_name": display_name,
-                "name": account.name.as_deref(),
-                "title": bot_title(&account.channel, &account.account_id, account.name.as_deref()),
-                "subtitle": bot_subtitle(&account.channel, &account.account_id),
-                "agent_id": account.agent_id.as_deref().unwrap_or(""),
-                "workspace_dir": account.workspace_dir.as_deref(),
-                "workspace_mode": public_workspace_mode(account.workspace_mode.as_deref()),
-                "root_behavior": root_behavior,
-                "endpoint_count": 0,
-                "bound_endpoint_count": 0,
-                "latest_activity": Value::Null,
-                "status": "idle",
-                "main_endpoint_status": if main_endpoint.is_some() { "resolved" } else { "unresolved" },
-                "main_endpoint": main_endpoint.as_ref().map(ResolvedMainEndpoint::to_value),
-                "main_endpoint_thread_id": main_endpoint.as_ref().and_then(|endpoint| endpoint.thread_id.clone()),
-                "default_open_endpoint": default_open_endpoint,
-                "default_open_thread_id": default_open_thread_id,
-                "conversation_nodes": conversation_nodes_from_account_ui(
-                    account_ui.as_ref(),
-                    &endpoints,
-                ).unwrap_or_default(),
-                "endpoints": [],
-            }));
+            "id": id,
+            "channel": account.channel,
+            "account_id": account.account_id,
+            "display_name": display_name,
+            "name": account.name.as_deref(),
+            "title": bot_title(&account.channel, &account.account_id, account.name.as_deref()),
+            "subtitle": bot_subtitle(&account.channel, &account.account_id),
+            "agent_id": account.agent_id.as_deref().unwrap_or(""),
+            "workspace_dir": account.workspace_dir.as_deref(),
+            "workspace_mode": public_workspace_mode(account.workspace_mode.as_deref()),
+            "root_behavior": root_behavior,
+            "endpoint_count": 0,
+            "bound_endpoint_count": 0,
+            "latest_activity": Value::Null,
+            "status": "idle",
+            "main_endpoint_status": if main_endpoint.is_some() { "resolved" } else { "unresolved" },
+            "main_endpoint": main_endpoint,
+            "main_endpoint_thread_id": main_endpoint_thread_id,
+            "default_open_endpoint": default_open_endpoint,
+            "default_open_thread_id": default_open_thread_id,
+            "conversation_nodes": conversation_nodes_from_projected_endpoints(&account_endpoints),
+            "endpoints": [],
+        }));
     }
 
     for endpoint in endpoints

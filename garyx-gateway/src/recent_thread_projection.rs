@@ -12,6 +12,8 @@ use crate::garyx_db::{GaryxDbService, RecentThreadDraft};
 use crate::thread_meta_projection::thread_meta_projection_from_thread_data;
 
 pub(crate) const RECENT_THREAD_MISSING_TIMESTAMP: &str = "1970-01-01T00:00:00.000Z";
+const RECENT_THREAD_PROJECTION_NAME: &str = "recent_threads";
+const RECENT_THREAD_PROJECTION_VERSION: i64 = 1;
 
 pub(crate) struct RecentThreadProjectingStore {
     inner: Arc<dyn ThreadStore>,
@@ -63,21 +65,27 @@ impl RecentThreadProjectingStore {
     }
 }
 
-pub(crate) async fn backfill_recent_thread_projection_if_empty(
+pub(crate) async fn backfill_recent_thread_projection_if_incomplete(
     thread_store: &Arc<dyn ThreadStore>,
     garyx_db: &GaryxDbService,
 ) -> usize {
-    match garyx_db.count_recent_threads() {
-        Ok(count) if count > 0 => return 0,
-        Ok(_) => {}
+    let thread_ids = thread_store.list_keys(Some("thread::")).await;
+    match garyx_db.projection_state_matches(
+        RECENT_THREAD_PROJECTION_NAME,
+        RECENT_THREAD_PROJECTION_VERSION,
+        thread_ids.len(),
+    ) {
+        Ok(true) => return 0,
+        Ok(false) => {}
         Err(error) => {
-            warn!(error = %error, "failed to count recent thread projection before backfill");
+            warn!(error = %error, "failed to check recent thread projection before backfill");
             return 0;
         }
     }
 
     let mut drafts = Vec::new();
-    for thread_id in thread_store.list_keys(Some("thread::")).await {
+    let source_row_count = thread_ids.len();
+    for thread_id in thread_ids {
         let Some(data) = thread_store.get(&thread_id).await else {
             continue;
         };
@@ -89,6 +97,13 @@ pub(crate) async fn backfill_recent_thread_projection_if_empty(
     if let Err(error) = garyx_db.sync_recent_threads_snapshot(drafts, usize::MAX) {
         warn!(error = %error, "failed to backfill recent thread projection");
         return 0;
+    }
+    if let Err(error) = garyx_db.record_projection_state(
+        RECENT_THREAD_PROJECTION_NAME,
+        RECENT_THREAD_PROJECTION_VERSION,
+        source_row_count,
+    ) {
+        warn!(error = %error, "failed to record recent thread projection state");
     }
     count
 }

@@ -3184,9 +3184,13 @@ export async function fetchThreadLogs(
 export async function fetchThreads(
   settings: DesktopSettings,
 ): Promise<DesktopThreadSummary[]> {
-  const payload = await requestJson<ThreadsPayload>(settings, "/api/threads", {
-    signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
-  });
+  const payload = await requestJson<ThreadsPayload>(
+    settings,
+    "/api/threads?limit=1000",
+    {
+      signal: AbortSignal.timeout(REMOTE_STATE_FETCH_TIMEOUT_MS),
+    },
+  );
 
   const threads = Array.isArray(payload.threads)
     ? payload.threads

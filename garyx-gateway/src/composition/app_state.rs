@@ -30,7 +30,7 @@ use crate::garyx_db::GaryxDbService;
 use crate::health::HealthChecker;
 use crate::mcp_metrics::McpToolMetrics;
 use crate::recent_thread_projection::{
-    backfill_recent_thread_projection_if_empty, prune_excluded_recent_thread_projection,
+    backfill_recent_thread_projection_if_incomplete, prune_excluded_recent_thread_projection,
     reconcile_active_recent_thread_projection,
 };
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
@@ -267,7 +267,7 @@ impl AppState {
         let workflow_reconcile_cutoff = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         tokio::spawn(async move {
             let started = Instant::now();
-            let recent_threads = backfill_recent_thread_projection_if_empty(
+            let recent_threads = backfill_recent_thread_projection_if_incomplete(
                 &state.threads.thread_store,
                 &state.ops.garyx_db,
             )
