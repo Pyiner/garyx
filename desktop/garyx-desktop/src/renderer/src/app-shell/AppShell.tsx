@@ -8901,6 +8901,7 @@ export function AppShell() {
                 }}
                 onSelectNewThreadWorkflow={(workflowId) => {
                   setPendingWorkflowId(workflowId);
+                  setPendingAgentId("claude");
                 }}
                 onSelectNewThreadWorkspaceMode={setPendingWorkspaceMode}
                 onResumeProviderSession={handleResumeProviderSession}

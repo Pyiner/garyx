@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Maximize2, MessageSquare, RefreshCcw, X } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, Circle, Loader2, Maximize2, MessageSquare, RefreshCcw, X } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
+
+import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 
 import type {
   DesktopTaskSummary,
@@ -17,6 +22,16 @@ import { AgentAvatar } from './AgentAvatar';
 
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'skipped']);
 const POLL_INTERVAL_MS = 4000;
+const VIEW_MODE_STORAGE_KEY = 'garyx.workflowViewMode';
+
+function readStoredViewMode(): WorkflowViewMode {
+  try {
+    const stored = window.localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+    return stored === 'console' || stored === 'timeline' ? stored : 'timeline';
+  } catch {
+    return 'timeline';
+  }
+}
 
 type WorkflowRunsPanelProps = {
   task?: DesktopTaskSummary | null;
@@ -386,7 +401,7 @@ function ResultReadableContent({
   if (typeof parsed.value === 'string') {
     return (
       <div className="workflow-result-markdown">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{parsed.value}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{parsed.value}</ReactMarkdown>
       </div>
     );
   }
@@ -891,12 +906,434 @@ function ChildResultPanel({
   );
 }
 
+type WorkflowViewMode = 'console' | 'timeline';
+
+function phaseDefaultExpanded(
+  phase: WorkflowPhase,
+  index: number,
+  phases: WorkflowPhase[],
+): boolean {
+  if (phase.status === 'running') {
+    return true;
+  }
+  if (phases.some((entry) => entry.status === 'running')) {
+    return false;
+  }
+  // Idle/finished run: expand the last phase that actually produced agents so
+  // the conversation does not collapse to a wall of empty headers.
+  const lastWithChildren = [...phases]
+    .reverse()
+    .find((entry) => entry.children.length > 0);
+  return lastWithChildren
+    ? phase.key === lastWithChildren.key
+    : index === phases.length - 1;
+}
+
+// Semantic state indicator shared by the timeline spine nodes. Running → spinner,
+// done → filled check, failed → red cross, not-yet-reached → hollow ring.
+function StepNode({ status }: { status: DesktopWorkflowRunStatus }) {
+  if (status === 'running') {
+    return (
+      <Loader2 className="size-[15px] animate-spin text-foreground/65" aria-hidden />
+    );
+  }
+  if (status === 'succeeded') {
+    return (
+      <span className="flex size-[15px] items-center justify-center rounded-full bg-foreground text-background">
+        <Check className="size-2.5" strokeWidth={3.5} aria-hidden />
+      </span>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <span className="flex size-[15px] items-center justify-center rounded-full bg-destructive text-white">
+        <X className="size-2.5" strokeWidth={3.5} aria-hidden />
+      </span>
+    );
+  }
+  return <Circle className="size-[15px] text-muted-foreground/35" strokeWidth={2} aria-hidden />;
+}
+
+// Plan checklist marker: shadcn Checkbox for reached/done state, spinner for the
+// active step, red for a failure. Reads as a real todo list.
+function PlanMarker({ status }: { status: DesktopWorkflowRunStatus }) {
+  if (status === 'running') {
+    return (
+      <Loader2 className="size-[18px] animate-spin text-foreground/65" aria-hidden />
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <span className="flex size-[18px] items-center justify-center rounded-md bg-destructive text-white">
+        <X className="size-3" strokeWidth={3} aria-hidden />
+      </span>
+    );
+  }
+  return (
+    <Checkbox
+      aria-hidden
+      checked={status === 'succeeded'}
+      className="pointer-events-none size-[18px]"
+      disabled
+      tabIndex={-1}
+    />
+  );
+}
+
+function runStatusBadgeClass(status: DesktopWorkflowRunStatus): string {
+  switch (status) {
+    case 'running':
+      return 'border-transparent bg-[#edf7fb] text-[#2d6987]';
+    case 'failed':
+      return 'border-transparent bg-destructive/10 text-destructive';
+    case 'succeeded':
+      return 'border-transparent bg-secondary text-foreground';
+    default:
+      return 'border-transparent bg-muted text-muted-foreground';
+  }
+}
+
+function AgentRow({
+  child,
+  onOpenThread,
+  onViewResult,
+  t,
+}: {
+  child: DesktopWorkflowChild;
+  onOpenThread: (threadId: string) => void;
+  onViewResult: (entry: { title: string; value: unknown }) => void;
+  t: Translate;
+}) {
+  const label = childDisplayName(child);
+  const agentName = childAgentDisplayName(child);
+  const tokenUsage = formatTokenUsage(child.inputTokens, child.outputTokens, t);
+  const cost = child.costUsd > 0 ? formatCost(child.costUsd) : null;
+  const outcome = childOutcomeValue(child);
+  const hasResult = outcome !== undefined && outcome !== null;
+  const threadId = child.threadId;
+  const canOpenThread = Boolean(threadId);
+  // Metrics stay hidden until hover; surface them as a native tooltip.
+  const tip = [
+    agentName,
+    tokenUsage,
+    cost,
+    child.toolCalls > 0 ? t('{count} tools', { count: child.toolCalls }) : null,
+    child.error || null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <div
+      className={`workflow-agent-row status-${child.status}`}
+      data-clickable={canOpenThread ? '' : undefined}
+      onClick={canOpenThread ? () => onOpenThread(threadId as string) : undefined}
+      onKeyDown={
+        canOpenThread
+          ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onOpenThread(threadId as string);
+              }
+            }
+          : undefined
+      }
+      role={canOpenThread ? 'button' : undefined}
+      tabIndex={canOpenThread ? 0 : undefined}
+      title={tip}
+    >
+      <span className="workflow-agent-row-avatar">
+        <AgentAvatar
+          agentId={child.agentId || child.workflowChildRunId}
+          displayName={agentName}
+          role="member"
+          size={20}
+        />
+        {child.status === 'running' ? (
+          <Loader2
+            aria-hidden
+            className="workflow-chip-spinner"
+            size={11}
+            strokeWidth={2.4}
+          />
+        ) : null}
+      </span>
+      <span className="workflow-agent-row-name">{label}</span>
+      {hasResult ? (
+        <button
+          className="workflow-agent-row-result"
+          onClick={(event) => {
+            event.stopPropagation();
+            onViewResult({ title: label, value: outcome });
+          }}
+          title={t('View result')}
+          type="button"
+        >
+          <Maximize2 aria-hidden size={12} strokeWidth={1.9} />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkflowTimelineView({
+  phases,
+  workflow,
+  onOpenThread,
+  t,
+}: {
+  phases: WorkflowPhase[];
+  workflow: DesktopWorkflowRunDrilldown['workflow'];
+  onOpenThread: (threadId: string) => void;
+  t: Translate;
+}) {
+  const [dialogEntry, setDialogEntry] = useState<{
+    title: string;
+    value: unknown;
+  } | null>(null);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => {
+    const next = new Set<string>();
+    phases.forEach((phase, index) => {
+      if (phaseDefaultExpanded(phase, index, phases)) {
+        next.add(phase.key);
+      }
+    });
+    return next;
+  });
+  const phaseRefs = useRef<Map<string, HTMLElement>>(new Map());
+  // Auto-open a phase the first time polling shows it running, so a live run
+  // always reveals the active stage. Each key is expanded once, so a manual
+  // collapse afterwards is respected.
+  const autoExpandedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const fresh = phases
+      .filter((phase) => phase.status === 'running')
+      .map((phase) => phase.key)
+      .filter((key) => !autoExpandedRef.current.has(key));
+    if (!fresh.length) {
+      return;
+    }
+    fresh.forEach((key) => autoExpandedRef.current.add(key));
+    setExpandedKeys((current) => {
+      const next = new Set(current);
+      fresh.forEach((key) => next.add(key));
+      return next;
+    });
+  }, [phases]);
+
+  const currentIndex =
+    workflow.currentPhaseIndex === null ||
+    workflow.currentPhaseIndex === undefined
+      ? -1
+      : workflow.currentPhaseIndex;
+  const streamPhases = phases.filter(
+    (phase) =>
+      phase.children.length > 0 ||
+      phase.status !== 'queued' ||
+      (phase.index !== null && phase.index <= currentIndex),
+  );
+  const visiblePhases = streamPhases.length ? streamPhases : phases.slice(0, 1);
+  const showFinal =
+    workflow.status === 'succeeded' && Boolean(workflow.summary?.trim());
+
+  const toggle = (key: string) => {
+    setExpandedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+  const focusPhase = (key: string) => {
+    setExpandedKeys((current) => {
+      if (current.has(key)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+    phaseRefs.current
+      .get(key)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const runStats = [
+    t('{completed}/{total} children', {
+      completed: workflow.completedChildren,
+      total: workflow.totalChildren,
+    }),
+    workflow.failedChildren > 0
+      ? t('{count} failed', { count: workflow.failedChildren })
+      : null,
+    workflow.totalCostUsd > 0 ? formatCost(workflow.totalCostUsd) : null,
+    workflow.startedAt
+      ? t('started {time}', {
+          time: formatRelativeTime(workflow.startedAt, t),
+        })
+      : null,
+  ].filter(Boolean);
+
+  return (
+    <div className="workflow-timeline">
+      <div className="workflow-timeline-main">
+        <div className="workflow-timeline-inner">
+          {visiblePhases.map((phase) => {
+            const expanded = expandedKeys.has(phase.key);
+            const running = phase.status === 'running';
+            return (
+              <section
+                className={`workflow-timeline-phase status-${phase.status}`}
+                key={phase.key}
+                ref={(el) => {
+                  if (el) {
+                    phaseRefs.current.set(phase.key, el);
+                  } else {
+                    phaseRefs.current.delete(phase.key);
+                  }
+                }}
+              >
+                <span className="workflow-phase-node">
+                  <StepNode status={phase.status} />
+                </span>
+                <div className="workflow-phase-content">
+                  <div
+                    className={`turn-summary ${
+                      expanded ? 'is-expanded' : 'is-collapsed'
+                    } ${running ? 'is-running' : ''} has-body`}
+                  >
+                    <button
+                      aria-expanded={expanded}
+                      className="turn-summary-toggle"
+                      onClick={() => toggle(phase.key)}
+                      type="button"
+                    >
+                      <span className="turn-summary-label">{phase.title}</span>
+                      <span className="workflow-phase-progress">
+                        {phase.completed}/{phase.children.length}
+                      </span>
+                      <ChevronDown
+                        aria-hidden
+                        className="turn-summary-chevron"
+                        size={15}
+                        strokeWidth={1.7}
+                      />
+                    </button>
+                    <div aria-hidden className="turn-summary-divider" />
+                    <div
+                      aria-hidden={!expanded}
+                      className="turn-summary-body"
+                      inert={!expanded ? true : undefined}
+                    >
+                      <div className="turn-summary-body-inner">
+                        {phase.detail ? (
+                          <p className="workflow-phase-detail">{phase.detail}</p>
+                        ) : null}
+                        {phase.children.length ? (
+                          <div className="workflow-agent-grid">
+                            {phase.children.map((child) => (
+                              <AgentRow
+                                child={child}
+                                key={child.workflowChildRunId}
+                                onOpenThread={onOpenThread}
+                                onViewResult={setDialogEntry}
+                                t={t}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="workflow-timeline-pending">
+                            {t('Waiting for agents…')}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            );
+          })}
+          {showFinal ? (
+            <section className="workflow-timeline-final workflow-result-markdown">
+              <div className="workflow-timeline-final-label">
+                {t('Workflow result')}
+              </div>
+              <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                {workflow.summary || ''}
+              </ReactMarkdown>
+            </section>
+          ) : null}
+        </div>
+      </div>
+
+      <aside className="workflow-plan-panel" aria-label={t('Plan')}>
+        <div className="workflow-plan-section">
+          <div className="workflow-plan-label">{t('Run')}</div>
+          <div className="workflow-plan-meta">
+            <Badge className={runStatusBadgeClass(workflow.status)}>
+              {t(workflow.status)}
+            </Badge>
+          </div>
+          {runStats.length ? (
+            <div className="workflow-plan-stats">
+              {runStats.map((stat, index) => (
+                <span key={index}>{stat}</span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <div className="workflow-plan-section">
+          <div className="workflow-plan-label">{t('Plan')}</div>
+          <ol className="workflow-plan-list">
+            {phases.map((phase) => (
+              <li key={phase.key}>
+                <div
+                  className={`workflow-plan-item status-${phase.status}`}
+                  onClick={() => focusPhase(phase.key)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      focusPhase(phase.key);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <span className="workflow-plan-check">
+                    <PlanMarker status={phase.status} />
+                  </span>
+                  <span className="workflow-plan-item-title" title={phase.title}>
+                    {phase.title}
+                  </span>
+                  <span className="workflow-plan-count">
+                    {phase.completed}/{phase.children.length}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </aside>
+
+      <ResultValueDialog
+        entry={dialogEntry}
+        onClose={() => setDialogEntry(null)}
+        t={t}
+      />
+    </div>
+  );
+}
+
 function RunCard({
   run,
+  viewMode,
   onOpenThread,
   t,
 }: {
   run: DesktopWorkflowRunDrilldown;
+  viewMode: WorkflowViewMode;
   onOpenThread: (threadId: string) => void;
   t: Translate;
 }) {
@@ -950,10 +1387,18 @@ function RunCard({
       ) : null}
 
       {phases.length ? (
+        viewMode === 'timeline' ? (
+          <WorkflowTimelineView
+            onOpenThread={onOpenThread}
+            phases={phases}
+            t={t}
+            workflow={workflow}
+          />
+        ) : (
         <div className="workflow-run-console">
           <nav className="workflow-phase-column" aria-label={t('Workflow phases')}>
             <div className="workflow-console-label">{t('Phases')}</div>
-            {phases.map((phase, index) => (
+            {phases.map((phase) => (
               <button
                 className={`workflow-phase-item ${
                   phase.key === activePhase?.key ? 'is-active' : ''
@@ -968,10 +1413,7 @@ function RunCard({
                 type="button"
               >
                 <span className="workflow-phase-main">
-                  <span className="workflow-phase-title">
-                    {phase.index === null ? index + 1 : phase.index + 1}.{' '}
-                    {phase.title}
-                  </span>
+                  <span className="workflow-phase-title">{phase.title}</span>
                   <span className="workflow-phase-count">
                     {phase.completed}/{phase.children.length}
                   </span>
@@ -1052,6 +1494,7 @@ function RunCard({
             t={t}
           />
         </div>
+        )
       ) : runOutcome ? (
         <section className="workflow-result-section workflow-run-result-fallback">
           <h4>{t('Workflow result')}</h4>
@@ -1075,36 +1518,22 @@ export function WorkflowRunsPanel({
   const [runs, setRuns] = useState<DesktopWorkflowRunDrilldown[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<WorkflowViewMode>(readStoredViewMode);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode);
+    } catch {
+      // Ignore storage failures (private mode, quota, etc.).
+    }
+  }, [viewMode]);
   const hasNonTerminal = runs.some((run) => !isTerminal(run.workflow.status));
   const shouldPoll =
     hasNonTerminal ||
     (runs.length === 0 &&
       (task?.status === 'in_progress' || Boolean(workflowRunId)));
   const mountedRef = useRef(true);
-  const taskLabel = task?.taskId || taskId || null;
-  const sourceLabel = taskLabel || workflowRunId || null;
   const primaryWorkflow = runs[0]?.workflow || null;
-  const headerTitle = primaryWorkflow?.name || t('Workflow run');
-  const headerMeta = [
-    sourceLabel,
-    primaryWorkflow
-      ? t('{completed}/{total} children', {
-          completed: primaryWorkflow.completedChildren,
-          total: primaryWorkflow.totalChildren,
-        })
-      : null,
-    primaryWorkflow && primaryWorkflow.failedChildren > 0
-      ? t('{count} failed', { count: primaryWorkflow.failedChildren })
-      : null,
-    primaryWorkflow && primaryWorkflow.totalCostUsd > 0
-      ? formatCost(primaryWorkflow.totalCostUsd)
-      : null,
-    primaryWorkflow?.startedAt
-      ? t('started {time}', {
-          time: formatRelativeTime(primaryWorkflow.startedAt, t),
-        })
-      : null,
-  ].filter(Boolean);
   const awaitingWorkflowRunRecord =
     Boolean(workflowRunId) && !error && runs.length === 0;
 
@@ -1186,30 +1615,45 @@ export function WorkflowRunsPanel({
         className="workflow-runs-panel"
       >
         <div className="workflow-runs-header">
-          <div className="workflow-runs-title-block">
-            <div className="workflow-runs-title-row">
-              {onOpenTasks ? (
-                <button
-                  className="workflow-runs-back"
-                  onClick={onOpenTasks}
-                  type="button"
-                >
-                  <ArrowLeft aria-hidden size={14} strokeWidth={1.8} />
-                  {t('Tasks')}
-                </button>
-              ) : null}
-              <h2>{headerTitle}</h2>
-              {primaryWorkflow ? (
-                <StatusPill status={primaryWorkflow.status} t={t} />
-              ) : null}
-            </div>
-            {headerMeta.length ? (
-              <span className="workflow-runs-subtitle">
-                {headerMeta.join(' · ')}
-              </span>
-            ) : null}
-          </div>
+          {onOpenTasks ? (
+            <button
+              className="workflow-runs-back"
+              onClick={onOpenTasks}
+              type="button"
+            >
+              <ArrowLeft aria-hidden size={14} strokeWidth={1.8} />
+              {t('Tasks')}
+            </button>
+          ) : (
+            <span className="workflow-runs-header-spacer" />
+          )}
           <div className="workflow-runs-header-actions">
+            {runs.length ? (
+              <ToggleGroup
+                aria-label={t('Workflow view')}
+                onValueChange={(value) => {
+                  if (value === 'timeline' || value === 'console') {
+                    setViewMode(value);
+                  }
+                }}
+                type="single"
+                value={viewMode}
+                variant="outline"
+              >
+                <ToggleGroupItem
+                  className="h-7 px-3 text-xs data-[state=on]:bg-accent data-[state=on]:text-foreground"
+                  value="timeline"
+                >
+                  {t('Timeline')}
+                </ToggleGroupItem>
+                <ToggleGroupItem
+                  className="h-7 px-3 text-xs data-[state=on]:bg-accent data-[state=on]:text-foreground"
+                  value="console"
+                >
+                  {t('Console')}
+                </ToggleGroupItem>
+              </ToggleGroup>
+            ) : null}
             {primaryWorkflow?.threadId && primaryWorkflow.threadId !== workflowRunId ? (
               <button
                 className="tasks-icon-button"
@@ -1253,6 +1697,7 @@ export function WorkflowRunsPanel({
                   onOpenThread={onOpenThread}
                   run={run}
                   t={t}
+                  viewMode={viewMode}
                 />
               ))}
             </div>

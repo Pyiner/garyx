@@ -382,7 +382,11 @@ function renderComposerProviderControl({
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
-          aria-label={t("Change agent for this thread")}
+          aria-label={
+            onSelectWorkflow
+              ? t("Change agent or workflow for this thread")
+              : t("Change agent for this thread")
+          }
           className="composer-provider-trigger"
           type="button"
         >
@@ -623,6 +627,7 @@ export function ComposerForm({
   slashCommandsLoading,
 }: ComposerFormProps) {
   const { t } = useI18n();
+  const workflowSelected = Boolean(selectedWorkflowId);
   const { entries: pluginCatalog } = useChannelPluginCatalog();
   const iconDataUrlByChannel = useMemo(
     () =>
@@ -761,7 +766,7 @@ export function ComposerForm({
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files || []);
-    if (!files.length) {
+    if (!files.length || workflowSelected) {
       return;
     }
     onAppendComposerAttachments(files);
@@ -769,7 +774,7 @@ export function ComposerForm({
 
   function handleDrop(event: DragEvent<HTMLFormElement>) {
     const files = Array.from(event.dataTransfer.files || []);
-    if (!files.length) {
+    if (!files.length || workflowSelected) {
       return;
     }
     event.preventDefault();
@@ -778,7 +783,7 @@ export function ComposerForm({
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(event.clipboardData.files || []);
-    if (!files.length) {
+    if (!files.length || workflowSelected) {
       return;
     }
     event.preventDefault();
@@ -1002,7 +1007,7 @@ export function ComposerForm({
           >
             <FloatingActionMenuItem
               className="composer-menu-item"
-              disabled={composerLocked}
+              disabled={composerLocked || workflowSelected}
               onSelect={() => {
                 composerAttachmentInputRef.current?.click();
               }}

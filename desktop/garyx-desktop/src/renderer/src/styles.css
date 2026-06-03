@@ -20817,3 +20817,321 @@ button.new-thread-dreams-scan:hover {
   background: rgba(26, 28, 31, 0.05);
   color: var(--color-token-text-secondary);
 }
+
+/* View toggle uses the shadcn ToggleGroup component (outline). */
+
+/* Workflow timeline (conversation-style) view */
+.workflow-timeline {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-token-bg-primary);
+}
+
+.workflow-timeline-main {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  /* Reserve the right gutter for the floating plan card. */
+  padding: 16px 256px 48px 20px;
+}
+
+.workflow-timeline-inner {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+/* Each phase: a status node on a vertical spine + collapsible content. */
+.workflow-timeline-phase {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  column-gap: 10px;
+  padding-bottom: 16px;
+}
+
+/* Continuous spine threading the nodes together. */
+.workflow-timeline-phase::before {
+  content: '';
+  position: absolute;
+  left: 10px;
+  top: 7px;
+  bottom: 0;
+  width: 1.5px;
+  background: var(--color-token-border);
+}
+
+.workflow-timeline-phase:last-of-type::before {
+  display: none;
+}
+
+.workflow-phase-node {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin-top: 5px;
+  justify-self: center;
+  /* Page-colored backplate masks the spine behind the status node. */
+  background: var(--color-token-bg-primary);
+}
+
+.workflow-phase-content {
+  min-width: 0;
+}
+
+/* Phase header reuses the thread "Worked" collapsible (.turn-summary), but the
+   phase title is the primary structure here so it earns more presence than a
+   thread's secondary "Worked" row. */
+.workflow-timeline-phase .turn-summary-toggle {
+  width: 100%;
+}
+
+.workflow-timeline-phase .turn-summary-label {
+  color: var(--color-token-text-primary);
+  font-size: 13px;
+  font-weight: var(--font-weight-medium);
+}
+
+.workflow-timeline-phase.status-queued .turn-summary-label {
+  color: var(--color-token-text-secondary);
+  font-weight: 400;
+}
+
+.workflow-phase-progress {
+  margin-left: auto;
+  color: var(--color-token-text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.workflow-phase-detail {
+  margin: 0 0 8px;
+  color: var(--color-token-text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* Agents: borderless avatar + name rows in a tidy responsive grid. */
+.workflow-agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+  gap: 1px 10px;
+}
+
+.workflow-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 7px;
+  text-align: left;
+}
+
+.workflow-agent-row[data-clickable] {
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.workflow-agent-row[data-clickable]:hover {
+  background: rgba(26, 28, 31, 0.045);
+}
+
+.workflow-agent-row-avatar {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.workflow-agent-row.status-failed .workflow-agent-row-name {
+  color: #b03a2e;
+}
+
+.workflow-chip-spinner {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  color: #2d6987;
+  background: var(--color-token-bg-primary);
+  border-radius: 50%;
+  animation: workflow-spin 0.9s linear infinite;
+}
+
+.workflow-agent-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-token-text-primary);
+  font-size: 12.5px;
+}
+
+.workflow-agent-row-result {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-token-text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.workflow-agent-row:hover .workflow-agent-row-result,
+.workflow-agent-row:focus-within .workflow-agent-row-result {
+  opacity: 1;
+}
+
+.workflow-agent-row-result:hover {
+  background: rgba(26, 28, 31, 0.08);
+  color: var(--color-token-text-primary);
+}
+
+.workflow-timeline-pending {
+  margin: 0;
+  color: var(--color-token-text-secondary);
+  font-size: 12px;
+  font-style: italic;
+}
+
+.workflow-timeline-final {
+  margin: 4px 0 0 32px;
+  padding-top: 16px;
+  border-top: 0.5px solid var(--color-token-border);
+}
+
+.workflow-timeline-final-label {
+  margin-bottom: 6px;
+  color: var(--color-token-text-secondary);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* Floating plan card (Codex-parity), anchored top-right over the stream. */
+.workflow-plan-panel {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 232px;
+  max-height: calc(100% - 32px);
+  padding: 15px 15px 16px;
+  border: 0.5px solid rgba(26, 28, 31, 0.08);
+  border-radius: 14px;
+  background: var(--color-token-bg-primary);
+  box-shadow:
+    0 12px 36px rgba(26, 28, 31, 0.08),
+    0 2px 8px rgba(26, 28, 31, 0.05);
+  overflow: auto;
+}
+
+.workflow-plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workflow-plan-label {
+  color: var(--color-token-text-secondary);
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.workflow-plan-meta {
+  display: flex;
+}
+
+.workflow-plan-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  color: var(--color-token-text-secondary);
+  font-size: 11px;
+}
+
+.workflow-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workflow-plan-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-token-text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.workflow-plan-item:hover {
+  background: rgba(26, 28, 31, 0.05);
+}
+
+.workflow-plan-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  justify-self: center;
+}
+
+.workflow-plan-item.status-succeeded .workflow-plan-item-title,
+.workflow-plan-item.status-running .workflow-plan-item-title {
+  color: var(--color-token-text-primary);
+}
+
+.workflow-plan-item-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-plan-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.workflow-spinner {
+  animation: workflow-spin 0.9s linear infinite;
+}
+
+@keyframes workflow-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
