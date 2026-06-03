@@ -2749,7 +2749,7 @@ async fn configured_bots_route_exposes_resolved_main_endpoints() {
     let router = build_router(state);
 
     let request = authed_request()
-        .uri("/api/configured-bots")
+        .uri("/api/configured-bots?include_endpoints=true")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -2880,7 +2880,7 @@ async fn configured_bots_route_resolves_legacy_telegram_private_endpoint_without
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/configured-bots")
+        .uri("/api/configured-bots?include_endpoints=true")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -2956,7 +2956,7 @@ async fn bot_consoles_route_aggregates_configured_bots_and_endpoints() {
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/bot-consoles")
+        .uri("/api/bot-consoles?include_endpoints=true")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -3078,7 +3078,7 @@ async fn bot_consoles_route_uses_configured_bot_order_not_activity_order() {
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/bot-consoles")
+        .uri("/api/bot-consoles?include_endpoints=true")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
@@ -3141,7 +3141,7 @@ async fn bot_consoles_route_ignores_unconfigured_endpoint_accounts() {
 
     let router = build_router(state);
     let request = authed_request()
-        .uri("/api/bot-consoles")
+        .uri("/api/bot-consoles?include_endpoints=true")
         .body(Body::empty())
         .unwrap();
     let response = router.oneshot(request).await.unwrap();

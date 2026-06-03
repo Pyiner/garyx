@@ -4,6 +4,7 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use chrono::{SecondsFormat, Utc};
+use garyx_router::KnownChannelEndpoint;
 use rusqlite::{Connection, OptionalExtension, Transaction, params, params_from_iter};
 use serde::Serialize;
 use uuid::Uuid;
@@ -61,6 +62,69 @@ pub struct RecentThreadDraft {
     pub run_state: String,
     pub updated_at: Option<String>,
     pub last_active_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadMessageRouteRecord {
+    pub thread_id: String,
+    pub channel: String,
+    pub account_id: String,
+    pub chat_id: String,
+    pub thread_binding_key: Option<String>,
+    pub message_id: String,
+    pub projected_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadMessageRouteDraft {
+    pub thread_id: String,
+    pub channel: String,
+    pub account_id: String,
+    pub chat_id: String,
+    pub thread_binding_key: Option<String>,
+    pub message_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadMetaRecord {
+    pub thread_id: String,
+    pub workspace_dir: Option<String>,
+    pub thread_type: String,
+    pub thread_label: Option<String>,
+    pub agent_id: Option<String>,
+    pub provider_type: Option<String>,
+    pub updated_at: Option<String>,
+    pub last_delivery_context_json: Option<String>,
+    pub last_delivery_updated_at: Option<String>,
+    pub projected_at: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadMetaDraft {
+    pub thread_id: String,
+    pub workspace_dir: Option<String>,
+    pub thread_type: String,
+    pub thread_label: Option<String>,
+    pub agent_id: Option<String>,
+    pub provider_type: Option<String>,
+    pub updated_at: Option<String>,
+    pub last_delivery_context_json: Option<String>,
+    pub last_delivery_updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ThreadMetaProjectionSnapshot {
+    pub thread_meta: Vec<ThreadMetaDraft>,
+    pub channel_endpoints: Vec<KnownChannelEndpoint>,
+    pub message_routes: Vec<ThreadMessageRouteDraft>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ThreadMetaProjectionDraft {
+    pub thread_id: String,
+    pub thread_meta: ThreadMetaDraft,
+    pub channel_endpoints: Vec<KnownChannelEndpoint>,
+    pub message_routes: Vec<ThreadMessageRouteDraft>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -788,6 +852,180 @@ impl GaryxDbService {
             "DELETE FROM recent_threads WHERE thread_id = ?1",
             params![thread_id],
         )?;
+        Ok(removed > 0)
+    }
+
+    pub fn count_thread_meta_projection_rows(&self) -> GaryxDbResult<usize> {
+        let conn = self.conn()?;
+        let count: i64 = conn.query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM thread_meta) +
+                (SELECT COUNT(*) FROM thread_channel_endpoints) +
+                (SELECT COUNT(*) FROM thread_message_routes)",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    pub fn count_thread_meta_rows(&self) -> GaryxDbResult<usize> {
+        let conn = self.conn()?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM thread_meta", [], |row| row.get(0))?;
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    pub fn count_thread_channel_endpoints(&self) -> GaryxDbResult<usize> {
+        let conn = self.conn()?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM thread_channel_endpoints", [], |row| {
+                row.get(0)
+            })?;
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
+    }
+
+    pub fn list_thread_channel_endpoints(&self) -> GaryxDbResult<Vec<KnownChannelEndpoint>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT endpoint_key, channel, account_id, binding_key, chat_id,
+                    delivery_target_type, delivery_target_id, display_label,
+                    thread_id, thread_label, workspace_dir, thread_updated_at,
+                    last_inbound_at, last_delivery_at
+             FROM thread_channel_endpoints
+             ORDER BY endpoint_key ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(KnownChannelEndpoint {
+                endpoint_key: row.get(0)?,
+                channel: row.get(1)?,
+                account_id: row.get(2)?,
+                binding_key: row.get(3)?,
+                chat_id: row.get(4)?,
+                delivery_target_type: row.get(5)?,
+                delivery_target_id: row.get(6)?,
+                display_label: row.get(7)?,
+                thread_id: row.get(8)?,
+                thread_label: row.get(9)?,
+                workspace_dir: row.get(10)?,
+                thread_updated_at: row.get(11)?,
+                last_inbound_at: row.get(12)?,
+                last_delivery_at: row.get(13)?,
+            })
+        })?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn list_thread_message_routes(&self) -> GaryxDbResult<Vec<ThreadMessageRouteRecord>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, channel, account_id, chat_id, thread_binding_key,
+                    message_id, projected_at
+             FROM thread_message_routes
+             ORDER BY projected_at ASC, thread_id ASC, message_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let thread_binding_key: String = row.get(4)?;
+            Ok(ThreadMessageRouteRecord {
+                thread_id: row.get(0)?,
+                channel: row.get(1)?,
+                account_id: row.get(2)?,
+                chat_id: row.get(3)?,
+                thread_binding_key: optional_from_stored_string(&thread_binding_key),
+                message_id: row.get(5)?,
+                projected_at: row.get(6)?,
+            })
+        })?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn list_thread_meta(&self) -> GaryxDbResult<Vec<ThreadMetaRecord>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT thread_id, workspace_dir, thread_type, thread_label, agent_id,
+                    provider_type, updated_at, last_delivery_context_json,
+                    last_delivery_updated_at, projected_at
+             FROM thread_meta
+             ORDER BY thread_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ThreadMetaRecord {
+                thread_id: row.get(0)?,
+                workspace_dir: row.get(1)?,
+                thread_type: row.get(2)?,
+                thread_label: row.get(3)?,
+                agent_id: row.get(4)?,
+                provider_type: row.get(5)?,
+                updated_at: row.get(6)?,
+                last_delivery_context_json: row.get(7)?,
+                last_delivery_updated_at: row.get(8)?,
+                projected_at: row.get(9)?,
+            })
+        })?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
+
+    pub fn sync_thread_meta_projection_snapshot(
+        &self,
+        snapshot: ThreadMetaProjectionSnapshot,
+    ) -> GaryxDbResult<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM thread_meta", [])?;
+        tx.execute("DELETE FROM thread_channel_endpoints", [])?;
+        tx.execute("DELETE FROM thread_message_routes", [])?;
+        for meta in snapshot.thread_meta {
+            upsert_thread_meta(&tx, &meta, &now_string())?;
+        }
+        for endpoint in snapshot.channel_endpoints {
+            upsert_thread_channel_endpoint(&tx, &endpoint, &now_string())?;
+        }
+        for route in snapshot.message_routes {
+            upsert_thread_message_route(&tx, &route, &now_string())?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn replace_thread_meta_projection(
+        &self,
+        draft: ThreadMetaProjectionDraft,
+    ) -> GaryxDbResult<()> {
+        let thread_id = normalize_thread_id(&draft.thread_id)?;
+        let recorded_at = now_string();
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        remove_thread_meta_projection_tx(&tx, &thread_id)?;
+        let mut thread_meta = draft.thread_meta;
+        thread_meta.thread_id = thread_id.clone();
+        upsert_thread_meta(&tx, &thread_meta, &recorded_at)?;
+        for mut endpoint in draft.channel_endpoints {
+            endpoint.thread_id = Some(thread_id.clone());
+            upsert_thread_channel_endpoint(&tx, &endpoint, &recorded_at)?;
+        }
+        for mut route in draft.message_routes {
+            route.thread_id = thread_id.clone();
+            upsert_thread_message_route(&tx, &route, &recorded_at)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn remove_thread_meta_projection(&self, thread_id: &str) -> GaryxDbResult<bool> {
+        let thread_id = normalize_thread_id(thread_id)?;
+        let conn = self.conn()?;
+        let removed = remove_thread_meta_projection_tx(&conn, &thread_id)?;
         Ok(removed > 0)
     }
 
@@ -2414,6 +2652,67 @@ fn initialize_connection(conn: &Connection) -> GaryxDbResult<()> {
         CREATE INDEX IF NOT EXISTS idx_recent_threads_last_active
             ON recent_threads(last_active_at DESC);
 
+        CREATE TABLE IF NOT EXISTS thread_meta (
+            thread_id TEXT PRIMARY KEY,
+            workspace_dir TEXT,
+            thread_type TEXT NOT NULL DEFAULT 'chat',
+            thread_label TEXT,
+            agent_id TEXT,
+            provider_type TEXT,
+            updated_at TEXT,
+            last_delivery_context_json TEXT,
+            last_delivery_updated_at TEXT,
+            projected_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_workspace
+            ON thread_meta(workspace_dir);
+
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_type_updated
+            ON thread_meta(thread_type, updated_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_thread_meta_last_delivery
+            ON thread_meta(last_delivery_updated_at DESC)
+            WHERE last_delivery_context_json IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS thread_channel_endpoints (
+            endpoint_key TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            binding_key TEXT NOT NULL,
+            chat_id TEXT NOT NULL DEFAULT '',
+            delivery_target_type TEXT NOT NULL DEFAULT 'chat_id',
+            delivery_target_id TEXT NOT NULL DEFAULT '',
+            display_label TEXT NOT NULL DEFAULT '',
+            thread_id TEXT,
+            thread_label TEXT,
+            workspace_dir TEXT,
+            thread_updated_at TEXT,
+            last_inbound_at TEXT,
+            last_delivery_at TEXT,
+            projected_at TEXT NOT NULL
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_thread_channel_endpoints_thread
+            ON thread_channel_endpoints(thread_id);
+
+        CREATE INDEX IF NOT EXISTS idx_thread_channel_endpoints_channel_account
+            ON thread_channel_endpoints(channel, account_id);
+
+        CREATE TABLE IF NOT EXISTS thread_message_routes (
+            channel TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            chat_id TEXT NOT NULL DEFAULT '',
+            thread_binding_key TEXT NOT NULL DEFAULT '',
+            message_id TEXT NOT NULL,
+            thread_id TEXT NOT NULL,
+            projected_at TEXT NOT NULL,
+            PRIMARY KEY (channel, account_id, chat_id, thread_binding_key, message_id)
+        ) STRICT;
+
+        CREATE INDEX IF NOT EXISTS idx_thread_message_routes_thread
+            ON thread_message_routes(thread_id);
+
         CREATE TABLE IF NOT EXISTS automation_thread_runs (
             automation_id TEXT NOT NULL,
             run_id TEXT NOT NULL,
@@ -2633,6 +2932,179 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|candidate| !candidate.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn optional_from_stored_string(value: &str) -> Option<String> {
+    normalize_optional(Some(value))
+}
+
+fn remove_thread_meta_projection_tx(conn: &Connection, thread_id: &str) -> GaryxDbResult<usize> {
+    let mut removed = 0usize;
+    removed += conn.execute(
+        "DELETE FROM thread_meta WHERE thread_id = ?1",
+        params![thread_id],
+    )?;
+    removed += conn.execute(
+        "DELETE FROM thread_channel_endpoints WHERE thread_id = ?1",
+        params![thread_id],
+    )?;
+    removed += conn.execute(
+        "DELETE FROM thread_message_routes WHERE thread_id = ?1",
+        params![thread_id],
+    )?;
+    Ok(removed)
+}
+
+fn upsert_thread_meta(
+    tx: &Transaction<'_>,
+    meta: &ThreadMetaDraft,
+    recorded_at: &str,
+) -> GaryxDbResult<()> {
+    let thread_id = normalize_thread_id(&meta.thread_id)?;
+    let workspace_dir = normalize_optional(meta.workspace_dir.as_deref());
+    let thread_type =
+        normalize_optional(Some(&meta.thread_type)).unwrap_or_else(|| "chat".to_owned());
+    let thread_label = normalize_optional(meta.thread_label.as_deref());
+    let agent_id = normalize_optional(meta.agent_id.as_deref());
+    let provider_type = normalize_optional(meta.provider_type.as_deref());
+    let updated_at = normalize_optional(meta.updated_at.as_deref());
+    let last_delivery_context_json = normalize_optional(meta.last_delivery_context_json.as_deref());
+    let last_delivery_updated_at = normalize_optional(meta.last_delivery_updated_at.as_deref());
+
+    tx.execute(
+        "INSERT INTO thread_meta (
+            thread_id, workspace_dir, thread_type, thread_label, agent_id, provider_type,
+            updated_at, last_delivery_context_json, last_delivery_updated_at, projected_at
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(thread_id) DO UPDATE SET
+            workspace_dir = excluded.workspace_dir,
+            thread_type = excluded.thread_type,
+            thread_label = excluded.thread_label,
+            agent_id = excluded.agent_id,
+            provider_type = excluded.provider_type,
+            updated_at = excluded.updated_at,
+            last_delivery_context_json = excluded.last_delivery_context_json,
+            last_delivery_updated_at = excluded.last_delivery_updated_at,
+            projected_at = excluded.projected_at",
+        params![
+            thread_id,
+            workspace_dir,
+            thread_type,
+            thread_label,
+            agent_id,
+            provider_type,
+            updated_at,
+            last_delivery_context_json,
+            last_delivery_updated_at,
+            recorded_at,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_thread_channel_endpoint(
+    tx: &Transaction<'_>,
+    endpoint: &KnownChannelEndpoint,
+    recorded_at: &str,
+) -> GaryxDbResult<()> {
+    let endpoint_key = normalize_required("endpoint_key", &endpoint.endpoint_key)?;
+    let channel = normalize_required("channel", &endpoint.channel)?;
+    let account_id = normalize_required("account_id", &endpoint.account_id)?;
+    let binding_key = endpoint.binding_key.trim().to_owned();
+    let chat_id = endpoint.chat_id.trim().to_owned();
+    let delivery_target_type = normalize_optional(Some(&endpoint.delivery_target_type))
+        .unwrap_or_else(|| "chat_id".to_owned());
+    let delivery_target_id = endpoint.delivery_target_id.trim().to_owned();
+    let display_label = endpoint.display_label.trim().to_owned();
+    let thread_id = normalize_optional(endpoint.thread_id.as_deref());
+    let thread_label = normalize_optional(endpoint.thread_label.as_deref());
+    let workspace_dir = normalize_optional(endpoint.workspace_dir.as_deref());
+    let thread_updated_at = normalize_optional(endpoint.thread_updated_at.as_deref());
+    let last_inbound_at = normalize_optional(endpoint.last_inbound_at.as_deref());
+    let last_delivery_at = normalize_optional(endpoint.last_delivery_at.as_deref());
+
+    tx.execute(
+        "INSERT INTO thread_channel_endpoints (
+            endpoint_key, channel, account_id, binding_key, chat_id,
+            delivery_target_type, delivery_target_id, display_label,
+            thread_id, thread_label, workspace_dir, thread_updated_at,
+            last_inbound_at, last_delivery_at, projected_at
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+         ON CONFLICT(endpoint_key) DO UPDATE SET
+            channel = excluded.channel,
+            account_id = excluded.account_id,
+            binding_key = excluded.binding_key,
+            chat_id = excluded.chat_id,
+            delivery_target_type = excluded.delivery_target_type,
+            delivery_target_id = excluded.delivery_target_id,
+            display_label = excluded.display_label,
+            thread_id = excluded.thread_id,
+            thread_label = excluded.thread_label,
+            workspace_dir = excluded.workspace_dir,
+            thread_updated_at = excluded.thread_updated_at,
+            last_inbound_at = excluded.last_inbound_at,
+            last_delivery_at = excluded.last_delivery_at,
+            projected_at = excluded.projected_at",
+        params![
+            endpoint_key,
+            channel,
+            account_id,
+            binding_key,
+            chat_id,
+            delivery_target_type,
+            delivery_target_id,
+            display_label,
+            thread_id,
+            thread_label,
+            workspace_dir,
+            thread_updated_at,
+            last_inbound_at,
+            last_delivery_at,
+            recorded_at,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_thread_message_route(
+    tx: &Transaction<'_>,
+    route: &ThreadMessageRouteDraft,
+    recorded_at: &str,
+) -> GaryxDbResult<()> {
+    let thread_id = normalize_thread_id(&route.thread_id)?;
+    let channel = normalize_required("channel", &route.channel)?;
+    let account_id = route.account_id.trim().to_owned();
+    let chat_id = route.chat_id.trim().to_owned();
+    let thread_binding_key = route
+        .thread_binding_key
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_owned();
+    let message_id = normalize_required("message_id", &route.message_id)?;
+
+    tx.execute(
+        "INSERT INTO thread_message_routes (
+            channel, account_id, chat_id, thread_binding_key, message_id, thread_id, projected_at
+         )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(channel, account_id, chat_id, thread_binding_key, message_id)
+         DO UPDATE SET
+            thread_id = excluded.thread_id,
+            projected_at = excluded.projected_at",
+        params![
+            channel,
+            account_id,
+            chat_id,
+            thread_binding_key,
+            message_id,
+            thread_id,
+            recorded_at,
+        ],
+    )?;
+    Ok(())
 }
 
 fn normalize_automation_thread_run_mode(value: &str) -> GaryxDbResult<String> {
@@ -3674,6 +4146,97 @@ mod tests {
                 .map(|record| record.thread_id)
                 .collect::<Vec<_>>(),
             vec!["thread::newer"],
+        );
+    }
+
+    #[test]
+    fn thread_meta_projection_round_trip_and_remove() {
+        let db = GaryxDbService::memory().expect("db opens");
+        let delivery_json = r#"{"channel":"telegram","account_id":"main","chat_id":"42","user_id":"42","delivery_target_type":"chat_id","delivery_target_id":"42"}"#.to_owned();
+        db.replace_thread_meta_projection(ThreadMetaProjectionDraft {
+            thread_id: "thread::workflow".to_owned(),
+            thread_meta: ThreadMetaDraft {
+                thread_id: "thread::workflow".to_owned(),
+                workspace_dir: Some("/work/project".to_owned()),
+                thread_type: "workflow_run".to_owned(),
+                thread_label: Some("Workflow Run".to_owned()),
+                agent_id: Some("deep-research".to_owned()),
+                provider_type: Some("workflow".to_owned()),
+                updated_at: Some("2026-06-03T08:00:00.000Z".to_owned()),
+                last_delivery_context_json: Some(delivery_json.clone()),
+                last_delivery_updated_at: Some("2026-06-03T08:00:01.000Z".to_owned()),
+            },
+            channel_endpoints: vec![KnownChannelEndpoint {
+                endpoint_key: "telegram::main::42".to_owned(),
+                channel: "telegram".to_owned(),
+                account_id: "main".to_owned(),
+                binding_key: "42".to_owned(),
+                chat_id: "42".to_owned(),
+                delivery_target_type: "chat_id".to_owned(),
+                delivery_target_id: "42".to_owned(),
+                display_label: "Test User".to_owned(),
+                thread_id: Some("thread::workflow".to_owned()),
+                thread_label: Some("Workflow Run".to_owned()),
+                workspace_dir: Some("/work/project".to_owned()),
+                thread_updated_at: Some("2026-06-03T08:00:00.000Z".to_owned()),
+                last_inbound_at: Some("2026-06-03T07:59:59.000Z".to_owned()),
+                last_delivery_at: Some("2026-06-03T08:00:01.000Z".to_owned()),
+            }],
+            message_routes: vec![ThreadMessageRouteDraft {
+                thread_id: "thread::workflow".to_owned(),
+                channel: "telegram".to_owned(),
+                account_id: "main".to_owned(),
+                chat_id: "42".to_owned(),
+                thread_binding_key: Some("42".to_owned()),
+                message_id: "message-1".to_owned(),
+            }],
+        })
+        .expect("project thread meta");
+
+        let meta = db.list_thread_meta().expect("list meta");
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0].thread_id, "thread::workflow");
+        assert_eq!(meta[0].thread_type, "workflow_run");
+        assert_eq!(meta[0].workspace_dir.as_deref(), Some("/work/project"));
+        assert_eq!(
+            meta[0].last_delivery_context_json.as_deref(),
+            Some(delivery_json.as_str())
+        );
+        assert_eq!(
+            meta[0].last_delivery_updated_at.as_deref(),
+            Some("2026-06-03T08:00:01.000Z")
+        );
+
+        let endpoints = db
+            .list_thread_channel_endpoints()
+            .expect("list channel endpoints");
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].endpoint_key, "telegram::main::42");
+        assert_eq!(endpoints[0].thread_id.as_deref(), Some("thread::workflow"));
+
+        let routes = db.list_thread_message_routes().expect("list routes");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].message_id, "message-1");
+        assert_eq!(routes[0].thread_binding_key.as_deref(), Some("42"));
+
+        assert!(
+            db.remove_thread_meta_projection("thread::workflow")
+                .expect("remove projection")
+        );
+        assert!(
+            db.list_thread_meta()
+                .expect("list meta after remove")
+                .is_empty()
+        );
+        assert!(
+            db.list_thread_channel_endpoints()
+                .expect("list endpoints after remove")
+                .is_empty()
+        );
+        assert!(
+            db.list_thread_message_routes()
+                .expect("list routes after remove")
+                .is_empty()
         );
     }
 

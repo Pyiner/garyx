@@ -8,7 +8,7 @@ use garyx_models::config::GaryxConfig;
 use garyx_models::thread_logs::ThreadLogSink;
 use garyx_router::{
     KnownChannelEndpoint, MessageLedgerStore, MessageRouter, ThreadHistoryRepository, ThreadStore,
-    is_thread_key, list_known_channel_endpoints,
+    is_thread_key,
 };
 use serde_json::Value;
 use std::path::PathBuf;
@@ -35,6 +35,9 @@ use crate::recent_thread_projection::{
 };
 use crate::runtime_cells::{ChannelDispatcherCell, LiveConfigCell};
 use crate::skills::SkillsService;
+use crate::thread_meta_projection::{
+    backfill_thread_meta_projection_if_incomplete, list_channel_endpoints_with_projection_backfill,
+};
 use crate::wikis::WikiStore;
 use crate::workflows::WorkflowScheduler;
 
@@ -222,7 +225,11 @@ impl AppState {
         }
 
         let started = Instant::now();
-        let endpoints = list_known_channel_endpoints(&self.threads.thread_store).await;
+        let endpoints = list_channel_endpoints_with_projection_backfill(
+            &self.threads.thread_store,
+            &self.ops.garyx_db,
+        )
+        .await;
         let elapsed_ms = started.elapsed().as_millis() as u64;
         debug!(
             elapsed_ms,
@@ -275,6 +282,11 @@ impl AppState {
                 &state.ops.garyx_db,
             )
             .await;
+            let thread_meta_projection = backfill_thread_meta_projection_if_incomplete(
+                &state.threads.thread_store,
+                &state.ops.garyx_db,
+            )
+            .await;
             let reconciled_workflows = crate::workflows::reconcile_interrupted_workflows(
                 &state,
                 &workflow_reconcile_cutoff,
@@ -289,6 +301,11 @@ impl AppState {
                 recent_thread_backfill_count = recent_threads,
                 recent_thread_prune_count = pruned_recent_threads,
                 recent_thread_active_reconcile_count = reconciled_recent_threads,
+                thread_meta_projection_threads = thread_meta_projection.threads_scanned,
+                thread_meta_projection_endpoints = thread_meta_projection.channel_endpoints,
+                thread_meta_projection_message_routes = thread_meta_projection.message_routes,
+                thread_meta_projection_delivery_contexts =
+                    thread_meta_projection.last_delivery_contexts,
                 workflow_reconcile_count = reconciled_workflows,
                 "gateway sync snapshots warmed"
             );

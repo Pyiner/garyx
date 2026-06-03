@@ -14,9 +14,9 @@ use garyx_models::routing::{DELIVERY_TARGET_TYPE_CHAT_ID, DELIVERY_TARGET_TYPE_O
 use garyx_router::{
     ChannelBinding, KnownChannelEndpoint, ThreadEnsureOptions, WorkspaceMode,
     active_run_snapshot_run_id, bindings_from_value, detach_endpoint_from_thread,
-    history_message_count, is_default_thread_list_hidden, is_thread_key,
-    list_known_channel_endpoints, thread_kind_from_value, update_thread_record,
-    workspace_dir_from_value, workspace_git_status as router_workspace_git_status,
+    history_message_count, is_default_thread_list_hidden, is_thread_key, thread_kind_from_value,
+    update_thread_record, workspace_dir_from_value,
+    workspace_git_status as router_workspace_git_status,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -518,7 +518,7 @@ pub(crate) async fn resolve_main_endpoint_by_bot(
     channel: &str,
     account_id: &str,
 ) -> Option<ResolvedMainEndpoint> {
-    let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
+    let endpoints = state.cached_channel_endpoints().await;
     resolve_main_endpoint_with_endpoints(state, channel, account_id, &endpoints).await
 }
 
@@ -527,7 +527,7 @@ async fn resolve_main_endpoint_by_key(
     endpoint_key_value: &str,
 ) -> Option<ResolvedMainEndpoint> {
     let config = state.config_snapshot();
-    let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
+    let endpoints = state.cached_channel_endpoints().await;
 
     for account in configured_channel_accounts(&config.channels) {
         let Some(endpoint) = resolve_main_endpoint_with_endpoints(
@@ -617,6 +617,12 @@ pub struct ListRecentThreadsParams {
 pub struct ThreadLogParams {
     #[serde(default)]
     pub cursor: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub struct BotListParams {
+    #[serde(default)]
+    pub include_endpoints: bool,
 }
 
 fn default_thread_limit() -> usize {
@@ -882,7 +888,7 @@ async fn resolve_channel_binding_for_endpoint_key(
     state: &Arc<AppState>,
     requested_endpoint_key: &str,
 ) -> Option<ChannelBinding> {
-    let endpoints = list_known_channel_endpoints(&state.threads.thread_store).await;
+    let endpoints = state.cached_channel_endpoints().await;
     if let Some(binding) = endpoints
         .into_iter()
         .find(|endpoint| endpoint_key_matches(&endpoint.endpoint_key, requested_endpoint_key))
@@ -953,12 +959,15 @@ pub(crate) async fn detach_channel_endpoint_key(
     let requested_endpoint_key = normalize_endpoint_lookup_key(endpoint_key);
     match detach_endpoint_from_thread(&state.threads.thread_store, &requested_endpoint_key).await {
         Ok(previous_thread_id) => {
-            let detached_endpoint = list_known_channel_endpoints(&state.threads.thread_store)
-                .await
-                .into_iter()
-                .find(|endpoint| {
-                    endpoint_key_matches(&endpoint.endpoint_key, &requested_endpoint_key)
-                });
+            state.invalidate_channel_endpoint_cache().await;
+            let detached_endpoint =
+                state
+                    .cached_channel_endpoints()
+                    .await
+                    .into_iter()
+                    .find(|endpoint| {
+                        endpoint_key_matches(&endpoint.endpoint_key, &requested_endpoint_key)
+                    });
             if let (Some(thread_id), Some(endpoint)) =
                 (previous_thread_id.as_deref(), detached_endpoint.as_ref())
             {
@@ -1674,9 +1683,16 @@ pub async fn workspace_git_status(
 }
 
 /// GET /api/configured-bots - list all configured channel bot accounts from config
-pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn list_configured_bots(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<BotListParams>,
+) -> impl IntoResponse {
     let config = state.config_snapshot();
-    let endpoints = state.cached_channel_endpoints().await;
+    let endpoints = if params.include_endpoints {
+        state.cached_channel_endpoints().await
+    } else {
+        Vec::new()
+    };
     let mut bots = Vec::new();
 
     for account in configured_channel_accounts(&config.channels) {
@@ -1684,20 +1700,28 @@ pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl In
             continue;
         }
         let root_behavior = channel_root_behavior(&state, &account.channel).await;
-        let account_ui = resolve_account_ui_with_endpoints(
-            &state,
-            &account.channel,
-            &account.account_id,
-            &endpoints,
-        )
-        .await;
-        let main_endpoint = resolve_main_endpoint_with_endpoints(
-            &state,
-            &account.channel,
-            &account.account_id,
-            &endpoints,
-        )
-        .await;
+        let account_ui = if params.include_endpoints {
+            resolve_account_ui_with_endpoints(
+                &state,
+                &account.channel,
+                &account.account_id,
+                &endpoints,
+            )
+            .await
+        } else {
+            None
+        };
+        let main_endpoint = if params.include_endpoints {
+            resolve_main_endpoint_with_endpoints(
+                &state,
+                &account.channel,
+                &account.account_id,
+                &endpoints,
+            )
+            .await
+        } else {
+            None
+        };
         let default_open_endpoint = if root_behavior == "expand_only" {
             None
         } else if let Some(endpoint) = main_endpoint.as_ref() {
@@ -1733,9 +1757,16 @@ pub async fn list_configured_bots(State(state): State<Arc<AppState>>) -> impl In
 }
 
 /// GET /api/bot-consoles - list aggregated bot console summaries
-pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn list_bot_consoles(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<BotListParams>,
+) -> impl IntoResponse {
     let config = state.config_snapshot();
-    let endpoints = state.cached_channel_endpoints().await;
+    let endpoints = if params.include_endpoints {
+        state.cached_channel_endpoints().await
+    } else {
+        Vec::new()
+    };
     let mut groups = Vec::<Value>::new();
     let mut group_indexes = HashMap::<String, usize>::new();
 
@@ -1745,20 +1776,28 @@ pub async fn list_bot_consoles(State(state): State<Arc<AppState>>) -> impl IntoR
         }
         let id = format!("{}::{}", account.channel, account.account_id);
         let root_behavior = channel_root_behavior(&state, &account.channel).await;
-        let account_ui = resolve_account_ui_with_endpoints(
-            &state,
-            &account.channel,
-            &account.account_id,
-            &endpoints,
-        )
-        .await;
-        let main_endpoint = resolve_main_endpoint_with_endpoints(
-            &state,
-            &account.channel,
-            &account.account_id,
-            &endpoints,
-        )
-        .await;
+        let account_ui = if params.include_endpoints {
+            resolve_account_ui_with_endpoints(
+                &state,
+                &account.channel,
+                &account.account_id,
+                &endpoints,
+            )
+            .await
+        } else {
+            None
+        };
+        let main_endpoint = if params.include_endpoints {
+            resolve_main_endpoint_with_endpoints(
+                &state,
+                &account.channel,
+                &account.account_id,
+                &endpoints,
+            )
+            .await
+        } else {
+            None
+        };
         let default_open_endpoint = if root_behavior == "expand_only" {
             None
         } else if let Some(endpoint) = main_endpoint.as_ref() {

@@ -11,10 +11,8 @@ use garyx_models::local_paths::{
 };
 use garyx_router::{
     ConversationIndexManager, FileThreadStore, InMemoryThreadStore, MessageLedgerStore,
-    ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore, is_thread_key,
-    workspace_dir_from_value,
+    ThreadHistoryRepository, ThreadStore, ThreadTranscriptStore,
 };
-use std::collections::HashMap;
 
 pub struct RuntimeAssembly {
     pub state: Arc<AppState>,
@@ -149,8 +147,6 @@ impl RuntimeAssembler {
             );
         }
 
-        rebuild_routing_caches(&state, &self.config).await;
-
         // AppStateBuilder wraps the raw file store in the recent-thread
         // projecting store. Bind the bridge to that final store so provider
         // persistence updates the projection instead of bypassing it.
@@ -159,11 +155,6 @@ impl RuntimeAssembler {
             .await;
         bridge.set_thread_history(state.threads.history.clone());
         bridge.set_event_tx(state.ops.events.sender()).await;
-        bridge
-            .replace_thread_workspace_bindings(
-                collect_thread_workspace_bindings(&state.threads.thread_store).await,
-            )
-            .await;
         cron_service
             .set_dispatch_runtime(
                 state.threads.thread_store.clone(),
@@ -202,43 +193,7 @@ fn parse_restart_tokens_from_env() -> Vec<String> {
         .unwrap_or_default()
 }
 
-async fn rebuild_routing_caches(state: &Arc<AppState>, config: &GaryxConfig) {
-    let mut router = state.threads.router.lock().await;
-    let rebuild_channels = routing_rebuild_channels(config);
-    let thread_index_stats = router.rebuild_thread_indexes().await;
-    let mut routing_entries = 0usize;
-    for channel in &rebuild_channels {
-        routing_entries += router.rebuild_routing_index(channel).await;
-    }
-    let delivery_entries = router.rebuild_last_delivery_cache().await;
-    tracing::info!(
-        channels = ?rebuild_channels,
-        endpoint_bindings = thread_index_stats.endpoint_bindings,
-        routing_entries,
-        delivery_entries,
-        "Rebuilt thread, routing, and delivery caches from thread store"
-    );
-}
-
-async fn collect_thread_workspace_bindings(
-    store: &Arc<dyn ThreadStore>,
-) -> HashMap<String, String> {
-    let mut bindings = HashMap::new();
-    for key in store.list_keys(None).await {
-        if !is_thread_key(&key) {
-            continue;
-        }
-        let Some(value) = store.get(&key).await else {
-            continue;
-        };
-        let Some(workspace_dir) = workspace_dir_from_value(&value) else {
-            continue;
-        };
-        bindings.insert(key, workspace_dir);
-    }
-    bindings
-}
-
+#[cfg(test)]
 pub(crate) fn routing_rebuild_channels(config: &GaryxConfig) -> Vec<String> {
     let mut channels: Vec<String> = Vec::new();
 

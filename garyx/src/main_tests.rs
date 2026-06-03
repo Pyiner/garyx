@@ -2688,7 +2688,7 @@ async fn startup_runtime_wiring_enables_operational_handlers() {
 }
 
 #[tokio::test]
-async fn startup_runtime_rebuilds_indexes_and_workspace_bindings_from_canonical_threads() {
+async fn startup_runtime_assembles_without_rebuilding_thread_indexes_from_canonical_threads() {
     use crate::runtime_assembler::RuntimeAssembler;
     use garyx_models::config::{GaryxConfig, TelegramAccount};
     use garyx_router::{FileThreadStore, ThreadStore};
@@ -2756,21 +2756,20 @@ async fn startup_runtime_rebuilds_indexes_and_workspace_bindings_from_canonical_
     assert_eq!(thread["workspace_dir"], "/tmp/runtime-assembler-ws");
 
     let mut router = assembly.state.threads.router.lock().await;
-    assert_eq!(
+    assert!(
         router
             .resolve_endpoint_thread_id("telegram", "main", "alice")
             .await
-            .as_deref(),
-        Some("thread::startup-alice")
+            .is_none()
     );
     drop(router);
 
-    let workspace_bindings = assembly.bridge.thread_workspace_bindings_snapshot().await;
-    assert_eq!(
-        workspace_bindings
-            .get("thread::startup-alice")
-            .map(String::as_str),
-        Some("/tmp/runtime-assembler-ws")
+    assert!(
+        assembly
+            .bridge
+            .thread_workspace_bindings_snapshot()
+            .await
+            .is_empty()
     );
 }
 

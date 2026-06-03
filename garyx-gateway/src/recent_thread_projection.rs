@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tracing::warn;
 
 use crate::garyx_db::{GaryxDbService, RecentThreadDraft};
+use crate::thread_meta_projection::thread_meta_projection_from_thread_data;
 
 pub(crate) const RECENT_THREAD_MISSING_TIMESTAMP: &str = "1970-01-01T00:00:00.000Z";
 
@@ -25,6 +26,18 @@ impl RecentThreadProjectingStore {
     fn project_thread(&self, thread_id: &str, data: &Value) {
         if !is_thread_key(thread_id) {
             return;
+        }
+        match thread_meta_projection_from_thread_data(thread_id, data) {
+            Some(draft) => {
+                if let Err(error) = self.garyx_db.replace_thread_meta_projection(draft) {
+                    warn!(thread_id, error = %error, "failed to upsert thread meta projection");
+                }
+            }
+            None => {
+                if let Err(error) = self.garyx_db.remove_thread_meta_projection(thread_id) {
+                    warn!(thread_id, error = %error, "failed to remove thread meta projection");
+                }
+            }
         }
         if is_hidden_thread_value(data) {
             if let Err(error) = self.garyx_db.remove_recent_thread(thread_id) {
@@ -181,6 +194,12 @@ impl ThreadStore for RecentThreadProjectingStore {
             && let Err(error) = self.garyx_db.remove_recent_thread(thread_id)
         {
             warn!(thread_id, error = %error, "failed to remove deleted thread from recent thread projection");
+        }
+        if deleted
+            && is_thread_key(thread_id)
+            && let Err(error) = self.garyx_db.remove_thread_meta_projection(thread_id)
+        {
+            warn!(thread_id, error = %error, "failed to remove deleted thread meta projection");
         }
         deleted
     }
