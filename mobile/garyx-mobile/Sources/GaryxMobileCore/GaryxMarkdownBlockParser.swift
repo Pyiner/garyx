@@ -280,11 +280,23 @@ enum GaryxMarkdownBlockParser {
         let alt = String(trimmed[afterBang..<altEnd]).trimmingCharacters(in: .whitespaces)
         let rawSource = String(trimmed[sourceStart..<sourceEnd]).trimmingCharacters(in: .whitespaces)
         guard !rawSource.isEmpty else { return nil }
-        let source = rawSource
-            .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
-            .first
-            .map(String.init) ?? rawSource
+        let source = normalizedImageSource(from: rawSource)
         return (alt, source)
+    }
+
+    private static func normalizedImageSource(from rawSource: String) -> String {
+        let raw = rawSource.trimmingCharacters(in: .whitespaces)
+        if raw.hasPrefix("<"), let end = raw.firstIndex(of: ">") {
+            let start = raw.index(after: raw.startIndex)
+            return String(raw[start..<end]).trimmingCharacters(in: .whitespaces)
+        }
+        if let titleRange = raw.range(
+            of: #"\s+["'][^"']*["']\s*$"#,
+            options: .regularExpression
+        ) {
+            return String(raw[..<titleRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+        }
+        return raw
     }
 
     private static func fenceCandidateLine(from line: String) -> String {

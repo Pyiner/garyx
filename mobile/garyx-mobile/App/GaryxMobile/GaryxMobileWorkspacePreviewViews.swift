@@ -131,7 +131,8 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
                             text: text,
                             foreground: .primary,
                             allowsRelativeFileLinks: true,
-                            onFileLinkTap: openFileLink
+                            onFileLinkTap: openFileLink,
+                            onImageFilePreview: imageFilePreview
                         )
                         .textSelection(.enabled)
                     } else {
@@ -242,6 +243,11 @@ struct GaryxFullscreenWorkspaceFilePreview: View {
         }
     }
 
+    @MainActor
+    private func imageFilePreview(_ target: String) async -> GaryxWorkspaceFilePreview? {
+        await model.workspaceFilePreviewLink(target, from: currentPreview, reportsError: false)
+    }
+
     private func previewIdentity(for preview: GaryxWorkspaceFilePreview) -> String {
         [
             preview.workspaceDir,
@@ -263,7 +269,8 @@ private struct GaryxWorkspaceMarkdownPreview: View {
                 text: text,
                 foreground: .primary,
                 allowsRelativeFileLinks: true,
-                onFileLinkTap: openFileLink
+                onFileLinkTap: openFileLink,
+                onImageFilePreview: imageFilePreview
             )
             .textSelection(.enabled)
             .padding(10)
@@ -281,6 +288,11 @@ private struct GaryxWorkspaceMarkdownPreview: View {
 
     private func openFileLink(_ target: String) {
         Task { await model.openWorkspacePreviewLink(target, from: preview) }
+    }
+
+    @MainActor
+    private func imageFilePreview(_ target: String) async -> GaryxWorkspaceFilePreview? {
+        await model.workspaceFilePreviewLink(target, from: preview, reportsError: false)
     }
 }
 

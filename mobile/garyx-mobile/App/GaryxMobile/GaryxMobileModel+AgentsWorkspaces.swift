@@ -752,15 +752,17 @@ extension GaryxMobileModel {
         await openWorkspaceFilePreview(resolved)
     }
 
-    func localFilePreview(_ target: String) async -> GaryxWorkspaceFilePreview? {
+    func localFilePreview(_ target: String, reportsError: Bool = true) async -> GaryxWorkspaceFilePreview? {
         guard let resolved = GaryxMobileFileLink.previewTarget(
             fromLink: target,
             workspacePaths: workspacePathSuggestions
         ) else {
-            lastError = "Garyx could not resolve this local file for preview."
+            if reportsError {
+                lastError = "Garyx could not resolve this local file for preview."
+            }
             return nil
         }
-        return await workspaceFilePreview(resolved)
+        return await workspaceFilePreview(resolved, reportsError: reportsError)
     }
 
     func openWorkspacePreviewLink(
@@ -782,7 +784,8 @@ extension GaryxMobileModel {
 
     func workspaceFilePreviewLink(
         _ target: String,
-        from preview: GaryxWorkspaceFilePreview
+        from preview: GaryxWorkspaceFilePreview,
+        reportsError: Bool = true
     ) async -> GaryxWorkspaceFilePreview? {
         let workspacePaths = workspacePathSuggestions + [preview.workspaceDir]
         guard let resolved = GaryxMobileFileLink.previewTarget(
@@ -791,10 +794,12 @@ extension GaryxMobileModel {
             currentWorkspaceDir: preview.workspaceDir,
             currentFilePath: preview.path
         ) else {
-            lastError = "Garyx could not resolve this local file for preview."
+            if reportsError {
+                lastError = "Garyx could not resolve this local file for preview."
+            }
             return nil
         }
-        return await workspaceFilePreview(resolved)
+        return await workspaceFilePreview(resolved, reportsError: reportsError)
     }
 
     func openWorkspaceFilePreview(
@@ -846,7 +851,10 @@ extension GaryxMobileModel {
         }
     }
 
-    private func workspaceFilePreview(_ target: GaryxMobileWorkspaceFileTarget) async -> GaryxWorkspaceFilePreview? {
+    private func workspaceFilePreview(
+        _ target: GaryxMobileWorkspaceFileTarget,
+        reportsError: Bool = true
+    ) async -> GaryxWorkspaceFilePreview? {
         let workspace = target.workspaceDir.trimmingCharacters(in: .whitespacesAndNewlines)
         let filePath = target.path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !workspace.isEmpty, !filePath.isEmpty else { return nil }
@@ -857,7 +865,9 @@ extension GaryxMobileModel {
                 path: filePath
             )
         } catch {
-            lastError = displayMessage(for: error)
+            if reportsError {
+                lastError = displayMessage(for: error)
+            }
             return nil
         }
     }

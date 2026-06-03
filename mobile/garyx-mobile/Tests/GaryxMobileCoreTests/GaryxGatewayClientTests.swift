@@ -2305,6 +2305,10 @@ final class GaryxGatewayClientTests: XCTestCase {
             GaryxMobileFileLink.localFilePath(from: "file:///workspace/project/docs/My%20File.md"),
             "/workspace/project/docs/My File.md"
         )
+        XCTAssertEqual(
+            GaryxMobileFileLink.localFilePath(from: "file:/workspace/project/assets/chart.png"),
+            "/workspace/project/assets/chart.png"
+        )
         XCTAssertNil(GaryxMobileFileLink.localFilePath(from: "https://example.test/docs/page.html"))
         XCTAssertNil(GaryxMobileFileLink.localFilePath(from: "docs/page.html"))
     }

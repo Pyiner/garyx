@@ -164,6 +164,17 @@ final class GaryxMarkdownBlockParserTests: XCTestCase {
         XCTAssertEqual(blocks[2].kind, .markdown("After"))
     }
 
+    func testStandaloneImagePreservesFileSourcesWithSpaces() {
+        let blocks = GaryxMarkdownBlockParser.blocks(from: """
+        ![Local chart](<file:/workspace/project/My Chart.png>)
+        ![Absolute chart](/workspace/project/My Chart.png)
+        """)
+
+        XCTAssertEqual(blocks.count, 2)
+        XCTAssertEqual(blocks[0].kind, .image(alt: "Local chart", source: "file:/workspace/project/My Chart.png"))
+        XCTAssertEqual(blocks[1].kind, .image(alt: "Absolute chart", source: "/workspace/project/My Chart.png"))
+    }
+
     func testTableStopsBeforeFenceAndFenceParsesAsCode() {
         let blocks = GaryxMarkdownBlockParser.blocks(from: """
         | Name | Value |

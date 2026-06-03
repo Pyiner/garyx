@@ -995,7 +995,8 @@ struct GaryxMessageBubble: View {
                             codeBackground: userCodeBackground,
                             codeBorder: GaryxTheme.hairline,
                             fillsAvailableWidth: false,
-                            onFileLinkTap: openMessageFileLink
+                            onFileLinkTap: openMessageFileLink,
+                            onImageFilePreview: messageImageFilePreview
                         )
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -1023,7 +1024,8 @@ struct GaryxMessageBubble: View {
                     GaryxMarkdownText(
                         text: displayText,
                         foreground: .primary,
-                        onFileLinkTap: openMessageFileLink
+                        onFileLinkTap: openMessageFileLink,
+                        onImageFilePreview: messageImageFilePreview
                     )
                 }
             }
@@ -1033,7 +1035,8 @@ struct GaryxMessageBubble: View {
                 text: displayText,
                 foreground: .secondary,
                 fillsAvailableWidth: false,
-                onFileLinkTap: openMessageFileLink
+                onFileLinkTap: openMessageFileLink,
+                onImageFilePreview: messageImageFilePreview
             )
                 .font(GaryxFont.footnote())
                 .padding(.horizontal, 10)
@@ -1107,6 +1110,11 @@ struct GaryxMessageBubble: View {
             guard let preview = await model.localFilePreview(target) else { return }
             filePreviewSheet = GaryxMessageFilePreviewSheet(preview: preview)
         }
+    }
+
+    @MainActor
+    private func messageImageFilePreview(_ target: String) async -> GaryxWorkspaceFilePreview? {
+        await model.localFilePreview(target, reportsError: false)
     }
 
     @ViewBuilder
@@ -1213,11 +1221,14 @@ struct GaryxMessageAttachmentStack: View {
 }
 
 struct GaryxMessageImageAttachmentView: View {
+    @EnvironmentObject private var model: GaryxMobileModel
+
     let attachment: GaryxMobileMessageAttachment
     let isUser: Bool
 
     @State private var decodedImage: UIImage?
     @State private var decodedImageKey: String?
+    @State private var gatewayPreviewDataUrl: String?
     @State private var showsPreview = false
 
     var body: some View {
@@ -1258,9 +1269,9 @@ struct GaryxMessageImageAttachmentView: View {
             GaryxFullscreenImagePreview(
                 source: GaryxImagePreviewSource(
                     title: attachment.name.isEmpty ? "Image" : attachment.name,
-                    dataUrl: attachment.dataUrl,
+                    dataUrl: attachment.dataUrl ?? gatewayPreviewDataUrl,
                     remoteUrl: attachment.remoteUrl,
-                    filePath: Self.localFilePath(from: attachment.path)
+                    filePath: gatewayPreviewDataUrl == nil ? Self.localFilePath(from: attachment.path) : nil
                 )
             ) {
                 showsPreview = false
@@ -1317,7 +1328,8 @@ struct GaryxMessageImageAttachmentView: View {
 
     private var dataUrlDecodeKey: String {
         let raw = attachment.dataUrl ?? ""
-        return "\(attachment.id):\(raw.count):\(raw.hashValue)"
+        let path = attachment.path ?? ""
+        return "\(attachment.id):\(raw.count):\(raw.hashValue):\(path.hashValue)"
     }
 
     @MainActor
@@ -1325,13 +1337,30 @@ struct GaryxMessageImageAttachmentView: View {
         let key = dataUrlDecodeKey
         guard decodedImageKey != key else { return }
         decodedImage = nil
+        gatewayPreviewDataUrl = nil
         decodedImageKey = key
-        guard let raw = attachment.dataUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !raw.isEmpty else { return }
+        if let raw = attachment.dataUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty {
+            let image = await Task.detached(priority: .utility) {
+                GaryxImageDecoder.image(fromDataUrl: raw, maxPixelSize: 520)
+            }.value
+            guard !Task.isCancelled, decodedImageKey == key else { return }
+            decodedImage = image
+            return
+        }
+        guard let path = attachment.path?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !path.isEmpty,
+              let preview = await model.localFilePreview(path, reportsError: false),
+              preview.previewKind == "image",
+              let dataUrl = preview.dataBase64?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !dataUrl.isEmpty else {
+            return
+        }
         let image = await Task.detached(priority: .utility) {
-            GaryxImageDecoder.image(fromDataUrl: raw, maxPixelSize: 520)
+            GaryxImageDecoder.image(fromDataUrl: dataUrl, maxPixelSize: 520)
         }.value
         guard !Task.isCancelled, decodedImageKey == key else { return }
+        gatewayPreviewDataUrl = dataUrl
         decodedImage = image
     }
 

@@ -19,8 +19,7 @@ public enum GaryxMobileFileLink {
             return normalizeLocalFilePath(trimmed)
         }
 
-        if trimmed.range(of: #"^file://"#, options: [.regularExpression, .caseInsensitive]) != nil,
-           let url = URL(string: trimmed) {
+        if let url = URL(string: trimmed), url.isFileURL {
             return localFilePath(from: url)
         }
 
