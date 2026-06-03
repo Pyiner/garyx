@@ -6,21 +6,25 @@ import UIKit
 import UniformTypeIdentifiers
 
 private enum GaryxComposerLayout {
-    static let composerCornerRadius: CGFloat = 26
+    static let composerCornerRadius: CGFloat = 24
     static let composerSpacing: CGFloat = 6
     static let bottomBarSpacing: CGFloat = 12
     static let bottomBarHorizontalPadding: CGFloat = 8
     static let bottomBarTopPadding: CGFloat = 2
-    static let bottomBarBottomPadding: CGFloat = 8
+    static let bottomBarBottomPadding: CGFloat = 7
     static let actionButtonSide: CGFloat = 32
     static let actionButtonFill = Color.primary.opacity(0.06)
     static let inputHorizontalPadding: CGFloat = 16
     static let inputTopPadding: CGFloat = 12
     static let inputBottomPadding: CGFloat = 8
-    static let workspaceBaseFill = Color.primary.opacity(0.12)
-    static let workspaceBaseTopPadding: CGFloat = 8
-    static let workspaceBaseBottomPadding: CGFloat = 8
-    static let workspaceStripHeight: CGFloat = 34
+    static let inputMinHeight: CGFloat = 29
+    static let workspaceBaseFill = Color.primary.opacity(0.10)
+    static let workspaceBaseForeground = Color.primary.opacity(0.72)
+    static let workspaceBaseOverlap: CGFloat = 18
+    static let workspaceBaseTopPadding: CGFloat = 20.5
+    static let workspaceBaseBottomPadding: CGFloat = 6
+    static let workspaceBaseCornerRadius: CGFloat = 20
+    static let workspaceStripHeight: CGFloat = 28
     static let workspaceSheetHeight: CGFloat = 228
     static let draftFieldIdentity = "garyx-composer-draft-field"
 }
@@ -46,6 +50,17 @@ struct GaryxComposer: View {
 
     private var showsSendButton: Bool {
         !model.isSelectedThreadSending || hasLocalPayload
+    }
+
+    private var canChangeWorkspaceMode: Bool {
+        model.selectedThread == nil
+            && !model.isSending
+            && model.activeRunThreadId == nil
+            && model.newThreadWorkspaceCanUseWorktree
+    }
+
+    private var showsWorkspaceModeStrip: Bool {
+        canChangeWorkspaceMode
     }
 
     var body: some View {
@@ -120,6 +135,11 @@ struct GaryxComposer: View {
                 showsWorkspaceModeSheet = false
             }
         }
+        .onChange(of: showsWorkspaceModeStrip) { _, visible in
+            if !visible {
+                showsWorkspaceModeSheet = false
+            }
+        }
         .onDisappear {
             guard draftContextVersion == model.composerContextVersion else { return }
             if model.draft != draftText {
@@ -138,17 +158,24 @@ struct GaryxComposer: View {
         }
     }
 
+    @ViewBuilder
     private var newThreadComposerDeck: some View {
-        VStack(spacing: 0) {
+        if showsWorkspaceModeStrip {
+            VStack(spacing: -GaryxComposerLayout.workspaceBaseOverlap) {
+                newThreadComposerCard
+
+                workspaceModeStrip
+                    .zIndex(0)
+            }
+        } else {
             newThreadComposerCard
-            workspaceModeStrip
         }
-        .clipShape(RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: GaryxComposerLayout.composerCornerRadius, style: .continuous)
-                .stroke(GaryxTheme.hairline, lineWidth: 1)
-        }
-        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+    }
+
+    private var newThreadComposerCard: some View {
+        composerCard
+            .zIndex(1)
+            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
     }
 
     private var composerCard: some View {
@@ -164,21 +191,6 @@ struct GaryxComposer: View {
             }
     }
 
-    private var newThreadComposerCard: some View {
-        composerCardContent
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .garyxAdaptiveGlass(
-                .regular,
-                in: UnevenRoundedRectangle(
-                    topLeadingRadius: GaryxComposerLayout.composerCornerRadius,
-                    bottomLeadingRadius: 0,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: GaryxComposerLayout.composerCornerRadius,
-                    style: .continuous
-                )
-            )
-    }
-
     private var composerCardContent: some View {
         VStack(spacing: 0) {
             if !model.composerAttachments.isEmpty {
@@ -192,31 +204,41 @@ struct GaryxComposer: View {
 
     private var workspaceModeStrip: some View {
         Button {
+            guard canChangeWorkspaceMode else { return }
             showsWorkspaceModeSheet = true
         } label: {
-            HStack(spacing: 9) {
+            HStack(spacing: 6) {
                 Image(systemName: workspaceModeIcon)
-                    .font(GaryxFont.system(size: 17, weight: .semibold))
-                    .frame(width: 22, height: 22)
+                    .font(GaryxFont.system(size: 14, weight: .regular))
+                    .frame(width: 19, height: 19)
 
                 Text(workspaceModeTitle)
-                    .font(GaryxFont.callout(weight: .semibold))
+                    .font(GaryxFont.footnote(weight: .regular))
                     .lineLimit(1)
 
                 Image(systemName: "chevron.down")
-                    .font(GaryxFont.system(size: 12, weight: .bold))
-                    .padding(.leading, 1)
+                    .font(GaryxFont.system(size: 10, weight: .semibold))
 
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 16)
+            .foregroundStyle(GaryxComposerLayout.workspaceBaseForeground)
+            .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.workspaceStripHeight, alignment: .leading)
             .padding(.top, GaryxComposerLayout.workspaceBaseTopPadding)
             .padding(.bottom, GaryxComposerLayout.workspaceBaseBottomPadding)
-            .background(GaryxComposerLayout.workspaceBaseFill)
+            .background(
+                GaryxComposerLayout.workspaceBaseFill,
+                in: UnevenRoundedRectangle(
+                    topLeadingRadius: 0,
+                    bottomLeadingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
+                    bottomTrailingRadius: GaryxComposerLayout.workspaceBaseCornerRadius,
+                    topTrailingRadius: 0,
+                    style: .continuous
+                )
+            )
         }
         .buttonStyle(.plain)
+        .disabled(!canChangeWorkspaceMode)
         .accessibilityLabel("Workspace mode")
     }
 
@@ -262,7 +284,7 @@ struct GaryxComposer: View {
                     Task { await sendLocalDraft() }
                 }
         }
-        .frame(maxWidth: .infinity, minHeight: 34, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.inputMinHeight, alignment: .topLeading)
         .padding(.horizontal, GaryxComposerLayout.inputHorizontalPadding)
         .padding(.top, model.composerAttachments.isEmpty ? GaryxComposerLayout.inputTopPadding : 6)
         .padding(.bottom, GaryxComposerLayout.inputBottomPadding)

@@ -49,6 +49,10 @@ extension GaryxMobileModel {
         )
         resetWorkspaceCatalogState()
         restoreCachedCatalogState()
+        let workspace = newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !workspace.isEmpty, workspaceGitStatuses[workspace] == nil {
+            Task { await refreshWorkspaceGitStatus(for: workspace) }
+        }
     }
 
     func saveGatewayScopedUserState() {

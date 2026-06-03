@@ -335,7 +335,9 @@ extension GaryxMobileModel {
     }
 
     func setNewThreadWorkspaceMode(_ mode: String) {
+        guard selectedThread == nil, !isSending, activeRunThreadId == nil, activeTasksByThread.isEmpty else { return }
         let normalized = Self.normalizedWorkspaceMode(mode)
+        guard normalized != "worktree" || newThreadWorkspaceCanUseWorktree else { return }
         newThreadWorkspaceMode = normalized
         if newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             newThreadWorkspaceMode = "local"
@@ -352,7 +354,7 @@ extension GaryxMobileModel {
     var newThreadWorkspaceCanUseWorktree: Bool {
         let workspace = newThreadWorkspace.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !workspace.isEmpty else { return false }
-        return workspaceGitStatuses[workspace]?.canUseWorktree ?? true
+        return workspaceGitStatuses[workspace]?.canUseWorktree == true
     }
 
     var newThreadUsesWorktree: Bool {

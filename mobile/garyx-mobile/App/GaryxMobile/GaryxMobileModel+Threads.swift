@@ -567,9 +567,7 @@ extension GaryxMobileModel {
         let trimmedWorkspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedWorkspace.isEmpty else { return "local" }
         guard Self.normalizedWorkspaceMode(newThreadWorkspaceMode) == "worktree" else { return "local" }
-        if let status = workspaceGitStatuses[trimmedWorkspace], !status.canUseWorktree {
-            return "local"
-        }
+        guard workspaceGitStatuses[trimmedWorkspace]?.canUseWorktree == true else { return "local" }
         return "worktree"
     }
 
