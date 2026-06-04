@@ -46,7 +46,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "logg
 # Internal crates
 claude-agent-sdk = { path = "claude-agent-sdk" }
 codex-sdk = { path = "codex-sdk" }
-cctty = { git = "https://github.com/Pyiner/cctty.git", rev = "bcee47903ec565aa3ab9bcc2238a3544c0010c16" }
+cctty = { git = "https://github.com/Pyiner/cctty.git", rev = "1aa7503689adaaac753238449b7139bbcbf939d4" }
 garyx-models = { path = "garyx-models" }
 garyx-core = { path = "garyx-core" }
 garyx-agent-loop = { path = "garyx-agent-loop" }
