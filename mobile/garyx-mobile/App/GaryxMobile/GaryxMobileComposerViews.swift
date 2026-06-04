@@ -30,11 +30,11 @@ private enum GaryxComposerLayout {
     static let workspaceBaseHighlight = Color.white.opacity(0.3)
     static let workspaceBaseTopShadow = Color.black.opacity(0.035)
     static let workspaceBaseOverlap: CGFloat = composerCornerRadius
-    static let workspaceBaseTopPadding: CGFloat = 32
-    static let workspaceBaseBottomPadding: CGFloat = 6
-    static let workspaceBaseCornerRadius: CGFloat = 18
+    static let workspaceBaseTopPadding: CGFloat = 26
+    static let workspaceBaseBottomPadding: CGFloat = 5
+    static let workspaceBaseCornerRadius: CGFloat = 16
     static let workspaceBaseTopCornerRadius: CGFloat = 0
-    static let workspaceStripHeight: CGFloat = 25
+    static let workspaceStripHeight: CGFloat = 23
     static let workspaceSheetHeight: CGFloat = 264
     static let workspaceSheetCornerRadius: CGFloat = 34
     static let workspaceSheetTopPadding: CGFloat = 32
