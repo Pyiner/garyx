@@ -24,6 +24,8 @@ import { AgentAvatar } from './AgentAvatar';
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'skipped']);
 const POLL_INTERVAL_MS = 4000;
 const VIEW_MODE_STORAGE_KEY = 'garyx.workflowViewMode';
+const INLINE_COLLECTION_LIMIT = 14;
+const INLINE_COLLECTION_MAX_DEPTH = 2;
 
 function readStoredViewMode(): WorkflowViewMode {
   try {
@@ -229,6 +231,41 @@ function objectSummary(value: Record<string, unknown>): string {
     .join(' · ');
 }
 
+function CollectionPreviewValue({
+  label,
+  onOpenValue,
+  t,
+  value,
+}: {
+  label: string;
+  onOpenValue?: (label: string, value: unknown) => void;
+  t: Translate;
+  value: unknown[] | Record<string, unknown>;
+}) {
+  const summary = Array.isArray(value)
+    ? valueKindLabel(value, t)
+    : objectSummary(value) || valueKindLabel(value, t);
+  if (!onOpenValue) {
+    return (
+      <span className="workflow-json-preview-static">
+        <span className="workflow-json-preview-label">{label}</span>
+        <span className="workflow-json-preview-meta">{summary}</span>
+      </span>
+    );
+  }
+  return (
+    <button
+      className="workflow-json-preview"
+      onClick={() => onOpenValue(label, value)}
+      type="button"
+    >
+      <span className="workflow-json-preview-label">{label}</span>
+      <span className="workflow-json-preview-meta">{summary}</span>
+      <span className="workflow-json-preview-action">{t('Open')}</span>
+    </button>
+  );
+}
+
 function looksMarkdownLike(value: string): boolean {
   return /(^|\n)(#{1,6}\s|[-*]\s|\d+\.\s|>\s|```|\|.+\||\[.+\]\(.+\))/.test(
     value,
@@ -312,6 +349,18 @@ function InspectableResultValue({
   }
 
   if (Array.isArray(value)) {
+    if (depth >= INLINE_COLLECTION_MAX_DEPTH) {
+      return (
+        <CollectionPreviewValue
+          label={label}
+          onOpenValue={onOpenValue}
+          t={t}
+          value={value}
+        />
+      );
+    }
+    const visibleItems = value.slice(0, INLINE_COLLECTION_LIMIT);
+    const hiddenCount = value.length - visibleItems.length;
     return (
       <details className="workflow-json-node" open={depth < 2}>
         <summary>
@@ -319,7 +368,7 @@ function InspectableResultValue({
           <span className="workflow-json-node-meta">{valueKindLabel(value, t)}</span>
         </summary>
         <div className="workflow-json-children">
-          {value.map((item, index) => {
+          {visibleItems.map((item, index) => {
             const summary = isPlainObject(item) ? objectSummary(item) : '';
             return (
               <div className="workflow-json-row" key={`${label}-${index}`}>
@@ -339,6 +388,15 @@ function InspectableResultValue({
               </div>
             );
           })}
+          {hiddenCount > 0 ? (
+            <button
+              className="workflow-json-more"
+              onClick={() => onOpenValue?.(label, value)}
+              type="button"
+            >
+              {t('{count} more', { count: hiddenCount })}
+            </button>
+          ) : null}
         </div>
       </details>
     );
@@ -346,6 +404,18 @@ function InspectableResultValue({
 
   if (isPlainObject(value)) {
     const entries = Object.entries(value);
+    if (depth >= INLINE_COLLECTION_MAX_DEPTH) {
+      return (
+        <CollectionPreviewValue
+          label={label}
+          onOpenValue={onOpenValue}
+          t={t}
+          value={value}
+        />
+      );
+    }
+    const visibleEntries = entries.slice(0, INLINE_COLLECTION_LIMIT);
+    const hiddenCount = entries.length - visibleEntries.length;
     return (
       <details className="workflow-json-node" open={depth < 2}>
         <summary>
@@ -355,7 +425,7 @@ function InspectableResultValue({
           </span>
         </summary>
         <div className="workflow-json-children">
-          {entries.map(([key, entryValue]) => (
+          {visibleEntries.map(([key, entryValue]) => (
             <div className="workflow-json-row" key={key}>
               <span className="workflow-json-key">{key}</span>
               <div className="workflow-json-value">
@@ -369,6 +439,15 @@ function InspectableResultValue({
               </div>
             </div>
           ))}
+          {hiddenCount > 0 ? (
+            <button
+              className="workflow-json-more"
+              onClick={() => onOpenValue?.(label, value)}
+              type="button"
+            >
+              {t('{count} more', { count: hiddenCount })}
+            </button>
+          ) : null}
         </div>
       </details>
     );

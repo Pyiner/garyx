@@ -4110,6 +4110,8 @@ code {
   display: block;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 24px;
 }
 
 .thread-log-line-text {
@@ -4127,6 +4129,8 @@ code {
     color-mix(in oklab, var(--color-token-border) 84%, transparent);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.82);
+  content-visibility: auto;
+  contain-intrinsic-size: auto 44px;
 }
 
 .thread-log-client-entry-error {
@@ -20481,6 +20485,8 @@ button.new-thread-dreams-scan:hover {
   align-items: flex-start;
   min-width: 0;
   padding: 5px 0;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 28px;
 }
 
 .workflow-json-key {
@@ -20509,6 +20515,65 @@ button.new-thread-dreams-scan:hover {
   color: var(--color-token-text-primary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.workflow-json-preview,
+.workflow-json-preview-static,
+.workflow-json-more {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0.5px solid var(--color-token-border);
+  border-radius: 6px;
+  background: var(--color-token-bg-primary);
+  color: var(--color-token-text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.workflow-json-preview,
+.workflow-json-more {
+  cursor: pointer;
+}
+
+.workflow-json-preview:hover,
+.workflow-json-more:hover {
+  border-color: rgba(26, 28, 31, 0.18);
+  background: rgba(26, 28, 31, 0.035);
+}
+
+.workflow-json-preview-label,
+.workflow-json-preview-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-json-preview-label {
+  color: var(--color-token-text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.workflow-json-preview-meta {
+  color: var(--color-token-text-secondary);
+}
+
+.workflow-json-preview-action {
+  color: var(--color-token-text-primary);
+  font-size: 11px;
+  font-weight: var(--font-weight-medium);
+}
+
+.workflow-json-more {
+  grid-template-columns: minmax(0, 1fr);
+  color: var(--color-token-text-secondary);
+  font-size: 11px;
 }
 
 .workflow-json-string,

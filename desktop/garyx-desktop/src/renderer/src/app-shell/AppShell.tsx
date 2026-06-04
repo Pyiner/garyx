@@ -182,6 +182,7 @@ import { useAutomationController } from "./useAutomationController";
 import { useAutoResearchController } from "./useAutoResearchController";
 import {
   MAX_CLIENT_STREAM_LOG_ENTRIES,
+  appendClientStreamLogEntry,
   THREAD_LOG_PANEL_MAX_WIDTH,
   THREAD_LOG_PANEL_MIN_WIDTH,
   buildClientStreamLogEntry,
@@ -830,6 +831,14 @@ function seededAckedUserBubble(intent: MessageIntent): UiTranscriptMessage {
 type SeededTurn = {
   assistantEntryId: string | null;
   legacyPendingAssistantId: string | null;
+};
+
+type PendingAssistantDelta = {
+  threadId: string;
+  intentId?: string;
+  runId: string;
+  text: string;
+  metadata?: Record<string, unknown> | null;
 };
 
 function queuedInputIdFromMessage(
@@ -1766,6 +1775,12 @@ export function AppShell() {
   const threadLogsOpenRef = useRef(false);
   const threadLogsActiveTabRef = useRef<ThreadLogTab>("client");
   const clientLogSequenceRef = useRef(1);
+  const pendingClientLogEventsRef = useRef<DesktopChatStreamEvent[]>([]);
+  const clientLogFlushFrameRef = useRef<number | null>(null);
+  const pendingAssistantDeltaByThreadRef = useRef<
+    Record<string, PendingAssistantDelta>
+  >({});
+  const assistantDeltaFlushFrameRef = useRef<number | null>(null);
   const messagesByThreadRef = useRef<MessageMap>({});
   const historyPaginationByThreadRef = useRef<
     Record<string, ThreadHistoryPaginationState>
@@ -3201,14 +3216,14 @@ export function AppShell() {
     return exhaustive;
   }
 
-  function confirmDiscardMemoryChanges(): boolean {
+  const confirmDiscardMemoryChanges = useCallback((): boolean => {
     if (!memoryDialogDirty) {
       return true;
     }
     return window.confirm("Discard unsaved memory changes?");
-  }
+  }, [memoryDialogDirty]);
 
-  async function openMemoryDialog(target: MemoryDialogTarget) {
+  const openMemoryDialog = useCallback(async (target: MemoryDialogTarget) => {
     if (memoryDialogTarget && !confirmDiscardMemoryChanges()) {
       return;
     }
@@ -3248,7 +3263,7 @@ export function AppShell() {
         setMemoryDialogLoading(false);
       }
     }
-  }
+  }, [confirmDiscardMemoryChanges, memoryDialogTarget]);
 
   function closeMemoryDialog() {
     if (!confirmDiscardMemoryChanges()) {
@@ -3305,7 +3320,7 @@ export function AppShell() {
     }
   }
 
-  function handleLocalFileLinkClick(absolutePath: string) {
+  const handleLocalFileLinkClick = useCallback((absolutePath: string) => {
     const memoryTarget = resolveMemoryDialogTargetFromPath(
       absolutePath,
       automations,
@@ -3316,7 +3331,12 @@ export function AppShell() {
       return;
     }
     handleLocalWorkspaceFileLinkClick(absolutePath);
-  }
+  }, [
+    automations,
+    desktopAgents,
+    handleLocalWorkspaceFileLinkClick,
+    openMemoryDialog,
+  ]);
 
   function openSettingsView() {
     setContentView("settings");
@@ -3737,6 +3757,14 @@ export function AppShell() {
         window.cancelAnimationFrame(messagesStickScrollFrameRef.current);
         messagesStickScrollFrameRef.current = null;
       }
+      if (clientLogFlushFrameRef.current !== null) {
+        window.cancelAnimationFrame(clientLogFlushFrameRef.current);
+        clientLogFlushFrameRef.current = null;
+      }
+      if (assistantDeltaFlushFrameRef.current !== null) {
+        window.cancelAnimationFrame(assistantDeltaFlushFrameRef.current);
+        assistantDeltaFlushFrameRef.current = null;
+      }
     };
   }, []);
 
@@ -3796,41 +3824,7 @@ export function AppShell() {
 
   useEffect(() => {
     const listener = (event: DesktopChatStreamEvent) => {
-      const key = `client-log-line-${clientLogSequenceRef.current}`;
-      clientLogSequenceRef.current += 1;
-      const nextEntry = buildClientStreamLogEntry(event, key);
-      setClientLogsByThread((current) => {
-        const existing = current[event.threadId] || [];
-        const nextEntries =
-          existing.length >= MAX_CLIENT_STREAM_LOG_ENTRIES
-            ? [
-                ...existing.slice(
-                  existing.length - MAX_CLIENT_STREAM_LOG_ENTRIES + 1,
-                ),
-                nextEntry,
-              ]
-            : [...existing, nextEntry];
-        return {
-          ...current,
-          [event.threadId]: nextEntries,
-        };
-      });
-
-      if (event.threadId === selectedThreadIdRef.current) {
-        const shouldAutoScroll =
-          threadLogsOpenRef.current &&
-          threadLogsActiveTabRef.current === "client" &&
-          threadLogsNearBottom();
-        if (shouldAutoScroll) {
-          setClientLogsHasUnread(false);
-          window.requestAnimationFrame(() => {
-            scrollThreadLogsToLatest("auto");
-          });
-        } else {
-          setClientLogsHasUnread(true);
-        }
-      }
-
+      enqueueClientLogEvent(event);
       streamEventHandlerRef.current(event);
     };
     window.garyxDesktop.subscribeChatStream(listener);
@@ -4863,6 +4857,150 @@ export function AppShell() {
     return next;
   }
 
+  function flushPendingClientLogEvents() {
+    clientLogFlushFrameRef.current = null;
+    const events = pendingClientLogEventsRef.current;
+    if (!events.length) {
+      return;
+    }
+    pendingClientLogEventsRef.current = [];
+
+    setClientLogsByThread((current) => {
+      let next = current;
+      for (const event of events) {
+        const key = `client-log-line-${clientLogSequenceRef.current}`;
+        clientLogSequenceRef.current += 1;
+        const nextEntry = buildClientStreamLogEntry(event, key);
+        const existing = next[event.threadId] || [];
+        const nextEntries = appendClientStreamLogEntry(
+          existing,
+          nextEntry,
+          MAX_CLIENT_STREAM_LOG_ENTRIES,
+        );
+        if (nextEntries === existing) {
+          continue;
+        }
+        next = {
+          ...next,
+          [event.threadId]: nextEntries,
+        };
+      }
+      return next;
+    });
+
+    const selectedThread = selectedThreadIdRef.current;
+    if (!selectedThread || !events.some((event) => event.threadId === selectedThread)) {
+      return;
+    }
+    const shouldAutoScroll =
+      threadLogsOpenRef.current &&
+      threadLogsActiveTabRef.current === "client" &&
+      threadLogsNearBottom();
+    if (shouldAutoScroll) {
+      setClientLogsHasUnread(false);
+      window.requestAnimationFrame(() => {
+        scrollThreadLogsToLatest("auto");
+      });
+    } else {
+      setClientLogsHasUnread(true);
+    }
+  }
+
+  function enqueueClientLogEvent(event: DesktopChatStreamEvent) {
+    pendingClientLogEventsRef.current.push(event);
+    if (clientLogFlushFrameRef.current !== null) {
+      return;
+    }
+    clientLogFlushFrameRef.current = window.requestAnimationFrame(
+      flushPendingClientLogEvents,
+    );
+  }
+
+  function flushPendingAssistantDelta(
+    threadId?: string,
+  ): LiveStreamState | null {
+    const pendingByThread = pendingAssistantDeltaByThreadRef.current;
+    const pendingDeltas = threadId
+      ? pendingByThread[threadId]
+        ? [pendingByThread[threadId]]
+        : []
+      : Object.values(pendingByThread);
+    if (!pendingDeltas.length) {
+      return threadId ? getLiveStreamState(threadId) : null;
+    }
+
+    let latestState: LiveStreamState | null = null;
+    for (const pending of pendingDeltas) {
+      delete pendingByThread[pending.threadId];
+      const assistantEntryId = applyStreamingAssistantDelta(
+        pending.threadId,
+        pending.intentId,
+        pending.runId,
+        pending.text,
+        pending.metadata,
+      );
+      latestState = updateLiveStreamState(pending.threadId, (current) => ({
+        threadId: pending.threadId,
+        runId: pending.runId,
+        activeIntentId: current?.activeIntentId || pending.intentId,
+        assistantEntryId,
+        pendingAckIntentIds: current?.pendingAckIntentIds || [],
+        streamStatus: "streaming",
+      }));
+      setThreadRuntimeState(pending.threadId, "running_remote", {
+        activeIntentId: pending.intentId,
+        remoteRunId: pending.runId,
+      });
+    }
+    return threadId ? getLiveStreamState(threadId) : latestState;
+  }
+
+  function schedulePendingAssistantDeltaFlush() {
+    if (assistantDeltaFlushFrameRef.current !== null) {
+      return;
+    }
+    assistantDeltaFlushFrameRef.current = window.requestAnimationFrame(() => {
+      assistantDeltaFlushFrameRef.current = null;
+      flushPendingAssistantDelta();
+    });
+  }
+
+  function enqueueStreamingAssistantDelta(
+    threadId: string,
+    intentId: string | undefined,
+    runId: string,
+    delta: string,
+    metadata?: Record<string, unknown> | null,
+  ) {
+    const pending = pendingAssistantDeltaByThreadRef.current[threadId];
+    const nextSpeakerKey = speakerIdentityKey(metadata);
+    const pendingSpeakerKey = speakerIdentityKey(pending?.metadata);
+    if (
+      pending &&
+      (pending.runId !== runId ||
+        pending.intentId !== intentId ||
+        pendingSpeakerKey !== nextSpeakerKey)
+    ) {
+      flushPendingAssistantDelta(threadId);
+    }
+
+    const current = pendingAssistantDeltaByThreadRef.current[threadId];
+    pendingAssistantDeltaByThreadRef.current[threadId] = current
+      ? {
+          ...current,
+          text: `${current.text}${delta}`,
+          metadata: metadata ?? current.metadata,
+        }
+      : {
+          threadId,
+          intentId,
+          runId,
+          text: delta,
+          metadata: metadata ?? null,
+        };
+    schedulePendingAssistantDeltaFlush();
+  }
+
   function requestMessagesBottomSnap(
     threadId: string | null | undefined,
     forceStick = false,
@@ -5495,7 +5633,10 @@ export function AppShell() {
 
   function handleChatStreamEvent(event: DesktopChatStreamEvent) {
     const threadId = event.threadId;
-    const currentStream = getLiveStreamState(threadId);
+    let currentStream = getLiveStreamState(threadId);
+    if (event.type !== "assistant_delta") {
+      currentStream = flushPendingAssistantDelta(threadId);
+    }
     const activeIntentId = currentStream?.activeIntentId;
 
     switch (event.type) {
@@ -5535,25 +5676,13 @@ export function AppShell() {
         break;
       }
       case "assistant_delta": {
-        const assistantEntryId = applyStreamingAssistantDelta(
+        enqueueStreamingAssistantDelta(
           threadId,
           activeIntentId,
           event.runId,
           event.delta,
           event.metadata,
         );
-        updateLiveStreamState(threadId, (current) => ({
-          threadId: threadId,
-          runId: event.runId,
-          activeIntentId: current?.activeIntentId,
-          assistantEntryId,
-          pendingAckIntentIds: current?.pendingAckIntentIds || [],
-          streamStatus: "streaming",
-        }));
-        setThreadRuntimeState(threadId, "running_remote", {
-          activeIntentId: activeIntentId || undefined,
-          remoteRunId: event.runId,
-        });
         break;
       }
       case "assistant_boundary": {

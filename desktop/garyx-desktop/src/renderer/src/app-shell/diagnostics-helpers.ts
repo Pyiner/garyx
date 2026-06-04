@@ -1,19 +1,18 @@
-import {
-  DEFAULT_DESKTOP_SETTINGS,
-  type ConnectionStatus,
-  type DesktopChatStreamEvent,
+import type {
+  ConnectionStatus,
+  DesktopChatStreamEvent,
 } from '@shared/contracts';
 
-import { stringifyJsonBlock } from '../gateway-settings';
 import type { ClientLogEntry, GatewayIndicatorTone, ThreadLogLine } from './types';
 
 const THREAD_LOG_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\S+\s+/;
-export const MAX_CLIENT_STREAM_LOG_ENTRIES = 500;
+export const MAX_CLIENT_STREAM_LOG_ENTRIES = 180;
 export const MAX_GATEWAY_THREAD_LOG_LINES = 100;
 export const THREAD_LOG_PANEL_MIN_WIDTH = 280;
 export const THREAD_LOG_PANEL_MAX_WIDTH = 760;
 const THREAD_LOG_PANEL_MIN_MAIN_WIDTH = 540;
 const THREAD_LOG_PANEL_RESIZER_WIDTH = 10;
+const DEFAULT_THREAD_LOG_PANEL_WIDTH = 360;
 const GATEWAY_OFFLINE_THRESHOLD = 3;
 
 export function keepRecentThreadLogLines(
@@ -98,17 +97,45 @@ function shortenClientLogId(value: string | null | undefined): string {
 }
 
 function stringifyClientLogPayload(value: unknown, maxChars = 4_000): string {
-  const text = typeof value === 'string' ? value : stringifyJsonBlock(value);
+  const text = typeof value === 'string'
+    ? value
+    : (() => {
+        try {
+          return JSON.stringify(value, null, 2);
+        } catch {
+          return String(value);
+        }
+      })();
   if (text.length <= maxChars) {
     return text;
   }
   return `${text.slice(0, maxChars)}\n…[truncated ${text.length - maxChars} chars]`;
 }
 
+function assistantDeltaSummary(count: number, totalChars: number): string {
+  return count === 1
+    ? `1 chunk · ${totalChars} chars`
+    : `${count} chunks · ${totalChars} chars`;
+}
+
+function assistantDeltaDetail(input: {
+  count: number;
+  runId?: string;
+  totalChars: number;
+}): string {
+  return stringifyClientLogPayload({
+    type: 'assistant_delta',
+    runId: input.runId,
+    chunks: input.count,
+    chars: input.totalChars,
+    coalesced: input.count > 1,
+  });
+}
+
 function summarizeClientStreamEvent(event: DesktopChatStreamEvent): string {
   switch (event.type) {
     case 'assistant_delta':
-      return `len=${event.delta.length} ${truncateClientLogText(compactClientLogText(JSON.stringify(event.delta)))}`;
+      return assistantDeltaSummary(1, event.delta.length);
     case 'tool_use':
     case 'tool_result': {
       const summaryParts = [
@@ -135,10 +162,10 @@ function summarizeClientStreamEvent(event: DesktopChatStreamEvent): string {
 function buildClientStreamLogDetail(event: DesktopChatStreamEvent): string {
   switch (event.type) {
     case 'assistant_delta':
-      return stringifyClientLogPayload({
-        type: event.type,
+      return assistantDeltaDetail({
+        count: 1,
         runId: event.runId,
-        delta: event.delta,
+        totalChars: event.delta.length,
       });
     case 'tool_use':
     case 'tool_result':
@@ -167,17 +194,59 @@ export function buildClientStreamLogEntry(
     key,
     timestamp: formatThreadLogClock(now),
     eventType: event.type,
+    runId: 'runId' in event ? event.runId : undefined,
+    count: event.type === 'assistant_delta' ? 1 : undefined,
+    totalChars: event.type === 'assistant_delta' ? event.delta.length : undefined,
     summary: summarizeClientStreamEvent(event),
     detail: buildClientStreamLogDetail(event),
     level: event.type === 'error' ? 'error' : 'default',
   };
 }
 
+export function appendClientStreamLogEntry(
+  existing: ClientLogEntry[],
+  nextEntry: ClientLogEntry,
+  maxEntries = MAX_CLIENT_STREAM_LOG_ENTRIES,
+): ClientLogEntry[] {
+  const previous = existing[existing.length - 1];
+  let nextEntries: ClientLogEntry[];
+  if (
+    previous &&
+    previous.eventType === 'assistant_delta' &&
+    nextEntry.eventType === 'assistant_delta' &&
+    previous.runId === nextEntry.runId
+  ) {
+    const count = (previous.count || 1) + (nextEntry.count || 1);
+    const totalChars =
+      (previous.totalChars || 0) + (nextEntry.totalChars || 0);
+    nextEntries = [
+      ...existing.slice(0, -1),
+      {
+        ...previous,
+        timestamp: nextEntry.timestamp,
+        count,
+        totalChars,
+        summary: assistantDeltaSummary(count, totalChars),
+        detail: assistantDeltaDetail({
+          count,
+          runId: previous.runId,
+          totalChars,
+        }),
+      },
+    ];
+  } else {
+    nextEntries = [...existing, nextEntry];
+  }
+  return maxEntries > 0 && nextEntries.length > maxEntries
+    ? nextEntries.slice(nextEntries.length - maxEntries)
+    : nextEntries;
+}
+
 export function clampThreadLogsPanelWidth(
   width: number,
   layoutWidth?: number | null,
 ): number {
-  const baseWidth = Number.isFinite(width) ? width : DEFAULT_DESKTOP_SETTINGS.threadLogsPanelWidth;
+  const baseWidth = Number.isFinite(width) ? width : DEFAULT_THREAD_LOG_PANEL_WIDTH;
   const layoutMax = layoutWidth && layoutWidth > 0
     ? Math.max(
         THREAD_LOG_PANEL_MIN_WIDTH,

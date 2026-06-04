@@ -464,6 +464,15 @@ export function ThreadPage({
           }),
     [activeRenderableBlocks, isActiveSendingThread, teamView.isTeam],
   );
+  const teamBlockSpeakers = useMemo(
+    () =>
+      teamView.isTeam
+        ? activeRenderableBlocks.map((block) =>
+            speakerForTranscriptBlock(block, teamSpeakerOptions),
+          )
+        : [],
+    [activeRenderableBlocks, teamSpeakerOptions, teamView.isTeam],
+  );
   const composerSelectedAgentId = selectedThreadId
     ? teamView.isTeam
       ? activeThreadSummary?.team?.team_id?.trim() ||
@@ -666,17 +675,10 @@ export function ThreadPage({
             // up behind a Codex-style "Worked for X" collapsible.
             if (teamView.isTeam) {
               return activeRenderableBlocks.map((block, index) => {
-                const speaker = speakerForTranscriptBlock(
-                  block,
-                  teamSpeakerOptions,
-                );
-                const previousSpeaker =
-                  index > 0
-                    ? speakerForTranscriptBlock(
-                        activeRenderableBlocks[index - 1]!,
-                        teamSpeakerOptions,
-                      )
-                    : null;
+                const speaker = teamBlockSpeakers[index] || null;
+                const previousSpeaker = index > 0
+                  ? teamBlockSpeakers[index - 1] || null
+                  : null;
                 const showSpeakerHeader =
                   Boolean(speaker) &&
                   speaker!.agentId !== previousSpeaker?.agentId;

@@ -87,6 +87,9 @@ export type ClientLogEntry = {
   key: string;
   timestamp: string;
   eventType: DesktopChatStreamEvent['type'];
+  runId?: string;
+  count?: number;
+  totalChars?: number;
   summary: string;
   detail: string;
   level: 'default' | 'error';
