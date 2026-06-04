@@ -4555,16 +4555,26 @@ code {
 }
 
 .workflow-thread-content {
+  position: absolute;
+  inset: 0;
   display: flex;
-  flex: 1 1 auto;
+  height: 100%;
   width: 100%;
-  min-height: min(720px, calc(100vh - 220px));
+  min-height: 0;
+  overflow: hidden;
 }
 
 .workflow-thread-content > .workflow-runs-page {
   flex: 1 1 auto;
-  height: auto;
+  height: 100%;
   min-height: 0;
+  width: 100%;
+}
+
+.thread-main.has-workflow-run-content .workflow-timeline-main {
+  padding-bottom: calc(
+    var(--composer-scroll-clip-height) + var(--composer-message-clearance) + 48px
+  );
 }
 
 .message-history-page-loader {
@@ -20897,9 +20907,13 @@ button.new-thread-dreams-scan:hover {
 /* Workflow timeline (conversation-style) view */
 .workflow-timeline {
   position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  column-gap: 22px;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  padding-right: 18px;
   background: var(--color-token-bg-primary);
 }
 
@@ -20907,8 +20921,7 @@ button.new-thread-dreams-scan:hover {
   height: 100%;
   min-height: 0;
   overflow: auto;
-  /* Reserve the right gutter for the floating plan card. */
-  padding: 16px 256px 48px 20px;
+  padding: 16px 0 48px 20px;
 }
 
 .workflow-timeline-inner {
@@ -21017,17 +21030,20 @@ button.new-thread-dreams-scan:hover {
   margin-left: 32px;
 }
 
-/* Floating plan card (Codex-parity), anchored top-right over the stream. */
+/* Right-side run context panel, separated from the scroll stream. */
 .workflow-plan-panel {
-  position: absolute;
-  top: 16px;
-  right: 18px;
-  z-index: 2;
+  position: relative;
+  z-index: 1;
+  align-self: start;
   display: flex;
   flex-direction: column;
   gap: 18px;
-  width: 232px;
-  max-height: calc(100% - 32px);
+  width: 100%;
+  max-height: calc(
+    100% - var(--composer-scroll-clip-height) -
+      var(--composer-message-clearance) - 32px
+  );
+  margin-top: 16px;
   padding: 15px 15px 16px;
   border: 0.5px solid rgba(26, 28, 31, 0.08);
   border-radius: 14px;

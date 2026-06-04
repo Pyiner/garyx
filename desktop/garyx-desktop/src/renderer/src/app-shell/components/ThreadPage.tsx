@@ -540,9 +540,16 @@ export function ThreadPage({
       style={threadLayoutStyle}
     >
       <div
-        className={`thread-main ${emptyNewThread ? "new-thread-centered" : ""}`}
+        className={`thread-main ${emptyNewThread ? "new-thread-centered" : ""} ${hasWorkflowRunContent ? "has-workflow-run-content" : ""}`}
         ref={threadMainRef}
       >
+        {hasWorkflowRunContent ? (
+          <div className="workflow-thread-content">
+            {workflowRunContent}
+          </div>
+        ) : null}
+
+        {!hasWorkflowRunContent ? (
         <div className="messages" onScroll={onMessagesScroll} ref={messagesRef}>
           {historyLoadingEarlier ? (
             <div
@@ -553,14 +560,7 @@ export function ThreadPage({
             </div>
           ) : null}
 
-          {hasWorkflowRunContent ? (
-            <div className="workflow-thread-content">
-              {workflowRunContent}
-            </div>
-          ) : null}
-
-          {!hasWorkflowRunContent &&
-          !activeMessages.length &&
+          {!activeMessages.length &&
           !historyLoading &&
           !showAutomationRunInitialPlaceholder ? (
             selectedThreadId ? (
@@ -863,6 +863,7 @@ export function ThreadPage({
             </article>
           ) : null}
         </div>
+        ) : null}
 
         <div className="composer-shell-wrap" ref={composerShellWrapRef}>
           {emptyNewThread ? (
