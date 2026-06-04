@@ -79,6 +79,7 @@ import { AddBotDialog } from "./components/AddBotDialog";
 import { DreamsPanel } from "./components/DreamsPanel";
 import { BotConversationSidebar } from "../BotConversationSidebar";
 import { WorkspaceConversationSidebar } from "../WorkspaceConversationSidebar";
+import { ThreadConversationSidebar } from "../ThreadConversationSidebar";
 import { buildComposerWorkflowOptions } from "../ComposerForm";
 import { ComposerQueue } from "../ComposerQueue";
 import { ConversationHeaderActions } from "../ConversationHeaderActions";
@@ -152,6 +153,7 @@ import {
   AutoResearchIcon,
   BackIcon,
   NewThreadIcon,
+  RecentIcon,
   SettingsIcon,
   SkillsIcon,
   WorkspaceFileIcon,
@@ -232,10 +234,14 @@ const HIDDEN_TOOL_RESULT_STATUS_TEXT = "Garyx finished a reasoning step…";
 
 type ThreadEntrySelectionSource =
   | "pinned"
+  | "recent"
   | "bot-root"
   | "bot-conversation"
   | "workspace-conversation"
   | "dreams";
+
+// How many most-recent threads the sidebar "Recent" rail surfaces.
+const RECENT_THREAD_LIMIT = 20;
 
 type ThreadHistoryPaginationState = {
   hasMoreBefore: boolean;
@@ -1686,6 +1692,7 @@ export function AppShell() {
   const [botConversationGroupId, setBotConversationGroupId] = useState<string | null>(null);
   const [workspaceConversationPath, setWorkspaceConversationPath] =
     useState<string | null>(null);
+  const [recentThreadsRailOpen, setRecentThreadsRailOpen] = useState(false);
   const sidebarResizeStateRef = useRef<{
     startX: number;
     startWidth: number;
@@ -2960,6 +2967,24 @@ export function AppShell() {
     visibleThreadEntrySelectionSource === "workspace-conversation"
       ? visibleSelectedThreadId
       : null;
+  const recentThreadRows = useMemo(
+    () =>
+      (desktopState?.threads || [])
+        .slice(0, RECENT_THREAD_LIMIT)
+        .map((thread) => ({
+          thread,
+          isActive:
+            visibleThreadEntrySelectionSource === "recent" &&
+            visibleSelectedThreadId === thread.id,
+          isBusy: isRuntimeBusy(selectThreadRuntime(messageState, thread.id)?.state),
+        })),
+    [
+      desktopState?.threads,
+      messageState,
+      visibleSelectedThreadId,
+      visibleThreadEntrySelectionSource,
+    ],
+  );
   const pinnedThreadRows = useMemo(
     () =>
       pinnedThreadIds
@@ -3038,6 +3063,7 @@ export function AppShell() {
     }
     setBotConversationGroupId((current) => (current ? null : current));
     setWorkspaceConversationPath((current) => (current ? null : current));
+    setRecentThreadsRailOpen((current) => (current ? false : current));
   }, [shouldShowConversationRail]);
   useEffect(() => {
     if (!botConversationGroupId) {
@@ -3104,7 +3130,9 @@ export function AppShell() {
   ]);
   const appShellClassName = [
     "app-shell",
-    activeBotConversationGroup || activeWorkspaceThreadGroup
+    activeBotConversationGroup ||
+    activeWorkspaceThreadGroup ||
+    (shouldShowConversationRail && recentThreadsRailOpen)
       ? "with-bot-conversation-rail"
       : null,
   ]
@@ -8400,6 +8428,7 @@ export function AppShell() {
         isSkillsView={isSkillsView}
         isTasksView={isTasksView || isWorkflowView}
         isDreamsView={isDreamsView}
+        recentRailOpen={shouldShowConversationRail && recentThreadsRailOpen}
         onBackToThreads={() => {
           setContentView("thread");
         }}
@@ -8409,7 +8438,18 @@ export function AppShell() {
         onNewThread={() => {
           void handleNewThread();
         }}
+        onOpenRecent={() => {
+          setBotConversationGroupId(null);
+          setWorkspaceConversationPath(null);
+          if (!shouldShowConversationRail) {
+            setContentView("thread");
+            setRecentThreadsRailOpen(true);
+            return;
+          }
+          setRecentThreadsRailOpen((current) => !current);
+        }}
         onOpenBot={(group) => {
+          setRecentThreadsRailOpen(false);
           setBotConversationGroupId((current) =>
             current === group.id ? current : null,
           );
@@ -8417,6 +8457,7 @@ export function AppShell() {
           void handleBotClick(group);
         }}
         onOpenPinnedThread={(threadId) => {
+          setRecentThreadsRailOpen(false);
           setBotConversationGroupId(null);
           setWorkspaceConversationPath(null);
           void openExistingThread(threadId, "pinned");
@@ -8436,12 +8477,14 @@ export function AppShell() {
           } as DesktopChannelEndpoint);
         }}
         onToggleBotConversationGroup={(group) => {
+          setRecentThreadsRailOpen(false);
           setWorkspaceConversationPath(null);
           setBotConversationGroupId((current) =>
             current === group.id ? null : group.id,
           );
         }}
         onToggleWorkspaceThreadGroup={(workspacePath) => {
+          setRecentThreadsRailOpen(false);
           setBotConversationGroupId(null);
           setWorkspaceConversationPath((current) => {
             const currentKey = current?.trim().toLowerCase() || "";
@@ -8533,8 +8576,11 @@ export function AppShell() {
           onClose={() => {
             setWorkspaceConversationPath(null);
           }}
-          onDeleteThread={(threadId) => {
-            void handleDeleteThread(threadId);
+          onArchiveThread={(threadId) => {
+            void handleArchiveBotConversationEndpoint({
+              threadId,
+              endpointKey: "",
+            } as DesktopChannelEndpoint);
           }}
           onOpenThread={(threadId) => {
             void openExistingThread(threadId, "workspace-conversation");
@@ -8542,6 +8588,43 @@ export function AppShell() {
           onRailResizeStart={handleRailResizeStart}
           railResizing={railResizing}
           selectedThreadId={workspaceConversationSelectedThreadId}
+        />
+      ) : shouldShowConversationRail && recentThreadsRailOpen ? (
+        <ThreadConversationSidebar
+          ariaLabel={t("Recent threads")}
+          className="recent-conversation-rail"
+          collapseLabel={t("Collapse recent threads")}
+          emptyLabel={t("No recent threads")}
+          formatThreadTimestamp={formatThreadTimestamp}
+          logo={
+            <span className="recent-conversation-logo">
+              <RecentIcon />
+            </span>
+          }
+          onClose={() => {
+            setRecentThreadsRailOpen(false);
+          }}
+          onRailResizeStart={handleRailResizeStart}
+          railResizing={railResizing}
+          rowClassName="recent-conversation-row-shell"
+          rows={recentThreadRows.map((row) => ({
+            key: row.thread.id,
+            title: row.thread.title,
+            time: row.thread.updatedAt,
+            isActive: row.isActive,
+            onOpen: () => {
+              void openExistingThread(row.thread.id, "recent");
+            },
+            onArchive: row.isBusy
+              ? undefined
+              : () => {
+                  void handleArchiveBotConversationEndpoint({
+                    threadId: row.thread.id,
+                    endpointKey: "",
+                  } as DesktopChannelEndpoint);
+                },
+          }))}
+          title={t("Recent")}
         />
       ) : null}
       <AddBotDialog
