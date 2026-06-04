@@ -6,40 +6,32 @@ import UIKit
 import UniformTypeIdentifiers
 
 private enum GaryxComposerLayout {
-    static let composerCornerRadius: CGFloat = 23
+    static let composerCornerRadius: CGFloat = 22
     static let composerSpacing: CGFloat = 6
     static let bottomBarSpacing: CGFloat = 12
-    static let bottomBarHorizontalPadding: CGFloat = 15
-    static let bottomBarTopPadding: CGFloat = 4
-    static let bottomBarBottomPadding: CGFloat = 12
-    static let actionButtonSide: CGFloat = 34
+    static let bottomBarHorizontalPadding: CGFloat = 14
+    static let bottomBarTopPadding: CGFloat = 2
+    static let bottomBarBottomPadding: CGFloat = 7
+    static let actionButtonSide: CGFloat = 32
     static let actionButtonFill = Color.primary.opacity(0.06)
     static let inputHorizontalPadding: CGFloat = 16
-    static let inputTopPadding: CGFloat = 17
-    static let inputBottomPadding: CGFloat = 7
-    static let inputMinHeight: CGFloat = 39
-    static let composerMaterialTint = Color(.systemBackground).opacity(0.62)
+    static let inputTopPadding: CGFloat = 15
+    static let inputBottomPadding: CGFloat = 8
+    static let inputMinHeight: CGFloat = 29
+    static let composerMaterialTint = Color(.systemBackground).opacity(0.58)
     static let composerMaterialStroke = Color.primary.opacity(0.09)
-    static let composerMaterialHighlight = Color.white.opacity(0.70)
-    static let composerShadow = Color.black.opacity(0.10)
-    static let workspaceBaseFill = Color(.systemFill).opacity(0.72)
+    static let composerMaterialHighlight = Color.white.opacity(0.66)
+    static let composerShadow = Color.black.opacity(0.08)
+    static let workspaceBaseFill = Color(.systemFill).opacity(0.74)
     static let workspaceBaseForeground = Color.primary.opacity(0.78)
     static let workspaceBaseStroke = Color.primary.opacity(0.055)
-    static let workspaceBaseHighlight = Color.white.opacity(0.36)
-    static let workspaceBaseOverlap: CGFloat = 25
-    static let workspaceBaseHorizontalPadding: CGFloat = 22
-    static let workspaceBaseTopPadding: CGFloat = 35
-    static let workspaceBaseBottomPadding: CGFloat = 14
-    static let workspaceBaseCornerRadius: CGFloat = 19
-    static let workspaceStripHeight: CGFloat = 32
-    static let workspaceSheetHeight: CGFloat = 304
-    static let workspaceSheetCornerRadius: CGFloat = 32
-    static let workspaceSheetTopPadding: CGFloat = 36
-    static let workspaceSheetHorizontalPadding: CGFloat = 18
-    static let workspaceSheetRowHeight: CGFloat = 56
-    static let workspaceSheetRowCornerRadius: CGFloat = 17
-    static let workspaceSheetIconSide: CGFloat = 34
-    static let workspaceSheetSelectedFill = Color(.systemGray5)
+    static let workspaceBaseHighlight = Color.white.opacity(0.32)
+    static let workspaceBaseOverlap: CGFloat = 21
+    static let workspaceBaseTopPadding: CGFloat = 31
+    static let workspaceBaseBottomPadding: CGFloat = 7
+    static let workspaceBaseCornerRadius: CGFloat = 18
+    static let workspaceStripHeight: CGFloat = 28
+    static let workspaceSheetHeight: CGFloat = 228
     static let draftFieldIdentity = "garyx-composer-draft-field"
 }
 
@@ -82,7 +74,7 @@ struct GaryxComposer: View {
             composerStack
         }
         .padding(.horizontal, 12)
-        .padding(.top, 12)
+        .padding(.top, 10)
         .padding(.bottom, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.clear)
@@ -96,7 +88,6 @@ struct GaryxComposer: View {
             }
             .presentationDetents([.height(GaryxComposerLayout.workspaceSheetHeight)])
             .presentationDragIndicator(.visible)
-            .presentationCornerRadius(GaryxComposerLayout.workspaceSheetCornerRadius)
         }
         .fileImporter(
             isPresented: $isPickingAttachments,
@@ -190,7 +181,7 @@ struct GaryxComposer: View {
     private var newThreadComposerCard: some View {
         composerCard
             .zIndex(1)
-            .shadow(color: GaryxComposerLayout.composerShadow, radius: 22, x: 0, y: 14)
+            .shadow(color: GaryxComposerLayout.composerShadow, radius: 18, x: 0, y: 10)
             .shadow(color: Color.black.opacity(0.025), radius: 2, x: 0, y: 1)
     }
 
@@ -232,20 +223,20 @@ struct GaryxComposer: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: workspaceModeIcon)
-                    .font(GaryxFont.system(size: 17, weight: .regular))
-                    .frame(width: 23, height: 23)
+                    .font(GaryxFont.system(size: 14, weight: .regular))
+                    .frame(width: 19, height: 19)
 
                 Text(workspaceModeTitle)
-                    .font(GaryxFont.body(weight: .regular))
+                    .font(GaryxFont.footnote(weight: .regular))
                     .lineLimit(1)
 
                 Image(systemName: "chevron.down")
-                    .font(GaryxFont.system(size: 11, weight: .semibold))
+                    .font(GaryxFont.system(size: 10, weight: .semibold))
 
                 Spacer(minLength: 0)
             }
             .foregroundStyle(GaryxComposerLayout.workspaceBaseForeground)
-            .padding(.horizontal, GaryxComposerLayout.workspaceBaseHorizontalPadding)
+            .padding(.horizontal, 14)
             .frame(maxWidth: .infinity, minHeight: GaryxComposerLayout.workspaceStripHeight, alignment: .leading)
             .padding(.top, GaryxComposerLayout.workspaceBaseTopPadding)
             .padding(.bottom, GaryxComposerLayout.workspaceBaseBottomPadding)
@@ -558,11 +549,11 @@ private struct GaryxComposerWorkspaceModeSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Run Location")
-                .font(GaryxFont.title2(weight: .semibold))
+                .font(GaryxFont.title3(weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 modeRow(
                     mode: "local",
                     title: "Local",
@@ -578,9 +569,9 @@ private struct GaryxComposerWorkspaceModeSheet: View {
                 )
             }
         }
-        .padding(.horizontal, GaryxComposerLayout.workspaceSheetHorizontalPadding)
-        .padding(.top, GaryxComposerLayout.workspaceSheetTopPadding)
-        .padding(.bottom, 20)
+        .padding(.horizontal, 18)
+        .padding(.top, 20)
+        .padding(.bottom, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(GaryxTheme.background)
     }
@@ -601,14 +592,11 @@ private struct GaryxComposerWorkspaceModeSheet: View {
                 Image(systemName: systemImage)
                     .font(GaryxFont.system(size: 16, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .frame(
-                        width: GaryxComposerLayout.workspaceSheetIconSide,
-                        height: GaryxComposerLayout.workspaceSheetIconSide
-                    )
+                    .frame(width: 34, height: 34)
                     .background(GaryxComposerLayout.actionButtonFill, in: Circle())
 
                 Text(title)
-                    .font(GaryxFont.body(weight: .semibold))
+                    .font(GaryxFont.callout(weight: .semibold))
                     .foregroundStyle(.primary)
 
                 Spacer(minLength: 0)
@@ -620,17 +608,17 @@ private struct GaryxComposerWorkspaceModeSheet: View {
                 }
             }
             .padding(.horizontal, 12)
-            .frame(height: GaryxComposerLayout.workspaceSheetRowHeight)
+            .frame(height: 54)
             .background(
-                selected ? GaryxComposerLayout.workspaceSheetSelectedFill : Color.clear,
-                in: RoundedRectangle(cornerRadius: GaryxComposerLayout.workspaceSheetRowCornerRadius, style: .continuous)
+                selected ? GaryxComposerLayout.workspaceBaseFill : Color.clear,
+                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
             )
             .overlay {
-                RoundedRectangle(cornerRadius: GaryxComposerLayout.workspaceSheetRowCornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(selected ? Color.primary.opacity(0.12) : GaryxTheme.hairline, lineWidth: 1)
             }
             .opacity(isEnabled ? 1 : 0.42)
-            .contentShape(RoundedRectangle(cornerRadius: GaryxComposerLayout.workspaceSheetRowCornerRadius, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
