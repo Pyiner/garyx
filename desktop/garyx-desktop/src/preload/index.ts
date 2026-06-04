@@ -2,6 +2,93 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import type { GaryxDesktopApi } from "@shared/contracts";
 
+const API_PERFORMANCE_THRESHOLD_MS = 120;
+const API_PERFORMANCE_MESSAGE_SOURCE = "garyx-desktop-api-performance";
+
+type DesktopApiMethod = (...args: unknown[]) => unknown;
+
+function getErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error) {
+    return String(error);
+  }
+  return undefined;
+}
+
+function postApiPerformanceTiming(
+  method: string,
+  durationMs: number,
+  ok: boolean,
+  error?: unknown,
+): void {
+  if (ok && durationMs < API_PERFORMANCE_THRESHOLD_MS) {
+    return;
+  }
+
+  try {
+    window.postMessage(
+      {
+        source: API_PERFORMANCE_MESSAGE_SOURCE,
+        method,
+        durationMs: Number(durationMs.toFixed(2)),
+        ok,
+        errorMessage: getErrorMessage(error),
+      },
+      "*",
+    );
+  } catch {
+    // Best-effort diagnostics only; never break the preload API surface.
+  }
+}
+
+function wrapApiMethod(methodName: string, method: DesktopApiMethod): DesktopApiMethod {
+  return (...args: unknown[]) => {
+    const start = performance.now();
+    try {
+      const result = method(...args);
+      if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+        return (result as PromiseLike<unknown>).then(
+          (value) => {
+            postApiPerformanceTiming(methodName, performance.now() - start, true);
+            return value;
+          },
+          (error) => {
+            postApiPerformanceTiming(methodName, performance.now() - start, false, error);
+            throw error;
+          },
+        );
+      }
+
+      postApiPerformanceTiming(methodName, performance.now() - start, true);
+      return result;
+    } catch (error) {
+      postApiPerformanceTiming(methodName, performance.now() - start, false, error);
+      throw error;
+    }
+  };
+}
+
+function instrumentDesktopApi(source: GaryxDesktopApi): GaryxDesktopApi {
+  const wrapped: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (
+      typeof value === "function" &&
+      !key.startsWith("subscribe") &&
+      !key.startsWith("unsubscribe")
+    ) {
+      wrapped[key] = wrapApiMethod(key, value as DesktopApiMethod);
+    } else {
+      wrapped[key] = value;
+    }
+  }
+  return wrapped as unknown as GaryxDesktopApi;
+}
+
 const chatStreamListeners = new Map<
   Parameters<GaryxDesktopApi["subscribeChatStream"]>[0],
   (_event: Electron.IpcRendererEvent, payload: unknown) => void
@@ -291,4 +378,4 @@ const api: GaryxDesktopApi = {
   },
 };
 
-contextBridge.exposeInMainWorld("garyxDesktop", api);
+contextBridge.exposeInMainWorld("garyxDesktop", instrumentDesktopApi(api));

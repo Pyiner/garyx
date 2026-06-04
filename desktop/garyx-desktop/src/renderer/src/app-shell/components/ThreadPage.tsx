@@ -51,6 +51,7 @@ import { ToolTraceGroup } from "../../tool-trace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ThreadLogPanel } from "./ThreadLogPanel";
 import { useI18n } from "../../i18n";
+import type { RendererPerformanceSnapshot } from "../../perf-metrics";
 import type {
   ClientLogEntry,
   PendingAutomationRun,
@@ -259,6 +260,7 @@ type ThreadPageProps = {
   canSteerQueuedPrompt: boolean;
   messagesRef: RefObject<HTMLDivElement | null>;
   mobileThreadLogLines: ThreadLogLine[];
+  performanceSnapshot: RendererPerformanceSnapshot;
   newThreadSelectedAgentId: string;
   newThreadSelectedWorkflowId?: string | null;
   newThreadWorkspaceEntry: DesktopWorkspace | null;
@@ -400,6 +402,7 @@ export function ThreadPage({
   onRemoveComposerFile,
   onRemoveComposerImage,
   onReorderQueuedIntent,
+  performanceSnapshot,
   onSelectNewThreadAgent,
   onSelectNewThreadWorkflow,
   onSelectNewThreadWorkspaceMode,
@@ -1031,6 +1034,7 @@ export function ThreadPage({
             onJumpToLatest={onJumpToLatestThreadLogs}
             onSelectTab={onSelectThreadLogsTab}
             onToggleClientLogEntry={onToggleClientLogEntry}
+            performanceSnapshot={performanceSnapshot}
             selectedThreadId={selectedThreadId}
             threadLogsActiveTab={threadLogsActiveTab}
             threadLogsError={threadLogsError}

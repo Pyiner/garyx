@@ -119,6 +119,12 @@ Detailed runtime, SDK, and workflow rules:
 Use the narrowest reliable validation for the touched area. Common commands and
 fallbacks live in @docs/agents/validation.md.
 
+For real Mac app renderer checks after desktop changes, run
+`npm run dist:dir` in `desktop/garyx-desktop`, quit any stale `Garyx` process,
+open the installed app, then attach with
+`playwright-cli -s=<session> attach --cdp=http://127.0.0.1:39222`. Restarting
+the app before attaching avoids testing an old renderer bundle.
+
 ## Keep AGENTS.md And CLAUDE.md In Sync
 
 The repo-level `AGENTS.md` and `CLAUDE.md` are intentionally identical so every

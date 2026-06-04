@@ -659,6 +659,22 @@ type RemoteFetchResult<T> =
   | { ok: true; value: T; error: null }
   | { ok: false; value: T; error: DesktopRemoteStateError };
 
+const BOT_CONSOLES_REMOTE_CACHE_TTL_MS = 60_000;
+const remoteSliceCache = new Map<RemoteFetchSource, {
+  fetchedAt: number;
+  value: unknown;
+}>();
+let latestHydratedDesktopState: DesktopState | null = null;
+
+function rememberHydratedDesktopState(state: DesktopState): DesktopState {
+  latestHydratedDesktopState = state;
+  return state;
+}
+
+async function getHydratedDesktopStateForUiMutation(): Promise<DesktopState> {
+  return latestHydratedDesktopState || getDesktopState();
+}
+
 function remoteErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error || 'Unknown error');
 }
@@ -668,11 +684,29 @@ async function fetchRemoteSlice<T>(
   label: string,
   fallback: T,
   fetcher: () => Promise<T>,
+  options?: { cacheTtlMs?: number },
 ): Promise<RemoteFetchResult<T>> {
-  try {
+  const cacheTtlMs = options?.cacheTtlMs || 0;
+  const cached = remoteSliceCache.get(source);
+  if (cacheTtlMs > 0 && cached && Date.now() - cached.fetchedAt <= cacheTtlMs) {
     return {
       ok: true,
-      value: await fetcher(),
+      value: cached.value as T,
+      error: null,
+    };
+  }
+
+  try {
+    const value = await fetcher();
+    if (cacheTtlMs > 0) {
+      remoteSliceCache.set(source, {
+        fetchedAt: Date.now(),
+        value,
+      });
+    }
+    return {
+      ok: true,
+      value,
       error: null,
     };
   } catch (error) {
@@ -680,7 +714,7 @@ async function fetchRemoteSlice<T>(
     console.warn(`Failed to refresh remote ${label}.`, error);
     return {
       ok: false,
-      value: fallback,
+      value: cached ? cached.value as T : fallback,
       error: {
         source,
         label,
@@ -709,7 +743,13 @@ async function mergeRemoteDesktopState(localState: DesktopState): Promise<Deskto
         [],
         () => fetchConfiguredBots(localState.settings),
       ),
-      fetchRemoteSlice('bot_consoles', 'bot consoles', localState.botConsoles, () => fetchBotConsoles(localState.settings)),
+      fetchRemoteSlice(
+        'bot_consoles',
+        'bot consoles',
+        localState.botConsoles,
+        () => fetchBotConsoles(localState.settings),
+        { cacheTtlMs: BOT_CONSOLES_REMOTE_CACHE_TTL_MS },
+      ),
       fetchRemoteSlice('automations', 'automations', localState.automations, () => fetchAutomations(localState.settings)),
     ]);
   const remoteErrors = [
@@ -867,7 +907,7 @@ async function getLocalDesktopState(): Promise<DesktopState> {
 
 export async function getDesktopState(): Promise<DesktopState> {
   const localState = await getLocalDesktopState();
-  return mergeRemoteDesktopState(localState);
+  return rememberHydratedDesktopState(await mergeRemoteDesktopState(localState));
 }
 
 export async function getLocalDesktopSettings(): Promise<DesktopSettings> {
@@ -897,23 +937,23 @@ export async function rememberDesktopGatewayProfile(): Promise<DesktopState> {
 }
 
 export async function selectDesktopWorkspace(workspacePath: string | null): Promise<DesktopState> {
-  const current = await getLocalDesktopState();
+  const current = await getHydratedDesktopStateForUiMutation();
   const next = withSortedEntities({
     ...current,
     selectedWorkspacePath: workspacePath,
   }, { preserveMissingSelectedWorkspace: true });
   await writeState(next);
-  return next;
+  return rememberHydratedDesktopState(next);
 }
 
 export async function selectDesktopAutomation(automationId: string | null): Promise<DesktopState> {
-  const current = await getLocalDesktopState();
+  const current = await getHydratedDesktopStateForUiMutation();
   const next = withSortedEntities({
     ...current,
     selectedAutomationId: automationId,
   });
   await writeState(next);
-  return getDesktopState();
+  return rememberHydratedDesktopState(next);
 }
 
 export async function setDesktopBotBinding(
@@ -949,7 +989,7 @@ export async function markDesktopAutomationSeen(
   automationId: string,
   seenAt: string | null,
 ): Promise<DesktopState> {
-  const current = await getLocalDesktopState();
+  const current = await getHydratedDesktopStateForUiMutation();
   const nextLastSeen = {
     ...current.lastSeenRunAtByAutomation,
   };
@@ -963,7 +1003,7 @@ export async function markDesktopAutomationSeen(
     lastSeenRunAtByAutomation: nextLastSeen,
   });
   await writeState(next);
-  return getDesktopState();
+  return rememberHydratedDesktopState(next);
 }
 
 export async function addDesktopWorkspace(path: string): Promise<{

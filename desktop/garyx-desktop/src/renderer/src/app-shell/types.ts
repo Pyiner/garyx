@@ -95,7 +95,7 @@ export type ClientLogEntry = {
   level: 'default' | 'error';
 };
 
-export type ThreadLogTab = 'mobile' | 'client';
+export type ThreadLogTab = 'mobile' | 'client' | 'performance';
 
 export type WorkspaceDirectoryState = {
   entries: DesktopWorkspaceFileListing['entries'];

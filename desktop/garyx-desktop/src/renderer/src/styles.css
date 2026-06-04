@@ -4236,6 +4236,173 @@ code {
   color: var(--color-token-error-foreground);
 }
 
+.thread-log-performance {
+  display: grid;
+  gap: 12px;
+}
+
+.thread-log-performance-summary {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in oklab, var(--color-token-border) 82%, transparent);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.thread-log-performance-summary.status-watch {
+  border-color: color-mix(in oklab, #b7791f 24%, transparent);
+  background: color-mix(in oklab, #fef3c7 42%, white 58%);
+}
+
+.thread-log-performance-summary.status-critical {
+  border-color: color-mix(in oklab, var(--color-token-error-foreground) 24%, transparent);
+  background: color-mix(in oklab, #fee2e2 40%, white 60%);
+}
+
+.thread-log-performance-eyebrow {
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.thread-log-performance-title {
+  margin-top: 2px;
+  color: var(--color-token-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 750;
+  text-transform: capitalize;
+}
+
+.thread-log-performance-summary p {
+  margin: 0;
+  color: var(--color-token-text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+
+.thread-log-performance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.thread-log-performance-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid color-mix(in oklab, var(--color-token-border) 78%, transparent);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  font-family: var(--font-sans);
+}
+
+.thread-log-performance-metric span {
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+
+.thread-log-performance-metric strong {
+  overflow: hidden;
+  color: var(--color-token-text-primary);
+  font-size: var(--text-lg);
+  font-weight: 760;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-log-performance-metric small {
+  color: var(--color-token-text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.35;
+}
+
+.thread-log-performance-section-title {
+  color: var(--color-token-description-foreground);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.thread-log-performance-entry.severity-critical {
+  border-color: color-mix(in oklab, var(--color-token-error-foreground) 22%, transparent);
+}
+
+.thread-log-performance-entry.severity-warning {
+  border-color: color-mix(in oklab, #b7791f 24%, transparent);
+}
+
+.thread-log-performance-entry {
+  overflow: hidden;
+}
+
+.thread-log-performance-entry-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.thread-log-performance-entry-head::-webkit-details-marker {
+  display: none;
+}
+
+.thread-log-performance-entry-head:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-token-accent) 72%, transparent);
+  outline-offset: -2px;
+}
+
+.thread-log-performance-entry[open] .thread-log-performance-entry-head {
+  border-bottom: 1px solid
+    color-mix(in oklab, var(--color-token-border) 76%, transparent);
+}
+
+.thread-log-performance-entry-time {
+  color: var(--color-token-description-foreground);
+  font-size: var(--text-xs);
+  font-weight: 700;
+}
+
+.thread-log-client-entry-type.type-api-call {
+  background: color-mix(in oklab, #dcfce7 68%, white 32%);
+  color: #15803d;
+}
+
+.thread-log-client-entry-type.type-frame-stall,
+.thread-log-client-entry-type.type-long-task {
+  background: color-mix(in oklab, #fef3c7 72%, white 28%);
+  color: #92400e;
+}
+
+.thread-log-client-entry-type.type-memory-warning {
+  background: color-mix(in oklab, #fee2e2 76%, white 24%);
+  color: var(--color-token-error-foreground);
+}
+
+.thread-log-client-entry-type.type-ui-action {
+  background: color-mix(in oklab, #e0e7ff 72%, white 28%);
+  color: #4338ca;
+}
+
+.thread-log-performance-footnote {
+  color: var(--color-token-description-foreground);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
 .thread-log-panel-empty {
   color: var(--color-token-description-foreground);
   white-space: pre-wrap;

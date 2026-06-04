@@ -105,7 +105,11 @@ import {
   deriveThreadActivityModel,
   threadActivitySignature,
 } from "./thread-activity";
-import { measureUiAction } from "../perf-metrics";
+import {
+  getRendererPerformanceSnapshot,
+  measureUiAction,
+  subscribeRendererPerformance,
+} from "../perf-metrics";
 import {
   activateBotDraftThread,
   openThreadFromEndpoint,
@@ -307,6 +311,22 @@ const WorkflowRunsPanel = lazy(() =>
   })),
 );
 const EMPTY_UI_TRANSCRIPT_MESSAGES: UiTranscriptMessage[] = [];
+
+function waitForUiActionPaint(): Promise<void> {
+  if (
+    typeof window === "undefined" ||
+    typeof window.requestAnimationFrame !== "function"
+  ) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        resolve();
+      });
+    });
+  });
+}
 
 function messagesNearBottom(node: HTMLDivElement | null): boolean {
   if (!node) {
@@ -1366,7 +1386,7 @@ const DEEP_LINK_GATEWAY_RETRY_DELAYS_MS = [0, 300, 650, 1_100, 1_700, 2_500];
 const TRANSIENT_STATUS_MS = 3200;
 const ERROR_TOAST_MS = 4400;
 const GATEWAY_HEALTHY_POLL_MS = 12000;
-const SILENT_DESKTOP_STATE_REFRESH_MS = 15000;
+const SILENT_DESKTOP_STATE_REFRESH_MS = 60000;
 const GATEWAY_RETRY_BACKOFF_MS = [2500, 4000, 6500, 10000, 15000];
 
 function savedContentView(): ContentView {
@@ -1675,6 +1695,11 @@ export function AppShell() {
     Record<string, ClientLogEntry[]>
   >({});
   const [clientLogsHasUnread, setClientLogsHasUnread] = useState(false);
+  const [performanceSnapshot, setPerformanceSnapshot] = useState(
+    () => getRendererPerformanceSnapshot(),
+  );
+  const [performanceLogsHasUnread, setPerformanceLogsHasUnread] =
+    useState(false);
   const [expandedClientLogEntries, setExpandedClientLogEntries] = useState<
     Record<string, boolean>
   >({});
@@ -1729,6 +1754,12 @@ export function AppShell() {
       return next;
     });
   };
+  function trackUiAction(label: string, task: () => void | Promise<void>) {
+    void measureUiAction(label, async () => {
+      await task();
+      await waitForUiActionPaint();
+    });
+  }
   const [addBotDialogOpen, setAddBotDialogOpen] = useState(false);
   const [addBotInitialValues, setAddBotInitialValues] = useState<{
     channel?: "telegram" | "feishu" | "weixin";
@@ -1834,6 +1865,21 @@ export function AppShell() {
   const shouldStickMessagesToBottomRef = useRef(true);
   const messagesStickScrollFrameRef = useRef<number | null>(null);
   const lastRenderedMessageThreadRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return subscribeRendererPerformance((snapshot) => {
+      setPerformanceSnapshot(snapshot);
+      const latestEvent = snapshot.events[snapshot.events.length - 1];
+      if (
+        latestEvent &&
+        latestEvent.severity !== "info" &&
+        (!threadLogsOpenRef.current ||
+          threadLogsActiveTabRef.current !== "performance")
+      ) {
+        setPerformanceLogsHasUnread(true);
+      }
+    });
+  }, []);
   const lastRenderedMessageCountRef = useRef(0);
   const lastRenderedMessageTailSignatureRef = useRef("0");
   const remoteTranscriptSignatureByThreadRef = useRef<Record<string, string>>(
@@ -2568,11 +2614,15 @@ export function AppShell() {
     ? clientLogsByThread[selectedThreadId] || []
     : [];
   const activeThreadLogsPath =
-    threadLogsActiveTab === "client"
+    threadLogsActiveTab === "performance"
+      ? "Renderer performance monitor: long tasks, frame stalls, memory, slow IPC/API calls"
+      : threadLogsActiveTab === "client"
       ? "Renderer stream events received by desktop app"
       : threadLogsPath || "Waiting for log file";
   const activeThreadLogsHasUnread =
-    threadLogsActiveTab === "client"
+    threadLogsActiveTab === "performance"
+      ? performanceLogsHasUnread
+      : threadLogsActiveTab === "client"
       ? clientLogsHasUnread
       : threadLogsHasUnread;
   const selectedWorkspaceEntry = selectedWorkspace(
@@ -4793,6 +4843,8 @@ export function AppShell() {
     }
     if (threadLogsActiveTab === "client") {
       setClientLogsHasUnread(false);
+    } else if (threadLogsActiveTab === "performance") {
+      setPerformanceLogsHasUnread(false);
     } else {
       setThreadLogsHasUnread(false);
     }
@@ -8434,37 +8486,47 @@ export function AppShell() {
         isDreamsView={isDreamsView}
         recentRailOpen={shouldShowConversationRail && recentThreadsRailOpen}
         onBackToThreads={() => {
-          setContentView("thread");
+          trackUiAction("nav.back_to_threads", () => {
+            setContentView("thread");
+          });
         }}
         onCreateThreadForWorkspace={(workspacePath) => {
-          void handleCreateThreadForWorkspace(workspacePath);
+          trackUiAction("nav.new_thread.workspace", () => {
+            handleCreateThreadForWorkspace(workspacePath);
+          });
         }}
         onNewThread={() => {
-          void handleNewThread();
+          trackUiAction("nav.new_thread", handleNewThread);
         }}
         onOpenRecent={() => {
-          setBotConversationGroupId(null);
-          setWorkspaceConversationPath(null);
-          if (!shouldShowConversationRail) {
-            setContentView("thread");
-            setRecentThreadsRailOpen(true);
-            return;
-          }
-          setRecentThreadsRailOpen((current) => !current);
+          trackUiAction("nav.open_recent", () => {
+            setBotConversationGroupId(null);
+            setWorkspaceConversationPath(null);
+            if (!shouldShowConversationRail) {
+              setContentView("thread");
+              setRecentThreadsRailOpen(true);
+              return;
+            }
+            setRecentThreadsRailOpen((current) => !current);
+          });
         }}
         onOpenBot={(group) => {
-          setRecentThreadsRailOpen(false);
-          setBotConversationGroupId((current) =>
-            current === group.id ? current : null,
-          );
-          setWorkspaceConversationPath(null);
-          void handleBotClick(group);
+          trackUiAction("nav.open_bot", async () => {
+            setRecentThreadsRailOpen(false);
+            setBotConversationGroupId((current) =>
+              current === group.id ? current : null,
+            );
+            setWorkspaceConversationPath(null);
+            await handleBotClick(group);
+          });
         }}
         onOpenPinnedThread={(threadId) => {
-          setRecentThreadsRailOpen(false);
-          setBotConversationGroupId(null);
-          setWorkspaceConversationPath(null);
-          void openExistingThread(threadId, "pinned");
+          trackUiAction("nav.open_pinned_thread", async () => {
+            setRecentThreadsRailOpen(false);
+            setBotConversationGroupId(null);
+            setWorkspaceConversationPath(null);
+            await openExistingThread(threadId, "pinned");
+          });
         }}
         onUnpinThread={(threadId) => {
           togglePinnedThread(threadId);
@@ -8503,36 +8565,52 @@ export function AppShell() {
           void handleAddWorkspace();
         }}
         onOpenSettings={() => {
-          openSettingsView();
+          trackUiAction("nav.open_settings", openSettingsView);
         }}
         onSidebarResizeStart={handleSidebarResizeStart}
         sidebarResizing={sidebarResizing}
         onOpenAutoResearch={() => {
-          setContentView("auto_research");
+          trackUiAction("nav.open_auto_research", () => {
+            setContentView("auto_research");
+          });
         }}
         onOpenBrowser={() => {
-          setContentView("browser");
+          trackUiAction("nav.open_browser", () => {
+            setContentView("browser");
+          });
         }}
         onOpenAgents={() => {
-          setContentView("agents");
+          trackUiAction("nav.open_agents", () => {
+            setContentView("agents");
+          });
         }}
         onOpenSkills={() => {
-          setContentView("skills");
+          trackUiAction("nav.open_skills", () => {
+            setContentView("skills");
+          });
         }}
         onOpenTasks={() => {
-          setContentView("tasks");
+          trackUiAction("nav.open_tasks", () => {
+            setContentView("tasks");
+          });
         }}
         onOpenDreams={() => {
-          setContentView("dreams");
+          trackUiAction("nav.open_dreams", () => {
+            setContentView("dreams");
+          });
         }}
         onRequestRemoveWorkspace={(workspace) => {
           void handleRequestRemoveWorkspace(workspace);
         }}
         onSelectAutomation={(automationId) => {
-          void handleSelectAutomation(automationId);
+          trackUiAction("nav.select_automation", async () => {
+            await handleSelectAutomation(automationId);
+          });
         }}
         onSelectSettingsTab={(tabId) => {
-          void handleSelectSettingsTab(tabId);
+          trackUiAction("nav.select_settings_tab", async () => {
+            await handleSelectSettingsTab(tabId);
+          });
         }}
         pinnedThreadRows={pinnedThreadRows}
         selectedAutomationId={selectedAutomationId}
@@ -8722,24 +8800,34 @@ export function AppShell() {
                 teamSummary={activeTeamSummary}
                 threadInfo={activeThreadInfo}
                 threadInfoLoaded={activeThreadInfoLoaded}
-                threadLogsHasUnread={threadLogsHasUnread || clientLogsHasUnread}
+                threadLogsHasUnread={threadLogsHasUnread || clientLogsHasUnread || performanceLogsHasUnread}
                 threadLogsOpen={threadLogsOpen}
                 onCreateAutomation={() => {
-                  openAutomationDialog("create");
+                  trackUiAction("automation.open_create_dialog", () => {
+                    openAutomationDialog("create");
+                  });
                 }}
                 onOpenThread={(threadId) => {
-                  void openExistingThread(threadId);
+                  trackUiAction("thread.open_from_header", async () => {
+                    await openExistingThread(threadId);
+                  });
                 }}
                 onOpenThreads={() => {
-                  setContentView("thread");
+                  trackUiAction("nav.back_to_threads", () => {
+                    setContentView("thread");
+                  });
                 }}
                 onToggleInspector={() => {
-                  setThreadLogsOpen(false);
-                  setInspectorOpen((current) => !current);
+                  trackUiAction("thread.toggle_inspector", () => {
+                    setThreadLogsOpen(false);
+                    setInspectorOpen((current) => !current);
+                  });
                 }}
                 onToggleThreadLogs={() => {
-                  setInspectorOpen(false);
-                  setThreadLogsOpen((current) => !current);
+                  trackUiAction("thread.toggle_logs", () => {
+                    setInspectorOpen(false);
+                    setThreadLogsOpen((current) => !current);
+                  });
                 }}
               />
             </header>
@@ -8840,7 +8928,9 @@ export function AppShell() {
                   void handleToggleAutomationEnabled(a, enabled);
                 }}
                 onEdit={(a) => {
-                  openAutomationDialog("edit", a);
+                  trackUiAction("automation.open_edit_dialog", () => {
+                    openAutomationDialog("edit", a);
+                  });
                 }}
                 onOpenMemory={(a) => {
                   void openMemoryDialog({
@@ -8856,7 +8946,9 @@ export function AppShell() {
                   void handleDeleteAutomation(a);
                 }}
                 onCreateAutomation={() => {
-                  openAutomationDialog("create");
+                  trackUiAction("automation.open_create_dialog", () => {
+                    openAutomationDialog("create");
+                  });
                 }}
               />
             ) : isAutoResearchView ? (
@@ -8930,9 +9022,15 @@ export function AppShell() {
                 botGroups={botGroups}
                 onAddWorkspace={addWorkspacePathFromPicker}
                 onOpenThread={(threadId) => {
-                  void openExistingThread(threadId);
+                  trackUiAction("tasks.open_thread", async () => {
+                    await openExistingThread(threadId);
+                  });
                 }}
-                onOpenWorkflowTask={openWorkflowTask}
+                onOpenWorkflowTask={(task) => {
+                  trackUiAction("tasks.open_workflow_task", () => {
+                    openWorkflowTask(task);
+                  });
+                }}
                 onToast={pushToast}
                 workspaces={workspacePickerWorkspaces}
                 workspaceMutation={workspaceMutation}
@@ -8940,10 +9038,14 @@ export function AppShell() {
             ) : isWorkflowView && selectedWorkflowTaskId ? (
               <WorkflowRunsPanel
                 onOpenTasks={() => {
-                  setContentView("tasks");
+                  trackUiAction("workflow.back_to_tasks", () => {
+                    setContentView("tasks");
+                  });
                 }}
                 onOpenThread={(threadId) => {
-                  void openExistingThread(threadId);
+                  trackUiAction("workflow.open_thread", async () => {
+                    await openExistingThread(threadId);
+                  });
                 }}
                 onToast={pushToast}
                 t={t}
@@ -9029,6 +9131,7 @@ export function AppShell() {
                 isComposingRef={isComposingRef}
                 messagesRef={messagesRef}
                 mobileThreadLogLines={mobileThreadLogLines}
+                performanceSnapshot={performanceSnapshot}
                 newThreadSelectedAgentId={pendingAgentId}
                 newThreadSelectedWorkflowId={pendingWorkflowId}
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
@@ -9077,6 +9180,8 @@ export function AppShell() {
                 onJumpToLatestThreadLogs={() => {
                   if (threadLogsActiveTab === "client") {
                     setClientLogsHasUnread(false);
+                  } else if (threadLogsActiveTab === "performance") {
+                    setPerformanceLogsHasUnread(false);
                   } else {
                     setThreadLogsHasUnread(false);
                   }
@@ -9128,7 +9233,11 @@ export function AppShell() {
                     setPendingBotId(botId);
                   }
                 }}
-                onSelectThreadLogsTab={setThreadLogsActiveTab}
+                onSelectThreadLogsTab={(tab) => {
+                  trackUiAction(`thread_logs.select_${tab}`, () => {
+                    setThreadLogsActiveTab(tab);
+                  });
+                }}
                 onOpenThreadById={(threadId) => {
                   void openExistingThread(threadId);
                 }}
@@ -9144,6 +9253,8 @@ export function AppShell() {
                   if (threadLogsNearBottom()) {
                     if (threadLogsActiveTab === "client") {
                       setClientLogsHasUnread(false);
+                    } else if (threadLogsActiveTab === "performance") {
+                      setPerformanceLogsHasUnread(false);
                     } else {
                       setThreadLogsHasUnread(false);
                     }
