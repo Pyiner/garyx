@@ -1188,10 +1188,12 @@ function WorkflowTimelineView({
   };
 
   const runStats = [
-    t('{completed}/{total} children', {
-      completed: workflow.completedChildren,
-      total: workflow.totalChildren,
-    }),
+    workflow.totalChildren > 0
+      ? t('{completed}/{total} children', {
+          completed: workflow.completedChildren,
+          total: workflow.totalChildren,
+        })
+      : null,
     workflow.failedChildren > 0
       ? t('{count} failed', { count: workflow.failedChildren })
       : null,
@@ -1238,9 +1240,11 @@ function WorkflowTimelineView({
                       type="button"
                     >
                       <span className="turn-summary-label">{phase.title}</span>
-                      <span className="workflow-phase-progress">
-                        {phase.completed}/{phase.children.length}
-                      </span>
+                      {phase.children.length > 0 ? (
+                        <span className="workflow-phase-progress">
+                          {phase.completed}/{phase.children.length}
+                        </span>
+                      ) : null}
                       <ChevronDown
                         aria-hidden
                         className="turn-summary-chevron"
@@ -1270,11 +1274,7 @@ function WorkflowTimelineView({
                               />
                             ))}
                           </div>
-                        ) : (
-                          <p className="workflow-timeline-pending">
-                            {t('Waiting for agents…')}
-                          </p>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -1334,9 +1334,11 @@ function WorkflowTimelineView({
                   <span className="workflow-plan-item-title" title={phase.title}>
                     {phase.title}
                   </span>
-                  <span className="workflow-plan-count">
-                    {phase.completed}/{phase.children.length}
-                  </span>
+                  {phase.children.length > 0 ? (
+                    <span className="workflow-plan-count">
+                      {phase.completed}/{phase.children.length}
+                    </span>
+                  ) : null}
                 </div>
               </li>
             ))}
@@ -1441,9 +1443,11 @@ function RunCard({
               >
                 <span className="workflow-phase-main">
                   <span className="workflow-phase-title">{phase.title}</span>
-                  <span className="workflow-phase-count">
-                    {phase.completed}/{phase.children.length}
-                  </span>
+                  {phase.children.length > 0 ? (
+                    <span className="workflow-phase-count">
+                      {phase.completed}/{phase.children.length}
+                    </span>
+                  ) : null}
                 </span>
               </button>
             ))}
@@ -1452,12 +1456,12 @@ function RunCard({
           <section className="workflow-agent-column">
             <div className="workflow-agent-column-head">
               <span className="workflow-console-label">
-                {activePhase
+                {activePhase && activePhase.children.length > 0
                   ? t('{phase} · {count} agents', {
                       phase: activePhase.title,
                       count: activePhase.children.length,
                     })
-                  : t('Agents')}
+                  : activePhase?.title || t('Agents')}
               </span>
               {activePhase ? <StatusPill status={activePhase.status} t={t} /> : null}
             </div>
