@@ -6,24 +6,24 @@ import UIKit
 import UniformTypeIdentifiers
 
 private enum GaryxComposerLayout {
-    static let composerCornerRadius: CGFloat = 24
+    static let composerCornerRadius: CGFloat = 22
     static let composerSpacing: CGFloat = 6
     static let bottomBarSpacing: CGFloat = 12
-    static let bottomBarHorizontalPadding: CGFloat = 8
+    static let bottomBarHorizontalPadding: CGFloat = 14
     static let bottomBarTopPadding: CGFloat = 2
     static let bottomBarBottomPadding: CGFloat = 7
     static let actionButtonSide: CGFloat = 32
     static let actionButtonFill = Color.primary.opacity(0.06)
     static let inputHorizontalPadding: CGFloat = 16
-    static let inputTopPadding: CGFloat = 12
+    static let inputTopPadding: CGFloat = 15
     static let inputBottomPadding: CGFloat = 8
     static let inputMinHeight: CGFloat = 29
-    static let workspaceBaseFill = Color.primary.opacity(0.10)
-    static let workspaceBaseForeground = Color.primary.opacity(0.72)
-    static let workspaceBaseOverlap: CGFloat = 18
-    static let workspaceBaseTopPadding: CGFloat = 20.5
-    static let workspaceBaseBottomPadding: CGFloat = 6
-    static let workspaceBaseCornerRadius: CGFloat = 20
+    static let workspaceBaseFill = Color.primary.opacity(0.09)
+    static let workspaceBaseForeground = Color.primary.opacity(0.78)
+    static let workspaceBaseOverlap: CGFloat = 21
+    static let workspaceBaseTopPadding: CGFloat = 31
+    static let workspaceBaseBottomPadding: CGFloat = 7
+    static let workspaceBaseCornerRadius: CGFloat = 18
     static let workspaceStripHeight: CGFloat = 28
     static let workspaceSheetHeight: CGFloat = 228
     static let draftFieldIdentity = "garyx-composer-draft-field"
