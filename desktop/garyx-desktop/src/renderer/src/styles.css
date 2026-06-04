@@ -3749,6 +3749,9 @@ code {
   --composer-overlay-height: 132px;
   --composer-scroll-clip-height: 72px;
   --composer-message-clearance: 36px;
+  --workflow-plan-column-gap: 22px;
+  --workflow-plan-column-width: clamp(260px, 24%, 340px);
+  --workflow-plan-page-padding-right: 18px;
   position: relative;
   display: block;
   min-width: 0;
@@ -4574,6 +4577,21 @@ code {
 .thread-main.has-workflow-run-content .workflow-timeline-main {
   padding-bottom: calc(
     var(--composer-scroll-clip-height) + var(--composer-message-clearance) + 48px
+  );
+}
+
+.thread-main.has-workflow-run-content .composer-shell-wrap {
+  right: calc(
+    var(--workflow-plan-column-width) + var(--workflow-plan-column-gap) +
+      var(--workflow-plan-page-padding-right)
+  );
+  width: min(
+    var(--container-2xl),
+    calc(
+      100% - var(--workflow-plan-column-width) -
+        var(--workflow-plan-column-gap) -
+        var(--workflow-plan-page-padding-right)
+    )
   );
 }
 
@@ -20908,12 +20926,12 @@ button.new-thread-dreams-scan:hover {
 .workflow-timeline {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
-  column-gap: 22px;
+  grid-template-columns: minmax(0, 1fr) var(--workflow-plan-column-width);
+  column-gap: var(--workflow-plan-column-gap);
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding-right: 18px;
+  padding-right: var(--workflow-plan-page-padding-right);
   background: var(--color-token-bg-primary);
 }
 
