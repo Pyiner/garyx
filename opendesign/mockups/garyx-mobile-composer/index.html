@@ -22,16 +22,15 @@
         --composer-opacity: 0.58;
         --composer-shadow-y: 10px;
         --composer-shadow-blur: 18px;
-        --apron-overlap: 19px;
-        --apron-side-inset: 18px;
-        --apron-top-pad: 27px;
-        --apron-bottom-pad: 5px;
-        --apron-height: 24px;
-        --apron-radius: 16px;
-        --apron-opacity: 0.62;
+        --apron-overlap: 21px;
+        --apron-top-pad: 31px;
+        --apron-bottom-pad: 7px;
+        --apron-height: 28px;
+        --apron-radius: 18px;
+        --apron-opacity: 0.74;
         --apron-font-size: 13px;
-        --apron-icon-size: 18px;
-        --apron-chevron-size: 12px;
+        --apron-icon-size: 19px;
+        --apron-chevron-size: 10px;
         --sheet-height: 228px;
         --sheet-radius: 38px;
         --sheet-top-pad: 20px;
@@ -324,12 +323,10 @@
         z-index: 1;
         display: flex;
         align-items: center;
-        justify-self: center;
-        width: calc(100% - (var(--apron-side-inset) * 2));
-        gap: 5px;
+        gap: 6px;
         min-height: var(--apron-height);
         margin-top: calc(var(--apron-overlap) * -1);
-        padding: var(--apron-top-pad) 12px var(--apron-bottom-pad);
+        padding: var(--apron-top-pad) 14px var(--apron-bottom-pad);
         border: 1px solid rgba(0, 0, 0, 0.055);
         border-top: 0;
         border-radius: 0 0 var(--apron-radius) var(--apron-radius);
@@ -341,7 +338,7 @@
       }
 
       .local-apron strong {
-        font-size: calc(var(--apron-font-size) + 1px);
+        font-size: var(--apron-font-size);
         font-weight: 400;
       }
 
@@ -741,10 +738,6 @@
             <input type="range" min="0" max="44" step="1" data-var="--apron-overlap" data-unit="px" />
           </div>
           <div class="field">
-            <label>左右收进 <output data-for="--apron-side-inset"></output></label>
-            <input type="range" min="0" max="42" step="1" data-var="--apron-side-inset" data-unit="px" />
-          </div>
-          <div class="field">
             <label>顶部露出 <output data-for="--apron-top-pad"></output></label>
             <input type="range" min="14" max="54" step="1" data-var="--apron-top-pad" data-unit="px" />
           </div>
@@ -843,6 +836,18 @@
       const exportBox = document.querySelector("#export");
       const controls = Array.from(document.querySelectorAll("[data-var]"));
       const defaults = {};
+      const storagePrefix = "garyx-composer-tuner:";
+      const storageVersionKey = `${storagePrefix}version`;
+      const storageVersion = "swift-code-baseline-2026-06-04";
+
+      if (localStorage.getItem(storageVersionKey) !== storageVersion) {
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith(storagePrefix)) {
+            localStorage.removeItem(key);
+          }
+        }
+        localStorage.setItem(storageVersionKey, storageVersion);
+      }
 
       for (const input of controls) {
         const key = input.dataset.var;
@@ -855,7 +860,7 @@
 
       function setVar(key, value, unit) {
         root.style.setProperty(key, `${value}${unit}`);
-        localStorage.setItem(`garyx-composer-tuner:${key}`, `${value}${unit}`);
+        localStorage.setItem(`${storagePrefix}${key}`, `${value}${unit}`);
         updateOutputs();
       }
 
@@ -863,7 +868,7 @@
         for (const input of controls) {
           const key = input.dataset.var;
           const unit = input.dataset.unit || "";
-          const saved = localStorage.getItem(`garyx-composer-tuner:${key}`);
+          const saved = localStorage.getItem(`${storagePrefix}${key}`);
           if (!saved) continue;
           root.style.setProperty(key, saved);
           input.value = unit ? saved.replace(unit, "") : saved;
@@ -890,7 +895,6 @@
           `    static let inputMinHeight: CGFloat = ${number("--composer-min-height")}`,
           `    static let composerMaterialTint = Color(.systemBackground).opacity(${value("--composer-opacity")})`,
           `    static let workspaceBaseOverlap: CGFloat = ${number("--apron-overlap")}`,
-          `    static let workspaceBaseHorizontalInset: CGFloat = ${number("--apron-side-inset")}`,
           `    static let workspaceBaseTopPadding: CGFloat = ${number("--apron-top-pad")}`,
           `    static let workspaceBaseBottomPadding: CGFloat = ${number("--apron-bottom-pad")}`,
           `    static let workspaceBaseCornerRadius: CGFloat = ${number("--apron-radius")}`,
@@ -916,7 +920,7 @@
       document.querySelector("#reset").addEventListener("click", () => {
         for (const [key, value] of Object.entries(defaults)) {
           root.style.setProperty(key, value);
-          localStorage.removeItem(`garyx-composer-tuner:${key}`);
+          localStorage.removeItem(`${storagePrefix}${key}`);
         }
         for (const input of controls) {
           const key = input.dataset.var;
