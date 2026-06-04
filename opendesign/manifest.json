@@ -6,15 +6,6 @@
       "label": "Mockups",
       "groups": [
         {
-          "slug": "garyx-mobile-composer",
-          "files": [
-            {
-              "label": "index.html",
-              "path": "mockups/garyx-mobile-composer/index.html"
-            }
-          ]
-        },
-        {
           "slug": "store-form",
           "files": [
             {
