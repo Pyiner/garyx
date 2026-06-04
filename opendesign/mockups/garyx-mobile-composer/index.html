@@ -27,15 +27,15 @@
         --apron-bottom-pad: 5px;
         --apron-height: 25px;
         --apron-radius: 18px;
-        --apron-opacity: 0.74;
+        --apron-opacity: 0.56;
         --apron-font-size: 13px;
         --apron-icon-size: 18px;
         --apron-chevron-size: 10px;
-        --sheet-height: 228px;
-        --sheet-radius: 38px;
-        --sheet-top-pad: 20px;
-        --row-height: 54px;
-        --row-radius: 16px;
+        --sheet-height: 264px;
+        --sheet-radius: 34px;
+        --sheet-top-pad: 32px;
+        --row-height: 60px;
+        --row-radius: 18px;
       }
 
       * {
@@ -348,12 +348,16 @@
         color: rgba(0, 0, 0, 0.78);
         background: linear-gradient(
           180deg,
-          rgba(210, 210, 210, var(--apron-opacity)) 0%,
-          rgba(222, 222, 222, var(--apron-opacity)) 52%,
-          rgba(239, 239, 239, var(--apron-opacity)) 100%
+          rgba(255, 255, 255, calc(var(--apron-opacity) + 0.16)) 0%,
+          rgba(235, 235, 235, var(--apron-opacity)) 45%,
+          rgba(246, 246, 246, calc(var(--apron-opacity) + 0.05)) 100%
         );
-        -webkit-backdrop-filter: blur(18px);
-        backdrop-filter: blur(18px);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.58),
+          inset 0 -1px 0 rgba(255, 255, 255, 0.42),
+          0 10px 28px rgba(0, 0, 0, 0.07);
+        -webkit-backdrop-filter: blur(26px) saturate(1.45);
+        backdrop-filter: blur(26px) saturate(1.45);
         font-size: var(--apron-font-size);
       }
 
@@ -381,7 +385,9 @@
         inset: 0;
         z-index: 5;
         display: none;
-        background: rgba(0, 0, 0, 0.12);
+        background: rgba(0, 0, 0, 0.1);
+        -webkit-backdrop-filter: blur(6px);
+        backdrop-filter: blur(6px);
       }
 
       .phone[data-state="sheet"] .sheet-backdrop {
@@ -396,18 +402,23 @@
         height: var(--sheet-height);
         padding: var(--sheet-top-pad) 18px 18px;
         border-radius: var(--sheet-radius) var(--sheet-radius) 0 0;
-        background: #fff;
-        box-shadow: 0 -18px 50px rgba(0, 0, 0, 0.08);
+        border-top: 1px solid rgba(255, 255, 255, 0.76);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(247, 247, 247, 0.9));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.88),
+          0 -20px 54px rgba(0, 0, 0, 0.14);
+        -webkit-backdrop-filter: blur(30px) saturate(1.35);
+        backdrop-filter: blur(30px) saturate(1.35);
       }
 
       .drag-indicator {
         position: absolute;
         top: 12px;
         left: 50%;
-        width: 36px;
+        width: 38px;
         height: 5px;
         border-radius: 999px;
-        background: #b8b8b8;
+        background: rgba(0, 0, 0, 0.26);
         transform: translateX(-50%);
       }
 
@@ -420,7 +431,7 @@
 
       .mode-list {
         display: grid;
-        gap: 8px;
+        gap: 10px;
       }
 
       .mode-row {
@@ -429,14 +440,16 @@
         gap: 12px;
         height: var(--row-height);
         padding: 0 12px;
-        border: 1px solid rgba(0, 0, 0, 0.09);
+        border: 1px solid rgba(0, 0, 0, 0.065);
         border-radius: var(--row-radius);
         color: #111;
-        background: #fff;
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
       }
 
       .mode-row.selected {
-        background: rgba(118, 118, 128, 0.13);
+        border-color: rgba(0, 0, 0, 0.11);
+        background: rgba(118, 118, 128, 0.16);
       }
 
       .mode-icon {
@@ -446,6 +459,10 @@
         place-items: center;
         border-radius: 50%;
         background: rgba(0, 0, 0, 0.055);
+      }
+
+      .mode-icon svg {
+        stroke-width: 2.2;
       }
 
       .mode-row strong {
@@ -683,7 +700,7 @@
                   </button>
                 </div>
               </div>
-              <button class="local-apron" type="button">
+              <button class="local-apron" type="button" aria-haspopup="dialog">
                 <i data-lucide="monitor"></i>
                 <strong>Local</strong>
                 <i data-lucide="chevron-down"></i>
@@ -697,7 +714,7 @@
               <h2>Run Location</h2>
               <div class="mode-list">
                 <div class="mode-row selected">
-                  <span class="mode-icon"><i data-lucide="laptop" style="width: 22px; height: 22px;"></i></span>
+                  <span class="mode-icon"><i data-lucide="monitor" style="width: 22px; height: 22px;"></i></span>
                   <strong>Local</strong>
                   <span class="check"><i data-lucide="check" style="width: 16px; height: 16px;"></i></span>
                 </div>
@@ -863,7 +880,7 @@
       const defaults = {};
       const storagePrefix = "garyx-composer-tuner:";
       const storageVersionKey = `${storagePrefix}version`;
-      const storageVersion = "reference-border-icon-ratio-2026-06-04";
+      const storageVersion = "glass-apron-sheet-2026-06-04";
 
       if (localStorage.getItem(storageVersionKey) !== storageVersion) {
         for (const key of Object.keys(localStorage)) {
@@ -936,6 +953,25 @@
           button.classList.add("active");
           phone.dataset.state = button.dataset.previewState;
         });
+      });
+
+      function setPreviewState(state) {
+        phone.dataset.state = state;
+        for (const button of document.querySelectorAll("[data-preview-state]")) {
+          button.classList.toggle("active", button.dataset.previewState === state);
+        }
+      }
+
+      document.querySelector(".local-apron").addEventListener("click", () => {
+        setPreviewState("sheet");
+      });
+
+      document.querySelector(".sheet-backdrop").addEventListener("click", () => {
+        setPreviewState("composer");
+      });
+
+      document.querySelector(".run-sheet").addEventListener("click", (event) => {
+        event.stopPropagation();
       });
 
       document.querySelector("#copy").addEventListener("click", async () => {
