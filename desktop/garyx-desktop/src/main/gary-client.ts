@@ -28,6 +28,7 @@ import type {
   DesktopProviderModels,
   DesktopProviderIconDescriptor,
   DesktopProviderIconKey,
+  DesktopProviderRecentSession,
   DesktopProviderModelOption,
   DesktopBotConsoleSummary,
   DesktopBotConversationNode,
@@ -47,6 +48,7 @@ import type {
   GetWorkflowDefinitionSourceInput,
   GetWorkflowRunInput,
   ListTaskWorkflowRunsInput,
+  ListProviderRecentSessionsInput,
   DeleteSlashCommandInput,
   DesktopChatStreamEvent,
   DesktopChannelEndpoint,
@@ -561,6 +563,10 @@ interface TasksPayload {
 interface WorkflowDefinitionsPayload {
   workflowDefinitions?: unknown[];
   workflow_definitions?: unknown[];
+}
+
+interface ProviderRecentSessionsPayload {
+  sessions?: unknown[];
 }
 
 interface WorkflowSourcePayload {
@@ -4534,6 +4540,36 @@ function mapWorkflowDefinition(value: unknown): DesktopWorkflowDefinition | null
   };
 }
 
+function mapProviderRecentSession(
+  value: unknown,
+): DesktopProviderRecentSession | null {
+  const record = parseRecord(value);
+  const sessionId =
+    asString(record.sessionId) || asString(record.session_id) || "";
+  const providerHint =
+    asString(record.providerHint) || asString(record.provider_hint) || "";
+  if (
+    !sessionId ||
+    !["claude", "codex", "gemini"].includes(providerHint)
+  ) {
+    return null;
+  }
+  return {
+    providerType:
+      asString(record.providerType) || asString(record.provider_type) || "",
+    providerHint: providerHint as DesktopProviderRecentSession["providerHint"],
+    sessionId,
+    title: asString(record.title) || sessionId,
+    workspaceDir:
+      asString(record.workspaceDir) || asString(record.workspace_dir) || "",
+    updatedAt:
+      asString(record.updatedAt) ||
+      asString(record.updated_at) ||
+      new Date(0).toISOString(),
+    path: asString(record.path) || null,
+  };
+}
+
 function mapWorkflowSource(value: WorkflowSourcePayload): DesktopWorkflowSourceDocument {
   return {
     workflowId: asString(value.workflowId) || asString(value.workflow_id) || "",
@@ -4745,6 +4781,28 @@ export async function listWorkflowDefinitions(
   return records
     .map(mapWorkflowDefinition)
     .filter((entry): entry is DesktopWorkflowDefinition => Boolean(entry));
+}
+
+export async function listProviderRecentSessions(
+  settings: DesktopSettings,
+  input?: ListProviderRecentSessionsInput,
+): Promise<DesktopProviderRecentSession[]> {
+  const query = new URLSearchParams();
+  if (input?.provider) {
+    query.set("provider", input.provider);
+  }
+  query.set("limit", String(Math.max(1, Math.min(50, input?.limit || 10))));
+  const payload = await requestJson<ProviderRecentSessionsPayload>(
+    settings,
+    `/api/provider-sessions/recent?${query.toString()}`,
+    {
+      signal: AbortSignal.timeout(8000),
+    },
+  );
+  const records = Array.isArray(payload.sessions) ? payload.sessions : [];
+  return records
+    .map(mapProviderRecentSession)
+    .filter((entry): entry is DesktopProviderRecentSession => Boolean(entry));
 }
 
 export async function getWorkflowDefinitionSource(

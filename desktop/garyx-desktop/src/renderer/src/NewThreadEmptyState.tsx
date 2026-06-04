@@ -13,6 +13,7 @@ import {
 import type {
   DesktopDreamTopic,
   DesktopDreamsPage,
+  DesktopProviderRecentSession,
   DesktopSessionProviderHint,
   DesktopWorkspace,
   DesktopWorkspaceGitStatus,
@@ -45,6 +46,14 @@ const MISSING_WORKSPACE_VALUE_PREFIX = "__missing_workspace__:";
 const GIT_STATUS_CHECK_DELAY_MS = 120;
 const HOME_DREAMS_LIMIT = 4;
 const HOME_DREAMS_CACHE_STALE_MS = 45_000;
+const RESUME_PROVIDER_OPTIONS: Array<{
+  value: DesktopSessionProviderHint;
+  label: string;
+}> = [
+  { value: "codex", label: "Codex" },
+  { value: "claude", label: "Claude Code" },
+  { value: "gemini", label: "Gemini CLI" },
+];
 const workspaceGitStatusCache = new Map<string, DesktopWorkspaceGitStatus>();
 let homeDreamsCache: { page: DesktopDreamsPage; cachedAt: number } | null =
   null;
@@ -83,6 +92,15 @@ export function NewThreadEmptyState({
   const [resumeLoading, setResumeLoading] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
   const [resumeSessionId, setResumeSessionId] = useState("");
+  const [resumeProviderTab, setResumeProviderTab] =
+    useState<DesktopSessionProviderHint>("codex");
+  const [recentSessionsByProvider, setRecentSessionsByProvider] = useState<
+    Partial<Record<DesktopSessionProviderHint, DesktopProviderRecentSession[]>>
+  >({});
+  const [recentSessionsLoading, setRecentSessionsLoading] = useState(false);
+  const [recentSessionsError, setRecentSessionsError] = useState<string | null>(
+    null,
+  );
   const [gitStatusResult, setGitStatusResult] = useState<{
     workspacePath: string;
     status: DesktopWorkspaceGitStatus;
@@ -152,7 +170,44 @@ export function NewThreadEmptyState({
     setResumeOpen(false);
     setResumeSessionId("");
     setResumeError(null);
+    setRecentSessionsError(null);
   }
+
+  const loadRecentSessions = useCallback(
+    async (provider: DesktopSessionProviderHint, force = false) => {
+      if (!force && recentSessionsByProvider[provider]) {
+        return;
+      }
+      setRecentSessionsLoading(true);
+      setRecentSessionsError(null);
+      try {
+        const sessions = await window.garyxDesktop.listProviderRecentSessions({
+          provider,
+          limit: 10,
+        });
+        setRecentSessionsByProvider((current) => ({
+          ...current,
+          [provider]: sessions,
+        }));
+      } catch (error) {
+        setRecentSessionsError(
+          error instanceof Error
+            ? error.message
+            : t("Failed to load recent sessions."),
+        );
+      } finally {
+        setRecentSessionsLoading(false);
+      }
+    },
+    [recentSessionsByProvider, t],
+  );
+
+  useEffect(() => {
+    if (!resumeOpen) {
+      return;
+    }
+    void loadRecentSessions(resumeProviderTab);
+  }, [loadRecentSessions, resumeOpen, resumeProviderTab]);
 
   async function submitResume() {
     const trimmed = resumeSessionId.trim();
@@ -173,6 +228,23 @@ export function NewThreadEmptyState({
       setResumeLoading(false);
     }
   }
+
+  async function resumeRecentSession(session: DesktopProviderRecentSession) {
+    setResumeLoading(true);
+    setResumeError(null);
+    try {
+      await onResumeProviderSession(session.sessionId, session.providerHint);
+      closeResume();
+    } catch (error) {
+      setResumeError(
+        error instanceof Error ? error.message : t("Resume failed."),
+      );
+    } finally {
+      setResumeLoading(false);
+    }
+  }
+
+  const recentSessions = recentSessionsByProvider[resumeProviderTab] ?? [];
 
   return (
     <>
@@ -332,7 +404,7 @@ export function NewThreadEmptyState({
           <DialogHeader>
             <DialogTitle>{t("Resume session")}</DialogTitle>
             <DialogDescription>
-              {t("Paste a Claude, Codex, or Gemini session ID. Garyx will recover its workspace and bind a thread to it.")}
+              {t("Paste a session ID or choose one of the latest local sessions.")}
             </DialogDescription>
           </DialogHeader>
 
@@ -351,6 +423,71 @@ export function NewThreadEmptyState({
             spellCheck={false}
             value={resumeSessionId}
           />
+
+          <section className="new-thread-resume-recent">
+            <div className="new-thread-resume-recent-header">
+              <span>{t("Choose recent")}</span>
+              <Button
+                aria-label={t("Refresh")}
+                disabled={resumeLoading || recentSessionsLoading}
+                onClick={() => void loadRecentSessions(resumeProviderTab, true)}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <IconRefresh aria-hidden size={13} stroke={1.8} />
+              </Button>
+            </div>
+            <div
+              aria-label={t("Provider")}
+              className="new-thread-resume-tabs"
+              role="tablist"
+            >
+              {RESUME_PROVIDER_OPTIONS.map((provider) => (
+                <button
+                  aria-selected={resumeProviderTab === provider.value}
+                  className="new-thread-resume-tab"
+                  disabled={resumeLoading}
+                  key={provider.value}
+                  onClick={() => setResumeProviderTab(provider.value)}
+                  role="tab"
+                  type="button"
+                >
+                  {provider.label}
+                </button>
+              ))}
+            </div>
+            <div className="new-thread-resume-list">
+              {recentSessionsLoading && !recentSessions.length ? (
+                <p className="new-thread-resume-empty">{t("Loading…")}</p>
+              ) : recentSessionsError ? (
+                <p className="new-thread-resume-error">{recentSessionsError}</p>
+              ) : recentSessions.length ? (
+                recentSessions.map((session) => (
+                  <button
+                    className="new-thread-resume-session-row"
+                    disabled={resumeLoading}
+                    key={`${session.providerHint}:${session.sessionId}`}
+                    onClick={() => void resumeRecentSession(session)}
+                    type="button"
+                  >
+                    <span className="new-thread-resume-session-main">
+                      <strong>{session.title}</strong>
+                      <span>{workspaceLabel(session.workspaceDir)}</span>
+                    </span>
+                    <span className="new-thread-resume-session-meta">
+                      <span>{formatRelativeTime(session.updatedAt)}</span>
+                      <code>{shortSessionId(session.sessionId)}</code>
+                    </span>
+                  </button>
+                ))
+              ) : (
+                <p className="new-thread-resume-empty">
+                  {t("No recent sessions found.")}
+                </p>
+              )}
+            </div>
+          </section>
 
           {resumeError ? (
             <p className="new-thread-resume-error">{resumeError}</p>
@@ -377,6 +514,45 @@ export function NewThreadEmptyState({
       </Dialog>
     </>
   );
+}
+
+function shortSessionId(sessionId: string): string {
+  const value = sessionId.trim();
+  if (value.length <= 12) {
+    return value;
+  }
+  return `${value.slice(0, 8)}…${value.slice(-4)}`;
+}
+
+function workspaceLabel(workspaceDir: string): string {
+  const normalized = workspaceDir.trim();
+  if (!normalized) {
+    return "No workspace";
+  }
+  return normalized.split("/").filter(Boolean).pop() || normalized;
+}
+
+function formatRelativeTime(value?: string | null): string {
+  if (!value) {
+    return "";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  const diffMs = parsed.getTime() - Date.now();
+  const absMs = Math.abs(diffMs);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (absMs < 60_000) {
+    return formatter.format(Math.round(diffMs / 1000), "second");
+  }
+  if (absMs < 3_600_000) {
+    return formatter.format(Math.round(diffMs / 60_000), "minute");
+  }
+  if (absMs < 86_400_000) {
+    return formatter.format(Math.round(diffMs / 3_600_000), "hour");
+  }
+  return formatter.format(Math.round(diffMs / 86_400_000), "day");
 }
 
 function formatDreamTime(value?: string | null): string {

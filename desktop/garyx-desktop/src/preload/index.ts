@@ -151,6 +151,8 @@ const api: GaryxDesktopApi = {
   createTask: (input) => ipcRenderer.invoke("garyx:create-task", input),
   listWorkflowDefinitions: () =>
     ipcRenderer.invoke("garyx:list-workflow-definitions"),
+  listProviderRecentSessions: (input) =>
+    ipcRenderer.invoke("garyx:list-provider-recent-sessions", input),
   getWorkflowDefinitionSource: (input) =>
     ipcRenderer.invoke("garyx:get-workflow-definition-source", input),
   listTaskWorkflowRuns: (input) =>

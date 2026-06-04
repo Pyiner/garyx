@@ -24,7 +24,9 @@ use std::sync::Arc;
 
 use crate::agent_identity::create_thread_for_agent_reference;
 use crate::garyx_db::{GaryxDbError, PinnedThreadRecord, RecentThreadRecord, ThreadMetaRecord};
-use crate::provider_session_locator::recover_local_provider_session;
+use crate::provider_session_locator::{
+    list_recent_local_provider_sessions, recover_local_provider_session,
+};
 use crate::recent_thread_projection::backfill_recent_thread_projection_if_incomplete;
 use crate::server::AppState;
 use crate::skills::SkillStoreError;
@@ -688,6 +690,13 @@ fn provider_hint_label(value: &ProviderType) -> &'static str {
     }
 }
 
+fn is_resume_provider(value: &ProviderType) -> bool {
+    matches!(
+        value,
+        ProviderType::ClaudeCode | ProviderType::CodexAppServer | ProviderType::GeminiCli
+    )
+}
+
 const IMPORTED_SESSION_SNAPSHOT_LIMIT: usize = 100;
 
 async fn seed_imported_thread_history(
@@ -821,9 +830,41 @@ pub struct CreateThreadBody {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RecentProviderSessionsParams {
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspaceGitStatusParams {
     #[serde(default, alias = "workspace_dir")]
     pub workspace_dir: String,
+}
+
+/// GET /api/provider-sessions/recent - list recent local provider-native sessions
+pub async fn list_recent_provider_sessions(
+    Query(params): Query<RecentProviderSessionsParams>,
+) -> impl IntoResponse {
+    let provider_hint = match parse_sdk_session_provider_hint(params.provider.as_deref()) {
+        Ok(value) => value,
+        Err(error) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))),
+    };
+    if let Some(provider_hint) = provider_hint.as_ref()
+        && !is_resume_provider(provider_hint)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "provider must be one of claude, codex, or gemini"
+            })),
+        );
+    }
+    let limit = params.limit.unwrap_or(10).clamp(1, 50);
+    let sessions = list_recent_local_provider_sessions(provider_hint, limit);
+    (StatusCode::OK, Json(json!({ "sessions": sessions })))
 }
 
 #[derive(Deserialize)]

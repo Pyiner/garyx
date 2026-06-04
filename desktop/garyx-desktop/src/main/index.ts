@@ -65,6 +65,7 @@ import type {
   ListAutoResearchRunsInput,
   ListCandidatesInput,
   ListDreamsInput,
+  ListProviderRecentSessionsInput,
   ListTasksInput,
   ListTaskWorkflowRunsInput,
   ListWorkspaceFilesInput,
@@ -144,6 +145,7 @@ import {
   listDreams,
   listTasks,
   listWorkflowDefinitions,
+  listProviderRecentSessions,
   listTaskWorkflowRuns,
   listAutoResearchCandidates,
   listAutoResearchRuns,
@@ -745,6 +747,14 @@ function registerIpcHandlers(): void {
     const settings = await resolveSettings();
     return listWorkflowDefinitions(settings);
   });
+
+  ipcMain.handle(
+    "garyx:list-provider-recent-sessions",
+    async (_event, input?: ListProviderRecentSessionsInput) => {
+      const settings = await resolveSettings();
+      return listProviderRecentSessions(settings, input || {});
+    },
+  );
 
   ipcMain.handle(
     "garyx:get-workflow-definition-source",

@@ -5866,6 +5866,132 @@ button.new-thread-mode-trigger[data-state="open"] {
   line-height: 1.4;
 }
 
+.new-thread-resume-recent {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.new-thread-resume-recent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--color-token-description-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.new-thread-resume-recent-header button {
+  width: 24px;
+  height: 24px;
+  color: var(--color-token-description-foreground);
+}
+
+.new-thread-resume-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: rgba(26, 28, 31, 0.055);
+}
+
+.new-thread-resume-tab {
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(26, 28, 31, 0.62);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.new-thread-resume-tab[aria-selected="true"] {
+  background: var(--color-token-bg-primary);
+  color: var(--color-token-text-primary);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.new-thread-resume-list {
+  display: grid;
+  gap: 4px;
+  max-height: 292px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.new-thread-resume-session-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-token-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.new-thread-resume-session-row:hover {
+  background: rgba(26, 28, 31, 0.055);
+}
+
+.new-thread-resume-session-main,
+.new-thread-resume-session-meta {
+  display: grid;
+  min-width: 0;
+}
+
+.new-thread-resume-session-main {
+  gap: 3px;
+}
+
+.new-thread-resume-session-main strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-thread-resume-session-main span {
+  overflow: hidden;
+  color: var(--color-token-description-foreground);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-thread-resume-session-meta {
+  justify-items: end;
+  gap: 4px;
+  color: var(--color-token-description-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.new-thread-resume-session-meta code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+}
+
+.new-thread-resume-empty {
+  margin: 8px 0;
+  color: var(--color-token-description-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .new-thread-resume-dialog {
   padding: 0;
   overflow: hidden;

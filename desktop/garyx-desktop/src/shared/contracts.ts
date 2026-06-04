@@ -1339,6 +1339,21 @@ export type DesktopChatStreamListener = (event: DesktopChatStreamEvent) => void;
 
 export type DesktopSessionProviderHint = "claude" | "codex" | "gemini";
 
+export interface DesktopProviderRecentSession {
+  providerType: DesktopApiProviderType | string;
+  providerHint: DesktopSessionProviderHint;
+  sessionId: string;
+  title: string;
+  workspaceDir: string;
+  updatedAt: string;
+  path?: string | null;
+}
+
+export interface ListProviderRecentSessionsInput {
+  provider?: DesktopSessionProviderHint | null;
+  limit?: number | null;
+}
+
 export type DesktopDeepLinkEvent =
   | {
       type: "open-thread";
@@ -1921,6 +1936,9 @@ export interface GaryxDesktopApi {
     thread: DesktopThreadSummary;
     session?: DesktopThreadSummary;
   }>;
+  listProviderRecentSessions: (
+    input?: ListProviderRecentSessionsInput,
+  ) => Promise<DesktopProviderRecentSession[]>;
   renameThread: (input: RenameThreadInput) => Promise<DesktopState>;
   deleteThread: (input: DeleteThreadInput) => Promise<DesktopState>;
   setThreadPinned: (input: SetThreadPinnedInput) => Promise<DesktopState>;
