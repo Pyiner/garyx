@@ -62,6 +62,20 @@ public struct GaryxWorkspaceGitStatus: Decodable, Equatable, Sendable {
         isGitRepo
     }
 
+    public init(
+        workspaceDir: String,
+        isGitRepo: Bool,
+        repoRoot: String? = nil,
+        currentBranch: String? = nil,
+        isDirty: Bool = false
+    ) {
+        self.workspaceDir = workspaceDir
+        self.isGitRepo = isGitRepo
+        self.repoRoot = repoRoot
+        self.currentBranch = currentBranch
+        self.isDirty = isDirty
+    }
+
     enum CodingKeys: String, CodingKey {
         case workspaceDir
         case workspaceDirSnake = "workspace_dir"

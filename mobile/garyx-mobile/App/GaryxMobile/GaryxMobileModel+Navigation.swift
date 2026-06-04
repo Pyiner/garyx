@@ -382,6 +382,13 @@ extension GaryxMobileModel {
             tabName: queryValue("tab"),
             showSidebar: url.path == "/sidebar" || queryValue("panel") == "sidebar"
         )
+        let shouldShowWorkspaceModeSheet =
+            queryValue("sheet") == "workspaceMode"
+            || queryValue("workspaceModeSheet") == "1"
+        if shouldShowWorkspaceModeSheet || queryValue("draft") == "1" {
+            openNewThreadDraft()
+        }
+        debugShowsWorkspaceModeSheet = shouldShowWorkspaceModeSheet
         return true
     }
 
@@ -452,6 +459,11 @@ extension GaryxMobileModel {
         gatewaySettingsStatus = nil
         connectionState = .ready(version: "debug")
         isSending = false
+        activeRunThreadId = nil
+        remoteBusyThreadIds = []
+        activeTasksByThread.values.forEach { $0.cancel(with: .goingAway, reason: nil) }
+        activeTasksByThread = [:]
+        debugShowsWorkspaceModeSheet = false
         isLoadingThreads = false
         resetThreadListPagination()
         remoteStateLoadPhase = .loaded
@@ -527,7 +539,15 @@ extension GaryxMobileModel {
         }
         """)
         workspacePreview = nil
-        workspaceGitStatuses = [:]
+        workspaceGitStatuses = [
+            "/workspace/garyx": GaryxWorkspaceGitStatus(
+                workspaceDir: "/workspace/garyx",
+                isGitRepo: true,
+                repoRoot: "/workspace/garyx",
+                currentBranch: "main",
+                isDirty: false
+            )
+        ]
         messages = [
             GaryxMobileMessage(
                 id: "debug-user-1",
