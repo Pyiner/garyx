@@ -4,6 +4,7 @@ export type SettingsTabId =
   | 'provider'
   | 'channels'
   | 'labs'
+  | 'performance'
   | 'commands'
   | 'mcp';
 
@@ -30,6 +31,12 @@ export const SETTINGS_TABS: Array<{
     label: 'Provider',
     eyebrow: 'Providers',
     description: 'Desktop-side Claude env overrides and Codex auth.',
+  },
+  {
+    id: 'performance',
+    label: 'Performance',
+    eyebrow: 'Diagnostics',
+    description: 'Renderer health, slow calls, frame stalls, long tasks, and memory samples.',
   },
   {
     id: 'channels',

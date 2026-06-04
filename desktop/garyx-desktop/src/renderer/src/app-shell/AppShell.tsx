@@ -1698,8 +1698,6 @@ export function AppShell() {
   const [performanceSnapshot, setPerformanceSnapshot] = useState(
     () => getRendererPerformanceSnapshot(),
   );
-  const [performanceLogsHasUnread, setPerformanceLogsHasUnread] =
-    useState(false);
   const [expandedClientLogEntries, setExpandedClientLogEntries] = useState<
     Record<string, boolean>
   >({});
@@ -1869,15 +1867,6 @@ export function AppShell() {
   useEffect(() => {
     return subscribeRendererPerformance((snapshot) => {
       setPerformanceSnapshot(snapshot);
-      const latestEvent = snapshot.events[snapshot.events.length - 1];
-      if (
-        latestEvent &&
-        latestEvent.severity !== "info" &&
-        (!threadLogsOpenRef.current ||
-          threadLogsActiveTabRef.current !== "performance")
-      ) {
-        setPerformanceLogsHasUnread(true);
-      }
     });
   }, []);
   const lastRenderedMessageCountRef = useRef(0);
@@ -2614,15 +2603,11 @@ export function AppShell() {
     ? clientLogsByThread[selectedThreadId] || []
     : [];
   const activeThreadLogsPath =
-    threadLogsActiveTab === "performance"
-      ? "Renderer performance monitor: long tasks, frame stalls, memory, slow IPC/API calls"
-      : threadLogsActiveTab === "client"
+    threadLogsActiveTab === "client"
       ? "Renderer stream events received by desktop app"
       : threadLogsPath || "Waiting for log file";
   const activeThreadLogsHasUnread =
-    threadLogsActiveTab === "performance"
-      ? performanceLogsHasUnread
-      : threadLogsActiveTab === "client"
+    threadLogsActiveTab === "client"
       ? clientLogsHasUnread
       : threadLogsHasUnread;
   const selectedWorkspaceEntry = selectedWorkspace(
@@ -4843,8 +4828,6 @@ export function AppShell() {
     }
     if (threadLogsActiveTab === "client") {
       setClientLogsHasUnread(false);
-    } else if (threadLogsActiveTab === "performance") {
-      setPerformanceLogsHasUnread(false);
     } else {
       setThreadLogsHasUnread(false);
     }
@@ -8800,7 +8783,7 @@ export function AppShell() {
                 teamSummary={activeTeamSummary}
                 threadInfo={activeThreadInfo}
                 threadInfoLoaded={activeThreadInfoLoaded}
-                threadLogsHasUnread={threadLogsHasUnread || clientLogsHasUnread || performanceLogsHasUnread}
+                threadLogsHasUnread={threadLogsHasUnread || clientLogsHasUnread}
                 threadLogsOpen={threadLogsOpen}
                 onCreateAutomation={() => {
                   trackUiAction("automation.open_create_dialog", () => {
@@ -8864,6 +8847,7 @@ export function AppShell() {
                     gatewayStatusMessage={gatewaySettingsStatus}
                     localSettingsDirty={localSettingsDirty}
                     localSettings={settingsDraft}
+                    performanceSnapshot={performanceSnapshot}
                     workspaces={workspacePickerWorkspaces}
                     onAddWorkspace={addWorkspacePathFromPicker}
                     mcpServers={mcpServers}
@@ -9131,7 +9115,6 @@ export function AppShell() {
                 isComposingRef={isComposingRef}
                 messagesRef={messagesRef}
                 mobileThreadLogLines={mobileThreadLogLines}
-                performanceSnapshot={performanceSnapshot}
                 newThreadSelectedAgentId={pendingAgentId}
                 newThreadSelectedWorkflowId={pendingWorkflowId}
                 newThreadWorkspaceEntry={newThreadWorkspaceEntry}
@@ -9180,8 +9163,6 @@ export function AppShell() {
                 onJumpToLatestThreadLogs={() => {
                   if (threadLogsActiveTab === "client") {
                     setClientLogsHasUnread(false);
-                  } else if (threadLogsActiveTab === "performance") {
-                    setPerformanceLogsHasUnread(false);
                   } else {
                     setThreadLogsHasUnread(false);
                   }
@@ -9253,8 +9234,6 @@ export function AppShell() {
                   if (threadLogsNearBottom()) {
                     if (threadLogsActiveTab === "client") {
                       setClientLogsHasUnread(false);
-                    } else if (threadLogsActiveTab === "performance") {
-                      setPerformanceLogsHasUnread(false);
                     } else {
                       setThreadLogsHasUnread(false);
                     }
