@@ -22,11 +22,11 @@
         --composer-opacity: 0.58;
         --composer-shadow-y: 10px;
         --composer-shadow-blur: 18px;
-        --apron-overlap: 21px;
-        --apron-top-pad: 31px;
-        --apron-bottom-pad: 7px;
-        --apron-height: 28px;
-        --apron-radius: 18px;
+        --apron-overlap: 20px;
+        --apron-top-pad: 24px;
+        --apron-bottom-pad: 5px;
+        --apron-height: 24px;
+        --apron-radius: 17px;
         --apron-opacity: 0.74;
         --apron-font-size: 13px;
         --apron-icon-size: 19px;
@@ -838,7 +838,7 @@
       const defaults = {};
       const storagePrefix = "garyx-composer-tuner:";
       const storageVersionKey = `${storagePrefix}version`;
-      const storageVersion = "swift-code-baseline-2026-06-04";
+      const storageVersion = "apron-shorter-2026-06-04";
 
       if (localStorage.getItem(storageVersionKey) !== storageVersion) {
         for (const key of Object.keys(localStorage)) {
