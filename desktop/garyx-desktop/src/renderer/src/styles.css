@@ -1386,7 +1386,8 @@ code {
   height: 18px;
 }
 
-.workspace-conversation-logo {
+.workspace-conversation-logo,
+.recent-conversation-logo {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1396,7 +1397,8 @@ code {
   color: color-mix(in oklab, var(--color-token-text-primary) 74%, transparent);
 }
 
-.workspace-conversation-logo .icon {
+.workspace-conversation-logo .icon,
+.recent-conversation-logo .icon {
   width: 16px;
   height: 16px;
 }
@@ -20988,19 +20990,11 @@ button.new-thread-dreams-scan:hover {
   font-style: italic;
 }
 
-.workflow-timeline-final {
-  margin: 4px 0 0 32px;
-  padding-top: 16px;
-  border-top: 0.5px solid var(--color-token-border);
-}
-
-.workflow-timeline-final-label {
-  margin-bottom: 6px;
-  color: var(--color-token-text-secondary);
-  font-size: 10px;
-  font-weight: 720;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+/* Final workflow output renders as a normal assistant message (.message-bubble
+   assistant), just nudged in to sit under the stepper's content column. */
+.workflow-timeline-result {
+  margin-top: 10px;
+  margin-left: 32px;
 }
 
 /* Floating plan card (Codex-parity), anchored top-right over the stream. */

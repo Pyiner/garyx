@@ -16,6 +16,7 @@ import type {
   DesktopWorkflowRunStatus,
 } from '@shared/contracts';
 
+import { RichMessageContent } from '../../message-rich-content';
 import { getDesktopApi } from '../../platform/desktop-api';
 import type { Translate } from '../../i18n';
 import type { ToastTone } from '../../toast';
@@ -1362,14 +1363,12 @@ function WorkflowTimelineView({
             );
           })}
           {showFinal ? (
-            <section className="workflow-timeline-final workflow-result-markdown">
-              <div className="workflow-timeline-final-label">
-                {t('Workflow result')}
-              </div>
-              <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
-                {workflow.outputText || ''}
-              </ReactMarkdown>
-            </section>
+            <article className="message-bubble assistant workflow-timeline-result">
+              <RichMessageContent
+                altPrefix="assistant"
+                text={workflow.outputText || ''}
+              />
+            </article>
           ) : null}
         </div>
       </div>
