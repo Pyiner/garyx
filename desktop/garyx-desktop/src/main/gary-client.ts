@@ -4573,7 +4573,13 @@ function mapWorkflowRun(value: unknown): DesktopWorkflowRun {
     meta: asRecordOrNull(record.meta),
     input: record.input ?? null,
     outputText:
-      asString(record.outputText) || asString(record.output_text) || null,
+      asString(record.outputText) ||
+      asString(record.output_text) ||
+      // Transitional: gateway binaries predating the outputText contract still
+      // emit the run's final text as `summary`. Harmless once the gateway only
+      // sends outputText (it stops emitting summary entirely).
+      asString(record.summary) ||
+      null,
     error: asString(record.error) || null,
     workspaceDir:
       asString(record.workspaceDir) || asString(record.workspace_dir) || null,
