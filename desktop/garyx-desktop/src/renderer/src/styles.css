@@ -2579,21 +2579,23 @@ code {
 .conversation-heading-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
 .conversation-title-group {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
-  max-width: min(620px, 48vw);
+  max-width: min(560px, 44vw);
   color: var(--color-token-text-primary);
 }
 
 .conversation-title-pin {
   flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
   color: var(--sidebar-text-muted);
   transform: rotate(-8deg);
 }
@@ -2661,9 +2663,9 @@ code {
 .conversation-title-text {
   min-width: 0;
   overflow: hidden;
-  font-size: var(--text-lg);
+  font-size: 15px;
   font-weight: var(--font-weight-semibold);
-  line-height: 1.2;
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2673,22 +2675,27 @@ code {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 15px;
+  border-radius: 9px;
   background: transparent;
   box-shadow: none;
-  color: color-mix(in srgb, var(--color-token-text-primary) 56%, transparent);
+  color: color-mix(in srgb, var(--color-token-text-primary) 50%, transparent);
   cursor: pointer;
+}
+
+.conversation-title-menu-trigger svg {
+  width: 16px;
+  height: 16px;
 }
 
 .conversation-title-menu-trigger:hover,
 .conversation-title-menu-trigger[data-state="open"] {
-  background: transparent;
+  background: rgba(15, 23, 42, 0.045);
   box-shadow: none;
-  color: color-mix(in srgb, var(--color-token-text-primary) 56%, transparent);
+  color: color-mix(in srgb, var(--color-token-text-primary) 72%, transparent);
 }
 
 .conversation-title-menu-trigger:focus-visible {
@@ -2697,30 +2704,30 @@ code {
 }
 
 .thread-title-menu-content {
-  width: min(252px, calc(100vw - 32px));
-  padding: 6px;
+  width: min(224px, calc(100vw - 32px));
+  padding: 4px;
   border: 1px solid rgba(26, 28, 31, 0.06);
-  border-radius: 16px;
+  border-radius: 13px;
   background: rgba(255, 255, 255, 0.98);
   box-shadow:
-    0 18px 48px rgba(0, 0, 0, 0.13),
-    0 3px 12px rgba(0, 0, 0, 0.08);
+    0 12px 32px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.07);
 }
 
 .thread-title-menu-item {
-  min-height: 38px;
-  gap: 10px;
-  padding: 0 10px;
-  border-radius: 10px;
+  min-height: 32px;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 9px;
   color: var(--color-token-text-primary);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   font-weight: var(--font-weight-medium);
   line-height: 1;
 }
 
 .thread-title-menu-item svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   color: color-mix(in srgb, var(--color-token-text-primary) 62%, transparent);
   stroke-width: 2;
 }
@@ -2732,7 +2739,7 @@ code {
 .thread-title-menu-shortcut {
   margin-left: auto;
   color: color-mix(in srgb, var(--color-token-text-primary) 42%, transparent);
-  font-size: var(--text-md);
+  font-size: var(--text-xs);
   font-weight: var(--font-weight-normal);
   letter-spacing: 0;
   white-space: nowrap;
@@ -5900,34 +5907,34 @@ button.new-thread-mode-trigger[data-state="open"] {
 }
 
 .thread-rename-dialog[data-slot="dialog-content"] {
-  --app-dialog-card-width: min(660px, var(--app-dialog-available-width));
+  --app-dialog-card-width: min(460px, var(--app-dialog-available-width));
   gap: 0;
   overflow: hidden;
   padding: 0;
   border: 1px solid rgba(26, 28, 31, 0.065);
-  border-radius: 28px;
+  border-radius: 20px;
   background: #ffffff;
   box-shadow:
-    0 28px 80px rgba(0, 0, 0, 0.18),
-    0 8px 24px rgba(0, 0, 0, 0.1);
+    0 20px 56px rgba(0, 0, 0, 0.16),
+    0 5px 18px rgba(0, 0, 0, 0.08);
 }
 
 .thread-rename-form {
   position: relative;
   display: grid;
-  gap: 22px;
-  padding: 36px 32px 30px;
+  gap: 14px;
+  padding: 24px 24px 20px;
 }
 
 .thread-rename-close {
   position: absolute;
-  top: 28px;
-  right: 31px;
+  top: 18px;
+  right: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -5946,34 +5953,34 @@ button.new-thread-mode-trigger[data-state="open"] {
 
 .thread-rename-copy {
   display: grid;
-  gap: 8px;
-  padding-right: 40px;
+  gap: 4px;
+  padding-right: 34px;
 }
 
 .thread-rename-title[data-slot="dialog-title"] {
   margin: 0;
   color: var(--color-token-text-primary);
-  font-size: 26px;
-  font-weight: var(--font-weight-bold);
-  line-height: 1.08;
+  font-size: 20px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.15;
 }
 
 .thread-rename-description[data-slot="dialog-description"] {
   color: color-mix(in srgb, var(--color-token-text-primary) 47%, transparent);
-  font-size: 16px;
+  font-size: var(--text-sm);
   font-weight: var(--font-weight-normal);
-  line-height: 1.25;
+  line-height: 1.35;
 }
 
 .thread-rename-input {
   width: 100%;
-  height: 59px;
-  padding: 0 18px;
+  height: 42px;
+  padding: 0 12px;
   border: 1px solid rgba(26, 28, 31, 0.12);
-  border-radius: 16px;
+  border-radius: 11px;
   background: #ffffff;
   color: var(--color-token-text-primary);
-  font-size: 18px;
+  font-size: 15px;
   font-weight: var(--font-weight-medium);
   line-height: 1.2;
   box-shadow:
@@ -5995,19 +6002,19 @@ button.new-thread-mode-trigger[data-state="open"] {
 .thread-rename-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 14px;
+  gap: 8px;
 }
 
 .thread-rename-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 98px;
-  height: 50px;
-  padding: 0 24px;
-  border-radius: 15px;
+  min-width: 76px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 10px;
   cursor: pointer;
-  font-size: 16px;
+  font-size: var(--text-sm);
   font-weight: var(--font-weight-semibold);
   line-height: 1;
   transition:
