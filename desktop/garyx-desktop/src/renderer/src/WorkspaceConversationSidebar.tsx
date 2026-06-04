@@ -1,6 +1,6 @@
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { PanelLeftClose, Trash, Workflow } from 'lucide-react';
+import { PanelLeftClose, Trash } from 'lucide-react';
 
 import type { DesktopState } from '@shared/contracts';
 
@@ -95,7 +95,6 @@ export function WorkspaceConversationSidebar({
         {rows.length ? (
           rows.map((row) => {
             const { thread } = row;
-            const isWorkflowRun = thread.threadType === 'workflow_run';
             return (
               <div
                 className={`bot-conversation-row-shell workspace-conversation-row-shell ${row.isActive ? 'active' : ''} ${row.deleteDisabled ? 'no-delete' : ''}`}
@@ -118,15 +117,6 @@ export function WorkspaceConversationSidebar({
                     <span className="bot-conversation-row-title" title={thread.title}>
                       {thread.title}
                     </span>
-                    {isWorkflowRun ? (
-                      <span
-                        aria-label={t('Workflow run')}
-                        className="workflow-thread-badge"
-                        title={t('Workflow run')}
-                      >
-                        <Workflow aria-hidden size={12} strokeWidth={1.8} />
-                      </span>
-                    ) : null}
                   </div>
                   <span className="bot-conversation-row-time">
                     {formatThreadTimestamp(thread.updatedAt)}
