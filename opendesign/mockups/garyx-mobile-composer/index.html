@@ -22,12 +22,16 @@
         --composer-opacity: 0.58;
         --composer-shadow-y: 10px;
         --composer-shadow-blur: 18px;
-        --apron-overlap: 21px;
-        --apron-top-pad: 31px;
-        --apron-bottom-pad: 7px;
-        --apron-height: 28px;
-        --apron-radius: 18px;
-        --apron-opacity: 0.74;
+        --apron-overlap: 19px;
+        --apron-side-inset: 18px;
+        --apron-top-pad: 27px;
+        --apron-bottom-pad: 5px;
+        --apron-height: 24px;
+        --apron-radius: 16px;
+        --apron-opacity: 0.62;
+        --apron-font-size: 13px;
+        --apron-icon-size: 18px;
+        --apron-chevron-size: 12px;
         --sheet-height: 228px;
         --sheet-radius: 38px;
         --sheet-top-pad: 20px;
@@ -320,10 +324,12 @@
         z-index: 1;
         display: flex;
         align-items: center;
-        gap: 7px;
+        justify-self: center;
+        width: calc(100% - (var(--apron-side-inset) * 2));
+        gap: 5px;
         min-height: var(--apron-height);
         margin-top: calc(var(--apron-overlap) * -1);
-        padding: var(--apron-top-pad) 14px var(--apron-bottom-pad);
+        padding: var(--apron-top-pad) 12px var(--apron-bottom-pad);
         border: 1px solid rgba(0, 0, 0, 0.055);
         border-top: 0;
         border-radius: 0 0 var(--apron-radius) var(--apron-radius);
@@ -331,12 +337,22 @@
         background: rgba(225, 225, 225, var(--apron-opacity));
         -webkit-backdrop-filter: blur(18px);
         backdrop-filter: blur(18px);
-        font-size: 15px;
+        font-size: var(--apron-font-size);
       }
 
       .local-apron strong {
-        font-size: 16px;
+        font-size: calc(var(--apron-font-size) + 1px);
         font-weight: 400;
+      }
+
+      .local-apron [data-lucide="laptop"] {
+        width: var(--apron-icon-size) !important;
+        height: var(--apron-icon-size) !important;
+      }
+
+      .local-apron [data-lucide="chevron-down"] {
+        width: var(--apron-chevron-size) !important;
+        height: var(--apron-chevron-size) !important;
       }
 
       .sheet-backdrop {
@@ -647,9 +663,9 @@
                 </div>
               </div>
               <button class="local-apron" type="button">
-                <i data-lucide="laptop" style="width: 22px; height: 22px;"></i>
+                <i data-lucide="laptop"></i>
                 <strong>Local</strong>
-                <i data-lucide="chevron-down" style="width: 16px; height: 16px;"></i>
+                <i data-lucide="chevron-down"></i>
               </button>
             </div>
           </div>
@@ -725,6 +741,10 @@
             <input type="range" min="0" max="44" step="1" data-var="--apron-overlap" data-unit="px" />
           </div>
           <div class="field">
+            <label>左右收进 <output data-for="--apron-side-inset"></output></label>
+            <input type="range" min="0" max="42" step="1" data-var="--apron-side-inset" data-unit="px" />
+          </div>
+          <div class="field">
             <label>顶部露出 <output data-for="--apron-top-pad"></output></label>
             <input type="range" min="14" max="54" step="1" data-var="--apron-top-pad" data-unit="px" />
           </div>
@@ -743,6 +763,18 @@
           <div class="field">
             <label>灰底强度 <output data-for="--apron-opacity"></output></label>
             <input type="range" min="0.25" max="0.95" step="0.01" data-var="--apron-opacity" />
+          </div>
+          <div class="field">
+            <label>文字大小 <output data-for="--apron-font-size"></output></label>
+            <input type="range" min="11" max="17" step="1" data-var="--apron-font-size" data-unit="px" />
+          </div>
+          <div class="field">
+            <label>电脑图标 <output data-for="--apron-icon-size"></output></label>
+            <input type="range" min="14" max="24" step="1" data-var="--apron-icon-size" data-unit="px" />
+          </div>
+          <div class="field">
+            <label>箭头图标 <output data-for="--apron-chevron-size"></output></label>
+            <input type="range" min="10" max="18" step="1" data-var="--apron-chevron-size" data-unit="px" />
           </div>
         </section>
 
@@ -858,6 +890,7 @@
           `    static let inputMinHeight: CGFloat = ${number("--composer-min-height")}`,
           `    static let composerMaterialTint = Color(.systemBackground).opacity(${value("--composer-opacity")})`,
           `    static let workspaceBaseOverlap: CGFloat = ${number("--apron-overlap")}`,
+          `    static let workspaceBaseHorizontalInset: CGFloat = ${number("--apron-side-inset")}`,
           `    static let workspaceBaseTopPadding: CGFloat = ${number("--apron-top-pad")}`,
           `    static let workspaceBaseBottomPadding: CGFloat = ${number("--apron-bottom-pad")}`,
           `    static let workspaceBaseCornerRadius: CGFloat = ${number("--apron-radius")}`,
