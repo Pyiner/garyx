@@ -302,7 +302,7 @@ dependencies = [
 [[package]]
 name = "cctty"
 version = "0.1.0"
-source = "git+https://github.com/Pyiner/cctty.git?rev=a21e34ea279b5377f2f4a400e3fb51b15f2e412e#a21e34ea279b5377f2f4a400e3fb51b15f2e412e"
+source = "git+https://github.com/Pyiner/cctty.git?rev=92de8b02644282982f755bf6fc159ecf0d715c53#92de8b02644282982f755bf6fc159ecf0d715c53"
 dependencies = [
  "libc",
  "serde",
@@ -685,7 +685,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1977,7 +1977,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2342,7 +2342,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2754,7 +2754,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
