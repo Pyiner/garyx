@@ -1375,11 +1375,13 @@ function WorkflowTimelineView({
 
       <aside className="workflow-plan-panel" aria-label={t('Plan')}>
         <div className="workflow-plan-section">
-          <div className="workflow-plan-label">{t('Run')}</div>
-          <div className="workflow-plan-meta">
-            <Badge className={runStatusBadgeClass(workflow.status)}>
-              {t(workflow.status)}
-            </Badge>
+          <div className="workflow-plan-heading">
+            <div className="workflow-plan-label">{t('Run')}</div>
+            <div className="workflow-plan-meta">
+              <Badge className={runStatusBadgeClass(workflow.status)}>
+                {t(workflow.status)}
+              </Badge>
+            </div>
           </div>
           {runStats.length ? (
             <div className="workflow-plan-stats">

@@ -2937,10 +2937,6 @@ export function AppShell() {
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
   const isWorkflowView = contentView === "workflow";
-  const selectedWorkflowRunThreadId =
-    contentView === "thread" && activeThread?.threadType === "workflow_run"
-      ? activeThread.id
-      : null;
   const isDreamsView = contentView === "dreams" && showDreamsFeature;
   const shouldShowConversationRail = contentView === "thread";
   const visibleSelectedThreadId = shouldShowConversationRail ? selectedThreadId : null;
@@ -8949,15 +8945,6 @@ export function AppShell() {
                 t={t}
                 task={selectedWorkflowTask}
                 taskId={selectedWorkflowTaskId}
-              />
-            ) : selectedWorkflowRunThreadId ? (
-              <WorkflowRunsPanel
-                onOpenThread={(threadId) => {
-                  void openExistingThread(threadId);
-                }}
-                onToast={pushToast}
-                t={t}
-                workflowRunId={selectedWorkflowRunThreadId}
               />
             ) : isDreamsView ? (
               <DreamsPanel

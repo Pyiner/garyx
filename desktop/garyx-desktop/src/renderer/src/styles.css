@@ -21039,8 +21039,17 @@ button.new-thread-dreams-scan:hover {
   text-transform: uppercase;
 }
 
+.workflow-plan-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
 .workflow-plan-meta {
   display: flex;
+  flex: none;
 }
 
 .workflow-plan-stats {
