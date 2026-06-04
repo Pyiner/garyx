@@ -20921,85 +20921,12 @@ button.new-thread-dreams-scan:hover {
 }
 
 /* Agents: borderless avatar + name rows in a tidy responsive grid. */
+/* Agent cards (shadcn-style) styled with Tailwind in AgentCard; the grid just
+   lays them out responsively, two-up on a comfortable width. */
 .workflow-agent-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
-  gap: 1px 10px;
-}
-
-.workflow-agent-row {
-  display: flex;
-  align-items: center;
+  grid-template-columns: repeat(auto-fill, minmax(244px, 1fr));
   gap: 8px;
-  min-width: 0;
-  padding: 4px 6px;
-  border-radius: 7px;
-  text-align: left;
-}
-
-.workflow-agent-row[data-clickable] {
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.workflow-agent-row[data-clickable]:hover {
-  background: rgba(26, 28, 31, 0.045);
-}
-
-.workflow-agent-row-avatar {
-  position: relative;
-  display: inline-flex;
-  flex: none;
-}
-
-.workflow-agent-row.status-failed .workflow-agent-row-name {
-  color: #b03a2e;
-}
-
-.workflow-chip-spinner {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  color: #2d6987;
-  background: var(--color-token-bg-primary);
-  border-radius: 50%;
-  animation: workflow-spin 0.9s linear infinite;
-}
-
-.workflow-agent-row-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-token-text-primary);
-  font-size: 12.5px;
-}
-
-.workflow-agent-row-result {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--color-token-text-secondary);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s ease, background 0.12s ease;
-}
-
-.workflow-agent-row:hover .workflow-agent-row-result,
-.workflow-agent-row:focus-within .workflow-agent-row-result {
-  opacity: 1;
-}
-
-.workflow-agent-row-result:hover {
-  background: rgba(26, 28, 31, 0.08);
-  color: var(--color-token-text-primary);
 }
 
 .workflow-timeline-pending {

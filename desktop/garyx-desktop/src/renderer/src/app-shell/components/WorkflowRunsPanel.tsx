@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { cn } from '@/lib/utils';
 
 import type {
   DesktopTaskSummary,
@@ -993,7 +994,7 @@ function runStatusBadgeClass(status: DesktopWorkflowRunStatus): string {
   }
 }
 
-function AgentRow({
+function AgentCard({
   child,
   onOpenThread,
   onViewResult,
@@ -1012,65 +1013,91 @@ function AgentRow({
   const hasResult = outcome !== undefined && outcome !== null;
   const threadId = child.threadId;
   const canOpenThread = Boolean(threadId);
-  // Metrics stay hidden until hover; surface them as a native tooltip.
-  const tip = [
+  const running = child.status === 'running';
+  const failed = child.status === 'failed';
+  // Second line: optional, restrained metadata.
+  const meta = [
     agentName,
     tokenUsage,
     cost,
     child.toolCalls > 0 ? t('{count} tools', { count: child.toolCalls }) : null,
-    child.error || null,
   ]
     .filter(Boolean)
     .join(' · ');
+  const openThread = () => {
+    if (threadId) {
+      onOpenThread(threadId);
+    }
+  };
   return (
     <div
-      className={`workflow-agent-row status-${child.status}`}
-      data-clickable={canOpenThread ? '' : undefined}
-      onClick={canOpenThread ? () => onOpenThread(threadId as string) : undefined}
+      className={cn(
+        'group/agent flex items-center gap-3 rounded-lg border border-[#eee] bg-card p-2.5 text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors',
+        canOpenThread && 'cursor-pointer hover:border-[#dcdcdc] hover:bg-accent/50',
+      )}
+      onClick={canOpenThread ? openThread : undefined}
       onKeyDown={
         canOpenThread
           ? (event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                onOpenThread(threadId as string);
+                openThread();
               }
             }
           : undefined
       }
       role={canOpenThread ? 'button' : undefined}
       tabIndex={canOpenThread ? 0 : undefined}
-      title={tip}
     >
-      <span className="workflow-agent-row-avatar">
+      <span className="shrink-0">
         <AgentAvatar
           agentId={child.agentId || child.workflowChildRunId}
           displayName={agentName}
           role="member"
-          size={20}
+          size={36}
         />
-        {child.status === 'running' ? (
+      </span>
+      <div className="min-w-0 flex-1 leading-tight">
+        <div
+          className={cn(
+            'truncate text-[13px] font-medium text-foreground',
+            failed && 'text-destructive',
+          )}
+          title={label}
+        >
+          {label}
+        </div>
+        {meta ? (
+          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+            {meta}
+          </div>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-0.5 self-center pl-1">
+        {hasResult ? (
+          <button
+            aria-label={t('View result')}
+            className="flex size-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-[opacity,background-color] hover:bg-accent hover:text-foreground focus:opacity-100 group-hover/agent:opacity-100"
+            onClick={(event) => {
+              event.stopPropagation();
+              onViewResult({ title: label, value: outcome });
+            }}
+            title={t('View result')}
+            type="button"
+          >
+            <Maximize2 aria-hidden className="size-3.5" strokeWidth={1.9} />
+          </button>
+        ) : null}
+        {running ? (
           <Loader2
             aria-hidden
-            className="workflow-chip-spinner"
-            size={11}
-            strokeWidth={2.4}
+            className="size-4 animate-spin text-foreground/55"
+            strokeWidth={2.2}
           />
+        ) : failed ? (
+          <X aria-hidden className="size-4 text-destructive" strokeWidth={2.4} />
         ) : null}
-      </span>
-      <span className="workflow-agent-row-name">{label}</span>
-      {hasResult ? (
-        <button
-          className="workflow-agent-row-result"
-          onClick={(event) => {
-            event.stopPropagation();
-            onViewResult({ title: label, value: outcome });
-          }}
-          title={t('View result')}
-          type="button"
-        >
-          <Maximize2 aria-hidden size={12} strokeWidth={1.9} />
-        </button>
-      ) : null}
+      </div>
     </div>
   );
 }
@@ -1234,7 +1261,7 @@ function WorkflowTimelineView({
                         {phase.children.length ? (
                           <div className="workflow-agent-grid">
                             {phase.children.map((child) => (
-                              <AgentRow
+                              <AgentCard
                                 child={child}
                                 key={child.workflowChildRunId}
                                 onOpenThread={onOpenThread}
