@@ -284,6 +284,7 @@ type ThreadPageProps = {
   teamAgentDisplayNamesById: Record<string, string>;
   visibleRemoteAwaitingAckInputs: PendingThreadInput[];
   visibleRemotePendingInputs: PendingThreadInput[];
+  workflowRunContent?: ReactNode;
   workspaceDirectoryPanel: ReactNode;
   workspaceMutation: string | null;
   composerTextareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -435,6 +436,7 @@ export function ThreadPage({
   teamAgentDisplayNamesById,
   visibleRemoteAwaitingAckInputs,
   visibleRemotePendingInputs,
+  workflowRunContent,
   workspaceDirectoryPanel,
   workspaceMutation,
 }: ThreadPageProps) {
@@ -489,6 +491,7 @@ export function ThreadPage({
     !historyLoading &&
     !showAutomationRunInitialPlaceholder;
   const newThreadPromptTitle = "What do you want Garyx to build?";
+  const hasWorkflowRunContent = Boolean(workflowRunContent);
 
   useLayoutEffect(() => {
     const threadMain = threadMainRef.current;
@@ -550,7 +553,14 @@ export function ThreadPage({
             </div>
           ) : null}
 
-          {!activeMessages.length &&
+          {hasWorkflowRunContent ? (
+            <div className="workflow-thread-content">
+              {workflowRunContent}
+            </div>
+          ) : null}
+
+          {!hasWorkflowRunContent &&
+          !activeMessages.length &&
           !historyLoading &&
           !showAutomationRunInitialPlaceholder ? (
             selectedThreadId ? (

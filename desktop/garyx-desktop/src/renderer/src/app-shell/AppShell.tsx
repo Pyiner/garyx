@@ -2937,6 +2937,10 @@ export function AppShell() {
   const isSkillsView = contentView === "skills";
   const isTasksView = contentView === "tasks";
   const isWorkflowView = contentView === "workflow";
+  const activeWorkflowRunThreadId =
+    contentView === "thread" && activeThread?.threadType === "workflow_run"
+      ? activeThread.id
+      : null;
   const isDreamsView = contentView === "dreams" && showDreamsFeature;
   const shouldShowConversationRail = contentView === "thread";
   const visibleSelectedThreadId = shouldShowConversationRail ? selectedThreadId : null;
@@ -9186,6 +9190,18 @@ export function AppShell() {
                 teamAgentDisplayNamesById={teamAgentDisplayNamesById}
                 visibleRemoteAwaitingAckInputs={visibleRemoteAwaitingAckInputs}
                 visibleRemotePendingInputs={visibleRemotePendingInputs}
+                workflowRunContent={
+                  activeWorkflowRunThreadId ? (
+                    <WorkflowRunsPanel
+                      onOpenThread={(threadId) => {
+                        void openExistingThread(threadId);
+                      }}
+                      onToast={pushToast}
+                      t={t}
+                      workflowRunId={activeWorkflowRunThreadId}
+                    />
+                  ) : null
+                }
                 workspaceDirectoryPanel={workspaceDirectoryPanel}
                 workspaceMutation={workspaceMutation}
               />

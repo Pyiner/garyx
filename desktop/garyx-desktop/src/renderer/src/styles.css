@@ -4554,6 +4554,19 @@ code {
   background: var(--color-token-bg-primary);
 }
 
+.workflow-thread-content {
+  display: flex;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: min(720px, calc(100vh - 220px));
+}
+
+.workflow-thread-content > .workflow-runs-page {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
 .message-history-page-loader {
   display: flex;
   justify-content: center;
