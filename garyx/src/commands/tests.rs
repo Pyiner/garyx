@@ -2501,3 +2501,28 @@ fn decorate_agent_list_json_handles_empty_array() {
     let decorated = decorate_agent_list_json(payload);
     assert_eq!(decorated, json!({ "agents": [] }));
 }
+
+#[test]
+fn gui_session_available_false_when_both_unset() {
+    assert!(!gui_session_available(None, None));
+}
+
+#[test]
+fn gui_session_available_false_when_both_empty() {
+    // X11 convention: an empty DISPLAY behaves like unset, and
+    // xdg-open's fallback chain treats it the same way.
+    assert!(!gui_session_available(
+        Some(OsStr::new("")),
+        Some(OsStr::new(""))
+    ));
+}
+
+#[test]
+fn gui_session_available_true_with_x11_display() {
+    assert!(gui_session_available(Some(OsStr::new(":0")), None));
+}
+
+#[test]
+fn gui_session_available_true_with_wayland_only() {
+    assert!(gui_session_available(None, Some(OsStr::new("wayland-0"))));
+}

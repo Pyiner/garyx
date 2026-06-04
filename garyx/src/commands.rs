@@ -9465,15 +9465,49 @@ fn looks_like_standalone_url(s: &str) -> bool {
     (t.starts_with("http://") || t.starts_with("https://")) && !t.contains(char::is_whitespace)
 }
 
+/// True when the environment looks like a graphical session a real
+/// browser could open into. Treats an empty value the same as unset —
+/// that's how X11 and xdg-open's fallback chain read it.
+#[cfg(any(target_os = "linux", test))]
+fn gui_session_available(
+    display: Option<&std::ffi::OsStr>,
+    wayland: Option<&std::ffi::OsStr>,
+) -> bool {
+    let set = |v: Option<&std::ffi::OsStr>| v.is_some_and(|s| !s.is_empty());
+    set(display) || set(wayland)
+}
+
 /// Best-effort: shell out to the platform's default-browser opener.
 /// Silent on failure — the URL is already printed above so the user
-/// can always copy-paste.
+/// can always copy-paste. All stdio is detached so an opener that
+/// resolves to a terminal browser (xdg-open → w3m via `$BROWSER` or a
+/// misconfigured desktop) can never hijack the live auth-flow TTY.
 fn open_url_in_browser(url: &str) -> io::Result<()> {
-    use std::process::Command;
+    use std::process::{Command, Stdio};
     #[cfg(target_os = "macos")]
-    let cmd = Command::new("open").arg(url).spawn();
+    let cmd = Command::new("open")
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
     #[cfg(target_os = "linux")]
-    let cmd = Command::new("xdg-open").arg(url).spawn();
+    let cmd = if !gui_session_available(
+        std::env::var_os("DISPLAY").as_deref(),
+        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+    ) {
+        // Headless box: xdg-open degrades to terminal browsers (w3m),
+        // which take over the terminal mid-auth-flow. The URL is
+        // already printed above, so skipping auto-open loses nothing.
+        return Ok(());
+    } else {
+        Command::new("xdg-open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+    };
     #[cfg(target_os = "windows")]
     // NB: do NOT shell out through `cmd /C start` — that reinterprets
     // the URL on cmd.exe's command line, giving shell metacharacters
@@ -9482,6 +9516,9 @@ fn open_url_in_browser(url: &str) -> io::Result<()> {
     // a direct argv[2] with no shell involvement.
     let cmd = Command::new("rundll32")
         .args(["url.dll,FileProtocolHandler", url])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn();
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     let cmd: io::Result<std::process::Child> = Err(io::Error::new(
