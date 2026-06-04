@@ -240,9 +240,6 @@ type ThreadEntrySelectionSource =
   | "workspace-conversation"
   | "dreams";
 
-// How many most-recent threads the sidebar "Recent" rail surfaces.
-const RECENT_THREAD_LIMIT = 20;
-
 type ThreadHistoryPaginationState = {
   hasMoreBefore: boolean;
   nextBeforeIndex: number | null;
@@ -2969,15 +2966,15 @@ export function AppShell() {
       : null;
   const recentThreadRows = useMemo(
     () =>
-      (desktopState?.threads || [])
-        .slice(0, RECENT_THREAD_LIMIT)
-        .map((thread) => ({
-          thread,
-          isActive:
-            visibleThreadEntrySelectionSource === "recent" &&
-            visibleSelectedThreadId === thread.id,
-          isBusy: isRuntimeBusy(selectThreadRuntime(messageState, thread.id)?.state),
-        })),
+      // `desktopState.threads` is the full recency-sorted set the app loads
+      // (gateway caps it at 1000). Show all of it; the rail list scrolls.
+      (desktopState?.threads || []).map((thread) => ({
+        thread,
+        isActive:
+          visibleThreadEntrySelectionSource === "recent" &&
+          visibleSelectedThreadId === thread.id,
+        isBusy: isRuntimeBusy(selectThreadRuntime(messageState, thread.id)?.state),
+      })),
     [
       desktopState?.threads,
       messageState,
