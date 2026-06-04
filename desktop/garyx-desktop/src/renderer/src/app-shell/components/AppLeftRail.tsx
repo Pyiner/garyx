@@ -17,6 +17,7 @@ import {
   BrowserIcon,
   DreamsIcon,
   NewThreadIcon,
+  RecentIcon,
   SettingsIcon,
   SettingsTabIcon,
   SkillsIcon,
@@ -34,6 +35,7 @@ type AppLeftRailProps = {
   isTasksView: boolean;
   isDreamsView: boolean;
   isBrowserView: boolean;
+  recentRailOpen: boolean;
   showAutoResearch: boolean;
   showDreams: boolean;
   settingsActiveTab: SettingsTabId;
@@ -49,6 +51,7 @@ type AppLeftRailProps = {
   onSelectSettingsTab: (tabId: SettingsTabId) => void;
   onBackToThreads: () => void;
   onNewThread: () => void;
+  onOpenRecent: () => void;
   onSelectAutomation: (automationId: string | null) => void;
   onOpenAutoResearch: () => void;
   onOpenBrowser: () => void;
@@ -83,6 +86,7 @@ export function AppLeftRail({
   isTasksView,
   isDreamsView,
   isBrowserView,
+  recentRailOpen,
   showAutoResearch,
   showDreams,
   settingsActiveTab,
@@ -98,6 +102,7 @@ export function AppLeftRail({
   onSelectSettingsTab,
   onBackToThreads,
   onNewThread,
+  onOpenRecent,
   onSelectAutomation,
   onOpenAutoResearch,
   onOpenBrowser,
@@ -236,6 +241,14 @@ export function AppLeftRail({
             >
               <SkillsIcon />
               <span>{t('Skills')}</span>
+            </button>
+            <button
+              className={`sidebar-action ${recentRailOpen ? 'active' : ''}`}
+              onClick={onOpenRecent}
+              type="button"
+            >
+              <RecentIcon />
+              <span>{t('Recent')}</span>
             </button>
           </nav>
 

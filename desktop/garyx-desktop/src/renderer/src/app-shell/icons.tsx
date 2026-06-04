@@ -2,6 +2,7 @@ import {
   Bot,
   Command,
   Cpu,
+  History,
   ListTodo,
   MoonStar,
   Router,
@@ -201,6 +202,10 @@ export function SkillsIcon() {
 
 export function TasksIcon() {
   return <SettingsRailIcon glyph={ListTodo} />;
+}
+
+export function RecentIcon() {
+  return <SettingsRailIcon glyph={History} />;
 }
 
 export function MemoryIcon() {

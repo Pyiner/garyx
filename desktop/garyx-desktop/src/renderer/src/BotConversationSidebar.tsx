@@ -1,11 +1,11 @@
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Archive, PanelLeftClose } from 'lucide-react';
+import { useMemo } from 'react';
 
 import type { DesktopBotConsoleSummary, DesktopChannelEndpoint } from '@shared/contracts';
 
 import { ChannelLogo } from './channel-logo';
 import { useChannelPluginCatalog } from './channel-plugins/useChannelPluginCatalog';
+import { ThreadConversationSidebar } from './ThreadConversationSidebar';
 import { useI18n } from './i18n';
 
 type BotConversationSidebarProps = {
@@ -34,148 +34,52 @@ export function BotConversationSidebar({
   railResizing,
 }: BotConversationSidebarProps) {
   const { t } = useI18n();
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { entries: pluginCatalog } = useChannelPluginCatalog();
-  const iconDataUrlByChannel = useMemo(
-    () =>
-      new Map(
-        (pluginCatalog || []).map((entry) => [
-          entry.id.toLowerCase(),
-          entry.icon_data_url || null,
-        ]),
-      ),
-    [pluginCatalog],
-  );
-  const entries = (group.conversationNodes || []).filter(
-    (entry) => entry.endpoint.threadId !== deletingThreadId,
-  );
+  const iconDataUrl = useMemo(() => {
+    const byChannel = new Map(
+      (pluginCatalog || []).map((entry) => [
+        entry.id.toLowerCase(),
+        entry.icon_data_url || null,
+      ]),
+    );
+    return byChannel.get(group.channel.toLowerCase()) || null;
+  }, [group.channel, pluginCatalog]);
 
-  useEffect(() => {
-    if (!confirmDeleteId) {
-      return;
-    }
-    confirmTimerRef.current = setTimeout(() => {
-      setConfirmDeleteId(null);
-    }, 3000);
-    return () => {
-      if (confirmTimerRef.current) {
-        clearTimeout(confirmTimerRef.current);
-      }
-    };
-  }, [confirmDeleteId]);
+  const rows = (group.conversationNodes || [])
+    .filter((entry) => entry.endpoint.threadId !== deletingThreadId)
+    .map((entry) => {
+      const threadId = entry.endpoint.threadId || '';
+      const archiveDisabled = !threadId || isThreadRuntimeBusy(threadId);
+      return {
+        key: entry.id,
+        title: entry.title,
+        time: entry.latestActivity,
+        badge: entry.badge,
+        isActive: selectedThreadId === entry.endpoint.threadId,
+        openable: entry.openable,
+        onOpen: () => onOpenEndpoint(entry.endpoint),
+        onArchive: archiveDisabled ? undefined : () => onArchiveEndpoint(entry.endpoint),
+      };
+    });
 
   return (
-    <aside
-      aria-label={t('{name} conversations', { name: group.title })}
-      className="bot-conversation-rail"
-    >
-      <div className="bot-conversation-header">
-        <div className="bot-conversation-heading">
-          <ChannelLogo
-            channel={group.channel}
-            className="channel-logo bot-conversation-logo"
-            iconDataUrl={iconDataUrlByChannel.get(group.channel.toLowerCase()) || null}
-            fallbackLabel={group.title}
-          />
-          <div className="bot-conversation-title-copy">
-            <div className="bot-conversation-title" title={group.title}>
-              {group.title}
-            </div>
-          </div>
-        </div>
-        <button
-          aria-label={t('Collapse conversations')}
-          className="bot-conversation-collapse"
-          onClick={onClose}
-          title={t('Collapse conversations')}
-          type="button"
-        >
-          <PanelLeftClose aria-hidden size={15} strokeWidth={1.8} />
-        </button>
-      </div>
-
-      <div className="bot-conversation-list">
-        {entries.map((entry) => {
-          const isSelected = selectedThreadId === entry.endpoint.threadId;
-          const threadId = entry.endpoint.threadId || '';
-          const isBusy = Boolean(threadId && isThreadRuntimeBusy(threadId));
-          const archiveDisabled = !threadId || isBusy;
-          return (
-            <div
-              className={`bot-conversation-row-shell ${isSelected ? 'active' : ''} ${archiveDisabled ? 'no-delete' : ''}`}
-              key={entry.id}
-              onMouseLeave={() => {
-                if (confirmDeleteId === threadId) {
-                  setConfirmDeleteId(null);
-                }
-              }}
-            >
-              <button
-                aria-current={isSelected ? 'page' : undefined}
-                className="bot-conversation-row"
-                disabled={!entry.openable}
-                onClick={() => {
-                  if (entry.openable) {
-                    onOpenEndpoint(entry.endpoint);
-                  }
-                }}
-                type="button"
-              >
-                <div className="bot-conversation-row-main">
-                  <span className="bot-conversation-row-title" title={entry.title}>
-                    {entry.title}
-                  </span>
-                  {entry.badge ? (
-                    <span className="bot-thread-badge">{t(entry.badge)}</span>
-                  ) : null}
-                </div>
-                <span className="bot-conversation-row-time">
-                  {formatThreadTimestamp(entry.latestActivity)}
-                </span>
-              </button>
-              {archiveDisabled ? null : confirmDeleteId === threadId ? (
-                <button
-                  aria-label={t('Confirm archive {name}', { name: entry.title })}
-                  className="thread-delete-button confirm"
-                  style={{ opacity: 1, pointerEvents: 'auto' }}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setConfirmDeleteId(null);
-                    onArchiveEndpoint(entry.endpoint);
-                  }}
-                  tabIndex={-1}
-                  type="button"
-                >
-                  {t('Confirm')}
-                </button>
-              ) : (
-                <button
-                  aria-label={t('Archive {name}', { name: entry.title })}
-                  className="thread-delete-button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setConfirmDeleteId(threadId);
-                  }}
-                  tabIndex={-1}
-                  title={t('Archive thread')}
-                  type="button"
-                >
-                  <Archive aria-hidden />
-                </button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {onRailResizeStart ? (
-        <div
-          className={`sidebar-resizer ${railResizing ? "is-resizing" : ""}`}
-          onPointerDown={onRailResizeStart}
-        >
-          <div className="sidebar-resizer-line" />
-        </div>
-      ) : null}
-    </aside>
+    <ThreadConversationSidebar
+      ariaLabel={t('{name} conversations', { name: group.title })}
+      collapseLabel={t('Collapse conversations')}
+      formatThreadTimestamp={formatThreadTimestamp}
+      logo={
+        <ChannelLogo
+          channel={group.channel}
+          className="channel-logo bot-conversation-logo"
+          iconDataUrl={iconDataUrl}
+          fallbackLabel={group.title}
+        />
+      }
+      onClose={onClose}
+      onRailResizeStart={onRailResizeStart}
+      railResizing={railResizing}
+      rows={rows}
+      title={group.title}
+    />
   );
 }

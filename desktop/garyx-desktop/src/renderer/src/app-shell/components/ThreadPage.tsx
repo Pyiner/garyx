@@ -284,6 +284,7 @@ type ThreadPageProps = {
   teamAgentDisplayNamesById: Record<string, string>;
   visibleRemoteAwaitingAckInputs: PendingThreadInput[];
   visibleRemotePendingInputs: PendingThreadInput[];
+  workflowRunContent?: ReactNode;
   workspaceDirectoryPanel: ReactNode;
   workspaceMutation: string | null;
   composerTextareaRef: RefObject<HTMLTextAreaElement | null>;
@@ -296,7 +297,9 @@ type ThreadPageProps = {
   onComposerCompositionEnd: (value: string) => void;
   onComposerCompositionStart: () => void;
   onComposerInterrupt: () => void;
-  onComposerSubmit: () => void;
+  onComposerSubmit: (options?: {
+    useAlternateFollowUpBehavior?: boolean;
+  }) => void;
   onJumpToLatestThreadLogs: () => void;
   onLocalWorkspaceFileLinkClick: (path: string) => void;
   onMessagesScroll: () => void;
@@ -433,6 +436,7 @@ export function ThreadPage({
   teamAgentDisplayNamesById,
   visibleRemoteAwaitingAckInputs,
   visibleRemotePendingInputs,
+  workflowRunContent,
   workspaceDirectoryPanel,
   workspaceMutation,
 }: ThreadPageProps) {
@@ -487,6 +491,7 @@ export function ThreadPage({
     !historyLoading &&
     !showAutomationRunInitialPlaceholder;
   const newThreadPromptTitle = "What do you want Garyx to build?";
+  const hasWorkflowRunContent = Boolean(workflowRunContent);
 
   useLayoutEffect(() => {
     const threadMain = threadMainRef.current;
@@ -535,10 +540,17 @@ export function ThreadPage({
       style={threadLayoutStyle}
     >
       <div
-        className={`thread-main ${emptyNewThread ? "new-thread-centered" : ""}`}
+        className={`thread-main ${emptyNewThread ? "new-thread-centered" : ""} ${hasWorkflowRunContent ? "has-workflow-run-content" : ""}`}
         ref={threadMainRef}
       >
-        <div className="messages" onScroll={onMessagesScroll} ref={messagesRef}>
+        {hasWorkflowRunContent ? (
+          <div className="workflow-thread-content">
+            {workflowRunContent}
+          </div>
+        ) : null}
+
+        {!hasWorkflowRunContent ? (
+          <div className="messages" onScroll={onMessagesScroll} ref={messagesRef}>
           {historyLoadingEarlier ? (
             <div
               aria-label={t("Loading earlier messages")}
@@ -850,17 +862,19 @@ export function ThreadPage({
               </div>
             </article>
           ) : null}
-        </div>
+          </div>
+        ) : null}
 
-        <div className="composer-shell-wrap" ref={composerShellWrapRef}>
-          {emptyNewThread ? (
-            <h1 className="new-thread-prompt-title">
-              {newThreadPromptTitle}
-            </h1>
-          ) : null}
-          <div
-            className={`composer-shell ${activeQueue.length ? "has-queue" : ""}`}
-          >
+        {!hasWorkflowRunContent ? (
+          <div className="composer-shell-wrap" ref={composerShellWrapRef}>
+            {emptyNewThread ? (
+              <h1 className="new-thread-prompt-title">
+                {newThreadPromptTitle}
+              </h1>
+            ) : null}
+            <div
+              className={`composer-shell ${activeQueue.length ? "has-queue" : ""}`}
+            >
             <ComposerQueue
               activeQueue={activeQueue}
               canSteerQueuedPrompt={canSteerQueuedPrompt}
@@ -920,7 +934,10 @@ export function ThreadPage({
                     return;
                   }
                   event.preventDefault();
-                  onComposerSubmit();
+                  onComposerSubmit({
+                    useAlternateFollowUpBehavior:
+                      event.metaKey || event.ctrlKey,
+                  });
                 }
               }}
               onComposerPasteFiles={onAppendComposerAttachments}
@@ -978,8 +995,9 @@ export function ThreadPage({
                 workspaceMutation={workspaceMutation}
               />
             ) : null}
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       {inspectorOpen && workspaceDirectoryPanel ? (

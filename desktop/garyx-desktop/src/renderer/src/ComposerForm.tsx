@@ -810,7 +810,12 @@ export function ComposerForm({
         });
         return;
       }
-      if ((event.key === 'Enter' || event.key === 'Tab') && highlightedSlashCommand) {
+      if (
+        (event.key === 'Enter' || event.key === 'Tab') &&
+        highlightedSlashCommand &&
+        !event.metaKey &&
+        !event.ctrlKey
+      ) {
         event.preventDefault();
         applySlashCommand(highlightedSlashCommand);
         return;
