@@ -18,6 +18,7 @@ private enum GaryxComposerLayout {
     static let inputTopPadding: CGFloat = 15
     static let inputBottomPadding: CGFloat = 8
     static let inputMinHeight: CGFloat = 29
+    static let composerOcclusionFill = Color(.systemBackground)
     static let composerMaterialTint = Color(.systemBackground).opacity(0.62)
     static let composerMaterialStroke = Color.primary.opacity(0.09)
     static let composerMaterialHighlight = Color.white.opacity(0.82)
@@ -28,11 +29,11 @@ private enum GaryxComposerLayout {
     static let workspaceBaseStroke = Color.primary.opacity(0.035)
     static let workspaceBaseHighlight = Color.white.opacity(0.3)
     static let workspaceBaseTopShadow = Color.black.opacity(0.035)
-    static let workspaceBaseOverlap: CGFloat = 8
-    static let workspaceBaseTopPadding: CGFloat = 18
+    static let workspaceBaseOverlap: CGFloat = composerCornerRadius
+    static let workspaceBaseTopPadding: CGFloat = 32
     static let workspaceBaseBottomPadding: CGFloat = 6
     static let workspaceBaseCornerRadius: CGFloat = 18
-    static let workspaceBaseTopCornerRadius: CGFloat = 12
+    static let workspaceBaseTopCornerRadius: CGFloat = 0
     static let workspaceStripHeight: CGFloat = 25
     static let workspaceSheetHeight: CGFloat = 264
     static let workspaceSheetCornerRadius: CGFloat = 34
@@ -213,6 +214,7 @@ struct GaryxComposer: View {
         composerCardContent
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(GaryxComposerLayout.composerMaterialTint, in: composerCardShape)
+            .background(GaryxComposerLayout.composerOcclusionFill, in: composerCardShape)
             .garyxAdaptiveGlass(.regular, isInteractive: false, fallbackMaterial: .ultraThinMaterial, in: composerCardShape)
             .overlay {
                 composerCardShape
