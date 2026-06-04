@@ -4574,27 +4574,6 @@ code {
   width: 100%;
 }
 
-.thread-main.has-workflow-run-content .workflow-timeline-main {
-  padding-bottom: calc(
-    var(--composer-scroll-clip-height) + var(--composer-message-clearance) + 48px
-  );
-}
-
-.thread-main.has-workflow-run-content .composer-shell-wrap {
-  right: calc(
-    var(--workflow-plan-column-width) + var(--workflow-plan-column-gap) +
-      var(--workflow-plan-page-padding-right)
-  );
-  width: min(
-    var(--container-2xl),
-    calc(
-      100% - var(--workflow-plan-column-width) -
-        var(--workflow-plan-column-gap) -
-        var(--workflow-plan-page-padding-right)
-    )
-  );
-}
-
 .message-history-page-loader {
   display: flex;
   justify-content: center;
@@ -21057,10 +21036,7 @@ button.new-thread-dreams-scan:hover {
   flex-direction: column;
   gap: 18px;
   width: 100%;
-  max-height: calc(
-    100% - var(--composer-scroll-clip-height) -
-      var(--composer-message-clearance) - 32px
-  );
+  max-height: calc(100% - 32px);
   margin-top: 16px;
   padding: 15px 15px 16px;
   border: 0.5px solid rgba(26, 28, 31, 0.08);

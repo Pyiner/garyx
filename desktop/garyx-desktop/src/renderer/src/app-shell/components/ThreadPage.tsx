@@ -550,7 +550,7 @@ export function ThreadPage({
         ) : null}
 
         {!hasWorkflowRunContent ? (
-        <div className="messages" onScroll={onMessagesScroll} ref={messagesRef}>
+          <div className="messages" onScroll={onMessagesScroll} ref={messagesRef}>
           {historyLoadingEarlier ? (
             <div
               aria-label={t("Loading earlier messages")}
@@ -862,18 +862,19 @@ export function ThreadPage({
               </div>
             </article>
           ) : null}
-        </div>
+          </div>
         ) : null}
 
-        <div className="composer-shell-wrap" ref={composerShellWrapRef}>
-          {emptyNewThread ? (
-            <h1 className="new-thread-prompt-title">
-              {newThreadPromptTitle}
-            </h1>
-          ) : null}
-          <div
-            className={`composer-shell ${activeQueue.length ? "has-queue" : ""}`}
-          >
+        {!hasWorkflowRunContent ? (
+          <div className="composer-shell-wrap" ref={composerShellWrapRef}>
+            {emptyNewThread ? (
+              <h1 className="new-thread-prompt-title">
+                {newThreadPromptTitle}
+              </h1>
+            ) : null}
+            <div
+              className={`composer-shell ${activeQueue.length ? "has-queue" : ""}`}
+            >
             <ComposerQueue
               activeQueue={activeQueue}
               canSteerQueuedPrompt={canSteerQueuedPrompt}
@@ -994,8 +995,9 @@ export function ThreadPage({
                 workspaceMutation={workspaceMutation}
               />
             ) : null}
+            </div>
           </div>
-        </div>
+        ) : null}
       </div>
 
       {inspectorOpen && workspaceDirectoryPanel ? (
